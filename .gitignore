@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Production
+dist/
+build/
+
+# Environment — never commit credentials
+.env
+.env.old
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+**/.env.old
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+*.log
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploads
+server/uploads/*
+!server/uploads/.gitkeep
+
+# OS
+Thumbs.db
+*:Zone.Identifier
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Database backups — contain real trading data, never commit
+backup_*.sql
+*.backup
+run_analysis.sql
+LucidTrades_*.csv
+
+# Loose files from Sierra Chart imports
+account
+duration
+entry_efficiency
+flat_to_flat_pl
+max_open_loss
+max_open_profit
+cumulative_pl
+
+# Claude local settings
+.claude/settings.local.json
+
+
