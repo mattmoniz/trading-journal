@@ -1,0 +1,83 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-04-28  (2026-04-22 – 2026-04-28)
+Generated   : 2026-05-26T19:01:49.067Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 5
+Total P&L     : -$1030.00 (4/5 days reliable)
+Daily avg     : -$257.50
+Win days      : 2 / 4 (50%)
+Best day      : 2026-04-27  +$45.50
+Worst day     : 2026-04-28  -$728.50
+
+  2026-04-22  -$351.50
+  2026-04-23  +$427.50 *
+  2026-04-24  +$4.50
+  2026-04-27  +$45.50
+  2026-04-28  -$728.50
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 4 day(s) | C confirm: 4 (100%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +12
+Day types     : Unknown: 5
+
+  2026-04-22  score: +4  A↑ C↑  [?]
+  2026-04-23  score: +4  A↑ C↑  [?]
+  2026-04-24  score: +4  A↑ C↑  [?]
+  2026-04-27  score: -4  A↓ C↓  [?]
+  2026-04-28  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 177
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 177 | wr: 42% | avg fill pnl: -$3.99
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1030.00 on 5 trading day(s)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-04-28 Analysis
+
+The DOWN WEEK flag with a net loss of -$1,030 across 5 trading days points to a consistent grind lower in P&L rather than a single catastrophic session, suggesting either repeated small misses on A-level setups or a market environment where ACD levels were failing to follow through cleanly. In NQ/ES, this type of distributed loss pattern often indicates the trader was fighting a choppy, mean-reverting tape while still leaning directionally — likely getting clipped on false breakouts above/below the Opening Range. The relatively modest total loss is not alarming in isolation, but a clean DOWN WEEK flag demands respect as a behavioral signal, not just a dollar amount.
+
+**Actionable Adjustment:** Next week, reduce position size by 25-30% on any first attempt at an A-Up or A-Down until you see at least one confirmed follow-through close beyond the level — let the market prove the breakout is real before committing full size, given last week's likely false-break environment.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEKLY ASSESSMENT: April 22–28, 2026
+
+**WEEK SUMMARY:**
+A -$1,030 week across 4 trading days, with a best day of +$45.50 and a worst day of -$728.50. Three of four sessions had zero detected setups and confluence below 4/12—yet trading continued all three times. The losses weren't bad luck; they were fully predictable outcomes of ignoring pre-defined rules.
+
+**STRONGEST MOMENT:**
+The two winning days existed, suggesting some ability to execute correctly when conditions align. Without trade-level detail on those sessions, the clearest positive is that losses were stopped before account-level damage—but that bar is too low to celebrate.
+
+**BIGGEST LEAK:**
+Oversized entries in zero-setup, low-confluence environments. This happened across all four sessions. The 4×/5× trades on April 28 alone cost -$370. April 23's 29 fills in a 0/12 session, April 24's 12 fills in a 2/12 session, April 27's 9 trades against an explicit NO_SIGNAL warning—this is one leak repeating four times, costing the entire week.
+
+**PROCESS GRADE: D**
+Rules were written, signals were clear, and trading happened anyway—three sessions had explicit NO_SIGNAL readings and still produced 50 combined fills.
+
+**FOCUS FOR NEXT WEEK:**
+Before entering any trade, confirm confluence ≥ 4/12 AND at least one detected setup. If either condition is unmet, maximum position size is 1 contract. Track this as a binary pass/fail on every single entry.
+
+============================================================

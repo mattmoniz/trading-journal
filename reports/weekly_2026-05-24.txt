@@ -1,0 +1,84 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-24  (2026-05-18 – 2026-05-24)
+Generated   : 2026-05-26T19:01:16.620Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 5
+Total P&L     : -$1736.50 (4/5 days reliable)
+Daily avg     : -$434.13
+Win days      : 1 / 4 (25%)
+Best day      : 2026-05-21  +$586.50
+Worst day     : 2026-05-20  -$1666.50
+
+  2026-05-18  -$1635.00 *
+  2026-05-19  -$227.50
+  2026-05-20  -$1666.50
+  2026-05-21  +$586.50
+  2026-05-22  -$429.00
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-05-18  score: -4  A↓ C↓  [?]
+  2026-05-19  score: +4  A↑ C↑  [?]
+  2026-05-20  score: -4  A↓ C↓  [?]
+  2026-05-21  score: +4  A↑ C↑  [?]
+  2026-05-22  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 251
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 251 | wr: 40% | avg fill pnl: -$13.35
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1736.50 on 5 trading day(s)
+Low win-day rate: 1/5 (20%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-05-24 — Flag Interpretation
+
+A 20% win-day rate with a net loss of $1,736.50 across five days signals a persistent directional bias failure — the trader is likely initiating ACD levels on the wrong side repeatedly, or holding through failed A-levels instead of respecting them as invalidation points. The consistency of losing days (4 out of 5) rules out a single outlier event and instead points to either a misread weekly OR level or a tendency to fight the prevailing trend. In NQ/ES specifically, this pattern often emerges when traders anchor to a prior week's bias and ignore fresh Opening Range rejections that confirm a shift.
+
+**Actionable adjustment for next week:** Before any entry, require that price confirms the A-Up or A-Down *and* holds for a full 5-minute close beyond that level before committing size — eliminate all anticipatory entries until the win-day rate recovers above 50%.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : F
+
+## WEEKLY ASSESSMENT: May 18–24, 2026
+
+**WEEK SUMMARY:**
+A -$1,736.50 week across 4 trading days with only 1 winning day (+$586.50). Three losing days were not bad-luck losses—they were systematic violations of the trader's own rules, including trading on 0–2/12 confluence scores with zero detected setups. The worst day alone (-$1,666.50) wiped more than two weeks of a strong best day.
+
+**STRONGEST MOMENT:**
+The +$586.50 winning day (May 22 best day context aside, likely May 18 or 20 morning session) represents the only period where sizing and direction aligned. Insufficient granular data to isolate a single trade, but the best day proves the edge exists when rules are followed.
+
+**BIGGEST LEAK:**
+Averaging into losers under zero-confluence conditions. This occurred across all 4 days—scaling to ×2, ×3, ×4, and ×5 contracts on trades where MFE never exceeded +$89 and often sat below +$35. The May 20 short sequence alone cost **$1,338.50**. Conservative estimate: this single behavior accounts for **$1,500+** of the weekly loss.
+
+**PROCESS GRADE: F**
+Trading 105 fills on a day the system explicitly flagged "None detected" is not process variance—it is complete process abandonment.
+
+**FOCUS FOR NEXT WEEK:**
+If confluence is below 6/12 or setups show "None detected," maximum position size is **1 contract, no additions**. Track every instance of compliance. Target 100%.
+
+============================================================

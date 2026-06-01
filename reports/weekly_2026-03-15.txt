@@ -1,0 +1,80 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-03-15  (2026-03-09 – 2026-03-15)
+Generated   : 2026-05-25T23:52:35.252Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 4
+Total P&L     : -$1934.50 (1/4 days reliable)
+Daily avg     : -$1934.50
+Win days      : 0 / 1 (0%)
+Best day      : 2026-03-10  -$1934.50
+
+  2026-03-10  -$1934.50
+  2026-03-11  -$1393.50 *
+  2026-03-12  -$242.00 *
+  2026-03-13  -$4725.00 *
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 1 day(s) | C confirm: 1 (100%)
+A Down fired  : 4 day(s) | C confirm: 4 (100%)
+Net score Δ   : -12
+Day types     : Unknown: 5
+
+  2026-03-09  score: -4  A↓ C↓  [?]
+  2026-03-10  score: -4  A↓ C↓  [?]
+  2026-03-11  score: -4  A↓ C↓  [?]
+  2026-03-12  score: -4  A↓ C↓  [?]
+  2026-03-13  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 2002
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 2002 | wr: 48% | avg fill pnl: -$5.80
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1934.50 on 4 trading day(s)
+Low win-day rate: 0/4 (0%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-03-15 Analysis
+
+The zero win-day rate across all four trading sessions signals a systematic breakdown rather than random variance — either the market's directional structure was consistently misread, or entries were being taken against the prevailing ACD trend without confirmation. A net loss of nearly $2,000 across four days suggests repeated small losses rather than one catastrophic outlier, pointing to a pattern of fighting the tape or prematurely fading moves before monthly/weekly pivots were clearly violated. This type of consistency in losing typically reflects a bias problem — likely leaning long into a bearish trend or vice versa — rather than execution failure. The ACD framework would flag this week as a clear signal that the trader's directional assumption for the period was fundamentally misaligned with where institutional order flow was actually positioned.
+
+**Actionable adjustment:** Before placing any trade next week, explicitly identify the 30-day rolling ACD number line direction for both NQ and ES and refuse to take any trade counter to that bias until a confirmed A-up or A-down prints on the opening range — no anticipatory fading, entries only on confirmed signals in the dominant direction.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : F
+
+## WEEK SUMMARY:
+One trading day logged, $1,934.50 lost, zero valid setups detected across the entire session. The system returned 0/12 confluence with no detected setup — the correct trade count was zero, and the actual trade count was not. This week continued a documented multi-week pattern of trading through explicit system-generated no-trade signals.
+
+## STRONGEST MOMENT:
+Insufficient trade data. No session produced a decision worth crediting.
+
+## BIGGEST LEAK:
+Ignoring 0/12 confluence signals and trading anyway. This happened on every reviewed session this week — and per the daily themes, on at least 4 consecutive trading days spanning the broader period. The pattern: system says no trade, trader enters anyway, repeats entries after stops, escalates size. On 2026-03-11 alone, 42 long trades at 7 contracts into a confirmed A-Down signal cost $2,673. On 2026-03-12, maximum size was applied to the worst trades while minimum size hit the only profitable move. The leak isn't a setup problem — it's a compliance problem.
+
+## PROCESS GRADE: F
+The system explicitly denied authorization to trade on every session reviewed, and trades were taken on every session reviewed — there is no process being followed.
+
+## FOCUS FOR NEXT WEEK:
+Before entering any trade, screenshot the confluence score. If it reads below 6/12, close the platform. Track how many sessions you close without a single entry — that number should be greater than zero by Friday.
+
+============================================================

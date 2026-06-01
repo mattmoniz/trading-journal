@@ -9,6 +9,7 @@
 //   cum_delta          — bid_volume - ask_volume per bar (not stored; computed when needed)
 
 import { query } from '../db.js';
+import { logProcess } from '../lib/processLog.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -469,16 +470,127 @@ export async function recalculatePatternStats(tradeDate) {
   console.log(`[pattern] ${tradeDate}: pattern_stats recalculated`);
 }
 
+// ── STEP 4: Update setup_move_stats ───────────────────────────────────────────
+
+const SETUP_TYPES = [
+  'TRT_SHORT','TRT_LONG','TRT_MAH_SHORT','TRT_MAH_LONG',
+  'IB_BEARISH','IB_BULLISH',
+  'OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT',
+  'C_REVERSAL_SHORT','C_REVERSAL_LONG',
+  'FAILED_AUCTION_SHORT','FAILED_AUCTION_LONG',
+  'VALUE_AREA_RESPONSIVE_LONG','VALUE_AREA_RESPONSIVE_SHORT',
+  'BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
+];
+
+export async function updateSetupMoveStats(tradeDate) {
+  for (const setupType of SETUP_TYPES) {
+    // Determine move direction from setup name so SQL expression is always a safe constant
+    const isLong = setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('UP');
+    const moveExpr = isLong ? 't1_level - entry_zone_low' : 'entry_zone_high - t1_level';
+
+    const [q30, q90, qAll] = await Promise.all([
+      query(`SELECT AVG(${moveExpr}) as avg_move, COUNT(*) as sessions
+             FROM active_setups
+             WHERE resolution = 'TARGET_HIT' AND setup_type = $1
+               AND fired_at >= NOW() - INTERVAL '30 days'`, [setupType]),
+      query(`SELECT AVG(${moveExpr}) as avg_move, COUNT(*) as sessions
+             FROM active_setups
+             WHERE resolution = 'TARGET_HIT' AND setup_type = $1
+               AND fired_at >= NOW() - INTERVAL '90 days'`, [setupType]),
+      query(`SELECT AVG(${moveExpr}) as avg_move, COUNT(*) as sessions
+             FROM active_setups
+             WHERE resolution = 'TARGET_HIT' AND setup_type = $1`, [setupType]),
+    ]);
+
+    await query(`
+      INSERT INTO setup_move_stats (
+        calculated_date, setup_type,
+        avg_move_30d, sessions_30d,
+        avg_move_90d, sessions_90d,
+        avg_move_alltime, sessions_alltime
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (calculated_date, setup_type) DO UPDATE SET
+        avg_move_30d=EXCLUDED.avg_move_30d, sessions_30d=EXCLUDED.sessions_30d,
+        avg_move_90d=EXCLUDED.avg_move_90d, sessions_90d=EXCLUDED.sessions_90d,
+        avg_move_alltime=EXCLUDED.avg_move_alltime, sessions_alltime=EXCLUDED.sessions_alltime,
+        updated_at=NOW()
+    `, [
+      tradeDate, setupType,
+      q30.rows[0].avg_move != null ? parseFloat(q30.rows[0].avg_move) : null,
+      parseInt(q30.rows[0].sessions) || 0,
+      q90.rows[0].avg_move != null ? parseFloat(q90.rows[0].avg_move) : null,
+      parseInt(q90.rows[0].sessions) || 0,
+      qAll.rows[0].avg_move != null ? parseFloat(qAll.rows[0].avg_move) : null,
+      parseInt(qAll.rows[0].sessions) || 0,
+    ]);
+  }
+  console.log(`[pattern] ${tradeDate}: setup_move_stats updated for ${SETUP_TYPES.length} setup types`);
+}
+
+// ── Backfill session_outcome for rule_overrides ────────────────────────────────
+
+async function backfillOverrideOutcomes(tradeDate) {
+  try {
+    // Find overrides for this date that don't yet have a session_outcome
+    const overrideQ = await query(`
+      SELECT id FROM rule_overrides
+      WHERE override_date = $1 AND session_outcome IS NULL
+    `, [tradeDate]);
+    if (overrideQ.rows.length === 0) return;
+
+    // Calculate session P&L using CumPL diff (same pattern as daily-logs)
+    const pnlQ = await query(`
+      WITH ep_fills AS (
+        SELECT (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric as cum_pl,
+               custom_fields->>'account' as account,
+               exit_time
+        FROM trades
+        WHERE log_date = $1
+          AND custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+          AND custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+      ),
+      last_ep AS (
+        SELECT DISTINCT ON (account) account, cum_pl
+        FROM ep_fills ORDER BY account, exit_time DESC
+      ),
+      prev_ep AS (
+        SELECT DISTINCT ON (custom_fields->>'account') custom_fields->>'account' as account,
+          (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric as cum_pl
+        FROM trades
+        WHERE log_date < $1
+          AND custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+          AND custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+        ORDER BY custom_fields->>'account', exit_time DESC
+      )
+      SELECT COALESCE(SUM(l.cum_pl - COALESCE(p.cum_pl, 0)), 0) as session_pnl
+      FROM last_ep l LEFT JOIN prev_ep p USING (account)
+    `, [tradeDate]);
+
+    const sessionPnl = parseFloat(pnlQ.rows[0]?.session_pnl) || 0;
+
+    await query(`
+      UPDATE rule_overrides SET session_outcome = $1
+      WHERE override_date = $2 AND session_outcome IS NULL
+    `, [sessionPnl, tradeDate]);
+
+    console.log(`[pattern] Override outcomes backfilled for ${tradeDate}: ${sessionPnl.toFixed(2)}`);
+  } catch (err) {
+    console.error(`[pattern] backfillOverrideOutcomes error:`, err.message);
+  }
+}
+
 // ── Main nightly runner ────────────────────────────────────────────────────────
 
 export async function runNightlyUpdate(tradeDate, io = null) {
-  console.log(`[pattern] Starting nightly update for ${tradeDate}`);
-  try {
+  return logProcess('PATTERN_MEMORY', async () => {
+    console.log(`[pattern] Starting nightly update for ${tradeDate}`);
     const logResult = await populateDailyLog(tradeDate, io);
-    if (!logResult) return { skipped: true };
+    if (!logResult) return { skipped: true, count: 0 };
 
     await updateConditionMemory(tradeDate);
     await recalculatePatternStats(tradeDate);
+    await updateSetupMoveStats(tradeDate);
+    await backfillOverrideOutcomes(tradeDate);
 
     const degradingQ = await query(`
       SELECT structural_state FROM pattern_stats
@@ -493,9 +605,9 @@ export async function runNightlyUpdate(tradeDate, io = null) {
       io.emit('pattern-memory-updated', { date: tradeDate, degradingAlerts: degradingStates, combinationsUpdated });
     }
     console.log(`[pattern] Nightly update complete for ${tradeDate}`);
-    return { success: true, tradeDate, degradingAlerts: degradingStates, combinationsUpdated };
-  } catch (err) {
+    return { success: true, count: combinationsUpdated, tradeDate, degradingAlerts: degradingStates, combinationsUpdated };
+  }).catch(err => {
     console.error(`[pattern] Nightly update failed for ${tradeDate}:`, err.message);
     return { error: err.message };
-  }
+  });
 }

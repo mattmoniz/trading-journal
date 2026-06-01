@@ -133,14 +133,29 @@ export async function getImportHistory(limit = 50) {
   return result.rows;
 }
 
-export async function manualImportFromFile(filePath) {
+export async function manualImportFromFile(filePath, trigger = 'MANUAL') {
   const fs = await import('fs');
+  const path = await import('path');
   const { parseSierraTradeLog } = await import('../parsers/sierraParser.js');
 
   const content = fs.readFileSync(filePath, 'utf8');
-  const trades = parseSierraTradeLog(content);
-  
-  return await importSierraTrades(trades);
+  const parsed = parseSierraTradeLog(content);
+  if (parsed.warning) console.warn('[import]', parsed.warning);
+
+  const result = await importSierraTrades(parsed.trades);
+
+  // Log to import_log (best-effort — never block the import result)
+  try {
+    const fileName = path.basename(filePath);
+    await pool.query(`
+      INSERT INTO import_log (import_time, file_used, imported, skipped, errors, trigger)
+      VALUES (NOW(), $1, $2, $3, $4, $5)
+    `, [fileName, result.imported, result.skipped, result.errors?.length ?? 0, trigger]);
+  } catch (logErr) {
+    console.warn('[import] import_log write failed:', logErr.message);
+  }
+
+  return result;
 }
 
 export default { importSierraTrades, getImportHistory, manualImportFromFile };

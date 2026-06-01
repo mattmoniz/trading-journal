@@ -1,0 +1,77 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-15  (2026-05-09 – 2026-05-15)
+Generated   : 2026-05-26T19:02:20.808Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 5
+Total P&L     : +$936.00 (4/5 days reliable)
+Daily avg     : +$234.00
+Win days      : 3 / 4 (75%)
+Best day      : 2026-05-13  +$837.00
+Worst day     : 2026-05-15  -$205.00
+
+  2026-05-11  +$162.00
+  2026-05-12  -$945.50 *
+  2026-05-13  +$837.00
+  2026-05-14  +$142.00
+  2026-05-15  -$205.00
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 2 (67%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +5
+Day types     : Unknown: 5
+
+  2026-05-11  score: +0  no signals  [?]
+  2026-05-12  score: +1  A↑  [?]
+  2026-05-13  score: -4  A↓ C↓  [?]
+  2026-05-14  score: +4  A↑ C↑  [?]
+  2026-05-15  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 140
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 140 | wr: 42% | avg fill pnl: -$0.07
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this week.
+
+INTERPRETATION (AI)
+----------------------------------------
+The absence of notable flags this week suggests the trader operated within expected parameters — no significant overtrading, no runaway losing days, and no extreme deviations from ACD framework discipline. This kind of "quiet week" can reflect either genuinely controlled execution or a low-volatility environment that simply didn't generate many tradeable ACD setups in NQ/ES. While clean weeks are positive, they can also mask passive under-engagement, where valid A-up or A-down confirmations were present but not acted upon with appropriate conviction. For next week, conduct a specific review of every identified Opening Range and confirm whether A-level breaks that held for 30+ minutes were traded at full size — if not, the actionable adjustment is to pre-commit position sizing rules before the open so hesitation doesn't erode edge on clean setups.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEK SUMMARY:
+Four trading days produced +$936.00 with three winning days, but the P&L masks a broken process. The best day (+$837.00) carried the week while four other sessions generated noise, oversized losses, and zero-confirmation trading. A profitable week built on a flawed foundation is not progress — it's exposure.
+
+## STRONGEST MOMENT:
+Insufficient trade data to identify a specific best decision, but the +$837.00 day suggests at least one session where directional discipline held long enough to capture meaningful movement.
+
+## BIGGEST LEAK:
+Trading with 2/12 confluence and zero detected setups — repeated across all four documented sessions. This directly produced 48 fills on May 15, 13 fills on May 11, and the $432 combined loss from oversized no-MFE trades on May 14. Conservative estimate: this single behavior cost $600–$800 in recoverable losses and opportunity drag across the week.
+
+## PROCESS GRADE: D
+The positive P&L was generated despite the process, not because of it — four sessions showed confluece violations, directional violations, or size escalation into losing ideas simultaneously.
+
+## FOCUS FOR NEXT WEEK:
+If confluence is below 5/12 and zero setups are detected, maximum position size is 2 contracts and maximum daily trade count is 6 fills. Track both numbers in real time. If either limit is hit, the session ends. Measure compliance as a binary yes/no for each day — target 4/4 next week.
+
+============================================================

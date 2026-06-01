@@ -1,0 +1,77 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-01  (2026-04-25 – 2026-05-01)
+Generated   : 2026-05-26T19:01:58.214Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 5
+Total P&L     : +$74.00 (4/5 days reliable)
+Daily avg     : +$18.50
+Win days      : 2 / 4 (50%)
+Best day      : 2026-04-29  +$1047.50
+Worst day     : 2026-04-28  -$728.50
+
+  2026-04-27  +$45.50
+  2026-04-28  -$728.50
+  2026-04-29  +$1047.50
+  2026-04-30  +$2235.50 *
+  2026-05-01  -$290.50
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-04-27  score: -4  A↓ C↓  [?]
+  2026-04-28  score: +4  A↑ C↑  [?]
+  2026-04-29  score: +4  A↑ C↑  [?]
+  2026-04-30  score: -4  A↓ C↓  [?]
+  2026-05-01  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 212
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 212 | wr: 51% | avg fill pnl: +$10.16
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this week.
+
+INTERPRETATION (AI)
+----------------------------------------
+The absence of notable flags this week indicates the trader operated within expected parameters — no significant rule violations, no outsized losses, and no behavioral drift from the ACD framework. This kind of clean week typically reflects either disciplined execution in a cooperative trending environment, or simply low activity where few A-level setups triggered. While a flag-free report is broadly positive, it shouldn't be mistaken for peak performance — the more important question is whether A-up/A-down levels were actively traded when they confirmed, or whether setups were passed on out of hesitation. For next week, audit every A-level trigger on NQ and ES to confirm you took the trade or had a rule-based reason to skip it — missed valid setups are silent underperformance that won't show up as a flag but erode edge over time.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEK SUMMARY:
+Four trading days produced +$74.00 total P&L, but the number obscures severe process failures underneath. The best day hit +$1,047.50 while the worst fell -$728.50, a swing driven almost entirely by sizing and signal violations rather than market conditions. Zero valid setups were detected across meaningful portions of the week, yet trade volume remained high.
+
+## STRONGEST MOMENT:
+Insufficient trade data to isolate a specific best decision — total trades recorded as 0 in structured data.
+
+## BIGGEST LEAK:
+Oversized entries in zero-confluence, no-signal environments. This occurred on all five trading sessions — 4/27 (9 trades, NO_SIGNAL), 4/28 (4–5 contract sizing with 2/12 confluence), 4/29 (repeated ×2 longs with 2/12 confluence), 4/30 (25 trades before a valid move), and 5/01 (×4 short, $4 MFE). Conservative estimate: this single behavior cost $700–$900 across the week, effectively erasing what should have been a significantly profitable week.
+
+## PROCESS GRADE: D
+Despite finishing marginally positive, the week demonstrated repeated, conscious violations of stated session rules on every single trading day.
+
+## FOCUS FOR NEXT WEEK:
+When confluence reads 2/12 or lower with no setup detected, maximum position size is 1 contract — log the confluence score before every entry and refuse to execute above 1× until the score reaches 6/12 or higher. Track compliance daily.
+
+============================================================

@@ -1,0 +1,84 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-22  (2026-05-16 – 2026-05-22)
+Generated   : 2026-05-26T19:02:30.573Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 5
+Total P&L     : -$1736.50 (4/5 days reliable)
+Daily avg     : -$434.13
+Win days      : 1 / 4 (25%)
+Best day      : 2026-05-21  +$586.50
+Worst day     : 2026-05-20  -$1666.50
+
+  2026-05-18  -$1635.00 *
+  2026-05-19  -$227.50
+  2026-05-20  -$1666.50
+  2026-05-21  +$586.50
+  2026-05-22  -$429.00
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-05-18  score: -4  A↓ C↓  [?]
+  2026-05-19  score: +4  A↑ C↑  [?]
+  2026-05-20  score: -4  A↓ C↓  [?]
+  2026-05-21  score: +4  A↑ C↑  [?]
+  2026-05-22  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 251
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 251 | wr: 40% | avg fill pnl: -$13.35
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1736.50 on 5 trading day(s)
+Low win-day rate: 1/5 (20%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-05-22 — Flag Interpretation
+
+The 20% win-day rate (1 out of 5) is the more telling signal here — this isn't a week where one bad day skewed the results, but rather persistent daily failure to capture or hold ACD levels across the board. A net loss of -$1,736.50 spread across five losing days suggests either repeated false breakouts that weren't cut quickly, or a choppy, non-trending environment where A-level initiations were fading rather than following through. In ACD terms, when the market refuses to confirm A-ups or A-downs consistently across a full week, the methodology is signaling range-bound conditions that punish aggressive trend-following entries. The combination of low win-day frequency and moderate total loss (not catastrophic) also hints at small, repeated death-by-a-thousand-cuts losses rather than one or two discipline failures.
+
+**Actionable Adjustment:** Next week, require confirmation of the Opening Range at minimum before initiating any A-level trade — no anticipatory entries — and cap daily loss at roughly half your average daily risk until you register back-to-back winning days, forcing the market to prove trend conviction before you re-engage full size.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : F
+
+## WEEKLY ASSESSMENT: May 16–22, 2026
+
+**WEEK SUMMARY:**
+A -$1,736.50 week across 4 trading days, with 3 losing days overwhelming the single winning day of +$586.50. The worst day alone (-$1,666.50) nearly erased the entire account buffer for the week. Every losing session shared the same root cause executed repeatedly.
+
+**STRONGEST MOMENT:**
+Wednesday's +$586.50 best day demonstrates the trader can generate meaningful profits when conditions align. Insufficient detail to identify a specific trade decision, but the result proves the edge exists.
+
+**BIGGEST LEAK:**
+Averaging into losers with zero setup confirmation. This occurred across all 3 losing days — the May 20 short sequence alone cost $1,338.50 across 5 entries, all with MFE under $65. May 19 added size 4 separate times into rejection on a 2/12 confluence day. May 21 and 22 repeated the same pattern. Conservative estimate: this single behavior cost over $2,000 this week — more than the total loss — meaning it erased profitable trades on top of the net figure.
+
+**PROCESS GRADE: F**
+Trading 3–5 contract positions on days the system explicitly scored 0–2/12 confluence with no detected setups is not a process breakdown — it is trading without a process.
+
+**FOCUS FOR NEXT WEEK:**
+If confluence is below 4/12 or setups read "None detected," maximum position size is 1 contract, no adds, no exceptions — track compliance as a daily binary (yes/no) before reviewing P&L.
+
+============================================================

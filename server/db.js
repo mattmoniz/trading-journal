@@ -27,8 +27,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 2000,
 });
 
-// Test connection
-pool.on('connect', () => {
+// Bump work_mem per-connection so large sorts (e.g. GROUP BY on trades) stay in memory
+pool.on('connect', (client) => {
+  client.query('SET work_mem = \'64MB\'').catch(() => {});
   console.log('✅ Connected to PostgreSQL database');
 });
 
@@ -43,7 +44,9 @@ export const query = async (text, params) => {
   try {
     const res = await pool.query(text, params);
     const duration = Date.now() - start;
-    console.log('Executed query', { text, duration, rows: res.rowCount });
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Executed query', { text, duration, rows: res.rowCount });
+    }
     return res;
   } catch (error) {
     console.error('Database query error:', error);

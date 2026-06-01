@@ -10,18 +10,54 @@
 }
 
 :root {
-  --bg-primary: #0a0e27;
+  /* ── Backgrounds ── */
+  --bg-primary:   #0a0e27;
   --bg-secondary: #12162e;
-  --bg-card: #1a1f3a;
-  --bg-hover: #252b4a;
+  --bg-card:      #1a1f3a;
+  --bg-hover:     #252b4a;
+  --card-bg:      #1a1f3a;   /* alias used by inline styles */
+
+  /* ── Semantic signal colors ── */
+  --color-bullish:  #22c55e;
+  --color-bearish:  #ef4444;
+  --color-caution:  #fbbf24;
+  --color-neutral:  #64748b;
+
+  /* ── Accent palette ── */
   --accent-purple: #8b5cf6;
-  --accent-blue: #3b82f6;
-  --accent-green: #10b981;
-  --accent-red: #ef4444;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --accent-blue:   #3b82f6;
+  --accent-green:  #10b981;
+  --accent-red:    #ef4444;
+
+  /* ── Typography ── */
+  --text-primary:   #f1f5f9;
+  --text-secondary: #a0aec0;
+  --text-muted:     #64748b;  /* minimum brightness for informational text */
+
+  /* ── Font sizes — 13px minimum for any label carrying information ── */
+  --font-label:   13px;
+  --font-body:    13px;
+  --font-value:   15px;
+  --font-header:  18px;
+  --font-metric:  24px;
+
+  /* ── Font weights ── */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-bold:   700;
+
+  /* ── Spacing scale ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  /* ── Borders & shadows ── */
   --border-color: #2d3354;
+  --input-bg:     #0f172a;
   --shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
 }
 
@@ -206,7 +242,7 @@ body {
 .sync-progress-bar-wrap.error .sync-progress-label { color: #ef4444; }
 .sync-progress-msg {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   flex: 1;
   word-break: break-word;
   white-space: pre-wrap;
@@ -255,7 +291,7 @@ body {
   padding: 14px 16px;
 }
 .tearsheet-kpi-label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-bottom: 6px;
   text-transform: uppercase;
@@ -300,7 +336,7 @@ body {
   color: var(--text-muted);
   font-weight: 500;
   border-bottom: 1px solid var(--border-color);
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
 }
 .tearsheet-table td {
@@ -309,7 +345,7 @@ body {
 }
 .tearsheet-table tr:last-child td { border-bottom: none; }
 .tearsheet-section-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -324,14 +360,14 @@ body {
 }
 .tearsheet-heatmap-table {
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 13px;
   min-width: 600px;
 }
 .tearsheet-heatmap-table th {
   padding: 4px 8px;
   color: var(--text-muted);
   font-weight: 500;
-  font-size: 11px;
+  font-size: 13px;
   text-align: right;
   white-space: nowrap;
 }
@@ -367,7 +403,7 @@ body {
 }
 
 .stat-chip .label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-bottom: 4px;
 }
@@ -570,7 +606,7 @@ body {
 .direction-badge {
   padding: 4px 8px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -707,7 +743,7 @@ body {
 
 .cal-dow {
   text-align: center;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -716,19 +752,18 @@ body {
 }
 
 .cal-cell {
-  aspect-ratio: 1;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 6px 7px;
+  padding: 6px 7px 18px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-height: 72px;
+  min-height: 80px;
   position: relative;
 }
 
-.cal-chart-btn {
+.cal-intraday-btn {
   position: absolute;
   bottom: 3px;
   right: 4px;
@@ -738,12 +773,11 @@ body {
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
-  opacity: 0.4;
+  opacity: 0.35;
   transition: opacity 0.15s;
 }
 
-.cal-chart-btn:hover { opacity: 1; }
-.cal-chart-btn.has-chart { opacity: 0.85; }
+.cal-intraday-btn:hover { opacity: 1; }
 
 .cal-empty {
   background: transparent;
@@ -770,14 +804,111 @@ body {
 }
 
 .cal-day-pnl {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .cal-trade-count {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-muted);
-  margin-top: auto;
+}
+
+.cal-setups {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 3px;
+}
+
+.cal-setup-line {
+  font-size: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+}
+
+.cal-setup-more {
+  font-size: 9px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.cal-confluence-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #f59e0b;
+  letter-spacing: 0.03em;
+  margin-bottom: 1px;
+}
+
+.cal-monthly-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.cal-monthly-label {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+}
+
+.cal-monthly-sep {
+  color: var(--border-color);
+  font-weight: 400;
+}
+
+.cal-week-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.cal-week-summary:hover {
+  background: rgba(255,255,255,0.06);
+}
+
+.cal-week-range {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.cal-week-sep {
+  color: var(--border-color);
+}
+
+.cal-week-detail {
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  margin-top: -2px;
 }
 
 /* ==================== DAY MODAL ==================== */
@@ -852,7 +983,7 @@ body {
   transform: translateY(-50%);
   background: var(--accent-purple);
   color: #fff;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
@@ -868,7 +999,7 @@ body {
   transform: translateX(-50%);
   background: var(--accent-purple);
   color: #fff;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
@@ -1006,7 +1137,7 @@ body {
 }
 
 .chart-upload-toggle {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
@@ -1028,12 +1159,12 @@ body {
 }
 
 .chart-type-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
 .chart-upload-btn {
-  font-size: 12px;
+  font-size: 13px;
   padding: 5px 14px;
 }
 
@@ -1101,7 +1232,7 @@ body {
   border: 1px solid rgba(239,68,68,0.3);
   padding: 5px 14px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -1115,7 +1246,7 @@ body {
 }
 
 .chart-analysis-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--accent-blue);
   text-transform: uppercase;
@@ -1145,7 +1276,7 @@ body {
 }
 
 .notes-field label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1186,13 +1317,13 @@ body {
   color: #a78bfa;
   border: 1px solid rgba(139, 92, 246, 0.3);
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 13px;
   padding: 1px 6px;
   white-space: nowrap;
 }
 
 .tag-chip.small {
-  font-size: 10px;
+  font-size: 13px;
   padding: 1px 5px;
 }
 
@@ -1214,7 +1345,7 @@ body {
   border-radius: 4px;
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
   padding: 1px 7px;
   transition: border-color 0.15s, color 0.15s;
 }
@@ -1228,7 +1359,7 @@ body {
   border: 1px solid var(--accent-purple);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: 13px;
   outline: none;
   padding: 1px 7px;
   width: 90px;
@@ -1251,6 +1382,101 @@ body {
   font-size: 13px;
   line-height: 1.8;
   box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+}
+
+.day-stats-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255,255,255,0.02);
+}
+
+.day-stats-result {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 10px;
+  border-radius: 4px;
+  margin-right: 16px;
+}
+
+.day-stats-result.win  { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+.day-stats-result.loss { background: rgba(239,68,68,0.15);  color: var(--accent-red); }
+.day-stats-result.flat { background: rgba(100,116,139,0.15); color: var(--text-muted); }
+
+.day-stats-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 14px;
+  border-left: 1px solid var(--border-color);
+}
+
+.day-stats-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.day-stats-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.day-coaching-section {
+  border-top: 1px solid var(--border-color);
+  margin: 0;
+}
+
+.day-coaching-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.day-coaching-header:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.coaching-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.coaching-dot-unread { background: #f59e0b; }
+.coaching-dot-read   { background: var(--accent-green); }
+
+.day-coaching-expand {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.day-coaching-body {
+  padding: 12px 20px 16px;
+  background: rgba(255,255,255,0.02);
+}
+
+.coaching-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
 }
 
 .day-modal-trade-list {
@@ -1473,7 +1699,7 @@ body {
 }
 
 .stat-card h3 {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--text-muted);
   margin-bottom: 4px;
   text-transform: uppercase;
@@ -1484,7 +1710,7 @@ body {
 }
 
 .big-number {
-  font-size: clamp(12px, 1.2vw, 16px);
+  font-size: clamp(13px, 1.2vw, 16px);
   font-weight: 600;
   margin-bottom: 2px;
   white-space: nowrap;
@@ -1494,7 +1720,7 @@ body {
 }
 
 .sub-text {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
@@ -1536,7 +1762,7 @@ body {
 }
 
 .duration-label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1618,7 +1844,7 @@ body {
   display: flex;
   justify-content: space-between;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .chart-section {
@@ -1885,7 +2111,7 @@ body {
   display: inline-block;
   padding: 4px 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -2175,7 +2401,7 @@ body {
 }
 
 .rule-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
@@ -2192,7 +2418,7 @@ body {
   border-radius: 6px;
   color: var(--text-secondary);
   padding: 5px 12px;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -2218,7 +2444,7 @@ body {
 }
 
 .bt-card-label {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -2231,7 +2457,7 @@ body {
 }
 
 .bt-card-sub {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
@@ -2290,7 +2516,7 @@ body {
 }
 
 .al-detail {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
@@ -2336,7 +2562,7 @@ body {
 
 .backtest-table th {
   text-align: left;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -2372,7 +2598,7 @@ body {
 }
 
 .quality-label {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   font-weight: 600;
   text-transform: uppercase;
@@ -2387,7 +2613,7 @@ body {
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s;
@@ -2432,7 +2658,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 4px;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 13px;
   padding: 3px 8px;
   cursor: pointer;
   transition: all 0.12s;
@@ -2485,7 +2711,7 @@ body {
 }
 
 .bp-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -2511,7 +2737,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
 }
 
@@ -2542,14 +2768,14 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 13px;
   background: var(--bg-card);
   border-radius: 4px;
   padding: 4px 8px;
 }
 
 .sc-label { color: var(--text-secondary); }
-.sc-days  { color: var(--text-muted); font-size: 11px; }
+.sc-days  { color: var(--text-muted); font-size: 13px; }
 .sc-wr    { font-weight: 600; }
 
 /* First Session Impact */
@@ -2599,7 +2825,7 @@ body {
 
 .fs-outcome {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
 }
 
@@ -2620,7 +2846,7 @@ body {
   background: var(--bg-secondary);
   color: var(--text-secondary);
   font-weight: 600;
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   border-bottom: 1px solid var(--border-color);
@@ -2663,7 +2889,7 @@ body {
 }
 
 .tp-band-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
@@ -2678,7 +2904,7 @@ body {
 }
 
 .tp-band-sub {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -2694,7 +2920,7 @@ body {
 }
 
 .tp-rr-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
   font-weight: 600;
 }

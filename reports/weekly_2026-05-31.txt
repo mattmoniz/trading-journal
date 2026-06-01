@@ -1,0 +1,85 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-31  (2026-05-25 – 2026-05-31)
+Generated   : 2026-06-01T13:59:38.417Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 4
+Total P&L     : -$309.50
+Daily avg     : -$77.38
+Win days      : 2 / 4 (50%)
+Best day      : 2026-05-26  +$1173.50
+Worst day     : 2026-05-28  -$1244.50
+
+  2026-05-26  +$1173.50
+  2026-05-27  +$681.50
+  2026-05-28  -$1244.50
+  2026-05-29  -$920.00
+
+SETUP STATISTICS
+----------------------------------------
+BRACKET_BREAKOUT_LONG          fired: 3 | wins: 0 | losses: 0 | expired: 2 | wr: unresolved
+C_STANDALONE_DOWN              fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+IB_BEARISH                     fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+IB_BULLISH                     fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+OPEN_TEST_DRIVE_LONG           fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+TRT_LONG_V2                    fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+TRT_MAH_SHORT                  fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-05-25  score: +4  A↑ C↑  [?]
+  2026-05-26  score: +4  A↑ C↑  [?]
+  2026-05-27  score: -4  A↓ C↓  [?]
+  2026-05-28  score: -4  A↓ C↓  [?]
+  2026-05-29  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 139
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 139 | wr: 48% | avg fill pnl: -$2.84
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$309.50 on 4 trading day(s)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-05-31 Analysis
+
+The DOWN WEEK flag with a modest net loss of -$309.50 across 4 trading days suggests controlled, disciplined exposure rather than a blow-up — the damage is contained, but the week still failed to generate positive value. This pattern often indicates either consistent small losses from failed A-level breakouts that never followed through, or a choppy, range-bound market environment where ACD levels were repeatedly breached and reversed. The 4-day participation is normal, so this isn't an overtrading issue — it's more likely a signal quality or entry timing problem.
+
+**Actionable Adjustment:** Next week, tighten your A-level confirmation requirement by waiting for a 5-minute close *beyond* the A-up/A-down level rather than triggering on the touch — in choppy conditions this single filter typically cuts false entries by 30-40% and would likely have converted several of those small losses into flat trades.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEKLY ASSESSMENT: May 25–31, 2026
+
+**WEEK SUMMARY:**
+A -$309.50 week across 4 trading days obscures the real damage: gross losses were far worse, partially offset by a single +$1,173.50 day. The -$1,244.50 worst day and a pattern of MFE bleed, counter-trend entries, and overtrading confirm the P&L number understates how broken the process was. Two winning days cannot mask four distinct, repeated execution failures.
+
+**STRONGEST MOMENT:**
+The +$1,173.50 day on May 26 represents the week's only clean evidence that setup identification is working. Price was found correctly on multiple occasions — the problem was never entry quality, it was exit discipline.
+
+**BIGGEST LEAK:**
+Holding through MFE reversals and scaling into failing setups. This appeared every single trading day. On May 26 alone, $200+ evaporated across two position pairs that were correct at entry. On May 29, three oversized losing trades (-$372, -$194, -$75) with near-zero forward movement required the entire winning day just to approach breakeven. This one pattern — right trade, wrong management — cost an estimated $600–900 in recoverable P&L this week.
+
+**PROCESS GRADE: D**
+Entry identification showed genuine edge on two days, but size mismanagement, counter-trend entries on confirmed directional days, and 26 fills against zero valid setups demonstrate the execution process is not rule-governed.
+
+**FOCUS FOR NEXT WEEK:**
+If MFE does not reach 50% of your target within 6 bars of entry, exit the full position — no exceptions, logged every trade.
+
+============================================================

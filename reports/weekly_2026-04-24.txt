@@ -1,0 +1,93 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-04-24  (2026-04-18 – 2026-04-24)
+Generated   : 2026-05-26T19:01:35.920Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 4
+Total P&L     : -$639.00 (3/4 days reliable)
+Daily avg     : -$213.00
+Win days      : 1 / 3 (33%)
+Best day      : 2026-04-24  +$4.50
+Worst day     : 2026-04-22  -$351.50
+
+  2026-04-20  -$292.00
+  2026-04-22  -$351.50
+  2026-04-23  +$427.50 *
+  2026-04-24  +$4.50
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 4 day(s) | C confirm: 4 (100%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +12
+Day types     : Unknown: 5
+
+  2026-04-20  score: -4  A↓ C↓  [?]
+  2026-04-21  score: +4  A↑ C↑  [?]
+  2026-04-22  score: +4  A↑ C↑  [?]
+  2026-04-23  score: +4  A↑ C↑  [?]
+  2026-04-24  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 110
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 110 | wr: 39% | avg fill pnl: -$2.55
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$639.00 on 4 trading day(s)
+Low win-day rate: 1/4 (25%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-04-24 — Flag Interpretation
+
+The -$639 net loss across 4 trading days with only a 25% win-day rate signals a week where the trader was consistently on the wrong side of price — likely fading moves that had genuine directional follow-through, or entering ACD levels that failed to hold. The low win-day frequency (1 of 4) points more toward a systematic misread of the week's bias rather than one catastrophic outlier day, suggesting the monthly or weekly A-level framework may have been misaligned with actual order flow. NQ/ES in this environment can whipsaw aggressively around macro catalysts, which may have compressed the reliability of opening range setups and generated false A-up/A-down signals throughout the week.
+
+**Actionable adjustment:** Before taking any ACD signal next week, require confirmation that price holds beyond the A-level for a minimum of two 5-minute closes before entering — this filters the false breakouts that likely generated the string of losing days and forces higher-conviction entries on genuinely established directional moves.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEKLY ASSESSMENT: APR 18–24, 2026
+
+---
+
+**WEEK SUMMARY:**
+A -$639.00 week across 3 trading days, with only 1 winning day and a best day of just +$4.50. The damage was concentrated in two sessions (Apr 23: -$351.50, Apr 24: -$376.00) where zero valid setups were present yet combined 41 fills were taken anyway. This was entirely an execution discipline failure, not a market problem.
+
+---
+
+**STRONGEST MOMENT:**
+Insufficient trade data to identify a specific strong decision. The one winning day produced only +$4.50, suggesting even "up" days lacked meaningful execution quality.
+
+---
+
+**BIGGEST LEAK:**
+Trading in no-signal, low-confluence environments — repeatedly. Apr 23 produced 29 fills with 0/12 confluence and 15 trades closing within $2 of entry. Apr 24 added 12 more fills at 2/12 confluence. That's **41 fills across two sessions where the pre-trade filter should have kept you flat**, costing ~$727.50 in those two days alone.
+
+---
+
+**PROCESS GRADE: D**
+The signals to stand aside were present and measurable both days — you traded anyway, repeatedly, at size.
+
+---
+
+**FOCUS FOR NEXT WEEK:**
+Before entry one on any session, log confluence score. **If score is below 4/12 and no setup is detected, maximum allowable trades = 0.** Track this as a binary pass/fail each day. Target: 3/3 days compliant.
+
+============================================================

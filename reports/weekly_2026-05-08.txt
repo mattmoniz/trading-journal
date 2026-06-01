@@ -1,0 +1,80 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-05-08  (2026-05-02 – 2026-05-08)
+Generated   : 2026-05-26T19:02:08.325Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 4
+Total P&L     : -$1367.50
+Daily avg     : -$341.88
+Win days      : 1 / 4 (25%)
+Best day      : 2026-05-07  +$44.50
+Worst day     : 2026-05-06  -$687.00
+
+  2026-05-05  -$582.00
+  2026-05-06  -$687.00
+  2026-05-07  +$44.50
+  2026-05-08  -$143.00
+
+SETUP STATISTICS
+----------------------------------------
+No setups fired this week.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 5 day(s) | C confirm: 5 (100%)
+A Down fired  : 0 day(s) | C confirm: 0 (0%)
+Net score Δ   : +20
+Day types     : Unknown: 5
+
+  2026-05-04  score: +4  A↑ C↑  [?]
+  2026-05-05  score: +4  A↑ C↑  [?]
+  2026-05-06  score: +4  A↑ C↑  [?]
+  2026-05-07  score: +4  A↑ C↑  [?]
+  2026-05-08  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 130
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 130 | wr: 48% | avg fill pnl: -$9.69
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1367.50 on 4 trading day(s)
+Low win-day rate: 1/4 (25%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-05-08 — Flag Interpretation
+
+The combination of a net loss week with only a 25% win-day rate signals that the trader is likely getting caught on the wrong side of intraday directional moves repeatedly, suggesting either poor A-level confirmation discipline or premature entries before true ACD levels are established. The relatively modest dollar loss of $1,367.50 across four days indicates position sizing is controlled, but the consistency of losing days points to a systematic read problem on market structure rather than one catastrophic trade. This pattern is characteristic of a choppy, mean-reverting tape where trend-following ACD setups are triggering but failing to follow through, trapping breakout entries. 
+
+**Actionable adjustment for next week:** Require at least two consecutive 30-minute closes beyond your A-level before entering any directional trade — this single filter will eliminate the false breakout entries that are likely responsible for the majority of losing days in this type of market environment.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : F
+
+## WEEKLY ASSESSMENT: May 2–8, 2026
+
+**WEEK SUMMARY:**
+A -$1,367.50 week across four trading days with only one winning session (+$44.50). Three losing days compounded by repeated sizing escalation and trading into confirmed no-signal conditions drove the damage, with the worst single day reaching -$687.00.
+
+**STRONGEST MOMENT:**
+Insufficient trade data for a clearly documented best decision. The week's lone green day at +$44.50 represents the ceiling of disciplined execution this week.
+
+**BIGGEST LEAK:**
+Trading when confluence scored 2/12 with zero valid setups detected — this happened on at least three of four sessions. You didn't just trade in poor conditions; you escalated size *into* them. May 5th: sized up to 2x–3x after early losses, turning a recoverable deficit into -$495. May 8th: 3 contracts short against a confirmed A Up signal and TRENDING_UP structure. This single behavioral pattern — increasing commitment when the market refuses your thesis — is responsible for the majority of the week's losses.
+
+**PROCESS GRADE: F**
+Confluence of 2/12 and zero detected setups is a no-trade condition, not a reduced-size condition, and that line was crossed repeatedly across three sessions.
+
+**FOCUS FOR NEXT WEEK:**
+Before entry, check two hard gates: confluence ≥ 6/12 AND at least one valid setup detected. If either gate fails, no trade is placed — not one, not reduced size. Track gate compliance daily as a binary yes/no.
+
+============================================================
