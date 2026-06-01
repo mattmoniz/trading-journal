@@ -374,19 +374,20 @@ httpServer.listen(PORT, () => {
   cron.schedule('0 16 * * 1-5', async () => {
     try {
       const sierraDir = '/mnt/c/SierraChart/SavedTradeActivity/';
-      const files = fs.readdirSync(sierraDir)
-        .filter(f => f.startsWith('TradeActivityLog') && f.endsWith('.txt'))
-        .map(f => ({ name: f, fullPath: path.join(sierraDir, f), mtime: fs.statSync(path.join(sierraDir, f)).mtime }))
-        .sort((a, b) => b.mtime - a.mtime);
-      if (!files.length) { console.log('[auto-import 4PM] No TAL files found in', sierraDir); return; }
-      const target = files[0];
-      console.log(`[auto-import 4PM] Importing ${target.name}`);
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const todayFile = path.join(sierraDir, `TradeActivityLogExport_${todayET}.txt`);
+      if (!fs.existsSync(todayFile)) {
+        console.log(`[auto-import 4PM] No TAL file for today (${todayET}) — skipping`);
+        await logProcess('AUTO_IMPORT_4PM', async () => ({ count: 0, imported: 0, skipped: 0, file: null, note: 'no TAL file for today' }));
+        return;
+      }
+      console.log(`[auto-import 4PM] Importing TradeActivityLogExport_${todayET}.txt`);
       const result = await logProcess('AUTO_IMPORT_4PM', async () => {
-        const r = await manualImportFromFile(target.fullPath, 'AUTO_4PM');
-        return { count: r.imported, imported: r.imported, skipped: r.skipped, file: target.name };
+        const r = await manualImportFromFile(todayFile, 'AUTO_4PM');
+        return { count: r.imported, imported: r.imported, skipped: r.skipped, file: `TradeActivityLogExport_${todayET}.txt` };
       });
       console.log(`[auto-import 4PM] Done — imported: ${result?.imported}, skipped: ${result?.skipped}`);
-      if (io) io.emit('auto-import-complete', { trigger: 'AUTO_4PM', file: target.name, imported: result?.imported, skipped: result?.skipped, time: new Date().toISOString() });
+      if (io) io.emit('auto-import-complete', { trigger: 'AUTO_4PM', file: `TradeActivityLogExport_${todayET}.txt`, imported: result?.imported, skipped: result?.skipped, time: new Date().toISOString() });
       checkAndEmitDLL(io).catch(() => {});
     } catch (e) { console.error('[auto-import 4PM] Error:', e.message); }
   }, { timezone: 'America/New_York' });
@@ -449,6 +450,24 @@ httpServer.listen(PORT, () => {
             const r = await runWeeklyReport(io);
             return { count: 1, weekEnd: r.weekEnd };
           });
+        }
+      }
+
+      // Auto-import catch-up — after 4 PM Mon–Fri, if today's TAL exists but 0 fills in DB
+      if (day >= 1 && day <= 5 && hour >= 16) {
+        const sierraDir = '/mnt/c/SierraChart/SavedTradeActivity/';
+        const todayFile = path.join(sierraDir, `TradeActivityLogExport_${today}.txt`);
+        if (fs.existsSync(todayFile)) {
+          const { rows: fillRows } = await query(
+            `SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [today]
+          );
+          if (parseInt(fillRows[0]?.count || 0) === 0) {
+            console.log('[catch-up] TAL file exists but 0 fills in DB — re-running import');
+            await logProcess('AUTO_IMPORT_4PM', async () => {
+              const r = await manualImportFromFile(todayFile, 'AUTO_CATCHUP');
+              return { count: r.imported, imported: r.imported, skipped: r.skipped, file: `TradeActivityLogExport_${today}.txt` };
+            });
+          }
         }
       }
 
@@ -597,15 +616,10 @@ httpServer.listen(PORT, () => {
 
       const sierraDir = '/mnt/c/SierraChart/SavedTradeActivity/';
       if (!fs.existsSync(sierraDir)) return;
-      const files = fs.readdirSync(sierraDir)
-        .filter(f => f.startsWith('TradeActivityLog') && f.endsWith('.txt'))
-        .map(f => ({ name: f, fullPath: path.join(sierraDir, f), mtime: fs.statSync(path.join(sierraDir, f)).mtime }))
-        .sort((a, b) => b.mtime - a.mtime);
-
-      if (!files.length) return;
-      const target = files[0];
-      console.log(`[auto-import intraday ${h}:${String(m).padStart(2,'0')}] Importing ${target.name}`);
-      const result = await manualImportFromFile(target.fullPath, 'AUTO_INTRADAY');
+      const todayFile = path.join(sierraDir, `TradeActivityLogExport_${todayStr}.txt`);
+      if (!fs.existsSync(todayFile)) return; // no file for today yet — skip silently
+      console.log(`[auto-import intraday ${h}:${String(m).padStart(2,'0')}] Importing TradeActivityLogExport_${todayStr}.txt`);
+      const result = await manualImportFromFile(todayFile, 'AUTO_INTRADAY');
       console.log(`[auto-import intraday] Done — imported: ${result?.imported}, skipped: ${result?.skipped}`);
 
       if (io && result?.imported > 0) {
