@@ -1,6 +1,9 @@
 import express from 'express';
+import fs from 'fs';
 import { query } from '../db.js';
 import { computeDLLStatus } from './dll.js';
+
+const SIERRA_TAL_DIR = '/mnt/c/SierraChart/SavedTradeActivity/';
 
 const router = express.Router();
 
@@ -92,8 +95,12 @@ router.get('/settings/process-health', async (req, res) => {
 
     // Fetch latest run for each non-live process
     const processNames = PROCESS_SCHEDULE.filter(p => !p.isLive).map(p => p.name);
+    // Cast timestamps to timestamptz so pg parses them correctly regardless of DB timezone
     const logsQ = await query(`
-      SELECT DISTINCT ON (process_name) process_name, started_at, completed_at, status, records_affected, error_message
+      SELECT DISTINCT ON (process_name) process_name,
+        (started_at AT TIME ZONE 'America/New_York')   as started_at,
+        (completed_at AT TIME ZONE 'America/New_York') as completed_at,
+        status, records_affected, error_message
       FROM process_log WHERE process_name = ANY($1)
       ORDER BY process_name, started_at DESC
     `, [processNames]);
@@ -101,7 +108,10 @@ router.get('/settings/process-health', async (req, res) => {
 
     // Fetch last 5 runs per process for detail view
     const detailQ = await query(`
-      SELECT process_name, started_at, completed_at, status, records_affected, error_message,
+      SELECT process_name,
+        (started_at AT TIME ZONE 'America/New_York')   as started_at,
+        (completed_at AT TIME ZONE 'America/New_York') as completed_at,
+        status, records_affected, error_message,
         id, ROW_NUMBER() OVER (PARTITION BY process_name ORDER BY started_at DESC) as rn
       FROM process_log WHERE process_name = ANY($1)
     `, [processNames]);
@@ -154,6 +164,7 @@ router.get('/settings/process-health', async (req, res) => {
         recordsAffected,
         errorMessage,
         statusColor: statusColor(proc, lastRun, lastStatus, nowET),
+        statusNote: null,
         history: proc.isLive ? [] : (detailByName[proc.name] || []).map(r => ({
           startedAt: fmtTime(r.started_at, nowET),
           duration: fmtDuration(r.started_at, r.completed_at),
@@ -163,6 +174,62 @@ router.get('/settings/process-health', async (req, res) => {
         })),
       };
     });
+
+    // ── Outcome validation: override statusColor based on actual results ────────
+
+    // Count today's trades in DB
+    const todayTradesQ = await query(
+      `SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [todayET]
+    );
+    const todayTrades = parseInt(todayTradesQ.rows[0]?.count || 0);
+
+    // Check if a TAL file for today exists on disk
+    let talForToday = false;
+    try {
+      const files = fs.readdirSync(SIERRA_TAL_DIR);
+      talForToday = files.some(f => f.includes(todayET) && f.endsWith('.txt'));
+    } catch (_) {}
+
+    // Get today's coaching record
+    const coachQ = await query(
+      `SELECT trades_count FROM daily_coaching WHERE session_date = $1`, [todayET]
+    );
+    const coachRecord = coachQ.rows[0] || null;
+
+    // Helper: did this process run today?
+    const ranToday = (name) => {
+      const row = logsByName[name];
+      if (!row) return false;
+      return new Date(row.started_at).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === todayET;
+    };
+
+    // AUTO_IMPORT_4PM outcome
+    const importProc = processes.find(p => p.name === 'AUTO_IMPORT_4PM');
+    if (importProc && ranToday('AUTO_IMPORT_4PM')) {
+      if (!talForToday) {
+        importProc.statusColor = 'gray';
+        importProc.statusNote = 'waiting — no TAL file exported from Sierra Chart yet';
+      } else if (talForToday && todayTrades === 0) {
+        importProc.statusColor = 'amber';
+        importProc.statusNote = 'ran but imported 0 fills — TAL file exists but no today trades in DB';
+      }
+    }
+
+    // DAILY_COACHING outcome (depends on import outcome)
+    const coachProc = processes.find(p => p.name === 'DAILY_COACHING');
+    if (coachProc && ranToday('DAILY_COACHING') && coachRecord) {
+      const importWaiting = importProc?.statusColor === 'gray';
+      const importStale   = importProc?.statusColor === 'amber';
+      if (coachRecord.trades_count === 0) {
+        if (importWaiting) {
+          coachProc.statusColor = 'gray';
+          coachProc.statusNote = 'blocked — import is waiting on TAL file; re-run after import';
+        } else if (importStale || todayTrades === 0) {
+          coachProc.statusColor = 'amber';
+          coachProc.statusNote = 'stale — coached on 0 trades; re-run after import completes';
+        }
+      }
+    }
 
     const redCount = processes.filter(p => p.statusColor === 'red' && p.critical).length;
 

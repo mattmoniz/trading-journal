@@ -9,7 +9,8 @@ module.exports = {
     max_memory_restart: '1G',
     env: {
       NODE_ENV: 'production',
-      PORT: 3001
+      PORT: 3001,
+      TZ: 'America/New_York'
     },
     log_file: '/home/mmoniz/trading-journal/logs/combined.log',
     error_file: '/home/mmoniz/trading-journal/logs/error.log',

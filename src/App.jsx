@@ -4087,7 +4087,13 @@ function ProcessHealthDashboard({ onNavigateToSettings }) {
     );
   };
 
-  const statusLabel = { green: 'OK', amber: 'WARN', red: 'FAIL', gray: 'N/A' };
+  const statusLabel = (proc) => {
+    if (proc.statusColor === 'green') return 'OK';
+    if (proc.statusColor === 'red')   return 'FAIL';
+    if (proc.statusColor === 'amber') return proc.statusNote ? 'STALE' : 'WARN';
+    if (proc.statusColor === 'gray')  return proc.statusNote ? 'WAIT' : 'N/A';
+    return proc.statusColor?.toUpperCase() || '—';
+  };
 
   const redCritical = data?.processes?.filter(p => p.statusColor === 'red' && p.critical) || [];
 
@@ -4153,13 +4159,21 @@ function ProcessHealthDashboard({ onNavigateToSettings }) {
                       </td>
                       <td style={{ padding: '9px 14px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{proc.lastDuration || '—'}</td>
                       <td style={{ padding: '9px 14px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          {dot(proc.statusColor)}
-                          <span style={{
-                            color: proc.statusColor === 'green' ? '#22c55e' : proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'red' ? '#ef4444' : '#475569',
-                            fontWeight: 600, fontSize: 12,
-                          }}>{statusLabel[proc.statusColor] || proc.statusColor.toUpperCase()}</span>
-                          {proc.errorMessage && <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 4 }}>({proc.errorMessage.slice(0, 40)}...)</span>}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            {dot(proc.statusColor)}
+                            <span style={{
+                              color: proc.statusColor === 'green' ? '#22c55e' : proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'red' ? '#ef4444' : '#475569',
+                              fontWeight: 600, fontSize: 12,
+                            }}>{statusLabel(proc)}</span>
+                            {proc.errorMessage && !proc.statusNote && <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 4 }}>({proc.errorMessage.slice(0, 40)})</span>}
+                          </div>
+                          {proc.statusNote && (
+                            <span style={{
+                              fontSize: 10, marginLeft: 16,
+                              color: proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'gray' ? '#475569' : '#ef4444',
+                            }}>{proc.statusNote}</span>
+                          )}
                         </div>
                       </td>
                     </tr>
