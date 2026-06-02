@@ -15189,7 +15189,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
     border: '1px solid var(--border-color)',
     borderRadius: 10,
     padding: '18px 20px',
-    marginBottom: 14,
+    marginBottom: 20,
   };
   const LABEL = { fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 12 };
 
@@ -15250,7 +15250,6 @@ function CaseView({ setCurrentView, nl, todayData }) {
     <>
       <ProximityBanner phaseState={phaseState} />
       <SessionStatusBar conf={conf} />
-      {preMarketPanels}
 
       {/* ─── BLOCK 1: THE DAY ───────────────────────────────────────────────── */}
       <div style={BLOCK}>
@@ -15341,20 +15340,24 @@ function CaseView({ setCurrentView, nl, todayData }) {
         </div>
 
         {/* Meter bar */}
-        <div style={{ position: 'relative', height: 7, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden', marginBottom: 4 }}>
-          <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
-          {meter > 10 ? (
-            <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.85 }} />
-          ) : meter < -10 ? (
-            <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.85 }} />
-          ) : (
-            <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
-          )}
+        <div style={{ textAlign: 'center', marginBottom: 5 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: meter > 10 ? LR_TEAL : meter < -10 ? LR_CORAL : '#94a3b8', fontFamily: 'monospace' }}>
+            {Math.abs(meter)}<span style={{ fontSize: 11, fontWeight: 400, color: '#475569' }}>/100</span>
+          </span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
-          <span style={{ fontSize: 9, color: LR_CORAL, fontWeight: 700, letterSpacing: '0.05em' }}>◀ SHORT</span>
-          <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>{Math.abs(meter)}/100</span>
-          <span style={{ fontSize: 9, color: LR_TEAL,  fontWeight: 700, letterSpacing: '0.05em' }}>LONG ▶</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+          <span style={{ fontSize: 12, color: LR_CORAL, fontWeight: 700, letterSpacing: '0.04em', flexShrink: 0 }}>◀ SHORT</span>
+          <div style={{ flex: 1, position: 'relative', height: 15, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.6)' }} />
+            {meter > 10 ? (
+              <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.85 }} />
+            ) : meter < -10 ? (
+              <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.85 }} />
+            ) : (
+              <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+            )}
+          </div>
+          <span style={{ fontSize: 12, color: LR_TEAL, fontWeight: 700, letterSpacing: '0.04em', flexShrink: 0 }}>LONG ▶</span>
         </div>
 
         {/* Case For / Against columns */}
@@ -15367,13 +15370,11 @@ function CaseView({ setCurrentView, nl, todayData }) {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {caseFor.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <div style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b', lineHeight: 1.3 }}>
-                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569' }}>〈 </span>}
-                      {item.point}
-                    </div>
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.35 }}>
+                    {!item.confirmed && <span style={{ fontSize: 9, color: '#475569', flexShrink: 0 }}>〈</span>}
+                    <span style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
                     {item.value && (
-                      <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>{item.value}</div>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>
                     )}
                   </div>
                 ))}
@@ -15387,13 +15388,11 @@ function CaseView({ setCurrentView, nl, todayData }) {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                 {caseAgainst.map((item, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <div style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b', lineHeight: 1.3 }}>
-                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569' }}>〈 </span>}
-                      {item.point}
-                    </div>
+                  <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.35 }}>
+                    {!item.confirmed && <span style={{ fontSize: 9, color: '#475569', flexShrink: 0 }}>〈</span>}
+                    <span style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
                     {item.value && (
-                      <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>{item.value}</div>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>
                     )}
                   </div>
                 ))}
@@ -15578,11 +15577,20 @@ function CaseView({ setCurrentView, nl, todayData }) {
         )}
       </div>
 
-      {/* ─── EXISTING PANELS (collapsed) ────────────────────────────────────── */}
-      <CollapsibleSection title="Trade Timeline" defaultOpen={true}>
+      {/* ─── SUPPORTING PANELS — collapsed, available on demand ─────────────── */}
+      <CollapsibleSection title="Big Picture" defaultOpen={false}>
+        <div style={{ padding: '0 4px' }}><BigPictureSnapshot setCurrentView={setCurrentView} /></div>
+      </CollapsibleSection>
+      <CollapsibleSection title="Morning Read" defaultOpen={false}>
+        <div style={{ padding: '0 4px' }}><AuctionReadSummary nl={nl} todayData={todayData} /></div>
+      </CollapsibleSection>
+      <CollapsibleSection title="Structure" defaultOpen={false}>
+        <div style={{ padding: '0 4px' }}><StructureInline /></div>
+      </CollapsibleSection>
+      <CollapsibleSection title="Trade Timeline" defaultOpen={false}>
         <div style={{ padding: '0 4px' }}><TradeTimelinePanel /></div>
       </CollapsibleSection>
-      <CollapsibleSection title="Today's Setup Timeline" defaultOpen={false}>
+      <CollapsibleSection title="Setup Timeline" defaultOpen={false}>
         <div style={{ padding: '0 4px' }}><ACDSessionTimeline /></div>
       </CollapsibleSection>
     </>
@@ -15628,8 +15636,10 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         {tab === 'dashboard' && (
           <>
             <SystemHealthSummary onNavigate={setCurrentView} />
-            <ACDAutoPanel onComplete={loadAll} />
             <CaseView setCurrentView={setCurrentView} nl={nl} todayData={todayData} />
+            <CollapsibleSection title="Auto-Compute" defaultOpen={false}>
+              <div style={{ padding: '4px 0' }}><ACDAutoPanel onComplete={loadAll} /></div>
+            </CollapsibleSection>
             <EodOutcomePrompt />
           </>
         )}
