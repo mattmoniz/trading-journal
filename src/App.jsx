@@ -929,6 +929,14 @@ const LR_CORAL = '#fb923c';
 const LR_AMBER = '#f59e0b';
 const LR_SLATE = '#64748b';
 
+const dirClr = (dir) => dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE;
+const DT_STYLE = {
+  BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.07)',    border: 'rgba(245,158,11,0.35)' },
+  TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.07)',   border: 'rgba(129,140,248,0.30)' },
+  TURBULENT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.06)',   border: 'rgba(148,163,184,0.22)' },
+  FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.30)',      border: 'rgba(51,65,85,0.40)' },
+};
+
 function useLiveCase() {
   const [caseData, setCaseData] = React.useState(null);
   const [loading, setLoading]   = React.useState(true);
@@ -10386,13 +10394,13 @@ function ThisSetupHistorically() {
 }
 
 // ─── AuctionReadSummary: inline conclusions + one full-read expand ─────────────
-function AuctionReadSummary({ nl, todayData }) {
+function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
   const [read,         setRead]         = React.useState({});
   const [autoDetected, setAutoDetected] = React.useState({});
   const [nqLive,       setNqLive]       = React.useState(null);
   const [ltSummary,    setLtSummary]    = React.useState(null);
   const [liveCtx,      setLiveCtx]      = React.useState(null);
-  const [expanded,     setExpanded]     = React.useState(false);
+  const [expanded,     setExpanded]     = React.useState(defaultOpen);
 
   React.useEffect(() => {
     fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
@@ -11439,9 +11447,9 @@ function ConditionRow({ c }) {
 }
 
 // ─── StructureInline: alignment + score summary + key conditions + one expand ──
-function StructureInline() {
+function StructureInline({ defaultOpen = false }) {
   const [data,     setData]     = React.useState(null);
-  const [expanded, setExpanded] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(defaultOpen);
 
   React.useEffect(() => {
     const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
@@ -11727,10 +11735,10 @@ function CounterTrendPanel({ ct }) {
   );
 }
 
-function BigPictureSnapshot({ setCurrentView }) {
+function BigPictureSnapshot({ setCurrentView, defaultOpen = false }) {
   const [lt, setLt] = React.useState(null);
   const [tpo, setTpo] = React.useState(null);
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = React.useState(defaultOpen);
 
   React.useEffect(() => {
     const load = () => {
@@ -15161,6 +15169,557 @@ function EodOutcomePrompt() {
   );
 }
 
+// ==================== DASHBOARD CARD GRID ====================
+
+function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
+  const { caseData: c, loading } = useLiveCase();
+  const [conf, setConf]   = React.useState(null);
+  const [lt,   setLt]     = React.useState(null);
+  const [nqLive, setNqLive] = React.useState(null);
+  const phaseState = usePhaseChangeState();
+
+  // ── Update tracking ────────────────────────────────────────────────────
+  const [updatedAt, setUpdatedAt] = React.useState({});
+  const [pulsing,   setPulsing]   = React.useState({});
+  const prevCRef = React.useRef(null);
+
+  const markUpdated = React.useCallback((cardId) => {
+    const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+    setUpdatedAt(prev => ({ ...prev, [cardId]: t }));
+    setPulsing(prev  => ({ ...prev, [cardId]: true }));
+    setTimeout(() => setPulsing(prev => ({ ...prev, [cardId]: false })), 2500);
+  }, []);
+
+  React.useEffect(() => {
+    const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json())
+      .then(d => { if (!d.error) { setConf(d); markUpdated('structure'); } }).catch(() => {});
+    load();
+    const iv = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [markUpdated]);
+
+  React.useEffect(() => {
+    const load = () => fetch(`${API_URL}/longterm/summary`).then(r => r.json())
+      .then(d => { if (!d.error) { setLt(d); markUpdated('bigpicture'); } }).catch(() => {});
+    load();
+    const iv = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [markUpdated]);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
+  }, []);
+
+  // track case-data changes → pulse relevant cards
+  React.useEffect(() => {
+    if (!c) return;
+    const prev = prevCRef.current;
+    if (prev) {
+      if (prev.dayType?.classification !== c.dayType?.classification) markUpdated('day');
+      if (prev.read?.bias !== c.read?.bias || prev.read?.meterPosition !== c.read?.meterPosition) markUpdated('case');
+      if (prev.trigger?.state !== c.trigger?.state || prev.trigger?.setup?.type !== c.trigger?.setup?.type) markUpdated('trigger');
+      if (JSON.stringify((prev.levels||[]).slice(0,4)) !== JSON.stringify((c.levels||[]).slice(0,4))) markUpdated('levels');
+    }
+    prevCRef.current = c;
+  }, [c, markUpdated]);
+
+  // ── Modal state ───────────────────────────────────────────────────────
+  const [activeModal, setActiveModal] = React.useState(null);
+  const closeModal = () => setActiveModal(null);
+
+  // ── Derived case values ───────────────────────────────────────────────
+  const isRTH    = !!c && !c.error;
+  const dtClass  = c?.dayType?.classification || 'FORMING';
+  const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
+  const bias     = c?.read?.bias || 'NEUTRAL';
+  const meter    = c?.read?.meterPosition || 0;
+  const biasClr  = dirClr(bias);
+  const caseFor  = c?.caseFor  || [];
+  const caseAgainst = c?.caseAgainst || [];
+  const tState   = c?.trigger?.state || 'WATCHING';
+  const tActive  = tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING';
+  const tSetup   = c?.trigger?.setup;
+  const tDir     = tSetup?.direction;
+  const tClr     = tActive ? dirClr(tDir) : LR_SLATE;
+  const tBorder  = tActive ? `${tClr}55` : undefined;
+  const ctx      = c?._ctx || {};
+
+  // ── Big picture derived ───────────────────────────────────────────────
+  const SC_COLOR = { TRENDING_UP: '#22c55e', TRENDING_DOWN: '#ef4444', TRANSITIONAL: '#fbbf24', BRACKET: '#3b82f6' };
+  const sc       = lt?.bracketState?.state;
+  const tiltUp   = lt?.bracketState?.transitionalNote?.includes('BULLISH');
+  const tiltDown = lt?.bracketState?.transitionalNote?.includes('BEARISH');
+  const bpClr    = SC_COLOR[sc] || '#94a3b8';
+  const bpLabel  = tiltUp ? '⚠ tilting up' : tiltDown ? '⚠ tilting down'
+    : sc === 'TRENDING_UP' ? '↑ TRENDING UP' : sc === 'TRENDING_DOWN' ? '↓ TRENDING DOWN'
+    : sc === 'TRANSITIONAL' ? '⚡ TRANSITIONAL' : sc ? '↔ BRACKET' : null;
+  const nl30v    = lt?.acd?.nl30 ?? 0;
+  const nlCol    = (n) => n > 9 ? '#22c55e' : n < -9 ? '#ef4444' : '#fbbf24';
+
+  // ── Auction derived ───────────────────────────────────────────────────
+  const nlTrend    = nl?.trend || 'RANGING';
+  const pivotBias  = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
+  const nlTrendClr = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
+
+  // ── Shared card style ─────────────────────────────────────────────────
+  const CS = (id, accentBorder) => ({
+    background: 'var(--card-bg)',
+    border: `1.5px solid ${pulsing[id] ? 'rgba(99,102,241,0.7)' : (accentBorder || 'var(--border-color)')}`,
+    borderRadius: 10,
+    padding: '12px 14px',
+    cursor: 'pointer',
+    transition: 'border-color 0.4s, box-shadow 0.4s',
+    boxShadow: pulsing[id] ? '0 0 14px rgba(99,102,241,0.28)' : 'none',
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 88,
+  });
+
+  const CHdr = ({ id, title }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <span style={{ fontSize: 9, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{title}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        {updatedAt[id] && <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>↻ {updatedAt[id]}</span>}
+        <span style={{ fontSize: 11, color: '#334155' }}>›</span>
+      </div>
+    </div>
+  );
+
+  const MiniMeter = ({ m }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 5 }}>
+      <span style={{ fontSize: 9, color: LR_CORAL, fontWeight: 700 }}>◀</span>
+      <div style={{ flex: 1, height: 5, background: 'rgba(51,65,85,0.5)', borderRadius: 3, position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.4)' }} />
+        {m > 10  ? <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50,(m/100)*50)}%`, height: '100%', background: LR_TEAL,  opacity: 0.85 }} /> : null}
+        {m < -10 ? <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50,(-m/100)*50)}%`, height: '100%', background: LR_CORAL, opacity: 0.85 }} /> : null}
+      </div>
+      <span style={{ fontSize: 9, color: LR_TEAL, fontWeight: 700 }}>▶</span>
+    </div>
+  );
+
+  // ── Card bodies ───────────────────────────────────────────────────────
+
+  const DayCardBody = () => !isRTH ? (
+    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+  ) : (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
+        <span style={{ fontSize: 17, fontWeight: 900, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{dtClass}</span>
+        {c.compression?.coiled && <span style={{ fontSize: 9, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 5px' }}>COILED</span>}
+        {dtClass === 'BALANCE' && <span style={{ fontSize: 9, fontWeight: 700, color: LR_AMBER }}>⚠ weak edge</span>}
+      </div>
+      {c.dayType?.playbook && (
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {c.dayType.playbook}
+        </div>
+      )}
+      {ctx.orWidth != null && (
+        <div style={{ fontSize: 10, color: '#475569', marginTop: 5, fontFamily: 'monospace' }}>
+          OR {ctx.orLow}–{ctx.orHigh} ({ctx.orWidth}pt)
+        </div>
+      )}
+    </>
+  );
+
+  const CaseCardBody = () => !isRTH ? (
+    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+  ) : (
+    <>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 4 }}>
+        <span style={{ fontSize: 17, fontWeight: 900, color: biasClr, textTransform: 'uppercase' }}>{bias}</span>
+        <span style={{ fontSize: 13, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(c.read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 10, color: '#475569' }}>/10</span></span>
+        <span style={{ marginLeft: 'auto', fontSize: 10, fontFamily: 'monospace', color: meter > 10 ? LR_TEAL : meter < -10 ? LR_CORAL : '#475569', fontWeight: 700 }}>{Math.abs(meter)}/100</span>
+      </div>
+      <MiniMeter m={meter} />
+      {caseFor[0] && (
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline' }}>
+          <span style={{ color: LR_TEAL, flexShrink: 0, fontWeight: 700 }}>↑</span>
+          <span>{caseFor[0].point}{caseFor[0].value ? <span style={{ fontFamily: 'monospace' }}> {caseFor[0].value}</span> : ''}</span>
+        </div>
+      )}
+      {caseAgainst[0] && (
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline', marginTop: 2 }}>
+          <span style={{ color: LR_CORAL, flexShrink: 0, fontWeight: 700 }}>↓</span>
+          <span>{caseAgainst[0].point}{caseAgainst[0].value ? <span style={{ fontFamily: 'monospace' }}> {caseAgainst[0].value}</span> : ''}</span>
+        </div>
+      )}
+    </>
+  );
+
+  const TriggerCardBody = () => !isRTH ? (
+    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+  ) : tState === 'WATCHING' ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
+      <span style={{ fontSize: 13, fontWeight: 700, color: '#334155', letterSpacing: '0.04em' }}>WATCHING</span>
+    </div>
+  ) : tState === 'RESOLVED' ? (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+      <span style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase' }}>{(c?.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
+    </div>
+  ) : tSetup ? (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
+        <span style={{ fontSize: 13, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.04em', flex: 1 }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: tClr, fontFamily: 'monospace', background: `${tClr}18`, borderRadius: 3, padding: '1px 6px' }}>{tSetup.impactScore}/10</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
+        {[['Entry', tSetup.entry, '#e2e8f0'], ['Stop', tSetup.stop, LR_CORAL], ['T1', tSetup.t1, LR_TEAL]].map(([label, val, clr]) => val != null && (
+          <div key={label} style={{ background: 'rgba(15,23,42,0.4)', borderRadius: 5, padding: '4px 5px', textAlign: 'center' }}>
+            <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', marginBottom: 1 }}>{label}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: clr, fontFamily: 'monospace' }}>{Math.round(val)}</div>
+          </div>
+        ))}
+      </div>
+    </>
+  ) : null;
+
+  const BigPictureCardBody = () => !lt ? (
+    <span style={{ fontSize: 11, color: '#475569' }}>Loading…</span>
+  ) : (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4, flexWrap: 'wrap' }}>
+        {bpLabel && <span style={{ fontSize: 13, fontWeight: 800, color: bpClr }}>{bpLabel}</span>}
+        <span style={{ fontSize: 11, fontFamily: 'monospace', color: nlCol(nl30v), fontWeight: 700 }}>NL30 {nl30v > 0 ? '+' : ''}{nl30v}</span>
+      </div>
+      {lt.summary?.text && (
+        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {lt.summary.text.split('.')[0]}.
+        </div>
+      )}
+    </>
+  );
+
+  const LevelsCardBody = () => {
+    const lvs = (c?.levels || []).slice(0, 4);
+    return !isRTH ? (
+      <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+    ) : lvs.length === 0 ? (
+      <span style={{ fontSize: 11, color: '#475569' }}>No levels yet</span>
+    ) : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {lvs.map((lv, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: lv.role === 'RESISTANCE' ? LR_CORAL : LR_TEAL, minWidth: 46, flexShrink: 0 }}>{lv.price}</span>
+            <span style={{ color: '#64748b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>{lv.label}</span>
+            <span style={{ color: '#fbbf24', fontSize: 9, flexShrink: 0 }}>{'★'.repeat(Math.min(lv.stars||1,3))}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const StructureCardBody = () => !conf ? (
+    <span style={{ fontSize: 11, color: '#475569' }}>Loading…</span>
+  ) : (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: conf.alignColor }}>
+          {conf.alignment === 'COUNTER_TREND' ? '⚡ COUNTER' : conf.alignment === 'ALIGNED' ? '✓ ALIGNED' : '─ NEUTRAL'}
+        </span>
+        {conf.structural && (
+          <span style={{ fontSize: 11, fontFamily: 'monospace', color: conf.structural.color, fontWeight: 600 }}>
+            {conf.structural.score}/7 {conf.structural.dir}
+          </span>
+        )}
+      </div>
+      {conf.session && (
+        <div style={{ fontSize: 10, color: '#64748b' }}>Session {conf.session.score}/5 · {conf.structural?.label || ''}</div>
+      )}
+    </>
+  );
+
+  const AuctionCardBody = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 10, color: '#475569', minWidth: 52 }}>NL Trend</span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: nlTrendClr }}>
+          {nlTrend === 'TRENDING_UP' ? '↑ UP' : nlTrend === 'TRENDING_DOWN' ? '↓ DOWN' : '↔ RANGING'}
+        </span>
+      </div>
+      {pivotBias && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 10, color: '#475569', minWidth: 52 }}>vs Pivot</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: pivotBias === 'up' ? '#22c55e' : '#ef4444' }}>{pivotBias === 'up' ? 'ABOVE' : 'BELOW'}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Modal content ─────────────────────────────────────────────────────
+  const renderModalContent = () => {
+    switch (activeModal) {
+      case 'day': {
+        if (!c) return <div style={{ color: '#64748b' }}>No case data available.</div>;
+        return (
+          <div>
+            <div style={{ border: `1.5px solid ${dts.border}`, borderRadius: 8, padding: '12px 14px', background: dts.bg, marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <span style={{ fontSize: 22, fontWeight: 900, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{dtClass}</span>
+                {c.compression?.coiled && <span style={{ fontSize: 9, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 6px' }}>COILED</span>}
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569' }}>{c.dayType?.source || 'LIT'}{c.dayType?.probability ? ` · ${c.dayType.probability}% prob` : ''}</span>
+              </div>
+              {dtClass === 'BALANCE' && (
+                <div style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.40)', borderRadius: 6, padding: '8px 12px', marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: LR_AMBER, marginBottom: 2 }}>⚠ WEAK EDGE TODAY</div>
+                  <div style={{ fontSize: 12, color: '#d97706', lineHeight: 1.45 }}>BALANCE days show 0% T1 hit rate (interim, n=7). Stand light. Wait for value area edges before any fade.</div>
+                </div>
+              )}
+              {c.dayType?.playbook && <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: c.dayType?.whatWouldChangeIt ? 6 : 0 }}>{c.dayType.playbook}</div>}
+              {c.dayType?.whatWouldChangeIt && <div style={{ fontSize: 11, color: '#64748b' }}><span style={{ color: '#475569', fontWeight: 600 }}>Changes if: </span>{c.dayType.whatWouldChangeIt}</div>}
+            </div>
+            {(ctx.orWidth || ctx.ibWidth) && (
+              <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#64748b', flexWrap: 'wrap', marginBottom: 10 }}>
+                {ctx.orWidth != null && <span>OR <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{ctx.orLow}–{ctx.orHigh}</strong> ({ctx.orWidth}pt)</span>}
+                {ctx.ibWidth != null && <span>IB <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{ctx.ibLow}–{ctx.ibHigh}</strong> ({ctx.ibWidth}pt)</span>}
+                {ctx.openingType && <span style={{ color: '#475569' }}>{ctx.openingType}</span>}
+              </div>
+            )}
+            {c.compression?.coiled && (
+              <div style={{ fontSize: 11, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.22)', borderRadius: 5, padding: '6px 10px' }}>
+                <strong>Coiled:</strong> {c.compression.note}
+                {c.compression.signals?.length > 0 && <div style={{ marginTop: 3, color: '#6366f1', fontSize: 10 }}>{c.compression.signals.join(' · ')}</div>}
+              </div>
+            )}
+          </div>
+        );
+      }
+      case 'case': {
+        if (!c) return <div style={{ color: '#64748b' }}>No case data available.</div>;
+        const evidenceLog = c.evidenceLog || [];
+        const juice = c.juice;
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8 }}>
+              <span style={{ fontSize: 24, fontWeight: 900, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{bias}</span>
+              <span style={{ fontSize: 16, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(c.read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 12, color: '#475569' }}>/10</span></span>
+              {c.read?.dayTypeEdge && <span style={{ marginLeft: 'auto', fontSize: 10, color: dtClass === 'BALANCE' ? LR_AMBER : '#22c55e', fontWeight: 600, textAlign: 'right' }}>{c.read.dayTypeEdge.split('—')[0].trim()}</span>}
+            </div>
+            <div style={{ textAlign: 'center', marginBottom: 5 }}>
+              <span style={{ fontSize: 16, fontWeight: 800, color: meter > 10 ? LR_TEAL : meter < -10 ? LR_CORAL : '#94a3b8', fontFamily: 'monospace' }}>{Math.abs(meter)}<span style={{ fontSize: 11, color: '#475569' }}>/100</span></span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+              <span style={{ fontSize: 12, color: LR_CORAL, fontWeight: 700 }}>◀ SHORT</span>
+              <div style={{ flex: 1, position: 'relative', height: 15, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.6)' }} />
+                {meter > 10 ? <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50,(meter/100)*50)}%`, height: '100%', background: LR_TEAL, opacity: 0.85 }} />
+                  : meter < -10 ? <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50,(-meter/100)*50)}%`, height: '100%', background: LR_CORAL, opacity: 0.85 }} />
+                  : <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />}
+              </div>
+              <span style={{ fontSize: 12, color: LR_TEAL, fontWeight: 700 }}>LONG ▶</span>
+            </div>
+            {(caseFor.length > 0 || caseAgainst.length > 0) && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: LR_TEAL, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, borderBottom: `1px solid rgba(45,212,191,0.2)`, paddingBottom: 4 }}>For ({caseFor.length})</div>
+                  {caseFor.map((item, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.4, marginBottom: 4 }}>
+                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569', flexShrink: 0 }}>〈</span>}
+                      <span style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                      {item.value && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>}
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: LR_CORAL, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, borderBottom: `1px solid rgba(251,146,60,0.2)`, paddingBottom: 4 }}>Against ({caseAgainst.length})</div>
+                  {caseAgainst.map((item, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.4, marginBottom: 4 }}>
+                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569', flexShrink: 0 }}>〈</span>}
+                      <span style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                      {item.value && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {c.whatFlipsIt && <div style={{ fontSize: 11, color: '#64748b', background: 'rgba(15,23,42,0.35)', borderRadius: 5, padding: '6px 10px', marginBottom: 10, lineHeight: 1.45 }}><span style={{ fontWeight: 700, color: '#475569' }}>Flips if: </span>{c.whatFlipsIt}</div>}
+            {juice && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: '#64748b', borderTop: '1px solid var(--border-color)', paddingTop: 8, marginBottom: evidenceLog.length > 0 ? 10 : 0 }}>
+                <span>Target <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{juice.nearestTargetDistance}pt</strong></span>
+                <span>Risk <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{juice.riskToStop}pt</strong></span>
+                {juice.rr != null && <span style={{ marginLeft: 'auto', fontWeight: 700, color: juice.worthIt ? LR_TEAL : LR_CORAL, fontFamily: 'monospace' }}>{juice.rr}R {juice.worthIt ? '✓' : '✗'}</span>}
+              </div>
+            )}
+            {evidenceLog.length > 0 && (
+              <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 8 }}>
+                <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Evidence Log</div>
+                {evidenceLog.slice(-6).reverse().map((ev, i) => (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px', borderRadius: 4, background: 'rgba(15,23,42,0.30)', marginBottom: 3 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: ev.change === '↑' ? LR_TEAL : LR_CORAL, lineHeight: 1, flexShrink: 0 }}>{ev.change}</span>
+                    <span style={{ flex: 1, fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.reason}</span>
+                    {ev.value != null && <span style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', flexShrink: 0 }}>{ev.value}</span>}
+                    <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace', flexShrink: 0 }}>{typeof ev.time === 'string' ? ev.time.slice(11,16) : ''}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
+      case 'trigger': {
+        if (!c) return <div style={{ color: '#64748b' }}>No case data available.</div>;
+        const tBgM = tActive ? (tDir === 'LONG' ? 'rgba(45,212,191,0.05)' : 'rgba(251,146,60,0.05)') : 'rgba(15,23,42,0.15)';
+        return (
+          <div style={{ background: tBgM, borderRadius: 8, padding: '14px 16px' }}>
+            {tState === 'WATCHING' && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
+                  <span style={{ fontSize: 14, fontWeight: 700, color: '#334155' }}>WATCHING</span>
+                </div>
+                <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.55 }}>No actionable setup. Trigger activates when impact score ≥ 6 with delta alignment, NL30 aligned, validated setup type, and R:R ≥ 2.0.</div>
+                {dtClass === 'BALANCE' && <div style={{ marginTop: 10, fontSize: 11, color: LR_AMBER, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 5, padding: '6px 10px' }}>BALANCE day — directional trigger suppressed.</div>}
+              </div>
+            )}
+            {tState === 'RESOLVED' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>{(c.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</div>
+                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>Setup resolved.</div>
+                </div>
+              </div>
+            )}
+            {tActive && tSetup && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: '50%', background: tClr, flexShrink: 0 }} />
+                  <span style={{ fontSize: 16, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1 }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: tClr, fontFamily: 'monospace', background: `${tClr}18`, border: `1px solid ${tClr}44`, borderRadius: 4, padding: '2px 8px' }}>{tSetup.impactScore ?? '?'}/10</span>
+                  {tState === 'ACTIVE_MANAGING' && <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase' }}>Managing</span>}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 14 }}>
+                  {[{ label: 'Entry', val: tSetup.entry, clr: '#e2e8f0' }, { label: 'Stop', val: tSetup.stop, clr: LR_CORAL }, { label: 'T1', val: tSetup.t1, clr: LR_TEAL }, { label: 'R:R', val: tSetup.rr, clr: '#94a3b8' }].map(({ label, val, clr }) => val != null && (
+                    <div key={label} style={{ background: 'rgba(15,23,42,0.35)', borderRadius: 6, padding: '8px 10px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', marginBottom: 3 }}>{label}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: clr, fontFamily: 'monospace' }}>{label === 'R:R' ? val : Math.round(val)}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 13, marginBottom: 12, letterSpacing: '-1px' }}>
+                  {[1,2,3].map(n => <span key={n} style={{ color: n <= (tSetup.stars||1) ? '#fbbf24' : '#1e293b' }}>★</span>)}
+                  <span style={{ fontSize: 11, color: '#475569', marginLeft: 6, letterSpacing: 'normal' }}>{tSetup.stars||1}-star setup</span>
+                </div>
+                {tSetup.impactStack?.length > 0 && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Impact Breakdown</div>
+                    {tSetup.impactStack.map((line, i) => {
+                      const pos = line.startsWith('+'), neg = line.startsWith('-');
+                      return (
+                        <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#64748b', lineHeight: 1.35, marginBottom: 3 }}>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700, color: pos ? LR_TEAL : neg ? LR_CORAL : '#64748b', flexShrink: 0, minWidth: 22 }}>{pos ? '+' : neg ? '−' : ''}</span>
+                          <span style={{ color: '#94a3b8' }}>{line.replace(/^[+-]\d+\s*/, '')}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {c.trigger?.exitPlaybook && !['WAIT','SUPPRESSED'].includes(c.trigger.exitPlaybook.scheme) && (
+                  <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 12 }}>
+                    <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Exit Playbook</div>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: tClr, textTransform: 'uppercase' }}>{c.trigger.exitPlaybook.scheme}</span>
+                    <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginTop: 6 }}>{c.trigger.exitPlaybook.target}</div>
+                    {c.trigger.exitPlaybook.trailRule && <div style={{ fontSize: 11, color: '#64748b', background: 'rgba(15,23,42,0.35)', borderRadius: 5, padding: '6px 10px', marginTop: 5 }}><span style={{ fontWeight: 600, color: '#475569' }}>Trail: </span>{c.trigger.exitPlaybook.trailRule}</div>}
+                    {c.trigger.exitPlaybook.note && <div style={{ fontSize: 10, color: '#475569', fontStyle: 'italic', marginTop: 4 }}>{c.trigger.exitPlaybook.note}</div>}
+                  </div>
+                )}
+                {c.trigger?.exitPlaybook?.scheme === 'SUPPRESSED' && (
+                  <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 10 }}>
+                    <div style={{ fontSize: 11, color: LR_AMBER, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 5, padding: '6px 10px' }}>{c.trigger.exitPlaybook.rationale?.split('.')[0]}.</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
+      case 'bigpicture':  return <BigPictureSnapshot setCurrentView={setCurrentView} defaultOpen />;
+      case 'levels': {
+        const allLevels = c?.levels || [];
+        return !isRTH ? (
+          <div style={{ color: '#64748b' }}>Activates at 9:30 ET.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {allLevels.length === 0 ? <div style={{ color: '#64748b' }}>No levels available.</div> : allLevels.map((lv, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'rgba(15,23,42,0.3)', borderRadius: 6 }}>
+                <span style={{ fontFamily: 'monospace', fontWeight: 700, color: lv.role === 'RESISTANCE' ? LR_CORAL : LR_TEAL, fontSize: 14, minWidth: 58 }}>{lv.price}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{lv.label}</div>
+                  <div style={{ fontSize: 10, color: '#475569' }}>{lv.timeframes?.join(', ')} · {lv.role}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 11, color: '#fbbf24' }}>{'★'.repeat(Math.min(lv.stars||1,3))}</div>
+                  <div style={{ fontSize: 10, color: (lv.distance||0) > 0 ? LR_CORAL : LR_TEAL, fontFamily: 'monospace' }}>{(lv.distance||0) > 0 ? '+' : ''}{(lv.distance||0).toFixed(0)}pt</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      }
+      case 'structure':   return <StructureInline defaultOpen />;
+      case 'auction':     return <AuctionReadSummary nl={nl} todayData={todayData} defaultOpen />;
+      case 'trades':      return <TradeTimelinePanel />;
+      case 'setups':      return <ACDSessionTimeline />;
+      case 'autocompute': return <ACDAutoPanel onComplete={onComplete} />;
+      default: return null;
+    }
+  };
+
+  const MODAL_TITLES = {
+    day: 'The Day', case: 'The Case', trigger: 'The Trigger',
+    bigpicture: 'Big Picture', levels: 'Key Levels', structure: 'Structure',
+    auction: 'Auction Read', trades: 'Trade Timeline', setups: 'Setup Timeline', autocompute: 'Auto-Compute',
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────
+  return (
+    <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
+      <ProximityBanner phaseState={phaseState} />
+      <SessionStatusBar conf={conf} />
+
+      {/* Fixed 2-column card grid — positions never change */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+
+        {/* Row 1 — live read */}
+        <div onClick={() => setActiveModal('day')}     style={CS('day',     isRTH ? dts.border : undefined)}><CHdr id="day"     title="The Day"     /><DayCardBody /></div>
+        <div onClick={() => setActiveModal('case')}    style={CS('case')}                                   ><CHdr id="case"    title="The Case"    /><CaseCardBody /></div>
+
+        {/* Row 2 — trigger + big picture */}
+        <div onClick={() => setActiveModal('trigger')} style={CS('trigger', tBorder)}                       ><CHdr id="trigger" title="The Trigger" /><TriggerCardBody /></div>
+        <div onClick={() => setActiveModal('bigpicture')} style={CS('bigpicture')}                          ><CHdr id="bigpicture" title="Big Picture"   /><BigPictureCardBody /></div>
+
+        {/* Row 3 — levels + structure */}
+        <div onClick={() => setActiveModal('levels')}    style={CS('levels')}                               ><CHdr id="levels"    title="Levels"          /><LevelsCardBody /></div>
+        <div onClick={() => setActiveModal('structure')} style={CS('structure')}                            ><CHdr id="structure" title="Structure"        /><StructureCardBody /></div>
+
+        {/* Row 4 — auction + trade timeline */}
+        <div onClick={() => setActiveModal('auction')}   style={CS('auction')}                              ><CHdr id="auction"   title="Auction Read"    /><AuctionCardBody /></div>
+        <div onClick={() => setActiveModal('trades')}    style={CS('trades')}                               ><CHdr id="trades"    title="Trade Timeline"  /><span style={{ fontSize: 11, color: '#64748b' }}>Today's fills &amp; events</span></div>
+
+        {/* Row 5 — setup timeline + auto-compute */}
+        <div onClick={() => setActiveModal('setups')}       style={CS('setups')}                            ><CHdr id="setups"       title="Setup Timeline"  /><span style={{ fontSize: 11, color: '#64748b' }}>ACD session events</span></div>
+        <div onClick={() => setActiveModal('autocompute')}  style={CS('autocompute')}                       ><CHdr id="autocompute"  title="Auto-Compute"    /><span style={{ fontSize: 11, color: '#64748b' }}>ACD parameters &amp; signals</span></div>
+
+      </div>
+
+      {/* Modal overlay */}
+      {activeModal && (
+        <div onClick={closeModal} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid var(--border-color)', borderRadius: 12, padding: '20px 24px', maxWidth: 700, width: '100%', maxHeight: '88vh', overflowY: 'auto', position: 'relative', boxShadow: '0 25px 80px rgba(0,0,0,0.9)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{MODAL_TITLES[activeModal]}</span>
+              <button onClick={closeModal} style={{ background: 'none', border: 'none', color: '#64748b', fontSize: 20, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}>✕</button>
+            </div>
+            {renderModalContent()}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ==================== PHASE 3: CASE VIEW (MAIN DASHBOARD) ====================
 
 function CaseView({ setCurrentView, nl, todayData }) {
@@ -15174,15 +15733,6 @@ function CaseView({ setCurrentView, nl, todayData }) {
     const iv = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(iv);
   }, []);
-
-  function dirClr(dir) { return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE; }
-
-  const DT_STYLE = {
-    BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.07)',    border: 'rgba(245,158,11,0.35)' },
-    TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.07)',   border: 'rgba(129,140,248,0.30)' },
-    TURBULENT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.06)',   border: 'rgba(148,163,184,0.22)' },
-    FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.30)',      border: 'rgba(51,65,85,0.40)' },
-  };
 
   const BLOCK = {
     background: 'var(--card-bg)',
@@ -15636,10 +16186,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         {tab === 'dashboard' && (
           <>
             <SystemHealthSummary onNavigate={setCurrentView} />
-            <CaseView setCurrentView={setCurrentView} nl={nl} todayData={todayData} />
-            <CollapsibleSection title="Auto-Compute" defaultOpen={false}>
-              <div style={{ padding: '4px 0' }}><ACDAutoPanel onComplete={loadAll} /></div>
-            </CollapsibleSection>
+            <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} />
             <EodOutcomePrompt />
           </>
         )}
