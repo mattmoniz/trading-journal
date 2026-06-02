@@ -778,6 +778,7 @@ export async function computeCase(tradeDate, asOf) {
         stars: nearLvl?.stars ?? null,
         impactScore: impact,
         impactStack,
+        firedAt: latestSetup.fired_at,
         rationale: [
           `${latestSetup.setup_type} fired ${new Date(latestSetup.fired_at).toISOString().slice(11,16)} (stored ET)`,
           `entry=${entryPx}, stop=${stop}, T1=${t1}, R:R=${setupRR ?? 'n/a'}`,

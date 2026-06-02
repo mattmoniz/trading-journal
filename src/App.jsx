@@ -15169,6 +15169,128 @@ function EodOutcomePrompt() {
   );
 }
 
+// ── AuctionReadModalContent: clean field list, no per-field dropdowns ─────────
+function AuctionReadModalContent({ nl, todayData }) {
+  const [read,         setRead]         = React.useState({});
+  const [autoDetected, setAutoDetected] = React.useState({});
+  const [nqLive,       setNqLive]       = React.useState(null);
+  const [ltSummary,    setLtSummary]    = React.useState(null);
+  const [liveCtx,      setLiveCtx]      = React.useState(null);
+  const [showEdit,     setShowEdit]     = React.useState(false);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
+    fetch(`${API_URL}/auction-read/auto`).then(r => r.json()).then(setAutoDetected).catch(() => {});
+    fetch(`${API_URL}/longterm/summary`).then(r => r.json()).then(d => { if (!d.error) setLtSummary(d); }).catch(() => {});
+    fetch(`${API_URL}/acd/live`).then(r => r.json()).then(setLiveCtx).catch(() => {});
+    fetch(`${API_URL}/auction-read/today`).then(r => r.json()).then(d => setRead(d || {})).catch(() => {});
+  }, []);
+
+  const nlTrend   = nl?.trend || 'RANGING';
+  const nlNum     = nl?.sum30 ?? nl?.nl30 ?? 0;
+  const pivotBias = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
+  const nlColor   = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
+  const pivotColor = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
+  const orCond     = read.or_condition || autoDetected.or_condition;
+  const autoASignal = todayData?.today?.a_up_fired ? 'A_UP' : todayData?.today?.a_down_fired ? 'A_DOWN'
+    : liveCtx?.aUpFired ? 'A_UP' : liveCtx?.aDownFired ? 'A_DOWN' : null;
+  const aSignal    = read.a_signal_override || autoASignal;
+  const openingCall = read.opening_call_type || liveCtx?.opening_call_type;
+  const ltCtx = ltSummary ? {
+    bracketState: ltSummary.bracketState?.state, nl30: ltSummary.acd?.nl30,
+    nl10: ltSummary.acd?.nl10, valueMigration: ltSummary.valueMigration?.direction,
+    weekType: ltSummary.weeklyStructure?.weekType,
+  } : null;
+  const p1Bias     = generatePreMarketBias(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, ltCtx);
+  const p1Dir      = p1Bias?.direction;
+  const sessionBias = generateSessionBias(p1Dir, orCond, openingCall, aSignal);
+
+  const fields = [
+    { label: 'Overnight inventory', val: read.overnight_inventory?.replace(/_/g,' '),
+      note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish pressure'
+          : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish pressure'
+          : 'neutral — no inventory edge',
+      clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b' },
+    { label: 'Open vs prior value', val: read.open_vs_prior_value?.replace(/_/g,' '),
+      note: read.open_vs_prior_value === 'ABOVE_VALUE' ? 'initiative long territory'
+          : read.open_vs_prior_value === 'BELOW_VALUE' ? 'initiative short territory'
+          : 'inside value — balanced day expected',
+      clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b' },
+    { label: 'OR condition', val: orCond?.replace(/_/g,' '),
+      note: orCond === 'NARROW' ? `tight — honor first A-level touch`
+          : orCond === 'WIDE'   ? `wide — reduce size 50%, wait 5-min sustain`
+          : orCond === 'EMOTIONAL' ? `extreme — avoid A signals, fade exhaustion only`
+          : 'normal — standard sizing',
+      clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b' },
+    { label: 'Opening call', val: openingCall?.replace(/_/g,' '),
+      note: (openingCall?.includes('DRIVE') && !openingCall?.includes('TEST')) ? 'strong directional intent — go with'
+          : openingCall?.includes('TEST_DRIVE') ? 'tested then drove — confirms direction'
+          : openingCall?.includes('REJECTION') ? 'rejected extreme — opposite direction'
+          : 'two-sided — wait for IB',
+      clr: '#94a3b8' },
+    { label: 'A signal', val: aSignal?.replace(/_/g,' '),
+      note: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? 'buyers structural control — session long'
+          : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? 'sellers structural control — session short'
+          : aSignal?.includes('FAILED') ? 'attempt failed — counter-trend signal'
+          : 'no directional signal yet',
+      clr: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? '#22c55e' : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? '#ef4444' : '#fbbf24' },
+    { label: 'NL30', val: `${nlNum > 0 ? '+' : ''}${nlNum}`,
+      note: nlTrend === 'TRENDING_UP' ? 'confirmed uptrend — A Up has full structural backing'
+          : nlTrend === 'TRENDING_DOWN' ? 'confirmed downtrend — A Down has full backing'
+          : 'ranging — no multi-session edge, both sides valid',
+      clr: nlColor },
+    { label: 'Monthly pivot', val: pivotBias === 'up' ? 'ABOVE PIVOT' : pivotBias === 'down' ? 'BELOW PIVOT' : null,
+      note: pivotBias === 'up' ? 'buyers hold monthly structure — bullish context'
+          : 'sellers control the month — rallies to pivot are fades',
+      clr: pivotColor },
+    { label: 'Prior day profile', val: read.prior_day_profile?.replace(/_/g,' '), note: '', clr: '#64748b' },
+  ].filter(f => f.val);
+
+  const biasColors = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#94a3b8' };
+  const levelColors = { GREEN: '#22c55e', AMBER: '#fbbf24', RED: '#ef4444' };
+
+  return (
+    <div>
+      {/* Clean field list */}
+      {fields.length === 0 ? (
+        <div style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>No fields set yet. Use "Edit fields" below to enter pre-market data.</div>
+      ) : (
+        <div style={{ marginBottom: 16 }}>
+          {fields.map((f, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 0', borderBottom: '1px solid rgba(51,65,85,0.25)' }}>
+              <span style={{ fontSize: 11, color: '#475569', minWidth: 130, flexShrink: 0, paddingTop: 1 }}>{f.label}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: f.clr, minWidth: 120, flexShrink: 0 }}>{f.val || '—'}</span>
+              <span style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{f.note}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Pre-market bias */}
+      {p1Bias && (
+        <div style={{ padding: '10px 14px', background: p1Dir === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Dir === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${biasColors[p1Dir] || '#475569'}35`, borderRadius: 7, marginBottom: 8 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: biasColors[p1Dir] || '#94a3b8', marginBottom: 4 }}>PRE-MARKET BIAS: {p1Dir}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{p1Bias.text}</div>
+        </div>
+      )}
+
+      {/* Session bias */}
+      {sessionBias && (
+        <div style={{ padding: '10px 14px', background: `${levelColors[sessionBias.level] || '#475569'}10`, border: `1px solid ${levelColors[sessionBias.level] || '#475569'}35`, borderRadius: 7, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: levelColors[sessionBias.level] || '#94a3b8', marginBottom: 4 }}>SESSION BIAS: {sessionBias.level}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
+        </div>
+      )}
+
+      {/* Edit fields toggle */}
+      <button onClick={() => setShowEdit(o => !o)} style={{ background: 'transparent', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6, color: '#475569', fontSize: 11, cursor: 'pointer', padding: '5px 12px', marginBottom: showEdit ? 12 : 0 }}>
+        {showEdit ? '▲ hide field editor' : '▼ edit fields / override'}
+      </button>
+      {showEdit && <AuctionReadSummary nl={nl} todayData={todayData} defaultOpen />}
+    </div>
+  );
+}
+
 // ==================== DASHBOARD CARD GRID ====================
 
 function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
@@ -15207,8 +15329,11 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   }, [markUpdated]);
 
   React.useEffect(() => {
-    fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
-  }, []);
+    const load = () => fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(d => { setNqLive(d); markUpdated('auction'); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [markUpdated]);
 
   // track case-data changes → pulse relevant cards
   React.useEffect(() => {
@@ -15222,6 +15347,19 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
     }
     prevCRef.current = c;
   }, [c, markUpdated]);
+
+  // ── Bias origin tracking (frozen when bias changes) ──────────────────
+  const [biasSince, setBiasSince] = React.useState(null);
+  const prevBiasRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!c) return;
+    const newBias = c.read?.bias;
+    if (newBias && newBias !== prevBiasRef.current) {
+      const t = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+      setBiasSince(t);
+      prevBiasRef.current = newBias;
+    }
+  }, [c]);
 
   // ── Modal state ───────────────────────────────────────────────────────
   const [activeModal, setActiveModal] = React.useState(null);
@@ -15243,6 +15381,13 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   const tClr     = tActive ? dirClr(tDir) : LR_SLATE;
   const tBorder  = tActive ? `${tClr}55` : undefined;
   const ctx      = c?._ctx || {};
+  const firedAtDisplay = React.useMemo(() => {
+    const fa = tSetup?.firedAt;
+    if (!fa) return null;
+    const d = new Date(fa);
+    if (isNaN(d)) return null;
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+  }, [tSetup?.firedAt]);
 
   // ── Big picture derived ───────────────────────────────────────────────
   const SC_COLOR = { TRENDING_UP: '#22c55e', TRENDING_DOWN: '#ef4444', TRANSITIONAL: '#fbbf24', BRACKET: '#3b82f6' };
@@ -15272,15 +15417,17 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
     boxShadow: pulsing[id] ? '0 0 14px rgba(99,102,241,0.28)' : 'none',
     display: 'flex',
     flexDirection: 'column',
-    minHeight: 88,
+    minHeight: 120,
   });
 
-  const CHdr = ({ id, title }) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-      <span style={{ fontSize: 9, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{title}</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        {updatedAt[id] && <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>↻ {updatedAt[id]}</span>}
-        <span style={{ fontSize: 11, color: '#334155' }}>›</span>
+  const CHdr = ({ id, title, sub }) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+      <div>
+        <span style={{ fontSize: 9, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{title}</span>
+        {sub && <span style={{ fontSize: 9, color: '#334155', marginLeft: 6, fontFamily: 'monospace' }}>{sub}</span>}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+        {updatedAt[id] && <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>↻ {updatedAt[id]}</span>}
       </div>
     </div>
   );
@@ -15300,45 +15447,46 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   // ── Card bodies ───────────────────────────────────────────────────────
 
   const DayCardBody = () => !isRTH ? (
-    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+    <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>activates 9:30 ET</span>
   ) : (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 5 }}>
-        <span style={{ fontSize: 17, fontWeight: 900, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{dtClass}</span>
-        {c.compression?.coiled && <span style={{ fontSize: 9, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 5px' }}>COILED</span>}
-        {dtClass === 'BALANCE' && <span style={{ fontSize: 9, fontWeight: 700, color: LR_AMBER }}>⚠ weak edge</span>}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+        <span style={{ fontSize: 18, fontWeight: 900, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>{dtClass}</span>
+        {c.compression?.coiled && <span style={{ fontSize: 10, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 5px' }}>COILED</span>}
+        {dtClass === 'BALANCE' && <span style={{ fontSize: 10, fontWeight: 700, color: LR_AMBER }}>⚠ weak edge</span>}
       </div>
       {c.dayType?.playbook && (
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+        <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.45, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
           {c.dayType.playbook}
         </div>
       )}
       {ctx.orWidth != null && (
-        <div style={{ fontSize: 10, color: '#475569', marginTop: 5, fontFamily: 'monospace' }}>
-          OR {ctx.orLow}–{ctx.orHigh} ({ctx.orWidth}pt)
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontFamily: 'monospace' }}>
+          OR {ctx.orLow}–{ctx.orHigh} <span style={{ color: '#64748b' }}>({ctx.orWidth}pt)</span>
+          {ctx.ibWidth != null && <span style={{ marginLeft: 8 }}>IB {ctx.ibLow}–{ctx.ibHigh} <span style={{ color: '#64748b' }}>({ctx.ibWidth}pt)</span></span>}
         </div>
       )}
     </>
   );
 
   const CaseCardBody = () => !isRTH ? (
-    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+    <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>activates 9:30 ET</span>
   ) : (
     <>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 4 }}>
-        <span style={{ fontSize: 17, fontWeight: 900, color: biasClr, textTransform: 'uppercase' }}>{bias}</span>
-        <span style={{ fontSize: 13, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(c.read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 10, color: '#475569' }}>/10</span></span>
-        <span style={{ marginLeft: 'auto', fontSize: 10, fontFamily: 'monospace', color: meter > 10 ? LR_TEAL : meter < -10 ? LR_CORAL : '#475569', fontWeight: 700 }}>{Math.abs(meter)}/100</span>
+        <span style={{ fontSize: 18, fontWeight: 900, color: biasClr, textTransform: 'uppercase' }}>{bias}</span>
+        <span style={{ fontSize: 13, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(c.read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 11, color: '#64748b' }}>/10</span></span>
+        <span style={{ marginLeft: 'auto', fontSize: 12, fontFamily: 'monospace', color: meter > 10 ? LR_TEAL : meter < -10 ? LR_CORAL : '#94a3b8', fontWeight: 700 }}>{Math.abs(meter)}/100</span>
       </div>
       <MiniMeter m={meter} />
       {caseFor[0] && (
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline' }}>
+        <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline' }}>
           <span style={{ color: LR_TEAL, flexShrink: 0, fontWeight: 700 }}>↑</span>
           <span>{caseFor[0].point}{caseFor[0].value ? <span style={{ fontFamily: 'monospace' }}> {caseFor[0].value}</span> : ''}</span>
         </div>
       )}
       {caseAgainst[0] && (
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline', marginTop: 2 }}>
+        <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3, display: 'flex', gap: 4, alignItems: 'baseline', marginTop: 2 }}>
           <span style={{ color: LR_CORAL, flexShrink: 0, fontWeight: 700 }}>↓</span>
           <span>{caseAgainst[0].point}{caseAgainst[0].value ? <span style={{ fontFamily: 'monospace' }}> {caseAgainst[0].value}</span> : ''}</span>
         </div>
@@ -15347,29 +15495,29 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   );
 
   const TriggerCardBody = () => !isRTH ? (
-    <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+    <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>activates 9:30 ET</span>
   ) : tState === 'WATCHING' ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
       <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
-      <span style={{ fontSize: 13, fontWeight: 700, color: '#334155', letterSpacing: '0.04em' }}>WATCHING</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: '#64748b', letterSpacing: '0.04em' }}>WATCHING</span>
     </div>
   ) : tState === 'RESOLVED' ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
       <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
-      <span style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase' }}>{(c?.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
+      <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase' }}>{(c?.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
     </div>
   ) : tSetup ? (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
-        <span style={{ fontSize: 13, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.04em', flex: 1 }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: tClr, fontFamily: 'monospace', background: `${tClr}18`, borderRadius: 3, padding: '1px 6px' }}>{tSetup.impactScore}/10</span>
+        <span style={{ fontSize: 14, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.04em', flex: 1 }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: tClr, fontFamily: 'monospace', background: `${tClr}18`, borderRadius: 3, padding: '1px 6px' }}>{tSetup.impactScore}/10</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5 }}>
         {[['Entry', tSetup.entry, '#e2e8f0'], ['Stop', tSetup.stop, LR_CORAL], ['T1', tSetup.t1, LR_TEAL]].map(([label, val, clr]) => val != null && (
           <div key={label} style={{ background: 'rgba(15,23,42,0.4)', borderRadius: 5, padding: '4px 5px', textAlign: 'center' }}>
-            <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', marginBottom: 1 }}>{label}</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: clr, fontFamily: 'monospace' }}>{Math.round(val)}</div>
+            <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', marginBottom: 1 }}>{label}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: clr, fontFamily: 'monospace' }}>{Math.round(val)}</div>
           </div>
         ))}
       </div>
@@ -15377,15 +15525,15 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   ) : null;
 
   const BigPictureCardBody = () => !lt ? (
-    <span style={{ fontSize: 11, color: '#475569' }}>Loading…</span>
+    <span style={{ fontSize: 12, color: '#64748b' }}>Loading…</span>
   ) : (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 4, flexWrap: 'wrap' }}>
-        {bpLabel && <span style={{ fontSize: 13, fontWeight: 800, color: bpClr }}>{bpLabel}</span>}
-        <span style={{ fontSize: 11, fontFamily: 'monospace', color: nlCol(nl30v), fontWeight: 700 }}>NL30 {nl30v > 0 ? '+' : ''}{nl30v}</span>
+        {bpLabel && <span style={{ fontSize: 14, fontWeight: 800, color: bpClr }}>{bpLabel}</span>}
+        <span style={{ fontSize: 12, fontFamily: 'monospace', color: nlCol(nl30v), fontWeight: 700 }}>NL30 {nl30v > 0 ? '+' : ''}{nl30v}</span>
       </div>
       {lt.summary?.text && (
-        <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+        <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
           {lt.summary.text.split('.')[0]}.
         </div>
       )}
@@ -15395,54 +15543,84 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
   const LevelsCardBody = () => {
     const lvs = (c?.levels || []).slice(0, 4);
     return !isRTH ? (
-      <span style={{ fontSize: 11, color: '#475569', fontStyle: 'italic' }}>activates 9:30 ET</span>
+      <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>activates 9:30 ET</span>
     ) : lvs.length === 0 ? (
-      <span style={{ fontSize: 11, color: '#475569' }}>No levels yet</span>
+      <span style={{ fontSize: 12, color: '#64748b' }}>No levels yet</span>
     ) : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {lvs.map((lv, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
-            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: lv.role === 'RESISTANCE' ? LR_CORAL : LR_TEAL, minWidth: 46, flexShrink: 0 }}>{lv.price}</span>
-            <span style={{ color: '#64748b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 10 }}>{lv.label}</span>
-            <span style={{ color: '#fbbf24', fontSize: 9, flexShrink: 0 }}>{'★'.repeat(Math.min(lv.stars||1,3))}</span>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, color: lv.role === 'RESISTANCE' ? LR_CORAL : LR_TEAL, fontSize: 13, minWidth: 46, flexShrink: 0 }}>{lv.price}</span>
+            <span style={{ color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }}>{lv.label}</span>
+            <span style={{ color: '#fbbf24', fontSize: 11, flexShrink: 0 }}>{'★'.repeat(Math.min(lv.stars||1,3))}</span>
           </div>
         ))}
       </div>
     );
   };
 
-  const StructureCardBody = () => !conf ? (
-    <span style={{ fontSize: 11, color: '#475569' }}>Loading…</span>
-  ) : (
-    <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 800, color: conf.alignColor }}>
-          {conf.alignment === 'COUNTER_TREND' ? '⚡ COUNTER' : conf.alignment === 'ALIGNED' ? '✓ ALIGNED' : '─ NEUTRAL'}
-        </span>
-        {conf.structural && (
-          <span style={{ fontSize: 11, fontFamily: 'monospace', color: conf.structural.color, fontWeight: 600 }}>
-            {conf.structural.score}/7 {conf.structural.dir}
+  const StructureCardBody = () => {
+    if (!conf) return <span style={{ fontSize: 12, color: '#64748b' }}>Loading…</span>;
+    const allConds = [...(conf.structural?.conditions || []), ...(conf.session?.conditions || [])];
+    const metConds   = allConds.filter(c => c.available && c.met).slice(0, 3);
+    const unmetConds = allConds.filter(c => c.available && !c.met).slice(0, 2);
+    const nl30Conf   = conf.nl30 ?? null;
+    return (
+      <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: conf.alignColor }}>
+            {conf.alignment === 'COUNTER_TREND' ? '⚡ COUNTER' : conf.alignment === 'ALIGNED' ? '✓ ALIGNED' : '─ NEUTRAL'}
           </span>
+          <span style={{ fontSize: 12, fontFamily: 'monospace', color: conf.structural?.color || '#94a3b8', fontWeight: 600 }}>
+            {conf.structural?.score || 0}/{conf.structural?.max || 7} struct · {conf.session?.score || 0}/{conf.session?.max || 5} sess
+          </span>
+          {nl30Conf != null && (
+            <span style={{ fontSize: 12, fontFamily: 'monospace', color: nlCol(nl30Conf), fontWeight: 700, marginLeft: 'auto' }}>
+              NL30 {nl30Conf > 0 ? '+' : ''}{nl30Conf}
+            </span>
+          )}
+        </div>
+        {conf.alignment === 'COUNTER_TREND' && conf.alignNote && (
+          <div style={{ fontSize: 11, color: '#fbbf24', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.22)', borderRadius: 4, padding: '3px 7px', marginBottom: 5, lineHeight: 1.4 }}>
+            {conf.alignNote}
+          </div>
         )}
-      </div>
-      {conf.session && (
-        <div style={{ fontSize: 10, color: '#64748b' }}>Session {conf.session.score}/5 · {conf.structural?.label || ''}</div>
-      )}
-    </>
-  );
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {metConds.map(c => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'baseline', gap: 5, fontSize: 11 }}>
+              <span style={{ color: '#22c55e', flexShrink: 0 }}>✓</span>
+              <span style={{ color: '#94a3b8' }}>{c.label}</span>
+            </div>
+          ))}
+          {unmetConds.map(c => (
+            <div key={c.id} style={{ display: 'flex', alignItems: 'baseline', gap: 5, fontSize: 11 }}>
+              <span style={{ color: '#475569', flexShrink: 0 }}>✗</span>
+              <span style={{ color: '#64748b' }}>{c.label}</span>
+            </div>
+          ))}
+        </div>
+      </>
+    );
+  };
 
   const AuctionCardBody = () => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 10, color: '#475569', minWidth: 52 }}>NL Trend</span>
+        <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 58 }}>NL Trend</span>
         <span style={{ fontSize: 13, fontWeight: 700, color: nlTrendClr }}>
           {nlTrend === 'TRENDING_UP' ? '↑ UP' : nlTrend === 'TRENDING_DOWN' ? '↓ DOWN' : '↔ RANGING'}
         </span>
       </div>
       {pivotBias && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 10, color: '#475569', minWidth: 52 }}>vs Pivot</span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: pivotBias === 'up' ? '#22c55e' : '#ef4444' }}>{pivotBias === 'up' ? 'ABOVE' : 'BELOW'}</span>
+          <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 58 }}>vs Pivot</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: pivotBias === 'up' ? '#22c55e' : '#ef4444' }}>{pivotBias === 'up' ? 'ABOVE' : 'BELOW'}</span>
+        </div>
+      )}
+      {nl && nl.trend && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 58 }}>Bias</span>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>{nl.bias || '—'}</span>
         </div>
       )}
     </div>
@@ -15659,7 +15837,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
         );
       }
       case 'structure':   return <StructureInline defaultOpen />;
-      case 'auction':     return <AuctionReadSummary nl={nl} todayData={todayData} defaultOpen />;
+      case 'auction':     return <AuctionReadModalContent nl={nl} todayData={todayData} />;
       case 'trades':      return <TradeTimelinePanel />;
       case 'setups':      return <ACDSessionTimeline />;
       case 'autocompute': return <ACDAutoPanel onComplete={onComplete} />;
@@ -15682,25 +15860,24 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete }) {
       {/* Fixed 2-column card grid — positions never change */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
 
-        {/* Row 1 — live read */}
+        {/* Row 1 — day + case */}
         <div onClick={() => setActiveModal('day')}     style={CS('day',     isRTH ? dts.border : undefined)}><CHdr id="day"     title="The Day"     /><DayCardBody /></div>
-        <div onClick={() => setActiveModal('case')}    style={CS('case')}                                   ><CHdr id="case"    title="The Case"    /><CaseCardBody /></div>
+        <div onClick={() => setActiveModal('case')}    style={CS('case')}                                   ><CHdr id="case"    title="The Case"    sub={biasSince ? `lean since ${biasSince}` : undefined} /><CaseCardBody /></div>
 
-        {/* Row 2 — trigger + big picture */}
-        <div onClick={() => setActiveModal('trigger')} style={CS('trigger', tBorder)}                       ><CHdr id="trigger" title="The Trigger" /><TriggerCardBody /></div>
-        <div onClick={() => setActiveModal('bigpicture')} style={CS('bigpicture')}                          ><CHdr id="bigpicture" title="Big Picture"   /><BigPictureCardBody /></div>
+        {/* Row 2 — auction + trigger */}
+        <div onClick={() => setActiveModal('auction')}   style={CS('auction')}                              ><CHdr id="auction"   title="Auction Read"    /><AuctionCardBody /></div>
+        <div onClick={() => setActiveModal('trigger')} style={CS('trigger', tBorder)}                       ><CHdr id="trigger" title="The Trigger" sub={firedAtDisplay ? `fired ${firedAtDisplay}` : undefined} /><TriggerCardBody /></div>
 
         {/* Row 3 — levels + structure */}
         <div onClick={() => setActiveModal('levels')}    style={CS('levels')}                               ><CHdr id="levels"    title="Levels"          /><LevelsCardBody /></div>
         <div onClick={() => setActiveModal('structure')} style={CS('structure')}                            ><CHdr id="structure" title="Structure"        /><StructureCardBody /></div>
 
-        {/* Row 4 — auction + trade timeline */}
-        <div onClick={() => setActiveModal('auction')}   style={CS('auction')}                              ><CHdr id="auction"   title="Auction Read"    /><AuctionCardBody /></div>
-        <div onClick={() => setActiveModal('trades')}    style={CS('trades')}                               ><CHdr id="trades"    title="Trade Timeline"  /><span style={{ fontSize: 11, color: '#64748b' }}>Today's fills &amp; events</span></div>
+        {/* Row 4 — big picture + trades */}
+        <div onClick={() => setActiveModal('bigpicture')} style={CS('bigpicture')}                          ><CHdr id="bigpicture" title="Big Picture"   /><BigPictureCardBody /></div>
+        <div onClick={() => setActiveModal('trades')}    style={CS('trades')}                               ><CHdr id="trades"    title="Trade Timeline"  /><span style={{ fontSize: 12, color: '#64748b' }}>Today's fills &amp; events</span></div>
 
-        {/* Row 5 — setup timeline + auto-compute */}
-        <div onClick={() => setActiveModal('setups')}       style={CS('setups')}                            ><CHdr id="setups"       title="Setup Timeline"  /><span style={{ fontSize: 11, color: '#64748b' }}>ACD session events</span></div>
-        <div onClick={() => setActiveModal('autocompute')}  style={CS('autocompute')}                       ><CHdr id="autocompute"  title="Auto-Compute"    /><span style={{ fontSize: 11, color: '#64748b' }}>ACD parameters &amp; signals</span></div>
+        {/* Row 5 — auto-compute */}
+        <div onClick={() => setActiveModal('autocompute')}  style={CS('autocompute')}                       ><CHdr id="autocompute"  title="Auto-Compute"    /><span style={{ fontSize: 12, color: '#64748b' }}>ACD parameters &amp; signals</span></div>
 
       </div>
 
