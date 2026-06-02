@@ -14902,6 +14902,422 @@ function EodOutcomePrompt() {
   );
 }
 
+// ==================== PHASE 3: CASE VIEW (MAIN DASHBOARD) ====================
+
+function CaseView({ setCurrentView }) {
+  const { caseData: c, loading } = useLiveCase();
+  const [conf, setConf] = React.useState(null);
+  const phaseState = usePhaseChangeState();
+
+  React.useEffect(() => {
+    const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setConf(d); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  function dirClr(dir) { return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE; }
+
+  const DT_STYLE = {
+    BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.07)',    border: 'rgba(245,158,11,0.35)' },
+    TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.07)',   border: 'rgba(129,140,248,0.30)' },
+    TURBULENT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.06)',   border: 'rgba(148,163,184,0.22)' },
+    FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.30)',      border: 'rgba(51,65,85,0.40)' },
+  };
+
+  const BLOCK = {
+    background: 'var(--card-bg)',
+    border: '1px solid var(--border-color)',
+    borderRadius: 10,
+    padding: '18px 20px',
+    marginBottom: 14,
+  };
+  const LABEL = { fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 12 };
+
+  if (loading && !c) {
+    return (
+      <>
+        <ProximityBanner phaseState={phaseState} />
+        <SessionStatusBar conf={conf} />
+        <div style={{ color: '#64748b', padding: '40px 0', textAlign: 'center', fontSize: 13 }}>Loading case engine…</div>
+      </>
+    );
+  }
+
+  if (!c || c.error) {
+    return (
+      <>
+        <ProximityBanner phaseState={phaseState} />
+        <SessionStatusBar conf={conf} />
+        <div style={{ ...BLOCK, color: '#64748b', textAlign: 'center', fontSize: 13 }}>No bar data yet for today.</div>
+      </>
+    );
+  }
+
+  const { dayType, read, caseFor = [], caseAgainst = [], levels = [], trigger, compression, evidenceLog = [], juice, whatFlipsIt } = c;
+  const dtClass  = dayType?.classification || 'FORMING';
+  const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
+  const bias     = read?.bias || 'NEUTRAL';
+  const meter    = read?.meterPosition || 0;
+  const biasClr  = dirClr(bias);
+
+  const tState  = trigger?.state || 'WATCHING';
+  const tActive = tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING';
+  const tSetup  = trigger?.setup;
+  const tDir    = tSetup?.direction;
+  const tClr    = tActive ? dirClr(tDir) : LR_SLATE;
+  const tBg     = tActive ? (tDir === 'LONG' ? 'rgba(45,212,191,0.05)' : 'rgba(251,146,60,0.05)') : 'rgba(15,23,42,0.15)';
+  const tBorder = tActive ? `${tClr}55` : 'rgba(51,65,85,0.45)';
+
+  const ctx = c._ctx || {};
+
+  return (
+    <>
+      <ProximityBanner phaseState={phaseState} />
+      <SessionStatusBar conf={conf} />
+
+      {/* BigPicture – collapsed; Phase 4 tightens */}
+      <CollapsibleSection title="Big Picture — Structural Context" defaultOpen={false}>
+        <div style={{ padding: '0 4px' }}><BigPictureSnapshot setCurrentView={setCurrentView} /></div>
+      </CollapsibleSection>
+
+      {/* ─── BLOCK 1: THE DAY ───────────────────────────────────────────────── */}
+      <div style={BLOCK}>
+        <div style={LABEL}>The Day</div>
+
+        {/* Day type header */}
+        <div style={{ border: `1.5px solid ${dts.border}`, borderRadius: 8, padding: '12px 14px', background: dts.bg, marginBottom: dtClass === 'BALANCE' || dayType?.whatWouldChangeIt || compression?.coiled ? 12 : 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20, fontWeight: 900, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em', lineHeight: 1 }}>
+              {dtClass}
+            </span>
+            {compression?.coiled && (
+              <span style={{ fontSize: 9, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 6px', letterSpacing: '0.05em' }}>
+                COILED
+              </span>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569', flexShrink: 0 }}>
+              {dayType?.source || 'LIT'}{dayType?.probability ? ` · ${dayType.probability}% prob` : ''}
+            </span>
+          </div>
+
+          {dtClass === 'BALANCE' && (
+            <div style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.40)', borderRadius: 6, padding: '8px 12px', marginBottom: 8 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: LR_AMBER, marginBottom: 2 }}>⚠ WEAK EDGE TODAY</div>
+              <div style={{ fontSize: 12, color: '#d97706', lineHeight: 1.45 }}>
+                BALANCE days show 0% T1 hit rate (interim, n=7). Stand light. Wait for value area edges before considering any fade. Breakout setups carry negative expected value.
+              </div>
+            </div>
+          )}
+
+          {dayType?.playbook && (
+            <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: dayType?.whatWouldChangeIt ? 6 : 0 }}>
+              {dayType.playbook}
+            </div>
+          )}
+
+          {dayType?.whatWouldChangeIt && (
+            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>
+              <span style={{ color: '#475569', fontWeight: 600 }}>Changes if: </span>
+              {dayType.whatWouldChangeIt}
+            </div>
+          )}
+        </div>
+
+        {/* OR / IB context row */}
+        {(ctx.orWidth || ctx.ibWidth) && (
+          <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#64748b', flexWrap: 'wrap' }}>
+            {ctx.orWidth != null && (
+              <span>OR <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{ctx.orLow}–{ctx.orHigh}</strong> <span style={{ color: '#475569' }}>({ctx.orWidth}pt)</span></span>
+            )}
+            {ctx.ibWidth != null && (
+              <span>IB <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{ctx.ibLow}–{ctx.ibHigh}</strong> <span style={{ color: '#475569' }}>({ctx.ibWidth}pt)</span></span>
+            )}
+            {ctx.openingType && (
+              <span style={{ color: '#475569' }}>{ctx.openingType}</span>
+            )}
+          </div>
+        )}
+
+        {/* Compression detail */}
+        {compression?.coiled && (
+          <div style={{ marginTop: 10, fontSize: 11, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.22)', borderRadius: 5, padding: '6px 10px', lineHeight: 1.4 }}>
+            <strong>Coiled:</strong> {compression.note}
+            {compression.signals?.length > 0 && (
+              <div style={{ marginTop: 3, color: '#6366f1', fontSize: 10 }}>{compression.signals.join(' · ')}</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ─── BLOCK 2: THE CASE ──────────────────────────────────────────────── */}
+      <div style={BLOCK}>
+        <div style={LABEL}>The Case</div>
+
+        {/* Bias + conviction */}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
+          <span style={{ fontSize: 22, fontWeight: 900, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
+            {bias}
+          </span>
+          <span style={{ fontSize: 15, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>
+            {(read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 11, color: '#475569', fontWeight: 400 }}>/10</span>
+          </span>
+          {read?.dayTypeEdge && (
+            <span style={{ marginLeft: 'auto', fontSize: 10, color: dtClass === 'BALANCE' ? LR_AMBER : '#22c55e', fontWeight: 600, textAlign: 'right', maxWidth: 200 }}>
+              {read.dayTypeEdge.split('—')[0].trim()}
+            </span>
+          )}
+        </div>
+
+        {/* Meter bar */}
+        <div style={{ position: 'relative', height: 7, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden', marginBottom: 4 }}>
+          <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
+          {meter > 10 ? (
+            <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.85 }} />
+          ) : meter < -10 ? (
+            <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.85 }} />
+          ) : (
+            <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
+          <span style={{ fontSize: 9, color: LR_CORAL, fontWeight: 700, letterSpacing: '0.05em' }}>◀ SHORT</span>
+          <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>{Math.abs(meter)}/100</span>
+          <span style={{ fontSize: 9, color: LR_TEAL,  fontWeight: 700, letterSpacing: '0.05em' }}>LONG ▶</span>
+        </div>
+
+        {/* Case For / Against columns */}
+        {(caseFor.length > 0 || caseAgainst.length > 0) && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+            {/* Case For */}
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: LR_TEAL, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, borderBottom: `1px solid rgba(45,212,191,0.2)`, paddingBottom: 4 }}>
+                For ({caseFor.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {caseFor.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <div style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b', lineHeight: 1.3 }}>
+                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569' }}>〈 </span>}
+                      {item.point}
+                    </div>
+                    {item.value && (
+                      <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>{item.value}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Case Against */}
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: LR_CORAL, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6, borderBottom: `1px solid rgba(251,146,60,0.2)`, paddingBottom: 4 }}>
+                Against ({caseAgainst.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {caseAgainst.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <div style={{ fontSize: 11, color: item.confirmed ? '#cbd5e1' : '#64748b', lineHeight: 1.3 }}>
+                      {!item.confirmed && <span style={{ fontSize: 9, color: '#475569' }}>〈 </span>}
+                      {item.point}
+                    </div>
+                    {item.value && (
+                      <div style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>{item.value}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* What flips it */}
+        {whatFlipsIt && (
+          <div style={{ fontSize: 11, color: '#64748b', background: 'rgba(15,23,42,0.35)', borderRadius: 5, padding: '6px 10px', marginBottom: 10, lineHeight: 1.45 }}>
+            <span style={{ fontWeight: 700, color: '#475569' }}>Flips if: </span>{whatFlipsIt}
+          </div>
+        )}
+
+        {/* Juice */}
+        {juice && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: '#64748b', borderTop: '1px solid var(--border-color)', paddingTop: 8, marginBottom: evidenceLog.length > 0 ? 10 : 0 }}>
+            <span>Nearest target <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{juice.nearestTargetDistance}pt</strong></span>
+            <span>Risk <strong style={{ color: '#94a3b8', fontFamily: 'monospace' }}>{juice.riskToStop}pt</strong></span>
+            {juice.rr != null && (
+              <span style={{ marginLeft: 'auto', fontWeight: 700, color: juice.worthIt ? LR_TEAL : LR_CORAL, fontFamily: 'monospace' }}>
+                {juice.rr}R {juice.worthIt ? '✓' : '✗'}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Evidence log */}
+        {evidenceLog.length > 0 && (
+          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 8 }}>
+            <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Evidence Log</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {evidenceLog.slice(-4).reverse().map((ev, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 6px', borderRadius: 4, background: 'rgba(15,23,42,0.30)' }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: ev.change === '↑' ? LR_TEAL : LR_CORAL, lineHeight: 1, flexShrink: 0 }}>
+                    {ev.change}
+                  </span>
+                  <span style={{ flex: 1, fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {ev.reason}
+                  </span>
+                  {ev.value != null && (
+                    <span style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', flexShrink: 0 }}>
+                      {ev.value}
+                    </span>
+                  )}
+                  <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace', flexShrink: 0 }}>
+                    {typeof ev.time === 'string' ? ev.time.slice(11, 16) : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ─── BLOCK 3: THE TRIGGER ───────────────────────────────────────────── */}
+      <div style={{ ...BLOCK, border: `1.5px solid ${tBorder}`, background: tBg }}>
+        <div style={LABEL}>The Trigger</div>
+
+        {tState === 'WATCHING' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#334155', letterSpacing: '0.04em' }}>WATCHING</span>
+            </div>
+            <div style={{ fontSize: 12, color: '#475569', lineHeight: 1.55 }}>
+              No actionable setup. Trigger activates when impact score ≥ 6 with delta alignment, NL30 aligned, validated setup type, and R:R ≥ 2.0.
+            </div>
+            {dtClass === 'BALANCE' && (
+              <div style={{ marginTop: 10, fontSize: 11, color: LR_AMBER, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 5, padding: '6px 10px' }}>
+                BALANCE day — directional trigger suppressed. Edge too weak to act.
+              </div>
+            )}
+          </div>
+        )}
+
+        {tState === 'RESOLVED' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                {(trigger.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}
+              </div>
+              <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>Setup resolved — no further action.</div>
+            </div>
+          </div>
+        )}
+
+        {(tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING') && tSetup && (
+          <div>
+            {/* Header row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', background: tClr, flexShrink: 0 }} />
+              <span style={{ fontSize: 15, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1 }}>
+                {(tSetup.type || '').replace(/_/g, ' ')}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: tClr, fontFamily: 'monospace', background: `${tClr}18`, border: `1px solid ${tClr}44`, borderRadius: 4, padding: '2px 8px' }}>
+                {tSetup.impactScore ?? '?'}/10
+              </span>
+              {tState === 'ACTIVE_MANAGING' && (
+                <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Managing</span>
+              )}
+            </div>
+
+            {/* Price grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 14 }}>
+              {[
+                { label: 'Entry', val: tSetup.entry != null ? Math.round(tSetup.entry) : null, clr: '#e2e8f0' },
+                { label: 'Stop',  val: tSetup.stop  != null ? Math.round(tSetup.stop)  : null, clr: LR_CORAL },
+                { label: 'T1',    val: tSetup.t1    != null ? Math.round(tSetup.t1)    : null, clr: LR_TEAL },
+                { label: 'R:R',   val: tSetup.rr    != null ? tSetup.rr                : null, clr: '#94a3b8' },
+              ].map(({ label, val, clr }) => val != null && (
+                <div key={label} style={{ background: 'rgba(15,23,42,0.35)', borderRadius: 6, padding: '8px 10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>{label}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: clr, fontFamily: 'monospace' }}>{val}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Stars */}
+            <div style={{ fontSize: 13, marginBottom: 12, letterSpacing: '-1px' }}>
+              {[1,2,3].map(n => (
+                <span key={n} style={{ color: n <= (tSetup.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>
+              ))}
+              <span style={{ fontSize: 11, color: '#475569', marginLeft: 6, letterSpacing: 'normal' }}>{tSetup.stars || 1}-star setup</span>
+            </div>
+
+            {/* Impact stack */}
+            {tSetup.impactStack?.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Impact Breakdown</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {tSetup.impactStack.map((line, i) => {
+                    const positive = line.startsWith('+');
+                    const negative = line.startsWith('-');
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, color: '#64748b', lineHeight: 1.35 }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: positive ? LR_TEAL : negative ? LR_CORAL : '#64748b', flexShrink: 0, minWidth: 22 }}>
+                          {positive ? '+' : negative ? '−' : ''}
+                        </span>
+                        <span style={{ color: '#94a3b8' }}>{line.replace(/^[+-]\d+\s*/, '')}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Exit playbook */}
+            {trigger?.exitPlaybook && trigger.exitPlaybook.scheme !== 'WAIT' && trigger.exitPlaybook.scheme !== 'SUPPRESSED' && (
+              <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 12 }}>
+                <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Exit Playbook</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 800, color: tClr, textTransform: 'uppercase' }}>
+                    {trigger.exitPlaybook.scheme}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: 5 }}>
+                  {trigger.exitPlaybook.target}
+                </div>
+                {trigger.exitPlaybook.trailRule && (
+                  <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.45, background: 'rgba(15,23,42,0.35)', borderRadius: 5, padding: '6px 10px', marginBottom: 5 }}>
+                    <span style={{ fontWeight: 600, color: '#475569' }}>Trail rule: </span>
+                    {trigger.exitPlaybook.trailRule}
+                  </div>
+                )}
+                {trigger.exitPlaybook.note && (
+                  <div style={{ fontSize: 10, color: '#475569', fontStyle: 'italic' }}>{trigger.exitPlaybook.note}</div>
+                )}
+              </div>
+            )}
+
+            {trigger?.exitPlaybook?.scheme === 'SUPPRESSED' && (
+              <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 10 }}>
+                <div style={{ fontSize: 11, color: LR_AMBER, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 5, padding: '6px 10px' }}>
+                  {trigger.exitPlaybook.rationale?.split('.')[0]}.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ─── EXISTING PANELS (collapsed) ────────────────────────────────────── */}
+      <CollapsibleSection title="Trade Timeline" defaultOpen={true}>
+        <div style={{ padding: '0 4px' }}><TradeTimelinePanel /></div>
+      </CollapsibleSection>
+      <CollapsibleSection title="Today's Setup Timeline" defaultOpen={false}>
+        <div style={{ padding: '0 4px' }}><ACDSessionTimeline /></div>
+      </CollapsibleSection>
+    </>
+  );
+}
+
 function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
   const [tab, setTab] = React.useState('dashboard');
   const [todayData, setTodayData] = React.useState(null);
@@ -14942,7 +15358,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
           <>
             <SystemHealthSummary onNavigate={setCurrentView} />
             <ACDAutoPanel onComplete={loadAll} />
-            <DashboardWithStatusBar nl={nl} todayData={todayData} setCurrentView={setCurrentView} />
+            <CaseView setCurrentView={setCurrentView} />
             <EodOutcomePrompt />
           </>
         )}
