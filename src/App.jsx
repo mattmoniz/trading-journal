@@ -10385,6 +10385,155 @@ function ThisSetupHistorically() {
   );
 }
 
+// ─── AuctionReadSummary: inline conclusions + one full-read expand ─────────────
+function AuctionReadSummary({ nl, todayData }) {
+  const [read,         setRead]         = React.useState({});
+  const [autoDetected, setAutoDetected] = React.useState({});
+  const [nqLive,       setNqLive]       = React.useState(null);
+  const [ltSummary,    setLtSummary]    = React.useState(null);
+  const [liveCtx,      setLiveCtx]      = React.useState(null);
+  const [expanded,     setExpanded]     = React.useState(false);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
+    fetch(`${API_URL}/auction-read/auto`).then(r => r.json()).then(setAutoDetected).catch(() => {});
+    fetch(`${API_URL}/longterm/summary`).then(r => r.json()).then(d => { if (!d.error) setLtSummary(d); }).catch(() => {});
+    fetch(`${API_URL}/acd/live`).then(r => r.json()).then(setLiveCtx).catch(() => {});
+    fetch(`${API_URL}/auction-read/today`).then(r => r.json()).then(d => setRead(d || {})).catch(() => {});
+  }, []);
+
+  const nlTrend    = nl?.trend || 'RANGING';
+  const nlNum      = nl?.sum30 ?? nl?.nl30 ?? 0;
+  const pivotBias  = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
+  const ltCtx      = ltSummary ? {
+    bracketState: ltSummary.bracketState?.state, nl30: ltSummary.acd?.nl30,
+    nl10: ltSummary.acd?.nl10, valueMigration: ltSummary.valueMigration?.direction,
+    weekType: ltSummary.weeklyStructure?.weekType,
+  } : null;
+  const autoASignal = todayData?.today?.a_up_fired ? 'A_UP' : todayData?.today?.a_down_fired ? 'A_DOWN'
+    : liveCtx?.aUpFired ? 'A_UP' : liveCtx?.aDownFired ? 'A_DOWN' : null;
+  const aSignal     = read.a_signal_override || autoASignal;
+  const openingCall = read.opening_call_type || liveCtx?.opening_call_type;
+  const p1Bias      = generatePreMarketBias(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, ltCtx);
+  const p1Direction = p1Bias?.direction;
+  const sessionBias = generateSessionBias(p1Direction, read.or_condition, openingCall, aSignal);
+  const biasColor   = { GREEN: '#22c55e', AMBER: '#fbbf24', RED: '#ef4444' };
+  const nlColor     = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
+  const pivotColor  = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
+  const orCond      = read.or_condition || autoDetected.or_condition;
+
+  const fieldRows = [
+    read.overnight_inventory && {
+      label: 'Overnight inventory', value: read.overnight_inventory.replace(/_/g, ' '),
+      note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish structural pressure'
+          : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish structural pressure'
+          : 'neutral — no inventory directional pressure',
+      clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b',
+    },
+    read.open_vs_prior_value && {
+      label: 'Open vs prior value', value: read.open_vs_prior_value.replace(/_/g, ' '),
+      note: read.open_vs_prior_value === 'ABOVE_VALUE'  ? 'accepted higher prices — initiative long territory'
+          : read.open_vs_prior_value === 'BELOW_VALUE'  ? 'accepted lower prices — initiative short territory'
+          : 'inside value — balanced, two-sided day expected',
+      clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b',
+    },
+    orCond && {
+      label: 'OR condition', value: orCond.replace(/_/g, ' '),
+      note: (() => {
+        const rng = autoDetected.today_or_range;
+        const pct = rng && autoDetected.avg_or_range ? Math.round(rng / autoDetected.avg_or_range * 100) : null;
+        if (orCond === 'NARROW')    return `${rng ? rng.toFixed(0) + 'pt' : 'tight'}${pct ? ' (' + pct + '% avg)' : ''} — honor first A-level touch`;
+        if (orCond === 'WIDE')      return `${rng ? rng.toFixed(0) + 'pt' : 'wide'}${pct ? ' (' + pct + '% avg)' : ''} — reduce size 50%, wait 5-min sustain`;
+        if (orCond === 'EMOTIONAL') return `extreme${pct ? ' (' + pct + '% avg)' : ''} — avoid A signals, fade exhaustion only`;
+        return `${rng ? rng.toFixed(0) + 'pt' : 'normal'}${pct ? ' (' + pct + '% avg)' : ''} — standard sizing`;
+      })(),
+      clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b',
+    },
+    openingCall && {
+      label: 'Opening call', value: openingCall.replace(/_/g, ' '),
+      note: (openingCall.includes('OPEN_DRIVE') && !openingCall.includes('TEST'))
+          ? 'strong directional intent — go with, do not fade'
+          : openingCall.includes('TEST_DRIVE')
+          ? 'tested extreme then drove — confirms direction'
+          : openingCall.includes('REJECTION')
+          ? 'rejected extreme and reversed — opposite direction high conviction'
+          : 'two-sided — wait for IB development',
+      clr: '#94a3b8',
+    },
+    aSignal && {
+      label: 'A signal', value: aSignal.replace(/_/g, ' '),
+      note: (aSignal.includes('UP') && !aSignal.includes('FAILED'))   ? 'buyers took structural control — session long'
+          : (aSignal.includes('DOWN') && !aSignal.includes('FAILED')) ? 'sellers took structural control — session short'
+          : aSignal.includes('FAILED') ? 'attempt failed — trapped participants, counter-trend likely'
+          : 'no directional signal',
+      clr: aSignal.includes('UP') && !aSignal.includes('FAILED') ? '#22c55e' : aSignal.includes('DOWN') && !aSignal.includes('FAILED') ? '#ef4444' : '#fbbf24',
+    },
+    {
+      label: 'NL30',
+      value: `${nlNum > 0 ? '+' : ''}${nlNum} ${nlTrend === 'TRENDING_UP' ? 'TRENDING UP' : nlTrend === 'TRENDING_DOWN' ? 'TRENDING DOWN' : 'RANGING'}`,
+      note: nlTrend === 'TRENDING_UP'   ? 'structural tailwind for longs — A Down has lower conviction'
+          : nlTrend === 'TRENDING_DOWN' ? 'structural tailwind for shorts — A Up is fighting the trend'
+          : 'no multi-session directional edge — both sides valid',
+      clr: nlColor,
+    },
+    nqLive?.pivotBias && {
+      label: 'Monthly pivot',
+      value: pivotBias === 'up' ? 'ABOVE PIVOT' : pivotBias === 'down' ? 'BELOW PIVOT' : '─',
+      note: pivotBias === 'up'   ? 'buyers hold monthly structural position'
+          : pivotBias === 'down' ? 'sellers control the month — rallies to pivot are selling opps'
+          : 'near pivot — no monthly directional edge',
+      clr: pivotColor,
+    },
+  ].filter(Boolean);
+
+  return (
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '14px 20px', marginBottom: 14, fontFamily: 'Arial, sans-serif' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 10 }}>Auction Read</div>
+
+      {/* Inline field conclusions */}
+      {fieldRows.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0, marginBottom: 10 }}>
+          {fieldRows.map((f, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '4px 0', borderBottom: '1px solid rgba(51,65,85,0.20)' }}>
+              <span style={{ fontSize: 11, color: '#475569', minWidth: 130, flexShrink: 0 }}>{f.label}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: f.clr, minWidth: 115, flexShrink: 0 }}>{f.value}</span>
+              <span style={{ fontSize: 11, color: '#64748b', lineHeight: 1.3 }}>{f.note}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>No fields set yet — expand below to fill in pre-market data.</div>
+      )}
+
+      {/* P1 Bias */}
+      {p1Bias && (
+        <div style={{ padding: '7px 12px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}35`, borderRadius: 7, marginBottom: 6 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8', marginBottom: 2 }}>PRE-MARKET BIAS: {p1Direction}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>{p1Bias.text}</div>
+        </div>
+      )}
+
+      {/* Session Bias */}
+      {sessionBias && (
+        <div style={{ padding: '7px 12px', background: `${biasColor[sessionBias.level]}10`, border: `2px solid ${biasColor[sessionBias.level]}`, borderRadius: 7, marginBottom: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: biasColor[sessionBias.level], marginBottom: 2 }}>SESSION BIAS: {sessionBias.level}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
+        </div>
+      )}
+
+      <button onClick={() => setExpanded(e => !e)}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, color: '#475569', padding: '2px 0', fontFamily: 'Arial, sans-serif' }}>
+        {expanded ? '▲ collapse' : '▼ full read / edit fields'}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+          <AuctionReadCard nl={nl} todayData={todayData} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuctionReadCard({ nl, todayData }) {
   const [read, setRead] = React.useState({});
   const [openPhases, setOpenPhases] = React.useState(new Set([]));
@@ -11289,6 +11438,89 @@ function ConditionRow({ c }) {
   );
 }
 
+// ─── StructureInline: alignment + score summary + key conditions + one expand ──
+function StructureInline() {
+  const [data,     setData]     = React.useState(null);
+  const [expanded, setExpanded] = React.useState(false);
+
+  React.useEffect(() => {
+    const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
+    load();
+    const iv = setInterval(load, 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (!data) return null;
+
+  const { structural, session, alignment, alignColor, alignNote, counterTrendData } = data;
+  const allConditions = [...(structural?.conditions || []), ...(session?.conditions || [])];
+  const metConds   = allConditions.filter(c => c.available && c.met).slice(0, 4);
+  const unmetConds = allConditions.filter(c => c.available && !c.met).slice(0, 3);
+
+  return (
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '14px 20px', marginBottom: 14, fontFamily: 'Arial, sans-serif' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Structure</div>
+
+      {/* Alignment + score summary row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color: alignColor }}>
+          {alignment === 'COUNTER_TREND' ? '⚡ COUNTER-TREND' : alignment === 'ALIGNED' ? '✓ ALIGNED' : '─ NEUTRAL'}
+        </span>
+        {structural && (
+          <span style={{ fontSize: 11, fontFamily: 'monospace', color: structural.color, fontWeight: 600 }}>
+            Structural {structural.score}/7 {structural.label} · {structural.dir}
+          </span>
+        )}
+        {session && (
+          <span style={{ fontSize: 11, fontFamily: 'monospace', color: session.dir ? session.color : '#64748b', fontWeight: 600 }}>
+            Session {session.score}/5 {session.label}
+          </span>
+        )}
+      </div>
+
+      {alignment === 'COUNTER_TREND' && alignNote && (
+        <div style={{ fontSize: 11, color: '#fbbf24', background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 5, padding: '5px 10px', marginBottom: 8, lineHeight: 1.4 }}>
+          {alignNote}
+        </div>
+      )}
+
+      {/* Key conditions inline */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 8 }}>
+        {metConds.map(c => (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+            <span style={{ color: '#22c55e', fontWeight: 700, flexShrink: 0, width: 10 }}>✓</span>
+            <span style={{ color: '#94a3b8', flex: 1 }}>{c.label}</span>
+            {c.value && <span style={{ color: '#22c55e', fontFamily: 'monospace', flexShrink: 0, fontSize: 10 }}>{c.value}</span>}
+          </div>
+        ))}
+        {unmetConds.map(c => (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+            <span style={{ color: '#ef4444', fontWeight: 700, flexShrink: 0, width: 10 }}>✗</span>
+            <span style={{ color: '#64748b', flex: 1 }}>{c.label}</span>
+            {c.reason && <span style={{ color: '#475569', fontSize: 10, flexShrink: 0 }}>{c.reason}</span>}
+          </div>
+        ))}
+      </div>
+
+      {counterTrendData && (
+        <div style={{ fontSize: 11, color: '#fbbf24', background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 5, padding: '5px 10px', marginBottom: 8 }}>
+          ⚡ Counter-trend active — T1 {counterTrendData.t1} ({counterTrendData.nearestTarget?.label})
+        </div>
+      )}
+
+      <button onClick={() => setExpanded(e => !e)}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, color: '#475569', padding: '2px 0', fontFamily: 'Arial, sans-serif' }}>
+        {expanded ? '▲ collapse' : '▼ full breakdown'}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 12, borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+          <ConfluenceScore />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConfluenceScore() {
   const [data, setData]         = React.useState(null);
   const [patternCtx, setPatternCtx] = React.useState(null);
@@ -11498,7 +11730,7 @@ function CounterTrendPanel({ ct }) {
 function BigPictureSnapshot({ setCurrentView }) {
   const [lt, setLt] = React.useState(null);
   const [tpo, setTpo] = React.useState(null);
-  const [open, setOpen] = React.useState(true);
+  const [open, setOpen] = React.useState(false);
 
   React.useEffect(() => {
     const load = () => {
@@ -11521,24 +11753,51 @@ function BigPictureSnapshot({ setCurrentView }) {
   const va = lt?.valueMigration;
 
   return (
-    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 12, padding: '14px 20px', marginBottom: 16, fontFamily: 'Arial, sans-serif' }}>
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '14px 20px', marginBottom: 14, fontFamily: 'Arial, sans-serif' }}>
+
+      {/* ── ALWAYS VISIBLE: 3-line headline ── */}
+      {(() => {
+        const sc       = bracketState?.state;
+        const tiltUp   = bracketState?.transitionalNote?.includes('BULLISH');
+        const tiltDown = bracketState?.transitionalNote?.includes('BEARISH');
+        const stateKey = tiltUp ? 'BRACKET_TILTING_UP' : tiltDown ? 'BRACKET_TILTING_DOWN' : sc;
+        const g        = TRADING_GUIDANCE[stateKey] || TRADING_GUIDANCE[sc];
+        const scColor  = stateColor[sc] || '#94a3b8';
+        const stateLabel = sc === 'TRENDING_UP' ? '↑ TRENDING UP' : sc === 'TRENDING_DOWN' ? '↓ TRENDING DOWN' : sc === 'TRANSITIONAL' ? '⚡ TRANSITIONAL' : '↔ BRACKET';
+        const nl30v  = acd?.nl30 ?? 0;
+        const vaDir  = va?.direction;
+        const vaLabel = vaDir === 'HIGHER' ? '↑ higher' : vaDir === 'LOWER' ? '↓ lower' : '↔ overlapping';
+        const weekLabel = wk?.weekType?.replace(/_/g, ' ') || null;
+        const summarySentence = lt?.summary?.text?.split('.')[0];
+        return (
+          <div style={{ marginBottom: 8 }}>
+            {/* Line 1: state + chips */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em' }}>Big Picture</span>
+              <span style={{ fontSize: 14, fontWeight: 800, color: scColor }}>
+                {tiltUp ? '⚠ BRACKET tilting up' : tiltDown ? '⚠ BRACKET tilting down' : stateLabel}
+              </span>
+              {acd && <span style={{ fontSize: 12, fontFamily: 'monospace', color: nlColor(nl30v), fontWeight: 700 }}>NL30 {nl30v > 0 ? '+' : ''}{nl30v}</span>}
+              {va  && <span style={{ fontSize: 11, color: vaDir === 'HIGHER' ? '#22c55e' : vaDir === 'LOWER' ? '#ef4444' : '#94a3b8' }}>value {vaLabel}</span>}
+              {weekLabel && <span style={{ fontSize: 11, color: '#64748b' }}>{weekLabel} week</span>}
+            </div>
+            {/* Line 2: structure sentence */}
+            {summarySentence && (
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4, lineHeight: 1.4 }}>
+                <span style={{ color: scColor, fontWeight: 600 }}>Structure says: </span>{summarySentence}.
+              </div>
+            )}
+            {/* Line 3: playbook action */}
+            {g?.headline && (
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1' }}>→ {g.headline}</div>
+            )}
+          </div>
+        );
+      })()}
+
       <button onClick={() => setOpen(o => !o)}
-        style={{ width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 0, marginBottom: open ? 12 : 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', letterSpacing: '0.08em' }}>BIG PICTURE</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary)' }}>Structural Context — Today's Snapshot</span>
-          {bracketState && (() => {
-            const isTiltUp   = bracketState.transitionalNote?.includes('BULLISH');
-            const isTiltDown = bracketState.transitionalNote?.includes('BEARISH');
-            if (bracketState.state === 'TRENDING_UP')   return <span style={{ fontSize: 13, fontWeight: 700, color: '#22c55e', padding: '2px 8px', background: 'rgba(34,197,94,0.15)', borderRadius: 4 }}>↑ TRENDING UP</span>;
-            if (bracketState.state === 'TRENDING_DOWN') return <span style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', padding: '2px 8px', background: 'rgba(239,68,68,0.15)', borderRadius: 4 }}>↓ TRENDING DOWN</span>;
-            if (bracketState.state === 'TRANSITIONAL')  return <span style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', padding: '2px 8px', background: 'rgba(251,191,36,0.15)', borderRadius: 4 }}>⚡ TRANSITIONAL</span>;
-            if (isTiltUp)   return <><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', padding: '2px 8px', background: 'rgba(59,130,246,0.15)', borderRadius: 4 }}>↔ BRACKET</span><span style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', padding: '2px 8px', background: 'rgba(251,191,36,0.12)', borderRadius: 4 }}>⚠ tilting up — breakouts unconfirmed</span></>;
-            if (isTiltDown) return <><span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', padding: '2px 8px', background: 'rgba(59,130,246,0.15)', borderRadius: 4 }}>↔ BRACKET</span><span style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', padding: '2px 8px', background: 'rgba(251,191,36,0.12)', borderRadius: 4 }}>⚠ tilting down — breakouts unconfirmed</span></>;
-            return <span style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', padding: '2px 8px', background: 'rgba(59,130,246,0.15)', borderRadius: 4 }}>↔ BRACKET</span>;
-          })()}
-        </div>
-        <span style={{ color: '#94a3b8', fontSize: 13 }}>{open ? '▲' : '▼'}</span>
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 11, color: '#475569', padding: '2px 0', marginBottom: open ? 10 : 0, fontFamily: 'Arial, sans-serif', display: 'flex', alignItems: 'center', gap: 4 }}>
+        {open ? '▲ collapse' : '▼ full read'}
       </button>
 
       {open && (
@@ -14904,7 +15163,7 @@ function EodOutcomePrompt() {
 
 // ==================== PHASE 3: CASE VIEW (MAIN DASHBOARD) ====================
 
-function CaseView({ setCurrentView }) {
+function CaseView({ setCurrentView, nl, todayData }) {
   const { caseData: c, loading } = useLiveCase();
   const [conf, setConf] = React.useState(null);
   const phaseState = usePhaseChangeState();
@@ -14934,12 +15193,22 @@ function CaseView({ setCurrentView }) {
   };
   const LABEL = { fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 12 };
 
+  // Pre-market panels never depend on RTH bars — always render them first.
+  const preMarketPanels = (
+    <>
+      <BigPictureSnapshot setCurrentView={setCurrentView} />
+      <AuctionReadSummary nl={nl} todayData={todayData} />
+      <StructureInline />
+    </>
+  );
+
   if (loading && !c) {
     return (
       <>
         <ProximityBanner phaseState={phaseState} />
         <SessionStatusBar conf={conf} />
-        <div style={{ color: '#64748b', padding: '40px 0', textAlign: 'center', fontSize: 13 }}>Loading case engine…</div>
+        {preMarketPanels}
+        <div style={{ color: '#64748b', padding: '20px 0', textAlign: 'center', fontSize: 13 }}>Loading case engine…</div>
       </>
     );
   }
@@ -14949,7 +15218,13 @@ function CaseView({ setCurrentView }) {
       <>
         <ProximityBanner phaseState={phaseState} />
         <SessionStatusBar conf={conf} />
-        <div style={{ ...BLOCK, color: '#64748b', textAlign: 'center', fontSize: 13 }}>No bar data yet for today.</div>
+        {preMarketPanels}
+        <div style={{ ...BLOCK, color: '#64748b', textAlign: 'center', fontSize: 12 }}>
+          Case engine activates at 9:30 ET when RTH bars open.
+          {c?.error && c.error !== 'No RTH bar data for this date/time' && (
+            <div style={{ marginTop: 4, fontSize: 11, color: '#ef4444' }}>{c.error}</div>
+          )}
+        </div>
       </>
     );
   }
@@ -14975,11 +15250,7 @@ function CaseView({ setCurrentView }) {
     <>
       <ProximityBanner phaseState={phaseState} />
       <SessionStatusBar conf={conf} />
-
-      {/* BigPicture – collapsed; Phase 4 tightens */}
-      <CollapsibleSection title="Big Picture — Structural Context" defaultOpen={false}>
-        <div style={{ padding: '0 4px' }}><BigPictureSnapshot setCurrentView={setCurrentView} /></div>
-      </CollapsibleSection>
+      {preMarketPanels}
 
       {/* ─── BLOCK 1: THE DAY ───────────────────────────────────────────────── */}
       <div style={BLOCK}>
@@ -15358,7 +15629,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
           <>
             <SystemHealthSummary onNavigate={setCurrentView} />
             <ACDAutoPanel onComplete={loadAll} />
-            <CaseView setCurrentView={setCurrentView} />
+            <CaseView setCurrentView={setCurrentView} nl={nl} todayData={todayData} />
             <EodOutcomePrompt />
           </>
         )}
