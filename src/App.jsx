@@ -921,6 +921,311 @@ function LiveSessionPanel() {
   );
 }
 
+// ==================== LIVE READ PANEL (Phase 2) ====================
+// Renders /api/case output. Polls every 10s + socket events.
+// Direction: teal = LONG, coral = SHORT. NOT green-for-everything.
+const LR_TEAL  = '#2dd4bf';
+const LR_CORAL = '#fb923c';
+const LR_AMBER = '#f59e0b';
+const LR_SLATE = '#64748b';
+
+function useLiveCase() {
+  const [caseData, setCaseData] = React.useState(null);
+  const [loading, setLoading]   = React.useState(true);
+
+  const todayET = React.useMemo(
+    () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }),
+    []
+  );
+
+  const load = React.useCallback(() => {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const hh  = String(now.getHours()).padStart(2, '0');
+    const mm  = String(now.getMinutes()).padStart(2, '0');
+    fetch(`${API_URL}/case?date=${todayET}&asOf=${hh}:${mm}`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setCaseData(d); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [todayET]);
+
+  React.useEffect(() => {
+    load();
+    const iv   = setInterval(load, 10000);
+    const sock = window._tradingSocket;
+    if (sock) {
+      sock.on('price-sync-progress', load);
+      sock.on('setup-detected',      load);
+      sock.on('setup-state',         load);
+    }
+    return () => {
+      clearInterval(iv);
+      if (sock) {
+        sock.off('price-sync-progress', load);
+        sock.off('setup-detected',      load);
+        sock.off('setup-state',         load);
+      }
+    };
+  }, [load]);
+
+  return { caseData, loading };
+}
+
+function LiveReadPanel() {
+  const { caseData: c, loading } = useLiveCase();
+
+  if ((loading && !c) || !c || c.error) {
+    return (
+      <div style={{ borderTop: '1px solid rgba(51,65,85,0.55)', paddingTop: 10, paddingBottom: 4 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 5 }}>Live Read</div>
+        <div style={{ fontSize: 12, color: LR_SLATE }}>
+          {loading && !c ? 'Loading…' : 'No bar data yet'}
+        </div>
+      </div>
+    );
+  }
+
+  const { dayType, read, levels = [], trigger, compression, evidenceLog = [] } = c;
+  const dtClass = dayType?.classification || 'FORMING';
+  const bias    = read?.bias || 'NEUTRAL';
+  const meter   = read?.meterPosition || 0;
+
+  function dirClr(dir) {
+    return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE;
+  }
+  const biasClr = dirClr(bias);
+
+  // Day-type color palette
+  const DT_STYLE = {
+    BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.09)',    border: 'rgba(245,158,11,0.35)' },
+    TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.08)',   border: 'rgba(129,140,248,0.30)' },
+    TURBULENT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.07)',   border: 'rgba(148,163,184,0.22)' },
+    FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.40)',      border: 'rgba(51,65,85,0.40)' },
+  };
+  const dts = DT_STYLE[dtClass] || DT_STYLE.FORMING;
+
+  // Trigger
+  const tState  = trigger?.state || 'WATCHING';
+  const tActive = tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING';
+  const tSetup  = trigger?.setup;
+  const tDir    = tSetup?.direction;
+  const tClr    = tActive ? dirClr(tDir) : LR_SLATE;
+  const tBg     = tActive
+    ? (tDir === 'LONG' ? 'rgba(45,212,191,0.07)' : 'rgba(251,146,60,0.07)')
+    : 'rgba(15,23,42,0.30)';
+  const tBorder = tActive ? `${tClr}55` : 'rgba(51,65,85,0.45)';
+
+  const latestEv  = evidenceLog[evidenceLog.length - 1] || null;
+  const asOfTime  = c.asOf ? c.asOf.slice(11, 16) : null;
+
+  return (
+    <div style={{ borderTop: '1px solid rgba(51,65,85,0.55)', paddingTop: 6 }}>
+
+      {/* ─── Header ─────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          Live Read
+        </span>
+        {asOfTime && (
+          <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>{asOfTime} ET</span>
+        )}
+      </div>
+
+      {/* ─── 1. THE DAY ─────────────────────────────────── */}
+      <div style={{ border: `1px solid ${dts.border}`, borderRadius: 6, padding: '8px 10px', background: dts.bg, marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: dtClass === 'BALANCE' || dayType?.playbook ? 4 : 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 800, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em', lineHeight: 1 }}>
+            {dtClass}
+          </span>
+          {compression?.coiled && (
+            <span style={{ fontSize: 8, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.05em' }}>
+              COILED
+            </span>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 9, color: '#334155', flexShrink: 0 }}>
+            {dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}
+          </span>
+        </div>
+
+        {dtClass === 'BALANCE' && (
+          <div style={{ fontSize: 11, color: LR_AMBER, fontWeight: 600, marginBottom: 3, lineHeight: 1.35 }}>
+            ⚠ WEAK edge today — breakout setups lose on balance days (interim). Stand light.
+          </div>
+        )}
+
+        {dayType?.playbook && (
+          <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
+            {dayType.playbook}
+          </div>
+        )}
+      </div>
+
+      {/* ─── 2. THE READ ────────────────────────────────── */}
+      <div style={{ marginBottom: 8 }}>
+        {/* Bias + conviction */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            {bias}
+          </span>
+          <span style={{ fontSize: 12, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>
+            {(read?.conviction ?? 0).toFixed(1)}/10
+          </span>
+        </div>
+
+        {/* Horizontal meter — short ← center → long */}
+        <div style={{ position: 'relative', height: 5, background: 'rgba(51,65,85,0.55)', borderRadius: 3, overflow: 'hidden', marginBottom: 3 }}>
+          <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
+          {meter > 15 ? (
+            <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 3px 3px 0', opacity: 0.9 }} />
+          ) : meter < -15 ? (
+            <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '3px 0 0 3px', opacity: 0.9 }} />
+          ) : (
+            <div style={{ position: 'absolute', left: 'calc(50% - 2px)', width: 4, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+          )}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+          <span style={{ fontSize: 9, color: LR_CORAL, fontWeight: 700 }}>SHORT</span>
+          <span style={{ fontSize: 9, color: LR_TEAL,  fontWeight: 700 }}>LONG</span>
+        </div>
+
+        {/* Evidence strip — latest event */}
+        {latestEv && (
+          <div style={{ fontSize: 11, background: 'rgba(15,23,42,0.45)', borderRadius: 4, padding: '4px 7px', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ color: latestEv.change === '↑' ? LR_TEAL : LR_CORAL, fontWeight: 800, fontSize: 13, flexShrink: 0, lineHeight: 1 }}>
+              {latestEv.change}
+            </span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#cbd5e1', fontSize: 11 }}>
+              {latestEv.reason}
+            </span>
+            <span style={{ flexShrink: 0, fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>
+              {typeof latestEv.time === 'string' ? latestEv.time.slice(11, 16) : ''}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ─── 3. LEVELS ──────────────────────────────────── */}
+      {levels.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: LR_SLATE, textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 4 }}>
+            Key Levels
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {levels.slice(0, 6).map((lv, i) => {
+              const isNearest = i === 0;
+              const tfClr = lv.timeframes?.[0] === 'WEEKLY' ? '#a78bfa' : lv.timeframes?.[0] === 'DAILY' ? '#60a5fa' : '#64748b';
+              const distTo    = -(lv.distance || 0);  // positive → level is above price
+              const distDisp  = `${distTo >= 0 ? '+' : ''}${Math.round(distTo)}`;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 4, padding: '3px 5px', borderRadius: 4,
+                    background: isNearest ? 'rgba(99,102,241,0.09)' : lv.stacked ? 'rgba(45,212,191,0.05)' : 'transparent',
+                    border:     isNearest ? '1px solid rgba(99,102,241,0.22)' : lv.stacked ? '1px solid rgba(45,212,191,0.18)' : '1px solid transparent',
+                  }}
+                >
+                  <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: isNearest ? '#e2e8f0' : '#94a3b8', minWidth: 46, flexShrink: 0 }}>
+                    {Math.round(lv.price)}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#64748b', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {lv.label}
+                  </span>
+                  {lv.stacked && (
+                    <span style={{ fontSize: 8, color: LR_TEAL, background: 'rgba(45,212,191,0.12)', border: '1px solid rgba(45,212,191,0.3)', borderRadius: 2, padding: '0 3px', letterSpacing: '0.04em', flexShrink: 0 }}>
+                      STK
+                    </span>
+                  )}
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: tfClr, flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, letterSpacing: '-1px', flexShrink: 0 }}>
+                    {[1,2,3].map(n => (
+                      <span key={n} style={{ color: n <= (lv.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>
+                    ))}
+                  </span>
+                  <span style={{ fontSize: 9, color: '#334155', fontFamily: 'monospace', flexShrink: 0, minWidth: 30, textAlign: 'right' }}>
+                    {distDisp}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── 4. TRIGGER SLOT ────────────────────────────── */}
+      <div style={{ border: `1.5px solid ${tBorder}`, borderRadius: 6, padding: '8px 10px', background: tBg }}>
+        {tState === 'WATCHING' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#1e293b', border: '1px solid #334155', flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: '#334155' }}>Watching — no actionable setup</span>
+          </div>
+        ) : tState === 'RESOLVED' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {(trigger.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}
+            </span>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
+              <span style={{ fontWeight: 700, fontSize: 11, color: tClr, textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {(tSetup?.type || '').replace(/_/g, ' ')}
+              </span>
+              <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: tClr, background: `${tClr}22`, border: `1px solid ${tClr}44`, borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
+                {tSetup?.impactScore ?? '?'}/10
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', fontSize: 12, marginBottom: 5 }}>
+              {tSetup?.entry != null && (
+                <span style={{ color: '#64748b' }}>Entry <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{Math.round(tSetup.entry)}</strong></span>
+              )}
+              {tSetup?.stop != null && (
+                <span style={{ color: '#64748b' }}>Stop  <strong style={{ color: LR_CORAL, fontFamily: 'monospace' }}>{Math.round(tSetup.stop)}</strong></span>
+              )}
+              {tSetup?.t1 != null && (
+                <span style={{ color: '#64748b' }}>T1    <strong style={{ color: LR_TEAL,  fontFamily: 'monospace' }}>{Math.round(tSetup.t1)}</strong></span>
+              )}
+              {tSetup?.rr != null && (
+                <span style={{ color: '#64748b' }}>R:R   <strong style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{tSetup.rr}</strong></span>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' ? 4 : 0 }}>
+              <span style={{ fontSize: 9, letterSpacing: '-1px' }}>
+                {[1,2,3].map(n => (
+                  <span key={n} style={{ color: n <= (tSetup?.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>
+                ))}
+              </span>
+              {tState === 'ACTIVE_MANAGING' && (
+                <span style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Managing</span>
+              )}
+            </div>
+
+            {trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' && (
+              <div style={{ fontSize: 10, color: '#64748b', borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 4, lineHeight: 1.4 }}>
+                <span style={{ color: tClr, fontWeight: 700 }}>{trigger.exitPlaybook.scheme}</span>
+                {' · '}
+                <span>{(trigger.exitPlaybook.target || '').split('.')[0]}</span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Compression coiled banner */}
+      {compression?.coiled && (
+        <div style={{ marginTop: 6, fontSize: 10, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.22)', borderRadius: 4, padding: '4px 8px', lineHeight: 1.4 }}>
+          {compression.note}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
 // ==================== SIDEBAR ====================
 function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
   return (
@@ -1011,6 +1316,7 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
         </button>
       </nav>
 
+      <LiveReadPanel />
       <LiveSessionPanel />
     </aside>
   );

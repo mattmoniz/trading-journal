@@ -37,6 +37,7 @@ import { detectPhaseChange } from './services/phaseChangeDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import morningBriefRouter from './routes/morningBrief.js';
+import caseRouter from './routes/case.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
 import { runWeeklyReport } from '../scripts/weekly_report.js';
@@ -233,6 +234,7 @@ app.use('/api', calendarRouter);
 app.use('/api', ruleOverridesRouter);
 app.use('/api', dllRouter);
 app.use('/api/morning-brief', morningBriefRouter);
+app.use('/api', caseRouter);
 
 // Data Health endpoint
 app.get('/api/health/data', async (req, res) => {
