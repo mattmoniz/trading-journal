@@ -15169,14 +15169,21 @@ function EodOutcomePrompt() {
   );
 }
 
-// ── AuctionReadModalContent: clean field list, no per-field dropdowns ─────────
+// ── AuctionReadModalContent: all 4 phases, always-visible, no dropdown soup ────
 function AuctionReadModalContent({ nl, todayData }) {
   const [read,         setRead]         = React.useState({});
   const [autoDetected, setAutoDetected] = React.useState({});
   const [nqLive,       setNqLive]       = React.useState(null);
   const [ltSummary,    setLtSummary]    = React.useState(null);
   const [liveCtx,      setLiveCtx]      = React.useState(null);
+  const [midSnap,      setMidSnap]      = React.useState(null);
+  const [eod,          setEod]          = React.useState(null);
   const [showEdit,     setShowEdit]     = React.useState(false);
+
+  const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const etMin   = nowET.getHours() * 60 + nowET.getMinutes();
+  const isAfter145 = etMin >= 13 * 60 + 45;
+  const isAfter4pm = etMin >= 16 * 60;
 
   React.useEffect(() => {
     fetch(`${API_URL}/acd/nq/latest`).then(r => r.json()).then(setNqLive).catch(() => {});
@@ -15184,19 +15191,22 @@ function AuctionReadModalContent({ nl, todayData }) {
     fetch(`${API_URL}/longterm/summary`).then(r => r.json()).then(d => { if (!d.error) setLtSummary(d); }).catch(() => {});
     fetch(`${API_URL}/acd/live`).then(r => r.json()).then(setLiveCtx).catch(() => {});
     fetch(`${API_URL}/auction-read/today`).then(r => r.json()).then(d => setRead(d || {})).catch(() => {});
+    if (isAfter145) fetch(`${API_URL}/auction-read/midday`).then(r => r.json()).then(setMidSnap).catch(() => {});
+    if (isAfter4pm) fetch(`${API_URL}/auction-read/eod`).then(r => r.json()).then(setEod).catch(() => {});
   }, []);
 
-  const nlTrend   = nl?.trend || 'RANGING';
-  const nlNum     = nl?.sum30 ?? nl?.nl30 ?? 0;
-  const pivotBias = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
-  const nlColor   = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
+  // ── Derived values ──────────────────────────────────────────────────────
+  const nlTrend    = nl?.trend || 'RANGING';
+  const nlNum      = nl?.sum30 ?? nl?.nl30 ?? 0;
+  const nlColor    = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
+  const pivotBias  = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
   const pivotColor = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
   const orCond     = read.or_condition || autoDetected.or_condition;
-  const autoASignal = todayData?.today?.a_up_fired ? 'A_UP' : todayData?.today?.a_down_fired ? 'A_DOWN'
+  const autoASig   = todayData?.today?.a_up_fired ? 'A_UP' : todayData?.today?.a_down_fired ? 'A_DOWN'
     : liveCtx?.aUpFired ? 'A_UP' : liveCtx?.aDownFired ? 'A_DOWN' : null;
-  const aSignal    = read.a_signal_override || autoASignal;
+  const aSignal    = read.a_signal_override || autoASig;
   const openingCall = read.opening_call_type || liveCtx?.opening_call_type;
-  const ltCtx = ltSummary ? {
+  const ltCtx      = ltSummary ? {
     bracketState: ltSummary.bracketState?.state, nl30: ltSummary.acd?.nl30,
     nl10: ltSummary.acd?.nl10, valueMigration: ltSummary.valueMigration?.direction,
     weekType: ltSummary.weeklyStructure?.weekType,
@@ -15204,87 +15214,262 @@ function AuctionReadModalContent({ nl, todayData }) {
   const p1Bias     = generatePreMarketBias(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, ltCtx);
   const p1Dir      = p1Bias?.direction;
   const sessionBias = generateSessionBias(p1Dir, orCond, openingCall, aSignal);
+  const biasClr    = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#94a3b8' };
+  const lvlClr     = { GREEN: '#22c55e', AMBER: '#fbbf24', RED: '#ef4444' };
 
-  const fields = [
-    { label: 'Overnight inventory', val: read.overnight_inventory?.replace(/_/g,' '),
-      note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish pressure'
-          : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish pressure'
-          : 'neutral — no inventory edge',
-      clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b' },
-    { label: 'Open vs prior value', val: read.open_vs_prior_value?.replace(/_/g,' '),
-      note: read.open_vs_prior_value === 'ABOVE_VALUE' ? 'initiative long territory'
-          : read.open_vs_prior_value === 'BELOW_VALUE' ? 'initiative short territory'
-          : 'inside value — balanced day expected',
-      clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b' },
-    { label: 'OR condition', val: orCond?.replace(/_/g,' '),
-      note: orCond === 'NARROW' ? `tight — honor first A-level touch`
-          : orCond === 'WIDE'   ? `wide — reduce size 50%, wait 5-min sustain`
-          : orCond === 'EMOTIONAL' ? `extreme — avoid A signals, fade exhaustion only`
-          : 'normal — standard sizing',
-      clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b' },
-    { label: 'Opening call', val: openingCall?.replace(/_/g,' '),
-      note: (openingCall?.includes('DRIVE') && !openingCall?.includes('TEST')) ? 'strong directional intent — go with'
-          : openingCall?.includes('TEST_DRIVE') ? 'tested then drove — confirms direction'
-          : openingCall?.includes('REJECTION') ? 'rejected extreme — opposite direction'
-          : 'two-sided — wait for IB',
-      clr: '#94a3b8' },
-    { label: 'A signal', val: aSignal?.replace(/_/g,' '),
-      note: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? 'buyers structural control — session long'
-          : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? 'sellers structural control — session short'
-          : aSignal?.includes('FAILED') ? 'attempt failed — counter-trend signal'
-          : 'no directional signal yet',
-      clr: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? '#22c55e' : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? '#ef4444' : '#fbbf24' },
-    { label: 'NL30', val: `${nlNum > 0 ? '+' : ''}${nlNum}`,
-      note: nlTrend === 'TRENDING_UP' ? 'confirmed uptrend — A Up has full structural backing'
-          : nlTrend === 'TRENDING_DOWN' ? 'confirmed downtrend — A Down has full backing'
-          : 'ranging — no multi-session edge, both sides valid',
-      clr: nlColor },
-    { label: 'Monthly pivot', val: pivotBias === 'up' ? 'ABOVE PIVOT' : pivotBias === 'down' ? 'BELOW PIVOT' : null,
-      note: pivotBias === 'up' ? 'buyers hold monthly structure — bullish context'
-          : 'sellers control the month — rallies to pivot are fades',
-      clr: pivotColor },
-    { label: 'Prior day profile', val: read.prior_day_profile?.replace(/_/g,' '), note: '', clr: '#64748b' },
-  ].filter(f => f.val);
+  // ── Shared field row renderer ───────────────────────────────────────────
+  const FieldRow = ({ label, val, note, clr }) => !val ? null : (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '7px 0', borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
+      <span style={{ fontSize: 12, color: '#64748b', minWidth: 140, flexShrink: 0, paddingTop: 1 }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: clr || '#94a3b8', minWidth: 110, flexShrink: 0 }}>{val}</span>
+      {note && <span style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{note}</span>}
+    </div>
+  );
 
-  const biasColors = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#94a3b8' };
-  const levelColors = { GREEN: '#22c55e', AMBER: '#fbbf24', RED: '#ef4444' };
+  // ── Phase section header ────────────────────────────────────────────────
+  const PhaseHdr = ({ num, title, timeNote, accent }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, paddingBottom: 8, borderBottom: `2px solid ${accent || '#334155'}` }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: accent || '#3b82f6', letterSpacing: '0.1em', textTransform: 'uppercase' }}>Phase {num}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{title}</span>
+      {timeNote && <span style={{ fontSize: 11, color: '#475569', marginLeft: 'auto' }}>{timeNote}</span>}
+    </div>
+  );
 
-  return (
-    <div>
-      {/* Clean field list */}
-      {fields.length === 0 ? (
-        <div style={{ color: '#64748b', fontSize: 13, marginBottom: 16 }}>No fields set yet. Use "Edit fields" below to enter pre-market data.</div>
-      ) : (
-        <div style={{ marginBottom: 16 }}>
-          {fields.map((f, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: '8px 0', borderBottom: '1px solid rgba(51,65,85,0.25)' }}>
-              <span style={{ fontSize: 11, color: '#475569', minWidth: 130, flexShrink: 0, paddingTop: 1 }}>{f.label}</span>
-              <span style={{ fontSize: 13, fontWeight: 700, color: f.clr, minWidth: 120, flexShrink: 0 }}>{f.val || '—'}</span>
-              <span style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{f.note}</span>
+  const sectionStyle = {
+    background: 'rgba(15,23,42,0.5)',
+    border: '1px solid rgba(51,65,85,0.5)',
+    borderRadius: 8,
+    padding: '14px 16px',
+    marginBottom: 12,
+  };
+
+  // ── MidDay content inline ───────────────────────────────────────────────
+  const MidDayContent = () => {
+    if (!isAfter145) return (
+      <div style={{ padding: '12px 0', textAlign: 'center', color: '#475569', fontSize: 13, fontStyle: 'italic' }}>
+        Available after 1:45 PM ET — pre-market bias vs how it's playing out, session signal, session range, watch-into-close items.
+      </div>
+    );
+    if (!midSnap) return <div style={{ color: '#64748b', fontSize: 13, padding: '8px 0' }}>Loading…</div>;
+    if (!midSnap.available) return <div style={{ color: '#64748b', fontSize: 13, padding: '8px 0' }}>{midSnap.reason || 'Not yet available.'}</div>;
+    const dirColor = { BULLISH: '#22c55e', BEARISH: '#ef4444', NEUTRAL: '#94a3b8' };
+    const genTime = midSnap.generatedAt ? formatTimestamp(midSnap.generatedAt) : null;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {genTime && <div style={{ fontSize: 11, color: '#475569', marginBottom: -4 }}>Generated {genTime} ET</div>}
+        {/* Status row */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Pre-mkt bias', val: midSnap.preMktBias || 'NEUTRAL', clr: biasClr[midSnap.preMktBias] || '#94a3b8', sub: 'inventory + value' },
+            { label: 'Session signal', val: midSnap.sessionSignal || 'No signal', clr: biasClr[midSnap.sessionSignal] || '#64748b', sub: midSnap.aDownFired ? 'A Down fired' : midSnap.aUpFired ? 'A Up fired' : 'no A signal' },
+            { label: `vs open (${midSnap.cutoffTime || ''})`, val: `${midSnap.ptsVsOpen > 0 ? '+' : ''}${midSnap.ptsVsOpen}pts`, clr: dirColor[midSnap.dir] || '#94a3b8', sub: midSnap.dir },
+            { label: 'Bias outcome', val: midSnap.biasPlaying ? '✓ Playing out' : midSnap.biasReversed ? '✗ Not playing out' : '— Neutral', clr: midSnap.biasPlaying ? '#22c55e' : midSnap.biasReversed ? '#ef4444' : '#94a3b8', sub: '' },
+            { label: 'Session range', val: `${midSnap.sessRange}pts`, clr: '#e2e8f0', sub: `H ${midSnap.sessHigh} · L ${midSnap.sessLow} (${midSnap.rangeVsAvg}% avg)` },
+          ].map(({ label, val, clr, sub }) => (
+            <div key={label} style={{ flex: '1 1 120px', minWidth: 100, padding: '8px 12px', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 6 }}>
+              <div style={{ fontSize: 11, color: '#475569', marginBottom: 3 }}>{label}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: clr }}>{val}</div>
+              {sub && <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{sub}</div>}
             </div>
           ))}
         </div>
-      )}
-
-      {/* Pre-market bias */}
-      {p1Bias && (
-        <div style={{ padding: '10px 14px', background: p1Dir === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Dir === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${biasColors[p1Dir] || '#475569'}35`, borderRadius: 7, marginBottom: 8 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: biasColors[p1Dir] || '#94a3b8', marginBottom: 4 }}>PRE-MARKET BIAS: {p1Dir}</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{p1Bias.text}</div>
+        {/* Key levels */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {[
+            ['Now', midSnap.currentPrice, '#e2e8f0'],
+            ['VWAP', midSnap.vwap, midSnap.currentPrice > midSnap.vwap ? '#22c55e' : '#ef4444'],
+            ['OR Hi', midSnap.orHigh, '#94a3b8'], ['OR Lo', midSnap.orLow, '#94a3b8'],
+            midSnap.gLine && ['G-Line', midSnap.gLine, '#f59e0b'],
+            midSnap.aUpFired && ['A Up', '✓', '#22c55e'],
+            midSnap.aDownFired && ['A Down', '✓', '#ef4444'],
+            [`P3 (${midSnap.p3Source || 'auto'})`, `${midSnap.p3Score}/5`, midSnap.p3Score >= 3 ? '#22c55e' : midSnap.p3Score >= 2 ? '#fbbf24' : '#ef4444'],
+          ].filter(Boolean).map(([label, val, color]) => (
+            <div key={label} style={{ padding: '4px 10px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(51,65,85,0.35)', borderRadius: 5 }}>
+              <span style={{ fontSize: 11, color: '#475569' }}>{label} </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color }}>{val}</span>
+            </div>
+          ))}
         </div>
-      )}
+        {/* Session shape */}
+        {midSnap.dayTypeDeveloping && (
+          <div style={{ padding: '10px 14px', background: 'rgba(59,130,246,0.06)', borderLeft: '3px solid #3b82f6', borderRadius: '0 6px 6px 0', fontSize: 13, lineHeight: 1.7, color: '#94a3b8' }}>
+            <span style={{ color: '#3b82f6', fontWeight: 700 }}>SESSION SHAPE  </span>{midSnap.dayTypeDeveloping}
+          </div>
+        )}
+        {/* Watch into close */}
+        {midSnap.watches?.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Watch into close</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {midSnap.watches.map((w, i) => (
+                <div key={i} style={{ padding: '7px 12px', background: 'rgba(0,0,0,0.15)', borderLeft: '2px solid #3b82f6', borderRadius: '0 6px 6px 0', fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>{w}</div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
-      {/* Session bias */}
-      {sessionBias && (
-        <div style={{ padding: '10px 14px', background: `${levelColors[sessionBias.level] || '#475569'}10`, border: `1px solid ${levelColors[sessionBias.level] || '#475569'}35`, borderRadius: 7, marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: levelColors[sessionBias.level] || '#94a3b8', marginBottom: 4 }}>SESSION BIAS: {sessionBias.level}</div>
-          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
+  // ── EOD content inline ──────────────────────────────────────────────────
+  const EODContent = () => {
+    if (!isAfter4pm) return (
+      <div style={{ padding: '12px 0', textAlign: 'center', color: '#475569', fontSize: 13, fontStyle: 'italic' }}>
+        Available after 4:00 PM ET — full session debrief, bias outcome, patterns detected, and tomorrow's read.
+      </div>
+    );
+    if (!eod) return <div style={{ color: '#64748b', fontSize: 13, padding: '8px 0' }}>Loading…</div>;
+    if (!eod.available) return <div style={{ color: '#64748b', fontSize: 13, padding: '8px 0' }}>{eod.reason || 'Not yet available.'}</div>;
+    const outClr = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#94a3b8' };
+    const outIcon = { CORRECT: '✓', WRONG: '✗', NEUTRAL: '—' };
+    const patClr = { V_REVERSAL_UP: '#22c55e', V_REVERSAL_DOWN: '#ef4444', TREND_DAY: '#f97316', BALANCE_DAY: '#64748b', FAILED_A_UP: '#f97316', FAILED_A_DOWN: '#a78bfa', NEWS_DRIVEN: '#fbbf24' };
+    const genTime = eod.calculatedAt ? formatTimestamp(new Date(eod.calculatedAt)) : null;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {genTime && <div style={{ fontSize: 11, color: '#475569', marginBottom: -4 }}>Generated {genTime} ET</div>}
+        {/* Outcome cards */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 160px', padding: '10px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 7 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Pre-market call</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: eod.mornBias === 'LONG' ? '#22c55e' : eod.mornBias === 'SHORT' ? '#ef4444' : '#94a3b8' }}>{eod.mornBias}</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>{eod.inv?.replace(/_/g,' ')} · {eod.val?.replace(/_/g,' ')}</div>
+            <div style={{ fontSize: 11, color: eod.aUpFired ? '#22c55e' : eod.aDownFired ? '#ef4444' : '#475569', marginTop: 2 }}>{eod.aUpFired ? 'A Up fired' : eod.aDownFired ? 'A Down fired' : 'No A signal'}</div>
+          </div>
+          <div style={{ flex: '1 1 160px', padding: '10px 14px', background: `${outClr[eod.outcome] || '#94a3b8'}10`, border: `1px solid ${outClr[eod.outcome] || '#94a3b8'}40`, borderRadius: 7 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Session result</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: outClr[eod.outcome] || '#94a3b8' }}>{outIcon[eod.outcome]} {eod.outcome}</div>
+            <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: eod.ptsVsOpen > 0 ? '#22c55e' : eod.ptsVsOpen < 0 ? '#ef4444' : '#94a3b8', marginTop: 3 }}>{eod.ptsVsOpen > 0 ? '+' : ''}{eod.ptsVsOpen}pts</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>Range {eod.sessRange}pts ({eod.rangeVsAvg}% avg)</div>
+          </div>
+          <div style={{ flex: '0 0 auto', padding: '10px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 7, textAlign: 'center', minWidth: 90 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>P3 Score</div>
+            <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: eod.p3Score >= 3 ? '#22c55e' : eod.p3Score >= 2 ? '#fbbf24' : '#ef4444' }}>{eod.p3Score}/5</div>
+          </div>
         </div>
-      )}
+        {/* Narratives */}
+        {[
+          { lines: eod.narrative?.preMarket,  label: 'PRE-MARKET READ', clr: '#3b82f6' },
+          { lines: eod.narrative?.session,    label: 'WHAT HAPPENED',   clr: outClr[eod.outcome] },
+          { lines: eod.narrative?.verdict,    label: 'THE VERDICT',     clr: outClr[eod.outcome] },
+          { lines: eod.narrative?.tomorrow,   label: 'INTO TOMORROW',   clr: '#3b82f6', prefix: '→ ' },
+        ].filter(s => s.lines?.length > 0).map(({ lines, label, clr, prefix }) => (
+          <div key={label} style={{ borderLeft: `3px solid ${clr}`, padding: '10px 14px', background: `${clr}06`, borderRadius: '0 6px 6px 0' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: clr, marginBottom: 8, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {lines.map((line, i) => <div key={i} style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.7 }}>{prefix || ''}{line}</div>)}
+            </div>
+          </div>
+        ))}
+        {/* Patterns */}
+        {eod.patterns?.length > 0 && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', marginBottom: 6, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Patterns detected</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {eod.patterns.map(p => (
+                <div key={p.type} style={{ padding: '7px 12px', background: `${patClr[p.type] || '#94a3b8'}10`, borderLeft: `3px solid ${patClr[p.type] || '#94a3b8'}`, borderRadius: '0 6px 6px 0' }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: patClr[p.type] || '#94a3b8', marginBottom: 3 }}>{p.label}</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.6 }}>{p.detail}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Level notes */}
+        {(eod.gNote || eod.pwNote) && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {eod.gNote && <div style={{ padding: '7px 12px', background: 'rgba(245,158,11,0.08)', borderLeft: '3px solid #f59e0b', borderRadius: '0 6px 6px 0', fontSize: 12, color: '#cbd5e1', lineHeight: 1.6 }}><span style={{ color: '#f59e0b', fontWeight: 700 }}>G-Line  </span>{eod.gNote}</div>}
+            {eod.pwNote && <div style={{ padding: '7px 12px', background: 'rgba(192,132,252,0.08)', borderLeft: '3px solid #c084fc', borderRadius: '0 6px 6px 0', fontSize: 12, color: '#cbd5e1', lineHeight: 1.6 }}><span style={{ color: '#c084fc', fontWeight: 700 }}>PW Level  </span>{eod.pwNote}</div>}
+          </div>
+        )}
+      </div>
+    );
+  };
 
-      {/* Edit fields toggle */}
-      <button onClick={() => setShowEdit(o => !o)} style={{ background: 'transparent', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6, color: '#475569', fontSize: 11, cursor: 'pointer', padding: '5px 12px', marginBottom: showEdit ? 12 : 0 }}>
-        {showEdit ? '▲ hide field editor' : '▼ edit fields / override'}
+  return (
+    <div>
+      {/* ── PHASE 1: PRE-MARKET ─────────────────────────────────────────── */}
+      <div style={sectionStyle}>
+        <PhaseHdr num={1} title="Pre-Market" timeNote="fill before 9:30" accent="#3b82f6" />
+        {[
+          { label: 'Overnight inventory', val: read.overnight_inventory?.replace(/_/g,' '),
+            note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish pressure'
+                : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish pressure'
+                : 'neutral — no inventory edge',
+            clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b' },
+          { label: 'Open vs prior value', val: read.open_vs_prior_value?.replace(/_/g,' '),
+            note: read.open_vs_prior_value === 'ABOVE_VALUE' ? 'initiative long territory'
+                : read.open_vs_prior_value === 'BELOW_VALUE' ? 'initiative short territory'
+                : 'inside value — balanced day expected',
+            clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b' },
+          { label: 'Prior day profile', val: read.prior_day_profile?.replace(/_/g,' '), note: '', clr: '#94a3b8' },
+          { label: 'NL30', val: `${nlNum > 0 ? '+' : ''}${nlNum} ${nlTrend === 'TRENDING_UP' ? 'UP' : nlTrend === 'TRENDING_DOWN' ? 'DOWN' : 'RANGING'}`,
+            note: nlTrend === 'TRENDING_UP' ? 'confirmed uptrend — A Up has full structural backing'
+                : nlTrend === 'TRENDING_DOWN' ? 'confirmed downtrend — A Down has full backing'
+                : 'ranging — no multi-session edge, both sides valid',
+            clr: nlColor },
+          { label: 'Monthly pivot', val: pivotBias === 'up' ? 'ABOVE PIVOT' : pivotBias === 'down' ? 'BELOW PIVOT' : null,
+            note: pivotBias === 'up' ? 'buyers hold monthly structure — bullish context' : 'sellers control the month — rallies to pivot are fades',
+            clr: pivotColor },
+        ].map((f, i) => <FieldRow key={i} {...f} />)}
+        {p1Bias && (
+          <div style={{ marginTop: 12, padding: '10px 14px', background: p1Dir === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Dir === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${biasClr[p1Dir] || '#475569'}40`, borderRadius: 7 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: biasClr[p1Dir] || '#94a3b8', marginBottom: 4 }}>PRE-MARKET BIAS: {p1Dir}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>{p1Bias.text}</div>
+          </div>
+        )}
+        {!p1Bias && !read.overnight_inventory && (
+          <div style={{ fontSize: 13, color: '#475569', fontStyle: 'italic', marginTop: 8 }}>No pre-market fields set yet. Use "edit fields" below.</div>
+        )}
+      </div>
+
+      {/* ── PHASE 2: OPENING READ ─────────────────────────────────────── */}
+      <div style={sectionStyle}>
+        <PhaseHdr num={2} title="Opening Read" timeNote="fill 9:30–9:45" accent="#3b82f6" />
+        {[
+          { label: 'OR condition', val: orCond?.replace(/_/g,' '),
+            note: orCond === 'NARROW' ? 'tight — honor first A-level touch'
+                : orCond === 'WIDE'   ? `wide — reduce size 50%, wait 5-min sustain${autoDetected.today_or_range ? ' (' + autoDetected.today_or_range.toFixed(0) + 'pts)' : ''}`
+                : orCond === 'EMOTIONAL' ? 'extreme — avoid A signals, fade exhaustion only'
+                : 'normal — standard sizing',
+            clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b' },
+          { label: 'Opening call', val: openingCall?.replace(/_/g,' '),
+            note: (openingCall?.includes('DRIVE') && !openingCall?.includes('TEST')) ? 'strong directional intent — go with'
+                : openingCall?.includes('TEST_DRIVE') ? 'tested then drove — confirms direction'
+                : openingCall?.includes('REJECTION') ? 'rejected extreme — opposite direction'
+                : 'two-sided — wait for IB',
+            clr: '#94a3b8' },
+          { label: 'A signal', val: aSignal?.replace(/_/g,' ') || (autoASig ? autoASig.replace(/_/g,' ') + ' (auto)' : null),
+            note: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? 'buyers structural control — session long'
+                : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? 'sellers structural control — session short'
+                : aSignal?.includes('FAILED') ? 'attempt failed — counter-trend signal'
+                : 'no directional signal yet',
+            clr: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? '#22c55e' : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? '#ef4444' : '#fbbf24' },
+        ].map((f, i) => <FieldRow key={i} {...f} />)}
+        {sessionBias ? (
+          <div style={{ marginTop: 12, padding: '10px 14px', background: `${lvlClr[sessionBias.level] || '#475569'}10`, border: `2px solid ${lvlClr[sessionBias.level] || '#475569'}`, borderRadius: 7 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: lvlClr[sessionBias.level] || '#94a3b8', marginBottom: 4 }}>SESSION BIAS: {sessionBias.level}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>{sessionBias.text}</div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: '#475569', fontStyle: 'italic', marginTop: 8 }}>Session bias populates once OR condition, opening call, and A signal are logged.</div>
+        )}
+      </div>
+
+      {/* ── MID-DAY READ ─────────────────────────────────────────────── */}
+      <div style={sectionStyle}>
+        <PhaseHdr num={3} title="Mid-Day Read" timeNote="1:45 PM ET" accent="#6366f1" />
+        <MidDayContent />
+      </div>
+
+      {/* ── END OF DAY READ ───────────────────────────────────────────── */}
+      <div style={sectionStyle}>
+        <PhaseHdr num={4} title="End of Day" timeNote="after 4:00 PM ET" accent="#64748b" />
+        <EODContent />
+      </div>
+
+      {/* ── Edit / override ──────────────────────────────────────────── */}
+      <button onClick={() => setShowEdit(o => !o)} style={{ background: 'transparent', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6, color: '#64748b', fontSize: 12, cursor: 'pointer', padding: '6px 14px', marginBottom: showEdit ? 12 : 0 }}>
+        {showEdit ? '▲ hide field editor' : '▼ edit fields / override values'}
       </button>
       {showEdit && <AuctionReadSummary nl={nl} todayData={todayData} defaultOpen />}
     </div>
