@@ -24,7 +24,7 @@ function fmt$(n) {
 }
 
 async function buildCoachingContext(targetDate) {
-  const [tradesQ, acdQ, arQ, dplQ, setupsQ, missedQ, nl30Q] = await Promise.all([
+  const [tradesQ, acdQ, arQ, dplQ, setupsQ, missedQ, nl30Q, peakPnlQ] = await Promise.all([
     query(`
       SELECT entry_time, exit_time, pnl,
         custom_fields->>'max_open_profit' as mfe,
@@ -79,6 +79,13 @@ async function buildCoachingContext(targetDate) {
       ) as nl30
       FROM acd_daily_log WHERE daily_score IS NOT NULL
     `),
+
+    // Peak intraday P&L from session-level FlatToFlat running sum (EP fills only)
+    query(`
+      SELECT exit_time, pnl
+      FROM trades WHERE log_date = $1
+      ORDER BY exit_time NULLS LAST
+    `, [targetDate]),
   ]);
 
   const trades = tradesQ.rows;
@@ -89,10 +96,18 @@ async function buildCoachingContext(targetDate) {
   const largestMissed = parseFloat(missedQ.rows[0]?.largest_missed) || 0;
   const nl30 = parseInt(nl30Q.rows[0]?.nl30) || 0;
 
-  // Session P&L from FlatToFlat EP fills
+  // Session P&L
   const winners = trades.filter(t => parseFloat(t.pnl) > 0).length;
   const losers  = trades.filter(t => parseFloat(t.pnl) < 0).length;
   const sessionPnl = trades.reduce((s, t) => s + (parseFloat(t.pnl) || 0), 0);
+
+  // Intraday peak P&L (max of running sum across fills ordered by exit_time)
+  let running = 0, peakPnl = 0;
+  for (const row of peakPnlQ.rows) {
+    running += parseFloat(row.pnl) || 0;
+    if (running > peakPnl) peakPnl = running;
+  }
+  const giveBack = Math.max(0, peakPnl - sessionPnl);
 
   const openingCall = ar.opening_call_type || 'NO_SIGNAL';
   const aSignal = ar.a_signal_override || 'NO_SIGNAL';
@@ -125,6 +140,8 @@ async function buildCoachingContext(targetDate) {
     winners,
     losers,
     sessionPnl,
+    peakPnl,
+    giveBack,
     largestMissed,
     structuralState,
     nl30,
@@ -170,6 +187,8 @@ SESSION RESULT:
 Total fills: ${ctx.totalTrades}
 Winners: ${ctx.winners} | Losers: ${ctx.losers}
 Session P&L: ${fmt$(ctx.sessionPnl)}
+Peak intraday P&L: ${ctx.peakPnl > 0 ? '+$' + ctx.peakPnl.toFixed(0) : '$0'}
+Give-back: ${ctx.giveBack > 0 ? '-$' + ctx.giveBack.toFixed(0) + ' (' + Math.round(ctx.giveBack / Math.max(ctx.peakPnl, 1) * 100) + '% of peak)' : 'none'}
 Largest profit seen on a losing trade: ${ctx.largestMissed > 0 ? '+$' + ctx.largestMissed.toFixed(0) : 'none'}
 `}
 Provide coaching in exactly this format:
@@ -239,12 +258,14 @@ export async function runDailyCoaching(targetDate, io) {
   try {
     await query(`
       INSERT INTO daily_coaching
-        (session_date, trades_count, session_pnl, largest_missed_profit, raw_context, coaching_text)
-      VALUES ($1, $2, $3, $4, $5, $6)
+        (session_date, trades_count, session_pnl, largest_missed_profit, peak_pnl, give_back, raw_context, coaching_text)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (session_date) DO UPDATE SET
         trades_count = EXCLUDED.trades_count,
         session_pnl = EXCLUDED.session_pnl,
         largest_missed_profit = EXCLUDED.largest_missed_profit,
+        peak_pnl = EXCLUDED.peak_pnl,
+        give_back = EXCLUDED.give_back,
         coaching_text = EXCLUDED.coaching_text,
         raw_context = EXCLUDED.raw_context,
         created_at = NOW()
@@ -253,9 +274,46 @@ export async function runDailyCoaching(targetDate, io) {
       ctx.totalTrades,
       ctx.sessionPnl,
       ctx.largestMissed || null,
+      ctx.peakPnl || null,
+      ctx.giveBack || null,
       JSON.stringify(ctx.rawContext),
       coachingText,
     ]);
+
+    // EOD day-type truth log — compute actual EOD classification from bars
+    try {
+      const barsQ = await query(`
+        SELECT close::float, high::float, low::float, open::float,
+          EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) as et_min
+        FROM price_bars WHERE symbol='NQ' AND ts::date = $1
+          AND EXTRACT(hour FROM ts) BETWEEN 9 AND 15
+        ORDER BY ts
+      `, [targetDate]);
+      if (barsQ.rows.length >= 50) {
+        const rthBars  = barsQ.rows.filter(b => b.et_min >= 570 && b.et_min <= 960);
+        const sessHigh = Math.max(...rthBars.map(b => b.high));
+        const sessLow  = Math.min(...rthBars.map(b => b.low));
+        const sessRange = sessHigh - sessLow;
+        const sessOpen = rthBars[0]?.open;
+        const sessClose = rthBars[rthBars.length - 1]?.close;
+        const closePct = sessRange > 0 ? (sessClose - sessLow) / sessRange : 0.5;
+        const trendStr = sessRange > 0 ? Math.abs(sessClose - sessOpen) / sessRange : 0;
+        // EOD truth rules (mirrors daytype_analysis.js classifyEOD)
+        const eodTruth = (closePct > 0.78 || closePct < 0.22) && sessRange > 180 && trendStr > 0.35
+          ? 'TREND'
+          : (sessRange > 270 && trendStr < 0.32 ? 'TURBULENT' : 'BALANCE');
+        const intradayCall = ctx.rawContext?.acd?.day_type || null;
+        const acdRow = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [targetDate]);
+        const orW = acdRow.rows[0] ? acdRow.rows[0].or_high - acdRow.rows[0].or_low : null;
+        await query(`
+          INSERT INTO daytype_accuracy_log (trade_date, intraday_call, eod_truth, matched, session_range, close_pct, trend_strength, or_width, nl30)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          ON CONFLICT (trade_date) DO UPDATE SET
+            intraday_call=$2, eod_truth=$3, matched=$4, session_range=$5, close_pct=$6, trend_strength=$7, or_width=$8, nl30=$9, logged_at=NOW()
+        `, [targetDate, intradayCall, eodTruth, intradayCall === eodTruth, Math.round(sessRange), Math.round(closePct * 100), Math.round(trendStr * 100), orW ? Math.round(orW) : null, ctx.nl30]);
+        console.log(`[daily_coaching] EOD truth logged: intraday=${intradayCall} → truth=${eodTruth} (${intradayCall === eodTruth ? 'MATCH' : 'MISS'})`);
+      }
+    } catch (dtErr) { console.error('[daily_coaching] daytype truth log failed:', dtErr.message); }
     console.log(`[daily_coaching] Saved to DB for ${targetDate}`);
   } catch (err) {
     console.error('[daily_coaching] DB upsert failed:', err.message);

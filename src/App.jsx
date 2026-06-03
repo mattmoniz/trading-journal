@@ -106,6 +106,134 @@ function InfoTooltip({ text, tooltip }) {
   );
 }
 
+// ==================== PROFIT GIVE-BACK BANNER (full-screen, no override) ====================
+function ProfitGivebackBanner({ status }) {
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const gbPct = Math.round((status?.giveBackPct || 0) * 100);
+  const peak  = status?.peakPnl || 0;
+  const cur   = status?.currentPnl || 0;
+  const gb    = status?.giveBack || 0;
+  const reason = status?.fireReason === 'floor'
+    ? `You fell below the profit floor ($${status?.floorAfterArm}) after being up ${fmt$(peak)}.`
+    : `You gave back ${gbPct}% of your peak profit (${fmt$(peak)} → ${fmt$(cur)}).`;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(10,10,15,0.97)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+      <div style={{ maxWidth: 520, width: '90vw', background: '#0f1520', border: '2px solid #f59e0b', borderRadius: 16, padding: '40px 44px', boxShadow: '0 0 80px rgba(245,158,11,0.2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(245,158,11,0.12)', border: '2px solid #f59e0b', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>⚠</div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#f59e0b', textTransform: 'uppercase', marginBottom: 2 }}>Profit Give-Back Guard</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#fde68a', letterSpacing: '-0.01em' }}>Stop Trading</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#f8fafc', marginBottom: 10, lineHeight: 1.4 }}>
+          You were up {fmt$(peak)}. You are now {fmt$(cur)}.
+        </div>
+        <div style={{ fontSize: 14, color: '#94a3b8', lineHeight: 1.7, marginBottom: 24 }}>
+          {reason} Your 60-day data shows average give-back of $485–663 per day. This is that pattern — right now, live.
+        </div>
+        <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
+          <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Peak Today</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#22c55e' }}>{fmt$(peak)}</div>
+          </div>
+          <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Now</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: cur >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(cur)}</div>
+          </div>
+          <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Given Back</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>-${gb.toFixed(0)}</div>
+          </div>
+        </div>
+        <div style={{ background: '#1a1200', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 16 }}>🔒</div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 2 }}>Session locked</div>
+            <div style={{ fontSize: 12, color: '#64748b' }}>No override. You are done for today.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== 1PM STOP REMINDER (full-screen, requires acknowledgment) ====================
+function OnePMReminderModal({ pnlAtReminder, onAck }) {
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const isGreen = (pnlAtReminder || 0) >= 0;
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(10,10,15,0.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
+      <div style={{ maxWidth: 520, width: '90vw', background: '#0f1520', border: '2px solid #3b82f6', borderRadius: 16, padding: '40px 44px', boxShadow: '0 0 60px rgba(59,130,246,0.15)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
+          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(59,130,246,0.12)', border: '2px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>⏰</div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#3b82f6', textTransform: 'uppercase', marginBottom: 2 }}>1:00 PM ET</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#bfdbfe', letterSpacing: '-0.01em' }}>Your Window Is Over</div>
+          </div>
+        </div>
+        <div style={{ fontSize: 15, color: '#94a3b8', lineHeight: 1.8, marginBottom: 24 }}>
+          Your data: <strong style={{ color: '#f8fafc' }}>100% of your losing days were traded past 1 PM.</strong> That is not a coincidence — it is the pattern. The edge disappears after noon.
+        </div>
+        {pnlAtReminder != null && (
+          <div style={{ background: '#111827', borderRadius: 8, padding: '14px 18px', marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 13, color: '#64748b' }}>P&L right now:</span>
+            <span style={{ fontSize: 20, fontWeight: 800, color: isGreen ? '#22c55e' : '#ef4444', fontFamily: 'monospace' }}>{fmt$(pnlAtReminder)}</span>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={() => onAck('STOP')}
+            style={{ flex: 2, padding: '14px 0', borderRadius: 8, border: 'none', background: '#1d4ed8', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
+          >
+            I'm done — closing out
+          </button>
+          <button
+            onClick={() => onAck('CONTINUE')}
+            style={{ flex: 1, padding: '14px 0', borderRadius: 8, border: '1px solid rgba(100,116,139,0.4)', background: 'transparent', color: '#64748b', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+          >
+            Continue (logged)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== UP-AND-DONE NUDGE (non-blocking, dismissible) ====================
+function UpAndDoneNudge({ status, onStop, onDismiss }) {
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const pnl = status?.currentPnl || 0;
+  return (
+    <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, maxWidth: 360, width: 'calc(100vw - 48px)' }}>
+      <div style={{ background: '#0f1520', border: '1.5px solid rgba(34,197,94,0.5)', borderRadius: 12, padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: '#22c55e', textTransform: 'uppercase' }}>You're Up {fmt$(pnl)}</div>
+          <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 0 0 8px' }}>×</button>
+        </div>
+        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginBottom: 14 }}>
+          Your data: average give-back of <strong style={{ color: '#fde68a' }}>$485–663/day</strong>. Every day. Is today worth the risk?
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={onStop}
+            style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: '1px solid rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.15)', color: '#22c55e', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+          >
+            Lock it in
+          </button>
+          <button
+            onClick={onDismiss}
+            style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: '1px solid rgba(100,116,139,0.3)', background: 'transparent', color: '#64748b', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+          >
+            Keep going
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ==================== DLL BLOCKING BANNER ====================
 function DLLBlockingBanner({ hits, allAccounts }) {
   const shortId = (id) => id.split('-').pop() || id;
@@ -230,6 +358,11 @@ function App() {
   const [priceSyncProgress, setPriceSyncProgress] = useState(null);
   const [processAlertCount, setProcessAlertCount] = useState(0);
   const [dllStatus, setDllStatus] = useState(null);
+  const [profitLockStatus, setProfitLockStatus] = useState(null);
+  const [show1PMModal, setShow1PMModal] = useState(false);
+  const [onePMChoice, setOnePMChoice] = useState(null);
+  const [upAndDoneDismissed, setUpAndDoneDismissed] = useState(false);
+  const upAndDoneShownRef = React.useRef(false);
   const syncTimeoutRef = React.useRef(null);
 
   const addToast = useCallback((message, type = 'info', duration = 5000) => {
@@ -248,6 +381,7 @@ function App() {
     fetchStats();
     fetchAccounts();
     fetch(`${API_URL}/dll/status`).then(r => r.json()).then(d => { if (!d.error) setDllStatus(d); }).catch(() => {});
+    fetch(`${API_URL}/profit-lock/status`).then(r => r.json()).then(d => { if (!d.error) setProfitLockStatus(d); }).catch(() => {});
 
     const socket = io(SOCKET_URL);
     window._tradingSocket = socket;
@@ -304,6 +438,19 @@ function App() {
 
     socket.on('dll-status', (data) => {
       setDllStatus(data);
+    });
+
+    socket.on('profit-lock-status', (data) => {
+      setProfitLockStatus(data);
+      if (data.upAndDoneReady && !upAndDoneShownRef.current) {
+        upAndDoneShownRef.current = true;
+        setUpAndDoneDismissed(false);
+      }
+    });
+
+    socket.on('1pm-reminder', (data) => {
+      setProfitLockStatus(prev => prev ? { ...prev, _1pmPnl: data.pnlAtReminder } : prev);
+      setShow1PMModal(true);
     });
 
     return () => socket.disconnect();
@@ -364,10 +511,27 @@ function App() {
   const _etHour = _nowET.getHours();
   const _todayDateET = _nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const isDLLBannerActive = dllStatus?.anyDllHit && dllStatus?.date === _todayDateET && _etHour < 16;
+  const isProfitLockFired = profitLockStatus?.fired && profitLockStatus?.date === _todayDateET && _etHour < 16;
+  const showUpAndDone = profitLockStatus?.armed && !profitLockStatus?.fired && !upAndDoneDismissed
+    && upAndDoneShownRef.current && profitLockStatus?.date === _todayDateET && _etHour < 16;
+
+  const handle1PMAck = async (choice) => {
+    setOnePMChoice(choice);
+    setShow1PMModal(false);
+    try { await fetch(`${API_URL}/profit-lock/1pm-ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) }); } catch (_) {}
+  };
+
+  const handleUpAndDoneStop = async () => {
+    setUpAndDoneDismissed(true);
+    try { await fetch(`${API_URL}/profit-lock/1pm-ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice: 'STOP_UPANDDONE' }) }); } catch (_) {}
+  };
 
   return (
     <div className="app-container">
       {isDLLBannerActive && <DLLBlockingBanner hits={dllStatus.hitsAccounts} allAccounts={dllStatus.accounts} />}
+      {isProfitLockFired && !isDLLBannerActive && <ProfitGivebackBanner status={profitLockStatus} />}
+      {show1PMModal && onePMChoice === null && <OnePMReminderModal pnlAtReminder={profitLockStatus?._1pmPnl ?? profitLockStatus?.currentPnl} onAck={handle1PMAck} />}
+      {showUpAndDone && <UpAndDoneNudge status={profitLockStatus} onStop={handleUpAndDoneStop} onDismiss={() => setUpAndDoneDismissed(true)} />}
       <Sidebar
         currentView={currentView}
         setCurrentView={setCurrentView}
@@ -824,9 +988,14 @@ function LiveSessionPanel() {
         };
 
         const SKIP_TYPES = new Set(['A Up tested', 'A Down tested', 'PM VAH tested', 'PW High tested', 'PM VAL tested', 'PW Low tested']);
-        const significant = events.filter(e => !SKIP_TYPES.has(e.setup_type));
+        // Case-engine setups (IB_BULLISH, BRACKET_BREAKOUT_*, etc.) are handled by the trigger card.
+        // Hide them from the signals list — they're observation/backtest only unless trigger is ACTIVE.
+        const CASE_ENGINE_TYPES = new Set(['IB_BULLISH','IB_BEARISH','BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
+          'OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT','OPEN_TEST_DRIVE_LONG','OPEN_TEST_DRIVE_SHORT',
+          'TRT_LONG','TRT_SHORT','TRT_MAH_LONG','TRT_MAH_SHORT']);
+        const significant = events.filter(e => !SKIP_TYPES.has(e.setup_type) && !CASE_ENGINE_TYPES.has(e.setup_type));
         // all significant signals, newest-first (no slice limit)
-        const shown = significant.length > 0 ? significant : events;
+        const shown = significant.length > 0 ? significant : events.filter(e => !CASE_ENGINE_TYPES.has(e.setup_type));
         const sigCount = significant.length;
 
         return (
@@ -10131,6 +10300,148 @@ function AuctionDayChart({ day, fullSize = false }) {
 
 // ── Auction Read Card ──────────────────────────────────────────────────────────
 
+function generatePhase1Narrative(inv, val, nlTrend, pivotBias, profile, explCtx, ltCtx) {
+  if (!inv || !val) return null;
+  const aUp   = explCtx?.aUpLevel   ? Math.round(explCtx.aUpLevel)   : null;
+  const aDown = explCtx?.aDownLevel ? Math.round(explCtx.aDownLevel) : null;
+  const orH   = explCtx?.orHigh     ? Math.round(explCtx.orHigh)     : null;
+  const orL   = explCtx?.orLow      ? Math.round(explCtx.orLow)      : null;
+  const priorVAH = explCtx?.priorVAH ? Math.round(explCtx.priorVAH) : null;
+  const priorVAL = explCtx?.priorVAL ? Math.round(explCtx.priorVAL) : null;
+  const priorPOC = explCtx?.priorPOC ? Math.round(explCtx.priorPOC) : null;
+  const nlDir  = nlTrend === 'TRENDING_UP' ? 'up' : nlTrend === 'TRENDING_DOWN' ? 'down' : 'ranging';
+  const isLong  = (inv === 'SHORT_TRAPPED' && val !== 'BELOW_VALUE') || (inv === 'NEUTRAL' && val === 'ABOVE_VALUE');
+  const isShort = (inv === 'LONG_TRAPPED'  && val !== 'ABOVE_VALUE') || (inv === 'NEUTRAL' && val === 'BELOW_VALUE');
+
+  const lines = [];
+
+  // What this structural combination tends to produce
+  if (inv === 'SHORT_TRAPPED' && val === 'ABOVE_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Short squeeze type day. Short sellers trapped below value are forced to cover as price stays above prior value area — this produces fast, one-way upside moves with little pullback. Buyers don\'t need to add; sellers are doing the work for them.');
+    lines.push('WATCH FOR: An A Up signal that holds its first 5-minute test — this is the main entry. Do not short the initial run up; trapped shorts mean the first pullback finds buyers. If OR is above prior VAH' + (priorVAH ? ` (${priorVAH})` : '') + ', the next extension target is the measured move above OR High.');
+    lines.push('CAUTION: The squeeze can exhaust quickly. Once short covering is done, the move can stall and reverse sharply. Watch for volume drying up on the push and increasing on pullbacks — that\'s the signal the squeeze is over. Do not hold long past 11 AM if the A Up hasn\'t extended.');
+    if (nlDir === 'down') lines.push('CONFLICT: NL is trending down multi-session — this means the larger player selling trend is still active. This long setup is a counter-trend bounce within a bearish environment. Treat it as a session trade only, no overnight holds, exit at T1 rather than trailing.');
+  } else if (inv === 'LONG_TRAPPED' && val === 'BELOW_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Failed recovery type day. Long buyers trapped above value are forced to liquidate as price stays below prior value area — this produces sustained downside with no meaningful bid. Every rally is a selling opportunity.');
+    lines.push('WATCH FOR: An A Down signal that holds its first 5-minute test' + (aDown ? ` (${aDown})` : '') + ' — that\'s the entry for shorts. The first bounce to the OR High' + (orH ? ` (${orH})` : '') + ' or prior VAL' + (priorVAL ? ` (${priorVAL})` : '') + ' is the high-conviction fade. Size full, trail stops above each prior swing high.');
+    lines.push('CAUTION: Don\'t chase into the flush. Wait for price to rally to a level, then fail — that failure confirms the trapped long thesis and gives you a clean stop. Chasing a gap-down open without a fade level means poor R:R.');
+    if (nlDir === 'up') lines.push('CONFLICT: NL is trending up multi-session — this short setup is fighting structural momentum. Treat as a single-session mean reversion. Be faster to take profit at T1 rather than pressing for a larger trend move.');
+  } else if (inv === 'SHORT_TRAPPED' && val === 'INSIDE_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Potential inside-out breakout day. Shorts are trapped but price hasn\'t yet moved above value — the setup needs the opening to confirm which way the breakout goes. Inside value means today\'s outcome depends heavily on the opening 30 minutes.');
+    lines.push('WATCH FOR: If price opens and pushes above prior VAH' + (priorVAH ? ` (${priorVAH})` : '') + ', shorts begin covering and the breakout accelerates. A Up' + (aUp ? ` (${aUp})` : '') + ' in this scenario is high conviction. If instead price opens and holds inside value, the trapped shorts may get rescued — WAIT for the break before assuming direction.');
+    lines.push('CAUTION: Fade plays against the short inventory bias carry extra risk. If price drops below prior VAL' + (priorVAL ? ` (${priorVAL})` : '') + ', trapped shorts are released from pressure and the setup flips — stand aside until new structure forms.');
+  } else if (inv === 'LONG_TRAPPED' && val === 'INSIDE_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Potential failed recovery day. Longs are trapped but price is inside value — the opening will determine if buyers can reclaim value or if sellers maintain control. High probability of a directional move once the opening call is established.');
+    lines.push('WATCH FOR: If price opens below prior VAL' + (priorVAL ? ` (${priorVAL})` : '') + ', longs begin liquidating and the breakdown accelerates — A Down' + (aDown ? ` (${aDown})` : '') + ' is high conviction. If instead price opens and pushes into value, longs may get relieved — wait for A signal confirmation before trading.');
+    lines.push('CAUTION: Don\'t sell the initial gap down blindly — trapped longs buying their way out creates sharp counter-moves. Wait for a rally to fail at a level before committing short.');
+  } else if (inv === 'NEUTRAL' && val === 'ABOVE_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Initiative long day with clean structure. No inventory pressure, just price accepted above prior value — buyers have structural control. The session tends to trend in the direction of the opening call. Typically produces one clean directional move in the first 90 minutes.');
+    lines.push('WATCH FOR: The opening call will confirm whether today is a trend or rotation. A Up' + (aUp ? ` (${aUp})` : '') + ' after an Open Drive or OTD opening call is the highest conviction long. Value area above becomes support — pullbacks to prior VAH' + (priorVAH ? ` (${priorVAH})` : '') + ' are buying opportunities, not warnings.');
+    lines.push('CAUTION: The cleanest structure sometimes produces the most boring days — price can anchor at a level and do nothing. If A Up fires but immediately comes back inside OR, the breakout has failed and you\'re in a BALANCE day. Do not force continuation if the structure doesn\'t confirm.');
+  } else if (inv === 'NEUTRAL' && val === 'BELOW_VALUE') {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Initiative short day with clean structure. No inventory pressure, price accepted below prior value — sellers have structural control. Sessions often trend down in the first 90 minutes, with each bounce selling off from a lower high.');
+    lines.push('WATCH FOR: A Down' + (aDown ? ` (${aDown})` : '') + ' after an ORR or failed drive opening call is the primary entry. Prior VAL' + (priorVAL ? ` (${priorVAL})` : '') + ' becomes resistance — accept-and-fail at that level gives a tight stop short. Do not be early: wait for the 5-minute sustain below OR Low' + (orL ? ` (${orL})` : '') + '.');
+    lines.push('CAUTION: Below-value opens can attract buy-the-dip players and produce a sharp bounce into the value area. If price reclaims prior VAL' + (priorVAL ? ` (${priorVAL})` : '') + ', the short premise is threatened — tighten stops. The bias is only valid if price stays below prior value.');
+  } else {
+    lines.push('WHAT THIS TENDS TO PRODUCE: Neutral/balanced setup. Both sides have valid arguments — the session will be determined by the opening 30 minutes. Responsive playbook is most likely: fade the high end of the expected range, buy the low end.');
+    lines.push('WATCH FOR: The opening call is critical today. An Open Drive will establish the day\'s direction quickly. An Open Auction means a wide-range, two-sided session. With neutral inventory, the A signal is your first strong conviction cue — wait for it rather than front-running.');
+    lines.push('CAUTION: Neutral days produce the most whipsaws. Avoid fading an Open Drive — if buyers (or sellers) take control at the open with a clean drive, the lack of opposing inventory means the move can run much farther than expected. Respect the opening call\'s direction.');
+  }
+
+  if (profile === 'TREND') {
+    lines.push('PRIOR DAY WAS A TREND DAY: This means value migrated in one direction all session. Today\'s OR will likely be set near yesterday\'s close, not the middle of the range. Continuation is the primary scenario until proven otherwise. If you\'re in a trend direction, lean full size on A signal.');
+  } else if (profile === 'NORMAL_VARIATION' || profile === 'NORMAL') {
+    lines.push('PRIOR DAY WAS NORMAL: Well-behaved day with balanced structure. Standard profiles — both sides had their chance. No inventory excess from yesterday to be resolved. Today starts with a clean slate from yesterday\'s perspective.');
+  } else if (profile === 'NEUTRAL' || profile === 'RUNNING_PROFILE_NEUTRAL') {
+    lines.push('PRIOR DAY WAS NEUTRAL/BALANCED: Price oscillated, accepting prices in both directions. The prior day left unfinished business — expect today to test at least one extreme of yesterday\'s range before direction is established. The first test of a prior day extreme is a reference, not an entry.');
+  } else if (profile === 'NONTREND') {
+    lines.push('PRIOR DAY WAS NONTREND: Very narrow range, both sides rejected. Today is likely to resolve the prior balance — watch for a decisive breakout from yesterday\'s high/low. The break of a prior nontrend high or low is typically a reliable directional signal.');
+  }
+
+  if (ltCtx?.bracketState === 'TRENDING_UP' && isShort) {
+    lines.push('MULTI-TIMEFRAME WARNING: The broader structure is trending UP (multi-week bracket). Today\'s short setup is fighting the larger trend. Treat all short targets conservatively — the structural tailwind is against you on this one. Exit at T1, do not press.');
+  } else if (ltCtx?.bracketState === 'TRENDING_DOWN' && isLong) {
+    lines.push('MULTI-TIMEFRAME WARNING: The broader structure is trending DOWN (multi-week bracket). Today\'s long setup is a counter-trend bounce. Exit at T1, do not hold overnight, and do not add to the position on strength.');
+  }
+
+  return lines.join('\n\n');
+}
+
+function generatePhase2Narrative(p1Direction, orCondition, openingCall, aSignal, explCtx, sessionBias) {
+  if (!openingCall) return null;
+  const aUp   = explCtx?.aUpLevel   ? Math.round(explCtx.aUpLevel)   : null;
+  const aDown = explCtx?.aDownLevel ? Math.round(explCtx.aDownLevel) : null;
+  const orH   = explCtx?.orHigh     ? Math.round(explCtx.orHigh)     : null;
+  const orL   = explCtx?.orLow      ? Math.round(explCtx.orLow)      : null;
+  const priorVAH = explCtx?.priorVAH ? Math.round(explCtx.priorVAH) : null;
+  const priorVAL = explCtx?.priorVAL ? Math.round(explCtx.priorVAL) : null;
+  const isLong  = p1Direction === 'LONG';
+  const isShort = p1Direction === 'SHORT';
+  const isOD   = openingCall === 'OPEN_DRIVE';
+  const isOTD  = openingCall === 'OPEN_TEST_DRIVE';
+  const isORR  = openingCall === 'OPEN_REJECTION_REVERSE';
+  const isOA   = openingCall === 'OPEN_AUCTION';
+  const aFired = aSignal && !aSignal.includes('NO_SIGNAL');
+  const aLong  = aSignal && aSignal.includes('A_UP') && !aSignal.includes('FAILED');
+  const aShort = aSignal && aSignal.includes('A_DOWN') && !aSignal.includes('FAILED');
+  const aFailed = aSignal && aSignal.includes('FAILED');
+
+  const lines = [];
+
+  // Opening call playbook
+  if (isOD) {
+    lines.push('OPEN DRIVE — what this means: Strong directional conviction at the open with no pause. The dominant side (buyers or sellers) came in with a plan and is executing it immediately. This is the highest-conviction opening type — the day tends to trend strongly in the direction of the drive.');
+    lines.push('HOW TO TRADE AN OPEN DRIVE: Do NOT fade the initial drive. Your job is to identify the first meaningful pullback after the drive extends, and enter on the continuation. The entry trigger is: wait for the drive to pause (2–3 bars of sideways action), then enter on the next bar that resumes the original direction. Stop: just below the last swing low of the pullback (longs) or above the last swing high (shorts).');
+    if (isLong) lines.push('SPECIFIC WATCH: If drive is up, watch for the first test back to OR High' + (orH ? ` (${orH})` : '') + ' after initial extension. That test — if it holds — is the pullback entry. A Up' + (aUp ? ` (${aUp})` : '') + ' confirmation adds conviction. If price gives back more than 75% of the initial drive, the drive has likely failed.');
+    if (isShort) lines.push('SPECIFIC WATCH: First test back to OR Low' + (orL ? ` (${orL})` : '') + ' after the drive down. A Down' + (aDown ? ` (${aDown})` : '') + ' hold is the entry. If price recovers back into OR, the drive is exhausted — stand aside.');
+  } else if (isOTD) {
+    lines.push('OPEN TEST DRIVE — what this means: Price tested the opposite extreme first (faking out sellers/buyers), then drove back in the primary direction. The participants who chased the initial fake move are now trapped and forced to cover, providing the fuel for the real move.');
+    lines.push('HOW TO TRADE AN OTD: The real move is the drive, not the initial test. If you missed the entry, wait for the first pullback after the drive — do not chase. The trapped-participant fuel means the move typically has more follow-through than a standard Open Drive, but the R:R on a chase entry is poor.');
+    if (isLong) lines.push('SPECIFIC WATCH: Price tested low (trapping shorts), then drove up. The prior low' + (orL ? ` (${orL} area)` : '') + ' is now key support — a test back to that level that holds is a high-conviction long entry. A Up' + (aUp ? ` (${aUp})` : '') + ' confirms buyers hold control.');
+    if (isShort) lines.push('SPECIFIC WATCH: Price tested high (trapping longs), then drove down. Prior high' + (orH ? ` (${orH} area)` : '') + ' is resistance. Test-and-fail at that level = short entry. A Down' + (aDown ? ` (${aDown})` : '') + ' confirms sellers hold control.');
+    lines.push('CAUTION: A failed OTD (price tests one side, starts to drive, then reverses back through the test level) is a very bearish/bullish signal in the opposite direction. If you\'re in the trade and price gives back the entire drive and takes out the test low/high, EXIT immediately.');
+  } else if (isORR) {
+    lines.push('OPEN REJECTION REVERSE — what this means: Price attempted to extend in one direction, got rejected hard, and reversed. This is the "nothing goes as expected at the open" scenario. The side that was right all pre-market is now wrong. The reversal often produces a strong move in the unexpected direction.');
+    lines.push('HOW TO TRADE AN ORR: The trade is the reversal. Wait for the rejection to be confirmed (price must CLOSE a bar back inside OR or back through the prior extreme), then enter in the reversal direction. This is the time to fight the morning bias — your pre-market read was right structurally, but today the market is giving you the opposite.');
+    if (isLong) lines.push('PRE-MARKET WAS LONG but ORR means price rejected higher and reversed. Watch for the reversal to develop a short opportunity. If A Down' + (aDown ? ` (${aDown})` : '') + ' fires following the rejection, that is your signal the market is going the other way today. This is a difficult trade psychologically — your bias says long but the structure says follow the rejection.');
+    if (isShort) lines.push('PRE-MARKET WAS SHORT but ORR means price rejected lower and reversed. Watch for A Up' + (aUp ? ` (${aUp})` : '') + ' following the recovery. The short thesis failed at the open — the long reversal is now the primary setup.');
+    lines.push('CAUTION: ORRs can produce whipsaws on both sides. The reversal must be committed — if price is just drifting back rather than driving back, it\'s a balance day masquerading as an ORR. A true ORR reversal has volume and delta confirmation on the reversal bars.');
+  } else if (isOA) {
+    lines.push('OPEN AUCTION — what this means: Price is rotating both directions inside or near the prior value area. No side has taken conviction control. This is the most balanced opening type and typically leads to either a normal variation day or a nontrend day.');
+    lines.push('HOW TO TRADE AN OPEN AUCTION: This is not the time to force a position. The primary play is RESPONSIVE: buy the low end of the IB, sell the high end, targeting the mid. Wait for the IB to be established (by 10:30 AM), then look for acceptance/rejection at IB extremes. A signal' + (aUp ? ` (A Up: ${aUp}, A Down: ${aDown})` : '') + ' will tell you if the auction resolves directionally.');
+    lines.push('CAUTION: Open Auction days that produce A signals are the most dangerous. The A signal fires AFTER a period of auction/balance, and the breakout often fails on the first attempt before succeeding on the second. Do not take the first A signal in an Open Auction day at full size — wait for the first attempt to succeed (5-min close, then another bar confirm) before adding.');
+  }
+
+  // A signal guidance
+  if (aFired && !aFailed) {
+    const dir = aLong ? 'long' : 'short';
+    const level = aLong ? aUp : aDown;
+    const levelStr = level ? ` (${level})` : '';
+    lines.push(`A ${aLong ? 'UP' : 'DOWN'} FIRED${levelStr}: Structural control confirmed. Buyers${aLong ? '' : ' failed — sellers'} hold the session. From here:`);
+    if (aLong) {
+      lines.push(`  • First target: prior day VAH${priorVAH ? ` (${priorVAH})` : ''} then measured move above OR High${orH ? ` (${orH})` : ''}\n  • Stop management: trail above OR Low${orL ? ` (${orL})` : ''} on the first bar, then above each successive higher low as the trend develops\n  • The move is valid as long as price stays above A Up level${level ? ` (${level})` : ''} on a closing bar basis — one touch back through is fine, a close below means the A Up has failed`);
+    } else {
+      lines.push(`  • First target: prior day VAL${priorVAL ? ` (${priorVAL})` : ''} then measured move below OR Low${orL ? ` (${orL})` : ''}\n  • Stop management: trail below OR High${orH ? ` (${orH})` : ''} on first bar, then below each successive lower high\n  • Valid while price stays below A Down${level ? ` (${level})` : ''} on a closing bar basis`);
+    }
+  } else if (aFailed) {
+    const isFailedAUp = aSignal.includes('A_UP');
+    lines.push(`${isFailedAUp ? 'FAILED A UP' : 'FAILED A DOWN'}: The attempted breakout failed. Participants who chased the ${isFailedAUp ? 'long' : 'short'} are now trapped. The counter-move is the trade.`);
+    lines.push(isFailedAUp
+      ? `Watch for price to break below OR Low${orL ? ` (${orL})` : ''} — that confirms a false breakout and triggers the short. Entry: first close below OR Low. Stop: above OR High${orH ? ` (${orH})` : ''}. Do not short the A Up failure itself until price is clearly back inside OR.`
+      : `Watch for price to break above OR High${orH ? ` (${orH})` : ''} — confirms the short failed and triggers the long. Entry: first close above OR High. Stop: below OR Low${orL ? ` (${orL})` : ''}. Do not buy until price has cleared back above OR High.`
+    );
+  }
+
+  // Session bias interpretation
+  if (sessionBias?.level === 'RED') {
+    lines.push('SESSION BIAS IS RED — CONFLICTING SIGNALS: Pre-market bias and opening behavior disagree. This is the single most important caution in the read. When pre-market says one thing and the open does another, the most common mistake is forcing your pre-market bias on a market that has already told you it\'s going a different way. STAND ASIDE. Your one job right now is to wait for one side to win cleanly: either price recovers and proves the pre-market bias was right, or price extends in the conflict direction and you acknowledge the bias was wrong today. Half-position or wait.');
+  } else if (sessionBias?.level === 'AMBER') {
+    lines.push('SESSION BIAS AMBER — PARTIAL CONFIRMATION: Not everything is aligned. The pre-market bias has some confirmation but not full conviction. Reduce position size to 1 contract. Your entry criteria should be tighter than on a GREEN day — wait for the strongest possible setup (A signal hold, not just initial fire) before entering. The partial alignment means a failed trade here should be taken as a signal to step back for the rest of the session.');
+  }
+
+  return lines.join('\n\n');
+}
+
 function generatePreMarketBias(inv, val, nlTrend, pivotBias, profile, ltCtx) {
   if (!inv || !val) return null;
   const nlDir = nlTrend === 'TRENDING_UP' ? 'up' : nlTrend === 'TRENDING_DOWN' ? 'down' : 'ranging';
@@ -10836,6 +11147,37 @@ function AuctionReadCard({ nl, todayData }) {
               )}
             </div>
           )}
+          {/* ── Phase 1 Narrative ── */}
+          {(() => {
+            const narrative = generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx);
+            if (!narrative) return null;
+            return (
+              <div style={{ marginTop: 12, padding: '12px 16px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+                  Morning Guidance
+                </div>
+                {narrative.split('\n\n').map((block, i) => {
+                  const isHeader = block.match(/^[A-Z][A-Z\s:]+:/);
+                  return (
+                    <div key={i} style={{ marginBottom: 10 }}>
+                      {isHeader ? (
+                        <>
+                          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
+                            {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
+                          </div>
+                          <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>
+                            {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>{block}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -10972,6 +11314,37 @@ function AuctionReadCard({ nl, todayData }) {
                         </div>
                       )}
                     </div>
+                  </div>
+                );
+              })()}
+              {/* ── Phase 2 Narrative ── */}
+              {(() => {
+                const narrative = generatePhase2Narrative(p1Direction, read.or_condition, read.opening_call_type, aSignal, explCtx, sessionBias);
+                if (!narrative) return null;
+                return (
+                  <div style={{ marginTop: 10, padding: '12px 16px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+                      Session Guidance
+                    </div>
+                    {narrative.split('\n\n').map((block, i) => {
+                      const isHeader = block.match(/^[A-Z][A-Z\s:–\-—]+:/);
+                      return (
+                        <div key={i} style={{ marginBottom: 10 }}>
+                          {isHeader ? (
+                            <>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
+                                {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
+                              </div>
+                              <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>
+                                {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>{block}</div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })()}

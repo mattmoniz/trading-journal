@@ -107,10 +107,14 @@ function classifyOpeningType(bars) {
 }
 
 // Dalton day-type classification (LITERATURE source)
+// ACCURACY NOTE: Backtested 41% overall (60-day window). TREND days called correctly only 25%.
+// Weights in impact score are halved until accuracy improves via feedback loop.
+const DAYTYPE_LOW_CONFIDENCE = true; // flip false only when 60-day accuracy exceeds 60%
 function classifyDayType({ openingType, nl30, orWidth, asOfMinutes }) {
   if (asOfMinutes < RTH_START + 5) {
     return {
       classification: 'FORMING', probability: null, source: 'LITERATURE', sampleSize: 0,
+      lowConfidence: true,
       playbook: 'Too early to classify — OR still forming.',
       whatWouldChangeIt: 'OR completes at 10:00 ET',
     };
@@ -127,6 +131,8 @@ function classifyDayType({ openingType, nl30, orWidth, asOfMinutes }) {
     const long = openingType.includes('LONG');
     return {
       classification: 'TREND', probability: Math.abs(nl30) > 15 ? 75 : 65, source: 'LITERATURE', sampleSize: 0,
+      lowConfidence: DAYTYPE_LOW_CONFIDENCE,
+      accuracyNote: '25% hit rate on TREND calls (60-day backtest) — high false-positive rate',
       playbook: long
         ? 'Lean long. Add on pullbacks above OR High. 2R+ targets. No fades until late-session volume exhaustion.'
         : 'Lean short. Add on bounces below OR Low. 2R+ targets. No counter-trend until delta divergence.',
@@ -139,6 +145,8 @@ function classifyDayType({ openingType, nl30, orWidth, asOfMinutes }) {
   if (isAuction || (narrowOR && !isDrive)) {
     return {
       classification: 'BALANCE', probability: 70, source: 'LITERATURE', sampleSize: 0,
+      lowConfidence: DAYTYPE_LOW_CONFIDENCE,
+      accuracyNote: '47% hit rate on BALANCE calls (60-day backtest)',
       playbook: 'Fade extremes of developing range. 1–1.5R targets. Reduce size. Stand aside near OR midpoint.',
       whatWouldChangeIt: 'Price breaks IB extension with 2+ bars closing outside on above-avg volume',
     };
@@ -147,6 +155,8 @@ function classifyDayType({ openingType, nl30, orWidth, asOfMinutes }) {
   if (wideOR && !isDrive) {
     return {
       classification: 'TURBULENT', probability: 55, source: 'LITERATURE', sampleSize: 0,
+      lowConfidence: DAYTYPE_LOW_CONFIDENCE,
+      accuracyNote: '33% hit rate on TURBULENT calls (60-day backtest)',
       playbook: 'Wide range, no conviction. Reduce size significantly. Wait for structure to form before entries.',
       whatWouldChangeIt: 'Price consolidates 2+ bars at level, then drives with delta confirmation',
     };
@@ -154,6 +164,8 @@ function classifyDayType({ openingType, nl30, orWidth, asOfMinutes }) {
 
   return {
     classification: 'BALANCE', probability: 60, source: 'LITERATURE', sampleSize: 0,
+    lowConfidence: DAYTYPE_LOW_CONFIDENCE,
+    accuracyNote: '47% hit rate on BALANCE calls (60-day backtest)',
     playbook: 'No clear trend signal. Trade responsive — fade range edges. Max 1R risk.',
     whatWouldChangeIt: 'Open-drive behavior or confirmed IB break with volume',
   };
@@ -214,8 +226,8 @@ function checkSessionActivation(bars, setup, nl30, levels, dayTypeClass) {
   if ((isLong && nl30 > 9) || (!isLong && nl30 < -9)) base += 2;
   const nearLvl = levels.find(l => Math.abs(l.price - entryPx) <= 20);
   if (nearLvl?.stars >= 2) base += 1;
-  // Day-type adjustment applied to latch check too (same scoring rules)
-  if      (dayTypeClass === 'BALANCE')                                  base -= 3;
+  // Day-type adjustment — halved weights (41% accuracy; see classifyDayType)
+  if      (dayTypeClass === 'BALANCE')                                  base -= 1;
   else if (dayTypeClass === 'TURBULENT' || dayTypeClass === 'TREND')    base += 1;
 
   for (let i = 2; i < bars.length; i++) {
@@ -720,9 +732,10 @@ export async function computeCase(tradeDate, asOf) {
     const conf = latestSetup.confluence_score_at_detection;
     if (conf != null && conf < 4) { impact -= 2; impactStack.push(`-2 low confluence score=${conf}`); }
 
-    // Day-type adjustment — INTERIM (n=7 backtest sample; weights from LITERATURE + provisional data)
-    if      (dayType.classification === 'BALANCE')                                         { impact -= 3; impactStack.push('-3 BALANCE day (INTERIM n=7) — fade probability high, trend probability low'); }
-    else if (dayType.classification === 'TURBULENT' || dayType.classification === 'TREND') { impact += 1; impactStack.push(`+1 ${dayType.classification} day (INTERIM n=7) — directional follow-through probability higher`); }
+    // Day-type adjustment — HALVED WEIGHTS (41% overall accuracy, 25% on TREND calls; see daytype_accuracy_log)
+    // Was: BALANCE=-3, TREND/TURBULENT=+1. Halved until 60-day accuracy exceeds 60%.
+    if      (dayType.classification === 'BALANCE')                                         { impact -= 1; impactStack.push('-1 BALANCE day [LOW-CONFIDENCE 41% accurate — weight halved from -3]'); }
+    else if (dayType.classification === 'TURBULENT' || dayType.classification === 'TREND') { impact += 1; impactStack.push(`+1 ${dayType.classification} day [LOW-CONFIDENCE 41% accurate — TREND only 25% correct]`); }
 
     // Failed auction fuel — trapped inventory at opposite extreme drives breakout (INTERIM)
     // Guard: skip on BALANCE days — range context, not breakout context

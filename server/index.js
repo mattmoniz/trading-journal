@@ -36,6 +36,7 @@ import ruleOverridesRouter from './routes/ruleOverrides.js';
 import { detectPhaseChange } from './services/phaseChangeDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
+import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
 import morningBriefRouter from './routes/morningBrief.js';
 import caseRouter from './routes/case.js';
 import cron from 'node-cron';
@@ -233,8 +234,21 @@ app.use('/api', setupsRouter);
 app.use('/api', calendarRouter);
 app.use('/api', ruleOverridesRouter);
 app.use('/api', dllRouter);
+app.use('/api', profitLockRouter);
 app.use('/api/morning-brief', morningBriefRouter);
 app.use('/api', caseRouter);
+
+// Admin trigger endpoints
+app.post('/api/admin/run-coaching', async (req, res) => {
+  try {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const text = await runDailyCoaching(today, io);
+    await logProcess('DAILY_COACHING', async () => ({ count: text ? 1 : 0 }));
+    res.json({ ok: true, date: today });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Data Health endpoint
 app.get('/api/health/data', async (req, res) => {
@@ -391,7 +405,26 @@ httpServer.listen(PORT, () => {
       console.log(`[auto-import 4PM] Done — imported: ${result?.imported}, skipped: ${result?.skipped}`);
       if (io) io.emit('auto-import-complete', { trigger: 'AUTO_4PM', file: `TradeActivityLogExport_${todayET}.txt`, imported: result?.imported, skipped: result?.skipped, time: new Date().toISOString() });
       checkAndEmitDLL(io).catch(() => {});
+      checkAndEmitProfitLock(io).catch(() => {});
     } catch (e) { console.error('[auto-import 4PM] Error:', e.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 1PM Stop reminder — Mon–Fri
+  cron.schedule('0 13 * * 1-5', async () => {
+    try {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const today = nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const pnlNow = (await query(`SELECT COALESCE(SUM(pnl),0)::float as pnl FROM trades WHERE log_date=$1`, [today])).rows[0]?.pnl || 0;
+      // Upsert 1PM event log (reminder is always sent, user_choice set when acknowledged)
+      await query(
+        `INSERT INTO profit_lock_events (event_date, event_type, current_pnl)
+         VALUES ($1, '1PM_REMINDER', $2)
+         ON CONFLICT DO NOTHING`,
+        [today, pnlNow]
+      ).catch(() => {});
+      if (io) io.emit('1pm-reminder', { pnlAtReminder: pnlNow, time: new Date().toISOString() });
+      console.log(`[1PM-stop] Reminder fired — P&L at 1PM: $${pnlNow >= 0 ? '+' : ''}${pnlNow.toFixed(0)}`);
+    } catch (e) { console.error('[1PM-stop] Error:', e.message); }
   }, { timezone: 'America/New_York' });
 
   // Pattern Memory — 4:05 PM ET Mon–Fri
@@ -474,12 +507,17 @@ httpServer.listen(PORT, () => {
       }
 
       // Daily coaching — due 4:45 PM Mon–Fri; catch up after 5 PM
+      // Also re-run if coaching ran but on 0 trades (import came in late)
       if (day >= 1 && day <= 5 && hour >= 17) {
-        const { rows } = await query(
-          `SELECT 1 FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [today]
-        );
-        if (rows.length === 0) {
-          console.log('[catch-up] Daily coaching overdue — running now');
+        const [coachRows, fillRows] = await Promise.all([
+          query(`SELECT trades_count FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [today]),
+          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [today]),
+        ]);
+        const coached = coachRows.rows[0];
+        const fillCount = parseInt(fillRows.rows[0]?.count || 0);
+        const needsCoaching = !coached || (coached.trades_count === 0 && fillCount > 0);
+        if (needsCoaching) {
+          console.log(`[catch-up] Daily coaching ${!coached ? 'overdue' : 'stale (0 trades coached, ' + fillCount + ' fills now in DB)'} — running now`);
           await logProcess('DAILY_COACHING', async () => {
             const text = await runDailyCoaching(null, io);
             return { count: text ? 1 : 0 };
@@ -592,8 +630,9 @@ httpServer.listen(PORT, () => {
           setTimeout(autoComputeTodayACD, 1000);
         }
       }
-      // DLL check on every bar cycle (quiet — no-ops when no accounts configured)
+      // DLL + profit-lock check on every bar cycle
       checkAndEmitDLL(io).catch(() => {});
+      checkAndEmitProfitLock(io).catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 
@@ -634,6 +673,7 @@ httpServer.listen(PORT, () => {
         });
       }
       checkAndEmitDLL(io).catch(() => {});
+      checkAndEmitProfitLock(io).catch(() => {});
     } catch (e) {
       console.error('[auto-import intraday] Error:', e.message);
     }

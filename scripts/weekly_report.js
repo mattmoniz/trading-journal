@@ -265,7 +265,53 @@ async function getTradeQualitySection(start, end) {
   return { text: lines.join('\n'), flags };
 }
 
-async function buildFlags(pnlData, setupData, acdData, qualityData) {
+async function getGiveBackSection(start, end) {
+  const res = await query(`
+    SELECT session_date::text, session_pnl, peak_pnl, give_back, trades_count
+    FROM daily_coaching
+    WHERE session_date BETWEEN $1 AND $2
+      AND trades_count > 0
+    ORDER BY session_date
+  `, [start, end]);
+
+  if (!res.rows.length) return { text: 'No coaching data this week.', totalGiveBack: 0, avgGiveBackPct: 0, flags: [] };
+
+  const rows = res.rows;
+  let totalGiveBack = 0, totalPeak = 0, daysWithGiveBack = 0, worstGiveBackPct = 0, worstDay = null;
+
+  const lines = [];
+  for (const r of rows) {
+    const peak = parseFloat(r.peak_pnl) || 0;
+    const close = parseFloat(r.session_pnl) || 0;
+    const gb = parseFloat(r.give_back) || 0;
+    const gbPct = peak > 0 ? Math.round(gb / peak * 100) : 0;
+    totalGiveBack += gb;
+    totalPeak += peak;
+    if (gb > 0) daysWithGiveBack++;
+    if (gbPct > worstGiveBackPct) { worstGiveBackPct = gbPct; worstDay = r.session_date; }
+    const gbStr = gb > 0 ? `-$${gb.toFixed(0)} (${gbPct}% of peak)` : 'none';
+    lines.push(`  ${r.session_date}  peak: ${peak > 0 ? '+$' + peak.toFixed(0) : '$0'}  close: ${fmt$(close)}  give-back: ${gbStr}`);
+  }
+
+  const avgGiveBackPct = totalPeak > 0 ? Math.round(totalGiveBack / totalPeak * 100) : 0;
+
+  const summary = [
+    `Days w/ give-back : ${daysWithGiveBack} / ${rows.length}`,
+    `Total give-back   : -$${totalGiveBack.toFixed(0)}`,
+    `Avg give-back     : ${avgGiveBackPct}% of peak`,
+    worstDay ? `Worst day         : ${worstDay}  ${worstGiveBackPct}% given back` : null,
+    '',
+    ...lines,
+  ].filter(l => l !== null);
+
+  const flags = [];
+  if (avgGiveBackPct > 30) flags.push(`High avg give-back: ${avgGiveBackPct}% of peak returned to market (target <20%)`);
+  if (worstGiveBackPct >= 50) flags.push(`Extreme give-back on ${worstDay}: ${worstGiveBackPct}% of peak`);
+
+  return { text: summary.join('\n'), totalGiveBack, avgGiveBackPct, worstGiveBackPct, flags };
+}
+
+async function buildFlags(pnlData, setupData, acdData, qualityData, giveBackData) {
   const flags = [];
 
   // Losing week
@@ -290,7 +336,7 @@ async function buildFlags(pnlData, setupData, acdData, qualityData) {
   }
 
   // Absorb section-level flags
-  flags.push(...acdData.flags, ...qualityData.flags);
+  flags.push(...acdData.flags, ...qualityData.flags, ...(giveBackData?.flags || []));
 
   if (!flags.length) flags.push('No notable flags this week.');
   return flags.join('\n');
@@ -312,7 +358,7 @@ async function interpretFlags(flagsText, weekEnd) {
   }
 }
 
-async function generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData) {
+async function generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData, giveBackData) {
   // Pull daily coaching records for the week to extract improvement themes
   const coachingQ = await query(`
     SELECT session_date::text, coaching_text, session_pnl, trades_count
@@ -349,6 +395,8 @@ Total P&L: ${totalPnl >= 0 ? '+$' : '-$'}${Math.abs(totalPnl).toFixed(2)}
 Best day: ${bestDayPnl != null ? (bestDayPnl >= 0 ? '+$' : '-$') + Math.abs(bestDayPnl).toFixed(2) : 'N/A'}
 Worst day: ${worstDayPnl != null ? (worstDayPnl >= 0 ? '+$' : '-$') + Math.abs(worstDayPnl).toFixed(2) : 'N/A'}
 Total trades: ${totalTrades}
+Avg give-back: ${giveBackData?.avgGiveBackPct ?? 'N/A'}% of daily peak
+Total give-back: -$${(giveBackData?.totalGiveBack ?? 0).toFixed(0)} this week
 
 DAILY IMPROVEMENT THEMES:
 ${dailyImprovements || '  (No daily coaching records for this week)'}
@@ -448,17 +496,18 @@ export async function generateWeeklyReport(weekEnd) {
   }
   const { start, end } = await getWeekRange(weekEnd);
 
-  const [pnlData, setupData, acdData, qualityData] = await Promise.all([
+  const [pnlData, setupData, acdData, qualityData, giveBackData] = await Promise.all([
     getPnlSection(start, end),
     getSetupSection(start, end),
     getAcdSection(start, end),
     getTradeQualitySection(start, end),
+    getGiveBackSection(start, end),
   ]);
 
-  const flagsText = await buildFlags(pnlData, setupData, acdData, qualityData);
+  const flagsText = await buildFlags(pnlData, setupData, acdData, qualityData, giveBackData);
   const [interpretation, weeklyAssessment] = await Promise.all([
     interpretFlags(flagsText, weekEnd),
-    generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData),
+    generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData, giveBackData),
   ]);
 
   const sep = '='.repeat(60);
@@ -485,6 +534,10 @@ export async function generateWeeklyReport(weekEnd) {
     'TRADE QUALITY',
     dash,
     qualityData.text,
+    '',
+    'GIVE-BACK / PEAK VS CLOSE',
+    dash,
+    giveBackData.text,
     '',
     'FLAGS (auto-detected)',
     dash,

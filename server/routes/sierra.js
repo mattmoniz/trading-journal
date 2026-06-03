@@ -7,6 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { query } from '../db.js';
 import { manualImportFromFile, getImportHistory } from '../services/tradeImportService.js';
 import { checkAndEmitDLL } from './dll.js';
+import { checkAndEmitProfitLock } from './profitLock.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +47,7 @@ export default function createSierraRouter(io, sierraWatcher) {
       const result = await manualImportFromFile(filePath);
       io.emit('trades-updated', { ...result, timestamp: new Date() });
       checkAndEmitDLL(io).catch(() => {});
+      checkAndEmitProfitLock(io).catch(() => {});
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: error.message });
