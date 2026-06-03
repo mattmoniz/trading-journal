@@ -39,6 +39,7 @@ import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
 import morningBriefRouter from './routes/morningBrief.js';
 import caseRouter from './routes/case.js';
+import scenarioRouter from './routes/scenario.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
 import { runWeeklyReport } from '../scripts/weekly_report.js';
@@ -237,6 +238,7 @@ app.use('/api', dllRouter);
 app.use('/api', profitLockRouter);
 app.use('/api/morning-brief', morningBriefRouter);
 app.use('/api', caseRouter);
+app.use('/api', scenarioRouter);
 
 // Admin trigger endpoints
 app.post('/api/admin/run-coaching', async (req, res) => {
