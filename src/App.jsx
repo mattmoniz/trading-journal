@@ -6375,6 +6375,24 @@ function ScenarioTesterView() {
   const [dllLoading,setDllLoading]= React.useState(false);
   const [activePreset, setActivePreset] = React.useState(null);
 
+  // Pattern analysis
+  const [patterns,        setPatterns]        = React.useState(null);
+  const [patternsLoading, setPatternsLoading] = React.useState(false);
+
+  // Optimizer
+  const [optExpanded,    setOptExpanded]    = React.useState(false);
+  const [optGridParams,  setOptGridParams]  = React.useState({ dll: true, timeTo: true, maxTradesPerDay: true, stopAfterLosses: false, profitLock: false });
+  const [optResult,      setOptResult]      = React.useState(null);
+  const [optLoading,     setOptLoading]     = React.useState(false);
+  const [optError,       setOptError]       = React.useState(null);
+
+  // Monte Carlo
+  const [mcExpanded,   setMcExpanded]   = React.useState(false);
+  const [mcParams,     setMcParams]     = React.useState(null); // { dll, timeTo, maxTradesPerDay, ... }
+  const [mcResult,     setMcResult]     = React.useState(null);
+  const [mcLoading,    setMcLoading]    = React.useState(false);
+  const [mcError,      setMcError]      = React.useState(null);
+
   React.useEffect(() => {
     fetch(`${API_URL}/scenario/accounts`).then(r => r.json()).then(a => { setAllAccounts(a); }).catch(() => {});
   }, []);
@@ -6406,12 +6424,15 @@ function ScenarioTesterView() {
   const run = React.useCallback(async (bodyOverrides = {}) => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`${API_URL}/scenario`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody(bodyOverrides)) });
-      const d = await r.json();
+      const [r1] = await Promise.all([
+        fetch(`${API_URL}/scenario`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildBody(bodyOverrides)) }),
+      ]);
+      const d = await r1.json();
       if (d.error) throw new Error(d.error);
       setResult(d);
     } catch(e) { setError(e.message); }
     setLoading(false);
+    runPatterns(bodyOverrides);
   }, [buildBody]);
 
   const runDllCompare = React.useCallback(async () => {
@@ -6425,8 +6446,55 @@ function ScenarioTesterView() {
     setDllLoading(false);
   }, [buildBody]);
 
+  const runPatterns = React.useCallback(async (bodyOverrides = {}) => {
+    setPatternsLoading(true);
+    try {
+      const base = buildBody(bodyOverrides);
+      const body = { startDate: base.startDate, endDate: base.endDate, accounts: base.accounts, daysOfWeek: base.daysOfWeek, dayTypes: base.dayTypes };
+      const r = await fetch(`${API_URL}/scenario/patterns`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setPatterns(d);
+    } catch(e) { console.error('[patterns]', e); }
+    setPatternsLoading(false);
+  }, [buildBody]);
+
+  const runOptimizer = React.useCallback(async () => {
+    setOptLoading(true); setOptError(null);
+    try {
+      const active = Object.entries(optGridParams).filter(([, v]) => v).map(([k]) => k);
+      const gridParams = {};
+      if (active.includes('dll'))             gridParams.dll             = [null, 100, 150, 200, 250, 300, 400, 500, 600];
+      if (active.includes('timeTo'))          gridParams.timeTo          = [null, '11:00', '11:30', '12:00', '12:30', '13:00', '14:00'];
+      if (active.includes('maxTradesPerDay')) gridParams.maxTradesPerDay = [null, 2, 3, 4, 5];
+      if (active.includes('stopAfterLosses')) gridParams.stopAfterLosses = [null, 1, 2, 3];
+      if (active.includes('profitLock'))      gridParams.profitLock      = [null, 200, 400, 600, 800];
+      const base = buildBody({});
+      const body = { startDate: base.startDate, endDate: base.endDate, accounts: base.accounts, gridParams, topN: 10 };
+      const r = await fetch(`${API_URL}/scenario/optimize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setOptResult(d);
+    } catch(e) { setOptError(e.message); }
+    setOptLoading(false);
+  }, [buildBody, optGridParams]);
+
+  const runMonteCarlo = React.useCallback(async (overrideParams = null) => {
+    setMcLoading(true); setMcError(null);
+    try {
+      const scenarioParams = overrideParams || { dll: dll ? parseFloat(dll) : undefined, timeTo: timeTo || undefined, maxTradesPerDay: maxTradesPerDay ? parseInt(maxTradesPerDay) : undefined, stopAfterLosses: stopAfterLosses ? parseInt(stopAfterLosses) : undefined, profitLock: profitLock ? parseFloat(profitLock) : undefined };
+      const base = buildBody({});
+      const body = { startDate: base.startDate, endDate: base.endDate, accounts: base.accounts, scenarioParams, iterations: 5000 };
+      const r = await fetch(`${API_URL}/scenario/monte-carlo`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      setMcResult(d); setMcExpanded(true);
+    } catch(e) { setMcError(e.message); }
+    setMcLoading(false);
+  }, [buildBody, dll, timeTo, maxTradesPerDay, stopAfterLosses, profitLock]);
+
   // Run on mount with defaults
-  React.useEffect(() => { run(); }, []);
+  React.useEffect(() => { run(); runPatterns(); }, []);
 
   const applyPreset = (preset) => {
     setActivePreset(preset.label);
@@ -6744,6 +6812,341 @@ function ScenarioTesterView() {
           </div>
         </div>
       </div>
+
+      {/* ── PATTERN ANALYSIS ─────────────────────────────────────────────── */}
+      {(patterns || patternsLoading) && (() => {
+        const PCOL = { background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '16px 18px' };
+        const pColor = v => v >= 0 ? '#22c55e' : '#ef4444';
+
+        const PatBar = ({ data, dataKey = 'avgPnl', nameKey = 'label', height = 160, subLine }) => (
+          <Recharts.ResponsiveContainer width="100%" height={height}>
+            <Recharts.BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <Recharts.CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
+              <Recharts.XAxis dataKey={nameKey} tick={{ fontSize: 11, fill: '#475569' }} />
+              <Recharts.YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
+              <Recharts.Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
+                formatter={(v, n) => [v != null ? `$${parseFloat(v).toFixed(0)}` : '—', 'Avg P&L']}
+                labelFormatter={(l, payload) => {
+                  const d = payload?.[0]?.payload;
+                  return d ? `${l} — ${d.winRate}% WR · ${d.count ?? d.days} ${d.count != null ? 'fills' : 'days'}` : l;
+                }} />
+              <Recharts.ReferenceLine y={0} stroke="#334155" />
+              {data && data.map((_, i) => null)}
+              <Recharts.Bar dataKey={dataKey} radius={[3, 3, 0, 0]}>
+                {(data || []).map((entry, i) => (
+                  <Recharts.Cell key={i} fill={entry[dataKey] >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={0.8} />
+                ))}
+              </Recharts.Bar>
+            </Recharts.BarChart>
+          </Recharts.ResponsiveContainer>
+        );
+
+        return (
+          <div style={{ marginTop: 24 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 14 }}>
+              Pattern Analysis
+              {patternsLoading && <span style={{ fontSize: 12, fontWeight: 400, color: '#475569', marginLeft: 10 }}>Loading…</span>}
+              <span style={{ fontSize: 11, fontWeight: 400, color: '#334155', marginLeft: 12, textTransform: 'none', letterSpacing: 0 }}>
+                Date range + account filters apply · sequential rules excluded
+              </span>
+            </div>
+
+            {patterns && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 16 }}>
+
+                {/* Hourly */}
+                <div style={PCOL}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                    Avg P&L by Hour (ET)
+                  </div>
+                  <PatBar data={patterns.hourly} />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
+                    {patterns.hourly.map(h => (
+                      <span key={h.hour} style={{ fontSize: 11, color: '#475569' }}>
+                        <b style={{ color: h.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{h.label}</b>: {h.winRate}% WR · {h.count}f
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* DOW */}
+                <div style={PCOL}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                    Avg Day P&L by Weekday
+                  </div>
+                  <Recharts.ResponsiveContainer width="100%" height={160}>
+                    <Recharts.BarChart data={patterns.dayOfWeek} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
+                      <Recharts.XAxis dataKey="label" tick={{ fontSize: 11, fill: '#475569' }} />
+                      <Recharts.YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
+                      <Recharts.Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
+                        formatter={v => [`$${parseFloat(v).toFixed(0)}`, 'Avg P&L']}
+                        labelFormatter={(l, payload) => { const d = payload?.[0]?.payload; return d ? `${l} — ${d.winRate}% WR · ${d.days} days` : l; }} />
+                      <Recharts.ReferenceLine y={0} stroke="#334155" />
+                      <Recharts.Bar dataKey="avgPnl" radius={[3, 3, 0, 0]}>
+                        {patterns.dayOfWeek.map((d, i) => <Recharts.Cell key={i} fill={d.avgPnl >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={0.8} />)}
+                      </Recharts.Bar>
+                    </Recharts.BarChart>
+                  </Recharts.ResponsiveContainer>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
+                    {patterns.dayOfWeek.map(d => (
+                      <span key={d.dow} style={{ fontSize: 11, color: '#475569' }}>
+                        <b style={{ color: d.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{d.label}</b>: {d.winRate}% WR · {d.days}d
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Fill sequence */}
+                <div style={PCOL}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                    Edge by Fill # of Day
+                  </div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 10 }}>Does your edge degrade as you trade more? #1 = first fill of the day.</div>
+                  <PatBar data={patterns.sessionSequence} />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
+                    {patterns.sessionSequence.map(s => (
+                      <span key={s.seq} style={{ fontSize: 11, color: '#475569' }}>
+                        <b style={{ color: s.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{s.label}</b>: {s.winRate}% WR · {s.count}f · {fmt$(s.totalPnl)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* After win/loss */}
+                <div style={PCOL}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                    Next Fill: After Win vs After Loss
+                  </div>
+                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 14 }}>Make-it-back spiral, quantified. How do you trade after a loser?</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    {[
+                      { key: 'afterLoss', label: 'After a Loss', color: '#ef4444' },
+                      { key: 'afterWin',  label: 'After a Win',  color: '#22c55e' },
+                    ].map(({ key, label, color }) => {
+                      const s = patterns.afterWinLoss[key];
+                      return (
+                        <div key={key} style={{ border: `1px solid ${color}33`, borderRadius: 8, padding: '14px 16px', background: `${color}08` }}>
+                          <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>{label}</div>
+                          <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'monospace', color: s.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>
+                            {fmt$(s.avgPnl)}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>avg per fill</div>
+                          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>{s.winRate}% win rate</div>
+                          <div style={{ fontSize: 12, color: '#475569' }}>{s.count} instances · {fmt$(s.totalPnl)} total</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── PARAMETER OPTIMIZER ──────────────────────────────────────────── */}
+      <div style={{ marginTop: 24, background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
+        <button onClick={() => setOptExpanded(x => !x)}
+          style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Parameter Optimizer (Grid Search)</span>
+          <span style={{ fontSize: 12, color: '#475569' }}>{optExpanded ? '▲' : '▼'}</span>
+        </button>
+        {optExpanded && (
+          <div style={{ padding: '0 18px 18px' }}>
+            {/* Warning */}
+            <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 7, marginBottom: 16, fontSize: 12, color: '#fbbf24', lineHeight: 1.6 }}>
+              <strong>Curve-fit risk:</strong> the top-ranked combo is the best fit to past data — not necessarily the best future rule.
+              Only trust combos labeled <strong>ROBUST</strong>: they must pass the out-of-sample test AND sit on a stable plateau (neighbors also work).
+              Combos labeled <strong>OVERFIT</strong> or <strong>FRAGILE</strong> are likely data-mined and should be ignored.
+            </div>
+
+            {/* Param selection */}
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>Select parameters to optimize:</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+              {[
+                ['dll', 'DLL ($100-600, $50/100 steps)'],
+                ['timeTo', 'Time cutoff (11:00–14:00, 30min)'],
+                ['maxTradesPerDay', 'Max trades/day (2–5)'],
+                ['stopAfterLosses', 'Stop after N losses (1–3)'],
+                ['profitLock', 'Profit lock (2–8 × $200)'],
+              ].map(([key, label]) => (
+                <button key={key} onClick={() => setOptGridParams(p => ({ ...p, [key]: !p[key] }))}
+                  style={{ padding: '5px 12px', fontSize: 12, borderRadius: 16, cursor: 'pointer',
+                    border: `1px solid ${optGridParams[key] ? '#6366f1' : 'var(--border-color)'}`,
+                    background: optGridParams[key] ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    color: optGridParams[key] ? '#818cf8' : '#475569', fontWeight: optGridParams[key] ? 700 : 400 }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: '#334155', marginBottom: 12 }}>
+              Unchecked parameters are held at their "no rule" default. Date range and account filters from the main panel apply.
+            </div>
+
+            <button onClick={runOptimizer} disabled={optLoading}
+              style={{ padding: '8px 20px', fontSize: 13, fontWeight: 700, borderRadius: 7, border: 'none',
+                background: optLoading ? '#1e293b' : '#6366f1', color: optLoading ? '#475569' : '#fff', cursor: optLoading ? 'default' : 'pointer', marginBottom: 16 }}>
+              {optLoading ? 'Running grid search…' : 'Run Optimizer'}
+            </button>
+
+            {optError && <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, color: '#ef4444', fontSize: 12, marginBottom: 12 }}>{optError}</div>}
+
+            {optResult && (() => {
+              const { topCombos, totalCombos, meta } = optResult;
+              return (
+                <div>
+                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 12 }}>
+                    {totalCombos} combinations tested · In-sample: {meta.isSplit.start} → {meta.isSplit.end} ({meta.isSplit.days}d) · Out-of-sample: {meta.oosSplit.start} → {meta.oosSplit.end} ({meta.oosSplit.days}d)
+                  </div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
+                          {['DLL','Cut','MaxT','StopL','ProfLk','IS Delta','IS WD%','OOS Delta','OOS WD%','Max DD','Plateau','Status'].map(h => (
+                            <th key={h} style={{ padding: '6px 8px', textAlign: 'right', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                          <th style={{ padding: '6px 8px', color: '#64748b', fontSize: 11 }}></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {topCombos.map((c, i) => {
+                          const p = c.params;
+                          const statusColor = c.robust ? '#22c55e' : c.label.startsWith('OVERFIT') ? '#ef4444' : '#f59e0b';
+                          return (
+                            <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.3)', background: c.robust ? 'rgba(34,197,94,0.04)' : 'transparent' }}>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'monospace', color: '#fbbf24' }}>{p.dll != null ? `$${p.dll}` : '—'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{p.timeTo || '—'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{p.maxTradesPerDay ?? '—'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{p.stopAfterLosses ?? '—'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{p.profitLock != null ? `$${p.profitLock}` : '—'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: c.isStats.delta >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(c.isStats.delta)}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{c.isStats.winDayRate}%</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: c.oosStats.delta >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(c.oosStats.delta)}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{c.oosStats.winDayRate}%</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', fontFamily: 'monospace', color: '#f59e0b' }}>{fmt$(c.isStats.maxDrawdown, false)}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8' }}>{Math.round(c.plateauRatio * 100)}%</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: statusColor, whiteSpace: 'nowrap' }}>{c.label}</td>
+                              <td style={{ padding: '6px 8px' }}>
+                                <button onClick={() => { setMcParams(c.params); runMonteCarlo(c.params); }}
+                                  style={{ padding: '3px 8px', fontSize: 11, borderRadius: 4, border: '1px solid #475569', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}>MC</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+                    <strong style={{ color: '#64748b' }}>Plateau %</strong> — % of ±1-step parameter neighbors that also beat actual P&L in-sample. ≥50% = robust plateau.&nbsp;
+                    <strong style={{ color: '#22c55e' }}>ROBUST</strong> = OOS profitable + plateau ≥50%.&nbsp;
+                    <strong style={{ color: '#f59e0b' }}>FRAGILE</strong> = OOS profitable but isolated spike.&nbsp;
+                    <strong style={{ color: '#ef4444' }}>OVERFIT</strong> = failed OOS.
+                    · <em>MC button = run Monte Carlo on that combo.</em>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* ── MONTE CARLO ──────────────────────────────────────────────────── */}
+      <div style={{ marginTop: 16, background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
+        <button onClick={() => setMcExpanded(x => !x)}
+          style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monte Carlo Robustness</span>
+          <span style={{ fontSize: 12, color: '#475569' }}>{mcExpanded ? '▲' : '▼'}</span>
+        </button>
+        {mcExpanded && (
+          <div style={{ padding: '0 18px 18px' }}>
+            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.6 }}>
+              Resamples the scenario's daily P&L array 5,000 times (with replacement) to show the distribution of possible outcomes.
+              If the result is order-dependent/lucky, the distribution will be wide and the 5th percentile will be deeply negative.
+              A robust strategy produces a tight distribution skewed to the right.
+            </div>
+
+            {mcParams && (
+              <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+                Testing: DLL={mcParams.dll != null ? `$${mcParams.dll}` : 'none'} · Cut={mcParams.timeTo || 'none'} · MaxT={mcParams.maxTradesPerDay ?? 'none'} · StopL={mcParams.stopAfterLosses ?? 'none'} · ProfLk={mcParams.profitLock != null ? `$${mcParams.profitLock}` : 'none'}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <button onClick={() => { setMcParams(null); runMonteCarlo(null); }} disabled={mcLoading}
+                style={{ padding: '8px 16px', fontSize: 12, fontWeight: 700, borderRadius: 7, border: '1px solid #6366f1',
+                  background: mcLoading ? 'transparent' : 'rgba(99,102,241,0.15)', color: mcLoading ? '#475569' : '#818cf8', cursor: mcLoading ? 'default' : 'pointer' }}>
+                {mcLoading ? 'Simulating 5000 paths…' : 'Run on Current Filters'}
+              </button>
+            </div>
+
+            {mcError && <div style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6, color: '#ef4444', fontSize: 12, marginBottom: 12 }}>{mcError}</div>}
+
+            {mcResult && (() => {
+              const { distribution: dist, drawdown, scenarioNetPnl, actualNetPnl, iterations } = mcResult;
+              const maxBin = Math.max(...dist.bins.map(b => b.count));
+              return (
+                <div>
+                  {/* Summary stats */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 20 }}>
+                    {[
+                      { label: '5th %ile', val: dist.p5, color: '#ef4444' },
+                      { label: '25th %ile', val: dist.p25, color: '#f59e0b' },
+                      { label: 'Median', val: dist.median, color: '#e2e8f0' },
+                      { label: '75th %ile', val: dist.p75, color: '#22c55e' },
+                      { label: '95th %ile', val: dist.p95, color: '#22c55e' },
+                    ].map(({ label, val, color }) => (
+                      <div key={label} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 12px' }}>
+                        <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{label}</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color }}>{fmt$(val)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <div style={{ padding: '8px 14px', borderRadius: 7, background: dist.probProfitable >= 60 ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${dist.probProfitable >= 60 ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
+                      <span style={{ fontSize: 13, color: dist.probProfitable >= 60 ? '#22c55e' : '#ef4444', fontWeight: 700 }}>
+                        {dist.probProfitable}% of simulations were profitable
+                      </span>
+                    </div>
+                    <div style={{ padding: '8px 14px', borderRadius: 7, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)' }}>
+                      <span style={{ fontSize: 13, color: '#fbbf24' }}>Max drawdown p95: {fmt$(drawdown.p95, false)}</span>
+                    </div>
+                    <div style={{ padding: '8px 14px', borderRadius: 7, background: '#0f172a', border: '1px solid #1e293b' }}>
+                      <span style={{ fontSize: 13, color: '#475569' }}>Actual scenario P&L: </span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: scenarioNetPnl >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(scenarioNetPnl)}</span>
+                    </div>
+                  </div>
+
+                  {/* Histogram */}
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>Distribution of simulated 60-day P&L outcomes ({iterations.toLocaleString()} paths)</div>
+                  <Recharts.ResponsiveContainer width="100%" height={180}>
+                    <Recharts.BarChart data={dist.bins} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                      <Recharts.CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" vertical={false} />
+                      <Recharts.XAxis dataKey="label" tick={{ fontSize: 9, fill: '#475569' }} interval={Math.floor(dist.bins.length / 8)} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v <= -1000 ? '-'+(Math.abs(v)/1000).toFixed(0)+'k' : v}`} />
+                      <Recharts.YAxis tick={{ fontSize: 10, fill: '#475569' }} />
+                      <Recharts.Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
+                        formatter={(v, n, props) => [`${v} paths (${(v/iterations*100).toFixed(1)}%)`, `$${props.payload.from} to $${props.payload.to}`]}
+                        labelFormatter={() => ''} />
+                      <Recharts.ReferenceLine x={0} stroke="#475569" />
+                      <Recharts.Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                        {dist.bins.map((b, i) => <Recharts.Cell key={i} fill={b.from >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={0.7} />)}
+                      </Recharts.Bar>
+                    </Recharts.BarChart>
+                  </Recharts.ResponsiveContainer>
+
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+                    Method: bootstrap resampling — randomly draws {mcResult.dailyPnls.length} daily P&Ls with replacement, 5,000 times.
+                    A left-skewed distribution with p5 deeply negative means the strategy is fragile to bad luck runs.
+                    The actual result ({fmt$(scenarioNetPnl)}) should sit above the median to be meaningful.
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </div>
+
     </div>
   );
 }
@@ -7066,8 +7469,21 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         )}
       </div>
 
-      {activeSection === 'rules' && <div className="backtest-config-panel">
-        {/* Account selector */}
+      {activeSection === 'rules' && (
+        <div style={{ padding: '48px 32px', textAlign: 'center', maxWidth: 540, margin: '0 auto' }}>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>⚗️</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 12 }}>Rule Simulator moved to Scenarios</div>
+          <div style={{ fontSize: 14, color: '#64748b', lineHeight: 1.7, marginBottom: 24 }}>
+            The Scenarios tab has a full rule simulator with DLL simulation, time windows, profit lock, stop-after-N-losses,
+            a parameter optimizer with in-sample / out-of-sample validation, Monte Carlo robustness testing,
+            and pattern analysis (hourly, DOW, fill sequence, after-win/loss stats).
+          </div>
+          <div style={{ fontSize: 13, color: '#475569' }}>Use the <strong style={{ color: '#818cf8' }}>Scenarios</strong> nav item in the sidebar.</div>
+        </div>
+      )}
+
+      {false && <div className="backtest-config-panel">
+        {/* Account selector — RETIRED, kept for reference */}
         <div className="backtest-config-section">
           <h3>Accounts</h3>
           {(() => {
@@ -7165,7 +7581,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         </button>
       </div>}
 
-      {activeSection === 'rules' && data && (
+      {false && activeSection === 'rules_retired' && data && (
         <>
           {/* Summary Cards */}
           <div className="backtest-summary-cards">
@@ -7457,7 +7873,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         </>
       )}
 
-      {activeSection === 'rules' && loading && !data && (
+      {false && activeSection === 'rules_loading_retired' && loading && !data && (
         <div style={{ textAlign: 'center', color: 'var(--text-muted)', marginTop: 60, fontSize: 16 }}>
           Running analysis...
         </div>
