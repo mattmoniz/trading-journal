@@ -32,13 +32,13 @@ router.get('/confluence/today', async (req, res) => {
 
     const vaQ = await query(`
       WITH days AS (
-        SELECT DISTINCT ts::date::text as d FROM price_bars WHERE symbol='NQ'
+        SELECT DISTINCT ts::date as d FROM price_bars WHERE symbol='NQ'
           AND ts::date < ($1::text)::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY d DESC LIMIT 5
       )
       SELECT d, (
         WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-          FROM price_bars WHERE symbol='NQ' AND ts::date::text=days.d
+          FROM price_bars WHERE symbol='NQ' AND ts::date=days.d
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
         poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
         SELECT poc_row.px FROM poc_row LIMIT 1

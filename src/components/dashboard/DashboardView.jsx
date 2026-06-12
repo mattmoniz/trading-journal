@@ -1,17 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import SyncProgressPanel from './SyncProgressPanel.jsx';
 import DashboardFilters from './DashboardFilters.jsx';
-import DashboardQuickNav from './DashboardQuickNav.jsx';
 import MarketRecapPanel from './MarketRecapPanel.jsx';
-import StatsGrid from './StatsGrid.jsx';
 import PerformanceVisuals from './PerformanceVisuals.jsx';
 import PnlCharts from './PnlCharts.jsx';
-import SymbolsTable from './SymbolsTable.jsx';
 import SetupsTable from './SetupsTable.jsx';
 import OptimizationSection from './OptimizationSection.jsx';
 import BehaviorSection from './BehaviorSection.jsx';
-import MorningBriefPanel from './MorningBriefPanel.jsx';
-import WeeklyReportPanel from './WeeklyReportPanel.jsx';
 
 const API_URL = '/api';
 
@@ -27,13 +22,9 @@ export default function DashboardView({
   onDismissSync,
   ChartReviewComponent,
 }) {
-  const [stats, setStats] = useState({});
   const [dailyPerf, setDailyPerf] = useState([]);
   const [setupStats, setSetupStats] = useState([]);
-  const [topSymbols, setTopSymbols] = useState([]);
   const [cumulativePnl, setCumulativePnl] = useState([]);
-  const [hourlyStats, setHourlyStats] = useState([]);
-  const [dayOfWeekStats, setDayOfWeekStats] = useState([]);
   const [durationStats, setDurationStats] = useState([]);
   const [behaviorData, setBehaviorData] = useState(null);
   const [optData, setOptData] = useState(null);
@@ -153,27 +144,25 @@ export default function DashboardView({
       const queryString = params.toString();
       const baseQuery = queryString ? `?${queryString}` : '';
 
-      const [overviewRes, dailyRes, setupRes, symbolsRes, cumulativeRes, hourlyRes, dayOfWeekRes, durationRes, behaviorRes, optRes, locRes] = await Promise.all([
-        fetch(`${API_URL}/stats/overview${baseQuery}`),
+      // Behavioral stats are structural truths — always all-time, never date-filtered.
+      // Only the account filter applies so multi-account setups still scope correctly.
+      const accountOnlyQuery = selectedAccounts.length > 0
+        ? `?account=${selectedAccounts.join(',')}`
+        : '';
+
+      const [dailyRes, setupRes, cumulativeRes, durationRes, behaviorRes, optRes, locRes] = await Promise.all([
         fetch(`${API_URL}/stats/daily${baseQuery}`),
         fetch(`${API_URL}/stats/by-setup${baseQuery}`),
-        fetch(`${API_URL}/stats/top-symbols${baseQuery}`),
         fetch(`${API_URL}/stats/cumulative-pnl${baseQuery}`),
-        fetch(`${API_URL}/stats/by-hour${baseQuery}`),
-        fetch(`${API_URL}/stats/by-day-of-week${baseQuery}`),
         fetch(`${API_URL}/stats/by-duration${baseQuery}`),
-        fetch(`${API_URL}/stats/behavior${baseQuery}`),
+        fetch(`${API_URL}/stats/behavior${accountOnlyQuery}`),
         fetch(`${API_URL}/stats/optimization${baseQuery}`),
         fetch(`${API_URL}/stats/trade-location${baseQuery}`),
       ]);
 
-      setStats(await overviewRes.json());
       setDailyPerf(await dailyRes.json());
       setSetupStats(await setupRes.json());
-      setTopSymbols(await symbolsRes.json());
       setCumulativePnl(await cumulativeRes.json());
-      setHourlyStats(await hourlyRes.json());
-      setDayOfWeekStats(await dayOfWeekRes.json());
       setDurationStats(await durationRes.json());
       setBehaviorData(await behaviorRes.json());
       setOptData(await optRes.json());
@@ -222,12 +211,6 @@ export default function DashboardView({
         onCustomDateChange={handleCustomDateChange}
       />
 
-      <DashboardQuickNav />
-
-      <MorningBriefPanel />
-
-      <WeeklyReportPanel />
-
       <MarketRecapPanel
         recapDate={recapDate}
         setRecapDate={setRecapDate}
@@ -238,19 +221,13 @@ export default function DashboardView({
         ChartReviewComponent={ChartReviewComponent}
       />
 
-      <StatsGrid stats={stats} />
-
-      <PerformanceVisuals stats={stats} durationStats={durationStats} />
+      <PerformanceVisuals durationStats={durationStats} />
 
       <PnlCharts
         cumulativePnl={cumulativePnl}
         dailyPerf={dailyPerf}
-        hourlyStats={hourlyStats}
-        dayOfWeekStats={dayOfWeekStats}
         filters={filters}
       />
-
-      <SymbolsTable topSymbols={topSymbols} />
 
       <SetupsTable setupStats={setupStats} />
 

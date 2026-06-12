@@ -1,8 +1,7 @@
 import React from 'react';
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { formatNumber } from '../../utils/format.js';
 
-export default function PerformanceVisuals({ stats, durationStats }) {
+export default function PerformanceVisuals({ durationStats }) {
   return (
     <section className="analysis-row">
       <div className="analysis-card duration-card">
@@ -37,61 +36,6 @@ export default function PerformanceVisuals({ stats, durationStats }) {
             </div>
           );
         })() : <p className="sub-text">No duration data available</p>}
-      </div>
-
-      <div className="analysis-card pf-visual-card">
-        <h2>Profit Factor</h2>
-        {(() => {
-          const pf = parseFloat(stats.profit_factor || 0);
-          let label, color;
-          if (pf >= 3)       { label = 'Excellent — Top-tier strategy'; color = '#10b981'; }
-          else if (pf >= 2)  { label = 'Good';                           color = '#22c55e'; }
-          else if (pf >= 1.5){ label = 'Average';                        color = '#f59e0b'; }
-          else if (pf >= 1)  { label = 'Below Average';                  color = '#f97316'; }
-          else               { label = 'Poor';                           color = '#ef4444'; }
-          const pct = Math.min(100, (pf / 4) * 100);
-          return (
-            <>
-              <p className="pf-big" style={{ color }}>{formatNumber(pf)}</p>
-              <div className="pf-bar-track">
-                <div className="pf-bar-fill" style={{ width: `${pct}%`, background: color }} />
-              </div>
-              <p className="pf-label" style={{ color }}>{label}</p>
-              <div className="pf-gross">
-                <div><span className="sub-text">Gross Profit</span><span className="positive"> ${formatNumber(stats.gross_profit)}</span></div>
-                <div><span className="sub-text">Gross Loss</span><span className="negative"> ${formatNumber(stats.gross_loss)}</span></div>
-              </div>
-            </>
-          );
-        })()}
-      </div>
-
-      <div className="analysis-card wr-visual-card">
-        <h2>Win Rate</h2>
-        <div style={{ position: 'relative', height: '110px' }}>
-          <ResponsiveContainer width="100%" height={110}>
-            <PieChart>
-              <Pie
-                data={[
-                  { value: parseFloat(stats.win_rate || 0) },
-                  { value: Math.max(0, 100 - parseFloat(stats.win_rate || 0)) }
-                ]}
-                cx="50%" cy="100%"
-                startAngle={180} endAngle={0}
-                innerRadius={55} outerRadius={80}
-                dataKey="value" strokeWidth={0}
-              >
-                <Cell fill="#10b981" />
-                <Cell fill="#2d3354" />
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="gauge-center-label">{formatNumber(stats.win_rate)}%</div>
-        </div>
-        <div className="wr-counts">
-          <span className="positive">Wins: {formatNumber(stats.winning_trades || 0, 0)}</span>
-          <span className="negative">Losses: {formatNumber(stats.losing_trades || 0, 0)}</span>
-        </div>
       </div>
     </section>
   );

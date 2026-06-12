@@ -18,6 +18,7 @@ import {
   getStructuralLevels,
 } from '../services/acdService.js';
 import { runParameterSearch } from '../services/acdBacktest.js';
+import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboRate } from '../services/engineReadHitRates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -96,6 +97,87 @@ export async function dropToTimeline(setup) {
   ]);
 }
 
+function isLongSetup(setupType) {
+  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
+}
+
+// Price-based resolution: for each ACTIVE setup with defined entry/stop/T1, walk price
+// bars since fired_at and resolve TARGET_HIT/STOP_HIT the moment either level is touched
+// (whichever is touched first, chronologically — same logic as setupBacktestService.js
+// and the historical backfill). Runs BEFORE expireStaleSetups/structurallyInvalidateSetups
+// so a real T1/stop touch is never preempted by a timer or OR-break invalidation.
+export async function resolveSetupsByPrice(io) {
+  const active = await query(`
+    SELECT id, setup_type, trade_date, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level
+    FROM active_setups WHERE status='ACTIVE'
+  `);
+
+  let count = 0;
+  for (const row of active.rows) {
+    const long = isLongSetup(row.setup_type);
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const stop = row.stop_level;
+    const t1 = row.t1_level;
+    if (entry == null || stop == null || t1 == null) continue;
+    if (long && t1 <= entry) continue;
+    if (!long && t1 >= entry) continue;
+
+    const bars = await query(`
+      SELECT ts, open::float, high::float, low::float, close::float
+      FROM price_bars WHERE symbol='NQ' AND ts > $1 ORDER BY ts
+    `, [row.fired_at]);
+
+    let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
+    for (const bar of bars.rows) {
+      const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
+      const stopHit = long ? bar.low <= stop : bar.high >= stop;
+      if (t1Hit && stopHit) {
+        const towardT1 = long ? (bar.open > entry) : (bar.open < entry);
+        resolution = towardT1 ? 'TARGET_HIT' : 'STOP_HIT';
+        method = 'SAME_BAR_TIEBREAK';
+        resolvedAt = bar.ts;
+        priceAtRes = towardT1 ? t1 : stop;
+        break;
+      } else if (t1Hit) {
+        resolution = 'TARGET_HIT';
+        method = 'PRICE_CLEAN';
+        resolvedAt = bar.ts;
+        priceAtRes = t1;
+        break;
+      } else if (stopHit) {
+        resolution = 'STOP_HIT';
+        method = 'PRICE_CLEAN';
+        resolvedAt = bar.ts;
+        priceAtRes = stop;
+        break;
+      }
+    }
+    if (!resolution) continue;
+
+    const pnl = resolution === 'TARGET_HIT'
+      ? (long ? (t1 - entry) : (entry - t1)) * 5 - 5
+      : (long ? (stop - entry) : (entry - stop)) * 5 - 5;
+
+    const updated = await query(`
+      UPDATE active_setups
+      SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_outcome=$2,
+          actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW()
+      WHERE id=$1 AND status='ACTIVE'
+      RETURNING *
+    `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt]);
+
+    if (updated.rows.length) {
+      try { await dropToTimeline(updated.rows[0]); } catch (_) {}
+      if (io) io.emit('setup-resolved', {
+        setupId: row.id, setupType: row.setup_type, tradeDate: row.trade_date,
+        resolution, resolutionMethod: method, actualPnl: updated.rows[0].actual_pnl,
+      });
+      count++;
+    }
+  }
+  return count;
+}
+
 // Expires any ACTIVE setups past their expires_at; emits socket events.
 export async function expireStaleSetups(io) {
   const expired = await query(`
@@ -129,8 +211,8 @@ export async function structurallyInvalidateSetups(io) {
   if (!currentPrice || !orHigh || !orLow) return 0;
 
   // Bearish setups invalidated when price closes above OR High
-  const bearishPattern = '%SHORT%,IB_BEARISH,C_STANDALONE_DOWN,C_REVERSAL_SHORT,FAILED_AUCTION_SHORT,VALUE_AREA_RESPONSIVE_SHORT'.split(',');
-  const bullishPattern = '%LONG%,IB_BULLISH,C_STANDALONE_UP,C_REVERSAL_LONG,FAILED_AUCTION_LONG,VALUE_AREA_RESPONSIVE_LONG'.split(',');
+  const bearishPattern = '%SHORT%,IB_BEARISH,C_STANDALONE_DOWN,FAILED_AUCTION_SHORT,VALUE_AREA_RESPONSIVE_SHORT'.split(',');
+  const bullishPattern = '%LONG%,IB_BULLISH,C_STANDALONE_UP,FAILED_AUCTION_LONG,VALUE_AREA_RESPONSIVE_LONG'.split(',');
 
   const isBearish = (t) => t.includes('SHORT') || t.includes('BEARISH') || t === 'C_STANDALONE_DOWN';
   const isBullish = (t) => t.includes('LONG')  || t.includes('BULLISH') || t === 'C_STANDALONE_UP';
@@ -1036,8 +1118,12 @@ export default function createACDRouter(io) {
       if (r.rows.length === 0) return res.json(null);
       const bar = r.rows[0];
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const todayET = nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const monthYear = `${nowET.getFullYear()}-${String(nowET.getMonth() + 1).padStart(2, '0')}`;
-      const pivot = await query('SELECT * FROM acd_monthly_pivot WHERE month_year = $1', [monthYear]);
+      const [pivot, arQ] = await Promise.all([
+        query('SELECT * FROM acd_monthly_pivot WHERE month_year = $1', [monthYear]),
+        query('SELECT opening_call_type FROM auction_reads WHERE trade_date=$1', [todayET]),
+      ]);
       const pivotRow = pivot.rows[0];
       let pivotBias = null;
       if (pivotRow) {
@@ -1047,7 +1133,8 @@ export default function createACDRouter(io) {
         const s1 = parseFloat(pivotRow.pivot_s1);
         pivotBias = price > r1 ? 'ABOVE_R1' : price > pLevel ? 'ABOVE_PIVOT' : price > s1 ? 'BELOW_PIVOT' : 'BELOW_S1';
       }
-      res.json({ ts: bar.ts, close: parseFloat(bar.close), pivot: pivotRow || null, pivotBias, barAgeMinutes: Math.round((Date.now() - new Date(bar.ts).getTime()) / 60000) });
+      const opening_call_type = arQ.rows[0]?.opening_call_type || null;
+      res.json({ ts: bar.ts, close: parseFloat(bar.close), pivot: pivotRow || null, pivotBias, barAgeMinutes: Math.round((Date.now() - new Date(bar.ts).getTime()) / 60000), opening_call_type });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -1999,6 +2086,66 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // GET /api/engine-reads/hit-rates — historical hit rates from engine_reads table
+  // Used by dashboard to show calibrated conviction next to A signals and pre-market bias reads.
+  // N<20 decisive outcomes = not confident; never display a percentage as reliable below this threshold.
+  router.get('/engine-reads/hit-rates', async (req, res) => {
+    try {
+      // Compute overall and by-bias-context hit rates for each signal type+value
+      const rows = await query(`
+        SELECT read_type, signal_value, session_bias_context,
+          COUNT(*) FILTER (WHERE outcome IN ('CORRECT','WRONG')) AS decisive,
+          COUNT(*) FILTER (WHERE outcome = 'CORRECT')            AS correct,
+          COUNT(*) FILTER (WHERE outcome = 'WRONG')              AS wrong,
+          COUNT(*)                                               AS n
+        FROM engine_reads
+        WHERE outcome IS NOT NULL
+        GROUP BY read_type, signal_value, session_bias_context
+        ORDER BY read_type, signal_value, session_bias_context
+      `);
+
+      // Build structured result
+      // Keys: 'A_UP', 'A_DOWN', 'BIAS_LONG', 'BIAS_SHORT', 'BIAS_NEUTRAL'
+      const result = {};
+      for (const r of rows.rows) {
+        const decisive = parseInt(r.decisive), correct = parseInt(r.correct), wrong = parseInt(r.wrong), n = parseInt(r.n);
+        const hitRate  = decisive > 0 ? correct / decisive : null;
+        const confident = decisive >= 20;
+        const entry = { n, decisive, correct, wrong, hitRate, confident };
+
+        const key = r.read_type === 'A_SIGNAL' ? r.signal_value : `BIAS_${r.signal_value}`;
+        if (!result[key]) result[key] = { overall: null, byBias: {} };
+        if (r.session_bias_context) result[key].byBias[r.session_bias_context] = entry;
+      }
+
+      // Overall (all bias contexts combined) per signal type+value
+      const overall = await query(`
+        SELECT read_type, signal_value,
+          COUNT(*) FILTER (WHERE outcome IN ('CORRECT','WRONG')) AS decisive,
+          COUNT(*) FILTER (WHERE outcome = 'CORRECT')            AS correct,
+          COUNT(*) FILTER (WHERE outcome = 'WRONG')              AS wrong,
+          COUNT(*)                                               AS n
+        FROM engine_reads
+        WHERE outcome IS NOT NULL
+        GROUP BY read_type, signal_value
+      `);
+      for (const r of overall.rows) {
+        const decisive = parseInt(r.decisive), correct = parseInt(r.correct), wrong = parseInt(r.wrong), n = parseInt(r.n);
+        const hitRate  = decisive > 0 ? correct / decisive : null;
+        const confident = decisive >= 20;
+        const key = r.read_type === 'A_SIGNAL' ? r.signal_value : `BIAS_${r.signal_value}`;
+        if (!result[key]) result[key] = { overall: null, byBias: {} };
+        result[key].overall = { n, decisive, correct, wrong, hitRate, confident };
+      }
+
+      // NEW: level-touch (IB/PD/VWAP reversal-bounce rates) and combo (level-confluence)
+      // hit rates from setup_correlation_cache / combo_stats — same N>=20 confidence rule.
+      const [levelTouches, combos] = await Promise.all([getLevelTouchLookup(), getComboLookup()]);
+
+      res.json({ rates: result, levelTouches, combos, computedAt: new Date().toISOString() });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
   // GET /api/acd/setup-detection — detect the highest-priority intraday setup
   // Returns one setup card at a time. Priority: IB_CONFIRMATION > OPEN_DRIVE_CONT >
   // FAILED_AUCTION > BRACKET_BREAKOUT > VALUE_AREA_RESP
@@ -2008,7 +2155,10 @@ export default function createACDRouter(io) {
       const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const etMin   = nowET.getHours() * 60 + nowET.getMinutes();
 
-      // Expire stale + structurally invalid setups on every poll (before any other logic)
+      // Resolve setups by price FIRST (TARGET_HIT/STOP_HIT) — a real T1/stop touch must
+      // never be preempted by a timer or OR-break invalidation. Only setups still ACTIVE
+      // after this (i.e. neither level touched) fall through to expiry/invalidation below.
+      await resolveSetupsByPrice(io).catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 
@@ -2028,7 +2178,7 @@ export default function createACDRouter(io) {
       if (!isRTH) return res.json({ setup: null, reason: 'market closed' });
 
       // ── Fetch all data sources in parallel ────────────────────────────────────
-      const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow] = await Promise.all([
+      const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row] = await Promise.all([
         // Today's OR levels + ACD/C state
         query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
         // Auction reads for today
@@ -2061,6 +2211,13 @@ export default function createACDRouter(io) {
         query(`SELECT setup_type, fired_time FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time`, [todayET]),
         // Session high/low so far today (for TRT stop calculation)
         query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
+        // First 15 min of bars (9:30-9:45) for live opening-type classification
+        query(`
+          SELECT high::float, low::float, close::float, open::float
+          FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
+          ORDER BY ts
+        `, [todayET]),
       ]);
 
       // Prior day value area — cached (changes only between days)
@@ -2115,11 +2272,44 @@ export default function createACDRouter(io) {
       const orH = acdRow.rows[0]?.or_high, orL = acdRow.rows[0]?.or_low;
       const orRange = orH && orL ? orH - orL : null;
       const openingCall = arRow.rows[0]?.opening_call_type;
-      const openVsPrior = arRow.rows[0]?.open_vs_prior_value;
       const currentPrice = latestBarRow.rows[0]?.close || 0;
       const avgVol = parseFloat(volumeCtxRow.rows[0]?.avg_vol) || 0;
       const ibBars = ibBarsRow.rows;
       const timelineEvents = timelineRow.rows.map(r => r.setup_type);
+
+      // Live opening-type classification (first 15 min of bars, 9:30-9:45) — replaces
+      // the empty auction_reads.opening_call_type for OPEN_DRIVE/VALUE_AREA_RESPONSIVE
+      // gating below. Mirrors /acd/live's classifier (~line 1895) without persisting.
+      const first15 = first15Row.rows;
+      let liveOpeningCallType = null;
+      if (first15.length >= 5 && orH && orL) {
+        const h15 = Math.max(...first15.map(b => b.high));
+        const l15 = Math.min(...first15.map(b => b.low));
+        const lastPx = first15[first15.length - 1].close;
+        const orRng = orH - orL;
+        const ext = orRng * 0.3;
+        const ext50 = orRng * 0.5;
+        const aboveOR = h15 - orH;
+        const belowOR = orL - l15;
+
+        if (aboveOR > ext && belowOR > ext) {
+          liveOpeningCallType = 'OPEN_TEST_DRIVE';
+        } else if (aboveOR > ext50 && belowOR < ext * 0.3) {
+          liveOpeningCallType = 'OPEN_DRIVE';
+        } else if (belowOR > ext50 && aboveOR < ext * 0.3) {
+          liveOpeningCallType = 'OPEN_DRIVE';
+        } else if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH + orL) / 2) < orRng * 0.4) {
+          liveOpeningCallType = 'OPEN_REJECTION_REVERSE';
+        } else {
+          liveOpeningCallType = 'OPEN_AUCTION';
+        }
+      }
+
+      // Live open-vs-prior-value classification — replaces empty auction_reads.open_vs_prior_value
+      const orMid = (orH != null && orL != null) ? (orH + orL) / 2 : null;
+      const liveOpenVsPrior = (orMid != null && pdVAH != null && pdVAL != null)
+        ? (orMid > pdVAH ? 'ABOVE_VALUE' : orMid < pdVAL ? 'BELOW_VALUE' : 'INSIDE_VALUE')
+        : null;
 
       // ACD/C state for TRT and C detection
       const aUpFired   = !!acdRow.rows[0]?.a_up_fired;
@@ -2131,7 +2321,7 @@ export default function createACDRouter(io) {
       const sessionHigh = sessionHiLoRow.rows[0]?.h;
       const sessionLow  = sessionHiLoRow.rows[0]?.l;
 
-      // C already fired today? (prevents duplicate C_REVERSAL / C_STANDALONE per day)
+      // C already fired today? (prevents duplicate C_STANDALONE per day)
       const cFiredRow = await query(
         `SELECT 1 FROM active_setups WHERE trade_date=$1 AND setup_type LIKE 'C_%' LIMIT 1`,
         [todayET]
@@ -2167,6 +2357,23 @@ export default function createACDRouter(io) {
         return null;
       };
 
+      // Same direction-guard as t1Guard, but candidates are { value, label } pairs
+      // and the matching label travels with the chosen value — so the displayed
+      // target and its label can never disagree about which structural level was used.
+      // Used by the TRT family, where every candidate must be a REAL structural level
+      // (no arbitrary price+multiple fallbacks) — falls through to NO_VIABLE_TARGET
+      // rather than inventing an unanchored number.
+      const t1GuardLabeled = (direction, entry, ...candidates) => {
+        const isLong = direction === 'LONG';
+        for (const cand of candidates) {
+          const c = cand?.value;
+          if (c != null && isFinite(c) && (isLong ? c > entry : c < entry)) {
+            return { value: Math.round(c), label: cand.label };
+          }
+        }
+        return { value: null, label: 'NO_VIABLE_TARGET' };
+      };
+
       // ── SETUP 0a: TRT V2 (LONG) ──────────────────────────────────────────────
       // Early trigger: A Down fired, NO C confirmation in either direction, price crosses
       // back above OR Low. A Down sellers are trapped before any C fires — earlier entry
@@ -2175,15 +2382,20 @@ export default function createACDRouter(io) {
       if (aDownFired && !cDownConf && !cUpConf && currentPrice && orL &&
           currentPrice > orL &&
           !timelineEvents.some(e => e === 'TRT_LONG_V2' || e === 'TRT_LONG')) {
+        const trtLongV2Stop = +(aDownLevel - 12).toFixed(0);
+        const trtLongV2T1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange : null, label: 'OR Measured Move' },
+        );
         trtLongV2 = {
           type: 'TRT_LONG_V2', label: 'TRT V2 — EARLY REVERSAL (LONG)',
           direction: 'LONG',
           entry: +currentPrice.toFixed(0),
-          stop: sessionLow ? +sessionLow.toFixed(0) : +(aDownLevel - 12).toFixed(0),
-          target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80) * 1.5),
-          targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'Composite VAH',
+          stop: trtLongV2Stop,
+          target: trtLongV2T1.value,
+          targetLabel: trtLongV2T1.label,
           keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (A Down trapped)',
-          description: `A Down fired at ${aDownLevel?.toFixed(0)} but C Down never confirmed. Price reclaimed OR Low (${orL?.toFixed(0)}) — A Down sellers are trapped early. No C opposite required (earlier entry than classic TRT). Stop below session low (${sessionLow?.toFixed(0)}).`,
+          description: `A Down fired at ${aDownLevel?.toFixed(0)} but C Down never confirmed. Price reclaimed OR Low (${orL?.toFixed(0)}) — A Down sellers are trapped early. No C opposite required (earlier entry than classic TRT). Stop below A Down level (${trtLongV2Stop}).`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -2195,15 +2407,20 @@ export default function createACDRouter(io) {
       if (aUpFired && !cUpConf && !cDownConf && currentPrice && orH &&
           currentPrice < orH &&
           !timelineEvents.some(e => e === 'TRT_SHORT_V2' || e === 'TRT_SHORT')) {
+        const trtShortV2Stop = +(aUpLevel + 12).toFixed(0);
+        const trtShortV2T1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' },
+        );
         trtShortV2 = {
           type: 'TRT_SHORT_V2', label: 'TRT V2 — EARLY REVERSAL (SHORT)',
           direction: 'SHORT',
           entry: +currentPrice.toFixed(0),
-          stop: sessionHigh ? +sessionHigh.toFixed(0) : +(aUpLevel + 12).toFixed(0),
-          target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80) * 1.5),
-          targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'Composite VAL',
+          stop: trtShortV2Stop,
+          target: trtShortV2T1.value,
+          targetLabel: trtShortV2T1.label,
           keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (A Up trapped)',
-          description: `A Up fired at ${aUpLevel?.toFixed(0)} but C Up never confirmed. Price fell back below OR High (${orH?.toFixed(0)}) — A Up buyers are trapped early. No C opposite required (earlier entry than classic TRT). Stop above session high (${sessionHigh?.toFixed(0)}).`,
+          description: `A Up fired at ${aUpLevel?.toFixed(0)} but C Up never confirmed. Price fell back below OR High (${orH?.toFixed(0)}) — A Up buyers are trapped early. No C opposite required (earlier entry than classic TRT). Stop above A Up level (${trtShortV2Stop}).`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -2259,26 +2476,36 @@ export default function createACDRouter(io) {
       if (isMahBull || isMahBear) {
         if (isMahBull && aUpFired && cUpConf && currentPrice && orL && aUpLevel &&
             currentPrice < orL && currentPrice < aUpLevel) {
+          const trtMahShortStop = +(aUpLevel + 12).toFixed(0);
+          const trtMahShortT1 = t1GuardLabeled('SHORT', currentPrice,
+            { value: pdVAL, label: 'Prior Day VAL' },
+            { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' },
+          );
           trtMah = {
             type: 'TRT_MAH_SHORT', label: 'TRT + MAH (SHORT)',
             direction: 'SHORT',
             entry: +currentPrice.toFixed(0),
-            stop: sessionHigh ? +sessionHigh.toFixed(0) : +(aUpLevel + 12).toFixed(0),
-            target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80) * 1.5),
-            targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'Composite VAL',
+            stop: trtMahShortStop,
+            target: trtMahShortT1.value,
+            targetLabel: trtMahShortT1.label,
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (failed support)',
             description: `A Up + C Up both failed. NL30 at +${nl30} with 10+ consecutive extreme sessions. MAH: trapped buyers fuel a larger-than-normal reversal. Price below OR Low (${orL?.toFixed(0)}) and A Up level (${aUpLevel?.toFixed(0)}).`,
             history: await getHistory('TRENDING_UP'),
           };
         } else if (isMahBear && aDownFired && cDownConf && currentPrice && orH && aDownLevel &&
                    currentPrice > orH && currentPrice > aDownLevel) {
+          const trtMahLongStop = +(aDownLevel - 12).toFixed(0);
+          const trtMahLongT1 = t1GuardLabeled('LONG', currentPrice,
+            { value: pdVAH, label: 'Prior Day VAH' },
+            { value: (orH != null && orRange != null) ? orH + orRange : null, label: 'OR Measured Move' },
+          );
           trtMah = {
             type: 'TRT_MAH_LONG', label: 'TRT + MAH (LONG)',
             direction: 'LONG',
             entry: +currentPrice.toFixed(0),
-            stop: sessionLow ? +sessionLow.toFixed(0) : +(aDownLevel - 12).toFixed(0),
-            target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80) * 1.5),
-            targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'Composite VAH',
+            stop: trtMahLongStop,
+            target: trtMahLongT1.value,
+            targetLabel: trtMahLongT1.label,
             keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (failed resistance)',
             description: `A Down + C Down both failed. NL30 at ${nl30} with 10+ consecutive extreme sessions. MAH: trapped sellers fuel a larger-than-normal reversal. Price above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}).`,
             history: await getHistory('TRENDING_DOWN'),
@@ -2291,28 +2518,38 @@ export default function createACDRouter(io) {
       let trt = null;
       if (aUpFired && cUpConf && currentPrice && orL && aUpLevel &&
           currentPrice < orL && currentPrice < aUpLevel) {
+        const trtShortStop = +(aUpLevel + 12).toFixed(0);
+        const trtShortT1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' },
+        );
         trt = {
           type: 'TRT_SHORT', label: 'TRT — TREND REVERSAL (SHORT)',
           direction: 'SHORT',
           entry: +currentPrice.toFixed(0),
-          stop: sessionHigh ? +sessionHigh.toFixed(0) : +(aUpLevel + 12).toFixed(0),
-          target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80) * 1.5),
-          targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'Composite VAL',
+          stop: trtShortStop,
+          target: trtShortT1.value,
+          targetLabel: trtShortT1.label,
           keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (failed support)',
-          description: `A Up + C Up both failed. Price is now below OR Low (${orL?.toFixed(0)}) and A Up level (${aUpLevel?.toFixed(0)}). Trapped longs fuel the reversal — stop above session high.`,
+          description: `A Up + C Up both failed. Price is now below OR Low (${orL?.toFixed(0)}) and A Up level (${aUpLevel?.toFixed(0)}). Trapped longs fuel the reversal — stop above A Up level (${trtShortStop}).`,
           history: await getHistory('TRANSITIONAL'),
         };
       } else if (aDownFired && cDownConf && currentPrice && orH && aDownLevel &&
                  currentPrice > orH && currentPrice > aDownLevel) {
+        const trtLongStop = +(aDownLevel - 12).toFixed(0);
+        const trtLongT1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange : null, label: 'OR Measured Move' },
+        );
         trt = {
           type: 'TRT_LONG', label: 'TRT — TREND REVERSAL (LONG)',
           direction: 'LONG',
           entry: +currentPrice.toFixed(0),
-          stop: sessionLow ? +sessionLow.toFixed(0) : +(aDownLevel - 12).toFixed(0),
-          target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80) * 1.5),
-          targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'Composite VAH',
+          stop: trtLongStop,
+          target: trtLongT1.value,
+          targetLabel: trtLongT1.label,
           keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (failed resistance)',
-          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal.`,
+          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal — stop below A Down level (${trtLongStop}).`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -2371,7 +2608,7 @@ export default function createACDRouter(io) {
 
       // ── SETUP 4: OPEN DRIVE ───────────────────────────────────────────────────
       let openDrive = null;
-      if (openingCall === 'OPEN_DRIVE' && orH && orL && currentPrice) {
+      if (liveOpeningCallType === 'OPEN_DRIVE' && orH && orL && currentPrice) {
         const nearOrHigh = Math.abs(currentPrice - orH) <= 15 && currentPrice >= orH - 15 && currentPrice <= orH + 5;
         const nearOrLow  = Math.abs(currentPrice - orL) <= 15 && currentPrice <= orL + 15 && currentPrice >= orL - 5;
         const isBull = nearOrHigh && nl30State !== 'BEARISH';
@@ -2393,37 +2630,6 @@ export default function createACDRouter(io) {
               ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level. Buyers who missed the drive are entering here.`
               : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level. Sellers who missed the drive are entering here.`,
             history: await getHistory('TRENDING_UP'),
-          };
-        }
-      }
-
-      // ── SETUP 5: C REVERSAL ───────────────────────────────────────────────────
-      // First C signal today opposite to A signal — A failed, use the reversal
-      let cReversal = null;
-      if (!hasCFiredToday) {
-        if (aUpFired && currentPrice && orL && currentPrice < orL) {
-          cReversal = {
-            type: 'C_REVERSAL_SHORT', label: 'C REVERSAL (SHORT)',
-            direction: 'SHORT',
-            entry: +currentPrice.toFixed(0),
-            stop: +(orH + 4).toFixed(0),
-            target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
-            targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Range Extension',
-            keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
-            description: `A Up fired earlier today. First C Down: price closing below OR Low (${orL?.toFixed(0)}) signals A Up is failing. Entry on confirmed close below OR Low.`,
-            history: await getHistory('TRANSITIONAL'),
-          };
-        } else if (aDownFired && currentPrice && orH && currentPrice > orH) {
-          cReversal = {
-            type: 'C_REVERSAL_LONG', label: 'C REVERSAL (LONG)',
-            direction: 'LONG',
-            entry: +currentPrice.toFixed(0),
-            stop: +(orL - 4).toFixed(0),
-            target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80)),
-            targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'OR Range Extension',
-            keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High',
-            description: `A Down fired earlier today. First C Up: price closing above OR High (${orH?.toFixed(0)}) signals A Down is failing. Entry on confirmed close above OR High.`,
-            history: await getHistory('TRANSITIONAL'),
           };
         }
       }
@@ -2512,7 +2718,7 @@ export default function createACDRouter(io) {
 
       // ── SETUP 8: VALUE AREA RESPONSIVE ───────────────────────────────────────
       let valueAreaResp = null;
-      if (openVsPrior === 'INSIDE_VALUE' && openingCall !== 'OPEN_DRIVE' && currentPrice && pdVAH && pdVAL) {
+      if (liveOpenVsPrior === 'INSIDE_VALUE' && liveOpeningCallType !== 'OPEN_DRIVE' && currentPrice && pdVAH && pdVAL) {
         const nearVAH = Math.abs(currentPrice - pdVAH) <= 20;
         const nearVAL = Math.abs(currentPrice - pdVAL) <= 20;
         if (nearVAH || nearVAL) {
@@ -2569,7 +2775,26 @@ export default function createACDRouter(io) {
       }
 
       // ── Priority selection (spec order) ──────────────────────────────────────
-      const active = trtLongV2 || trtShortV2 || otdSetup || trtMah || trt || ibSetup || openDrive || cReversal || failedAuction || bracketBreakout || valueAreaResp || cStandalone || null;
+      // Integrity guard: a setup must not fire with the stop on the wrong side of
+      // entry (non-positive risk — e.g. VALUE_AREA_RESPONSIVE's ±8pt buffer can land
+      // past entry relative to where price already is vs the prior-day value area,
+      // and OPEN_DRIVE's orL-2/orH+2 stop can do the same when price has already
+      // drifted past the OR boundary by fire time). Such a setup is pre-invalidated
+      // at the moment of detection — reject it and fall through to the next-priority
+      // candidate rather than persisting a guaranteed-instant-stop "setup".
+      const candidates = [trtLongV2, trtShortV2, otdSetup, trtMah, trt, ibSetup, openDrive, failedAuction, bracketBreakout, valueAreaResp, cStandalone];
+      let active = null;
+      for (const cand of candidates) {
+        if (!cand) continue;
+        const isLongCand = cand.direction === 'LONG';
+        const riskOk = cand.stop == null || (isLongCand ? cand.stop < cand.entry : cand.stop > cand.entry);
+        if (!riskOk) {
+          console.error(`[setup-detection] REJECTED ${cand.type} — non-positive risk: stop ${cand.stop} vs entry ${cand.entry} (${cand.direction})`);
+          continue;
+        }
+        active = cand;
+        break;
+      }
       if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
@@ -2591,7 +2816,6 @@ export default function createACDRouter(io) {
         OPEN_TEST_DRIVE_SHORT: 45, OPEN_TEST_DRIVE_LONG: 45,
         IB_BULLISH: null, IB_BEARISH: null,
         OPEN_DRIVE_LONG: null, OPEN_DRIVE_SHORT: null,
-        C_REVERSAL_SHORT: 40, C_REVERSAL_LONG: 40,
         C_STANDALONE_UP: null, C_STANDALONE_DOWN: null,
         FAILED_AUCTION_SHORT: 30, FAILED_AUCTION_LONG: 30,
         VALUE_AREA_RESPONSIVE_SHORT: null, VALUE_AREA_RESPONSIVE_LONG: null,
@@ -2617,7 +2841,7 @@ export default function createACDRouter(io) {
       };
 
       const existingSetup = await query(`
-        SELECT id, fired_at::text as fired_at
+        SELECT id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         FROM active_setups WHERE trade_date=$1 AND setup_type=$2
         ORDER BY fired_at DESC LIMIT 1
       `, [todayET, active.type]);
@@ -2635,10 +2859,22 @@ export default function createACDRouter(io) {
         }
       }
 
-      let detectedAt, setupId;
+      // The persisted active_setups row is the ONE canonical source for tradeable
+      // levels (entry/stop/target). Once a setup is detected, those levels are frozen
+      // for its lifetime — the live recompute above (`active.entry/stop/target`) only
+      // feeds the INSERT on first detection; every subsequent poll must echo back the
+      // persisted row so the card never shows a drifting, per-poll-recomputed target.
+      let detectedAt, setupId, persistedLevels;
       if (existingSetup.rows.length) {
-        detectedAt = existingSetup.rows[0].fired_at.slice(11, 16); // HH:MM
-        setupId    = existingSetup.rows[0].id;
+        const row = existingSetup.rows[0];
+        detectedAt = row.fired_at.slice(11, 16); // HH:MM
+        setupId    = row.id;
+        persistedLevels = {
+          entry: row.entry_zone_low != null ? +row.entry_zone_low : active.entry,
+          stop: row.stop_level != null ? +row.stop_level : active.stop,
+          target: row.t1_level != null ? +row.t1_level : null,
+          targetLabel: row.t1_label || 'NO_VIABLE_TARGET',
+        };
       } else {
         const hist = active.history || {};
         const ins = await query(`
@@ -2649,7 +2885,7 @@ export default function createACDRouter(io) {
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection
           ) VALUES ($1,$2,$3,$4,'ACTIVE',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-          ON CONFLICT DO NOTHING RETURNING id
+          ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
           active.entry, active.entry, active.stop, safeT1Level, safeT1Label,
@@ -2657,8 +2893,26 @@ export default function createACDRouter(io) {
           hist.winRate ?? null, hist.occurrences ?? null, hist.avgPnl ?? null, hist.t1HitRate ?? null,
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
         ]);
-        setupId    = ins.rows[0]?.id;
-        detectedAt = firedTimeStr.slice(0, 5);
+        let row = ins.rows[0];
+        if (!row) {
+          // ON CONFLICT DO NOTHING — a concurrent poll won the race and persisted first.
+          // Re-select so we still serve the canonical persisted row, not our live recompute.
+          const won = await query(`
+            SELECT id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
+            FROM active_setups WHERE trade_date=$1 AND setup_type=$2
+            ORDER BY fired_at DESC LIMIT 1
+          `, [todayET, active.type]);
+          row = won.rows[0];
+          if (row) detectedAt = row.fired_at.slice(11, 16);
+        }
+        setupId    = row?.id;
+        detectedAt = detectedAt || firedTimeStr.slice(0, 5);
+        persistedLevels = row ? {
+          entry: row.entry_zone_low != null ? +row.entry_zone_low : active.entry,
+          stop: row.stop_level != null ? +row.stop_level : active.stop,
+          target: row.t1_level != null ? +row.t1_level : null,
+          targetLabel: row.t1_label || 'NO_VIABLE_TARGET',
+        } : { entry: active.entry, stop: active.stop, target: safeT1Level, targetLabel: safeT1Label };
         // Backward compat: also write to acd_setup_events
         await query(`
           INSERT INTO acd_setup_events (trade_date, setup_type, fired_time, fired_price)
@@ -2670,32 +2924,42 @@ export default function createACDRouter(io) {
       const minsRemaining = Math.max(0, Math.round((new Date(expiresAt) - etNow) / 60000));
       const isExpired = minsRemaining === 0;
 
-      res.json({ setup: { ...active, detectedAt, minsRemaining, isExpired, setupId }, noNewEntries: !!noNewEntries });
+      res.json({
+        setup: {
+          ...active,
+          entry: persistedLevels.entry,
+          stop: persistedLevels.stop,
+          target: persistedLevels.target,
+          targetLabel: persistedLevels.targetLabel,
+          detectedAt, minsRemaining, isExpired, setupId,
+        },
+        noNewEntries: !!noNewEntries,
+      });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   });
 
-  // ── Static baseline stats (Edge Analysis, pre-active_setups data) ─────────
-  const SETUP_BASELINES = {
-    IB_BULLISH:                  { winRate: 0.875,  sessions: 32,  t1HitRate: 0.75  },
-    IB_BEARISH:                  { winRate: 0.875,  sessions: 32,  t1HitRate: 0.75  },
-    OPEN_DRIVE_LONG:             { winRate: 0.701,  sessions: 167, t1HitRate: 0.60  },
-    OPEN_DRIVE_SHORT:            { winRate: 0.701,  sessions: 167, t1HitRate: 0.60  },
-    TRT_LONG:                    { winRate: null,   sessions: null, t1HitRate: null  },
-    TRT_SHORT:                   { winRate: null,   sessions: null, t1HitRate: null  },
-    TRT_LONG_V2:                 { winRate: null,   sessions: null, t1HitRate: null  },
-    TRT_SHORT_V2:                { winRate: null,   sessions: null, t1HitRate: null  },
-    TRT_MAH_LONG:                { winRate: null,   sessions: null, t1HitRate: null  },
-    TRT_MAH_SHORT:               { winRate: null,   sessions: null, t1HitRate: null  },
-    C_REVERSAL_LONG:             { winRate: null,   sessions: null, t1HitRate: null  },
-    C_REVERSAL_SHORT:            { winRate: null,   sessions: null, t1HitRate: null  },
-    FAILED_AUCTION_LONG:         { winRate: null,   sessions: null, t1HitRate: null  },
-    FAILED_AUCTION_SHORT:        { winRate: null,   sessions: null, t1HitRate: null  },
-    BRACKET_BREAKOUT_LONG:       { winRate: null,   sessions: null, t1HitRate: null  },
-    BRACKET_BREAKOUT_SHORT:      { winRate: null,   sessions: null, t1HitRate: null  },
-    VALUE_AREA_RESPONSIVE_LONG:  { winRate: null,   sessions: null, t1HitRate: null  },
-    VALUE_AREA_RESPONSIVE_SHORT: { winRate: null,   sessions: null, t1HitRate: null  },
-    C_STANDALONE_UP:             { winRate: null,   sessions: null, t1HitRate: null  },
-    C_STANDALONE_DOWN:           { winRate: null,   sessions: null, t1HitRate: null  },
+  // ── Replayed baseline stats (replaces hardcoded SETUP_BASELINES) ──────────
+  // Source: setup_daytype_winrates, populated by scripts/replay_all_setups.js +
+  // scripts/populate_setup_daytype_winrates.js — a full-history replay of the
+  // CURRENT detection rules (incl. the negative-risk/zero-reward integrity guard),
+  // resolved with the current price-vs-T1/stop logic. The 'OVERALL' row is the
+  // blended (all day types) baseline; TREND/BALANCE/TURBULENT rows back the
+  // conditional-edge display on setup cards.
+  const getReplayBaseline = async (setupType) => {
+    const r = await query(`
+      SELECT day_type, n, decided_n, win_rate, limited_sample
+      FROM setup_daytype_winrates
+      WHERE setup_type=$1 AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
+    `, [setupType]).catch(() => ({ rows: [] }));
+    const byDayType = {};
+    for (const row of r.rows) {
+      byDayType[row.day_type] = {
+        n: row.n, decidedN: row.decided_n,
+        winRate: row.win_rate != null ? parseFloat(row.win_rate) : null,
+        limitedSample: row.limited_sample,
+      };
+    }
+    return byDayType;
   };
 
   const MIN_SAMPLE = 5; // minimum resolved setups before live stats override baseline
@@ -2716,7 +2980,8 @@ export default function createACDRouter(io) {
         FROM active_setups WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND fired_at >= NOW() - INTERVAL '30 days'
     `, [setupType]).catch(() => ({ rows: [] }));
 
-    const baseline = SETUP_BASELINES[setupType] || {};
+    const byDayType = await getReplayBaseline(setupType);
+    const overall = byDayType.OVERALL || null;
     const fmt = (rows, tf) => {
       const row = rows.find(r => r.tf === tf);
       const n = row ? parseInt(row.total) : 0;
@@ -2728,14 +2993,14 @@ export default function createACDRouter(io) {
           avgPnl: row.avg_pnl != null ? parseFloat(row.avg_pnl) : null,
         };
       }
-      // Fall back to baseline for all-time; null for shorter windows
-      if (tf === 'all' && baseline.winRate != null) {
-        return { winRate: baseline.winRate, sessions: baseline.sessions, t1HitRate: baseline.t1HitRate, avgPnl: null, isBaseline: true };
+      // Fall back to the full-history replay baseline for all-time; null for shorter windows
+      if (tf === 'all' && overall?.winRate != null) {
+        return { winRate: overall.winRate, sessions: overall.n, t1HitRate: null, avgPnl: null, isBaseline: true, limitedSample: overall.limitedSample };
       }
       return null;
     };
 
-    return { allTime: fmt(r.rows, 'all'), d90: fmt(r.rows, '90d'), d30: fmt(r.rows, '30d') };
+    return { allTime: fmt(r.rows, 'all'), d90: fmt(r.rows, '90d'), d30: fmt(r.rows, '30d'), byDayType };
   };
 
   // ── GET /api/setups/active ─────────────────────────────────────────────────
@@ -2805,7 +3070,6 @@ export default function createACDRouter(io) {
     TRT_LONG_V2: 'ib_low', TRT_SHORT_V2: 'ib_high',
     OPEN_DRIVE_LONG: 'ib_high', OPEN_DRIVE_SHORT: 'ib_low',
     C_STANDALONE_UP: 'ib_high', C_STANDALONE_DOWN: 'ib_low',
-    C_REVERSAL_LONG: 'ib_low', C_REVERSAL_SHORT: 'ib_high',
     BRACKET_BREAKOUT_LONG: 'bracket_high', BRACKET_BREAKOUT_SHORT: 'bracket_low',
     VALUE_AREA_RESPONSIVE_LONG: 'composite_val', VALUE_AREA_RESPONSIVE_SHORT: 'composite_vah',
     FAILED_AUCTION_LONG: 'bracket_low', FAILED_AUCTION_SHORT: 'bracket_high',

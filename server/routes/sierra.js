@@ -122,7 +122,27 @@ export default function createSierraRouter(io, sierraWatcher) {
         proc.on('error', reject);
       });
 
-      emitProgress(8, 'Export complete — importing trades...', 'success');
+      emitProgress(8, 'Export complete — importing trades...', 'running');
+
+      // Actually import today's file
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const sierraDir = '/mnt/c/SierraChart/SavedTradeActivity/';
+      const todayFile = path.join(sierraDir, `TradeActivityLogExport_${todayET}.txt`);
+
+      if (!fs.existsSync(todayFile)) {
+        emitProgress(8, `File not found: TradeActivityLogExport_${todayET}.txt`, 'error');
+        return;
+      }
+
+      try {
+        const result = await manualImportFromFile(todayFile, 'MANUAL');
+        emitProgress(9, `Done — ${result.imported} new fills added, ${result.skipped} already in DB`, 'success');
+        io.emit('trades-updated', { imported: result.imported, skipped: result.skipped, file: `TradeActivityLogExport_${todayET}.txt`, timestamp: new Date() });
+        checkAndEmitDLL(io).catch(() => {});
+        checkAndEmitProfitLock(io).catch(() => {});
+      } catch (importErr) {
+        emitProgress(9, `Import error: ${importErr.message}`, 'error');
+      }
     } catch (err) {
       console.error('Export trigger error:', err.message);
       io.emit('sync-progress', { step: -1, message: err.message, status: 'error', timestamp: new Date() });

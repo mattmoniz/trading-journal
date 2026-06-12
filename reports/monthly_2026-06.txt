@@ -1,0 +1,58 @@
+TRADING JOURNAL — MONTHLY REPORT
+Month         : 2026-06  (2026-06-01 – 2026-06-30)
+Generated     : 2026-06-11T21:38:58.200Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 9
+Total P&L     : +$2802.00
+Daily avg     : +$311.33
+Daily σ       : $935.43
+Win days      : 5 / 9 (55.6%)
+Best day      : 2026-06-09  +$2002.50
+Worst day     : 2026-06-05  -$771.50
+
+SETUP STATISTICS
+----------------------------------------
+IB_BEARISH                     fired: 5 | wins: 2 | losses: 1 | expired: 1 | wr: 66.7% | avg pnl: +$343.33
+OPEN_TEST_DRIVE_SHORT          fired: 4 | wins: 1 | losses: 2 | expired: 1 | wr: 33.3% | avg pnl: -$116.67
+C_STANDALONE_DOWN              fired: 3 | wins: 1 | losses: 1 | expired: 1 | wr: 50.0% | avg pnl: -$275.00
+C_STANDALONE_UP                fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0.0% | avg pnl: -$893.33
+OPEN_TEST_DRIVE_LONG           fired: 3 | wins: 1 | losses: 1 | expired: 1 | wr: 50.0% | avg pnl: -$72.50
+IB_BULLISH                     fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33.3% | avg pnl: -$806.67
+FAILED_AUCTION_LONG            fired: 3 | wins: 0 | losses: 1 | expired: 1 | wr: 0.0% | avg pnl: -$445.00
+TRT_MAH_SHORT                  fired: 2 | wins: 0 | losses: 1 | expired: 1 | wr: 0.0% | avg pnl: -$900.00
+TRT_LONG                       fired: 2 | wins: 0 | losses: 0 | expired: 2 | wr: unresolved
+BRACKET_BREAKOUT_LONG          fired: 2 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+TRT_SHORT_V2                   fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+Sessions      : 9
+A Up fired    : 4 | C confirmed: 3 (75.0%)
+A Down fired  : 4 | C confirmed: 4 (100.0%)
+Net score     : -3  (avg -0.33/session)
+Day types     : Trend 0 / Normal 0 / Neutral 0
+
+EDGE VALIDATION (confluence buckets)
+----------------------------------------
+Confluence bucket | Fired | W | L | Win% | Avg P&L
+------------------------------------------------------------
+no_score          | 31    | 6 | 12| 33.3% | -$358.89
+
+BACKTEST DRIFT
+----------------------------------------
+IB_BEARISH                     live: 40.0% (n=5) vs baseline 87.5% (n=32) | drift: -47.5pp ⚠ SIGNIFICANT DRIFT
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this month.
+
+INTERPRETATION (AI)
+----------------------------------------
+This month shows a profitable but highly volatile performance (+$2,802 across 9 days) driven primarily by one exceptional day (+$2,002.50 on June 9th), masking concerning underlying deterioration in edge consistency. The most alarming trend is the massive -47.5pp drift in IB_BEARISH performance versus baseline (40% vs 87.5% historical win rate), suggesting this previously reliable setup has fundamentally broken down. Long-biased setups are performing terribly with C_STANDALONE_UP posting 0% win rate and IB_BULLISH severely underperforming, while the confluence scoring system appears completely ineffective with 33% of "no_score" trades winning versus what should be random performance.
+
+The ACD signal accuracy shows reasonable A-to-C confirmation rates (75% up, 100% down), but the lack of classified day types suggests market structure recognition is failing. Two immediate adjustments for next month: 1) Temporarily suspend all IB_BEARISH trades until the 47.5pp drift is diagnosed and resolved through paper trading or reduced position sizing, and 2) Implement a minimum confluence score threshold to eliminate "no_score" trades entirely, forcing only high-conviction setups with proper edge validation.
+
+============================================================

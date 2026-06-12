@@ -213,14 +213,18 @@ router.get('/stats/pnl-distribution', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// POLICY: entry_time and exit_time are stored as ET wall-clock (normalized 2026-06-08).
+// Do NOT apply AT TIME ZONE conversion — they are already ET. Double-shifting will corrupt
+// time-bucketed displays (By Hour, By DOW, Timing Heatmap). Use EXTRACT directly.
+
 // Timing heatmap: weekday × hour average P&L
 router.get('/stats/timing-heatmap', async (req, res) => {
   try {
     const { where, params } = buildWhere(req.query);
     const result = await query(`
       SELECT
-        EXTRACT(DOW FROM exit_time AT TIME ZONE 'America/New_York') as dow,
-        EXTRACT(HOUR FROM exit_time AT TIME ZONE 'America/New_York') as hour,
+        EXTRACT(DOW FROM exit_time) as dow,
+        EXTRACT(HOUR FROM exit_time) as hour,
         ROUND(AVG(pnl)::numeric, 2) as avg_pnl,
         COUNT(*) as trade_count,
         ROUND(SUM(pnl)::numeric, 2) as total_pnl
@@ -311,7 +315,8 @@ router.get('/stats/excursion', async (req, res) => {
     };
     const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 
-    const captureRows = rows.filter(r => parseFloat(r.mfe) > 0);
+    // Winners only: losers have negative pnl/mfe ratios that drag the average into nonsense territory
+    const captureRows = rows.filter(r => parseFloat(r.mfe) > 0 && parseFloat(r.pnl) > 0);
     const mfeCaptures = captureRows.map(r => parseFloat(r.pnl) / parseFloat(r.mfe) * 100);
 
     const step = Math.max(1, Math.floor(rows.length / 500));
@@ -446,7 +451,8 @@ router.get('/stats/optimization', async (req, res) => {
     };
     const mfes = withBars.map(t => t.mfe);
     const maes = withBars.map(t => t.mae);
-    const captures = withBars.filter(t => t.mfe_capture != null).map(t => t.mfe_capture);
+    // Winners only: losers have negative ratios that make the average meaningless
+    const captures = withBars.filter(t => t.mfe_capture != null && t.pnl > 0).map(t => t.mfe_capture);
     const winsO  = enriched.filter(t => t.pnl > 0);
     const lossesO = enriched.filter(t => t.pnl < 0);
 
@@ -527,11 +533,34 @@ router.get('/stats/optimization', async (req, res) => {
       }));
     };
 
-    const mfeDist  = buildDist(mfes, mfeBuckets);
-    const maeDist  = buildDist(maes, maeBuckets);
+    const mfeDist    = buildDist(mfes, mfeBuckets);
+    const maeDist    = buildDist(maes, maeBuckets);
     const winMaeDist = buildDist(winMaes, maeBuckets);
 
-    res.json({ summary, byHour, byVwap, mfeDist, maeDist, winMaeDist, trades: enriched });
+    // Stop placement: for each stop distance, simulate replacing stopped-out trades with -stopDist exit
+    const actualPtsTotal = withBars.reduce((s, t) => s + t.actual_pts, 0);
+    const stopPlacement = [5, 10, 15, 20, 25, 30, 40, 50, 75].map(stopDist => {
+      let simPts = 0;
+      let stoppedCount = 0;
+      for (const t of withBars) {
+        if (t.mae > stopDist) {
+          simPts += -stopDist;
+          stoppedCount++;
+        } else {
+          simPts += t.actual_pts;
+        }
+      }
+      return {
+        stop_dist:      stopDist,
+        stopped_count:  stoppedCount,
+        pct_stopped:    +(stoppedCount / withBars.length * 100).toFixed(1),
+        sim_pnl_pts:    +simPts.toFixed(1),
+        actual_pnl_pts: +actualPtsTotal.toFixed(1),
+        delta_pts:      +(simPts - actualPtsTotal).toFixed(1),
+      };
+    });
+
+    res.json({ summary, byHour, byVwap, mfeDist, maeDist, winMaeDist, stopPlacement, trades: enriched });
   } catch (err) {
     console.error('Optimization error:', err);
     res.status(500).json({ error: err.message });

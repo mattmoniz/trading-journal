@@ -391,12 +391,29 @@ router.get('/auction-read/auto', async (req, res) => {
     // IB High (= OR High for A-up target)
     const ibHigh  = orH || null;
 
+    // G-Line (weekly open) + prior week high/low — structural reference levels for pre-market
+    const gLine = await getGLine(todayET);
+    const pwQ = await query(`
+      SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
+      FROM price_bars WHERE symbol='NQ'
+        AND ts::date >= date_trunc('week', ($1::text)::date) - INTERVAL '7 days'
+        AND ts::date < date_trunc('week', ($1::text)::date)
+        AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+    `, [todayET]);
+    const pwHigh = pwQ.rows[0]?.pw_high || null;
+    const pwLow  = pwQ.rows[0]?.pw_low  || null;
+
+    // Latest price for pre-market display
+    const latestClose = latestBar.rows[0]?.close || null;
+
     res.json({
       open_vs_prior_value, overnight_inventory, or_condition, prior_day_profile,
       prior_day_vah: vah || null, prior_day_val: val || null, prior_day_poc: poc || null,
       avg_or_range: avgRange, today_or_range: orRange, or_range_stddev: sdRange,
       ovn_high: ovnHigh, ovn_low: ovnLow,
       ib_high: ibHigh, ib_low: orL || null, ib_low_1x: ibLow1x,
+      g_line: gLine || null, pw_high: pwHigh, pw_low: pwLow,
+      latest_close: latestClose,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -440,11 +457,14 @@ router.post('/auction-read/correlation/compute', async (req, res) => {
       const pd = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorDate])).rows[0];
       const va = (await query(`WITH vp AS (SELECT ROUND(low/0.25)*0.25 px, SUM(volume) vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25), t AS (SELECT SUM(vol) t FROM vp), pr AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1) SELECT p2.px::float poc, (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float vah, (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float val FROM vp, pr p2 GROUP BY p2.px LIMIT 1`, [priorDate])).rows[0];
       const acd = (await query(`SELECT or_high::float oh, or_low::float ol FROM acd_daily_log WHERE trade_date=$1`, [date])).rows[0];
+      const on = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)`, [priorDate])).rows[0];
+      const orMid = (acd?.oh != null && acd?.ol != null) ? (parseFloat(acd.oh) + parseFloat(acd.ol)) / 2 : null;
 
       const levels = [
         {k:'IBH',p:acd?.oh,t:'resistance'},{k:'IBL',p:acd?.ol,t:'support'},
         {k:'PD VAH',p:va?.vah,t:'resistance'},{k:'PD VAL',p:va?.val,t:'support'},
         {k:'PD High',p:pd?.h,t:'resistance'},{k:'PD Low',p:pd?.l,t:'support'},
+        {k:'ON High',p:on?.h,t:'resistance'},{k:'ON Low',p:on?.l,t:'support'},
       ].filter(l=>l.p);
 
       const bkey = bias_dir || 'NEUTRAL';
@@ -477,6 +497,23 @@ router.post('/auction-read/correlation/compute', async (req, res) => {
         acc[bkey][k].tested++;
         if (mv>=MIN){acc[bkey][k].profitable++;acc[bkey][k].pts.push(Math.round(mv));}
         break;
+      }
+      // OR Mid — pivot level, no fixed polarity. Type for each touch is determined by the
+      // approach direction (price coming from above = test as resistance/support-from-above,
+      // i.e. does it hold and reject back the way it came). Same bounce/hold semantics as IBH/IBL.
+      if (orMid != null) {
+        for (let i=11; i<bars.length-BARS; i++) {
+          const b=bars[i], prev=bars[i-1];
+          const touched = b.l<=orMid+TOUCH && b.h>=orMid-TOUCH;
+          if (!touched) continue;
+          const fromAbove = prev.c > orMid;
+          const fut=bars.slice(i+1,i+BARS+1);
+          const mv = fromAbove ? orMid-Math.min(...fut.map(x=>x.l)) : Math.max(...fut.map(x=>x.h))-orMid;
+          if (!acc[bkey]['OR Mid']) acc[bkey]['OR Mid']={tested:0,profitable:0,pts:[]};
+          acc[bkey]['OR Mid'].tested++;
+          if (mv>=MIN){acc[bkey]['OR Mid'].profitable++;acc[bkey]['OR Mid'].pts.push(Math.round(mv));}
+          break;
+        }
       }
     }
 
@@ -700,6 +737,37 @@ router.get('/auction-read/history', async (req, res) => {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
           ON CONFLICT (date) DO NOTHING
         `, [r.date, r.priorDay, r.priorProfile, r.nlTrend, r.nl30, r.inv, r.valPos, r.orCond, r.biasDir, r.conflict, r.outcome, r.actualDir, r.acdScore, r.ptsVsOpen, r.orHigh, r.orLow, r.aUpLevel, r.aDownLevel, r.aUpFired, r.aDownFired, r.priorVAH, r.priorVAL, r.priorPOC, r.sessionHigh, r.sessionLow, r.sessionClose, r.sessionOpen, r.pivotBias, JSON.stringify(r.bars)]);
+
+        // Persist engine reads to engine_reads for accuracy tracking
+        // PREMARKET_BIAS read + outcome
+        await query(`
+          INSERT INTO engine_reads (trade_date, read_type, signal_value, nl30, or_cond, predicted_direction, outcome, pts_vs_open, outcome_detail, evaluated_at)
+          VALUES ($1,'PREMARKET_BIAS',$2,$3,$4,$5,$6,$7,$8,NOW())
+          ON CONFLICT (trade_date, read_type, signal_value) DO UPDATE SET
+            outcome=EXCLUDED.outcome, pts_vs_open=EXCLUDED.pts_vs_open,
+            outcome_detail=EXCLUDED.outcome_detail, evaluated_at=EXCLUDED.evaluated_at
+        `, [r.date, r.biasDir || 'NEUTRAL', r.nl30, r.orCond,
+            r.biasDir === 'LONG' ? 'LONG' : r.biasDir === 'SHORT' ? 'SHORT' : 'NEUTRAL',
+            r.outcome, r.ptsVsOpen,
+            `actual_dir:${r.actualDir} pts_vs_open:${r.ptsVsOpen}`]);
+
+        // A_SIGNAL read + outcome (if fired)
+        if (r.aUpFired || r.aDownFired) {
+          const sigVal = r.aUpFired ? 'A_UP' : 'A_DOWN';
+          const sigDir = r.aUpFired ? 'LONG' : 'SHORT';
+          const sigOutcome = r.aUpFired
+            ? (r.ptsVsOpen >  15 ? 'CORRECT' : r.ptsVsOpen < -15 ? 'WRONG' : 'NEUTRAL')
+            : (r.ptsVsOpen < -15 ? 'CORRECT' : r.ptsVsOpen >  15 ? 'WRONG' : 'NEUTRAL');
+          await query(`
+            INSERT INTO engine_reads (trade_date, read_type, signal_value, session_bias_context, nl30, or_cond, predicted_direction, outcome, pts_vs_open, outcome_detail, evaluated_at)
+            VALUES ($1,'A_SIGNAL',$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+            ON CONFLICT (trade_date, read_type, signal_value) DO UPDATE SET
+              session_bias_context=EXCLUDED.session_bias_context,
+              outcome=EXCLUDED.outcome, pts_vs_open=EXCLUDED.pts_vs_open,
+              outcome_detail=EXCLUDED.outcome_detail, evaluated_at=EXCLUDED.evaluated_at
+          `, [r.date, sigVal, r.biasDir, r.nl30, r.orCond, sigDir, sigOutcome, r.ptsVsOpen,
+              `bias:${r.biasDir} actual_dir:${r.actualDir} pts_vs_open:${r.ptsVsOpen}`]);
+        }
       } catch(e) { /* skip individual save errors */ }
     }
 
@@ -890,6 +958,7 @@ router.get('/auction-read/midday', async (req, res) => {
       vwap, gLine: gLine ? Math.round(gLine) : null, pwHigh: pwHigh ? Math.round(pwHigh) : null, pwLow: pwLow ? Math.round(pwLow) : null,
       orHigh: Math.round(acdRow.or_high), orLow: Math.round(acdRow.or_low),
       aUpFired: !!acdRow.a_up_fired, aDownFired: !!acdRow.a_down_fired,
+      ibHighBroken: sessHigh > acdRow.or_high, ibLowBroken: sessLow < acdRow.or_low,
       p3Score, p3Source, dayTypeDeveloping, watches,
     };
     res.json(snap);

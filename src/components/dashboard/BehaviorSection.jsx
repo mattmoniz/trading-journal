@@ -1,6 +1,14 @@
 import React from 'react';
-import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, ReferenceLine, Legend } from 'recharts';
 import { formatNumber } from '../../utils/format.js';
+import { SectionUpdateDot } from '../shared/UpdateDot.jsx';
+
+const BUCKET_META = {
+  loss_under1:  { label: '< 1 min (revenge)', color: '#ef4444' },
+  loss_1to5:    { label: '1–5 min',           color: '#f97316' },
+  loss_5to15:   { label: '5–15 min',          color: '#f59e0b' },
+  loss_over15:  { label: '> 15 min (cooldown)', color: '#10b981' },
+};
 
 export default function BehaviorSection({ behaviorData }) {
   if (!behaviorData) return null;
@@ -9,7 +17,7 @@ export default function BehaviorSection({ behaviorData }) {
 
   return (
     <section id="section-behavior" className="behavior-section">
-      <h2>Trading Behavior Analysis <span className="sub-text">({behaviorData.totalDays} trading days)</span></h2>
+      <h2>Trading Behavior Analysis <span className="sub-text">({behaviorData.totalDays} trading days)</span><SectionUpdateDot id="behavior-reentry-2026-06" /></h2>
 
       {/* Intraday Pattern Distribution */}
       <div className="behavior-grid">
@@ -135,11 +143,12 @@ export default function BehaviorSection({ behaviorData }) {
       {Object.keys(behaviorData.reentry).length > 0 && (() => {
         const r = behaviorData.reentry;
         const rows = [
-          { label: 'After LOSS — re-enter < 1 min', key: 'loss_under1', alert: true },
-          { label: 'After LOSS — re-enter 1–5 min', key: 'loss_1to5', alert: false },
-          { label: 'After LOSS — re-enter > 5 min', key: 'loss_over5', alert: false },
-          { label: 'After WIN — re-enter < 1 min', key: 'win_under1', alert: false },
-          { label: 'After WIN — re-enter > 1 min', key: 'win_over1', alert: false },
+          { label: 'After LOSS — re-enter < 1 min',   key: 'loss_under1',  alert: true,     cooldown: false },
+          { label: 'After LOSS — re-enter 1–5 min',  key: 'loss_1to5',   alert: false,    cooldown: false },
+          { label: 'After LOSS — re-enter 5–15 min', key: 'loss_5to15',  alert: false,    cooldown: false },
+          { label: 'After LOSS — re-enter > 15 min ✓ cooldown', key: 'loss_over15', alert: false, cooldown: true },
+          { label: 'After WIN — re-enter < 1 min',   key: 'win_under1',  alert: false,    cooldown: false },
+          { label: 'After WIN — re-enter > 1 min',   key: 'win_over1',   alert: false,    cooldown: false },
         ].filter(row => r[row.key]);
         return (
           <div className="reentry-section">
@@ -159,18 +168,85 @@ export default function BehaviorSection({ behaviorData }) {
                 {rows.map(row => {
                   const d = r[row.key];
                   const isGood = d.avgPnl > 0 && d.winPct >= 45;
+                  const rowStyle = row.cooldown
+                    ? { background: 'rgba(16,185,129,0.08)', borderLeft: '3px solid rgba(16,185,129,0.5)' }
+                    : {};
                   return (
-                    <tr key={row.key} className={row.alert ? 'alert-row' : ''}>
-                      <td>{row.label}</td>
+                    <tr key={row.key} className={row.alert ? 'alert-row' : ''} style={rowStyle}>
+                      <td style={row.cooldown ? { fontWeight: 600, color: '#10b981' } : {}}>{row.label}</td>
                       <td>{d.count}</td>
                       <td className={d.avgPnl >= 0 ? 'positive' : 'negative'}>${formatNumber(d.avgPnl)}</td>
                       <td className={d.winPct >= 50 ? 'positive' : 'negative'}>{d.winPct}%</td>
-                      <td className="sub-text">{row.alert && d.avgPnl < 0 ? '⚠ Revenge trading risk' : isGood ? '✓ Good discipline' : ''}</td>
+                      <td className="sub-text">
+                        {row.cooldown && isGood ? '✓ Cooldown works' :
+                         row.cooldown ? '→ The target behavior' :
+                         row.alert && d.avgPnl < 0 ? '⚠ Revenge trading risk' :
+                         isGood ? '✓ Good discipline' : ''}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+        );
+      })()}
+
+      {/* Rolling 90-instance win rate trend by re-entry timing bucket */}
+      {behaviorData.reentryTrend && behaviorData.reentryTrend.length > 0 && (() => {
+        const trend = behaviorData.reentryTrend;
+        const activeBuckets = Object.keys(BUCKET_META).filter(b =>
+          trend.some(p => p[b] != null)
+        );
+        return (
+          <div className="reentry-section">
+            <h3>Re-entry Win Rate — Rolling 90 Instances</h3>
+            <p className="sub-text" style={{ marginBottom: 12 }}>
+              Rolling win rate of the last 90 occurrences per bucket. Green line rising = learning to wait longer after a loss.
+            </p>
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={trend} margin={{ top: 4, right: 24, bottom: 0, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                <XAxis
+                  dataKey="date"
+                  stroke="#94a3b8"
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+                  minTickGap={60}
+                  tickFormatter={d => {
+                    const dt = new Date(d);
+                    return dt.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                  }}
+                />
+                <YAxis
+                  stroke="#94a3b8"
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
+                  domain={[0, 80]}
+                  tickFormatter={v => `${v}%`}
+                  width={38}
+                />
+                <ReferenceLine y={50} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" label={{ value: '50%', position: 'right', fill: '#64748b', fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', fontSize: 12 }}
+                  formatter={(v, name) => [`${v}%`, BUCKET_META[name]?.label || name]}
+                  labelFormatter={d => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+                  formatter={name => BUCKET_META[name]?.label || name}
+                />
+                {activeBuckets.map(b => (
+                  <Line
+                    key={b}
+                    type="monotone"
+                    dataKey={b}
+                    stroke={BUCKET_META[b].color}
+                    strokeWidth={b === 'loss_over15' ? 2.5 : 1.5}
+                    dot={false}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         );
       })()}

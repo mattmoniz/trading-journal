@@ -1,5 +1,7 @@
 import { query } from '../server/db.js';
 import { logProcess } from '../server/lib/processLog.js';
+import { getHitRateLookup, formatHitRate } from '../server/services/engineReadHitRates.js';
+import { getContextMarkerStats } from '../server/services/annotationPatterns.js';
 import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
@@ -358,6 +360,59 @@ async function interpretFlags(flagsText, weekEnd) {
   }
 }
 
+// Per-day signal scorecard for the week, with all-time hit rates as reference (pre-computed, never recalculated by Claude)
+async function getSignalScorecard(start, end) {
+  const [readsQ, hitRateLookup] = await Promise.all([
+    query(`
+      SELECT trade_date::text, read_type, signal_value, session_bias_context, outcome
+      FROM engine_reads WHERE trade_date BETWEEN $1 AND $2
+      ORDER BY trade_date
+    `, [start, end]),
+    getHitRateLookup(),
+  ]);
+
+  if (!readsQ.rows.length) return { text: 'No engine_reads for this week.', hitRateLookup };
+
+  const lines = readsQ.rows.map(r => {
+    const key = r.read_type === 'A_SIGNAL'
+      ? (r.signal_value === 'A_UP' ? 'A_UP' : 'A_DOWN')
+      : 'BIAS_' + r.signal_value;
+    const rate = formatHitRate(hitRateLookup, key, r.session_bias_context);
+    return `  ${r.trade_date}: ${key}${r.session_bias_context ? ` (bias ${r.session_bias_context})` : ''} → ${r.outcome} | all-time rate: ${rate || 'no data'}`;
+  });
+
+  return { text: lines.join('\n'), hitRateLookup };
+}
+
+// Annotation coverage + pattern stats for the week
+async function getAnnotationSection(start, end) {
+  const [fillsQ, annotatedQ, patternStats] = await Promise.all([
+    query(`SELECT COUNT(*) AS n FROM trades WHERE log_date BETWEEN $1 AND $2`, [start, end]),
+    query(`
+      SELECT COUNT(DISTINCT t.id) AS n
+      FROM trade_annotations a
+      JOIN trades t ON t.id = ANY(a.trade_ids)
+      WHERE a.trade_date BETWEEN $1 AND $2
+    `, [start, end]),
+    getContextMarkerStats(),
+  ]);
+
+  const totalFills = parseInt(fillsQ.rows[0]?.n) || 0;
+  const annotatedFills = parseInt(annotatedQ.rows[0]?.n) || 0;
+
+  const patternLines = Object.entries(patternStats).map(([marker, s]) => {
+    if (s.confident) {
+      return `  ${marker.toUpperCase()}: ${s.winRate}% win rate (n=${s.decisive} decisive of ${s.n} total, all-time), net ${fmt$(s.totalPnl)}`;
+    }
+    return `  ${marker.toUpperCase()}: limited sample (n=${s.decisive} decisive of ${s.n} total, all-time) — too few to show a win rate`;
+  });
+
+  return {
+    coverageText: `${annotatedFills} of ${totalFills} fills annotated this week.`,
+    patternText: patternLines.length ? patternLines.join('\n') : '  No annotation pattern data yet.',
+  };
+}
+
 async function generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData, giveBackData) {
   // Pull daily coaching records for the week to extract improvement themes
   const coachingQ = await query(`
@@ -384,9 +439,23 @@ async function generateWeeklyAssessment(start, end, weekEnd, pnlData, setupData,
     .filter(Boolean)
     .join('\n');
 
-  const weeklyPrompt = `You are providing a weekly assessment for a NQ/MNQ futures prop firm trader.
+  const [scorecard, annotationSection] = await Promise.all([
+    getSignalScorecard(start, end),
+    getAnnotationSection(start, end),
+  ]);
 
-WEEK: ${start} to ${end}
+  const weeklySystemPrompt = `You are providing a weekly coaching assessment for a NQ/MNQ futures prop firm trader. Use ONLY the data provided — never fabricate.
+
+HARD RULES — NEVER VIOLATE:
+1. Every percentage you cite must come verbatim from the SIGNAL SCORECARD or ANNOTATION PATTERN sections. Never calculate or estimate a rate yourself.
+2. If pattern data says "limited sample (n=X)", write "limited sample (n=X)", never a percentage.
+3. CHALLENGE wins on weak or against-signal setups when the data shows it; AFFIRM disciplined process when annotations or hit rates support it.
+3a. STRONGEST MOMENT MUST ADD SOMETHING THE TRADER DID NOT WRITE. Never restate or rephrase a trader's own annotation as the substance of "strongest moment" — they already wrote it. The substance must be an objective fact from the data (give-back/capture vs peak, a hit-rate or scorecard outcome, sizing/discipline pattern across the week) that the trader didn't already state. You may briefly reference their reasoning to connect to it, but that reference must not BE the moment. If there's nothing objective to add, keep it short and honest rather than padding with paraphrase.
+4. If annotation coverage is low (e.g. "X of Y fills annotated"), say so honestly — note that more notes would sharpen next week's review.
+5. Daily improvement themes are real excerpts from the trader's own daily coaching — synthesize them, don't invent new ones.
+6. Under 250 words. Direct. Specific numbers only.`;
+
+  const weeklyPrompt = `WEEK: ${start} to ${end}
 
 PERFORMANCE:
 Trading days: ${tradingDays}
@@ -397,6 +466,15 @@ Worst day: ${worstDayPnl != null ? (worstDayPnl >= 0 ? '+$' : '-$') + Math.abs(w
 Total trades: ${totalTrades}
 Avg give-back: ${giveBackData?.avgGiveBackPct ?? 'N/A'}% of daily peak
 Total give-back: -$${(giveBackData?.totalGiveBack ?? 0).toFixed(0)} this week
+
+SIGNAL SCORECARD (this week's signals vs. all-time hit rates):
+${scorecard.text}
+
+ANNOTATION COVERAGE:
+${annotationSection.coverageText}
+
+ANNOTATION PATTERN STATS (all-time, by context_marker):
+${annotationSection.patternText}
 
 DAILY IMPROVEMENT THEMES:
 ${dailyImprovements || '  (No daily coaching records for this week)'}
@@ -426,6 +504,7 @@ Under 250 words. Direct. Specific numbers.`;
     const msg = await client.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 500,
+      system: weeklySystemPrompt,
       messages: [{ role: 'user', content: weeklyPrompt }],
     });
     assessmentText = msg.content[0]?.text || '(no response)';

@@ -142,9 +142,8 @@ export async function ingestBarFile(filePath) {
       return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11})`;
     });
 
-    // ON CONFLICT DO UPDATE: if a bar already exists for (contract, ts), overwrite it.
-    // This handles re-exports where SC corrects historical bars, and ensures the latest
-    // file data always wins rather than silently keeping stale values.
+    // ON CONFLICT DO UPDATE only when values actually changed — prevents dead tuple explosion
+    // from re-ingesting unchanged historical bars every time SC appends a new bar to the file.
     const sql = `
       INSERT INTO price_bars (symbol, contract, ts, open, high, low, close, volume, num_trades, bid_volume, ask_volume)
       VALUES ${placeholders.join(',')}
@@ -152,6 +151,10 @@ export async function ingestBarFile(filePath) {
         open = EXCLUDED.open, high = EXCLUDED.high, low = EXCLUDED.low, close = EXCLUDED.close,
         volume = EXCLUDED.volume, num_trades = EXCLUDED.num_trades,
         bid_volume = EXCLUDED.bid_volume, ask_volume = EXCLUDED.ask_volume
+      WHERE price_bars.close != EXCLUDED.close
+         OR price_bars.high  != EXCLUDED.high
+         OR price_bars.low   != EXCLUDED.low
+         OR price_bars.volume != EXCLUDED.volume
     `;
     const result = await query(sql, values);
     barsInserted += result.rowCount;

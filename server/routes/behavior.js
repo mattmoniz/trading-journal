@@ -13,8 +13,7 @@ router.get('/stats/behavior', async (req, res) => {
     ];
     let params = []; let p = 1;
     if (dateFrom) { conditions.push(`log_date >= $${p++}`); params.push(dateFrom); }
-    else           { conditions.push(`log_date >= CURRENT_DATE - INTERVAL '90 days'`); }
-    if (dateTo)  { conditions.push(`log_date <= $${p++}`); params.push(dateTo); }
+    if (dateTo)   { conditions.push(`log_date <= $${p++}`); params.push(dateTo); }
     if (account) { conditions.push(`custom_fields->>'account' = ANY($${p++}::text[])`); params.push(account.split(',').filter(Boolean)); }
     const where = `WHERE ${conditions.join(' AND ')}`;
     const parsePnl = `replace(replace(custom_fields->'sierra_data'->>'FlatToFlat Profit/Loss (C)','F',''),' ','')::numeric`;
@@ -91,7 +90,8 @@ router.get('/stats/behavior', async (req, res) => {
         CASE
           WHEN prev_pnl<0 AND gap_sec<60   THEN 'loss_under1'
           WHEN prev_pnl<0 AND gap_sec<300  THEN 'loss_1to5'
-          WHEN prev_pnl<0 AND gap_sec>=300 THEN 'loss_over5'
+          WHEN prev_pnl<0 AND gap_sec<900  THEN 'loss_5to15'
+          WHEN prev_pnl<0 AND gap_sec>=900 THEN 'loss_over15'
           WHEN prev_pnl>0 AND gap_sec<60   THEN 'win_under1'
           WHEN prev_pnl>0 AND gap_sec>=60  THEN 'win_over1'
         END as bucket,
@@ -103,6 +103,71 @@ router.get('/stats/behavior', async (req, res) => {
     `, params);
     const reentry = {};
     for (const r of reentryRaw.rows) if (r.bucket) reentry[r.bucket] = { count: parseInt(r.cnt), avgPnl: parseFloat(r.avg_pnl), winPct: parseFloat(r.win_pct) };
+
+    // Rolling 90-instance win rate trend for each loss re-entry bucket.
+    // Returns a merged time series (carry-forward) so the chart has a common date axis.
+    const trendRaw = await query(`
+      WITH ep AS (
+        SELECT log_date, exit_time, MIN(entry_time) as entry_time, SUM(${parsePnl}) as pnl
+        FROM trades ${where} GROUP BY log_date, exit_time
+      ),
+      gapped AS (
+        SELECT log_date, exit_time as ts, exit_time::date as date, pnl,
+          LAG(pnl) OVER (PARTITION BY log_date ORDER BY exit_time) as prev_pnl,
+          EXTRACT(EPOCH FROM (entry_time - LAG(exit_time) OVER (PARTITION BY log_date ORDER BY exit_time))) as gap_sec
+        FROM ep
+      )
+      SELECT
+        date::text,
+        pnl > 0 as win,
+        CASE
+          WHEN prev_pnl<0 AND gap_sec<60   THEN 'loss_under1'
+          WHEN prev_pnl<0 AND gap_sec<300  THEN 'loss_1to5'
+          WHEN prev_pnl<0 AND gap_sec<900  THEN 'loss_5to15'
+          WHEN prev_pnl<0 AND gap_sec>=900 THEN 'loss_over15'
+        END as bucket
+      FROM gapped
+      WHERE prev_pnl IS NOT NULL AND gap_sec >= 0
+        AND prev_pnl < 0
+      ORDER BY log_date, ts
+    `, params);
+
+    const TREND_WINDOW = 90;
+    const LOSS_BUCKETS = ['loss_under1', 'loss_1to5', 'loss_5to15', 'loss_over15'];
+    const byBucket = {};
+    LOSS_BUCKETS.forEach(b => { byBucket[b] = []; });
+    for (const r of trendRaw.rows) {
+      if (r.bucket && byBucket[r.bucket]) byBucket[r.bucket].push({ date: r.date, win: r.win });
+    }
+
+    // Per-bucket rolling win rates (keyed by date of the Nth occurrence)
+    const bucketSeries = {};
+    for (const b of LOSS_BUCKETS) {
+      bucketSeries[b] = [];
+      const inst = byBucket[b];
+      for (let i = TREND_WINDOW - 1; i < inst.length; i++) {
+        const wins = inst.slice(i - TREND_WINDOW + 1, i + 1).filter(x => x.win).length;
+        bucketSeries[b].push({ date: inst[i].date, wr: Math.round(wins / TREND_WINDOW * 1000) / 10 });
+      }
+    }
+
+    // Merge into a carry-forward unified time series (all dates across all buckets)
+    const allDates = [...new Set(
+      LOSS_BUCKETS.flatMap(b => bucketSeries[b].map(p => p.date))
+    )].sort();
+
+    const reentryTrend = [];
+    const last = {};
+    for (const date of allDates) {
+      for (const b of LOSS_BUCKETS) {
+        const match = bucketSeries[b].filter(p => p.date === date);
+        if (match.length) last[b] = match[match.length - 1].wr;
+      }
+      // Only emit a point when at least one bucket has data
+      if (Object.keys(last).length > 0) {
+        reentryTrend.push({ date, ...last });
+      }
+    }
 
     const scb = {};
     for (const d of days) {
@@ -117,7 +182,7 @@ router.get('/stats/behavior', async (req, res) => {
     }));
 
     res.json({
-      patterns, firstSessionStats, reentry, sessionCounts,
+      patterns, firstSessionStats, reentry, sessionCounts, reentryTrend,
       totalDays: days.length,
       days: days.map(d=>({ date:d.date, finalPnl:Math.round(d.finalPnl), low:Math.round(d.low), high:Math.round(d.high), sessions:d.sessions, pattern:d.pattern, s1:Math.round(d.s1) }))
     });

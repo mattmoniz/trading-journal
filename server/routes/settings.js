@@ -16,6 +16,7 @@ const PROCESS_SCHEDULE = [
   { name: 'DAILY_COACHING',      label: 'Daily Coaching Review',    schedule: '4:45 PM ET Mon-Fri',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], scheduledHour: 16, maxAgeHours: 25,  critical: true  },
   { name: 'WEEKLY_REPORT',       label: 'Weekly Report',            schedule: '6:00 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'WEEKLY_ASSESSMENT',   label: 'Weekly Assessment',        schedule: '6:05 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
+  { name: 'COMBO_BACKTEST',      label: 'Combo Level Backtest',     schedule: '6:30 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'MONTHLY_REPORT',      label: 'Monthly Report',           schedule: '7:00 PM ET First Sunday',   expectedDays: ['Sun'],                         scheduledHour: 19, maxAgeHours: 750, critical: false },
   { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Continuous during mkt hrs', expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },

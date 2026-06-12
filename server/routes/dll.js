@@ -7,7 +7,7 @@ const router = express.Router();
 export async function computeDLLStatus(dateStr = null) {
   const targetDate = dateStr || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  const [settingsQ, pnlQ, dlrQ] = await Promise.all([
+  const [settingsQ, pnlQ, dlrQ, eventsQ] = await Promise.all([
     query('SELECT account_id, daily_loss_limit, dll_removed_count, last_dll_removal FROM account_settings ORDER BY account_id'),
     query(`
       SELECT custom_fields->>'account' as account, SUM(pnl) as daily_pnl, COUNT(*) as trade_count
@@ -25,11 +25,24 @@ export async function computeDLLStatus(dateStr = null) {
         AND custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
       ORDER BY custom_fields->>'account', exit_time DESC
     `, [targetDate]),
+    // Lifetime near-limit day counts, per account, from the audit table
+    query(`
+      SELECT account_id,
+        COUNT(*) as near_limit_days,
+        COUNT(*) FILTER (WHERE event_type = 'BREACH') as breach_days
+      FROM dll_daily_events
+      GROUP BY account_id
+    `),
   ]);
 
   const pnlByAccount = {};
   for (const row of pnlQ.rows) {
     if (row.account) pnlByAccount[row.account] = { pnl: parseFloat(row.daily_pnl) || 0, trades: parseInt(row.trade_count) || 0 };
+  }
+
+  const eventsByAccount = {};
+  for (const row of eventsQ.rows) {
+    eventsByAccount[row.account_id] = { nearLimitDays: parseInt(row.near_limit_days) || 0, breachDays: parseInt(row.breach_days) || 0 };
   }
 
   const accounts = settingsQ.rows.map(s => {
@@ -39,6 +52,7 @@ export async function computeDLLStatus(dateStr = null) {
     const pctUsed = dll > 0 ? Math.min(1, Math.max(0, -pnl) / dll) : 0;
     const dllHit = pnl <= -dll;
     const dllWarning = !dllHit && pnl <= -(dll - 50);
+    const events = eventsByAccount[s.account_id] || { nearLimitDays: 0, breachDays: 0 };
     return {
       account_id: s.account_id,
       daily_loss_limit: dll,
@@ -49,6 +63,8 @@ export async function computeDLLStatus(dateStr = null) {
       dll_warning: dllWarning,
       dll_removed_count: s.dll_removed_count || 0,
       last_dll_removal: s.last_dll_removal,
+      near_limit_days: events.nearLimitDays,
+      breach_days: events.breachDays,
     };
   });
 
@@ -60,6 +76,18 @@ export async function computeDLLStatus(dateStr = null) {
     hitsAccounts: accounts.filter(a => a.dll_hit),
     warnAccounts: accounts.filter(a => a.dll_warning),
   };
+}
+
+// Upsert today's near-limit/breach event for an account into the audit table.
+// Idempotent per (account, date) — safe to call repeatedly through the day as P&L updates.
+export async function recordDLLDayEvent(accountId, logDate, dailyPnl, dll, eventType) {
+  await query(`
+    INSERT INTO dll_daily_events (account_id, log_date, daily_pnl, daily_loss_limit, event_type, updated_at)
+    VALUES ($1, $2, $3, $4, $5, NOW())
+    ON CONFLICT (account_id, log_date) DO UPDATE
+    SET daily_pnl = EXCLUDED.daily_pnl, daily_loss_limit = EXCLUDED.daily_loss_limit,
+        event_type = EXCLUDED.event_type, updated_at = NOW()
+  `, [accountId, logDate, dailyPnl, dll, eventType]);
 }
 
 // Record a DLL removal attempt for an account (within $50 of limit and still trading)
@@ -89,7 +117,16 @@ export async function checkAndEmitDLL(io, dateStr = null) {
     const status = await computeDLLStatus(dateStr);
     if (io) io.emit('dll-status', status);
 
-    // Track approach attempts for warning-zone accounts with trades today
+    // Record near-limit/breach days for the audit table — covers BOTH the warning
+    // band (within $50, not yet over) AND a full breach (>= limit), so a day that
+    // blows straight past the limit in one move still counts as a danger day.
+    for (const acct of status.accounts) {
+      if (acct.trade_count > 0 && (acct.dll_warning || acct.dll_hit)) {
+        await recordDLLDayEvent(acct.account_id, status.date, acct.daily_pnl, acct.daily_loss_limit, acct.dll_hit ? 'BREACH' : 'WARNING');
+      }
+    }
+
+    // Legacy lifetime counter — kept for backward compatibility, only tracks the warning band
     for (const acct of status.warnAccounts) {
       if (acct.trade_count > 0) {
         await trackDLLApproach(acct.account_id);
@@ -117,19 +154,43 @@ router.get('/dll/status', async (req, res) => {
 export async function computeEvalProgress() {
   const PASS_TARGET = 3000;
   const rows = await query(`
+    WITH ep_fills AS (
+      SELECT t.log_date, t.custom_fields->>'account' as account, t.exit_time,
+        (t.custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric as cum_pl
+      FROM trades t
+      JOIN account_settings a ON a.account_id = t.custom_fields->>'account'
+      WHERE a.account_stage = 'EVALUATION'
+        AND t.custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+        AND t.exit_time IS NOT NULL
+        AND t.custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+    ),
+    last_ep_per_day AS (
+      SELECT DISTINCT ON (account, log_date) account, log_date, cum_pl
+      FROM ep_fills ORDER BY account, log_date, exit_time DESC
+    ),
+    daily_pnl AS (
+      SELECT account, log_date,
+        cum_pl - COALESCE(LAG(cum_pl) OVER (PARTITION BY account ORDER BY log_date), 0) as session_pnl
+      FROM last_ep_per_day
+    ),
+    account_totals AS (
+      SELECT account,
+        SUM(session_pnl) as current_pnl,
+        COUNT(DISTINCT log_date) as days_traded,
+        MAX(log_date) as last_trade_date
+      FROM daily_pnl GROUP BY account
+    )
     SELECT
       a.account_id,
       a.daily_loss_limit,
       a.account_stage,
-      COALESCE(SUM(t.pnl), 0)::numeric as current_pnl,
-      COUNT(DISTINCT t.log_date)::int as days_traded,
-      MAX(t.log_date) as last_trade_date
+      COALESCE(at.current_pnl, 0)::numeric as current_pnl,
+      COALESCE(at.days_traded, 0)::int as days_traded,
+      at.last_trade_date
     FROM account_settings a
-    LEFT JOIN trades t ON t.custom_fields->>'account' = a.account_id
+    LEFT JOIN account_totals at ON at.account = a.account_id
     WHERE a.account_stage = 'EVALUATION'
-    GROUP BY a.account_id, a.daily_loss_limit, a.account_stage
-    HAVING MAX(t.log_date) >= CURRENT_DATE - INTERVAL '30 days'
-       OR COUNT(t.log_date) = 0
+      AND (at.last_trade_date >= CURRENT_DATE - INTERVAL '30 days' OR at.last_trade_date IS NULL)
     ORDER BY a.account_id
   `);
 

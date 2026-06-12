@@ -27,7 +27,7 @@ async function runMorningBrief(targetDate) {
   let evalAccounts = [];
   try { evalAccounts = await computeEvalProgress(); } catch (_) {}
 
-  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ] = await Promise.all([
+  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ, onQ, pwPdQ] = await Promise.all([
     // Today's ACD
     query(`SELECT trade_date::text, day_type, daily_score, or_high, or_low,
              a_up_fired, a_down_fired, a_up_level, a_down_level,
@@ -100,6 +100,35 @@ async function runMorningBrief(targetDate) {
         AND ts::date < ($1::text)::date
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
       GROUP BY ts::date ORDER BY ts::date ASC
+    `, [targetDate]),
+
+    // Overnight High/Low (prior RTH close → current pre-market)
+    query(`
+      SELECT MAX(h) as on_high, MIN(l) as on_low FROM (
+        SELECT high as h, low as l FROM price_bars WHERE symbol='NQ'
+          AND ts::date = ($1::date - INTERVAL '1 day')::date
+          AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) >= 960
+        UNION ALL
+        SELECT high, low FROM price_bars WHERE symbol='NQ'
+          AND ts::date = $1::date
+          AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) < 570
+      ) x
+    `, [targetDate]),
+
+    // Prior week H/L + prior day bar H/L
+    query(`
+      SELECT
+        MAX(high) FILTER (WHERE ts::date >= DATE_TRUNC('week', $1::date - INTERVAL '7 days')
+                           AND ts::date < DATE_TRUNC('week', $1::date)
+                           AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16) as pw_high,
+        MIN(low)  FILTER (WHERE ts::date >= DATE_TRUNC('week', $1::date - INTERVAL '7 days')
+                           AND ts::date < DATE_TRUNC('week', $1::date)
+                           AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16) as pw_low,
+        MAX(high) FILTER (WHERE ts::date = (SELECT MAX(ts::date) FROM price_bars WHERE symbol='NQ' AND ts::date < $1)
+                           AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16) as pd_high_bar,
+        MIN(low)  FILTER (WHERE ts::date = (SELECT MAX(ts::date) FROM price_bars WHERE symbol='NQ' AND ts::date < $1)
+                           AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16) as pd_low_bar
+      FROM price_bars WHERE symbol='NQ'
     `, [targetDate]),
   ]);
 
@@ -203,6 +232,80 @@ async function runMorningBrief(targetDate) {
   const todayAboveGLine = gLine && todayOpen ? todayOpen > gLine : null;
   const gLinePts = gLine && todayOpen ? Math.abs(todayOpen - gLine).toFixed(0) : 'N/A';
   const gLineAboveBelow = todayAboveGLine === true ? 'above' : todayAboveGLine === false ? 'below' : 'near';
+
+  // Overnight + prior week levels
+  const onHigh    = parseFloat(onQ.rows[0]?.on_high)    || null;
+  const onLow     = parseFloat(onQ.rows[0]?.on_low)     || null;
+  const pwHigh    = parseFloat(pwPdQ.rows[0]?.pw_high)  || null;
+  const pwLow     = parseFloat(pwPdQ.rows[0]?.pw_low)   || null;
+  const pdHighBar = parseFloat(pwPdQ.rows[0]?.pd_high_bar) || null;
+  const pdLowBar  = parseFloat(pwPdQ.rows[0]?.pd_low_bar)  || null;
+  const pdVah = structuralLevels.find(l => l.type === 'PRIOR_DAY_VAH')?.price || null;
+  const pdVal = structuralLevels.find(l => l.type === 'PRIOR_DAY_VAL')?.price || null;
+  const pdPoc = structuralLevels.find(l => l.type === 'PRIOR_DAY_POC')?.price || null;
+
+  // Level confluence — which pre-market combos are in proximity?
+  const levelValues = {
+    ON_Hi: onHigh, ON_Lo: onLow,
+    PD_Hi: pdHighBar, PD_Lo: pdLowBar,
+    PD_VAH: pdVah, PD_VAL: pdVal, PD_POC: pdPoc,
+    PW_Hi: pwHigh, PW_Lo: pwLow,
+    G_Line: gLine,
+  };
+
+  // Load live stats from combo_stats table (updated weekly by combo_backtest.js)
+  const comboStatsRows = await query(`SELECT combo_id, avg_pnl, win_rate, n FROM combo_stats`).then(r => r.rows).catch(() => []);
+  const comboStatsMap = Object.fromEntries(comboStatsRows.map(r => [r.combo_id, r]));
+  const liveStats = (id, fallback) => {
+    const s = comboStatsMap[id];
+    return s ? { avg: Math.round(parseFloat(s.avg_pnl)), win: Math.round(parseFloat(s.win_rate)), n: parseInt(s.n) } : fallback;
+  };
+
+  const PM_COMBOS = [
+    { id: 'on_lo_pd_lo',  levels: ['ON_Lo', 'PD_Lo'],  label: 'ON Low + PD Low',
+      ...liveStats('on_lo_pd_lo', { avg: 63, win: 61, n: 70 }),
+      must: ['Entry above ON Low (support, +$248 vs −$6 below)', 'Wide IB day preferred', 'Open outside PD VA'],
+      avoid: ['Inside VA open (−$40)', 'Wednesdays (−$96)'] },
+    { id: 'on_lo_pdpoc_vwap', levels: ['ON_Lo', 'PD_POC'], label: 'ON Low + PD POC',
+      ...liveStats('on_lo_pdpoc_vwap', { avg: 41, win: 35, n: 97 }),
+      must: ['PD POC from below (+$52)', 'Mid-morning or Wed ($+112)'],
+      avoid: ['Fridays (0% win rate)', 'Close session (−$126)'] },
+    { id: 'pd_lo_pd_val', levels: ['PD_Lo', 'PD_VAL'], label: 'PD Low + PD VAL',
+      ...liveStats('pd_lo_pd_val', { avg: 22, win: 44, n: 128 }),
+      must: ['Entry above PD VAL (+$108 vs −$16 from below)', 'Mid-morning ($+67)'],
+      avoid: ['Below VA open (−$63)', 'Afternoons (−$37)'] },
+    { id: 'pd_val_wvwap', levels: ['PD_VAL', 'W_VWAP'], label: 'PD VAL + W-VWAP',
+      ...liveStats('pd_val_wvwap', { avg: 60, win: 57, n: 109 }),
+      must: ['Entry above PD VAL (+$81)', 'Narrow IB (+$81 vs +$20 wide)'],
+      avoid: ['Inside VA open (−$141)', 'Thursdays (−$178)'] },
+    { id: 'on_lo_pd_lo',  levels: ['PD_Lo', 'PD_VAL'],  label: 'PD Low + PD VAL',
+      ...liveStats('pd_lo_pd_val', { avg: 42, win: 42, n: 50 }),
+      must: ['PD POC from below (+$84 vs −$260 from above)', 'Mid-morning ($+96)'],
+      avoid: ['Open drive ($+5 only)', 'Thursdays (−$20)'] },
+  ];
+
+  const activeCombos = PM_COMBOS.filter(c => {
+    const vals = c.levels.map(l => levelValues[l]).filter(v => v != null);
+    if (vals.length < c.levels.length) return false;
+    return (Math.max(...vals) - Math.min(...vals)) <= 20;
+  }).map(c => {
+    const vals = c.levels.map(l => levelValues[l]);
+    return { ...c, prices: Object.fromEntries(c.levels.map(l => [l, levelValues[l]])),
+      spread: +(Math.max(...vals) - Math.min(...vals)).toFixed(2) };
+  });
+
+  // Intraday watch: OR-level combos — flag the anchor levels
+  const watchLevels = [];
+  if (pwHigh != null) watchLevels.push({ level: 'PW Hi', price: pwHigh,
+    combos: ['OR_Hi+PW_Hi ($+58, 48% win)', 'OR5Mid+OR_Hi+PW_Hi ($+94, 67% win)'],
+    note: 'Open drive only. OR Hi from below. Entry above PW Hi (+$116 vs +$39). Avoid Fridays.' });
+  if (onHigh != null) watchLevels.push({ level: 'ON Hi', price: onHigh,
+    combos: ['ON_Hi+OR5Mid+OR_Hi ($+45, 57% win)'],
+    note: 'If OR prints near ON Hi: mid-morning or open drive, ON Hi from above.' });
+
+  const dow = new Date(targetDate + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long' });
+
+  const confluenceData = { levels: levelValues, activeCombos, watchLevels, dow };
 
   // Data health: how stale is the last auto-import?
   let importStatus, importStatusLabel;
@@ -345,6 +448,47 @@ async function runMorningBrief(targetDate) {
     'ACTIVE SETUPS',
     setupLines,
     '',
+    'LEVEL CONFLUENCE WATCH',
+    (() => {
+      const p = (v) => v != null ? fmtPrice(v) : '—';
+      const lines = [
+        '  Pre-market levels:',
+        `    ON Hi ${p(onHigh).padStart(10)}   ON Lo  ${p(onLow).padStart(10)}`,
+        `    PW Hi ${p(pwHigh).padStart(10)}   PW Lo  ${p(pwLow).padStart(10)}`,
+        `    PD Hi ${p(pdHighBar).padStart(10)}   PD Lo  ${p(pdLowBar).padStart(10)}`,
+        `    PD VAH ${p(pdVah).padStart(9)}   PD POC ${p(pdPoc).padStart(9)}   PD VAL ${p(pdVal)}`,
+        `    G-Line ${p(gLine).padStart(9)}`,
+        '',
+        `  Day: ${dow}`,
+      ];
+      if (activeCombos.length === 0) {
+        lines.push('  No pre-market combos in proximity (>20pt apart).');
+      } else {
+        lines.push(`  Active combos (levels within 20pt):`);
+        for (const c of activeCombos) {
+          const prices = c.levels.map(l => `${l} ${p(c.prices[l])}`).join(' ↔ ');
+          lines.push(`    [ACTIVE] ${c.label}  (${c.spread}pt spread)`);
+          lines.push(`             $+${c.avg} avg · ${c.win}% win · n=${c.n}`);
+          lines.push(`             ${prices}`);
+          lines.push(`             Must: ${c.must[0]}`);
+          if (c.avoid[0]) lines.push(`             Avoid: ${c.avoid[0]}`);
+          lines.push('');
+        }
+      }
+      if (watchLevels.length > 0) {
+        lines.push('  Intraday watch (check after 9:35 OR established):');
+        for (const w of watchLevels) {
+          lines.push(`    ${w.level} @ ${p(w.price)} → ${w.combos[0]}`);
+          lines.push(`      ${w.note}`);
+        }
+        lines.push('');
+      }
+      lines.push('  Context to check:');
+      lines.push(`    9:30 open vs PD VA:  VAL ${p(pdVal)} / VAH ${p(pdVah)}`);
+      lines.push('    10:30 IB type: narrow = IB range < 20-day avg (~25pt)');
+      return lines.join('\n');
+    })(),
+    '',
     "YESTERDAY'S WATCH (from coaching)",
     `  ${tomorrowWatch}`,
     '',
@@ -369,23 +513,24 @@ async function runMorningBrief(targetDate) {
         }).join(' ') + '\n' + evalSummary
       : '';
 
-    const prompt = `You are reviewing pre-market context for a NQ futures prop firm trader using ACD methodology. Trading window 9:30–11:00 AM ET. Max 3 contracts.
+    const prompt = `NQ futures pre-market snapshot for ${targetDate}. ACD methodology. Trading window 9:30–11:00 ET.
 
 DATE: ${targetDate}
 Structural state: ${structState} | NL30: ${nl30} (${nl30Label}) | NL10: ${nl10}
 OR: ${orRange} | A Up: ${aUpLevel} (fired: ${today.a_up_fired ? 'yes' : 'no'}) | A Down: ${aDownLevel} (fired: ${today.a_down_fired ? 'yes' : 'no'})
 Confluence: ${confluenceScore}/12 | Opening call: ${openingCall} | A signal: ${aSignal}
-G-LINE (weekly open): ${gLine ? fmtPrice(gLine) : 'N/A'}
-Days held ${gLineDirection} this week: ${gLineDaysHeld} | Today opens ${gLineAboveBelow} G-Line by ${gLinePts} pts
+G-LINE: ${gLine ? fmtPrice(gLine) : 'N/A'} — ${gLineDaysHeld} sessions held ${gLineDirection} this week, today opens ${gLineAboveBelow} by ${gLinePts} pts
 Active setups: ${setups.length > 0 ? setups.map(s => s.setup_type).join(', ') : 'none'}
 Prior session watch: ${tomorrowWatch}
 ${evalPromptLines ? '\n' + evalPromptLines : ''}
 
-In 2–3 sentences: what is the key structural decision for today's session? Name the specific price(s) that confirm or deny a trade. Reference the G-Line if it is within 30 pts of a key level — "Week is [positive/negative] — price has held [above/below] the weekly open for [N] consecutive sessions." State the bias direction if one exists, or call it a no-trade day if conditions don't qualify. If account status shows an eval trailing behind, note whether today's setup quality justifies pressing for size. No generic advice.`;
+Write 3–5 short bullets. Each bullet is one concrete point — the bias, the specific price that matters today, or what confirms vs denies a trade. Plain trading language. No headers, no bold, no hedging preamble, no meta-commentary. Hard cap: 80 words total.
+
+Example tone: "- Opened inside value, two-sided. Watch 28781 — accept below = short, reject = balance. NL negative, slight short lean. No edge until OR sets the tone."`;
 
     const msg = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 150,
+      max_tokens: 120,
       messages: [{ role: 'user', content: prompt }],
     });
     aiRead = msg.content[0].text;
@@ -415,6 +560,7 @@ In 2–3 sentences: what is the key structural decision for today's session? Nam
         daily_score: today.daily_score,
       },
       pivot: pivot || null,
+      confluence: confluenceData,
     };
     await query(
       `INSERT INTO morning_briefs (brief_date, brief_text, structural_data)

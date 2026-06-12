@@ -2931,3 +2931,310 @@ body {
 }
 
 /* ==================== ANALYSIS VIEW ==================== */
+
+/* ==================== TRADE ANNOTATIONS ==================== */
+
+/* Add note button (idle state) — clearly visible, one-tap action */
+.ann-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: calc(100% - 28px);
+  margin: 5px 14px;
+  padding: 7px 12px;
+  background: rgba(99,102,241,0.07);
+  border: 1px dashed rgba(99,102,241,0.45);
+  border-radius: 5px;
+  color: #818cf8;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.ann-add-btn:hover {
+  background: rgba(99,102,241,0.15);
+  border-color: rgba(99,102,241,0.7);
+  color: #a5b4fc;
+}
+
+/* Trade row selection checkbox */
+.ann-row-check {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  min-width: 13px;
+  border-radius: 3px;
+  border: 1.5px solid rgba(51,65,85,0.55);
+  background: transparent;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+  flex-shrink: 0;
+  position: relative;
+}
+.ann-row-check:hover { border-color: rgba(99,102,241,0.65); background: rgba(99,102,241,0.1); }
+.ann-row-check.checked {
+  background: rgba(99,102,241,0.3);
+  border-color: #818cf8;
+}
+
+/* Trade rows: annotated accent and selected state */
+.day-modal-trade-row.annotated  { box-shadow: inset 3px 0 0 rgba(99,102,241,0.35); }
+.day-modal-trade-row.ann-selected { background: rgba(99,102,241,0.1) !important; box-shadow: inset 3px 0 0 #818cf8; }
+
+/* Selection action bar */
+.ann-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: rgba(99,102,241,0.1);
+  border-bottom: 1px solid rgba(99,102,241,0.25);
+  font-size: 12.5px;
+  color: #94a3b8;
+}
+.ann-sel-note-btn {
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(99,102,241,0.2);
+  border: 1px solid rgba(99,102,241,0.5);
+  color: #818cf8;
+  border-radius: 4px;
+  padding: 3px 14px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.ann-sel-note-btn:hover { background: rgba(99,102,241,0.35); }
+.ann-sel-clear-btn {
+  font-size: 11px;
+  background: none;
+  border: none;
+  color: rgba(100,116,139,0.7);
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.ann-sel-clear-btn:hover { color: #ef4444; }
+
+/* Selection editor wrap */
+.ann-selection-editor-wrap { border-bottom: 2px solid rgba(99,102,241,0.2); }
+.ann-selection-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 14px;
+  background: rgba(99,102,241,0.06);
+  border-bottom: 1px solid rgba(99,102,241,0.15);
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* Display mode */
+.ann-display {
+  padding: 6px 14px 7px;
+  background: rgba(15,23,42,0.45);
+  border-top: 1px solid rgba(51,65,85,0.3);
+}
+.ann-display-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.ann-marker {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+.ann-marker-planned  { background: rgba(99,102,241,0.15); color: #818cf8; }
+.ann-marker-reaction { background: rgba(245,158,11,0.15); color: #f59e0b; }
+.ann-setup-chip {
+  font-size: 11px;
+  color: #94a3b8;
+  background: rgba(51,65,85,0.5);
+  border-radius: 3px;
+  padding: 1px 6px;
+}
+.ann-display-text {
+  font-size: 12.5px;
+  color: #cbd5e1;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.ann-edit-btn {
+  margin-left: auto;
+  font-size: 11px;
+  background: none;
+  border: 1px solid rgba(99,102,241,0.35);
+  color: #818cf8;
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.ann-edit-btn:hover { background: rgba(99,102,241,0.12); }
+.ann-delete-btn {
+  font-size: 14px;
+  font-weight: 700;
+  background: none;
+  border: none;
+  color: rgba(100,116,139,0.5);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.ann-delete-btn:hover { color: #ef4444; }
+
+/* Image thumbnail in display mode */
+.ann-image-thumb-wrap { margin-top: 6px; }
+.ann-image-thumb {
+  max-width: 240px;
+  max-height: 140px;
+  border-radius: 4px;
+  border: 1px solid rgba(51,65,85,0.5);
+  cursor: zoom-in;
+  display: block;
+}
+
+/* Lightbox */
+.ann-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.ann-lightbox-img {
+  max-width: 92vw;
+  max-height: 88vh;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+.ann-lightbox-hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.4);
+}
+
+/* Editor */
+.ann-editor {
+  padding: 8px 14px 9px;
+  background: rgba(15,23,42,0.6);
+  border-top: 1px solid rgba(99,102,241,0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ann-textarea {
+  width: 100%;
+  background: rgba(30,41,59,0.8);
+  border: 1px solid rgba(51,65,85,0.6);
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 9px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.ann-textarea:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+.ann-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ann-setup-input {
+  flex: 1;
+  min-width: 140px;
+  background: rgba(30,41,59,0.8);
+  border: 1px solid rgba(51,65,85,0.6);
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.ann-setup-input:focus { outline: none; border-color: rgba(99,102,241,0.5); }
+.ann-context-toggle {
+  display: flex;
+  border: 1px solid rgba(51,65,85,0.6);
+  border-radius: 5px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.ann-ctx-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.ann-ctx-btn.active          { background: rgba(99,102,241,0.18); color: #818cf8; }
+.ann-ctx-btn:not(.active):hover { background: rgba(51,65,85,0.4); }
+.ann-ctx-btn + .ann-ctx-btn { border-left: 1px solid rgba(51,65,85,0.6); }
+.ann-ctx-btn:nth-child(2).active { background: rgba(245,158,11,0.18); color: #f59e0b; }
+
+/* Image controls in editor */
+.ann-image-btn {
+  font-size: 11px;
+  background: none;
+  border: 1px dashed rgba(51,65,85,0.7);
+  color: #64748b;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.ann-image-btn:hover { border-color: #818cf8; color: #818cf8; }
+.ann-image-preview-wrap { position: relative; display: inline-flex; }
+.ann-image-preview {
+  max-height: 64px;
+  max-width: 120px;
+  border-radius: 4px;
+  border: 1px solid rgba(51,65,85,0.5);
+}
+.ann-image-remove {
+  position: absolute;
+  top: -5px; right: -5px;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #ef4444;
+  border: none;
+  color: white;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Save / Cancel */
+.ann-save-btn {
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(99,102,241,0.2);
+  border: 1px solid rgba(99,102,241,0.45);
+  color: #818cf8;
+  border-radius: 4px;
+  padding: 3px 14px;
+  cursor: pointer;
+}
+.ann-save-btn:hover:not(:disabled) { background: rgba(99,102,241,0.35); }
+.ann-save-btn:disabled { opacity: 0.4; cursor: default; }
+.ann-cancel-btn {
+  font-size: 12px;
+  background: none;
+  border: 1px solid rgba(51,65,85,0.5);
+  color: #64748b;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.ann-cancel-btn:hover { border-color: #94a3b8; color: #94a3b8; }

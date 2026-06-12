@@ -1,0 +1,180 @@
+Trading Journal — Build Summary (June 4, 2026)
+================================================
+
+
+1. Off-Hours "Last Session" Fallback — All Dashboard Cards
+----------------------------------------------------------
+
+Problem: Four live-data cards in the dashboard (ACDView → DashboardCardGrid) showed blank or
+error states when the market was closed because they only fetched real-time data.
+
+Fix: Added a `lastSession` state that fires when `isRTH` (real-time hours) is false. It fetches
+the most recent trade date from /api/acd/daily, then calls /api/case?date={lastDate}&asOf=16:00
+to reconstruct end-of-session state.
+
+Cards updated:
+  - Trigger card  — shows last session's setup type, Entry/Stop/T1 levels, R:R, and state label
+  - Levels card   — shows last session's OR levels, A Up/Down, POC, VWAP
+  - Day card      — shows prior session's directional case (Bullish/Bearish/Neutral)
+  - Case card     — shows last session's case-engine summary
+
+Each card shows a LastSessionStamp italic footer: "last session · YYYY-MM-DD"
+
+
+2. "Close to Forming" Amber Trigger Card
+-----------------------------------------
+
+Logic: When a setup is in WATCHING state (not yet active) and the structural confluence score
+is >= 4/7, the trigger card turns amber.
+
+Implementation:
+  - isForming = !tActive && tState === 'WATCHING' && structScore >= 4
+  - Card border becomes rgba(245,158,11,0.7), background gets a subtle amber tint,
+    soft amber glow via box-shadow
+  - Card header shows "forming · 4/7" (or whatever the current score is)
+  - Returns to normal when score drops or setup fully activates
+
+
+3. Session Timeline in Sidebar
+-------------------------------
+
+Replaced the static "Today's Signals" section with a live Session Timeline that merges
+two event streams:
+
+  - Level events from acd_setup_events (OR break, A Up/Down confirms, etc.)
+  - Case-engine setups from /api/setups/today (active_setups table — TRT_LONG, TRT_SHORT, etc.)
+
+Events are sorted by fired_time. Each case-engine setup shows:
+  - Colored left border matching setup type
+  - Entry, Stop, T1 prices
+  - Outcome badge: T1 (green), Stop (red), expired (gray), or live (pulsing)
+  - Reloads automatically on setup-resolved and setup-expired socket events
+
+
+4. Morning Prep — Pre-Market Level Alignment
+---------------------------------------------
+
+Enhancement to src/components/dashboard/MorningBriefPanel.jsx:
+  - Auto-selects the most recent available brief when today's hasn't been generated yet
+    (previously showed "unavailable" error)
+  - Header now shows live DB stats: "Live stats · N sessions · last analyzed DATE"
+    when combo_stats data is available
+
+Enhancement to scripts/morning_brief.js:
+  - PM_COMBOS section now reads live stats from the combo_stats table (avg P&L, win rate,
+    session count) with hardcoded fallback values if the table is empty
+  - Each combo has an id field that matches combo_stats.combo_id for cross-referencing
+
+
+5. Combo Level Backtest System (scripts/combo_backtest.js)
+-----------------------------------------------------------
+
+New script (~530 lines) that computes level confluence stats from historical DB data.
+
+What it does:
+  - Fetches all NQ RTH sessions with ACD data from the DB
+  - Computes 8 categories of key levels per session entirely from DB (no external data):
+      ACD:              OR High/Low, OR5Mid, A Up, A Down
+      Overnight:        ON High/Low
+      Prior Day:        PD High/Low, VWAP
+      Prior Week:       PW High/Low, W-VWAP
+      PD volume profile: POC, VAH, VAL
+      PM volume profile: PM VAL
+      G-Line:           CME weekly open (Sunday 18:00 bar)
+  - For each of 10 defined combos, checks whether all levels in the combo were within
+    the proximity threshold (default 20 pts) of each other
+  - Single-level combos (PM VAL) use touch detection (did session Hi or Lo reach the level?)
+    rather than proximity
+  - Outcome: NQ open→close × $20/pt — normalized, independent of which accounts were active
+    (avoids sim/live contamination)
+  - Upserts results to combo_stats table
+
+Usage: node scripts/combo_backtest.js [--prox=20] [--dry-run]
+
+Current combos tracked:
+
+  Combo                             N      Win%    Avg P&L
+  --------------------------------------------------------
+  OR Mid + OR High + W-VWAP        20      65%      $828
+  OR Mid + OR High + PW High        8      75%    $1,843
+  OR High + PW High               varies    —         —
+  ON Low + PD Low                 varies    —         —
+  ON Low + PD POC + VWAP          varies    —         —
+  A Down + W-VWAP                 varies    —         —
+  A Down + VWAP + W-VWAP          varies    —         —
+  PD VAL + W-VWAP                 varies    —         —
+  PD Low + PD VAL                 varies    —         —
+  PM VAL (solo)                   varies    —         —
+
+
+6. Live Combo Stats in UI (LevelConfluenceReference)
+-----------------------------------------------------
+
+Updated the Level Confluence Reference panel to fetch live stats from /api/stats/combo-stats
+and overlay them on the hardcoded combo definitions:
+  - Shows avg_pnl, win_rate, n from DB
+  - Header shows "Live stats · N sessions · last analyzed DATE"
+  - Re-run button — calls POST /api/stats/combo-stats/rerun, shows "Rerunning (~90s)...",
+    polls for updated stats after 90 seconds
+
+
+7. New API Endpoints (server/routes/stats.js)
+----------------------------------------------
+
+  GET  /api/stats/combo-stats        — returns all rows from combo_stats ordered by tier/win_rate
+  POST /api/stats/combo-stats/rerun  — spawns combo_backtest.js as detached child, returns immediately
+
+
+8. Weekly Cron + Data Health Tracking
+--------------------------------------
+
+Weekly cron added to server/index.js:
+  - Every Sunday at 6:30 PM ET, spawns combo_backtest.js as a detached child process
+
+Data Health integration:
+  - COMBO_BACKTEST entry added to PROCESS_SCHEDULE in server/routes/settings.js
+  - combo_backtest.js writes its own process_log entries directly to the DB (necessary because
+    it runs as a detached child — the parent server's logProcess() wrapper can't reach it):
+      RUNNING  — inserted at script start
+      SUCCESS  — updated with combo count on completion
+      FAILED   — updated with error message if anything throws
+  - The Data Health Status panel now shows a "Combo Level Backtest" row alongside Morning Brief,
+    Auto-Import, Daily Coaching, etc. — gray until it runs, green after a successful Sunday run
+
+
+Bug Fixes
+----------
+
+  - TDZ crash ("Cannot access 'isRTH' before initialization"):
+      lastSession useEffect dependency array referenced isRTH before its const declaration.
+      Fixed by moving the state and effect to after the isRTH declaration.
+
+  - import { query, pool } SyntaxError:
+      pool is the default export from db.js, not a named export.
+      Fixed to: import pool from '../server/db.js'
+
+  - PM VAL showing n=250:
+      Single-level proximity check always passed (max-min of one value = 0).
+      Fixed by adding touch-detection branch for single-level combos.
+
+  - All combos showing negative avg P&L:
+      Combined account P&L included sim/eval accounts with losses.
+      Fixed by switching to NQ price-based outcome (open→close × $20/pt).
+
+  - Morning brief "unavailable" error:
+      Panel was defaulting to today's date even when no brief existed.
+      Fixed to auto-select dates[0] (most recent) when today's brief isn't found.
+
+
+Files Modified
+---------------
+
+  src/App.jsx                                    — lastSession fallback, amber forming card,
+                                                   session timeline, live combo stats in
+                                                   LevelConfluenceReference
+  src/components/dashboard/MorningBriefPanel.jsx — auto-select latest brief, live stats header
+  scripts/combo_backtest.js                      — NEW: full backtest script with process_log
+  scripts/morning_brief.js                       — combo stats read from DB
+  server/index.js                                — weekly cron at Sunday 6:30 PM ET
+  server/routes/stats.js                         — GET + POST /api/stats/combo-stats endpoints
+  server/routes/settings.js                      — COMBO_BACKTEST added to PROCESS_SCHEDULE

@@ -40,6 +40,9 @@ import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js
 import morningBriefRouter from './routes/morningBrief.js';
 import caseRouter from './routes/case.js';
 import scenarioRouter from './routes/scenario.js';
+import cooldownRouter from './routes/cooldown.js';
+import premarketWalkthroughRouter from './routes/premarketWalkthrough.js';
+import annotationsRouter from './routes/annotations.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
 import { runWeeklyReport } from '../scripts/weekly_report.js';
@@ -239,6 +242,9 @@ app.use('/api', profitLockRouter);
 app.use('/api/morning-brief', morningBriefRouter);
 app.use('/api', caseRouter);
 app.use('/api', scenarioRouter);
+app.use('/api', cooldownRouter);
+app.use('/api', premarketWalkthroughRouter);
+app.use('/api', annotationsRouter);
 
 // Admin trigger endpoints
 app.post('/api/admin/run-coaching', async (req, res) => {
@@ -382,8 +388,8 @@ httpServer.listen(PORT, () => {
 
   // ── Scheduled jobs (node-cron v3, fires within the matching minute) ──────────
 
-  // Morning Brief — 7:00 AM ET Mon–Fri
-  cron.schedule('0 7 * * 1-5', async () => {
+  // Morning Brief — 8:30 AM ET Mon–Fri
+  cron.schedule('30 8 * * 1-5', async () => {
     try { await runMorningBriefLogged(); }
     catch (err) { console.error('[morning_brief] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
@@ -455,6 +461,18 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[weekly_report] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // Combo backtest — every Sunday 6:30 PM ET (after weekly report)
+  cron.schedule('30 18 * * 0', async () => {
+    try {
+      const { spawn } = await import('child_process');
+      const child = spawn('node', ['scripts/combo_backtest.js'], {
+        cwd: process.cwd(), detached: true, stdio: 'ignore',
+      });
+      child.unref();
+      console.log('[combo_backtest] Weekly re-run started');
+    } catch (err) { console.error('[combo_backtest] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Monthly Report — 7:00 PM ET first Sunday of month
   cron.schedule('0 19 * * 0', async () => {
     try {
@@ -504,6 +522,17 @@ httpServer.listen(PORT, () => {
               const r = await manualImportFromFile(todayFile, 'AUTO_CATCHUP');
               return { count: r.imported, imported: r.imported, skipped: r.skipped, file: `TradeActivityLogExport_${today}.txt` };
             });
+            // Immediately run coaching now that fills are in — don't wait for next tick
+            const { rows: postImportFills } = await query(
+              `SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [today]
+            );
+            if (parseInt(postImportFills[0]?.count || 0) > 0 && hour >= 16) {
+              console.log('[catch-up] Running coaching immediately after late import');
+              await logProcess('DAILY_COACHING', async () => {
+                const text = await runDailyCoaching(today, io);
+                return { count: text ? 1 : 0 };
+              });
+            }
           }
         }
       }
@@ -527,8 +556,32 @@ httpServer.listen(PORT, () => {
         }
       }
 
-      // Morning brief — due 7 AM Mon–Fri; catch up between 8 AM–noon
-      if (day >= 1 && day <= 5 && hour >= 8 && hour < 12) {
+      // Prior trading day coaching catch-up — runs any day/time, no day/hour guard.
+      // Handles: server was down at 4:45 PM, trades imported manually, server restarted next day.
+      // "Prior trading day" = Mon→Fri, otherwise the closest prior weekday.
+      {
+        const d = new Date(nowET);
+        d.setDate(d.getDate() - 1);
+        while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+        const prevDay = d.toLocaleDateString('en-CA');
+        const [prevCoachRows, prevFillRows] = await Promise.all([
+          query(`SELECT trades_count FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [prevDay]),
+          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [prevDay]),
+        ]);
+        const prevCoached = prevCoachRows.rows[0];
+        const prevFillCount = parseInt(prevFillRows.rows[0]?.count || 0);
+        const prevNeedsCoaching = prevFillCount > 0 && (!prevCoached || (prevCoached.trades_count === 0 && prevFillCount > 0));
+        if (prevNeedsCoaching) {
+          console.log(`[catch-up] Prior day coaching missing for ${prevDay} (${prevFillCount} fills in DB) — running now`);
+          await logProcess('DAILY_COACHING', async () => {
+            const text = await runDailyCoaching(prevDay, io);
+            return { count: text ? 1 : 0 };
+          });
+        }
+      }
+
+      // Morning brief — due 8:30 AM Mon–Fri; catch up 9 AM–1 PM
+      if (day >= 1 && day <= 5 && hour >= 9 && hour < 13) {
         const { rows } = await query(
           `SELECT 1 FROM morning_briefs WHERE brief_date = $1 LIMIT 1`, [today]
         );
@@ -542,7 +595,7 @@ httpServer.listen(PORT, () => {
     }
   }, { timezone: 'America/New_York' });
 
-  console.log('[cron] Registered: Morning Brief 7AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM ET Sun | Catch-up every 30min');
+  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM ET Sun | Catch-up every 30min');
 
   // Hourly overdue process check (9 AM–5 PM ET Mon–Fri)
   setInterval(async () => {

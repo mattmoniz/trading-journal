@@ -212,6 +212,10 @@ router.get('/stats/cumulative-pnl', async (req, res) => {
   }
 });
 
+// POLICY: entry_time and exit_time are stored as ET wall-clock (normalized 2026-06-08).
+// Do NOT apply AT TIME ZONE conversion — they are already ET. Double-shifting will corrupt
+// time-bucketed displays (By Hour, By DOW, Timing Heatmap). Use EXTRACT directly.
+
 // Get performance by hour of day
 router.get('/stats/by-hour', async (req, res) => {
   try {
@@ -241,7 +245,7 @@ router.get('/stats/by-hour', async (req, res) => {
 
     const result = await query(`
       SELECT
-        EXTRACT(HOUR FROM entry_time AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') as hour,
+        EXTRACT(HOUR FROM entry_time) as hour,
         COUNT(*) as trade_count,
         SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
         SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
@@ -250,7 +254,7 @@ router.get('/stats/by-hour', async (req, res) => {
         ROUND((SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::decimal / COUNT(*) * 100)::numeric, 2) as win_rate
       FROM trades
       WHERE ${whereClause}
-      GROUP BY EXTRACT(HOUR FROM entry_time AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+      GROUP BY EXTRACT(HOUR FROM entry_time)
       ORDER BY hour ASC
     `, queryParams);
 
@@ -290,8 +294,8 @@ router.get('/stats/by-day-of-week', async (req, res) => {
 
     const result = await query(`
       SELECT
-        EXTRACT(DOW FROM entry_time AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') as day_num,
-        CASE EXTRACT(DOW FROM entry_time AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+        EXTRACT(DOW FROM entry_time) as day_num,
+        CASE EXTRACT(DOW FROM entry_time)
           WHEN 0 THEN 'Sunday'
           WHEN 1 THEN 'Monday'
           WHEN 2 THEN 'Tuesday'
@@ -308,7 +312,7 @@ router.get('/stats/by-day-of-week', async (req, res) => {
         ROUND((SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::decimal / COUNT(*) * 100)::numeric, 2) as win_rate
       FROM trades
       WHERE ${whereClause}
-      GROUP BY EXTRACT(DOW FROM entry_time AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+      GROUP BY EXTRACT(DOW FROM entry_time)
       ORDER BY day_num ASC
     `, queryParams);
 
@@ -814,6 +818,32 @@ router.post('/sessions/close', async (req, res) => {
       [closed_reason || 'manual', today]
     );
     res.json(r.rows[0] || { message: 'No open session found' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/stats/combo-stats — live level confluence backtest results
+router.get('/stats/combo-stats', async (req, res) => {
+  try {
+    const r = await query(`
+      SELECT combo_id, label, category, tier, levels, n, win_count,
+        avg_pnl::float, win_rate::float, prox_pts::float,
+        session_range_start::text, session_range_end::text,
+        TO_CHAR(last_analyzed AT TIME ZONE 'America/New_York', 'YYYY-MM-DD') as last_analyzed
+      FROM combo_stats ORDER BY tier ASC, win_rate DESC NULLS LAST
+    `);
+    res.json(r.rows);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/stats/combo-stats/rerun — trigger a fresh backtest
+router.post('/stats/combo-stats/rerun', async (req, res) => {
+  try {
+    const { spawn } = await import('child_process');
+    const child = spawn('node', ['scripts/combo_backtest.js'], {
+      cwd: process.cwd(), detached: true, stdio: 'ignore',
+    });
+    child.unref();
+    res.json({ ok: true, message: 'Backtest started — check combo_stats in ~2 minutes' });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

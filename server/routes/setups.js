@@ -10,7 +10,6 @@ const FALLBACK_MEDIANS = {
   'IB_BEARISH': 34, 'IB_BULLISH': 34,
   'OPEN_DRIVE_LONG': 34, 'OPEN_DRIVE_SHORT': 34,
   'TRT_SHORT': 33, 'TRT_LONG': 33, 'TRT_MAH_SHORT': 33, 'TRT_MAH_LONG': 33,
-  'C_REVERSAL_SHORT': 30, 'C_REVERSAL_LONG': 30,
   'FAILED_AUCTION_SHORT': 28, 'FAILED_AUCTION_LONG': 28,
   'VALUE_AREA_RESPONSIVE_LONG': 28, 'VALUE_AREA_RESPONSIVE_SHORT': 28,
   'BRACKET_BREAKOUT_LONG': 40, 'BRACKET_BREAKOUT_SHORT': 40,
@@ -26,7 +25,6 @@ const LEVEL_MAGNITUDES = {
 };
 const COUNTER_TREND_SETUPS = new Set([
   'TRT_SHORT','TRT_LONG','TRT_MAH_SHORT','TRT_MAH_LONG',
-  'C_REVERSAL_SHORT','C_REVERSAL_LONG',
   'VALUE_AREA_RESPONSIVE_LONG','VALUE_AREA_RESPONSIVE_SHORT',
 ]);
 
@@ -345,30 +343,13 @@ router.get('/setups/best-by-date', async (req, res) => {
         GROUP BY setup_type
         HAVING COUNT(*) FILTER (WHERE hit_t1_first OR (hit_stop AND NOT COALESCE(hit_t1_first,false))) >= 10
       ),
-      -- ACD-methodology baseline rates used when no live data exists yet
-      acd_baseline (setup_type, baseline_win_rate) AS (VALUES
-        ('IB_BULLISH',                  0.56),
-        ('IB_BEARISH',                  0.56),
-        ('OPEN_DRIVE_LONG',             0.58),
-        ('OPEN_DRIVE_SHORT',            0.58),
-        ('BRACKET_BREAKOUT_LONG',       0.52),
-        ('BRACKET_BREAKOUT_SHORT',      0.52),
-        ('OPEN_TEST_DRIVE_LONG',        0.52),
-        ('OPEN_TEST_DRIVE_SHORT',       0.52),
-        ('TRT_LONG',                    0.50),
-        ('TRT_SHORT',                   0.50),
-        ('TRT_LONG_V2',                 0.50),
-        ('TRT_SHORT_V2',                0.50),
-        ('TRT_MAH_LONG',                0.48),
-        ('TRT_MAH_SHORT',               0.48),
-        ('C_REVERSAL_LONG',             0.48),
-        ('C_REVERSAL_SHORT',            0.48),
-        ('FAILED_AUCTION_LONG',         0.48),
-        ('FAILED_AUCTION_SHORT',        0.48),
-        ('VALUE_AREA_RESPONSIVE_LONG',  0.44),
-        ('VALUE_AREA_RESPONSIVE_SHORT', 0.44),
-        ('C_STANDALONE_UP',             0.40),
-        ('C_STANDALONE_DOWN',           0.40)
+      -- Replay-derived baseline rates used when no live data exists yet
+      -- (replaces hardcoded ACD-methodology guesses with the full-history
+      -- setup-detection replay, same source as acd.js's getReplayBaseline)
+      acd_baseline AS (
+        SELECT setup_type, win_rate::float as baseline_win_rate
+        FROM setup_daytype_winrates
+        WHERE day_type = 'OVERALL' AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
       ),
       setups_with_stars AS (
         SELECT
@@ -411,6 +392,17 @@ router.get('/setups/best-by-date', async (req, res) => {
         fired_at
     `, [startDate, endDate]);
 
+    // Total setups per day (unfiltered by stars) — used so "+N more" reflects the
+    // full active_setups count for the day, not just the stars>=2 subset above.
+    const totalCounts = await query(`
+      SELECT trade_date::text as trade_date, COUNT(*) as total
+      FROM active_setups
+      WHERE trade_date BETWEEN $1 AND $2
+      GROUP BY trade_date
+    `, [startDate, endDate]);
+    const totalByDate = {};
+    for (const row of totalCounts.rows) totalByDate[row.trade_date] = parseInt(row.total);
+
     // Group by date, compute confluence, cap at 3
     const rawByDate = {};
     for (const row of result.rows) {
@@ -420,7 +412,7 @@ router.get('/setups/best-by-date', async (req, res) => {
 
     const byDate = {};
     for (const [date, rows] of Object.entries(rawByDate)) {
-      const total = rows.length;
+      const total = totalByDate[date] ?? rows.length;
       const shown = rows.slice(0, 3);
 
       // Confluence: all shown setups fired within 5 minutes of each other
@@ -440,7 +432,7 @@ router.get('/setups/best-by-date', async (req, res) => {
           win_rate: r.win_rate,
         })),
         confluence,
-        moreCount: Math.max(0, total - 3),
+        moreCount: Math.max(0, total - shown.length),
       };
     }
 
@@ -463,6 +455,7 @@ router.get('/setups/for-date', async (req, res) => {
       WITH backtest_rates AS (
         SELECT
           setup_type,
+          COUNT(*) FILTER (WHERE hit_t1_first OR (hit_stop AND NOT COALESCE(hit_t1_first,false))) as n,
           ROUND(
             COUNT(*) FILTER (WHERE hit_t1_first)::numeric /
             NULLIF(
@@ -474,18 +467,13 @@ router.get('/setups/for-date', async (req, res) => {
         GROUP BY setup_type
         HAVING COUNT(*) FILTER (WHERE hit_t1_first OR (hit_stop AND NOT COALESCE(hit_t1_first,false))) >= 10
       ),
-      acd_baseline (setup_type, baseline_win_rate) AS (VALUES
-        ('IB_BULLISH',                  0.56), ('IB_BEARISH',                  0.56),
-        ('OPEN_DRIVE_LONG',             0.58), ('OPEN_DRIVE_SHORT',            0.58),
-        ('BRACKET_BREAKOUT_LONG',       0.52), ('BRACKET_BREAKOUT_SHORT',      0.52),
-        ('OPEN_TEST_DRIVE_LONG',        0.52), ('OPEN_TEST_DRIVE_SHORT',       0.52),
-        ('TRT_LONG',                    0.50), ('TRT_SHORT',                   0.50),
-        ('TRT_LONG_V2',                 0.50), ('TRT_SHORT_V2',                0.50),
-        ('TRT_MAH_LONG',                0.48), ('TRT_MAH_SHORT',               0.48),
-        ('C_REVERSAL_LONG',             0.48), ('C_REVERSAL_SHORT',            0.48),
-        ('FAILED_AUCTION_LONG',         0.48), ('FAILED_AUCTION_SHORT',        0.48),
-        ('VALUE_AREA_RESPONSIVE_LONG',  0.44), ('VALUE_AREA_RESPONSIVE_SHORT', 0.44),
-        ('C_STANDALONE_UP',             0.40), ('C_STANDALONE_DOWN',           0.40)
+      -- Replay-derived baseline rates used when no live data exists yet
+      -- (replaces hardcoded ACD-methodology guesses with the full-history
+      -- setup-detection replay, same source as acd.js's getReplayBaseline)
+      acd_baseline AS (
+        SELECT setup_type, win_rate::float as baseline_win_rate
+        FROM setup_daytype_winrates
+        WHERE day_type = 'OVERALL' AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
       )
       SELECT
         s.id,
@@ -501,6 +489,7 @@ router.get('/setups/for-date', async (req, res) => {
         s.resolution,
         s.status,
         COALESCE(bt.measured_win_rate, s.historical_win_rate, b.baseline_win_rate)::float as win_rate,
+        COALESCE(bt.n, 0)::int as sample_n,
         CASE
           WHEN COALESCE(bt.measured_win_rate, s.historical_win_rate, b.baseline_win_rate) >= 0.58 THEN 3
           WHEN COALESCE(bt.measured_win_rate, s.historical_win_rate, b.baseline_win_rate) >= 0.48 THEN 2
@@ -527,6 +516,7 @@ router.get('/setups/for-date', async (req, res) => {
       resolution: r.resolution,
       status: r.status,
       win_rate: r.win_rate,
+      sample_n: r.sample_n,
       stars: parseInt(r.stars),
     })));
   } catch (err) {

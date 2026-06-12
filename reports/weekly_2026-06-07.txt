@@ -1,0 +1,95 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-06-07  (2026-06-01 – 2026-06-07)
+Generated   : 2026-06-11T21:38:42.130Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 5
+Total P&L     : +$1330.00
+Daily avg     : +$266.00
+Win days      : 3 / 5 (60%)
+Best day      : 2026-06-02  +$1095.50
+Worst day     : 2026-06-05  -$771.50
+
+  2026-06-01  -$377.00
+  2026-06-02  +$1095.50
+  2026-06-03  +$317.50
+  2026-06-04  +$1065.50
+  2026-06-05  -$771.50
+
+SETUP STATISTICS
+----------------------------------------
+BRACKET_BREAKOUT_LONG          fired: 2 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+C_STANDALONE_DOWN              fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$500.00
+FAILED_AUCTION_LONG            fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+IB_BEARISH                     fired: 3 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$260.00
+IB_BULLISH                     fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$420.00
+OPEN_TEST_DRIVE_LONG           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$450.00
+OPEN_TEST_DRIVE_SHORT          fired: 3 | wins: 1 | losses: 1 | expired: 1 | wr: 50% | avg +$120.00
+TRT_LONG                       fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 1 day(s) | C confirm: 1 (100%)
+A Down fired  : 3 day(s) | C confirm: 3 (100%)
+Net score Δ   : -8
+Day types     : BALANCE: 3, TREND: 2
+
+  2026-06-01  score: +0  no signals  [BALANCE]
+  2026-06-02  score: +4  A↑ C↑  [TREND]
+  2026-06-03  score: -4  A↓ C↓  [BALANCE]
+  2026-06-04  score: -4  A↓ C↓  [BALANCE]
+  2026-06-05  score: -4  A↓ C↓  [TREND]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 342
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 342 | wr: 49% | avg fill pnl: +$8.00
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+Days w/ give-back : 3 / 5
+Total give-back   : -$1332
+Avg give-back     : 43% of peak
+Worst day         : 2026-06-03  58% given back
+
+  2026-06-01  peak: $0  close: -$377.00  give-back: none
+  2026-06-02  peak: +$1096  close: +$1095.50  give-back: none
+  2026-06-03  peak: +$749  close: +$317.50  give-back: -$431 (58% of peak)
+  2026-06-04  peak: +$1233  close: +$1105.50  give-back: -$128 (10% of peak)
+  2026-06-05  peak: $0  close: -$773.00  give-back: -$773 (0% of peak)
+
+FLAGS (auto-detected)
+----------------------------------------
+High avg give-back: 43% of peak returned to market (target <20%)
+Extreme give-back on 2026-06-03: 58% of peak
+
+INTERPRETATION (AI)
+----------------------------------------
+The 43% average give-back indicates a systematic failure to protect open profits, suggesting entries are well-timed but exits are reactive rather than planned. The 58% spike on June 3rd points to either a strong trend reversal day where trailing stops were too loose, or a news-driven move that wiped back gains before a defensive exit was triggered. Collectively, these flags reveal that the edge is being built on good A-level reads but surrendered through undisciplined profit management — the work is being done on the front end and donated on the back end. For next week, implement a hard rule: once a trade reaches 1.5x the initial risk in profit, move the stop to lock in a minimum of 40% of peak open profit, and do not override it regardless of conviction about further continuation.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+WEEK SUMMARY:
++$1,330 net across 5 days, but avg give-back of 43% of daily peak with -$1,332 total give-back means you surrendered nearly a full week's gains intraday. Two losing days cost -$771.50 at worst. The scorecard went 3-for-5 on decisive signals, but 0 of 342 fills were annotated — there is no way to connect execution to outcomes this week.
+
+STRONGEST MOMENT:
+Insufficient trade data. Zero annotations across 342 fills means no specific execution can be evaluated. The signal on 06-05 (A_DOWN in SHORT bias) resolved CORRECT, and BIAS_SHORT also resolved CORRECT that day — two aligned signals firing together — but without annotations there is no way to confirm you traded it, sized it correctly, or captured any of it.
+
+BIGGEST LEAK:
+No-signal/bracket day overtrading. On 06-01 alone: 10 trades, 8 losers averaging -$52 each, with MFE rarely exceeding +$32. On 06-02, a ×3 LONG with no MFE in a zero-confluence bracket day nearly erased 40% of gross profits at -$172.50 on a single fill. The pattern is identical: maximum activity and maximum size deployed on the weakest setups.
+
+PROCESS GRADE: D
+Positive P&L masks a broken process — overtrading no-signal days, max-sizing without edge, 43% average give-back, and zero annotation coverage make improvement impossible to track.
+
+FOCUS FOR NEXT WEEK:
+Zero trades on any session flagged NO_SIGNAL or 0/12 confluence before the open. One rule, measurable daily.
+
+============================================================
