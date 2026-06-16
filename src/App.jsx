@@ -4,6 +4,7 @@ import './App.css';
 import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './utils/timestamps.js';
 import { TOOLTIPS } from './constants/tooltips.js';
 import DashboardView from './components/dashboard/DashboardView.jsx';
+import AntigravityEdgesView from './components/dashboard/AntigravityEdgesView.jsx';
 import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import MorningBriefPanel from './components/dashboard/MorningBriefPanel.jsx';
 import PostLossCooldown from './components/dashboard/PostLossCooldown.jsx';
@@ -584,6 +585,11 @@ function App() {
         {currentView === 'dashboard' && (
           <ErrorBoundary name="Dashboard">
             <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} ChartReviewComponent={ChartReviewSection} />
+          </ErrorBoundary>
+        )}
+        {currentView === 'edges' && (
+          <ErrorBoundary name="Antigravity Edges">
+            <AntigravityEdgesView />
           </ErrorBoundary>
         )}
         {(currentView === 'all-trades' || currentView === 'calendar') && (
@@ -1254,6 +1260,50 @@ const DT_STYLE = {
   FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.30)',      border: 'rgba(51,65,85,0.40)' },
 };
 
+// Live day-type reassessment — shows whether the static (10:05) read has
+// since been reassessed, with the evidence that triggered it, framed as
+// provisional. Read-only / additive (server/services/dayTypeReassessmentService.js).
+function DayTypeReassessmentBanner({ reassessment, compact = false }) {
+  if (!reassessment) return null;
+  const { reassessments = [], provisional, limitation } = reassessment;
+  const latest = reassessments[reassessments.length - 1];
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      {latest && (
+        <div style={{
+          fontSize: compact ? 11 : 13, color: '#a5b4fc', lineHeight: 1.45,
+          background: 'rgba(129,140,248,0.10)', border: '1px solid rgba(129,140,248,0.30)',
+          borderRadius: 5, padding: compact ? '5px 8px' : '7px 10px', marginBottom: 6,
+        }}>
+          <span style={{ fontWeight: 700, color: '#818cf8' }}>↻ {latest.message}</span>
+          {reassessments.length > 1 && (
+            <div style={{ marginTop: 3, fontSize: 11, color: '#818cf8', opacity: 0.75 }}>
+              ({reassessments.length} reassessments this session: {reassessments.map(r => `${r.from}→${r.to}@${r.time}`).join(', ')})
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: compact ? 10 : 11, color: provisional ? LR_AMBER : '#64748b', marginBottom: latest ? 4 : 0 }}>
+        <span style={{
+          fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
+          padding: '1px 5px', borderRadius: 3,
+          background: provisional ? 'rgba(245,158,11,0.15)' : 'rgba(100,116,139,0.15)',
+          border: `1px solid ${provisional ? 'rgba(245,158,11,0.35)' : 'rgba(100,116,139,0.30)'}`,
+        }}>
+          {provisional ? 'LIVE · PROVISIONAL' : 'FINAL'}
+        </span>
+        <span>{provisional ? 'Can still change as the session develops' : 'Session closed — read is final'}</span>
+      </div>
+      {!compact && limitation && (
+        <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.45, marginTop: 4 }}>
+          {limitation}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function useLiveCase() {
   const [caseData, setCaseData] = React.useState(null);
   const [loading, setLoading]   = React.useState(true);
@@ -1341,6 +1391,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
             )}
             {c.dayType?.playbook && <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: c.dayType?.whatWouldChangeIt ? 6 : 0 }}>{c.dayType.playbook}</div>}
             {c.dayType?.whatWouldChangeIt && <div style={{ fontSize: 13, color: '#cbd5e1' }}><span style={{ color: '#94a3b8', fontWeight: 600 }}>Changes if: </span>{c.dayType.whatWouldChangeIt}</div>}
+            <DayTypeReassessmentBanner reassessment={c.dayTypeReassessment} />
           </div>
           {(ctx.orWidth || ctx.ibWidth) && (
             <div style={{ display: 'flex', gap: 16, fontSize: 12, color: '#cbd5e1', flexWrap: 'wrap', marginBottom: 10 }}>
@@ -1554,7 +1605,9 @@ function CaseReadDetailModal({ kind, c, isRTH = true, isPastOpen = true, title, 
   );
 }
 
-function LiveReadPanel() {
+// Live day/case/trigger read — large, readable banner at the top of the
+// Morning Prep main column. Sourced from CaseContext (same /api/case poll).
+function LiveReadBanner() {
   const { caseData: c, loading } = React.useContext(CaseContext);
   const [activeModal, setActiveModal] = React.useState(null);
   const closeModal = () => setActiveModal(null);
@@ -1566,9 +1619,9 @@ function LiveReadPanel() {
 
   if ((loading && !c) || !c || c.error) {
     return (
-      <div style={{ borderTop: '1px solid rgba(51,65,85,0.55)', paddingTop: 10, paddingBottom: 4 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 5 }}>Live Read</div>
-        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+      <div style={{ border: '1px solid rgba(51,65,85,0.55)', borderRadius: 10, padding: '14px 18px', marginBottom: 18 }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 6 }}>Live Read</div>
+        <div style={{ fontSize: 15, color: '#94a3b8' }}>
           {loading && !c ? 'Loading…' : 'No bar data yet'}
         </div>
       </div>
@@ -1579,162 +1632,141 @@ function LiveReadPanel() {
   const dtClass = dayType?.classification || 'FORMING';
   const bias    = read?.bias || 'NEUTRAL';
   const meter   = read?.meterPosition || 0;
-
-  function dirClr(dir) {
-    return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE;
-  }
+  function dirClr(dir) { return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE; }
   const biasClr = dirClr(bias);
-
-  // Day-type color palette
-  const DT_STYLE = {
-    BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.09)',    border: 'rgba(245,158,11,0.35)' },
-    TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.08)',   border: 'rgba(129,140,248,0.30)' },
-    TURBULENT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.07)',   border: 'rgba(148,163,184,0.22)' },
-    FORMING:   { color: LR_SLATE,  bg: 'rgba(30,41,59,0.40)',      border: 'rgba(51,65,85,0.40)' },
-  };
   const dts = DT_STYLE[dtClass] || DT_STYLE.FORMING;
 
-  // Trigger
   const tState  = trigger?.state || 'WATCHING';
   const tActive = tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING';
   const tSetup  = trigger?.setup;
   const tDir    = tSetup?.direction;
   const tClr    = tActive ? dirClr(tDir) : LR_SLATE;
-  const tBg     = tActive
-    ? (tDir === 'LONG' ? 'rgba(45,212,191,0.07)' : 'rgba(251,146,60,0.07)')
-    : 'rgba(15,23,42,0.30)';
+  const tBg     = tActive ? (tDir === 'LONG' ? 'rgba(45,212,191,0.07)' : 'rgba(251,146,60,0.07)') : 'rgba(15,23,42,0.30)';
   const tBorder = tActive ? `${tClr}55` : 'rgba(51,65,85,0.45)';
 
   const latestEv  = evidenceLog[evidenceLog.length - 1] || null;
   const asOfTime  = c.asOf ? c.asOf.slice(11, 16) : null;
 
   return (
-    <div style={{ borderTop: '1px solid rgba(51,65,85,0.55)', paddingTop: 6 }}>
-
-      {/* ─── Header ─────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-          Live Read
-        </span>
-        {asOfTime && (
-          <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{asOfTime} ET</span>
-        )}
+    <div style={{ border: '1px solid rgba(51,65,85,0.55)', borderRadius: 10, padding: '16px 20px', marginBottom: 18, background: 'rgba(15,23,42,0.25)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <span style={{ fontSize: 15, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Live Read</span>
+        {asOfTime && <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace' }}>{asOfTime} ET</span>}
       </div>
 
-      {/* ─── 1. THE DAY ─────────────────────────────────── */}
-      <div {...clickableProps('day')} style={{ border: `1px solid ${dts.border}`, borderRadius: 6, padding: '8px 10px', background: dts.bg, marginBottom: 8, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: dtClass === 'BALANCE' || dayType?.playbook ? 4 : 0 }}>
-          <span style={{ fontSize: 14, fontWeight: 800, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em', lineHeight: 1 }}>
-            {dtClass}
-          </span>
-          {compression?.coiled && (
-            <span style={{ fontSize: 9, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 5px', letterSpacing: '0.05em' }}>
-              COILED
-            </span>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
+        {/* ─── THE DAY ─────────────────────────────────── */}
+        <div {...clickableProps('day')} style={{ flex: '1 1 260px', border: `1px solid ${dts.border}`, borderRadius: 8, padding: '12px 16px', background: dts.bg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20, fontWeight: 800, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{dtClass}</span>
+            {compression?.coiled && (
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.05em' }}>COILED</span>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>{dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}</span>
+          </div>
+          {dtClass === 'BALANCE' && (
+            <div style={{ fontSize: 14, color: LR_AMBER, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
+              ⚠ WEAK edge today — breakout setups lose on balance days (interim). Stand light.
+            </div>
           )}
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: '#64748b', flexShrink: 0 }}>
-            {dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}
-          </span>
+          {dayType?.playbook && <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.5 }}>{dayType.playbook}</div>}
+          <DayTypeReassessmentBanner reassessment={c.dayTypeReassessment} />
         </div>
 
-        {dtClass === 'BALANCE' && (
-          <div style={{ fontSize: 12, color: LR_AMBER, fontWeight: 600, marginBottom: 3, lineHeight: 1.35 }}>
-            ⚠ WEAK edge today — breakout setups lose on balance days (interim). Stand light.
+        {/* ─── THE READ ────────────────────────────────── */}
+        <div {...clickableProps('case')} style={{ flex: '1 1 280px', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', transition: 'filter 0.12s ease' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{bias}</span>
+            <span style={{ fontSize: 16, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(read?.conviction ?? 0).toFixed(1)}/10</span>
           </div>
-        )}
-
-        {dayType?.playbook && (
-          <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.4 }}>
-            {dayType.playbook}
+          <div style={{ position: 'relative', height: 7, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden', marginBottom: 5 }}>
+            <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
+            {meter > 15 ? (
+              <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.9 }} />
+            ) : meter < -15 ? (
+              <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.9 }} />
+            ) : (
+              <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+            )}
           </div>
-        )}
-      </div>
-
-      {/* ─── 2. THE READ ────────────────────────────────── */}
-      <div {...clickableProps('case')} style={{ marginBottom: 8, cursor: 'pointer', borderRadius: 6, padding: '6px 7px', margin: '0 -7px 8px', transition: 'filter 0.12s ease' }}>
-        {/* Bias + conviction */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {bias}
-          </span>
-          <span style={{ fontSize: 12, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>
-            {(read?.conviction ?? 0).toFixed(1)}/10
-          </span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: LR_CORAL, fontWeight: 700 }}>SHORT</span>
+            <span style={{ fontSize: 12, color: LR_TEAL, fontWeight: 700 }}>LONG</span>
+          </div>
+          {latestEv && (
+            <div style={{ fontSize: 14, background: 'rgba(15,23,42,0.45)', borderRadius: 5, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ color: latestEv.change === '↑' ? LR_TEAL : LR_CORAL, fontWeight: 800, fontSize: 16, flexShrink: 0, lineHeight: 1 }}>{latestEv.change}</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e2e8f0' }}>{latestEv.reason}</span>
+              <span style={{ flexShrink: 0, fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>{typeof latestEv.time === 'string' ? latestEv.time.slice(11, 16) : ''}</span>
+            </div>
+          )}
         </div>
 
-        {/* Horizontal meter — short ← center → long */}
-        <div style={{ position: 'relative', height: 5, background: 'rgba(51,65,85,0.55)', borderRadius: 3, overflow: 'hidden', marginBottom: 3 }}>
-          <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
-          {meter > 15 ? (
-            <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 3px 3px 0', opacity: 0.9 }} />
-          ) : meter < -15 ? (
-            <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '3px 0 0 3px', opacity: 0.9 }} />
+        {/* ─── TRIGGER SLOT ────────────────────────────── */}
+        <div {...clickableProps('trigger')} style={{ flex: '1 1 280px', border: `1.5px solid ${tBorder}`, borderRadius: 8, padding: '12px 16px', background: tBg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
+          {tState === 'WATCHING' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1e293b', border: '1px solid #334155', flexShrink: 0 }} />
+              <span style={{ fontSize: 14, color: '#94a3b8' }}>Watching — no actionable setup</span>
+            </div>
+          ) : tState === 'RESOLVED' ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+              <span style={{ fontSize: 14, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{(trigger.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
+            </div>
           ) : (
-            <div style={{ position: 'absolute', left: 'calc(50% - 2px)', width: 4, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                <span style={{ width: 9, height: 9, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
+                <span style={{ fontWeight: 700, fontSize: 14, color: tClr, textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(tSetup?.type || '').replace(/_/g, ' ')}</span>
+                <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 700, color: tClr, background: `${tClr}22`, border: `1px solid ${tClr}44`, borderRadius: 4, padding: '2px 7px', flexShrink: 0 }}>{tSetup?.impactScore ?? '?'}/10</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px', fontSize: 14, marginBottom: 7 }}>
+                {tSetup?.entry != null && <span style={{ color: '#94a3b8' }}>Entry <strong style={{ color: '#f1f5f9', fontFamily: 'monospace' }}>{Math.round(tSetup.entry)}</strong></span>}
+                {tSetup?.stop != null && <span style={{ color: '#94a3b8' }}>Stop  <strong style={{ color: LR_CORAL, fontFamily: 'monospace' }}>{Math.round(tSetup.stop)}</strong></span>}
+                {tSetup?.t1 != null && <span style={{ color: '#94a3b8' }}>T1    <strong style={{ color: LR_TEAL, fontFamily: 'monospace' }}>{Math.round(tSetup.t1)}</strong></span>}
+                {tSetup?.rr != null && <span style={{ color: '#94a3b8' }}>R:R   <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{tSetup.rr}</strong></span>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' ? 6 : 0 }}>
+                <span style={{ fontSize: 13, letterSpacing: '-1px' }}>
+                  {[1,2,3].map(n => <span key={n} style={{ color: n <= (tSetup?.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>)}
+                </span>
+                {tState === 'ACTIVE_MANAGING' && <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Managing</span>}
+              </div>
+              {trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' && (
+                <div style={{ fontSize: 13, color: '#94a3b8', borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 6, lineHeight: 1.45 }}>
+                  <span style={{ color: tClr, fontWeight: 700 }}>{trigger.exitPlaybook.scheme}</span>{' · '}<span>{(trigger.exitPlaybook.target || '').split('.')[0]}</span>
+                </div>
+              )}
+            </>
           )}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-          <span style={{ fontSize: 10, color: LR_CORAL, fontWeight: 700 }}>SHORT</span>
-          <span style={{ fontSize: 10, color: LR_TEAL,  fontWeight: 700 }}>LONG</span>
-        </div>
-
-        {/* Evidence strip — latest event */}
-        {latestEv && (
-          <div style={{ fontSize: 12, background: 'rgba(15,23,42,0.45)', borderRadius: 4, padding: '4px 7px', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ color: latestEv.change === '↑' ? LR_TEAL : LR_CORAL, fontWeight: 800, fontSize: 13, flexShrink: 0, lineHeight: 1 }}>
-              {latestEv.change}
-            </span>
-            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e2e8f0', fontSize: 12 }}>
-              {latestEv.reason}
-            </span>
-            <span style={{ flexShrink: 0, fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>
-              {typeof latestEv.time === 'string' ? latestEv.time.slice(11, 16) : ''}
-            </span>
-          </div>
-        )}
       </div>
 
-      {/* ─── 3. LEVELS ──────────────────────────────────── */}
+      {/* ─── KEY LEVELS ──────────────────────────────────── */}
       {levels.length > 0 && (
-        <div {...clickableProps('levels')} style={{ marginBottom: 8, cursor: 'pointer', borderRadius: 6, padding: '6px 7px', margin: '0 -7px 8px', transition: 'filter 0.12s ease' }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 4, fontWeight: 700 }}>
-            Key Levels
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div {...clickableProps('levels')} style={{ marginTop: 14, cursor: 'pointer', borderRadius: 8, padding: '10px 12px', border: '1px solid rgba(51,65,85,0.4)', transition: 'filter 0.12s ease' }}>
+          <div style={{ fontSize: 13, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.09em', marginBottom: 8, fontWeight: 700 }}>Key Levels</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {levels.slice(0, 6).map((lv, i) => {
               const isNearest = i === 0;
               const tfClr = lv.timeframes?.[0] === 'WEEKLY' ? '#a78bfa' : lv.timeframes?.[0] === 'DAILY' ? '#60a5fa' : '#64748b';
-              const distTo    = -(lv.distance || 0);  // positive → level is above price
+              const distTo    = -(lv.distance || 0);
               const distDisp  = `${distTo >= 0 ? '+' : ''}${Math.round(distTo)}`;
               return (
-                <div
-                  key={i}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 4, padding: '3px 5px', borderRadius: 4,
-                    background: isNearest ? 'rgba(99,102,241,0.09)' : lv.stacked ? 'rgba(45,212,191,0.05)' : 'transparent',
-                    border:     isNearest ? '1px solid rgba(99,102,241,0.22)' : lv.stacked ? '1px solid rgba(45,212,191,0.18)' : '1px solid transparent',
-                  }}
-                >
-                  <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700, color: isNearest ? '#f1f5f9' : '#cbd5e1', minWidth: 46, flexShrink: 0 }}>
-                    {Math.round(lv.price)}
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderRadius: 6,
+                  background: isNearest ? 'rgba(99,102,241,0.09)' : lv.stacked ? 'rgba(45,212,191,0.05)' : 'rgba(15,23,42,0.3)',
+                  border: isNearest ? '1px solid rgba(99,102,241,0.22)' : lv.stacked ? '1px solid rgba(45,212,191,0.18)' : '1px solid rgba(51,65,85,0.3)',
+                }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: isNearest ? '#f1f5f9' : '#cbd5e1' }}>{Math.round(lv.price)}</span>
+                  <span style={{ fontSize: 13, color: '#94a3b8' }}>{lv.label}</span>
+                  {lv.stacked && <span style={{ fontSize: 10, color: LR_TEAL, background: 'rgba(45,212,191,0.12)', border: '1px solid rgba(45,212,191,0.3)', borderRadius: 3, padding: '0 4px', letterSpacing: '0.04em' }}>STK</span>}
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: tfClr }} />
+                  <span style={{ fontSize: 12, letterSpacing: '-1px' }}>
+                    {[1,2,3].map(n => <span key={n} style={{ color: n <= (lv.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>)}
                   </span>
-                  <span style={{ fontSize: 11, color: '#94a3b8', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {lv.label}
-                  </span>
-                  {lv.stacked && (
-                    <span style={{ fontSize: 8, color: LR_TEAL, background: 'rgba(45,212,191,0.12)', border: '1px solid rgba(45,212,191,0.3)', borderRadius: 2, padding: '0 3px', letterSpacing: '0.04em', flexShrink: 0 }}>
-                      STK
-                    </span>
-                  )}
-                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: tfClr, flexShrink: 0 }} />
-                  <span style={{ fontSize: 10, letterSpacing: '-1px', flexShrink: 0 }}>
-                    {[1,2,3].map(n => (
-                      <span key={n} style={{ color: n <= (lv.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>
-                    ))}
-                  </span>
-                  <span style={{ fontSize: 10, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0, minWidth: 30, textAlign: 'right' }}>
-                    {distDisp}
-                  </span>
+                  <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>{distDisp}</span>
                 </div>
               );
             })}
@@ -1742,87 +1774,16 @@ function LiveReadPanel() {
         </div>
       )}
 
-      {/* ─── 4. TRIGGER SLOT ────────────────────────────── */}
-      <div {...clickableProps('trigger')} style={{ border: `1.5px solid ${tBorder}`, borderRadius: 6, padding: '8px 10px', background: tBg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
-        {tState === 'WATCHING' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#1e293b', border: '1px solid #334155', flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: '#94a3b8' }}>Watching — no actionable setup</span>
-          </div>
-        ) : tState === 'RESOLVED' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
-            <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              {(trigger.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}
-            </span>
-          </div>
-        ) : (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
-              <span style={{ fontWeight: 700, fontSize: 11, color: tClr, textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {(tSetup?.type || '').replace(/_/g, ' ')}
-              </span>
-              <span style={{ fontSize: 10, fontFamily: 'monospace', fontWeight: 700, color: tClr, background: `${tClr}22`, border: `1px solid ${tClr}44`, borderRadius: 3, padding: '1px 6px', flexShrink: 0 }}>
-                {tSetup?.impactScore ?? '?'}/10
-              </span>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px', fontSize: 12, marginBottom: 5 }}>
-              {tSetup?.entry != null && (
-                <span style={{ color: '#94a3b8' }}>Entry <strong style={{ color: '#f1f5f9', fontFamily: 'monospace' }}>{Math.round(tSetup.entry)}</strong></span>
-              )}
-              {tSetup?.stop != null && (
-                <span style={{ color: '#94a3b8' }}>Stop  <strong style={{ color: LR_CORAL, fontFamily: 'monospace' }}>{Math.round(tSetup.stop)}</strong></span>
-              )}
-              {tSetup?.t1 != null && (
-                <span style={{ color: '#94a3b8' }}>T1    <strong style={{ color: LR_TEAL,  fontFamily: 'monospace' }}>{Math.round(tSetup.t1)}</strong></span>
-              )}
-              {tSetup?.rr != null && (
-                <span style={{ color: '#94a3b8' }}>R:R   <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{tSetup.rr}</strong></span>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' ? 4 : 0 }}>
-              <span style={{ fontSize: 10, letterSpacing: '-1px' }}>
-                {[1,2,3].map(n => (
-                  <span key={n} style={{ color: n <= (tSetup?.stars || 1) ? '#fbbf24' : '#1e293b' }}>★</span>
-                ))}
-              </span>
-              {tState === 'ACTIVE_MANAGING' && (
-                <span style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Managing</span>
-              )}
-            </div>
-
-            {trigger?.exitPlaybook?.scheme && trigger.exitPlaybook.scheme !== 'WAIT' && (
-              <div style={{ fontSize: 11, color: '#94a3b8', borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 4, lineHeight: 1.4 }}>
-                <span style={{ color: tClr, fontWeight: 700 }}>{trigger.exitPlaybook.scheme}</span>
-                {' · '}
-                <span>{(trigger.exitPlaybook.target || '').split('.')[0]}</span>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
       {/* Compression coiled banner */}
       {compression?.coiled && (
-        <div style={{ marginTop: 6, fontSize: 10, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.22)', borderRadius: 4, padding: '4px 8px', lineHeight: 1.4 }}>
+        <div style={{ marginTop: 10, fontSize: 13, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.22)', borderRadius: 6, padding: '6px 10px', lineHeight: 1.5 }}>
           {compression.note}
         </div>
       )}
 
       {activeModal && (
-        <CaseReadDetailModal
-          kind={activeModal}
-          c={c}
-          isRTH={true}
-          isPastOpen={true}
-          title={MODAL_TITLES[activeModal]}
-          onClose={closeModal}
-        />
+        <CaseReadDetailModal kind={activeModal} c={c} isRTH={true} isPastOpen={true} title={MODAL_TITLES[activeModal]} onClose={closeModal} />
       )}
-
     </div>
   );
 }
@@ -1864,6 +1825,14 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
           <span className="nav-icon">📈</span>
           <span>Dashboard</span>
           <NavUpdateDot view="dashboard" />
+        </button>
+
+        <button
+          className={`nav-item ${currentView === 'edges' ? 'active' : ''}`}
+          onClick={() => setCurrentView('edges')}
+        >
+          <span className="nav-icon">💡</span>
+          <span>Antigravity Edges</span>
         </button>
 
         <button
@@ -1923,7 +1892,6 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
         </button>
       </nav>
 
-      <LiveReadPanel />
       <LiveSessionPanel />
     </aside>
   );
@@ -2758,7 +2726,9 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
             if (!weekRangeStart) return null;
             const d = new Date(weekRangeStart + 'T12:00:00');
             const dow = d.getDay(); // 0=Sun,1=Mon,...
-            d.setDate(d.getDate() + (dow === 0 ? -6 : 1 - dow));
+            // Monday belonging to THIS calendar row: Sunday (dow=0) -> +1 day forward.
+            // Any other weekday (only happens on the first partial week of the month) -> back to Monday.
+            d.setDate(d.getDate() + (dow === 0 ? 1 : 1 - dow));
             return d.toLocaleDateString('en-CA');
           })();
           const weekAssessment = weekKey ? weeklyAssessments[weekKey] : null;
@@ -2852,7 +2822,7 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
                       {weekAssessment.assessment_text}
                     </pre>
                   ) : (
-                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
                       {weekGrade ? 'Assessment text not available.' : 'Full weekly assessment generates Sunday at 6 PM ET.'}
                     </span>
                   )}
@@ -5527,7 +5497,6 @@ function SettingsView() {
     </div>
   );
 }
-
 // ==================== KEY LEVEL BACKTEST MULTI-TIMEFRAME VIEW ====================
 
 const KL_LEVEL_GROUPS = [
@@ -8164,7 +8133,16 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
 
       {/* Section Tabs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-color)', paddingBottom: 0 }}>
-        {[['efficiency', 'Efficiency Analysis'], ['volume', 'Volume Profile'], ['keylevels', 'Key Level Analysis'], ['edge', 'Edge Analysis'], ['chartreview', 'Chart Review'], ['playbook', 'Playbook']].map(([v, l]) => (
+        {[
+          ['efficiency', 'Efficiency Analysis'],
+          ['volume', 'Volume Profile'],
+          ['keylevels', 'Key Level Analysis'],
+          ['edge', 'Edge Analysis'],
+          ['chartreview', 'Chart Review'],
+          ['playbook', 'Playbook'],
+          ['backlog', 'Improvements Backlog'],
+          ['explanations', 'Playbook & Weekly Patterns']
+        ].map(([v, l]) => (
           <button key={v} onClick={() => setActiveSection(v)}
             style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: '10px 20px',
@@ -9117,6 +9095,8 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         <ChartReviewSection selectedAccounts={selectedAccounts} initialDate={chartReviewDate} initialLevelKey={null} />
       )}
       {activeSection === 'playbook' && <PlaybookPage />}
+      {activeSection === 'backlog' && <ImprovementsBacklogSection />}
+      {activeSection === 'explanations' && <PlaybookWeeklyPatternsSection />}
     </div>
   );
 }
@@ -12188,6 +12168,82 @@ function ThisSetupHistorically() {
   );
 }
 
+// Renders a narrative string (blocks separated by \n\n, with "LABEL:" headers) —
+// shared by the inline Phase 1 card and the Auction Read detail modal.
+function NarrativeBlocks({ narrative, title }) {
+  if (!narrative) return null;
+  return (
+    <div style={{ marginTop: 12, padding: '12px 16px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 8 }}>
+      {title && (
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
+          {title}
+        </div>
+      )}
+      {narrative.split('\n\n').map((block, i) => {
+        const isHeader = block.match(/^[A-Z][A-Z\s:]+:/);
+        return (
+          <div key={i} style={{ marginBottom: 10 }}>
+            {isHeader ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
+                  {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
+                </div>
+                <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>
+                  {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>{block}</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Modal: full morning-guidance detail behind the green Pre-Market Bias / Session
+// Bias summary boxes — opened on click, keeps the dashboard summary compact.
+function AuctionReadDetailModal({ p1Direction, p1Bias, ltSentence, phase1Narrative, sessionBias, phase2Narrative, biasColor, onClose }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#0d1117', border: '1px solid var(--border-color)', borderRadius: 12, padding: '20px 24px', maxWidth: 700, width: '100%', maxHeight: '88vh', overflowY: 'auto', position: 'relative', boxShadow: '0 25px 80px rgba(0,0,0,0.9)', fontFamily: 'Arial, sans-serif' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.12em' }}>Morning Read — Full Detail</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#cbd5e1', fontSize: 20, cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}>✕</button>
+        </div>
+
+        {p1Bias && (
+          <div style={{ padding: '10px 14px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.08)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}40`, borderRadius: 8, marginBottom: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8', marginBottom: 4 }}>
+              PRE-MARKET BIAS: {p1Direction}
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.7 }}>{p1Bias.text}</div>
+            {ltSentence && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(100,116,139,0.2)', fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>
+                <span style={{ color: '#cbd5e1', fontWeight: 700 }}>Structural context: </span>{ltSentence}
+              </div>
+            )}
+          </div>
+        )}
+
+        <NarrativeBlocks narrative={phase1Narrative} title="Morning Guidance" />
+
+        {sessionBias && (
+          <div style={{ padding: '10px 14px', background: `${biasColor[sessionBias.level]}10`, border: `2px solid ${biasColor[sessionBias.level]}`, borderRadius: 8, marginTop: 16, marginBottom: 6 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: biasColor[sessionBias.level], marginBottom: 4 }}>
+              SESSION BIAS: {sessionBias.level}
+            </div>
+            <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
+          </div>
+        )}
+
+        <NarrativeBlocks narrative={phase2Narrative} title="Opening Guidance" />
+      </div>
+    </div>
+  );
+}
+
 // ─── AuctionReadSummary: inline conclusions + one full-read expand ─────────────
 function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
   const [read,         setRead]         = React.useState({});
@@ -12197,6 +12253,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
   const [liveCtx,      setLiveCtx]      = React.useState(null);
   const [expanded,     setExpanded]     = React.useState(defaultOpen);
   const [fetchedAt,    setFetchedAt]    = React.useState(null);
+  const [detailModalOpen, setDetailModalOpen] = React.useState(false);
 
   React.useEffect(() => {
     Promise.all([
@@ -12239,6 +12296,20 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
   const nlColor     = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
   const pivotColor  = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
   const orCond      = read.or_condition || autoDetected.or_condition;
+  const ltSentence  = buildLtContextSentence(ltCtx);
+
+  // Context for the detail modal's narratives (mirrors AuctionReadCard's explCtx)
+  const explCtx = {
+    orHigh: liveCtx?.orHigh || todayData?.today?.or_high,
+    orLow:  liveCtx?.orLow  || todayData?.today?.or_low,
+    priorVAH: autoDetected?.prior_day_vah,
+    priorVAL: autoDetected?.prior_day_val,
+    priorPOC: autoDetected?.prior_day_poc,
+    aUpLevel:  liveCtx?.aUpLevel  || todayData?.today?.a_up_level,
+    aDownLevel: liveCtx?.aDownLevel || todayData?.today?.a_down_level,
+  };
+  const phase1Narrative = generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx);
+  const phase2Narrative = generatePhase2Narrative(p1Direction, read.or_condition, openingCall, aSignal, explCtx, sessionBias);
 
   const fieldRows = [
     read.overnight_inventory && {
@@ -12360,10 +12431,11 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
 
       {/* P1 Bias */}
       {p1Bias && (
-        <div style={{ padding: '7px 12px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}35`, borderRadius: 7, marginBottom: 6 }}>
+        <div onClick={() => setDetailModalOpen(true)} title="Click for full morning guidance"
+          style={{ padding: '7px 12px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}35`, borderRadius: 7, marginBottom: 6, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8', marginBottom: 2 }}>
             PRE-MARKET BIAS: {p1Direction}
-            {fieldDots.p1_bias?.unseen && <Dot title={`Changed from: ${fieldDots.p1_bias.prev || '(none)'} — click to dismiss`} onClick={fieldDots.p1_bias.clear} />}
+            {fieldDots.p1_bias?.unseen && <Dot title={`Changed from: ${fieldDots.p1_bias.prev || '(none)'} — click to dismiss`} onClick={(e) => { e.stopPropagation(); fieldDots.p1_bias.clear(); }} />}
           </div>
           <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{p1Bias.text}</div>
         </div>
@@ -12371,10 +12443,11 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
 
       {/* Session Bias */}
       {sessionBias && (
-        <div style={{ padding: '7px 12px', background: `${biasColor[sessionBias.level]}10`, border: `2px solid ${biasColor[sessionBias.level]}`, borderRadius: 7, marginBottom: 8 }}>
+        <div onClick={() => setDetailModalOpen(true)} title="Click for full morning guidance"
+          style={{ padding: '7px 12px', background: `${biasColor[sessionBias.level]}10`, border: `2px solid ${biasColor[sessionBias.level]}`, borderRadius: 7, marginBottom: 8, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: biasColor[sessionBias.level], marginBottom: 2 }}>
             SESSION BIAS: {sessionBias.level}
-            {fieldDots.session_bias?.unseen && <Dot title={`Changed from: ${fieldDots.session_bias.prev || '(none)'} — click to dismiss`} onClick={fieldDots.session_bias.clear} />}
+            {fieldDots.session_bias?.unseen && <Dot title={`Changed from: ${fieldDots.session_bias.prev || '(none)'} — click to dismiss`} onClick={(e) => { e.stopPropagation(); fieldDots.session_bias.clear(); }} />}
           </div>
           <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
         </div>
@@ -12384,6 +12457,14 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
         <div style={{ marginTop: 12, borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
           <AuctionReadCard nl={nl} todayData={todayData} />
         </div>
+      )}
+
+      {detailModalOpen && (
+        <AuctionReadDetailModal
+          p1Direction={p1Direction} p1Bias={p1Bias} ltSentence={ltSentence} phase1Narrative={phase1Narrative}
+          sessionBias={sessionBias} phase2Narrative={phase2Narrative} biasColor={biasColor}
+          onClose={() => setDetailModalOpen(false)}
+        />
       )}
     </div>
   );
@@ -12505,7 +12586,6 @@ function AuctionReadCard({ nl, todayData }) {
   const pivotBias = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
   const pivotLabel = nqLive?.pivotBias?.includes('ABOVE') ? 'ABOVE PIVOT' : nqLive?.pivotBias?.includes('BELOW') ? 'BELOW PIVOT' : '—';
   const pivotColor = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#94a3b8';
-  const marketState = getEfficiencyLabel(read.prior_day_profile);
 
   // Auto-detect A signal: prefer logged daily data, fall back to live bar analysis
   const liveSignal = todayData?.today;
@@ -12685,20 +12765,6 @@ function AuctionReadCard({ nl, todayData }) {
       <PhaseHeader num={1} title="Pre-Market" locked={phase1Locked} timeLabel="Fill before 9:30" />
       {openPhases.has(1) && (
         <div style={{ padding: '12px 0' }}>
-          {row('Overnight inventory', <Selector field="overnight_inventory" locked={phase1Locked}
-            options={[['SHORT_TRAPPED','Short Trapped'],['LONG_TRAPPED','Long Trapped'],['NEUTRAL','Neutral']]} />,
-            TOOLTIPS.OVERNIGHT_INVENTORY.text + (TOOLTIPS.OVERNIGHT_INVENTORY.source ? `\n\nSource: ${TOOLTIPS.OVERNIGHT_INVENTORY.source}` : ''), 'overnight_inventory')}
-          {row('Open vs prior value', <Selector field="open_vs_prior_value" locked={phase1Locked}
-            options={[['ABOVE_VALUE','Above Value'],['INSIDE_VALUE','Inside Value'],['BELOW_VALUE','Below Value']]} />,
-            TOOLTIPS.OPEN_VS_PRIOR_VALUE.text + (TOOLTIPS.OPEN_VS_PRIOR_VALUE.source ? `\n\nSource: ${TOOLTIPS.OPEN_VS_PRIOR_VALUE.source}` : ''), 'open_vs_prior_value')}
-          {row('Prior day profile', <Selector field="prior_day_profile" locked={phase1Locked}
-            options={[['TREND','Trend'],['NORMAL_VARIATION','Norm Var'],['NORMAL','Normal'],['NEUTRAL','Neutral'],['RUNNING_PROFILE_NEUTRAL','Running Neutral'],['NONTREND','Nontrend']]} />,
-            TOOLTIPS.PRIOR_DAY_PROFILE.text + (TOOLTIPS.PRIOR_DAY_PROFILE.source ? `\n\nSource: ${TOOLTIPS.PRIOR_DAY_PROFILE.source}` : ''), 'prior_day_profile')}
-          {row('Market state', (
-            <span style={{ fontSize: 13, fontWeight: 700, color: marketState?.color || '#64748b' }}>
-              {marketState?.label || '— select day type'}{marketState?.label && (' — ' + marketState.playbook)}
-            </span>
-          ), 'Auto-derived from prior day profile. Efficient = buyers and sellers in balance — fade extremes. Inefficient = one side dominant — go with breakouts, do not fade.')}
           {row('ACD number line', (
             <span style={{ fontSize: 13, fontWeight: 700, color: nlColor, fontFamily: 'monospace' }}>
               {nlNum > 0 ? '+' : ''}{nlNum} &nbsp; {nlLabel}
@@ -12730,36 +12796,7 @@ function AuctionReadCard({ nl, todayData }) {
             </div>
           )}
           {/* ── Phase 1 Narrative ── */}
-          {(() => {
-            const narrative = generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx);
-            if (!narrative) return null;
-            return (
-              <div style={{ marginTop: 12, padding: '12px 16px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 8 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
-                  Morning Guidance
-                </div>
-                {narrative.split('\n\n').map((block, i) => {
-                  const isHeader = block.match(/^[A-Z][A-Z\s:]+:/);
-                  return (
-                    <div key={i} style={{ marginBottom: 10 }}>
-                      {isHeader ? (
-                        <>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
-                            {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
-                          </div>
-                          <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>
-                            {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
-                          </div>
-                        </>
-                      ) : (
-                        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>{block}</div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
+          <NarrativeBlocks narrative={generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx)} title="Morning Guidance" />
         </div>
       )}
 
@@ -14756,6 +14793,769 @@ function PlaybookPage() {
 
       {/* Backtest Results */}
       <ConditionBacktest />
+    </div>
+  );
+}
+
+function ImprovementsBacklogSection() {
+  const [todos, setTodos] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [showAddForm, setShowAddForm] = React.useState(false);
+  
+  // Add item form fields
+  const [newTitle, setNewTitle] = React.useState('');
+  const [newCategory, setNewCategory] = React.useState('A: Real-Time Risk & Execution Guardrails');
+  const [newImpact, setNewImpact] = React.useState('');
+  const [newDescription, setNewDescription] = React.useState('');
+
+  const loadTodos = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`${API_URL}/settings/todos`);
+      const d = await r.json();
+      if (Array.isArray(d)) {
+        setTodos(d);
+      }
+    } catch (e) {
+      console.error('Failed to load todos:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadTodos();
+  }, [loadTodos]);
+
+  const toggleTodo = async (todo) => {
+    try {
+      const r = await fetch(`${API_URL}/settings/todos/${todo.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ completed: !todo.completed }),
+      });
+      if (r.ok) {
+        const updated = await r.json();
+        setTodos(prev => prev.map(t => t.id === todo.id ? updated : t));
+      }
+    } catch (e) {
+      console.error('Failed to toggle todo:', e);
+    }
+  };
+
+  const handleAddTodo = async (e) => {
+    e.preventDefault();
+    if (!newTitle.trim()) return;
+    try {
+      const r = await fetch(`${API_URL}/settings/todos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: newTitle,
+          category: newCategory,
+          impact: newImpact,
+          description: newDescription,
+        }),
+      });
+      if (r.ok) {
+        const created = await r.json();
+        setTodos(prev => [...prev, created]);
+        setNewTitle('');
+        setNewImpact('');
+        setNewDescription('');
+        setShowAddForm(false);
+      }
+    } catch (e) {
+      console.error('Failed to add todo:', e);
+    }
+  };
+
+  const handleDeleteTodo = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this custom task?')) return;
+    try {
+      const r = await fetch(`${API_URL}/settings/todos/${id}`, {
+        method: 'DELETE',
+      });
+      if (r.ok) {
+        setTodos(prev => prev.filter(t => t.id !== id));
+      }
+    } catch (e) {
+      console.error('Failed to delete todo:', e);
+    }
+  };
+
+  const categories = [
+    'A: Real-Time Risk & Execution Guardrails',
+    'B: Real-Time Setup & Analysis Edges',
+    'C: Database & Ingestion Optimization',
+    'D: Frontend Architecture & Code Quality',
+    'E: Secondary Backtest & Reporting Improvements',
+    'Custom Improvements',
+  ];
+
+  const groupedTodos = categories.reduce((acc, cat) => {
+    acc[cat] = todos.filter(t => t.category.startsWith(cat.substring(0, 3)) || t.category === cat);
+    return acc;
+  }, {});
+
+  const totalCount = todos.length;
+  const completedCount = todos.filter(t => t.completed).length;
+  const pctComplete = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1000, marginTop: 20 }}>
+      {/* Progress bar card */}
+      <div className="settings-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 14 }}>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Execution & Codebase Improvements Checklist</span>
+            <span style={{ fontWeight: 700, color: 'var(--accent-purple)' }}>{pctComplete}% Complete ({completedCount} / {totalCount} items)</span>
+          </div>
+          <div style={{ height: 8, background: 'rgba(255,255,255,0.08)', borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pctComplete}%`, background: 'linear-gradient(90deg, var(--accent-purple), #10b981)', transition: 'width 0.4s ease' }} />
+          </div>
+        </div>
+        <button className="btn btn-primary" style={{ marginLeft: 24, padding: '8px 16px', fontSize: 13 }} onClick={() => setShowAddForm(!showAddForm)}>
+          {showAddForm ? 'Cancel' : 'Add Custom Task'}
+        </button>
+      </div>
+
+      {/* Add custom item form */}
+      {showAddForm && (
+        <div className="settings-card" style={{ border: '1px solid var(--accent-purple)', background: 'rgba(167,139,250,0.05)', padding: 20, borderRadius: 10 }}>
+          <h3>Add New Custom Improvement Task</h3>
+          <form onSubmit={handleAddTodo} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div style={{ flex: 2 }}>
+                <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>Task Title *</label>
+                <input type="text" value={newTitle} onChange={e => setNewTitle(e.target.value)} required placeholder="e.g. Implement alert audio notifications"
+                  style={{ width: '100%', padding: '8px 12px', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, color: 'var(--text-primary)' }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>Category</label>
+                <select value={newCategory} onChange={e => setNewCategory(e.target.value)}
+                  style={{ width: '100%', padding: '8px 12px', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, color: 'var(--text-primary)', height: 38 }}>
+                  {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>Expected Impact / Target Metric</label>
+              <input type="text" value={newImpact} onChange={e => setNewImpact(e.target.value)} placeholder="e.g. 15% reduction in sizing errors"
+                style={{ width: '100%', padding: '8px 12px', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, color: 'var(--text-primary)' }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 4, color: 'var(--text-secondary)' }}>Description / Details</label>
+              <textarea value={newDescription} onChange={e => setNewDescription(e.target.value)} placeholder="Provide context on what this task entails and how to verify..." rows={3}
+                style={{ width: '100%', padding: '8px 12px', background: '#1e293b', border: '1px solid #334155', borderRadius: 6, color: 'var(--text-primary)', resize: 'vertical' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 8 }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setShowAddForm(false)}>Cancel</button>
+              <button type="submit" className="btn btn-primary">Save Task</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Checklist Categories */}
+      {loading && <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>Loading improvements backlog...</div>}
+      
+      {!loading && categories.map(cat => {
+        const list = groupedTodos[cat] || [];
+        if (list.length === 0 && cat === 'Custom Improvements') return null; // Hide custom cat if empty
+        
+        const catCompleted = list.filter(t => t.completed).length;
+        const catTotal = list.length;
+        
+        return (
+          <div key={cat} className="settings-card" style={{ borderLeft: '3px solid var(--accent-purple)', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeftWidth: 3, borderRadius: 10, padding: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: 10, marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{cat}</h3>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+                {catCompleted} / {catTotal} completed
+              </span>
+            </div>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {list.length === 0 && <div style={{ fontSize: 13, color: 'var(--text-muted)', padding: '4px 0' }}>No tasks in this category.</div>}
+              {list.map(todo => (
+                <div key={todo.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '8px 12px', background: todo.completed ? 'rgba(16,185,129,0.02)' : 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 6, transition: 'all 0.2s ease' }}>
+                  <input type="checkbox" checked={todo.completed} onChange={() => toggleTodo(todo)}
+                    style={{ width: 16, height: 16, marginTop: 3, cursor: 'pointer', accentColor: '#10b981' }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: todo.completed ? 'var(--text-muted)' : 'var(--text-primary)', textDecoration: todo.completed ? 'line-through' : 'none' }}>
+                        {todo.priority && <span style={{ marginRight: 6, opacity: 0.6 }}>#{todo.priority}</span>}
+                        {todo.title}
+                      </span>
+                      {todo.impact && (
+                        <span style={{ fontSize: 11, background: todo.completed ? 'rgba(255,255,255,0.03)' : 'rgba(59,130,246,0.1)', color: todo.completed ? 'var(--text-muted)' : '#60a5fa', padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          Impact: {todo.impact}
+                        </span>
+                      )}
+                    </div>
+                    {todo.description && (
+                      <p style={{ margin: '4px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4, textDecoration: todo.completed ? 'line-through' : 'none' }}>
+                        {todo.description}
+                      </p>
+                    )}
+                  </div>
+                  {todo.is_custom && (
+                    <button style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }} title="Delete task" onClick={() => handleDeleteTodo(todo.id)}>
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function PlaybookWeeklyPatternsSection() {
+  const [statsMap, setStatsMap] = React.useState({});
+  const [edgesContext, setEdgesContext] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+
+  const PLAYBOOK_SETUPS = [
+    { key: 'IB_BULLISH', label: 'Initial Balance Breakout Long ↑', desc: 'Sustained price break and acceptance above the 9:30–10:30 AM ET range high.', stop: 'Opposite side of range or IBM.', target: '100% / 200% expansions.' },
+    { key: 'IB_BEARISH', label: 'Initial Balance Breakout Short ↓', desc: 'Sustained price break and acceptance below the 9:30–10:30 AM ET range low.', stop: 'Opposite side of range or IBM.', target: '100% / 200% expansions.' },
+    { key: 'BRACKET_BREAKOUT_LONG', label: 'Bracket Breakout Long ↑', desc: 'Price closes above a multi-day horizontal consolidation boundary (bracket resistance).', stop: 'Re-entry back inside bracket.', target: 'Measured move equivalent to bracket width.' },
+    { key: 'BRACKET_BREAKOUT_SHORT', label: 'Bracket Breakout Short ↓', desc: 'Price closes below a multi-day horizontal consolidation boundary (bracket support).', stop: 'Re-entry back inside bracket.', target: 'Measured move equivalent to bracket width.' },
+    { key: 'OPEN_TEST_DRIVE_LONG', label: 'Open Test Drive Long ↑', desc: 'Price probes lower at the open, sweeps liquidity, then drives through the OR High extreme.', stop: 'Session low established during test phase.', target: 'Key structural targets (VAH, VAL, etc.).' },
+    { key: 'OPEN_TEST_DRIVE_SHORT', label: 'Open Test Drive Short ↓', desc: 'Price probes higher at the open, sweeps liquidity, then drives through the OR Low extreme.', stop: 'Session high established during test phase.', target: 'Key structural targets (VAH, VAL, etc.).' },
+    { key: 'OPEN_DRIVE_LONG', label: 'Open Drive Long ↑', desc: 'Conviction buying drives price directly through the OR High at the opening bell without counter-testing.', stop: 'Open price or opposite side of OR5.', target: 'ATR/weekly target extensions.' },
+    { key: 'OPEN_DRIVE_SHORT', label: 'Open Drive Short ↓', desc: 'Conviction selling drives price directly through the OR Low at the opening bell without counter-testing.', stop: 'Open price or opposite side of OR5.', target: 'ATR/weekly target extensions.' },
+    { key: 'TRT_LONG', label: 'Trapped Shorts (TRT Long) ↑', desc: 'An A Down fires but fails to confirm via C level, rejecting back through the OR High extreme.', stop: 'Session low.', target: 'T1 level on opposite side.' },
+    { key: 'TRT_SHORT', label: 'Trapped Longs (TRT Short) ↓', desc: 'An A Up fires but fails to confirm via C level, rejecting back through the OR Low extreme.', stop: 'Session high.', target: 'T1 level on opposite side.' },
+    { key: 'TRT_LONG_V2', label: 'TRT V2 Long ↑', desc: 'Earlier entry than classic TRT: A Down rejected before C level confirmation.', stop: 'Session low.', target: 'T1 level on opposite side.' },
+    { key: 'TRT_SHORT_V2', label: 'TRT V2 Short ↓', desc: 'Earlier entry than classic TRT: A Up rejected before C level confirmation.', stop: 'Session high.', target: 'T1 level on opposite side.' },
+    { key: 'TRT_MAH_LONG', label: 'MAH Reversal Long ↑', desc: 'A TRT setup that triggers at extreme 30-day Number Line overbought/oversold exhaustion zones.', stop: 'Reversal low.', target: 'T1 level or major daily pivot.' },
+    { key: 'TRT_MAH_SHORT', label: 'MAH Reversal Short ↓', desc: 'A TRT setup that triggers at extreme 30-day Number Line overbought/oversold exhaustion zones.', stop: 'Reversal high.', target: 'T1 level or major daily pivot.' },
+    { key: 'FAILED_AUCTION_LONG', label: 'Failed Auction Long ↑', desc: 'Price probes below previous range, fails to find acceptance, and reclaims range.', stop: 'Low of failed probe.', target: 'Opposite extreme of yesterday\'s range.' },
+    { key: 'FAILED_AUCTION_SHORT', label: 'Failed Auction Short ↓', desc: 'Price probes above previous range, fails to find acceptance, and reclaims range.', stop: 'High of failed probe.', target: 'Opposite extreme of yesterday\'s range.' },
+    { key: 'VALUE_AREA_RESPONSIVE_LONG', label: 'Value Area Responsive Long ↑', desc: 'Price opens/probes below yesterday\'s value area, rejects, and trades back inside.', stop: 'Session extreme outside yesterday\'s VA.', target: 'Yesterday\'s POC or opposite Value Area limit.' },
+    { key: 'VALUE_AREA_RESPONSIVE_SHORT', label: 'Value Area Responsive Short ↓', desc: 'Price opens/probes above yesterday\'s value area, rejects, and trades back inside.', stop: 'Session extreme outside yesterday\'s VA.', target: 'Yesterday\'s POC or opposite Value Area limit.' },
+    { key: 'A_UP_STRONG', label: 'A Up Strong ↑', desc: 'Immediate directional drive, price holds cleanly above OR High. High probability when aligned with trend.', stop: 'OR Low.', target: 'T1 target or full OR measured move.' },
+    { key: 'A_DOWN_STRONG', label: 'A Down Strong ↓', desc: 'Immediate directional drive, price holds cleanly below OR Low. High probability when aligned with trend.', stop: 'OR High.', target: 'T1 target or full OR measured move.' },
+    { key: 'A_UP_WEAK', label: 'A Up Weak (Counter) ↑', desc: 'Slow grind or counter-trend A Up. Stalls near the level. Lower follow-through probability.', stop: 'OR Low.', target: 'Tighter targets / conservative T1.' },
+    { key: 'A_DOWN_WEAK', label: 'A Down Weak (Counter) ↓', desc: 'Slow grind or counter-trend A Down. Stalls near the level. Lower follow-through probability.', stop: 'OR High.', target: 'Tighter targets / conservative T1.' },
+    { key: 'C_PAIRED_LONG', label: 'C Up Paired ↑', desc: 'C Up confirmed after an A Up fires, showing strong buyer absorption of any counter-moves.', stop: 'OR Low.', target: 'Weekly extension or 2R.' },
+    { key: 'C_PAIRED_SHORT', label: 'C Down Paired ↓', desc: 'C Down confirmed after an A Down fires, showing strong seller absorption of any counter-moves.', stop: 'OR High.', target: 'Weekly extension or 2R.' },
+    { key: 'C_REVERSAL_LONG', label: 'C Reversal Long ↑', desc: 'C Up fires in opposite direction of a failed A Down, confirming thesis reversed.', stop: 'Session low.', target: 'Opposite extreme of yesterday\'s range.' },
+    { key: 'C_REVERSAL_SHORT', label: 'C Reversal Short ↓', desc: 'C Down fires in opposite direction of a failed A Up, confirming thesis reversed.', stop: 'Session high.', target: 'Opposite extreme of yesterday\'s range.' },
+    { key: 'C_STANDALONE_UP', label: 'C Standalone Up ↑', desc: 'C Up fires but no A signal ever fired previously during the session.', stop: 'OR Low.', target: 'Prior day VAH or OR measured move.' },
+    { key: 'C_STANDALONE_DOWN', label: 'C Standalone Down ↓', desc: 'C Down fires but no A signal ever fired previously during the session.', stop: 'OR High.', target: 'Prior day VAL or OR measured move.' }
+  ];
+
+  const PRICE_ACTION_EDGES = [
+    {
+      key: 'gapUp',
+      label: 'Gap Up Fills',
+      desc: 'Market opens above yesterday\'s High and trades down to fill the gap (touch yesterday\'s High).',
+      metric: 'gapUpFillPct',
+      tip: `Gap Up Fill (66% - 69% Probability)
+
+Trigger: NQ opens above yesterday's High.
+
+Mechanics: If the initial opening drive up fails to find aggressive buyers, a counter-offensive sell is triggered when the price reclaims the open. Target is yesterday's High (completing the gap fill).
+
+Risk: Stop-loss at session High. Target yesterday's High.`
+    },
+    {
+      key: 'gapDown',
+      label: 'Gap Down Fills',
+      desc: 'Market opens below yesterday\'s Low and trades up to fill the gap (touch yesterday\'s Low).',
+      metric: 'gapDownFillPct',
+      tip: `Gap Down Fill (66% - 69% Probability)
+
+Trigger: NQ opens below yesterday's Low.
+
+Mechanics: If the initial opening drive down fails to find aggressive sellers, a buy is triggered when the price reclaims the open. Target is yesterday's Low (completing the gap fill).
+
+Risk: Stop-loss at session Low. Target yesterday's Low.`
+    },
+    {
+      key: 'sweeps',
+      label: 'Failed sweeps (Liquidity Rejections)',
+      desc: 'Market probes above/below yesterday\'s high/low but closes back inside yesterday\'s range.',
+      metric: 'sweepPct',
+      tip: `Failed Sweeps (~30% Occurrence)
+
+Trigger: Price sweeps yesterday's limits (High/Low) but fails to sustain acceptance, reversing back inside the range.
+
+Mechanics: Reversal setup indicating lack of aggressive boundary participants. Target is the opposite side of the range.
+
+Risk: Tight stop-loss just beyond the failed sweep extreme.`
+    },
+    {
+      key: 'pivot',
+      label: '10:00 AM Pivot',
+      desc: 'Session high or low printed within the 9:55 - 10:05 AM ET window (10:00 AM turning point).',
+      metric: 'pivotPct',
+      tip: `10:00 AM Pivot / Turning Point (~52% Probability)
+
+Trigger: Daily High or Low is established between 9:55 AM and 10:05 AM ET.
+
+Mechanics: Morning retail drive exhausts as institutional volume enters. Often creates sharp rejections or double tops/bottoms.
+
+Risk: Enter reversal plays with stop-loss at the extreme of the 10:00 AM pivot wick.`
+    },
+    {
+      key: 'wideOR',
+      label: 'Wide OR Follow-thru',
+      desc: 'Rate of successful breakout runs on days when the opening 5-minute range is wide (>= 91.5 pts).',
+      metric: 'wideRunPct',
+      tip: `Wide OR Breakout (<5% Success Rate)
+
+Trigger: Opening range (OR5) exceeds 91.5 pts.
+
+Mechanics: Wide opening ranges indicate high volatility but also mean the day's expected extension has already occurred. Breakouts have an extremely high failure rate (>95%). Fades or Trapped setups (TRT) are the dominant edge.
+
+Risk: Avoid trend-following breakouts; enter only fading reversals with tight risk.`
+    },
+    {
+      key: 'tightOR',
+      label: 'Tight OR Follow-thru',
+      desc: 'Rate of successful breakout runs on days when the opening 5-minute range is narrow (< 47.5 pts).',
+      metric: 'tightRunPct',
+      tip: `Tight OR Breakout (~12% Success Rate)
+
+Trigger: Opening range (OR5) is narrow (< 47.5 pts).
+
+Mechanics: Narrow opening ranges indicate volatility compression/coiling, which leads to high-momentum breakouts with strong directional extension.
+
+Risk: Position sizing and risk parameters are standard. Enter on candle close outside the IB range.`
+    }
+  ];
+
+  React.useEffect(() => {
+    const loadAllStats = async () => {
+      setLoading(true);
+      try {
+        const edgesRes = await fetch(`${API_URL}/antigravity/edges-context`);
+        const edgesData = await edgesRes.json();
+        setEdgesContext(edgesData);
+
+        const setupKeys = PLAYBOOK_SETUPS.map(s => s.key);
+        const statsPromises = setupKeys.map(async (key) => {
+          try {
+            const res = await fetch(`${API_URL}/setups/stats?type=${key}`);
+            const data = await res.json();
+            return { key, data };
+          } catch (e) {
+            console.error(`Failed to fetch stats for ${key}:`, e);
+            return { key, data: null };
+          }
+        });
+
+        const statsResults = await Promise.all(statsPromises);
+        const newStatsMap = {};
+        statsResults.forEach(({ key, data }) => {
+          newStatsMap[key] = data;
+        });
+        setStatsMap(newStatsMap);
+      } catch (e) {
+        console.error('Failed to load playbook stats:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadAllStats();
+  }, []);
+
+  const getStatColor = (val) => {
+    if (val == null) return 'var(--text-muted)';
+    const rate = val > 1 ? val / 100 : val;
+    if (rate >= 0.58) return '#22c55e';
+    if (rate >= 0.48) return 'var(--text-primary)';
+    return '#ef4444';
+  };
+
+  const getEdgeVal = (winKey, metric) => {
+    const win = edgesContext?.windows?.[winKey];
+    return win ? win[metric] : null;
+  };
+
+  const renderStatsGrid = (stats, isEdge = false, metric = '') => {
+    let col30 = null, col60 = null, col90 = null, colAll = null;
+    let cnt30 = null, cnt60 = null, cnt90 = null, cntAll = null;
+    let isBaseline = false;
+
+    if (isEdge) {
+      col30 = getEdgeVal('last30', metric);
+      col60 = getEdgeVal('last60', metric);
+      col90 = getEdgeVal('last90', metric);
+      colAll = getEdgeVal('allTime', metric);
+    } else if (stats) {
+      col30 = stats.d30 ? stats.d30.winRate : null;
+      cnt30 = stats.d30 ? stats.d30.sessions : null;
+      col60 = stats.d60 ? stats.d60.winRate : null;
+      cnt60 = stats.d60 ? stats.d60.sessions : null;
+      col90 = stats.d90 ? stats.d90.winRate : null;
+      cnt90 = stats.d90 ? stats.d90.sessions : null;
+      colAll = stats.allTime ? stats.allTime.winRate : null;
+      cntAll = stats.allTime ? stats.allTime.sessions : null;
+      isBaseline = stats.allTime?.isBaseline || false;
+    }
+
+    const columns = [
+      { label: '30d', val: col30, count: cnt30 },
+      { label: '60d', val: col60, count: cnt60 },
+      { label: '90d', val: col90, count: cnt90 },
+      { label: 'All-Time', val: colAll, count: cntAll, isBaseline }
+    ];
+
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, minWidth: 260 }}>
+        {columns.map(col => (
+          <div key={col.label} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '6px 4px', borderRadius: 6, textAlign: 'center' }}>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: getStatColor(col.val) }}>
+              {col.val != null ? `${Math.round(col.val * (isEdge ? 1 : 100))}%` : '—'}
+            </div>
+            {col.count != null && (
+              <div style={{ fontSize: 8, color: 'var(--text-muted)', marginTop: 1 }}>
+                ({col.count}){col.isBaseline && <span title="Baseline win rate default" style={{ cursor: 'help' }}> (B)</span>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const renderDowStatsGrid = (dowNum) => {
+    const getDowVal = (winKey) => {
+      const stats = edgesContext?.tradeBacktest?.[winKey]?.dowStats?.[dowNum];
+      return stats ? { winRate: stats.winRate, total: stats.total, avgPnl: stats.avgPnl } : null;
+    };
+
+    const col30 = getDowVal('last30');
+    const col60 = getDowVal('last60');
+    const col90 = getDowVal('last90');
+    const colAll = getDowVal('allTime');
+
+    const columns = [
+      { label: '30d', stats: col30 },
+      { label: '60d', stats: col60 },
+      { label: '90d', stats: col90 },
+      { label: 'All-Time', stats: colAll }
+    ];
+
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, minWidth: 260 }}>
+        {columns.map(col => (
+          <div key={col.label} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '6px 4px', borderRadius: 6, textAlign: 'center' }}>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
+            <div style={{ fontSize: 12, fontWeight: 800, color: col.stats?.winRate != null ? getStatColor(col.stats.winRate / 100) : 'var(--text-muted)' }}>
+              {col.stats?.winRate != null ? `${Math.round(col.stats.winRate)}%` : '—'}
+            </div>
+            {col.stats?.total != null && col.stats.total > 0 && (
+              <div style={{ fontSize: 8, color: 'var(--text-muted)', marginTop: 1 }} title={`Avg P&L: $${col.stats.avgPnl}`}>
+                ({col.stats.total}t)
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const [guideTab, setGuideTab] = React.useState('verification'); // 'verification' | 'examples' | 'scanning'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1000, marginTop: 20 }}>
+      {/* Section: Weekday Patterns */}
+      <div className="settings-card" style={{ borderLeft: '3px solid #f59e0b', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeftWidth: 3, borderRadius: 10, padding: 20 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 16, color: '#f59e0b' }}>
+          📆 Weekly (Day-of-Week) Playbook Patterns & Stats
+        </h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {[
+            {
+              day: 'Monday',
+              dowNum: 1,
+              name: 'Mean Reversion & Drive Alignment',
+              wr: '21.9% WR',
+              alert: '⚠️ Highest-Loss Day',
+              desc: 'On Mondays, standard breakout plays have an extremely high failure rate. Instead, focus strictly on fading early range extensions.',
+              rule: 'Use 50% size. Avoid breakouts before 11:00 AM ET. If a trend does form, it typically closes in the same direction as the first 15-minute drive.'
+            },
+            {
+              day: 'Tuesday',
+              dowNum: 2,
+              name: 'Trend Initiation Sweet Spot',
+              wr: 'Sweet Spot',
+              alert: '✅ Mid-Week Trading',
+              desc: 'Tuesdays are the start of mid-week liquidity. There is an elevated statistical probability of a clean, sustained trend day.',
+              rule: 'Standard position sizes and risk parameters allowed. Play standard breakout and trend-following setups.'
+            },
+            {
+              day: 'Wednesday',
+              dowNum: 3,
+              name: 'Mid-Week Trend Continuation',
+              wr: 'Sweet Spot',
+              alert: '✅ Trend Follow-Through',
+              desc: 'Wednesdays show a strong statistical tendency for morning momentum to continue through the afternoon close ("Wednesday → AM Continues into PM").',
+              rule: 'Standard position sizes. Ride morning momentum and avoid counter-trend fading of strong morning trends early in the PM session.'
+            },
+            {
+              day: 'Thursday',
+              dowNum: 4,
+              name: 'Sweet Spot Consolidation',
+              wr: 'Sweet Spot',
+              alert: '✅ Mid-Week Trading',
+              desc: 'Another consistent execution day. Price tends to respect volume profiles and established support/resistance zones.',
+              rule: 'Standard sizing. Focus on key level touches (IB, VAH/VAL) and standard playbook setups.'
+            },
+            {
+              day: 'Friday',
+              dowNum: 5,
+              name: 'Profit Taking & PM Reversals',
+              wr: '74% Red Rate',
+              alert: '⚠️ High-Risk Day',
+              desc: 'Fridays have a historically high failure rate for your accounts, primarily due to overstaying positions late in the day.',
+              rule: 'Keep stops tight and lock in gains early. Expect sharp afternoon reversals of the morning trend ("Friday → AM Reverses in PM") as institutions square books before the weekend.'
+            }
+          ].map(d => (
+            <div key={d.day} style={{ display: 'flex', gap: 20, alignItems: 'center', justifyContent: 'space-between', padding: 12, background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 8 }}>
+              <div style={{ flex: 1, marginRight: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {d.day} — <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{d.name}</span>
+                  </span>
+                  <span style={{ fontSize: 11, background: d.alert.startsWith('✅') ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', color: d.alert.startsWith('✅') ? '#34d399' : '#f87171', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+                    {d.alert}
+                  </span>
+                </div>
+                <p style={{ margin: '0 0 6px 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>{d.desc}</p>
+                <div style={{ fontSize: 11, color: '#60a5fa', background: 'rgba(59,130,246,0.05)', padding: '6px 10px', borderRadius: 4, borderLeft: '2px solid #3b82f6' }}>
+                  <strong>Execution Rule:</strong> {d.rule}
+                </div>
+              </div>
+              {renderDowStatsGrid(d.dowNum)}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Section: Price-Action Edge Setups */}
+      <div className="settings-card" style={{ borderLeft: '3px solid #6366f1', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeftWidth: 3, borderRadius: 10, padding: 20 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 16, color: '#818cf8' }}>
+          📊 Price-Action Edge Setups (Statistical Lookbacks)
+        </h2>
+        {loading && <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 20 }}>Loading statistical edges...</div>}
+        {!loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {PRICE_ACTION_EDGES.map(s => (
+              <div key={s.key} style={{ display: 'flex', gap: 20, alignItems: 'center', justifyContent: 'space-between', padding: 12, background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 8 }}>
+                <div style={{ flex: 1, marginRight: 16 }}>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '0 0 4px 0', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>
+                    {s.label}
+                    {s.tip && <InfoTooltip text={s.tip} />}
+                  </h4>
+                  <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.4 }}>{s.desc}</p>
+                </div>
+                {renderStatsGrid(null, true, s.metric)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Section: Setup Definitions */}
+      <div className="settings-card" style={{ borderLeft: '3px solid #10b981', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeftWidth: 3, borderRadius: 10, padding: 20 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 16, color: '#10b981' }}>
+          🎯 ACD & Structural Setup Reference Guide
+        </h2>
+        {loading && <div style={{ color: 'var(--text-muted)', fontSize: 13, textAlign: 'center', padding: 20 }}>Loading setup statistics...</div>}
+        {!loading && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {PLAYBOOK_SETUPS.map(s => (
+              <div key={s.key} style={{ display: 'flex', gap: 20, alignItems: 'center', justifyContent: 'space-between', padding: 12, background: 'rgba(255,255,255,0.01)', border: '1px solid var(--border-color)', borderRadius: 8 }}>
+                <div style={{ flex: 1, marginRight: 16 }}>
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{s.label}</h4>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+                    <p style={{ margin: '0 0 4px 0', color: 'var(--text-muted)', lineHeight: 1.4 }}>{s.desc}</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '2px 12px', fontSize: 11 }}>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Stop-Loss:</span>
+                      <span style={{ color: 'var(--accent-red)', fontWeight: 500 }}>{s.stop}</span>
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Target:</span>
+                      <span style={{ color: 'var(--accent-green)', fontWeight: 500 }}>{s.target}</span>
+                    </div>
+                    {statsMap[s.key]?.byDayType && (() => {
+                      const bdt = statsMap[s.key].byDayType;
+                      const buckets = ['TREND', 'BALANCE', 'TURBULENT'].map(dt => ({ dt, stat: bdt[dt] })).filter(b => b.stat?.winRate != null);
+                      if (!buckets.length) return null;
+                      return (
+                        <div style={{ display: 'flex', gap: 10, marginTop: 6, fontSize: 11, flexWrap: 'wrap', alignItems: 'center', background: 'rgba(99,102,241,0.03)', border: '1px solid rgba(99,102,241,0.1)', padding: '4px 8px', borderRadius: 4, width: 'fit-content' }}>
+                          <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>Day Type Edges:</span>
+                          {buckets.map(({ dt, stat }) => {
+                            const wr = Math.round(stat.winRate * 100);
+                            const col = stat.winRate >= 0.58 ? '#22c55e' : stat.winRate >= 0.48 ? 'var(--text-primary)' : '#ef4444';
+                            return (
+                              <span key={dt} style={{ color: col, fontWeight: 700 }}>
+                                {dt}: {wr}% <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 9 }}>({stat.decidedN}t)</span>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+                {renderStatsGrid(statsMap[s.key], false)}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Section: Antigravity Trading Intelligence & Visual Validation Guide */}
+      <div className="settings-card" style={{ borderLeft: '3px solid #8b5cf6', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeftWidth: 3, borderRadius: 10, padding: 20, marginBottom: 20 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, borderBottom: '1px solid var(--border-color)', paddingBottom: 8, marginBottom: 16, color: '#a78bfa' }}>
+          🧠 Antigravity Intelligence & Visual Validation Guide
+        </h2>
+        
+        {/* Sub-tab navigation */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 8 }}>
+          {[
+            { key: 'verification', label: '🔍 How I See Setups' },
+            { key: 'examples', label: '🏆 High-Probability Examples' },
+            { key: 'scanning', label: '🤖 Perpetual Scanning & Alerts' }
+          ].map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setGuideTab(tab.key)}
+              style={{
+                background: guideTab === tab.key ? 'rgba(139, 92, 246, 0.15)' : 'transparent',
+                border: guideTab === tab.key ? '1px solid #8b5cf6' : '1px solid transparent',
+                borderRadius: 4,
+                padding: '6px 12px',
+                fontSize: 12,
+                fontWeight: 600,
+                color: guideTab === tab.key ? '#cbd5e1' : 'var(--text-muted)',
+                cursor: 'pointer',
+                transition: 'all 0.15s'
+              }}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Tab content */}
+        <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--text-secondary)' }}>
+          {guideTab === 'verification' && (
+            <div>
+              <p style={{ marginTop: 0 }}>
+                <strong>How do you know I am actually seeing the exact setup?</strong>
+              </p>
+              <p>
+                Every trading setup (e.g. Initial Balance breakouts, Reversals, Trapped Shorts) is parsed deterministically using 1-minute historical price bars from your database. The system does not use heuristics or vague indicators; it uses exact mathematical definitions:
+              </p>
+              <ul style={{ paddingLeft: 20, margin: '10px 0' }}>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Chronological Order of Level Touches:</strong> Reconstructed by checking every 1-minute bar's High/Low relative to key levels.
+                </li>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Initial Balance (IB) Boundaries:</strong> Defined strictly as the high and low range printed during the first 60 minutes of the RTH session (9:30 AM – 10:30 AM ET).
+                </li>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Value Area Boundaries:</strong> Calculated using the volume profile of the previous session to get the exact VAH, VAL, and POC.
+                </li>
+              </ul>
+              <div style={{ background: 'rgba(0,0,0,0.15)', padding: 12, borderRadius: 6, border: '1px solid var(--border-color)', marginTop: 12 }}>
+                <strong style={{ color: 'var(--text-primary)' }}>🛠 How to visually verify any setup:</strong>
+                <p style={{ margin: '4px 0 0 0' }}>
+                  Go to the <strong>Chart Review</strong> tab or the <strong>Volume Profile</strong> sub-tab inside the Backtest page. Select or enter the date of any past session. The chart will render the exact Initial Balance (IB) range, overnight boundaries, yesterday's value areas, and draw line markers showing exactly where price touched them and triggered the setups.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {guideTab === 'examples' && (
+            <div>
+              <p style={{ marginTop: 0 }}>
+                Here are the step-by-step logic walkthroughs of the highest-probability trading setups:
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ background: 'rgba(0,0,0,0.15)', padding: 12, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: 12, color: '#10b981', fontWeight: 700, textTransform: 'uppercase', tracking: '0.05em' }}>
+                    Setup 1: Gap Down Fill (66% - 69% Probability)
+                  </span>
+                  <p style={{ margin: '6px 0 4px 0', fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>
+                    Trigger: NQ opens below yesterday's low.
+                  </p>
+                  <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                    <strong>The Mechanics:</strong> If the initial opening drive down fails to find aggressive sellers and exhausting volumes are seen, a counter-offensive buy is triggered when the price reclaims the open. The target is yesterday's low (completing the gap fill).
+                    <br />
+                    <strong>Risk Parameter:</strong> Stop-loss goes at the established session low. Target yesterday's low.
+                  </p>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.15)', padding: 12, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: 12, color: '#3b82f6', fontWeight: 700, textTransform: 'uppercase', tracking: '0.05em' }}>
+                    Setup 2: Trapped Shorts (TRT Long) (58%+ Probability)
+                  </span>
+                  <p style={{ margin: '6px 0 4px 0', fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>
+                    Trigger: An A Down breakout fires but fails to confirm, then price reverses and takes out the IB High.
+                  </p>
+                  <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                    <strong>The Mechanics:</strong> Early sellers break below the IB Low (A Down), but buying pressure absorbs them. When the market reverses and reclaims the opening range high, those sellers are forced to buy to cover, creating a fast short squeeze.
+                    <br />
+                    <strong>Risk Parameter:</strong> Stop-loss goes at the session low. Target is the T1 expansion level.
+                  </p>
+                </div>
+
+                <div style={{ background: 'rgba(0,0,0,0.15)', padding: 12, borderRadius: 6, border: '1px solid var(--border-color)' }}>
+                  <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 700, textTransform: 'uppercase', tracking: '0.05em' }}>
+                    Setup 3: 10:00 AM Pivot / Turning Point (~52% Probability)
+                  </span>
+                  <p style={{ margin: '6px 0 4px 0', fontSize: 13, color: 'var(--text-primary)', fontWeight: 600 }}>
+                    Trigger: Price prints its daily session High or Low between 9:55 AM and 10:05 AM ET.
+                  </p>
+                  <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                    <strong>The Mechanics:</strong> The first 30 minutes of the session represent the initial retail drive. At 10:00 AM ET, institutional players enter the market, frequently creating a sharp rejection or reversal of the retail drive.
+                    <br />
+                    <strong>Execution Tip:</strong> Look for visual double tops/bottoms or volume exhaustion bars on the 1-minute chart at exactly 9:58 - 10:02 AM.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {guideTab === 'scanning' && (
+            <div>
+              <p style={{ marginTop: 0 }}>
+                <strong>Can you perpetually keep looking at these and new high probability setups?</strong>
+              </p>
+              <p>
+                Yes! The server runs a perpetual background daemon process. During market hours (9:30 AM – 4:00 PM ET), this daemon acts as a real-time monitor:
+              </p>
+              <ul style={{ paddingLeft: 20, margin: '10px 0' }}>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Continuous Ingestion:</strong> It reads incoming 1-minute price bars as they are exported from Sierra Chart.
+                </li>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Dynamic Updates:</strong> It updates the developing Value Area, Number Line (NL30), and checks for Initial Balance breakouts in real-time.
+                </li>
+                <li style={{ marginBottom: 6 }}>
+                  <strong>Active Setup Writing:</strong> The moment a setup is mathematically detected, it is immediately written to the <code>active_setups</code> table in the database and broadcasted via WebSockets (Socket.io) to your browser, which flashes the alert on your screen.
+                </li>
+              </ul>
+              <p>
+                Because this setup is fully automated, the system is constantly looking at the market for you, compiling statistics, and refining target and stop levels based on ATR adjustments.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -19155,6 +19955,8 @@ function CaseView({ setCurrentView, nl, todayData }) {
               {dayType.whatWouldChangeIt}
             </div>
           )}
+
+          <DayTypeReassessmentBanner reassessment={c.dayTypeReassessment} />
         </div>
 
         {/* OR / IB context row */}
@@ -19504,6 +20306,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ order: -1 }}><LiveReadBanner /></div>
             <div style={{ order: 0 }}>
               <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
                 updateId="acd-dash-trade-plan" updateView="acd"

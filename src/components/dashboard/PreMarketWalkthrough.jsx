@@ -74,6 +74,7 @@ export default function PreMarketWalkthrough() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState(null);
   const saveTimer = useRef(null);
+  const [showVolGuide, setShowVolGuide] = useState(true);
 
   // Reference data — read-only, from existing overnight/auction-read auto-detection
   useEffect(() => {
@@ -177,6 +178,41 @@ export default function PreMarketWalkthrough() {
         {savedAt && <span style={{ marginLeft: 8, color: '#64748b', fontStyle: 'italic' }}>· last saved {savedAt} ET{saving ? ' · saving…' : ''}</span>}
       </div>
 
+      {/* INITIAL BALANCE & VOLATILITY GUIDE */}
+      <div style={{ background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 8, padding: 14, marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setShowVolGuide(v => !v)}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#818cf8', letterSpacing: '0.06em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 6 }}>
+            💡 Volatility & Initial Balance Execution Rules
+          </span>
+          <span style={{ color: '#818cf8', fontSize: 12 }}>{showVolGuide ? '▲ collapse' : '▼ expand'}</span>
+        </div>
+        {showVolGuide && (
+          <div style={{ marginTop: 12, fontSize: 12, color: '#cbd5e1', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 12 }}>
+            <div>
+              <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>1. Opening Range Volatility (OR5 Width)</div>
+              <ul style={{ paddingLeft: 16, margin: 0, lineHeight: 1.5 }}>
+                <li><strong style={{ color: '#34d399' }}>Tight OR (&lt; 47.5 pts):</strong> Volatility compression/coiling. High breakout success rate (~12%). Plan for standard breakouts.</li>
+                <li><strong style={{ color: '#f87171' }}>Wide OR (&ge; 91.5 pts):</strong> Expected daily extension has already occurred. Breakouts have a <strong style={{ color: '#f87171' }}>&gt;95% failure rate</strong>. DO NOT chase breakouts; fade wicks / play TRT setups.</li>
+              </ul>
+            </div>
+            <div>
+              <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>2. Day Type Target Modifiers (NL30 / Bracket)</div>
+              <ul style={{ paddingLeft: 16, margin: 0, lineHeight: 1.5 }}>
+                <li><strong>Trend Day (NL30 &gt; 9 or &lt; -9):</strong> Apply <strong>1.20x</strong> target multiplier. Use 35pt profit protection (runners possible).</li>
+                <li><strong>Bracket Day (NL30 -9 to 9 / Bracket state):</strong> Apply <strong>0.85x</strong> target multiplier. Use 20pt profit protection (move stop to BE quickly).</li>
+                <li><strong>High Volatility / Wide OR:</strong> Apply <strong>0.70x</strong> target multiplier. Use 15pt profit protection (take profits aggressively).</li>
+              </ul>
+            </div>
+            <div style={{ gridColumn: '1 / -1' }}>
+              <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>3. Exhaustion & Reversal Signs (At IB boundaries)</div>
+              <p style={{ margin: 0, lineHeight: 1.5, color: '#94a3b8' }}>
+                When price approaches <strong>IB High</strong> or <strong>IB Low</strong>, monitor the Phase Change score. An alert score of <strong>3/5 to 5/5</strong> (combining declining volume, cumulative delta divergence, range compression, and profile stops) forecasts a failed breakout/reversal. Prepare to fade the test back to POC/Value Area.
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* LAYER 1 — REGIME */}
       <div style={sectionWrapStyle}>
         <div style={labelStyle}>Layer 1 — Regime / bigger structure</div>
@@ -187,7 +223,6 @@ export default function PreMarketWalkthrough() {
         {longterm?.bracketState && (
           <div style={refRowStyle}>
             <div><span style={refItemLabel}>Live regime read</span><span style={refItemValue}>{BRACKET_STATE_LABEL[longterm.bracketState.state] || longterm.bracketState.state || '—'}</span></div>
-            <div><span style={refItemLabel}>Value overlap (5d / 10d)</span><span style={refItemValue}>{longterm.valueMigration?.overlapCount5 ?? '—'} of 5 · {longterm.valueMigration?.overlapCount10 ?? '—'} of 10</span></div>
           </div>
         )}
         <ChoiceRow options={REGIME_OPTIONS} value={regime}
@@ -200,7 +235,6 @@ export default function PreMarketWalkthrough() {
         <div style={helperStyle}>Reference (read-only) — reason against the real numbers, then write your read below.</div>
         {ref && (
           <div style={refRowStyle}>
-            <div><span style={refItemLabel}>Open vs prior value</span><span style={refItemValue}>{VALUE_LABEL[ref.open_vs_prior_value] || '—'}</span></div>
             <div><span style={refItemLabel}>Overnight inventory</span><span style={refItemValue}>{INVENTORY_LABEL[ref.overnight_inventory] || '—'}</span></div>
             <div><span style={refItemLabel}>Overnight high</span><span style={refItemValue}>{fmtPx(ref.ovn_high)}</span></div>
             <div><span style={refItemLabel}>Overnight low</span><span style={refItemValue}>{fmtPx(ref.ovn_low)}</span></div>
@@ -221,11 +255,7 @@ export default function PreMarketWalkthrough() {
           overnight read = confluence; a drive <em>against</em> it = warning your bias may be wrong.
           Fill this in pre-open as "what I expect / what would confirm" — revisit it at the open. Note opening type yourself; reference levels below.
         </div>
-        {acdToday?.today && (acdToday.today.or_high != null || acdToday.today.or_low != null) && (
-          <div style={refRowStyle}>
-            <div><span style={refItemLabel}>OR high / low</span><span style={refItemValue}>{fmtPx(acdToday.today.or_high)} / {fmtPx(acdToday.today.or_low)}</span></div>
-          </div>
-        )}
+
         <textarea style={textareaStyle} value={openNotes}
           onChange={e => { setOpenNotes(e.target.value); scheduleSave({ open_notes: e.target.value }); }}
           placeholder="e.g. Expecting a test-drive down into the ON low, then a drive back up if it holds — that would confirm the long lean" />

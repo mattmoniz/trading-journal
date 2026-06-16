@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import DevelopingValueCard from './DevelopingValueCard.jsx';
 
 const API_URL = '/api';
 
@@ -114,6 +115,12 @@ export default function WeeklyReportPanel({ initialWeekStart = null }) {
           {expanded ? 'collapse' : 'expand'}
         </button>
       </div>
+
+      {expanded && data?.week_end && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border-color)' }}>
+          <DevelopingValueCard date={data.week_end} title={`Developing Value — Week of ${data.week_start}`} windows={[5, 10, 20]} />
+        </div>
+      )}
 
       {expanded && data?.report_text && (
         <pre style={{

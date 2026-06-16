@@ -19,6 +19,7 @@ import {
 } from '../services/acdService.js';
 import { runParameterSearch } from '../services/acdBacktest.js';
 import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboRate } from '../services/engineReadHitRates.js';
+import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -259,6 +260,20 @@ export async function structurallyInvalidateSetups(io) {
 // Factory: needs io for socket events
 export default function createACDRouter(io) {
   const router = express.Router();
+
+  // GET /api/acd/volatility-regime
+  // Phase 2 of the volatility-regime backtest (report-only Phase 1 confirmed
+  // setups perform meaningfully better in HIGH-VOL-DIRECTIONAL mornings and
+  // flat-to-worse in HIGH-VOL-CHOP). Live read-only monitor — does not affect
+  // setup detection/resolution/classification.
+  router.get('/acd/volatility-regime', async (req, res) => {
+    try {
+      const result = await computeLiveVolatilityRegime();
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ available: false, reason: e.message });
+    }
+  });
 
   // GET /api/acd/today
   router.get('/acd/today', async (req, res) => {
@@ -1264,34 +1279,45 @@ export default function createACDRouter(io) {
       const prevDay = pdQ.rows[0];
       let pdVAH = null, pdVAL = null;
       if (prevDay) {
-        const pdBars = await query(`
-          SELECT high::float as high, low::float as low, close::float as close, volume::integer as volume
-          FROM price_bars WHERE symbol='NQ' AND ts::date=(SELECT MAX(trade_date) FROM acd_daily_log WHERE trade_date < $1)
-            AND (EXTRACT(hour FROM ts)=9 AND EXTRACT(minute FROM ts)>=30 OR EXTRACT(hour FROM ts) BETWEEN 10 AND 15)
+        const vaQ = await query(`
+          SELECT vah::float as vah, val::float as val
+          FROM developing_value_log
+          WHERE trade_date = (SELECT MAX(trade_date) FROM acd_daily_log WHERE trade_date < $1)
         `, [todayET]);
-        if (pdBars.rows.length) {
-          const priceMap = {};
-          let totalV = 0;
-          for (const b of pdBars.rows) {
-            const v = b.volume || 0;
-            for (let p = Math.round(b.low / 0.25) * 0.25; p <= b.high + 0.01; p += 0.25) {
-              const k = p.toFixed(2);
-              priceMap[k] = (priceMap[k] || 0) + v / Math.max(1, Math.round((b.high - b.low) / 0.25) + 1);
-              totalV += v / Math.max(1, Math.round((b.high - b.low) / 0.25) + 1);
+        if (vaQ.rows[0]) {
+          pdVAH = vaQ.rows[0].vah;
+          pdVAL = vaQ.rows[0].val;
+        } else {
+          // fallback to pdBars calculation
+          const pdBars = await query(`
+            SELECT high::float as high, low::float as low, close::float as close, volume::integer as volume
+            FROM price_bars WHERE symbol='NQ' AND ts::date=(SELECT MAX(trade_date) FROM acd_daily_log WHERE trade_date < $1)
+              AND (EXTRACT(hour FROM ts)=9 AND EXTRACT(minute FROM ts)>=30 OR EXTRACT(hour FROM ts) BETWEEN 10 AND 15)
+          `, [todayET]);
+          if (pdBars.rows.length) {
+            const priceMap = {};
+            let totalV = 0;
+            for (const b of pdBars.rows) {
+              const v = b.volume || 0;
+              for (let p = Math.round(b.low / 0.25) * 0.25; p <= b.high + 0.01; p += 0.25) {
+                const k = p.toFixed(2);
+                priceMap[k] = (priceMap[k] || 0) + v / Math.max(1, Math.round((b.high - b.low) / 0.25) + 1);
+                totalV += v / Math.max(1, Math.round((b.high - b.low) / 0.25) + 1);
+              }
             }
-          }
-          const poc = parseFloat(Object.entries(priceMap).sort((a,b) => b[1]-a[1])[0]?.[0]);
-          if (poc && totalV > 0) {
-            const sorted70 = Object.entries(priceMap).filter(([p]) => parseFloat(p) >= poc)
-              .sort((a,b) => b[1]-a[1]);
-            let cumVah = 0;
-            pdVAH = poc;
-            for (const [p,v] of sorted70) { cumVah += v; pdVAH = Math.max(pdVAH, parseFloat(p)); if (cumVah >= totalV * 0.35) break; }
-            const sorted70dn = Object.entries(priceMap).filter(([p]) => parseFloat(p) <= poc)
-              .sort((a,b) => b[1]-a[1]);
-            let cumVal = 0;
-            pdVAL = poc;
-            for (const [p,v] of sorted70dn) { cumVal += v; pdVAL = Math.min(pdVAL, parseFloat(p)); if (cumVal >= totalV * 0.35) break; }
+            const poc = parseFloat(Object.entries(priceMap).sort((a,b) => b[1]-a[1])[0]?.[0]);
+            if (poc && totalV > 0) {
+              const sorted70 = Object.entries(priceMap).filter(([p]) => parseFloat(p) >= poc)
+                .sort((a,b) => b[1]-a[1]);
+              let cumVah = 0;
+              pdVAH = poc;
+              for (const [p,v] of sorted70) { cumVah += v; pdVAH = Math.max(pdVAH, parseFloat(p)); if (cumVah >= totalV * 0.35) break; }
+              const sorted70dn = Object.entries(priceMap).filter(([p]) => parseFloat(p) <= poc)
+                .sort((a,b) => b[1]-a[1]);
+              let cumVal = 0;
+              pdVAL = poc;
+              for (const [p,v] of sorted70dn) { cumVal += v; pdVAL = Math.min(pdVAL, parseFloat(p)); if (cumVal >= totalV * 0.35) break; }
+            }
           }
         }
       }
@@ -1379,14 +1405,26 @@ export default function createACDRouter(io) {
         pdHigh = pd.rows[0]?.h; pdLow = pd.rows[0]?.l;
 
         const vaR = await query(`
-          WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
-          total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
-          SELECT p2.px::float as poc,
-            (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-            (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as val
-          FROM vp, poc_row p2 GROUP BY p2.px LIMIT 1
+          SELECT poc::float as poc, vah::float as vah, val::float as val
+          FROM developing_value_log
+          WHERE trade_date = $1
         `, [priorDate]);
-        pdVAH = vaR.rows[0]?.vah; pdVAL = vaR.rows[0]?.val;
+        if (vaR.rows[0]) {
+          pdVAH = vaR.rows[0].vah;
+          pdVAL = vaR.rows[0].val;
+        } else {
+          // fallback
+          const fallbackQ = await query(`
+            WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+            total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
+            SELECT p2.px::float as poc,
+              (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
+              (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as val
+            FROM vp, poc_row p2 GROUP BY p2.px LIMIT 1
+          `, [priorDate]);
+          pdVAH = fallbackQ.rows[0]?.vah;
+          pdVAL = fallbackQ.rows[0]?.val;
+        }
 
         const onR = await query(`
           SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars
@@ -2174,7 +2212,11 @@ export default function createACDRouter(io) {
       }
       const noNewEntries = etMin >= 12 * 60; // noon–1 PM: manage open trades only
 
-      const isRTH = etMin >= 9 * 60 + 30;
+      // Setup detection itself depends on today's OR/A-levels, which aren't
+      // computed until 9:35 ET — opening this gate at 8:30 just stops the
+      // endpoint hard-blocking pre-market; it'll still return setup:null
+      // until the OR/A-levels exist.
+      const isRTH = etMin >= 8 * 60 + 30;
       if (!isRTH) return res.json({ setup: null, reason: 'market closed' });
 
       // ── Fetch all data sources in parallel ────────────────────────────────────
@@ -2230,14 +2272,30 @@ export default function createACDRouter(io) {
         const priorDay = priorDayQ.rows[0]?.d;
         if (priorDay) {
           const vaQ = await query(`
-            WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
-            total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-            SELECT p.poc_px::float as poc,
-              (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-              (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-            FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
+            SELECT poc::float as poc, vah::float as vah, val::float as val
+            FROM developing_value_log
+            WHERE trade_date = $1
           `, [priorDay]);
-          if (vaQ.rows[0]) { pdVAH = vaQ.rows[0].vah; pdVAL = vaQ.rows[0].val; pdPOC = vaQ.rows[0].poc; }
+          if (vaQ.rows[0]) {
+            pdVAH = vaQ.rows[0].vah;
+            pdVAL = vaQ.rows[0].val;
+            pdPOC = vaQ.rows[0].poc;
+          } else {
+            // fallback
+            const fallbackQ = await query(`
+              WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+              total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
+              SELECT p.poc_px::float as poc,
+                (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
+                (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
+              FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
+            `, [priorDay]);
+            if (fallbackQ.rows[0]) {
+              pdVAH = fallbackQ.rows[0].vah;
+              pdVAL = fallbackQ.rows[0].val;
+              pdPOC = fallbackQ.rows[0].poc;
+            }
+          }
         }
         setCached(todayET, 'pdVA', { pdVAH, pdVAL, pdPOC });
       }
@@ -2469,6 +2527,90 @@ export default function createACDRouter(io) {
           }
         }
       }
+      
+      // ── SETUP 0d: A UP STRONG (LONG) ─────────────────────────────────────────
+      let aUpStrong = null;
+      if (aUpFired && nl30 >= -9 &&
+          !timelineEvents.some(e => e === 'A_UP_STRONG' || e === 'A_UP_WEAK' || e === 'TRT_LONG' || e === 'TRT_LONG_V2')) {
+        const aUpStrongT1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange : null, label: 'OR Measured Move' }
+        );
+        aUpStrong = {
+          type: 'A_UP_STRONG', label: 'A UP STRONG (LONG)',
+          direction: 'LONG',
+          entry: +currentPrice.toFixed(0),
+          stop: orL ? +orL.toFixed(0) : null,
+          target: aUpStrongT1.value,
+          targetLabel: aUpStrongT1.label,
+          keyLevel: orH ? +orH.toFixed(0) : null, keyLevelLabel: 'OR High',
+          description: `A Up fired at ${aUpLevel?.toFixed(0)} under a supportive trend (NL30 is at +${nl30}). Bullish momentum holds above OR High. Stop below OR Low (${orL?.toFixed(0)}).`,
+          history: await getHistory('TRENDING_UP'),
+        };
+      }
+
+      // ── SETUP 0e: A DOWN STRONG (SHORT) ──────────────────────────────────────
+      let aDownStrong = null;
+      if (aDownFired && nl30 <= 9 &&
+          !timelineEvents.some(e => e === 'A_DOWN_STRONG' || e === 'A_DOWN_WEAK' || e === 'TRT_SHORT' || e === 'TRT_SHORT_V2')) {
+        const aDownStrongT1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' }
+        );
+        aDownStrong = {
+          type: 'A_DOWN_STRONG', label: 'A DOWN STRONG (SHORT)',
+          direction: 'SHORT',
+          entry: +currentPrice.toFixed(0),
+          stop: orH ? +orH.toFixed(0) : null,
+          target: aDownStrongT1.value,
+          targetLabel: aDownStrongT1.label,
+          keyLevel: orL ? +orL.toFixed(0) : null, keyLevelLabel: 'OR Low',
+          description: `A Down fired at ${aDownLevel?.toFixed(0)} under a supportive trend (NL30 is at ${nl30}). Bearish momentum holds below OR Low. Stop above OR High (${orH?.toFixed(0)}).`,
+          history: await getHistory('TRENDING_DOWN'),
+        };
+      }
+
+      // ── SETUP 0f: A UP WEAK (LONG) ───────────────────────────────────────────
+      let aUpWeak = null;
+      if (aUpFired && nl30 < -9 &&
+          !timelineEvents.some(e => e === 'A_UP_STRONG' || e === 'A_UP_WEAK' || e === 'TRT_LONG' || e === 'TRT_LONG_V2')) {
+        const aUpWeakT1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange * 0.5 : null, label: 'OR Half Measured Move' }
+        );
+        aUpWeak = {
+          type: 'A_UP_WEAK', label: 'A UP WEAK (LONG)',
+          direction: 'LONG',
+          entry: +currentPrice.toFixed(0),
+          stop: orL ? +orL.toFixed(0) : null,
+          target: aUpWeakT1.value,
+          targetLabel: aUpWeakT1.label,
+          keyLevel: orH ? +orH.toFixed(0) : null, keyLevelLabel: 'OR High',
+          description: `A Up fired at ${aUpLevel?.toFixed(0)} but against a bearish trend (NL30 is at ${nl30}). High failure/reversal risk. Stop below OR Low (${orL?.toFixed(0)}).`,
+          history: await getHistory('TRANSITIONAL'),
+        };
+      }
+
+      // ── SETUP 0g: A DOWN WEAK (SHORT) ────────────────────────────────────────
+      let aDownWeak = null;
+      if (aDownFired && nl30 > 9 &&
+          !timelineEvents.some(e => e === 'A_DOWN_STRONG' || e === 'A_DOWN_WEAK' || e === 'TRT_SHORT' || e === 'TRT_SHORT_V2')) {
+        const aDownWeakT1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange * 0.5 : null, label: 'OR Half Measured Move' }
+        );
+        aDownWeak = {
+          type: 'A_DOWN_WEAK', label: 'A DOWN WEAK (SHORT)',
+          direction: 'SHORT',
+          entry: +currentPrice.toFixed(0),
+          stop: orH ? +orH.toFixed(0) : null,
+          target: aDownWeakT1.value,
+          targetLabel: aDownWeakT1.label,
+          keyLevel: orL ? +orL.toFixed(0) : null, keyLevelLabel: 'OR Low',
+          description: `A Down fired at ${aDownLevel?.toFixed(0)} but against a bullish trend (NL30 is at +${nl30}). High failure/reversal risk. Stop above OR High (${orH?.toFixed(0)}).`,
+          history: await getHistory('TRANSITIONAL'),
+        };
+      }
 
       // ── SETUP 1: TRT + MAH ────────────────────────────────────────────────────
       // "Mad As Hell" — extended trend exhaustion: TRT conditions + NL30 extreme for 10+ sessions
@@ -2634,6 +2776,86 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── SETUP 5a: C PAIRED (LONG) ────────────────────────────────────────────
+      let cPairedLong = null;
+      if (aUpFired && cUpConf && !timelineEvents.some(e => e === 'C_PAIRED_LONG')) {
+        const cPairedLongT1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange * 1.5 : null, label: 'OR Measured Move 1.5x' }
+        );
+        cPairedLong = {
+          type: 'C_PAIRED_LONG', label: 'C PAIRED (LONG)',
+          direction: 'LONG',
+          entry: +currentPrice.toFixed(0),
+          stop: orL ? +orL.toFixed(0) : null,
+          target: cPairedLongT1.value,
+          targetLabel: cPairedLongT1.label,
+          keyLevel: orH ? +orH.toFixed(0) : null, keyLevelLabel: 'OR High',
+          description: `C Up confirmed after an A Up fired. Paired C confirms absorption of seller counter-moves. Hold for weekly extension. Stop below OR Low (${orL?.toFixed(0)}).`,
+          history: await getHistory('TRENDING_UP'),
+        };
+      }
+
+      // ── SETUP 5b: C PAIRED (SHORT) ───────────────────────────────────────────
+      let cPairedShort = null;
+      if (aDownFired && cDownConf && !timelineEvents.some(e => e === 'C_PAIRED_SHORT')) {
+        const cPairedShortT1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange * 1.5 : null, label: 'OR Measured Move 1.5x' }
+        );
+        cPairedShort = {
+          type: 'C_PAIRED_SHORT', label: 'C PAIRED (SHORT)',
+          direction: 'SHORT',
+          entry: +currentPrice.toFixed(0),
+          stop: orH ? +orH.toFixed(0) : null,
+          target: cPairedShortT1.value,
+          targetLabel: cPairedShortT1.label,
+          keyLevel: orL ? +orL.toFixed(0) : null, keyLevelLabel: 'OR Low',
+          description: `C Down confirmed after an A Down fired. Paired C confirms absorption of buyer counter-moves. Hold for weekly extension. Stop above OR High (${orH?.toFixed(0)}).`,
+          history: await getHistory('TRENDING_DOWN'),
+        };
+      }
+
+      // ── SETUP 5c: C REVERSAL (LONG) ──────────────────────────────────────────
+      let cReversalLong = null;
+      if (aDownFired && cUpConf && !timelineEvents.some(e => e === 'C_REVERSAL_LONG')) {
+        const cReversalLongT1 = t1GuardLabeled('LONG', currentPrice,
+          { value: pdVAH, label: 'Prior Day VAH' },
+          { value: (orH != null && orRange != null) ? orH + orRange : null, label: 'OR Measured Move' }
+        );
+        cReversalLong = {
+          type: 'C_REVERSAL_LONG', label: 'C REVERSAL (LONG)',
+          direction: 'LONG',
+          entry: +currentPrice.toFixed(0),
+          stop: sessionLow ? +sessionLow.toFixed(0) : (orL ? +orL.toFixed(0) : null),
+          target: cReversalLongT1.value,
+          targetLabel: cReversalLongT1.label,
+          keyLevel: orH ? +orH.toFixed(0) : null, keyLevelLabel: 'OR High',
+          description: `C Up fires after a failed A Down signal, confirming that the initial bearish thesis reversed. Stop below session low (${sessionLow?.toFixed(0)}).`,
+          history: await getHistory('TRANSITIONAL'),
+        };
+      }
+
+      // ── SETUP 5d: C REVERSAL (SHORT) ─────────────────────────────────────────
+      let cReversalShort = null;
+      if (aUpFired && cDownConf && !timelineEvents.some(e => e === 'C_REVERSAL_SHORT')) {
+        const cReversalShortT1 = t1GuardLabeled('SHORT', currentPrice,
+          { value: pdVAL, label: 'Prior Day VAL' },
+          { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' }
+        );
+        cReversalShort = {
+          type: 'C_REVERSAL_SHORT', label: 'C REVERSAL (SHORT)',
+          direction: 'SHORT',
+          entry: +currentPrice.toFixed(0),
+          stop: sessionHigh ? +sessionHigh.toFixed(0) : (orH ? +orH.toFixed(0) : null),
+          target: cReversalShortT1.value,
+          targetLabel: cReversalShortT1.label,
+          keyLevel: orL ? +orL.toFixed(0) : null, keyLevelLabel: 'OR Low',
+          description: `C Down fires after a failed A Up signal, confirming that the initial bullish thesis reversed. Stop above session high (${sessionHigh?.toFixed(0)}).`,
+          history: await getHistory('TRANSITIONAL'),
+        };
+      }
+
       // ── SETUP 6: FAILED AUCTION ───────────────────────────────────────────────
       let failedAuction = null;
       {
@@ -2782,7 +3004,22 @@ export default function createACDRouter(io) {
       // drifted past the OR boundary by fire time). Such a setup is pre-invalidated
       // at the moment of detection — reject it and fall through to the next-priority
       // candidate rather than persisting a guaranteed-instant-stop "setup".
-      const candidates = [trtLongV2, trtShortV2, otdSetup, trtMah, trt, ibSetup, openDrive, failedAuction, bracketBreakout, valueAreaResp, cStandalone];
+      const candidates = [
+        trtMah,
+        trtLongV2, trtShortV2,
+        trt,
+        aUpStrong, aDownStrong,
+        otdSetup,
+        aUpWeak, aDownWeak,
+        ibSetup,
+        openDrive,
+        cPairedLong, cPairedShort,
+        cReversalLong, cReversalShort,
+        failedAuction,
+        bracketBreakout,
+        valueAreaResp,
+        cStandalone
+      ];
       let active = null;
       for (const cand of candidates) {
         if (!cand) continue;
@@ -2820,6 +3057,10 @@ export default function createACDRouter(io) {
         FAILED_AUCTION_SHORT: 30, FAILED_AUCTION_LONG: 30,
         VALUE_AREA_RESPONSIVE_SHORT: null, VALUE_AREA_RESPONSIVE_LONG: null,
         BRACKET_BREAKOUT_LONG: 960, BRACKET_BREAKOUT_SHORT: 960, // full session
+        A_UP_STRONG: null, A_DOWN_STRONG: null,
+        A_UP_WEAK: null, A_DOWN_WEAK: null,
+        C_PAIRED_LONG: null, C_PAIRED_SHORT: null,
+        C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
       };
       // Hard cap: 1:00 PM ET (session end). Use local (ET) time formatting so PostgreSQL
       // interprets the stored TIMESTAMP WITHOUT TZ correctly in its session timezone.
@@ -2964,7 +3205,7 @@ export default function createACDRouter(io) {
 
   const MIN_SAMPLE = 5; // minimum resolved setups before live stats override baseline
 
-  // Returns { allTime, d90, d30 } each with { winRate, sessions, t1HitRate, avgPnl }
+  // Returns { allTime, d90, d60, d30 } each with { winRate, sessions, t1HitRate, avgPnl }
   const getSetupStats = async (setupType) => {
     const r = await query(`
       SELECT
@@ -2974,6 +3215,10 @@ export default function createACDRouter(io) {
       SELECT
         '90d', COUNT(*) FILTER (WHERE resolution='TARGET_HIT'), COUNT(*), AVG(actual_pnl)
         FROM active_setups WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND fired_at >= NOW() - INTERVAL '90 days'
+      UNION ALL
+      SELECT
+        '60d', COUNT(*) FILTER (WHERE resolution='TARGET_HIT'), COUNT(*), AVG(actual_pnl)
+        FROM active_setups WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND fired_at >= NOW() - INTERVAL '60 days'
       UNION ALL
       SELECT
         '30d', COUNT(*) FILTER (WHERE resolution='TARGET_HIT'), COUNT(*), AVG(actual_pnl)
@@ -3000,7 +3245,7 @@ export default function createACDRouter(io) {
       return null;
     };
 
-    return { allTime: fmt(r.rows, 'all'), d90: fmt(r.rows, '90d'), d30: fmt(r.rows, '30d'), byDayType };
+    return { allTime: fmt(r.rows, 'all'), d90: fmt(r.rows, '90d'), d60: fmt(r.rows, '60d'), d30: fmt(r.rows, '30d'), byDayType };
   };
 
   // ── GET /api/setups/active ─────────────────────────────────────────────────
@@ -3073,6 +3318,10 @@ export default function createACDRouter(io) {
     BRACKET_BREAKOUT_LONG: 'bracket_high', BRACKET_BREAKOUT_SHORT: 'bracket_low',
     VALUE_AREA_RESPONSIVE_LONG: 'composite_val', VALUE_AREA_RESPONSIVE_SHORT: 'composite_vah',
     FAILED_AUCTION_LONG: 'bracket_low', FAILED_AUCTION_SHORT: 'bracket_high',
+    A_UP_STRONG: 'ib_high', A_DOWN_STRONG: 'ib_low',
+    A_UP_WEAK: 'ib_high', A_DOWN_WEAK: 'ib_low',
+    C_PAIRED_LONG: 'ib_high', C_PAIRED_SHORT: 'ib_low',
+    C_REVERSAL_LONG: 'ib_high', C_REVERSAL_SHORT: 'ib_low',
   };
 
   router.get('/timeline/today', async (req, res) => {

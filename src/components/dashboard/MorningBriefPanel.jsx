@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Dot, useDataUpdateDot } from '../shared/UpdateDot.jsx';
+import DevelopingValueCard from './DevelopingValueCard.jsx';
 
 const API_URL = '/api';
 
@@ -95,6 +96,12 @@ export default function MorningBriefPanel() {
           ) : (
             <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>No AI read available for this date.</div>
           )}
+        </div>
+      )}
+
+      {expanded && (
+        <div style={{ marginTop: 10, borderTop: '1px solid rgba(139,92,246,0.15)', paddingTop: 10 }}>
+          <DevelopingValueCard date={date} title="Developing Value — Going Into Today" windows={[5, 10, 20]} />
         </div>
       )}
     </div>

@@ -28,6 +28,10 @@ const EXPIRY_WINDOW = {
   FAILED_AUCTION_SHORT: 30, FAILED_AUCTION_LONG: 30,
   VALUE_AREA_RESPONSIVE_SHORT: null, VALUE_AREA_RESPONSIVE_LONG: null,
   BRACKET_BREAKOUT_LONG: 960, BRACKET_BREAKOUT_SHORT: 960,
+  A_UP_STRONG: null, A_DOWN_STRONG: null,
+  A_UP_WEAK: null, A_DOWN_WEAK: null,
+  C_PAIRED_LONG: null, C_PAIRED_SHORT: null,
+  C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
 };
 const SESSION_END = 780; // 13:00 ET hard cap for non-bracket setups
 const EOD = 960; // 16:00 ET for bracket breakout expiry
@@ -124,10 +128,23 @@ for (const d in barsByDate) barsByDate[d].sort((a, b) => a.et_min - b.et_min);
 
 // ── 4. Prior-day value area (VPOC) per session ──────────────────────────────
 async function getPriorDayVA(tradeDate) {
+  const vaQ = await q(`
+    SELECT poc::float as poc, vah::float as vah, val::float as val
+    FROM developing_value_log
+    WHERE trade_date = (
+      SELECT MAX(ts::date)
+      FROM price_bars
+      WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+    )
+  `, [tradeDate]);
+  if (vaQ.rows[0]) {
+    return { pdVAH: vaQ.rows[0].vah, pdVAL: vaQ.rows[0].val, pdPOC: vaQ.rows[0].poc };
+  }
+
   const priorDayQ = await q(`SELECT MAX(ts::date)::text as d FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [tradeDate]);
   const priorDay = priorDayQ.rows[0]?.d;
   if (!priorDay) return { pdVAH: null, pdVAL: null, pdPOC: null };
-  const vaQ = await q(`
+  const fallbackQ = await q(`
     WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
     total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
     SELECT p.poc_px::float as poc,
@@ -135,8 +152,8 @@ async function getPriorDayVA(tradeDate) {
       (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
     FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
   `, [priorDay]);
-  if (!vaQ.rows[0]) return { pdVAH: null, pdVAL: null, pdPOC: null };
-  return { pdVAH: vaQ.rows[0].vah, pdVAL: vaQ.rows[0].val, pdPOC: vaQ.rows[0].poc };
+  if (!fallbackQ.rows[0]) return { pdVAH: null, pdVAL: null, pdPOC: null };
+  return { pdVAH: fallbackQ.rows[0].vah, pdVAL: fallbackQ.rows[0].val, pdPOC: fallbackQ.rows[0].poc };
 }
 
 // ── 5. Per-session simulation ────────────────────────────────────────────────
@@ -269,6 +286,20 @@ for (const sess of sessions) {
       const t1 = t1GuardLabeled('SHORT', currentPrice, { value: pdVAL, label: 'Prior Day VAL' }, { value: orL - orRange, label: 'OR Measured Move' });
       active = { type: 'TRT_SHORT_V2', direction: 'SHORT', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
     }
+    // SETUP 0d: A_UP_STRONG
+    if (!active && aUpFired && nl30 >= -9 &&
+        !firedToday.has('A_UP_STRONG') && !firedToday.has('A_UP_WEAK') && !firedToday.has('TRT_LONG') && !firedToday.has('TRT_LONG_V2')) {
+      const stop = orL != null ? +orL.toFixed(0) : null;
+      const t1 = t1GuardLabeled('LONG', currentPrice, { value: pdVAH, label: 'Prior Day VAH' }, { value: orH + orRange, label: 'OR Measured Move' });
+      active = { type: 'A_UP_STRONG', direction: 'LONG', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
+    // SETUP 0e: A_DOWN_STRONG
+    if (!active && aDownFired && nl30 <= 9 &&
+        !firedToday.has('A_DOWN_STRONG') && !firedToday.has('A_DOWN_WEAK') && !firedToday.has('TRT_SHORT') && !firedToday.has('TRT_SHORT_V2')) {
+      const stop = orH != null ? +orH.toFixed(0) : null;
+      const t1 = t1GuardLabeled('SHORT', currentPrice, { value: pdVAL, label: 'Prior Day VAL' }, { value: orL - orRange, label: 'OR Measured Move' });
+      active = { type: 'A_DOWN_STRONG', direction: 'SHORT', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
     // SETUP 0c: OPEN TEST DRIVE
     if (!active && !firedToday.has('OPEN_TEST_DRIVE_SHORT') && !firedToday.has('OPEN_TEST_DRIVE_LONG')) {
       const otdBars = ibBarsFull.filter(b => b.et_min >= 570 && b.et_min <= 584 && b.et_min <= m);
@@ -288,6 +319,20 @@ for (const sess of sessions) {
           active = { type: 'OPEN_TEST_DRIVE_LONG', direction: 'LONG', entry: +currentPrice.toFixed(0), stop: +probeLow.toFixed(0), t1, t1Label: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'Composite VAH' };
         }
       }
+    }
+    // SETUP 0f: A_UP_WEAK
+    if (!active && aUpFired && nl30 < -9 &&
+        !firedToday.has('A_UP_STRONG') && !firedToday.has('A_UP_WEAK') && !firedToday.has('TRT_LONG') && !firedToday.has('TRT_LONG_V2')) {
+      const stop = orL != null ? +orL.toFixed(0) : null;
+      const t1 = t1GuardLabeled('LONG', currentPrice, { value: pdVAH, label: 'Prior Day VAH' }, { value: orH + orRange * 0.5, label: 'OR Half Measured Move' });
+      active = { type: 'A_UP_WEAK', direction: 'LONG', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
+    // SETUP 0g: A_DOWN_WEAK
+    if (!active && aDownFired && nl30 > 9 &&
+        !firedToday.has('A_DOWN_STRONG') && !firedToday.has('A_DOWN_WEAK') && !firedToday.has('TRT_SHORT') && !firedToday.has('TRT_SHORT_V2')) {
+      const stop = orH != null ? +orH.toFixed(0) : null;
+      const t1 = t1GuardLabeled('SHORT', currentPrice, { value: pdVAL, label: 'Prior Day VAL' }, { value: orL - orRange * 0.5, label: 'OR Half Measured Move' });
+      active = { type: 'A_DOWN_WEAK', direction: 'SHORT', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
     }
     // SETUP 1: TRT + MAH
     if (!active && (isMahBull || isMahBear)) {
@@ -352,6 +397,30 @@ for (const sess of sessions) {
           : t1Guard('SHORT', currentPrice, orL - orRange, currentPrice - orRange);
         active = { type: isBull ? 'OPEN_DRIVE_LONG' : 'OPEN_DRIVE_SHORT', direction: isBull ? 'LONG' : 'SHORT', entry: +currentPrice.toFixed(0), stop, t1, t1Label: 'OR Measured Move' };
       }
+    }
+    // SETUP 5a: C_PAIRED_LONG
+    if (!active && aUpFired && cUpConf && !firedToday.has('C_PAIRED_LONG')) {
+      const stop = orL != null ? +orL.toFixed(0) : null;
+      const t1 = t1GuardLabeled('LONG', currentPrice, { value: pdVAH, label: 'Prior Day VAH' }, { value: orH + orRange * 1.5, label: 'OR Measured Move 1.5x' });
+      active = { type: 'C_PAIRED_LONG', direction: 'LONG', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
+    // SETUP 5b: C_PAIRED_SHORT
+    if (!active && aDownFired && cDownConf && !firedToday.has('C_PAIRED_SHORT')) {
+      const stop = orH != null ? +orH.toFixed(0) : null;
+      const t1 = t1GuardLabeled('SHORT', currentPrice, { value: pdVAL, label: 'Prior Day VAL' }, { value: orL - orRange * 1.5, label: 'OR Measured Move 1.5x' });
+      active = { type: 'C_PAIRED_SHORT', direction: 'SHORT', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
+    // SETUP 5c: C_REVERSAL_LONG
+    if (!active && aDownFired && cUpConf && !firedToday.has('C_REVERSAL_LONG')) {
+      const stop = sessionLow && isFinite(sessionLow) ? +sessionLow.toFixed(0) : (orL != null ? +orL.toFixed(0) : null);
+      const t1 = t1GuardLabeled('LONG', currentPrice, { value: pdVAH, label: 'Prior Day VAH' }, { value: orH + orRange, label: 'OR Measured Move' });
+      active = { type: 'C_REVERSAL_LONG', direction: 'LONG', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
+    }
+    // SETUP 5d: C_REVERSAL_SHORT
+    if (!active && aUpFired && cDownConf && !firedToday.has('C_REVERSAL_SHORT')) {
+      const stop = sessionHigh && isFinite(sessionHigh) ? +sessionHigh.toFixed(0) : (orH != null ? +orH.toFixed(0) : null);
+      const t1 = t1GuardLabeled('SHORT', currentPrice, { value: pdVAL, label: 'Prior Day VAL' }, { value: orL - orRange, label: 'OR Measured Move' });
+      active = { type: 'C_REVERSAL_SHORT', direction: 'SHORT', entry: +currentPrice.toFixed(0), stop, t1: t1.value, t1Label: t1.label };
     }
     // SETUP 6: FAILED AUCTION
     if (!active && !firedToday.has('FAILED_AUCTION_LONG') && !firedToday.has('FAILED_AUCTION_SHORT')) {

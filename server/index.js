@@ -43,6 +43,9 @@ import scenarioRouter from './routes/scenario.js';
 import cooldownRouter from './routes/cooldown.js';
 import premarketWalkthroughRouter from './routes/premarketWalkthrough.js';
 import annotationsRouter from './routes/annotations.js';
+import developingValueRouter from './routes/developingValue.js';
+import antigravityEdgesRouter from './routes/antigravityEdges.js';
+import { computeAndPersistSession } from './services/developingValueService.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
 import { runWeeklyReport } from '../scripts/weekly_report.js';
@@ -245,6 +248,8 @@ app.use('/api', scenarioRouter);
 app.use('/api', cooldownRouter);
 app.use('/api', premarketWalkthroughRouter);
 app.use('/api', annotationsRouter);
+app.use('/api', developingValueRouter);
+app.use('/api', antigravityEdgesRouter);
 
 // Admin trigger endpoints
 app.post('/api/admin/run-coaching', async (req, res) => {
@@ -441,6 +446,17 @@ httpServer.listen(PORT, () => {
     catch (err) { console.error('[pattern_memory] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // Developing Value Tracker — persist today's session profile, 4:05 PM ET Mon-Fri
+  cron.schedule('5 16 * * 1-5', async () => {
+    try {
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      await logProcess('DEVELOPING_VALUE', async () => {
+        const r = await computeAndPersistSession(todayET);
+        return { count: r ? 1 : 0 };
+      });
+    } catch (err) { console.error('[developing_value] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Daily Coaching — 4:45 PM ET Mon–Fri
   cron.schedule('45 16 * * 1-5', async () => {
     try {
@@ -478,7 +494,10 @@ httpServer.listen(PORT, () => {
     try {
       const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       if (d.getDate() > 7) return;
-      await runMonthlyReport(io);
+      await logProcess('MONTHLY_REPORT', async () => {
+        await runMonthlyReport(io);
+        return { count: 1 };
+      });
     } catch (err) { console.error('[monthly_report] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
@@ -588,6 +607,39 @@ httpServer.listen(PORT, () => {
         if (rows.length === 0) {
           console.log('[catch-up] Morning brief overdue — running now');
           await runMorningBriefLogged();
+        }
+      }
+
+      // Combo backtest — due Sunday 6:30 PM; catch up Sunday after 6:30 PM if it hasn't run today
+      if (day === 0 && hour >= 18) {
+        const { rows } = await query(
+          `SELECT 1 FROM process_log WHERE process_name = 'COMBO_BACKTEST' AND started_at::date = CURRENT_DATE LIMIT 1`
+        );
+        if (rows.length === 0) {
+          console.log('[catch-up] Combo backtest overdue — running now');
+          const { spawn } = await import('child_process');
+          const child = spawn('node', ['scripts/combo_backtest.js'], {
+            cwd: process.cwd(), detached: true, stdio: 'ignore',
+          });
+          child.unref();
+        }
+      }
+
+      // Monthly report — due 7 PM ET first Sunday of month; catch up any time in first week
+      // if no successful run has happened yet this month
+      if (nowET.getDate() <= 7 && !(day === 0 && hour < 19)) {
+        const { rows } = await query(`
+          SELECT 1 FROM process_log
+          WHERE process_name = 'MONTHLY_REPORT' AND status = 'SUCCESS'
+            AND started_at >= date_trunc('month', CURRENT_DATE)
+          LIMIT 1
+        `);
+        if (rows.length === 0) {
+          console.log('[catch-up] Monthly report overdue — running now');
+          await logProcess('MONTHLY_REPORT', async () => {
+            await runMonthlyReport(io);
+            return { count: 1 };
+          });
         }
       }
     } catch (err) {

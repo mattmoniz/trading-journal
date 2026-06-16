@@ -13,8 +13,10 @@
 import { query } from '../db.js';
 import { getNL, getPriorWeekRange, getGLine, getConvictionData, computeDynamicConviction } from './queries.js';
 import { getStructuralLevels } from './phaseChangeDetector.js';
+import { runReassessment, describeLiveReassessment } from './dayTypeReassessmentService.js';
 
 const RTH_START = 570; // 09:30 in minutes from midnight
+const REASSESSMENT_CHECKPOINTS = [660, 690, 720, 750, 780, 840, 900, 945]; // 11:00 .. 15:45 ET
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -567,6 +569,45 @@ export async function computeCase(tradeDate, asOf) {
   const accuracyStats = await getDayTypeAccuracyStats();
   const dayType       = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats });
 
+  // 7a. Live day-type REASSESSMENT (additive, read-only — see dayTypeReassessmentService.js).
+  // Catches the static read's blind spot (TREND days called BALANCE at 10:05) using
+  // backtest-validated triggers: range expansion >= 30% avg_range_20, confirmed by a
+  // vol-jump when present. Runs at checkpoints from 11:00 ET on, no-lookahead.
+  let dayTypeReassessment = null;
+  if (asOfMinutes >= RTH_START + 60) {
+    const avgRange20Q = await query(`
+      WITH sessions AS (
+        SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
+        FROM price_bars
+        WHERE symbol = 'NQ'
+          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
+          AND ts::date < $1
+        GROUP BY ts::date
+        ORDER BY trade_date DESC
+        LIMIT 20
+      )
+      SELECT AVG(sess_high - sess_low)::float AS avg_range_20 FROM sessions
+    `, [tradeDate]);
+    const avgRange20 = avgRange20Q.rows[0]?.avg_range_20 ?? null;
+
+    if (avgRange20) {
+      const reassessBars = bars.map(b => ({ ...b, et_min: barMinutes(b) }));
+      const checkpoints = REASSESSMENT_CHECKPOINTS.filter(t => t <= asOfMinutes);
+      const reassessResult = runReassessment({
+        initialRead: dayType.classification,
+        bars: reassessBars,
+        sessOpen: Number(bars[0].open),
+        avgRange20,
+        ibHigh, ibLow,
+        checkpoints,
+      });
+      dayTypeReassessment = {
+        ...describeLiveReassessment(reassessResult, asOfMinutes),
+        limitation: '~68% accurate end-to-end and recovers ~71% of TREND days the static read misses, but ~20% of BALANCE→TREND reassessments are false positives. Treat a reassessment as a prompt to verify with price action, not a command to switch playbooks.',
+      };
+    }
+  }
+
   // 8. Volume & delta metrics
   const avgVol     = trailingAvgVol(bars, bars.length, 20) || 1;
   const cumDelta   = bars.reduce((s, b) => s + Number(b.ask_volume||0) - Number(b.bid_volume||0), 0);
@@ -863,6 +904,7 @@ export async function computeCase(tradeDate, asOf) {
     currentPrice,
 
     dayType,
+    dayTypeReassessment,
 
     read: {
       bias,

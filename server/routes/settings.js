@@ -17,7 +17,7 @@ const PROCESS_SCHEDULE = [
   { name: 'WEEKLY_REPORT',       label: 'Weekly Report',            schedule: '6:00 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'WEEKLY_ASSESSMENT',   label: 'Weekly Assessment',        schedule: '6:05 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'COMBO_BACKTEST',      label: 'Combo Level Backtest',     schedule: '6:30 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
-  { name: 'MONTHLY_REPORT',      label: 'Monthly Report',           schedule: '7:00 PM ET First Sunday',   expectedDays: ['Sun'],                         scheduledHour: 19, maxAgeHours: 750, critical: false },
+  { name: 'MONTHLY_REPORT',      label: 'Monthly Report',           schedule: '7:00 PM ET First Sunday',   expectedDays: ['Sun'],                         scheduledHour: 19, maxAgeHours: 750, critical: false, firstSundayOnly: true },
   { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Continuous during mkt hrs', expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
 ];
@@ -30,7 +30,7 @@ function getETNow() {
 
 function statusColor(proc, lastRun, lastStatus, nowET) {
   const todayName = DAY_NAMES[nowET.getDay()];
-  const expectedToday = proc.expectedDays.includes(todayName);
+  const expectedToday = proc.expectedDays.includes(todayName) && (!proc.firstSundayOnly || nowET.getDate() <= 7);
   const etH = nowET.getHours(), etM = nowET.getMinutes();
 
   if (proc.isLive) {
@@ -47,8 +47,18 @@ function statusColor(proc, lastRun, lastStatus, nowET) {
 
   if (!expectedToday) {
     if (!lastRun) return 'gray';
-    const ageHours = (nowET - new Date(lastRun)) / 3600000;
-    if (ageHours > (proc.maxAgeHours || 25)) return 'red';
+    if (lastStatus === 'FAILED') return 'red';
+    // Not expected to run today (e.g. weekend for a Mon-Fri job) — only flag red if
+    // the most recent day it WAS expected to run is more recent than the last run.
+    for (let i = 1; i <= 7; i++) {
+      const d = new Date(nowET);
+      d.setDate(d.getDate() - i);
+      const dayName = DAY_NAMES[d.getDay()];
+      if (!proc.expectedDays.includes(dayName)) continue;
+      if (proc.firstSundayOnly && d.getDate() > 7) continue;
+      d.setHours(proc.scheduledHour ?? 0, 0, 0, 0);
+      return (new Date(lastRun) >= d) ? 'green' : 'red';
+    }
     return 'green';
   }
 
@@ -314,6 +324,82 @@ router.get('/custom-fields', async (req, res) => {
 // Health check
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Get all todos
+router.get('/settings/todos', async (req, res) => {
+  try {
+    const result = await query('SELECT * FROM settings_todos ORDER BY is_custom ASC, priority ASC, id ASC');
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching settings todos:', error);
+    res.status(500).json({ error: 'Failed to fetch todo items' });
+  }
+});
+
+// Create a new custom todo
+router.post('/settings/todos', async (req, res) => {
+  try {
+    const { category, title, impact, description } = req.body;
+    
+    // Find the next priority for custom items or default to 51+
+    const maxRes = await query('SELECT COALESCE(MAX(priority), 50) as max_priority FROM settings_todos WHERE is_custom = false');
+    const nextPriority = parseInt(maxRes.rows[0].max_priority || 50) + 1;
+    
+    const result = await query(
+      `INSERT INTO settings_todos (category, priority, title, impact, description, completed, is_custom)
+       VALUES ($1, $2, $3, $4, $5, false, true)
+       RETURNING *`,
+      [category || 'Custom Improvements', nextPriority, title, impact || '', description || '']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating settings todo:', error);
+    res.status(500).json({ error: 'Failed to create todo item' });
+  }
+});
+
+// Update a todo (mark complete, etc)
+router.put('/settings/todos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { completed, title, description, category, impact } = req.body;
+    
+    const result = await query(
+      `UPDATE settings_todos 
+       SET completed = COALESCE($1, completed),
+           title = COALESCE($2, title),
+           description = COALESCE($3, description),
+           category = COALESCE($4, category),
+           impact = COALESCE($5, impact)
+       WHERE id = $6
+       RETURNING *`,
+      [completed, title, description, category, impact, id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Todo not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error updating settings todo:', error);
+    res.status(500).json({ error: 'Failed to update todo item' });
+  }
+});
+
+// Delete a custom todo
+router.delete('/settings/todos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query('DELETE FROM settings_todos WHERE id = $1 AND is_custom = true RETURNING *', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Todo not found or not customizable' });
+    }
+    res.json({ message: 'Todo deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting settings todo:', error);
+    res.status(500).json({ error: 'Failed to delete todo item' });
+  }
 });
 
 export default router;
