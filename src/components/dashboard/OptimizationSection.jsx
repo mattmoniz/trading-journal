@@ -1,3 +1,4 @@
+const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React from 'react';
 import { formatNumber } from '../../utils/format.js';
 import { SectionUpdateDot } from '../shared/UpdateDot.jsx';

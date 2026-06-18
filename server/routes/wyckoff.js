@@ -79,7 +79,7 @@ router.get('/wyckoff/effort-result', async (req, res) => {
           MIN(low)::numeric(8,2) as session_low,
           MAX(high) - MIN(low) as session_range,
           SUM(volume)::bigint as total_volume
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ'
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY ts::date
@@ -95,7 +95,7 @@ router.get('/wyckoff/effort-result', async (req, res) => {
           SELECT
             MAX(high) - MIN(low) as session_range,
             SUM(volume) as total_volume
-          FROM price_bars
+          FROM price_bars_primary
           WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY ts::date
           HAVING COUNT(*) > 100
@@ -137,7 +137,7 @@ router.get('/wyckoff/sot', async (req, res) => {
     // Get daily high/low for last 60 days to detect swing points
     const bars = await query(`
       SELECT ts::date::text as date, MAX(high)::numeric(8,2) as high, MIN(low)::numeric(8,2) as low
-      FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+      FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       GROUP BY ts::date ORDER BY ts::date DESC LIMIT 60
     `);
     const days = bars.rows.reverse(); // oldest first

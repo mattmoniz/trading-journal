@@ -59,6 +59,7 @@ export default function PreMarketWalkthrough() {
   const [ref, setRef] = useState(null);
   const [longterm, setLongterm] = useState(null);
   const [acdToday, setAcdToday] = useState(null);
+  const [edgesCtx, setEdgesCtx] = useState(null);
 
   const [regime, setRegime] = useState(null);
   const [overnightRead, setOvernightRead] = useState('');
@@ -97,6 +98,14 @@ export default function PreMarketWalkthrough() {
     fetch(`${API_URL}/acd/today`)
       .then(r => r.json())
       .then(d => { if (!d.error) setAcdToday(d); })
+      .catch(() => {});
+  }, []);
+
+  // Fetch edges context for dynamic OR5 bounds
+  useEffect(() => {
+    fetch(`${API_URL}/antigravity/edges-context`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setEdgesCtx(d); })
       .catch(() => {});
   }, []);
 
@@ -191,8 +200,8 @@ export default function PreMarketWalkthrough() {
             <div>
               <div style={{ fontWeight: 700, color: '#e2e8f0', marginBottom: 4 }}>1. Opening Range Volatility (OR5 Width)</div>
               <ul style={{ paddingLeft: 16, margin: 0, lineHeight: 1.5 }}>
-                <li><strong style={{ color: '#34d399' }}>Tight OR (&lt; 47.5 pts):</strong> Volatility compression/coiling. High breakout success rate (~12%). Plan for standard breakouts.</li>
-                <li><strong style={{ color: '#f87171' }}>Wide OR (&ge; 91.5 pts):</strong> Expected daily extension has already occurred. Breakouts have a <strong style={{ color: '#f87171' }}>&gt;95% failure rate</strong>. DO NOT chase breakouts; fade wicks / play TRT setups.</li>
+                <li><strong style={{ color: '#34d399' }}>Tight OR (&lt; {edgesCtx?.limits?.Q1_LIMIT || 47.5} pts):</strong> Volatility compression/coiling. Statistically elevated breakout success rate. Plan for standard breakouts.</li>
+                <li><strong style={{ color: '#f87171' }}>Wide OR (&ge; {edgesCtx?.limits?.Q4_LIMIT || 91.5} pts):</strong> Expected daily extension has already occurred. Breakouts have a high historical failure rate. DO NOT chase breakouts; fade wicks / play TRT setups.</li>
               </ul>
             </div>
             <div>
@@ -208,6 +217,9 @@ export default function PreMarketWalkthrough() {
               <p style={{ margin: 0, lineHeight: 1.5, color: '#94a3b8' }}>
                 When price approaches <strong>IB High</strong> or <strong>IB Low</strong>, monitor the Phase Change score. An alert score of <strong>3/5 to 5/5</strong> (combining declining volume, cumulative delta divergence, range compression, and profile stops) forecasts a failed breakout/reversal. Prepare to fade the test back to POC/Value Area.
               </p>
+            </div>
+            <div style={{ gridColumn: '1 / -1', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 8, fontSize: '10px', color: '#64748b', fontStyle: 'italic', textAlign: 'right' }}>
+              * Volatility stats, win rates, and targets are historical benchmarks and qualitative coaching heuristics, not live-measured account statistics.
             </div>
           </div>
         )}

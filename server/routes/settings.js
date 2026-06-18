@@ -137,7 +137,7 @@ router.get('/settings/process-health', async (req, res) => {
     // Live process checks — both use MAX(ts) from price_bars
     // SETUP_DETECTION runs on every bar insert, so bar freshness = detection freshness
     const barQ = await query(
-      `SELECT MAX(ts)::text as last_bar FROM price_bars WHERE symbol='NQ' AND ts::date = $1`, [todayET]
+      `SELECT MAX(ts)::text as last_bar FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1`, [todayET]
     );
     const lastBar = barQ.rows[0]?.last_bar || null;
 
@@ -267,7 +267,7 @@ router.get('/settings/process-overdue', async (req, res) => {
       FROM process_log WHERE process_name = ANY($1) ORDER BY process_name, started_at DESC
     `, [processNames]);
     const logsByName = Object.fromEntries(logsQ.rows.map(r => [r.process_name, r]));
-    const barQ = await query(`SELECT MAX(ts)::text as last_bar FROM price_bars WHERE symbol='NQ' AND ts::date = $1`, [todayET]);
+    const barQ = await query(`SELECT MAX(ts)::text as last_bar FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1`, [todayET]);
     const lastBar = barQ.rows[0]?.last_bar || null;
     const liveData = {
       BAR_INGEST:      { lastRun: lastBar, lastStatus: lastBar ? 'SUCCESS' : null },

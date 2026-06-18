@@ -12,7 +12,7 @@ router.get('/analysis/edge', async (req, res) => {
       SELECT date(ts) AS bar_date, ts,
              open::numeric, high::numeric, low::numeric, close::numeric,
              volume::integer, bid_volume::integer, ask_volume::integer
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = 'NQ'
       ORDER BY ts ASC
     `);

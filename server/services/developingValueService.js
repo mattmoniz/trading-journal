@@ -88,7 +88,7 @@ function describeMigration(profile, sessionHigh, sessionLow, sessionClose, prior
 export async function computeAndPersistSession(tradeDate) {
   const barsQ = await query(`
     SELECT open::float, high::float, low::float, close::float, volume::float
-    FROM price_bars
+    FROM price_bars_primary
     WHERE symbol='NQ' AND ts::date=$1
       AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) BETWEEN ${RTH_START} AND ${RTH_END-1}
     ORDER BY ts
@@ -125,7 +125,7 @@ export async function computeAndPersistSession(tradeDate) {
 export async function computeLiveSession(tradeDate) {
   const barsQ = await query(`
     SELECT open::float, high::float, low::float, close::float, volume::float
-    FROM price_bars
+    FROM price_bars_primary
     WHERE symbol='NQ' AND ts::date=$1
       AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) BETWEEN ${RTH_START} AND ${RTH_END-1}
     ORDER BY ts

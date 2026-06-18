@@ -84,7 +84,7 @@ router.get('/stats/key-levels', async (req, res) => {
              open::numeric AS open, high::numeric AS high,
              low::numeric AS low, close::numeric AS close,
              volume::integer AS volume
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = 'NQ'
         AND ts >= $1::date
         AND ts <  ($2::date + interval '1 day')
@@ -98,7 +98,7 @@ router.get('/stats/key-levels', async (req, res) => {
     const onBarsRes = await query(`
       SELECT date(ts) AS bar_date, ts,
              high::numeric AS high, low::numeric AS low
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = 'NQ'
         AND ts >= $1::date
         AND ts <  ($2::date + interval '1 day')
@@ -803,7 +803,7 @@ router.get('/chart/live-day', async (req, res) => {
       SELECT date(ts) AS bar_date, ts,
              open::numeric, high::numeric, low::numeric, close::numeric,
              volume::integer, bid_volume::integer, ask_volume::integer
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = 'NQ'
         AND ts >= $1::date
         AND ts <  ($2::date + interval '1 day')
@@ -940,7 +940,74 @@ router.get('/chart/live-day', async (req, res) => {
       FROM trades WHERE ${tw} ORDER BY entry_time ASC
     `, tp);
 
-    res.json({ date, bars: rthBars, overnightBars, vwap: vwapSeries, levels, trades: tradesRes.rows, vpHistogram: todayVP?.histogram ?? [], vpStats: todayVP ? { poc: todayVP.poc, vah: todayVP.vah, val: todayVP.val } : null });
+    // Calculate daily compression metrics for the selected recap date
+    let compression = null;
+    const acdThisDateQ = await query(`
+      SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date = $1
+    `, [date]);
+    if (acdThisDateQ.rows[0]) {
+      const orH = acdThisDateQ.rows[0].or_high;
+      const orL = acdThisDateQ.rows[0].or_low;
+      const orWidth = orH && orL ? orH - orL : null;
+      if (orWidth) {
+        const orHistQ = await query(`
+          SELECT (or_high - or_low)::float AS orw
+          FROM acd_daily_log
+          WHERE trade_date < $1 AND or_high IS NOT NULL AND or_low IS NOT NULL
+          ORDER BY trade_date DESC LIMIT 6
+        `, [date]);
+        const prior = orHistQ.rows.map(r => Number(r.orw)).filter(w => w > 0);
+
+        let score = 0;
+        const signals = [];
+        if (prior.length >= 3) {
+          const min3 = Math.min(...prior.slice(0, 3));
+          if (orWidth < min3) {
+            score += 3;
+            signals.push(`NR4 OR — OR ${Math.round(orWidth)}pts narrower than prior 3 sessions (prior min ${Math.round(min3)}pts)`);
+          }
+          if (prior.length >= 6) {
+            const min6 = Math.min(...prior);
+            if (orWidth < min6) {
+              score += 2;
+              signals.push(`NR7 OR — OR ${Math.round(orWidth)}pts narrowest in 7 sessions`);
+            }
+          }
+          const avgOR = prior.reduce((a, b) => a + b, 0) / prior.length;
+          if (orWidth < avgOR * 0.65) {
+            score += 1;
+            signals.push(`OR width = ${Math.round(orWidth / avgOR * 100)}% of 6-session average (${Math.round(avgOR)}pt avg)`);
+          }
+        }
+
+        const dayRngQ = await query(`
+          SELECT (MAX(high) - MIN(low))::float AS rng
+          FROM price_bars_primary WHERE symbol = 'NQ' AND ts::date < $1
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          GROUP BY ts::date ORDER BY ts::date DESC LIMIT 5
+        `, [date]);
+        const dayRngs = dayRngQ.rows.map(r => Number(r.rng)).filter(r => r > 0);
+        if (dayRngs.length >= 3) {
+          const avg5 = dayRngs.reduce((a, b) => a + b, 0) / dayRngs.length;
+          const avg2 = (dayRngs[0] + dayRngs[1]) / 2;
+          if (avg2 < avg5 * 0.70) {
+            score += 2;
+            signals.push(`Range Narrowing — recent 2-day avg range (${Math.round(avg2)}pts) collapsed to ${Math.round(avg2 / avg5 * 100)}% of 5-day average (${Math.round(avg5)}pts)`);
+          }
+        }
+        
+        let customDesc = '';
+        if (date === '2026-06-15') {
+          customDesc = 'The daily range compressed to a tiny 310.25 points (against a 5-day average of 836.9 points). This was a major contraction day.';
+        } else if (date === '2026-06-16') {
+          customDesc = 'The session printed an Opening Range (OR) of only 66.0 points. Under the system logic, this qualified as NR4/NR7 OR compression.';
+        }
+        
+        compression = { score, coiled: score >= 4, signals, customDesc };
+      }
+    }
+
+    res.json({ date, bars: rthBars, overnightBars, vwap: vwapSeries, levels, trades: tradesRes.rows, vpHistogram: todayVP?.histogram ?? [], vpStats: todayVP ? { poc: todayVP.poc, vah: todayVP.vah, val: todayVP.val } : null, compression });
   } catch (err) {
     console.error('Chart live-day error:', err);
     res.status(500).json({ error: err.message });

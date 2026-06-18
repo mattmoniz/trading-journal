@@ -32,13 +32,13 @@ router.get('/confluence/today', async (req, res) => {
 
     const vaQ = await query(`
       WITH days AS (
-        SELECT DISTINCT ts::date as d FROM price_bars WHERE symbol='NQ'
+        SELECT DISTINCT ts::date as d FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date < ($1::text)::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY d DESC LIMIT 5
       )
       SELECT d, (
         WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-          FROM price_bars WHERE symbol='NQ' AND ts::date=days.d
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=days.d
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
         poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
         SELECT poc_row.px FROM poc_row LIMIT 1
@@ -62,7 +62,7 @@ router.get('/confluence/today', async (req, res) => {
     const pivotLevel = pivotQ.rows[0]?.pivot_level ? parseFloat(pivotQ.rows[0].pivot_level) : null;
     const pivotR1    = pivotQ.rows[0]?.pivot_r1 ? parseFloat(pivotQ.rows[0].pivot_r1) : null;
     const pivotS1    = pivotQ.rows[0]?.pivot_s1 ? parseFloat(pivotQ.rows[0].pivot_s1) : null;
-    const currentPriceQ = await query(`SELECT close::float as close FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    const currentPriceQ = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
     const currentPrice = currentPriceQ.rows[0]?.close || 0;
     const monthlyPivotPos = pivotR1 && pivotS1 && currentPrice
       ? (currentPrice > pivotR1 ? 'ABOVE_PIVOT_RANGE' : currentPrice < pivotS1 ? 'BELOW_PIVOT_RANGE' : 'INSIDE_PIVOT_RANGE')
@@ -247,7 +247,7 @@ router.get('/confluence/today', async (req, res) => {
     // Always compute composite (5d) VA profile — needed for NO_SETUP reference levels
     const ctVaQ = await query(`
       WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-        FROM price_bars WHERE symbol='NQ' AND ts::date >= CURRENT_DATE-5 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE-5 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY ROUND(low/0.25)*0.25),
       total AS (SELECT SUM(vol) as t FROM vp),
       poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
@@ -268,7 +268,7 @@ router.get('/confluence/today', async (req, res) => {
 
       const priorVaQ = await query(`
         WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-          FROM price_bars WHERE symbol='NQ' AND ts::date=(SELECT MAX(ts::date) FROM price_bars WHERE symbol='NQ' AND ts::date<CURRENT_DATE AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16)
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=(SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date<CURRENT_DATE AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16)
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
         total AS (SELECT SUM(vol) as t FROM vp),
         poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)

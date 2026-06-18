@@ -45,7 +45,9 @@ export const query = async (text, params) => {
     const res = await pool.query(text, params);
     const duration = Date.now() - start;
     if (process.env.NODE_ENV !== 'production') {
-      console.log('Executed query', { text, duration, rows: res.rowCount });
+      const cleanText = text.replace(/\s+/g, ' ').trim();
+      const display = cleanText.length > 120 ? cleanText.slice(0, 120) + '...' : cleanText;
+      console.log('Executed query', { query: display, duration, rows: res.rowCount });
     }
     return res;
   } catch (error) {

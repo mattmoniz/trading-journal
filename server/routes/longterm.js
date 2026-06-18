@@ -13,7 +13,7 @@ router.get('/longterm/summary', async (req, res) => {
 
     const tradingDays = await query(`
       SELECT DISTINCT ts::date::text as date
-      FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+      FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY date DESC LIMIT 30
     `);
 
@@ -23,7 +23,7 @@ router.get('/longterm/summary', async (req, res) => {
         const r = await query(`
           WITH vp AS (
             SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-            FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+            FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
             GROUP BY ROUND(low/0.25)*0.25
           ), total AS (SELECT SUM(vol) as t FROM vp),
           poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
@@ -31,7 +31,7 @@ router.get('/longterm/summary', async (req, res) => {
             (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) s WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
             (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC)  cv FROM vp WHERE px<=p.poc_px) s WHERE cv<=(SELECT t*0.35 FROM total))::float as val,
             MAX(vp.px)::float as day_high, MIN(vp.px)::float as day_low,
-            (SELECT (array_agg(close ORDER BY ts DESC))[1]::float FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) as day_close
+            (SELECT (array_agg(close ORDER BY ts DESC))[1]::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) as day_close
           FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
         `, [date]);
         const sh = await query(`SELECT l.profile_shape FROM acd_daily_log l WHERE l.trade_date=$1`, [date]);
@@ -125,11 +125,11 @@ router.get('/longterm/summary', async (req, res) => {
       WITH daily AS (
         SELECT ts::date as d, MAX(high)-MIN(low) as rng, SUM(volume) as vol,
           (array_agg(close ORDER BY ts DESC))[1]-(array_agg(open ORDER BY ts ASC))[1] as chg
-        FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY ts::date HAVING COUNT(*)>100 ORDER BY d DESC LIMIT 10
       ), stats AS (
         SELECT AVG(rng) as ar, AVG(vol) as av FROM (
-          SELECT MAX(high)-MIN(low) as rng, SUM(volume) as vol FROM price_bars
+          SELECT MAX(high)-MIN(low) as rng, SUM(volume) as vol FROM price_bars_primary
           WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY ts::date HAVING COUNT(*)>100 ORDER BY MAX(ts) DESC LIMIT 30
         ) s
@@ -180,11 +180,11 @@ router.get('/longterm/summary', async (req, res) => {
     const wQ = await query(`
       SELECT MAX(high)::float as wh, MIN(low)::float as wl,
         (array_agg(high ORDER BY ts))[1]::float as mon_open
-      FROM price_bars WHERE symbol='NQ' AND ts::date>=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date>=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
     `, [weekStartStr]);
     const monIBQ = await query(`
       SELECT MAX(high)::float as h, MIN(low)::float as l
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
     `, [weekStartStr]);
     const wRow = wQ.rows[0], monIB = monIBQ.rows[0];

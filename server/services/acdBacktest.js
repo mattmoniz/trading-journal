@@ -56,7 +56,7 @@ async function loadSessionsFromDB(startDate, endDate) {
       ts::date::text as date,
       to_char(ts, 'HH24:MI') as time,
       open::float, high::float, low::float, close::float
-    FROM price_bars
+    FROM price_bars_primary
     WHERE ${where}
     ORDER BY ts ASC
   `, params);

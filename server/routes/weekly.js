@@ -25,7 +25,7 @@ router.get('/weekly/current', async (req, res) => {
       // Fetch current week high/low from bars
       const weekBars = await query(`
         SELECT MAX(high)::numeric(8,2) as week_high, MIN(low)::numeric(8,2) as week_low
-        FROM price_bars WHERE symbol='NQ' AND ts::date >= $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [weekStart]);
       const nlRow = await query(`SELECT COALESCE(SUM(daily_score),0) as nl30 FROM (SELECT daily_score FROM acd_daily_log ORDER BY trade_date DESC LIMIT 30) s`);
       const row = { ...r.rows[0], week_start: r.rows[0].week_start_str || weekStart };
@@ -35,7 +35,7 @@ router.get('/weekly/current', async (req, res) => {
     // Auto-compute Monday IB from price_bars if available
     const mondayBars = await query(`
       SELECT MAX(high)::numeric(8,2) as high, MIN(low)::numeric(8,2) as low
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 10
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 10
     `, [weekStart]);
 
     if (mondayBars.rows[0]?.high) {
@@ -43,7 +43,7 @@ router.get('/weekly/current', async (req, res) => {
       const ibRange = mh - ml;
       const nlRow = await query(`SELECT COALESCE(SUM(daily_score),0) as nl30 FROM (SELECT daily_score FROM acd_daily_log ORDER BY trade_date DESC LIMIT 30) s`);
       const pivotRow = await query(`SELECT pivot_level FROM acd_monthly_pivot WHERE month_year=$1`, [`${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`]);
-      const latestBar = await query(`SELECT close::float FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
       const nqClose = latestBar.rows[0]?.close;
       const pivotLevel = parseFloat(pivotRow.rows[0]?.pivot_level) || null;
       const pivotBias = pivotLevel ? (nqClose > pivotLevel ? 'ABOVE' : 'BELOW') : null;
@@ -53,7 +53,7 @@ router.get('/weekly/current', async (req, res) => {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (week_start) DO NOTHING RETURNING *, week_start::text
       `, [weekStart, mh, ml, mh+ibRange*0.5, ml-ibRange*0.5, mh+ibRange, ml-ibRange, parseInt(nlRow.rows[0]?.nl30), pivotBias]);
 
-      const weekBars = await query(`SELECT MAX(high)::numeric(8,2) as week_high, MIN(low)::numeric(8,2) as week_low FROM price_bars WHERE symbol='NQ' AND ts::date >= $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [weekStart]);
+      const weekBars = await query(`SELECT MAX(high)::numeric(8,2) as week_high, MIN(low)::numeric(8,2) as week_low FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [weekStart]);
       return res.json({ ...(saved.rows[0] || {}), week_start: weekStart, monday_high: mh, monday_low: ml, normal_week_upper: mh+ibRange*0.5, normal_week_lower: ml-ibRange*0.5, normal_var_upper: mh+ibRange, normal_var_lower: ml-ibRange, current_week_high: weekBars.rows[0]?.week_high, current_week_low: weekBars.rows[0]?.week_low, nl30: parseInt(nlRow.rows[0]?.nl30), monthly_pivot_bias: pivotBias });
     }
 
@@ -61,7 +61,7 @@ router.get('/weekly/current', async (req, res) => {
     const priorWeek = await query(`SELECT id, week_start::text as week_start_str, monday_high, monday_low, normal_week_upper, normal_week_lower, normal_var_upper, normal_var_lower, week_high, week_low, week_close, week_type, direction, acd_number_line_monday, monthly_pivot_bias, notes FROM weekly_ib_structure WHERE week_start < $1 ORDER BY weekly_ib_structure.week_start DESC LIMIT 1`, [weekStart]);
     const pw = priorWeek.rows[0];
     if (pw) pw.week_start = pw.week_start_str || pw.week_start;
-    const priorBars = pw ? await query(`SELECT (array_agg(close ORDER BY ts DESC))[1]::numeric(8,2) as week_close, MAX(high)::numeric(8,2) as week_high, MIN(low)::numeric(8,2) as week_low FROM price_bars WHERE symbol='NQ' AND ts::date >= $1 AND ts::date < $2 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [pw.week_start_str, weekStart]) : null;
+    const priorBars = pw ? await query(`SELECT (array_agg(close ORDER BY ts DESC))[1]::numeric(8,2) as week_close, MAX(high)::numeric(8,2) as week_high, MIN(low)::numeric(8,2) as week_low FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date < $2 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [pw.week_start_str, weekStart]) : null;
     res.json({ week_start: weekStart, monday_high: null, monday_low: null, prior_week: pw ? { ...pw, week_close: priorBars?.rows[0]?.week_close, week_high: priorBars?.rows[0]?.week_high, week_low: priorBars?.rows[0]?.week_low } : null });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
@@ -78,7 +78,7 @@ router.get('/weekly/va-history', async (req, res) => {
     // Get last N week starts that have bar data
     const weekStarts = await query(`
       SELECT DISTINCT date_trunc('week', ts::date)::date::text as week_start
-      FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+      FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY week_start DESC LIMIT $1
     `, [weeksBack]);
 
@@ -92,7 +92,7 @@ router.get('/weekly/va-history', async (req, res) => {
         const vp = await query(`
           WITH vp AS (
             SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-            FROM price_bars WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
+            FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
               AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
             GROUP BY ROUND(low / 0.25) * 0.25
           ),
@@ -109,13 +109,13 @@ router.get('/weekly/va-history', async (req, res) => {
         // Monday range
         const mon = await query(`
           SELECT MAX(high)::float as h, MIN(low)::float as l
-          FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         `, [week_start]);
 
         // Week close (Friday last bar)
         const close = await query(`
           SELECT (array_agg(close ORDER BY ts DESC))[1]::float as close
-          FROM price_bars WHERE symbol='NQ' AND ts::date <= $1 AND ts::date >= $2
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date <= $1 AND ts::date >= $2
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         `, [weekEnd, week_start]);
 
@@ -155,7 +155,7 @@ router.get('/daily/va-history', async (req, res) => {
 
     const tradingDays = await query(`
       SELECT DISTINCT ts::date::text as date
-      FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+      FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY date DESC LIMIT $1
     `, [daysBack]);
 
@@ -165,7 +165,7 @@ router.get('/daily/va-history', async (req, res) => {
         const vp = await query(`
           WITH vp AS (
             SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-            FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+            FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
               AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
             GROUP BY ROUND(low / 0.25) * 0.25
           ),
@@ -177,7 +177,7 @@ router.get('/daily/va-history', async (req, res) => {
             (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p.poc_px) s WHERE cv <= (SELECT t*0.35 FROM total))::float as val,
             (array_agg(close ORDER BY ts DESC))[1]::float as day_close
           FROM vp, poc_row p
-          JOIN price_bars ON ts::date=$1 AND symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+          JOIN price_bars_primary ON ts::date=$1 AND symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY p.poc_px LIMIT 1
         `, [date]);
 
@@ -222,7 +222,7 @@ router.get('/weekly/bars', async (req, res) => {
         MIN(low)::float as low,
         (array_agg(close ORDER BY ts DESC))[1]::float as close,
         SUM(volume)::bigint as volume
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       GROUP BY date_trunc('hour', ts), ts::date
@@ -233,7 +233,7 @@ router.get('/weekly/bars', async (req, res) => {
     const vpR = await query(`
       WITH vp AS (
         SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY ROUND(low / 0.25) * 0.25

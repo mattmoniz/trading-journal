@@ -1,0 +1,16 @@
+{
+  "watch": [
+    "server"
+  ],
+  "ignore": [
+    "node_modules",
+    "venv",
+    "logs",
+    "dist",
+    "uploads",
+    "src",
+    ".git",
+    "*.log"
+  ],
+  "ext": "js,mjs,json"
+}

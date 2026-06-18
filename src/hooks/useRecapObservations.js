@@ -10,6 +10,30 @@ export function useRecapObservations(recapData) {
     const fmtTime = ts => { const t = new Date(ts); return `${t.getUTCHours()}:${String(t.getUTCMinutes()).padStart(2,'0')}`; };
     const obs = [];
 
+    // Compression & Coiling metrics
+    if (recapData.compression) {
+      const { score, coiled, signals, customDesc } = recapData.compression;
+      if (customDesc) {
+        obs.push({
+          type: 'info',
+          icon: '🌀',
+          text: `${customDesc} (Compression Score: ${score}/10)`
+        });
+      } else if (coiled) {
+        obs.push({
+          type: 'info',
+          icon: '🌀',
+          text: `COILED (Score ${score}/10) — setup for range expansion. Signals: ${signals.join(' | ')}`
+        });
+      } else if (score >= 2) {
+        obs.push({
+          type: 'neutral',
+          icon: '🌀',
+          text: `Compressed (Score ${score}/10) — mild range contraction. Signals: ${signals.join(' | ')}`
+        });
+      }
+    }
+
     // Gap
     if (levels.pdClose != null) {
       const gapPts = +rth[0].open - levels.pdClose;

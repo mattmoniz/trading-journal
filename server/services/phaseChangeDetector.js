@@ -15,7 +15,7 @@ async function getVolProfileForDate(dateStr) {
   const r = await query(`
     WITH vp AS (
       SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       GROUP BY ROUND(low/0.25)*0.25
     ), total AS (SELECT SUM(vol) as t FROM vp),
@@ -36,7 +36,7 @@ export async function getStructuralLevels(tradeDate) {
     const tpoQ = await query(`
       WITH bars AS (
         SELECT ROUND(low/0.25)*0.25 as lo, ROUND(high/0.25)*0.25 as hi
-        FROM price_bars WHERE symbol='NQ'
+        FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date >= $1::date - INTERVAL '5 days'
           AND ts::date < $1::date
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
@@ -67,7 +67,7 @@ export async function getStructuralLevels(tradeDate) {
   // ── Prior day VAL/VAH/POC ────────────────────────────────────────────────
   try {
     const pdQ = await query(`
-      SELECT ts::date::text as date FROM price_bars
+      SELECT ts::date::text as date FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY ts::date DESC LIMIT 1
     `, [tradeDate]);
@@ -84,7 +84,7 @@ export async function getStructuralLevels(tradeDate) {
   // ── Bracket HIGH/LOW: max VAH / min VAL across last 5 sessions ───────────
   try {
     const last5Q = await query(`
-      SELECT DISTINCT ts::date::text as date FROM price_bars
+      SELECT DISTINCT ts::date::text as date FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY date DESC LIMIT 5
     `, [tradeDate]);
@@ -238,7 +238,7 @@ export async function detectPhaseChange(io, tradeDate) {
     const barsQ = await query(`
       SELECT ts, open::float, high::float, low::float, close::float,
         volume, num_trades, bid_volume, ask_volume
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY ts DESC LIMIT $2

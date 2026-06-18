@@ -125,7 +125,7 @@ export async function resolveSetupsByPrice(io) {
 
     const bars = await query(`
       SELECT ts, open::float, high::float, low::float, close::float
-      FROM price_bars WHERE symbol='NQ' AND ts > $1 ORDER BY ts
+      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts
     `, [row.fired_at]);
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
@@ -202,7 +202,7 @@ export async function structurallyInvalidateSetups(io) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
   const [priceRow, acdRow] = await Promise.all([
-    query(`SELECT close::float FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+    query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
   ]);
 
@@ -215,20 +215,30 @@ export async function structurallyInvalidateSetups(io) {
   const bearishPattern = '%SHORT%,IB_BEARISH,C_STANDALONE_DOWN,FAILED_AUCTION_SHORT,VALUE_AREA_RESPONSIVE_SHORT'.split(',');
   const bullishPattern = '%LONG%,IB_BULLISH,C_STANDALONE_UP,FAILED_AUCTION_LONG,VALUE_AREA_RESPONSIVE_LONG'.split(',');
 
-  const isBearish = (t) => t.includes('SHORT') || t.includes('BEARISH') || t === 'C_STANDALONE_DOWN';
-  const isBullish = (t) => t.includes('LONG')  || t.includes('BULLISH') || t === 'C_STANDALONE_UP';
+  const isBearish = (t) => t.includes('SHORT') || t.includes('BEARISH') || t === 'C_STANDALONE_DOWN' || t.includes('A_DOWN');
+  const isBullish = (t) => t.includes('LONG')  || t.includes('BULLISH') || t === 'C_STANDALONE_UP' || t.includes('A_UP');
 
-  // Need fired_at to compute how long the setup was active when invalidated
+  // Need fired_at and stop_level to compute how long the setup was active when invalidated
   const activeWithTime = await query(`
-    SELECT id, setup_type, trade_date, fired_at FROM active_setups
+    SELECT id, setup_type, trade_date, fired_at, stop_level FROM active_setups
     WHERE trade_date=$1 AND status='ACTIVE'
   `, [todayET]);
 
   let count = 0;
   for (const row of activeWithTime.rows) {
-    const shouldInvalidate =
-      (isBearish(row.setup_type) && currentPrice > orHigh) ||
-      (isBullish(row.setup_type) && currentPrice < orLow);
+    const isBracket = row.setup_type.includes('BRACKET_BREAKOUT');
+    let shouldInvalidate = false;
+
+    if (isBracket) {
+      const isLong = row.setup_type.includes('LONG');
+      shouldInvalidate = isLong
+        ? (row.stop_level != null && currentPrice <= row.stop_level)
+        : (row.stop_level != null && currentPrice >= row.stop_level);
+    } else {
+      shouldInvalidate =
+        (isBearish(row.setup_type) && currentPrice > orHigh) ||
+        (isBullish(row.setup_type) && currentPrice < orLow);
+    }
 
     if (!shouldInvalidate) continue;
 
@@ -272,6 +282,121 @@ export default function createACDRouter(io) {
       res.json(result);
     } catch (e) {
       res.status(500).json({ available: false, reason: e.message });
+    }
+  });
+
+  // GET /api/acd/gap-context
+  // Detects open RTH-to-RTH gaps from the last 30 sessions and returns gap zones,
+  // fill status, and current price relation. Read-only, no DB writes.
+  router.get('/acd/gap-context', async (req, res) => {
+    try {
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+      const rangesQ = await query(`
+        SELECT d, rth_low, rth_high FROM (
+          SELECT ts::date::text as d,
+            MIN(low)::float as rth_low,
+            MAX(high)::float as rth_high
+          FROM price_bars_primary
+          WHERE symbol='NQ'
+            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+            AND ts::date <= $1
+          GROUP BY ts::date
+          ORDER BY ts::date DESC
+          LIMIT 40
+        ) sub ORDER BY d ASC
+      `, [todayET]);
+      const sessions = rangesQ.rows;
+
+      const priceQ = await query(`
+        SELECT close::float as price FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date = $1
+        ORDER BY ts DESC LIMIT 1
+      `, [todayET]);
+      const currentPrice = priceQ.rows[0]?.price ?? null;
+
+      if (sessions.length < 2) {
+        return res.json({ gaps: [], currentPrice });
+      }
+
+      const gaps = [];
+      for (let i = 1; i < sessions.length; i++) {
+        const prev = sessions[i - 1];
+        const curr = sessions[i];
+        if (curr.rth_low > prev.rth_high) {
+          gaps.push({ type: 'up', fromDate: prev.d, toDate: curr.d, gapLow: prev.rth_high, gapHigh: curr.rth_low });
+        } else if (curr.rth_high < prev.rth_low) {
+          gaps.push({ type: 'down', fromDate: prev.d, toDate: curr.d, gapLow: curr.rth_high, gapHigh: prev.rth_low });
+        }
+      }
+
+      const openGaps = [];
+      for (const gap of gaps) {
+        const gapIdx = sessions.findIndex(s => s.d === gap.toDate);
+        const gapSize = gap.gapHigh - gap.gapLow;
+        let filled = false;
+        let partialFillLow = gap.gapHigh; // lowest price reached inside gap (for up gaps)
+        let partialFillHigh = gap.gapLow; // highest price reached inside gap (for down gaps)
+
+        for (let i = gapIdx + 1; i < sessions.length; i++) {
+          const s = sessions[i];
+          if (gap.type === 'up') {
+            partialFillLow = Math.min(partialFillLow, s.rth_low);
+            if (s.rth_low <= gap.gapLow) { filled = true; break; }
+          } else {
+            partialFillHigh = Math.max(partialFillHigh, s.rth_high);
+            if (s.rth_high >= gap.gapHigh) { filled = true; break; }
+          }
+        }
+
+        if (!filled) {
+          const sessionAge = sessions.length - 1 - gapIdx;
+          let pctFilled = 0;
+          if (gap.type === 'up' && partialFillLow < gap.gapHigh) {
+            pctFilled = Math.min(100, (gap.gapHigh - partialFillLow) / gapSize * 100);
+          } else if (gap.type === 'down' && partialFillHigh > gap.gapLow) {
+            pctFilled = Math.min(100, (partialFillHigh - gap.gapLow) / gapSize * 100);
+          }
+
+          const priceInGap = currentPrice != null && currentPrice > gap.gapLow && currentPrice < gap.gapHigh;
+          const priceAboveGap = currentPrice != null && currentPrice >= gap.gapHigh;
+          const priceBelowGap = currentPrice != null && currentPrice <= gap.gapLow;
+          const priceRelation = currentPrice == null ? null
+            : priceAboveGap ? 'above' : priceBelowGap ? 'below' : 'inside';
+
+          openGaps.push({
+            type: gap.type,
+            fromDate: gap.fromDate,
+            toDate: gap.toDate,
+            gapLow: gap.gapLow,
+            gapHigh: gap.gapHigh,
+            gapSize: Math.round(gapSize * 100) / 100,
+            sessionAge,
+            pctFilled: Math.round(pctFilled),
+            ptsRemaining: Math.round((gapSize * (1 - pctFilled / 100)) * 100) / 100,
+            priceRelation,
+          });
+        }
+      }
+
+      res.json({ gaps: openGaps, currentPrice });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // GET /api/acd/vol-backtest-stats
+  // Returns latest cached results from vol_backtest_cache (written by scripts/volatility_predictive_backtest.mjs).
+  // Used by VolatilityRegimeCard to show expansion targets and continuation probability.
+  router.get('/acd/vol-backtest-stats', async (req, res) => {
+    try {
+      const r = await query(
+        `SELECT results, run_at FROM vol_backtest_cache ORDER BY id DESC LIMIT 1`
+      );
+      if (!r.rows.length) return res.json(null);
+      res.json({ ...r.rows[0].results, cachedAt: r.rows[0].run_at });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 
@@ -480,7 +605,7 @@ export default function createACDRouter(io) {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
       const prevRes = await query(`
-        SELECT DISTINCT ts::date::text as d FROM price_bars
+        SELECT DISTINCT ts::date::text as d FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY d DESC LIMIT 1
       `, [todayET]);
@@ -489,7 +614,7 @@ export default function createACDRouter(io) {
 
       const bars = await query(`
         SELECT high::float, low::float, volume::bigint
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date = $1
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY ts
@@ -602,7 +727,7 @@ export default function createACDRouter(io) {
               const pmVpQ = await query(`
                 WITH vp AS (
                   SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-                  FROM price_bars WHERE symbol='NQ'
+                  FROM price_bars_primary WHERE symbol='NQ'
                     AND ts >= $1::date AND ts < $2::date
                     AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
                     AND EXTRACT(hour FROM ts) < 16
@@ -625,7 +750,7 @@ export default function createACDRouter(io) {
 
             const pwQ = await query(`
               SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
-              FROM price_bars WHERE symbol='NQ'
+              FROM price_bars_primary WHERE symbol='NQ'
                 AND ts::date >= date_trunc('week', ($1::text)::date) - INTERVAL '7 days'
                 AND ts::date <  date_trunc('week', ($1::text)::date)
                 AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
@@ -643,7 +768,7 @@ export default function createACDRouter(io) {
 
             const bars = await query(`
               SELECT ts, high::float, low::float, close::float
-              FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+              FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
                 AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 575 AND 959
               ORDER BY ts
             `, [date]);
@@ -735,7 +860,7 @@ export default function createACDRouter(io) {
     setImmediate(async () => {
       try {
         const datesRes = await query(`
-          SELECT DISTINCT ts::date::text as d FROM price_bars
+          SELECT DISTINCT ts::date::text as d FROM price_bars_primary
           WHERE symbol = 'NQ'
             AND EXTRACT(hour FROM ts) = 9 AND EXTRACT(minute FROM ts) = 30
           ORDER BY d
@@ -784,11 +909,11 @@ export default function createACDRouter(io) {
         SELECT
           MAX(high)   as prior_month_high,
           MIN(low)    as prior_month_low,
-          (SELECT close FROM price_bars WHERE symbol='NQ'
+          (SELECT close FROM price_bars_primary WHERE symbol='NQ'
             AND ts >= $1::date AND ts < $2::date
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
             ORDER BY ts DESC LIMIT 1) as prior_month_close
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol = 'NQ'
           AND ts >= $1::date AND ts < $2::date
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
@@ -877,7 +1002,7 @@ export default function createACDRouter(io) {
     const bars = await query(`
       SELECT ts::date::text as date, to_char(ts, 'HH24:MI') as time,
              high::float, low::float, close::float
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = 'NQ'
         AND ts::date >= $1::date
         AND ts::date < $1::date + interval '7 days'
@@ -1040,7 +1165,7 @@ export default function createACDRouter(io) {
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const monthYear = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`;
       const pivot = await query('SELECT pivot_level FROM acd_monthly_pivot WHERE month_year=$1', [monthYear]);
-      const latestBar = await query(`SELECT close::float as close FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
       const nqClose = latestBar.rows[0]?.close || 0;
       const pivotLevel = parseFloat(pivot.rows[0]?.pivot_level) || null;
       const pivotBias = pivotLevel ? (nqClose > pivotLevel ? 'up' : 'down') : null;
@@ -1105,7 +1230,7 @@ export default function createACDRouter(io) {
       try {
         const weeksRes = await query(`
           SELECT DISTINCT date_trunc('week', ts::date)::date::text as week_start
-          FROM price_bars
+          FROM price_bars_primary
           WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           ORDER BY week_start
         `);
@@ -1129,7 +1254,7 @@ export default function createACDRouter(io) {
   // GET /api/acd/nq/latest
   router.get('/acd/nq/latest', async (req, res) => {
     try {
-      const r = await query(`SELECT ts, close, high, low, open FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const r = await query(`SELECT ts, close, high, low, open FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
       if (r.rows.length === 0) return res.json(null);
       const bar = r.rows[0];
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -1244,7 +1369,7 @@ export default function createACDRouter(io) {
       // cacheGet imported at top of file
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-      const latestBar = await query(`SELECT close::float as close FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
       const currentPrice = latestBar.rows[0]?.close;
       if (!currentPrice) return res.json({ levels: [] });
 
@@ -1264,7 +1389,7 @@ export default function createACDRouter(io) {
 
       const ibQ = await query(`
         SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
       `, [todayET]);
       const ibHigh = ibQ.rows[0]?.ib_high;
@@ -1291,7 +1416,7 @@ export default function createACDRouter(io) {
           // fallback to pdBars calculation
           const pdBars = await query(`
             SELECT high::float as high, low::float as low, close::float as close, volume::integer as volume
-            FROM price_bars WHERE symbol='NQ' AND ts::date=(SELECT MAX(trade_date) FROM acd_daily_log WHERE trade_date < $1)
+            FROM price_bars_primary WHERE symbol='NQ' AND ts::date=(SELECT MAX(trade_date) FROM acd_daily_log WHERE trade_date < $1)
               AND (EXTRACT(hour FROM ts)=9 AND EXTRACT(minute FROM ts)>=30 OR EXTRACT(hour FROM ts) BETWEEN 10 AND 15)
           `, [todayET]);
           if (pdBars.rows.length) {
@@ -1382,7 +1507,7 @@ export default function createACDRouter(io) {
         SELECT ts, open::float, high::float, low::float, close::float, volume::bigint,
                SUM(close::float * volume::bigint) OVER (ORDER BY ts) /
                NULLIF(SUM(volume::bigint) OVER (ORDER BY ts), 0) as vwap_running
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
         ORDER BY ts
@@ -1391,7 +1516,7 @@ export default function createACDRouter(io) {
       if (!bars.length) return res.json([]);
 
       const priorR = await query(`
-        SELECT MAX(ts::date::text) as prior_date FROM price_bars
+        SELECT MAX(ts::date::text) as prior_date FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [date]);
       const priorDate = priorR.rows[0]?.prior_date;
@@ -1399,7 +1524,7 @@ export default function createACDRouter(io) {
       let pdHigh = null, pdLow = null, pdVAH = null, pdVAL = null, onHigh = null, onLow = null;
       if (priorDate) {
         const pd = await query(`
-          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars
+          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
           WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         `, [priorDate]);
         pdHigh = pd.rows[0]?.h; pdLow = pd.rows[0]?.l;
@@ -1415,7 +1540,7 @@ export default function createACDRouter(io) {
         } else {
           // fallback
           const fallbackQ = await query(`
-            WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+            WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
             total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
             SELECT p2.px::float as poc,
               (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
@@ -1427,7 +1552,7 @@ export default function createACDRouter(io) {
         }
 
         const onR = await query(`
-          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars
+          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
           WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)
         `, [priorDate]);
         onHigh = onR.rows[0]?.h; onLow = onR.rows[0]?.l;
@@ -1582,7 +1707,7 @@ export default function createACDRouter(io) {
           const weeklyQ = await query(`
             SELECT ts::date as session_date,
                    (array_agg(close ORDER BY ts DESC))[1]::float as session_close
-            FROM price_bars
+            FROM price_bars_primary
             WHERE symbol='NQ'
               AND ts::date >= date_trunc('week', ($1::text)::date)
               AND ts::date < ($1::text)::date
@@ -1596,7 +1721,7 @@ export default function createACDRouter(io) {
       // Prior week RTH high/low
       const pwQ = await query(`
         SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
-        FROM price_bars WHERE symbol='NQ'
+        FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date >= date_trunc('week', CURRENT_DATE) - INTERVAL '7 days'
           AND ts::date <  date_trunc('week', CURRENT_DATE)
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
@@ -1608,7 +1733,7 @@ export default function createACDRouter(io) {
       const pmVaQ = await query(`
         WITH vp AS (
           SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-          FROM price_bars WHERE symbol='NQ'
+          FROM price_bars_primary WHERE symbol='NQ'
             AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY ROUND(low/0.25)*0.25
@@ -1638,7 +1763,7 @@ export default function createACDRouter(io) {
       const bars = await query(`
         SELECT ts, open::float, high::float, low::float, close::float, volume::bigint,
                EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) as bar_min
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= $2
           AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) <= $3
@@ -2006,7 +2131,7 @@ export default function createACDRouter(io) {
       const allBarsQ = await query(`
         SELECT high::float, low::float, close::float, open::float,
                EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as bm
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
         ORDER BY ts
       `, [todayET]);
@@ -2225,38 +2350,46 @@ export default function createACDRouter(io) {
         query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
         // Auction reads for today
         query(`SELECT opening_call_type, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]),
-        // Prior 5 bracket states (for bracket breakout detection)
+        // Prior 5 bracket states using actual session High/Low (9:30–16:00)
         query(`
-          SELECT al.trade_date::text, al.or_high::float, al.or_low::float,
-                 ar.opening_call_type
-          FROM acd_daily_log al LEFT JOIN auction_reads ar USING (trade_date)
-          WHERE al.trade_date < $1 AND al.or_high IS NOT NULL
-          ORDER BY al.trade_date DESC LIMIT 5
+          WITH dates AS (
+            SELECT DISTINCT ts::date as dt FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date < $1
+            ORDER BY dt DESC LIMIT 5
+          )
+          SELECT ts::date::text as trade_date, 
+                 MAX(high)::float as or_high, 
+                 MIN(low)::float as or_low
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date IN (SELECT dt FROM dates)
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+          GROUP BY ts::date
+          ORDER BY trade_date DESC
         `, [todayET]),
         // IB bars (9:30–10:00) with bid/ask volume — spec: 30-min OR period
         query(`
           SELECT high::float, low::float, close::float, open::float,
                  COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int
-          FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 599
           ORDER BY ts
         `, [todayET]),
         // Current price + volume + bar timestamp
-        query(`SELECT ts, close::float, volume::int FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
         // 20-bar average volume (last 20 RTH bars)
         query(`
           SELECT AVG(volume)::float as avg_vol
-          FROM (SELECT volume FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+          FROM (SELECT volume FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 575 ORDER BY ts DESC LIMIT 20) v
         `, [todayET]),
         // Live timeline events
         query(`SELECT setup_type, fired_time FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time`, [todayET]),
         // Session high/low so far today (for TRT stop calculation)
-        query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
+        query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
         // First 15 min of bars (9:30-9:45) for live opening-type classification
         query(`
           SELECT high::float, low::float, close::float, open::float
-          FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
           ORDER BY ts
         `, [todayET]),
@@ -2268,7 +2401,7 @@ export default function createACDRouter(io) {
       if (cachedPdVA) {
         ({ pdVAH, pdVAL, pdPOC } = cachedPdVA);
       } else {
-        const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
+        const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
         const priorDay = priorDayQ.rows[0]?.d;
         if (priorDay) {
           const vaQ = await query(`
@@ -2283,7 +2416,7 @@ export default function createACDRouter(io) {
           } else {
             // fallback
             const fallbackQ = await query(`
-              WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+              WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
               total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
               SELECT p.poc_px::float as poc,
                 (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
@@ -2996,6 +3129,92 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── SETUP 10: GAP FILL ──────────────────────────────────────────────────
+      let gapFill = null;
+      {
+        const rangesQ = await query(`
+          SELECT d, rth_low, rth_high FROM (
+            SELECT ts::date::text as d,
+              MIN(low)::float as rth_low,
+              MAX(high)::float as rth_high
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+              AND ts::date <= $1
+            GROUP BY ts::date
+            ORDER BY ts::date DESC
+            LIMIT 40
+          ) sub ORDER BY d ASC
+        `, [todayET]);
+        const sessions = rangesQ.rows;
+
+        if (sessions.length >= 2 && currentPrice) {
+          const gaps = [];
+          for (let i = 1; i < sessions.length; i++) {
+            const prev = sessions[i - 1];
+            const curr = sessions[i];
+            if (curr.rth_low > prev.rth_high) {
+              gaps.push({ type: 'up', fromDate: prev.d, toDate: curr.d, gapLow: prev.rth_high, gapHigh: curr.rth_low });
+            } else if (curr.rth_high < prev.rth_low) {
+              gaps.push({ type: 'down', fromDate: prev.d, toDate: curr.d, gapLow: curr.rth_high, gapHigh: prev.rth_low });
+            }
+          }
+
+          const openGaps = [];
+          for (const gap of gaps) {
+            const gapIdx = sessions.findIndex(s => s.d === gap.toDate);
+            const gapSize = gap.gapHigh - gap.gapLow;
+            let filled = false;
+            for (let i = gapIdx + 1; i < sessions.length; i++) {
+              const s = sessions[i];
+              if (gap.type === 'up') {
+                if (s.rth_low <= gap.gapLow) { filled = true; break; }
+              } else {
+                if (s.rth_high >= gap.gapHigh) { filled = true; break; }
+              }
+            }
+            if (!filled) {
+              openGaps.push({ ...gap, gapSize });
+            }
+          }
+
+          for (const gap of openGaps) {
+            if (currentPrice < gap.gapHigh && currentPrice > gap.gapLow) {
+              if (gap.type === 'up') {
+                gapFill = {
+                  type: 'GAP_FILL_SHORT',
+                  label: `GAP FILL SHORT (${gap.fromDate} to ${gap.toDate})`,
+                  direction: 'SHORT',
+                  entry: +currentPrice.toFixed(0),
+                  stop: +Math.round(gap.gapHigh + 15),
+                  target: t1Guard('SHORT', currentPrice, gap.gapLow),
+                  targetLabel: 'Gap Floor',
+                  keyLevel: +Math.round(gap.gapHigh),
+                  keyLevelLabel: 'Gap Ceiling',
+                  description: `NQ entered the unfilled up-gap zone from ${gap.fromDate} to ${gap.toDate} (${Math.round(gap.gapLow)}–${Math.round(gap.gapHigh)}). Expecting fast travel to complete the gap fill down to ${Math.round(gap.gapLow)}. Invalidation is 15 pts above gap ceiling.`,
+                  history: await getHistory('TREND'),
+                };
+              } else {
+                gapFill = {
+                  type: 'GAP_FILL_LONG',
+                  label: `GAP FILL LONG (${gap.fromDate} to ${gap.toDate})`,
+                  direction: 'LONG',
+                  entry: +currentPrice.toFixed(0),
+                  stop: +Math.round(gap.gapLow - 15),
+                  target: t1Guard('LONG', currentPrice, gap.gapHigh),
+                  targetLabel: 'Gap Ceiling',
+                  keyLevel: +Math.round(gap.gapLow),
+                  keyLevelLabel: 'Gap Floor',
+                  description: `NQ entered the unfilled down-gap zone from ${gap.fromDate} to ${gap.toDate} (${Math.round(gap.gapLow)}–${Math.round(gap.gapHigh)}). Expecting fast travel to complete the gap fill up to ${Math.round(gap.gapHigh)}. Invalidation is 15 pts below gap floor.`,
+                  history: await getHistory('TREND'),
+                };
+              }
+              break;
+            }
+          }
+        }
+      }
+
       // ── Priority selection (spec order) ──────────────────────────────────────
       // Integrity guard: a setup must not fire with the stop on the wrong side of
       // entry (non-positive risk — e.g. VALUE_AREA_RESPONSIVE's ±8pt buffer can land
@@ -3008,6 +3227,7 @@ export default function createACDRouter(io) {
         trtMah,
         trtLongV2, trtShortV2,
         trt,
+        gapFill,
         aUpStrong, aDownStrong,
         otdSetup,
         aUpWeak, aDownWeak,
@@ -3061,6 +3281,7 @@ export default function createACDRouter(io) {
         A_UP_WEAK: null, A_DOWN_WEAK: null,
         C_PAIRED_LONG: null, C_PAIRED_SHORT: null,
         C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
+        GAP_FILL_LONG: null, GAP_FILL_SHORT: null,
       };
       // Hard cap: 1:00 PM ET (session end). Use local (ET) time formatting so PostgreSQL
       // interprets the stored TIMESTAMP WITHOUT TZ correctly in its session timezone.
@@ -3322,6 +3543,7 @@ export default function createACDRouter(io) {
     A_UP_WEAK: 'ib_high', A_DOWN_WEAK: 'ib_low',
     C_PAIRED_LONG: 'ib_high', C_PAIRED_SHORT: 'ib_low',
     C_REVERSAL_LONG: 'ib_high', C_REVERSAL_SHORT: 'ib_low',
+    GAP_FILL_LONG: 'bracket_high', GAP_FILL_SHORT: 'bracket_low',
   };
 
   router.get('/timeline/today', async (req, res) => {
@@ -3393,7 +3615,7 @@ export default function createACDRouter(io) {
             // then compare against price_bars.ts (UTC stored as TIMESTAMP WITHOUT TZ via session UTC).
             const mfeQ = await query(`
               SELECT ${isLong ? 'MAX(high)' : 'MIN(low)'}::float as mfe_price
-              FROM price_bars
+              FROM price_bars_primary
               WHERE symbol='NQ'
                 AND ts >= ($1::timestamp AT TIME ZONE 'America/New_York')::timestamp
                 AND ts <= ($2::timestamp AT TIME ZONE 'America/New_York')::timestamp

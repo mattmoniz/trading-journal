@@ -181,8 +181,12 @@ export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accur
   const wideOR    = (orWidth || 0) > 80;
   const narrowOR  = (orWidth || 0) < 40;
 
-  if (isDrive && (nlBull || nlBear) && wideOR) {
-    const long = openingType.includes('LONG');
+  const longDrive = openingType.includes('LONG');
+  const shortDrive = openingType.includes('SHORT');
+  const alignedTrend = isDrive && wideOR && ((longDrive && nlBull) || (shortDrive && nlBear));
+
+  if (alignedTrend) {
+    const long = longDrive;
     return {
       classification: 'TREND', probability: Math.abs(nl30) > 15 ? 75 : 65, source: 'LITERATURE', sampleSize: 0,
       lowConfidence,
@@ -206,7 +210,7 @@ export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accur
     };
   }
 
-  if (wideOR && !isDrive) {
+  if (wideOR) {
     return {
       classification: 'TURBULENT', probability: 55, source: 'LITERATURE', sampleSize: 0,
       lowConfidence,
@@ -343,7 +347,7 @@ async function computeCompression(tradeDate, orWidth) {
   // Prior-day RTH H-L ranges narrowing (proxy for value area tightening)
   const dayRngQ = await query(`
     SELECT (MAX(high) - MIN(low))::float AS rng
-    FROM price_bars WHERE symbol = 'NQ' AND ts::date < $1
+    FROM price_bars_primary WHERE symbol = 'NQ' AND ts::date < $1
       AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     GROUP BY ts::date ORDER BY ts::date DESC LIMIT 5
   `, [tradeDate]);
@@ -447,6 +451,70 @@ function buildExitPlaybook(dayTypeClass) {
   };
 }
 
+async function getOpenGaps(tradeDate, currentPrice) {
+  try {
+    const rangesQ = await query(`
+      SELECT d, rth_low, rth_high FROM (
+        SELECT ts::date::text as d,
+          MIN(low)::float as rth_low,
+          MAX(high)::float as rth_high
+        FROM price_bars_primary
+        WHERE symbol='NQ'
+          AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+          AND ts::date <= $1
+        GROUP BY ts::date
+        ORDER BY ts::date DESC
+        LIMIT 40
+      ) sub ORDER BY d ASC
+    `, [tradeDate]);
+    const sessions = rangesQ.rows;
+    if (sessions.length < 2) return [];
+
+    const gaps = [];
+    for (let i = 1; i < sessions.length; i++) {
+      const prev = sessions[i - 1];
+      const curr = sessions[i];
+      if (curr.rth_low > prev.rth_high) {
+        gaps.push({ type: 'up', fromDate: prev.d, toDate: curr.d, gapLow: prev.rth_high, gapHigh: curr.rth_low });
+      } else if (curr.rth_high < prev.rth_low) {
+        gaps.push({ type: 'down', fromDate: prev.d, toDate: curr.d, gapLow: curr.rth_high, gapHigh: prev.rth_low });
+      }
+    }
+
+    const openGaps = [];
+    for (const gap of gaps) {
+      const gapIdx = sessions.findIndex(s => s.d === gap.toDate);
+      const gapSize = gap.gapHigh - gap.gapLow;
+      let filled = false;
+      let partialFillLow = gap.gapHigh;
+      let partialFillHigh = gap.gapLow;
+
+      for (let i = gapIdx + 1; i < sessions.length; i++) {
+        const s = sessions[i];
+        if (gap.type === 'up') {
+          partialFillLow = Math.min(partialFillLow, s.rth_low);
+          if (s.rth_low <= gap.gapLow) { filled = true; break; }
+        } else {
+          partialFillHigh = Math.max(partialFillHigh, s.rth_high);
+          if (s.rth_high >= gap.gapHigh) { filled = true; break; }
+        }
+      }
+
+      if (!filled) {
+        const priceRelation = currentPrice == null ? null
+          : currentPrice >= gap.gapHigh ? 'above'
+          : currentPrice <= gap.gapLow ? 'below' : 'inside';
+
+        openGaps.push({ ...gap, gapSize, priceRelation });
+      }
+    }
+    return openGaps;
+  } catch (e) {
+    console.error('Error fetching open gaps in caseEngine:', e);
+    return [];
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────────
 
 export async function computeCase(tradeDate, asOf) {
@@ -456,7 +524,7 @@ export async function computeCase(tradeDate, asOf) {
   const barsQ = await query(`
     SELECT ts, open::float, high::float, low::float, close::float,
            volume::int, bid_volume::int, ask_volume::int
-    FROM price_bars
+    FROM price_bars_primary
     WHERE symbol = 'NQ' AND ts::date = $1
       AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= ${RTH_START}
       AND ts <= $2
@@ -468,9 +536,57 @@ export async function computeCase(tradeDate, asOf) {
     return { error: 'No RTH bar data for this date/time', asOf: asOfFull, tradeDate };
   }
 
+  // 1b. Fetch trailing 5-session average RTH 1-minute bar volume baseline
+  const statsVolQ = await query(`
+    SELECT AVG(volume)::float as mean_vol
+    FROM price_bars_primary
+    WHERE symbol = 'NQ'
+      AND ts >= ($1::date - INTERVAL '10 days')::timestamp
+      AND ts < ($1::date)::timestamp
+      AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [tradeDate]);
+  const baselineAvgVol = statsVolQ.rows[0]?.mean_vol || 1000;
+
   const currentPrice  = Number(bars[bars.length - 1].close);
   const currentTs     = bars[bars.length - 1].ts;
   const asOfMinutes   = barMinutes(bars[bars.length - 1]);
+
+  // Fetch open gaps and calculate gap warning
+  const openGaps = await getOpenGaps(tradeDate, currentPrice);
+  let gapWarning = null;
+  if (asOfMinutes < 16 * 60) {
+    for (const gap of openGaps) {
+      if (gap.priceRelation === 'inside') {
+        gapWarning = {
+          severity: 'WARNING',
+          title: 'Gap Fill in Progress',
+          message: `NQ has entered the ${gap.type === 'up' ? 'up' : 'down'}-gap void from ${gap.fromDate} to ${gap.toDate} (${Math.round(gap.gapLow)}–${Math.round(gap.gapHigh)}). Expect fast travel toward ${gap.type === 'up' ? Math.round(gap.gapLow) : Math.round(gap.gapHigh)} (no structural support/resistance inside the void).`,
+          type: 'GAP_VOID'
+        };
+        break;
+      } else {
+        const distHigh = Math.abs(currentPrice - gap.gapHigh);
+        const distLow = Math.abs(currentPrice - gap.gapLow);
+        if (distHigh <= 15 && currentPrice >= gap.gapHigh) {
+          gapWarning = {
+            severity: 'INFO',
+            title: 'Gap Ceiling Proximity',
+            message: `NQ is within ${Math.round(distHigh)} pts of the gap ceiling (${Math.round(gap.gapHigh)}). Dropping below risks a fast ${Math.round(gap.gapSize)} pt move to complete the fill.`,
+            type: 'GAP_PROXIMITY_CEILING'
+          };
+          break;
+        } else if (distLow <= 15 && currentPrice <= gap.gapLow) {
+          gapWarning = {
+            severity: 'INFO',
+            title: 'Gap Floor Proximity',
+            message: `NQ is within ${Math.round(distLow)} pts of the gap floor (${Math.round(gap.gapLow)}). Rallies above risk a fast ${Math.round(gap.gapSize)} pt move to complete the fill.`,
+            type: 'GAP_PROXIMITY_FLOOR'
+          };
+          break;
+        }
+      }
+    }
+  }
 
   // 2. ACD log
   const acdQ = await query(`
@@ -494,6 +610,103 @@ export async function computeCase(tradeDate, asOf) {
   const aUpLevel   = acd?.a_up_level   ?? (orHigh && orWidth ? orHigh + orWidth * aMult : null);
   const aDownLevel = acd?.a_down_level ?? (orLow  && orWidth ? orLow  - orWidth * aMult : null);
 
+  // 2a. Calculate IB breakout warning
+  let breakoutWarning = null;
+  if (ibHigh && ibLow && asOfMinutes >= RTH_START + 60 && asOfMinutes < 16 * 60) {
+    const postIbBars = bars.filter(b => barMinutes(b) >= RTH_START + 60);
+    let firstBreak = null;
+    for (const b of postIbBars) {
+      const bh = Number(b.high);
+      const bl = Number(b.low);
+      const bc = Number(b.close);
+      if (bh > ibHigh && bl < ibLow) {
+        const type = bc > (ibHigh + ibLow) / 2 ? 'BULL' : 'BEAR';
+        firstBreak = { type, time: barMinutes(b) };
+        break;
+      } else if (bh > ibHigh) {
+        firstBreak = { type: 'BULL', time: barMinutes(b) };
+        break;
+      } else if (bl < ibLow) {
+        firstBreak = { type: 'BEAR', time: barMinutes(b) };
+        break;
+      }
+    }
+
+    if (firstBreak) {
+      const isBull = firstBreak.type === 'BULL';
+
+      // Check if breakout has been invalidated (price closed past the IB midpoint since the break)
+      const ibMid = (ibHigh + ibLow) / 2;
+      const barsAfterBreak = postIbBars.filter(b => barMinutes(b) > firstBreak.time);
+      let invalidated = false;
+      for (const b of barsAfterBreak) {
+        const bc = Number(b.close);
+        if (isBull ? (bc < ibMid) : (bc > ibMid)) {
+          invalidated = true;
+          break;
+        }
+      }
+
+      if (!invalidated) {
+        const isCurrentlyOutside = isBull ? currentPrice > ibHigh : currentPrice < ibLow;
+
+        // Dynamic pullback buffer based on standard deviation of 1-min ranges during IB (9:30-10:30)
+        const ibBars = bars.filter(b => {
+          const m = barMinutes(b);
+          return m >= RTH_START && m < RTH_START + 60;
+        });
+        let pullbackBuffer = 20; // default fallback
+        if (ibBars.length > 0) {
+          const ibRanges = ibBars.map(b => Number(b.high) - Number(b.low));
+          const avgRange = ibRanges.reduce((sum, r) => sum + r, 0) / ibRanges.length;
+          const variance = ibRanges.reduce((sum, r) => sum + (r - avgRange) ** 2, 0) / ibRanges.length;
+          const sdRange = Math.sqrt(variance);
+          pullbackBuffer = avgRange + sdRange;
+        }
+
+        const isWithinPullback = isBull
+          ? (currentPrice >= ibHigh - pullbackBuffer && currentPrice <= ibHigh)
+          : (currentPrice <= ibLow + pullbackBuffer && currentPrice >= ibLow);
+
+        if (isCurrentlyOutside || isWithinPullback) {
+        if (isBull) {
+          if (acd?.a_down_fired) {
+            breakoutWarning = {
+              severity: 'WARNING',
+              title: 'Counter-ACD Breakout Warning',
+              message: `NQ broke IB High (${ibHigh}) on a bearish A-DOWN day. Historical trap rate: 87.3%. Look to fade.`,
+              type: 'BULL_COUNTER_ACD'
+            };
+          } else {
+            breakoutWarning = {
+              severity: 'INFO',
+              title: 'IB Breakout Active',
+              message: `NQ broke IB High (${ibHigh}). Average pullback rate: 94.2% (91.6% touch re-entry). Wait for a pullback inside the range before entering.`,
+              type: 'BULL_NORMAL'
+            };
+          }
+        } else { // BEAR
+          if (acd?.a_up_fired) {
+            breakoutWarning = {
+              severity: 'WARNING',
+              title: 'Counter-ACD Breakout Warning',
+              message: `NQ broke IB Low (${ibLow}) on a bullish A-UP day. Historical trap rate: 100.0%. Look to fade.`,
+              type: 'BEAR_COUNTER_ACD'
+            };
+          } else {
+            breakoutWarning = {
+              severity: 'INFO',
+              title: 'IB Breakout Active',
+              message: `NQ broke IB Low (${ibLow}). Average pullback rate: 94.2% (96.7% touch re-entry). Wait for a pullback inside the range before entering.`,
+              type: 'BEAR_NORMAL'
+            };
+          }
+        }
+      }
+      }
+    }
+  }
+
   // 3. Context: NL30, prior week, G-Line
   const [{ nl30, nl10, trend: nlTrend }, { pwHigh, pwLow }, gLine] = await Promise.all([
     getNL({ asOf: tradeDate }),
@@ -507,7 +720,7 @@ export async function computeCase(tradeDate, asOf) {
   // 5. Overnight range
   const onQ = await query(`
     SELECT MAX(high)::float as on_high, MIN(low)::float as on_low
-    FROM price_bars WHERE symbol='NQ' AND ts::date = $1
+    FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1
       AND (EXTRACT(hour FROM ts) >= 18 OR EXTRACT(hour FROM ts) < 9)
   `, [tradeDate]);
   const onHigh = onQ.rows[0]?.on_high ?? null;
@@ -535,6 +748,10 @@ export async function computeCase(tradeDate, asOf) {
       timeframes: ['DAILY'],
       role: (sl.type.includes('VAH') || sl.type.includes('HIGH') || sl.type.includes('BRACKET_HIGH')) ? 'RESISTANCE' : 'SUPPORT',
     })),
+    ...openGaps.flatMap(gap => [
+      { price: gap.gapHigh, label: `Gap Ceiling (${gap.toDate})`, timeframes: ['DAILY'], role: gap.type === 'up' ? 'RESISTANCE' : 'SUPPORT' },
+      { price: gap.gapLow,  label: `Gap Floor (${gap.toDate})`,  timeframes: ['DAILY'], role: gap.type === 'up' ? 'SUPPORT' : 'RESISTANCE' }
+    ])
   ].filter(Boolean);
 
   // Assign stars via conviction data
@@ -578,7 +795,7 @@ export async function computeCase(tradeDate, asOf) {
     const avgRange20Q = await query(`
       WITH sessions AS (
         SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol = 'NQ'
           AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
           AND ts::date < $1
@@ -769,6 +986,31 @@ export async function computeCase(tradeDate, asOf) {
     });
   }
 
+  // Dynamic Volume Spike Detection (preventing flooding by using peak detection in 5-bar window)
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i];
+    const vol = Number(bar.volume || 0);
+    if (vol >= baselineAvgVol * 2.5) {
+      // Local peak test: is it the highest volume in [i-2, i+2]?
+      let isPeak = true;
+      for (let j = Math.max(0, i - 2); j <= Math.min(bars.length - 1, i + 2); j++) {
+        if (Number(bars[j].volume || 0) > vol) {
+          isPeak = false;
+          break;
+        }
+      }
+      if (isPeak) {
+        const isBull = Number(bar.close) >= Number(bar.open);
+        evidenceLog.push({
+          time: bar.ts,
+          change: isBull ? '↑' : '↓',
+          reason: `Vol Spike (${(vol / baselineAvgVol).toFixed(1)}x baseline)`,
+          value: `vol=${vol}, price=${Math.round(Number(bar.close))}`,
+        });
+      }
+    }
+  }
+
   meter = Math.max(-100, Math.min(100, Math.round(meter)));
   const bias = meter > 15 ? 'LONG' : meter < -15 ? 'SHORT' : 'NEUTRAL';
   const conviction = Math.min(10, Math.round(Math.abs(meter) / 10 * 10) / 10);
@@ -784,7 +1026,7 @@ export async function computeCase(tradeDate, asOf) {
     SELECT id, setup_type, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level,
            confluence_score_at_detection, structural_level_type, nl30_at_detection, status
     FROM active_setups
-    WHERE trade_date = $1 AND fired_at <= $2
+    WHERE trade_date = $1 AND fired_at <= $2 AND status = 'ACTIVE'
     ORDER BY fired_at DESC LIMIT 1
   `, [tradeDate, asOfFull]);
   const latestSetup = setupQ.rows[0] || null;
@@ -827,10 +1069,32 @@ export async function computeCase(tradeDate, asOf) {
     if (conf != null && conf < 4) { impact -= 2; impactStack.push(`-2 low confluence score=${conf}`); }
 
     // Day-type adjustment — weights halved while accuracy is low-confidence (see getDayTypeAccuracyStats)
+    // TURBULENT separated from TREND: TURBULENT = "no conviction, wait for structure" → neutral (0), not a boost.
     // Was: BALANCE=-3, TREND/TURBULENT=+1. Halved until measured overall accuracy exceeds 60%.
     const dtConfTag = dayType.lowConfidence ? 'LOW-CONFIDENCE' : 'CONFIRMED';
-    if      (dayType.classification === 'BALANCE')                                         { impact -= 1; impactStack.push(`-1 BALANCE day [${dtConfTag} — ${dayType.accuracyNote} — weight halved from -3]`); }
-    else if (dayType.classification === 'TURBULENT' || dayType.classification === 'TREND') { impact += 1; impactStack.push(`+1 ${dayType.classification} day [${dtConfTag} — ${dayType.accuracyNote}]`); }
+    if      (dayType.classification === 'BALANCE')   { impact -= 1; impactStack.push(`-1 BALANCE day [${dtConfTag} — ${dayType.accuracyNote} — weight halved from -3]`); }
+    else if (dayType.classification === 'TREND')      { impact += 1; impactStack.push(`+1 TREND day [${dtConfTag} — ${dayType.accuracyNote}]`); }
+    // TURBULENT: no impact adjustment — wide range but no directional conviction; "wait for structure"
+
+    // Suppress/penalize breakout setups in rotational (BALANCE / TURBULENT) regimes
+    const isBreakoutSetup = /BREAKOUT|DRIVE|IB_BULLISH|IB_BEARISH/.test(latestSetup.setup_type);
+    if (isBreakoutSetup) {
+      if (dayType.classification === 'BALANCE') {
+        impact -= 3;
+        impactStack.push(`-3 breakout setup in BALANCE regime (high trap rate)`);
+      } else if (dayType.classification === 'TURBULENT') {
+        impact -= 3;
+        impactStack.push(`-3 breakout setup in TURBULENT regime (high whipsaw risk)`);
+      }
+    }
+
+    // ACD signal integrity penalty: if the intraday A signal was reached but not confirmed
+    // (A Up fired but C Up never closed above OR High = A Up was rejected), this is a failed
+    // intraday premise and directly undermines directional breakout setups.
+    const aUpRejected   = isLong  && acd?.a_up_fired   && !acd?.c_up_confirmed   && currentPrice < (aUpLevel   ?? Infinity) - 5;
+    const aDownRejected = !isLong && acd?.a_down_fired  && !acd?.c_down_confirmed && currentPrice > (aDownLevel ?? -Infinity) + 5;
+    if (aUpRejected)   { impact -= 2; impactStack.push(`-2 A Up tested but REJECTED (price now below A Up level — intraday premise broken)`); }
+    if (aDownRejected) { impact -= 2; impactStack.push(`-2 A Down tested but REJECTED (price now above A Down level — intraday premise broken)`); }
 
     // Failed auction fuel — trapped inventory at opposite extreme drives breakout (INTERIM)
     // Guard: skip on BALANCE days — range context, not breakout context
@@ -847,9 +1111,14 @@ export async function computeCase(tradeDate, asOf) {
     // Resolution conditions (real — not momentary delta gaps)
     const t1Hit        = t1   && (isLong ? currentPrice >= t1   : currentPrice <= t1  );
     const stopHit      = stop && (isLong ? currentPrice <= stop  : currentPrice >= stop);
-    const premiseBroken = isLong
-      ? (orLow  != null && currentPrice < orLow  - 5)
-      : (orHigh != null && currentPrice > orHigh + 5);
+    const isBracketBreak = latestSetup.setup_type.includes('BRACKET_BREAKOUT');
+    const premiseBroken = isBracketBreak
+      ? (isLong
+          ? (latestSetup.stop_level != null && currentPrice <= latestSetup.stop_level)
+          : (latestSetup.stop_level != null && currentPrice >= latestSetup.stop_level))
+      : (isLong
+          ? (orLow  != null && currentPrice < orLow  - 5)
+          : (orHigh != null && currentPrice > orHigh + 5));
     const juiceGone    = juice?.rr != null && juice.rr < 0.5;
 
     let triggerState   = 'WATCHING';
@@ -905,6 +1174,8 @@ export async function computeCase(tradeDate, asOf) {
 
     dayType,
     dayTypeReassessment,
+    breakoutWarning,
+    gapWarning,
 
     read: {
       bias,
@@ -920,7 +1191,13 @@ export async function computeCase(tradeDate, asOf) {
 
     caseFor,
     caseAgainst,
-    evidenceLog: evidenceLog.slice(-5),
+    evidenceLog: evidenceLog
+      .sort((a, b) => {
+        const ta = a.time instanceof Date ? a.time.getTime() : new Date(a.time).getTime();
+        const tb = b.time instanceof Date ? b.time.getTime() : new Date(b.time).getTime();
+        return ta - tb;
+      })
+      .slice(-10),
 
     whatFlipsIt,
 

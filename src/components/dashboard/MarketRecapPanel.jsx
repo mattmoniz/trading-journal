@@ -1,3 +1,4 @@
+const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React, { useState } from 'react';
 import RecapDatePicker from './RecapDatePicker.jsx';
 import { useRecapObservations } from '../../hooks/useRecapObservations.js';

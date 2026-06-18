@@ -17,7 +17,7 @@ router.get('/auction-read/day-setups', async (req, res) => {
       SELECT ts, open::float, high::float, low::float, close::float, volume::bigint,
              SUM(close::float * volume::bigint) OVER (ORDER BY ts) /
              NULLIF(SUM(volume::bigint) OVER (ORDER BY ts), 0) as vwap_running
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
       ORDER BY ts
@@ -27,7 +27,7 @@ router.get('/auction-read/day-setups', async (req, res) => {
 
     // Get key levels from prior day
     const priorR = await query(`
-      SELECT MAX(ts::date::text) as prior_date FROM price_bars
+      SELECT MAX(ts::date::text) as prior_date FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
     `, [date]);
     const priorDate = priorR.rows[0]?.prior_date;
@@ -35,14 +35,14 @@ router.get('/auction-read/day-setups', async (req, res) => {
     let pdHigh = null, pdLow = null, pdVAH = null, pdVAL = null, onHigh = null, onLow = null;
     if (priorDate) {
       const pd = await query(`
-        SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars
+        SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [priorDate]);
       pdHigh = pd.rows[0]?.h; pdLow = pd.rows[0]?.l;
 
       // Prior day VA
       const vaR = await query(`
-        WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+        WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
         total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
         SELECT p2.px::float as poc,
           (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
@@ -53,7 +53,7 @@ router.get('/auction-read/day-setups', async (req, res) => {
 
       // Overnight range (bars between 16:00 prior and 09:30 today)
       const onR = await query(`
-        SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars
+        SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)
       `, [priorDate]);
       onHigh = onR.rows[0]?.h; onLow = onR.rows[0]?.l;
@@ -207,14 +207,14 @@ router.get('/composite-profile', async (req, res) => {
     if (cached) return res.json(cached);
 
     // Current price for context
-    const latestBar = await query(`SELECT close::float as close FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
     const currentPrice = latestBar.rows[0]?.close || null;
 
     // Build TPO composite: each 1-min bar contributes 1 count to each price level it spans
     const tpoQ = await query(`
       WITH bars AS (
         SELECT ROUND(low/0.25)*0.25 as lo, ROUND(high/0.25)*0.25 as hi
-        FROM price_bars WHERE symbol='NQ'
+        FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date >= CURRENT_DATE - ($1 || ' days')::INTERVAL
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       )
@@ -292,12 +292,12 @@ router.get('/auction-read/auto', async (req, res) => {
     const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
     // Prior day value area — CTE approach (avoids LATERAL+WITH compatibility issue)
-    const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
+    const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
     const priorDay = priorDayQ.rows[0]?.d;
     const ctx = priorDay ? await query(`
       WITH vp AS (
         SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY ROUND(low/0.25)*0.25
       ), total AS (SELECT SUM(vol) as t FROM vp),
       poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
@@ -312,7 +312,7 @@ router.get('/auction-read/auto', async (req, res) => {
 
     // Today's OR + current price
     const todayLog = await query(`SELECT or_high, or_low FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
-    const latestBar = await query(`SELECT close::float as close FROM price_bars WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
     const nqClose = latestBar.rows[0]?.close || 0;
     const orH = todayLog.rows[0]?.or_high ? parseFloat(todayLog.rows[0].or_high) : null;
     const orL = todayLog.rows[0]?.or_low  ? parseFloat(todayLog.rows[0].or_low)  : null;
@@ -356,10 +356,10 @@ router.get('/auction-read/auto', async (req, res) => {
 
     // Auto-detect: prior day profile from yesterday's session range vs IB range
     let prior_day_profile = null;
-    const priorDate = (await query(`SELECT MAX(ts::date)::text as d FROM price_bars WHERE symbol='NQ' AND ts::date < $1`, [todayET])).rows[0]?.d;
+    const priorDate = (await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1`, [todayET])).rows[0]?.d;
     if (priorDate) {
       const priorIB = await query(`SELECT or_high::float as ib_high, or_low::float as ib_low FROM acd_daily_log WHERE trade_date=$1`, [priorDate]);
-      const priorSess = await query(`SELECT MAX(high)::float as sh, MIN(low)::float as sl FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorDate]);
+      const priorSess = await query(`SELECT MAX(high)::float as sh, MIN(low)::float as sl FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorDate]);
       const ib = priorIB.rows[0] || {};
       const sess = priorSess.rows[0] || {};
       const ibR = (ib.ib_high || 0) - (ib.ib_low || 0);
@@ -379,8 +379,8 @@ router.get('/auction-read/auto', async (req, res) => {
     // Overnight high/low (prior 4 PM to today 9:30) — needed for T1 targets
     const ovnQ = await query(`
       SELECT MAX(high)::float as ovn_high, MIN(low)::float as ovn_low
-      FROM price_bars WHERE symbol='NQ'
-        AND ts > (SELECT MAX(ts::date)::timestamp FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) + INTERVAL '7 hours'
+      FROM price_bars_primary WHERE symbol='NQ'
+        AND ts > (SELECT MAX(ts::date)::timestamp FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) + INTERVAL '7 hours'
         AND ts < ($1::text)::date + INTERVAL '9 hours 30 minutes'
     `, [todayET]);
     const ovnHigh = ovnQ.rows[0]?.ovn_high || null;
@@ -395,7 +395,7 @@ router.get('/auction-read/auto', async (req, res) => {
     const gLine = await getGLine(todayET);
     const pwQ = await query(`
       SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
-      FROM price_bars WHERE symbol='NQ'
+      FROM price_bars_primary WHERE symbol='NQ'
         AND ts::date >= date_trunc('week', ($1::text)::date) - INTERVAL '7 days'
         AND ts::date < date_trunc('week', ($1::text)::date)
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
@@ -446,18 +446,18 @@ router.post('/auction-read/correlation/compute', async (req, res) => {
       const bars = (await query(`
         SELECT ts, high::float h, low::float l, close::float c,
           SUM(close::float*volume::bigint) OVER (ORDER BY ts)/NULLIF(SUM(volume::bigint) OVER (ORDER BY ts),0) vw
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960 ORDER BY ts`, [date])).rows;
       if (bars.length < 50) continue;
 
-      const pdR = await query(`SELECT MAX(ts::date::text) p FROM price_bars WHERE symbol='NQ' AND ts::date<$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [date]);
+      const pdR = await query(`SELECT MAX(ts::date::text) p FROM price_bars_primary WHERE symbol='NQ' AND ts::date<$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [date]);
       const priorDate = pdR.rows[0]?.p;
       if (!priorDate) continue;
 
-      const pd = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorDate])).rows[0];
-      const va = (await query(`WITH vp AS (SELECT ROUND(low/0.25)*0.25 px, SUM(volume) vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25), t AS (SELECT SUM(vol) t FROM vp), pr AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1) SELECT p2.px::float poc, (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float vah, (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float val FROM vp, pr p2 GROUP BY p2.px LIMIT 1`, [priorDate])).rows[0];
+      const pd = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorDate])).rows[0];
+      const va = (await query(`WITH vp AS (SELECT ROUND(low/0.25)*0.25 px, SUM(volume) vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25), t AS (SELECT SUM(vol) t FROM vp), pr AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1) SELECT p2.px::float poc, (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float vah, (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p2.px) x WHERE cv<=(SELECT t*0.35 FROM t))::float val FROM vp, pr p2 GROUP BY p2.px LIMIT 1`, [priorDate])).rows[0];
       const acd = (await query(`SELECT or_high::float oh, or_low::float ol FROM acd_daily_log WHERE trade_date=$1`, [date])).rows[0];
-      const on = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)`, [priorDate])).rows[0];
+      const on = (await query(`SELECT MAX(high)::float h, MIN(low)::float l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)`, [priorDate])).rows[0];
       const orMid = (acd?.oh != null && acd?.ol != null) ? (parseFloat(acd.oh) + parseFloat(acd.ol)) / 2 : null;
 
       const levels = [
@@ -572,7 +572,7 @@ router.get('/auction-read/history', async (req, res) => {
 
     // Serve from DB only when we have enough days AND the most recent record is current
     const mostRecentStored = stored.rows[0]?.date_str;
-    const latestBarDate = (await query(`SELECT MAX(ts::date)::text as d FROM price_bars WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`)).rows[0]?.d;
+    const latestBarDate = (await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`)).rows[0]?.d;
     const dbIsCurrent = mostRecentStored && latestBarDate && mostRecentStored >= latestBarDate;
 
     if (stored.rows.length >= days - 5 && dbIsCurrent) {
@@ -602,7 +602,7 @@ router.get('/auction-read/history', async (req, res) => {
     const calendarLookback = days * 2;
     const tradingDays = await query(`
       SELECT DISTINCT ts::date::text as d
-      FROM price_bars WHERE symbol='NQ'
+      FROM price_bars_primary WHERE symbol='NQ'
         AND ts::date >= CURRENT_DATE - ($1 || ' days')::INTERVAL
         AND ts::date < CURRENT_DATE
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 10
@@ -627,14 +627,14 @@ router.get('/auction-read/history', async (req, res) => {
           (array_agg(close ORDER BY ts DESC))[1]::float as sc,
           MAX(high) FILTER (WHERE EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630)::float as ib_high,
           MIN(low)  FILTER (WHERE EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630)::float as ib_low
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [priorDay]);
       const p = pb.rows[0];
       if (!p?.sh) continue;
 
       // Prior day VA
       const vaR = await query(`
-        WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
+        WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
         total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
         SELECT p2.px::float as poc,
           (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
@@ -660,7 +660,7 @@ router.get('/auction-read/history', async (req, res) => {
         SELECT MAX(high)::float as sh, MIN(low)::float as sl,
           (array_agg(close ORDER BY ts DESC))[1]::float as sc,
           (array_agg(open ORDER BY ts ASC))[1]::float as so
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [today]);
       const sess = sessR.rows[0];
 
@@ -670,7 +670,7 @@ router.get('/auction-read/history', async (req, res) => {
           (array_agg(open ORDER BY ts))[1]::float as o,
           MAX(high)::float as h, MIN(low)::float as l,
           (array_agg(close ORDER BY ts DESC))[1]::float as c
-        FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         GROUP BY date_trunc('hour',ts) ORDER BY 1
       `, [today]);
@@ -842,7 +842,7 @@ router.get('/auction-read/midday', async (req, res) => {
       SELECT high::float, low::float, close::float, open::float, volume::bigint,
              EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as bm,
              to_char(ts,'HH24:MI') as t
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $2
       ORDER BY ts
     `, [todayET, cutoffMin]);
@@ -857,7 +857,7 @@ router.get('/auction-read/midday', async (req, res) => {
     const dir = ptsVsOpen > 10 ? 'BULLISH' : ptsVsOpen < -10 ? 'BEARISH' : 'NEUTRAL';
 
     // Avg range
-    const avgQ = await query(`SELECT AVG(daily_range)::float as avg FROM (SELECT MAX(high)-MIN(low) as daily_range FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= ($1::text)::date - INTERVAL '30 days' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ts::date) s`, [todayET]);
+    const avgQ = await query(`SELECT AVG(daily_range)::float as avg FROM (SELECT MAX(high)-MIN(low) as daily_range FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= ($1::text)::date - INTERVAL '30 days' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ts::date) s`, [todayET]);
     const avgRange = avgQ.rows[0]?.avg || 150;
     const sessRange = sessHigh - sessLow;
     const rangeVsAvg = sessRange / avgRange;
@@ -883,7 +883,7 @@ router.get('/auction-read/midday', async (req, res) => {
 
     // G-Line and PW levels
     const gLine = await getGLine(todayET);
-    const pwQ = await query(`SELECT MAX(high)::float as pwh, MIN(low)::float as pwl FROM price_bars WHERE symbol='NQ' AND ts::date>=date_trunc('week',($1::text)::date)-INTERVAL '7 days' AND ts::date<date_trunc('week',($1::text)::date) AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
+    const pwQ = await query(`SELECT MAX(high)::float as pwh, MIN(low)::float as pwl FROM price_bars_primary WHERE symbol='NQ' AND ts::date>=date_trunc('week',($1::text)::date)-INTERVAL '7 days' AND ts::date<date_trunc('week',($1::text)::date) AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
     const pwHigh = pwQ.rows[0]?.pwh, pwLow = pwQ.rows[0]?.pwl;
 
     // P3 score — compute from bar data (same as live endpoint) so it's never 0 due to DB nulls
@@ -984,7 +984,7 @@ router.get('/auction-read/eod', async (req, res) => {
       SELECT high::float, low::float, close::float, open::float, volume::bigint,
              EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as bm,
              to_char(ts,'HH24:MI') as t
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY ts
     `, [dateET]);
@@ -1001,12 +1001,12 @@ router.get('/auction-read/eod', async (req, res) => {
     const actualDir = ptsVsOpen > 15 ? 'BULLISH' : ptsVsOpen < -15 ? 'BEARISH' : 'NEUTRAL';
 
     // Avg range (30-day)
-    const avgQ = await query(`SELECT AVG(daily_range)::float as avg FROM (SELECT MAX(high)-MIN(low) as daily_range FROM price_bars WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= ($1::text)::date - INTERVAL '30 days' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ts::date) sub`, [dateET]);
+    const avgQ = await query(`SELECT AVG(daily_range)::float as avg FROM (SELECT MAX(high)-MIN(low) as daily_range FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= ($1::text)::date - INTERVAL '30 days' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ts::date) sub`, [dateET]);
     const avgRange = avgQ.rows.length ? avgQ.rows.reduce((s,r)=>s+r.avg,0)/avgQ.rows.length : 150;
     const rangeVsAvg = sessRange / avgRange;
 
     // Prior week levels
-    const pwQ = await query(`SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low FROM price_bars WHERE symbol='NQ' AND ts::date >= date_trunc('week',($1::text)::date) - INTERVAL '7 days' AND ts::date < date_trunc('week',($1::text)::date) AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [dateET]);
+    const pwQ = await query(`SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= date_trunc('week',($1::text)::date) - INTERVAL '7 days' AND ts::date < date_trunc('week',($1::text)::date) AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [dateET]);
     const pwHigh = pwQ.rows[0]?.pw_high;
     const pwLow  = pwQ.rows[0]?.pw_low;
 
@@ -1117,11 +1117,11 @@ router.get('/auction-read/eod', async (req, res) => {
     // VA migration direction: last 5 days before this session
     const vaHist5Q = await query(`
       WITH days AS (
-        SELECT DISTINCT ts::date::text as d FROM price_bars WHERE symbol='NQ'
+        SELECT DISTINCT ts::date::text as d FROM price_bars_primary WHERE symbol='NQ'
           AND ts::date < ($1::text)::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         ORDER BY d DESC LIMIT 5
       )
-      SELECT d, (SELECT ROUND((array_agg(close ORDER BY ts DESC))[1]/0.25)*0.25 FROM price_bars WHERE symbol='NQ' AND ts::date::text=days.d AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) as close
+      SELECT d, (SELECT ROUND((array_agg(close ORDER BY ts DESC))[1]/0.25)*0.25 FROM price_bars_primary WHERE symbol='NQ' AND ts::date::text=days.d AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16) as close
       FROM days ORDER BY d ASC
     `, [dateET]);
     const vaClosing = vaHist5Q.rows.map(r => parseFloat(r.close)).filter(Boolean);
@@ -1136,13 +1136,13 @@ router.get('/auction-read/eod', async (req, res) => {
           LEAST(d1.vah, d2.vah) - GREATEST(d1.val, d2.val) as overlap
         FROM (
           SELECT ts::date::text as d, MAX(high)::float as vah, MIN(low)::float as val
-          FROM price_bars WHERE symbol='NQ' AND ts::date < ($1::text)::date
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date < ($1::text)::date
             AND ts::date >= ($1::text)::date - INTERVAL '14 days'
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY ts::date
         ) d1 JOIN (
           SELECT ts::date::text as d, MAX(high)::float as vah, MIN(low)::float as val
-          FROM price_bars WHERE symbol='NQ' AND ts::date < ($1::text)::date
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date < ($1::text)::date
             AND ts::date >= ($1::text)::date - INTERVAL '15 days'
             AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
           GROUP BY ts::date

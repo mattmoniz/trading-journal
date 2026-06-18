@@ -10,6 +10,10 @@ import MorningBriefPanel from './components/dashboard/MorningBriefPanel.jsx';
 import PostLossCooldown from './components/dashboard/PostLossCooldown.jsx';
 import { NavUpdateDot, SectionUpdateDot, Dot, useDataUpdateDot, useFieldUpdateDots } from './components/shared/UpdateDot.jsx';
 import PreMarketWalkthrough from './components/dashboard/PreMarketWalkthrough.jsx';
+import VolatilityRegimeCard from './components/dashboard/VolatilityRegimeCard.jsx';
+import GapContextCard from './components/dashboard/GapContextCard.jsx';
+import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
+import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -19,51 +23,21 @@ import {
 
 const API_URL = '/api';
 const SOCKET_URL = window.location.origin;
+const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
-// ── Error Boundary ─────────────────────────────────────────────────────────────
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(error, info) {
-    console.error(`[ErrorBoundary: ${this.props.name}]`, error, info.componentStack);
-  }
-  render() {
-    if (this.state.error) {
-      return (
-        <div style={{ padding: 40, textAlign: 'center', fontFamily: 'Arial, sans-serif' }}>
-          <div style={{ fontSize: 15, color: '#ef4444', fontWeight: 700, marginBottom: 8 }}>
-            {this.props.name} unavailable
-          </div>
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>
-            {this.state.error.message || 'An unexpected error occurred.'}
-          </div>
-          <button
-            onClick={() => this.setState({ error: null })}
-            style={{ padding: '6px 16px', borderRadius: 6, border: '1px solid #334155', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 13 }}>
-            Retry
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 
 // InfoTooltip accepts either:
 //   text="plain string"                         (existing usage — unchanged)
 //   tooltip={{ text, source, example }}         (new structured usage from tooltips.js)
-function InfoTooltip({ text, tooltip }) {
+function InfoTooltip({ text, tooltip, children }) {
   const [visible, setVisible] = React.useState(false);
   const [pos, setPos] = React.useState({ top: 0, left: 0 });
   const ref = React.useRef(null);
 
   // Support both calling styles
   const content = tooltip || (text ? { text } : null);
-  if (!content) return null;
+  if (!content) return children || null;
 
   const handleMouseEnter = () => {
     if (ref.current) {
@@ -79,13 +53,15 @@ function InfoTooltip({ text, tooltip }) {
   };
 
   return (
-    <span ref={ref} style={{ display: 'inline-block', marginLeft: 4, verticalAlign: 'middle', flexShrink: 0 }}
+    <span ref={ref} style={{ display: 'inline-block', marginLeft: children ? 0 : 4, verticalAlign: 'middle', flexShrink: 0 }}
       onMouseEnter={handleMouseEnter} onMouseLeave={() => setVisible(false)}
       onClick={() => setVisible(v => !v)}>
-      <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 14, height: 14, borderRadius: '50%', fontSize: 9, fontWeight: 700,
-        background: 'rgba(100,116,139,0.2)', color: 'var(--text-muted)',
-        border: '1px solid rgba(100,116,139,0.35)', cursor: 'help', lineHeight: 1 }}>i</span>
+      {children ? children : (
+        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          width: 14, height: 14, borderRadius: '50%', fontSize: 9, fontWeight: 700,
+          background: 'rgba(100,116,139,0.2)', color: 'var(--text-muted)',
+          border: '1px solid rgba(100,116,139,0.35)', cursor: 'help', lineHeight: 1 }}>i</span>
+      )}
       {visible && (
         <div style={{
           position: 'fixed', top: pos.top, left: pos.left,
@@ -113,7 +89,7 @@ function InfoTooltip({ text, tooltip }) {
 
 // ==================== PROFIT GIVE-BACK BANNER (full-screen, no override) ====================
 function ProfitGivebackBanner({ status }) {
-  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
   const gbPct = Math.round((status?.giveBackPct || 0) * 100);
   const peak  = status?.peakPnl || 0;
   const cur   = status?.currentPnl || 0;
@@ -149,7 +125,7 @@ function ProfitGivebackBanner({ status }) {
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
             <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Given Back</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>-${gb.toFixed(0)}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>-${fmtP(gb)}</div>
           </div>
         </div>
         <div style={{ background: '#1a1200', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -166,7 +142,7 @@ function ProfitGivebackBanner({ status }) {
 
 // ==================== 1PM STOP REMINDER (full-screen, requires acknowledgment) ====================
 function OnePMReminderModal({ pnlAtReminder, onAck }) {
-  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
   const isGreen = (pnlAtReminder || 0) >= 0;
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(10,10,15,0.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
@@ -208,7 +184,7 @@ function OnePMReminderModal({ pnlAtReminder, onAck }) {
 
 // ==================== UP-AND-DONE NUDGE (non-blocking, dismissible) ====================
 function UpAndDoneNudge({ status, onStop, onDismiss }) {
-  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${Math.abs(n).toFixed(0)}`;
+  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
   const pnl = status?.currentPnl || 0;
   return (
     <div style={{ position: 'fixed', bottom: 24, right: 24, zIndex: 9999, maxWidth: 360, width: 'calc(100vw - 48px)' }}>
@@ -245,7 +221,7 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
   const hitAccount = hits?.[0];
   if (!hitAccount) return null;
 
-  const pnlFmt = (n) => `${n < 0 ? '-' : '+'}$${Math.abs(n).toFixed(0)}`;
+  const pnlFmt = (n) => `${n < 0 ? '-' : '+'}$${fmtP(Math.abs(n))}`;
   const dll = hitAccount.daily_loss_limit;
   const pnl = hitAccount.daily_pnl;
   const accountTag = shortId(hitAccount.account_id);
@@ -587,11 +563,6 @@ function App() {
             <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} ChartReviewComponent={ChartReviewSection} />
           </ErrorBoundary>
         )}
-        {currentView === 'edges' && (
-          <ErrorBoundary name="Antigravity Edges">
-            <AntigravityEdgesView />
-          </ErrorBoundary>
-        )}
         {(currentView === 'all-trades' || currentView === 'calendar') && (
           <ErrorBoundary name="Trades">
             <AllTradesView addToast={addToast} syncing={syncing} onSyncTrades={() => handleSyncTrades(true)}
@@ -681,6 +652,8 @@ const SETUP_DISPLAY_LABELS = {
   FAILED_AUCTION_SHORT:    'Failed Auction ↓',
   VALUE_AREA_RESPONSIVE_LONG:  'VA Responsive ↑',
   VALUE_AREA_RESPONSIVE_SHORT: 'VA Responsive ↓',
+  GAP_FILL_LONG:           'Gap Fill ↑',
+  GAP_FILL_SHORT:          'Gap Fill ↓',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level
@@ -691,6 +664,8 @@ const SETUP_RESOLUTION_TEXT = {
   TIME_EXPIRED:  { label: 'EXPIRED',       color: '#64748b', desc: 'Setup window closed without resolution.' },
   INVALIDATED:   { label: 'INVALIDATED',   color: '#f59e0b', desc: 'Price structure invalidated this setup before/after it triggered.' },
   SESSION_CLOSED:{ label: 'SESSION CLOSED',color: '#64748b', desc: 'Session ended with this setup unresolved.' },
+  PREMISE_BROKEN:{ label: 'PREMISE BROKEN',color: '#ef4444', desc: 'Trade premise invalidated — price broke OR Low (for long) or OR High (for short).' },
+  JUICE_EXHAUSTED:{ label: 'JUICE EXHAUSTED',color: '#64748b', desc: 'Morning drive exhausted — remaining profit potential is too low.' },
 };
 
 const SETUP_EVENT_DESCRIPTIONS = {
@@ -733,6 +708,8 @@ const SETUP_EVENT_DESCRIPTIONS = {
   'FAILED_AUCTION_SHORT':    'Failed Auction short — buyers pushed price up, failed to find acceptance, and price fell back into range. Trapped buyers fuel the decline.',
   'VALUE_AREA_RESPONSIVE_LONG':  'Value Area Responsive long — price probed below prior value area and responded back inside. Responsive buyers defending value.',
   'VALUE_AREA_RESPONSIVE_SHORT': 'Value Area Responsive short — price probed above prior value area and responded back inside. Responsive sellers defending value.',
+  'GAP_FILL_LONG':           'Gap Fill long — price has entered an unfilled down-gap void from a previous session. Speed of travel typically increases inside the void due to lack of historical structure.',
+  'GAP_FILL_SHORT':          'Gap Fill short — price has entered an unfilled up-gap void from a previous session. Speed of travel typically increases inside the void due to lack of historical structure.',
 };
 
 // ==================== CALENDAR SETUP CONSTANTS ====================
@@ -757,6 +734,8 @@ const CAL_SETUP_SHORT_LABELS = {
   FAILED_AUCTION_SHORT:         'FA SHORT',
   VALUE_AREA_RESPONSIVE_LONG:   'VAR LONG',
   VALUE_AREA_RESPONSIVE_SHORT:  'VAR SHORT',
+  GAP_FILL_LONG:                'GAP LONG',
+  GAP_FILL_SHORT:               'GAP SHORT',
 };
 
 function calSetupColor(resolution) {
@@ -787,6 +766,53 @@ function FetchStamp({ at }) {
   const s = fmtFetchStamp(at);
   if (!s) return null;
   return <span style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', fontFamily: 'monospace' }}>updated · {s}</span>;
+}
+
+// Dynamically returns detailed, highly articulate execution playbook guidelines for active setups
+function getSetupPlaybookNuance(setupType, event) {
+  const tu = (setupType || '').toUpperCase();
+
+  if (tu.includes('BRACKET_BREAKOUT_LONG')) {
+    return {
+      title: "🎯 Nuanced Execution Rules",
+      rules: [
+        "Do Not Chase the Breakout Bar: Wait for acceptance above the 5-session bracket top (exceeding bracketTop + 5). Look for NQ to build value, print high-volume 1-minute closes, and hold above the bracket top for at least 5 to 10 minutes.",
+        "The Bracket Top is the Line in the Sand: The previous 5-session bracket top is now your ultimate invalidation floor. The stop-loss is just below it (bracketTop - 5). If NQ wicks above and then closes back below the bracket top, the breakout has failed, the premise is broken, and you must exit immediately.",
+        "If it Fails, it is a Fade Setup: If the bracket breakout is rejected and NQ collapses back inside the bracket, the thesis shifts back to the responsive balance playbook—the failed breakout becomes a high-conviction short fade back to the center of the range."
+      ]
+    };
+  }
+  if (tu.includes('BRACKET_BREAKOUT_SHORT')) {
+    return {
+      title: "🎯 Nuanced Execution Rules",
+      rules: [
+        "Do Not Chase the Breakout Bar: Wait for acceptance below the 5-session bracket bottom (exceeding bracketBottom - 5). Look for NQ to build value, print high-volume 1-minute closes, and hold below the bracket bottom for at least 5 to 10 minutes.",
+        "The Bracket Bottom is the Line in the Sand: The previous 5-session bracket bottom is now your ultimate invalidation floor. The stop-loss is just above it (bracketBottom + 5). If NQ wicks below and then closes back above the bracket bottom, the breakout has failed, the premise is broken, and you must exit immediately.",
+        "If it Fails, it is a Fade Setup: If the bracket breakout is rejected and NQ rallies back inside the bracket, the thesis shifts back to the responsive balance playbook—the failed breakout becomes a high-conviction long fade back to the center of the range."
+      ]
+    };
+  }
+  if (tu.includes('A_UP') || tu.includes('A UP')) {
+    return {
+      title: "🎯 Nuanced Execution Rules",
+      rules: [
+        "Avoid Chasing: Since NQ wicks back inside the IB range 94.2% of the time, entering immediately on the breakout bar carries high stop-out risk. Wait for NQ to re-touch the range boundary or A-Up level to establish your entry.",
+        "Opening Range Invalidation: The OR Low is the primary invalidation floor. If NQ wicks or closes below OR Low - 5, the premise is broken, and you should exit the trade immediately.",
+        "Verify Bias Confluence: If this A-Up occurs against a bearish day-bias (or A-Down fires), it carries an 87.3% trap rate. Look to fade the breakout rather than buying it."
+      ]
+    };
+  }
+  if (tu.includes('A_DOWN') || tu.includes('A DOWN')) {
+    return {
+      title: "🎯 Nuanced Execution Rules",
+      rules: [
+        "Avoid Chasing: Since NQ wicks back inside the IB range 94.2% of the time, entering immediately on the breakout bar carries high stop-out risk. Wait for NQ to re-touch the range boundary or A-Down level to establish your entry.",
+        "Opening Range Invalidation: The OR High is the primary invalidation floor. If NQ wicks or closes above OR High + 5, the premise is broken, and you should exit the trade immediately.",
+        "Verify Bias Confluence: If this A-Down occurs against a bullish day-bias (or A-Up fires), it carries a 100% trap rate. Look to fade the breakout rather than selling it."
+      ]
+    };
+  }
+  return null;
 }
 
 function SetupEventModal({ event, onClose }) {
@@ -826,7 +852,8 @@ function SetupEventModal({ event, onClose }) {
   const label = SETUP_DISPLAY_LABELS[type] || type.replace(/_/g, ' ');
   const description = SETUP_EVENT_DESCRIPTIONS[type] || 'ACD setup event.';
   const timeStr = fmtEventTime(event.fired_time);
-  const price = event.fired_price ? parseFloat(event.fired_price).toFixed(2) : null;
+  const price = event.fired_price ? fmtP(parseFloat(event.fired_price), 2) : null;
+  const playbook = getSetupPlaybookNuance(type, event);
 
   const WinChip = ({ label: l, stat }) => {
     if (!stat || stat.winRate == null) return <div style={{ textAlign: 'center', minWidth: 56, opacity: 0.4 }}><div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>{l}</div><div style={{ fontSize: 14, color: '#475569' }}>—</div></div>;
@@ -882,6 +909,28 @@ function SetupEventModal({ event, onClose }) {
         <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.65, marginBottom: 16, borderLeft: `2px solid ${borderColor}`, paddingLeft: 12 }}>
           {description}
         </div>
+
+        {/* Playbook rules if available */}
+        {playbook && (
+          <div style={{ marginTop: 14, borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#a78bfa', letterSpacing: '0.08em', marginBottom: 8 }}>
+              {playbook.title}
+            </div>
+            <ul style={{ paddingLeft: 18, margin: 0, fontSize: 12, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {playbook.rules.map((rule, idx) => {
+                const parts = rule.split(':');
+                if (parts.length > 1) {
+                  return (
+                    <li key={idx} style={{ lineHeight: 1.5 }}>
+                      <strong style={{ color: '#e2e8f0' }}>{parts[0]}:</strong>{parts.slice(1).join(':')}
+                    </li>
+                  );
+                }
+                return <li key={idx} style={{ lineHeight: 1.5 }}>{rule}</li>;
+              })}
+            </ul>
+          </div>
+        )}
 
         {/* Win rate */}
         {stats && (stats.allTime || stats.d90 || stats.d30) && (
@@ -1284,7 +1333,7 @@ function DayTypeReassessmentBanner({ reassessment, compact = false }) {
           )}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: compact ? 10 : 11, color: provisional ? LR_AMBER : '#64748b', marginBottom: latest ? 4 : 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: compact ? 10 : 11, color: provisional ? LR_AMBER : '#64748b' }}>
         <span style={{
           fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
           padding: '1px 5px', borderRadius: 3,
@@ -1293,13 +1342,9 @@ function DayTypeReassessmentBanner({ reassessment, compact = false }) {
         }}>
           {provisional ? 'LIVE · PROVISIONAL' : 'FINAL'}
         </span>
-        <span>{provisional ? 'Can still change as the session develops' : 'Session closed — read is final'}</span>
+        <span>{provisional ? 'Can still change' : 'Final read'}</span>
+        {provisional && limitation && <InfoTooltip text={limitation} />}
       </div>
-      {!compact && limitation && (
-        <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.45, marginTop: 4 }}>
-          {limitation}
-        </div>
-      )}
     </div>
   );
 }
@@ -1360,7 +1405,9 @@ function CaseProvider({ children }) {
 function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
   const dtClass     = c?.dayType?.classification || 'FORMING';
   const dts         = DT_STYLE[dtClass] || DT_STYLE.FORMING;
-  const bias        = c?.read?.bias || 'NEUTRAL';
+  const rawBias     = c?.read?.bias || 'NEUTRAL';
+  const conviction  = c?.read?.conviction ?? 0;
+  const bias        = (conviction < 5.0) ? 'NO LEAN' : rawBias;
   const meter       = c?.read?.meterPosition || 0;
   const biasClr     = dirClr(bias);
   const caseFor     = c?.caseFor || [];
@@ -1373,6 +1420,114 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
   const ctx         = c?._ctx || {};
 
   switch (kind) {
+    case 'playbooks': {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>
+            This directory details the tactical execution playbooks, lines in the sand, and risk management parameters for all market regimes. Read these rules before trading a session's breakout or fade.
+          </div>
+          
+          {/* Section 1: Bracket Breakout */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#a78bfa', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              🛡️ Bracket Breakout Playbook (5-Session Range)
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 10, fontStyle: 'italic' }}>
+              Triggers when NQ tests or exceeds the 5-session multi-day Bracket High or Bracket Low boundaries.
+            </div>
+            <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Do Not Chase the Breakout Bar:</strong> Wait for confirmed acceptance above/below the boundary (exceeding bracket boundary +/- 5). Look for NQ to build value and print high-volume 1-minute closes outside the boundary for at least 5 to 10 minutes.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>The Bracket Boundary is the Line in the Sand:</strong> The boundary top/bottom is your ultimate invalidation floor/roof. Set stop-loss just outside it (bracketTop - 5 / bracketBot + 5). If price close-reverts back inside, the breakout has failed and you must exit immediately.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>If it Fails, it is a Fade Setup:</strong> If the breakout is rejected and price collapses back inside the bracket, the playbook immediately flips to a responsive balance fade. Enter in the opposite direction targeting the opposite side of the range or VWAP.
+              </li>
+            </ol>
+          </div>
+
+          {/* Section 2: Coiled Balance */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(129, 140, 248, 0.25)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#818cf8', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              🌀 Coiled Balance Day Playbook
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 10, fontStyle: 'italic' }}>
+              Triggers on compressed Balance days when the Initial Balance (IB) range wicks are tight and range expansion is imminent.
+            </div>
+            <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Wait for the Pullback:</strong> Do not buy the immediate breakout bar. Wick pullback rates are 94.2%; price will highly likely retest the range boundary. Wait for a re-touch of the IB High/Low to establish your entry.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Opening Range Invalidation:</strong> For long breakouts, the invalidation floor is the OR Low. For short breakdowns, the invalidation roof is the OR High. Exit immediately if these boundaries are crossed.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Fade Counter-Bias Breaks:</strong> If NQ wicks below the IB Low on an A-Up day, historical failure rate is 100% (n=68). Look to buy the reclaim of the IB Low, fading the trap back to VWAP.
+              </li>
+            </ol>
+          </div>
+
+          {/* Section 3: Standard Balance */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#f59e0b', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              ⚖️ Standard Balance Day Playbook
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 10, fontStyle: 'italic' }}>
+              Triggers on uncompressed Balance days characterized by price rotations within the morning boundaries.
+            </div>
+            <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Trade Responsive (Fade Edges):</strong> Sell wicks above the IB High and buy wicks below the IB Low. Do not trade breakouts; range expansion holds less than 10% of the time.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Target Mean Reversion:</strong> Set exit targets near the VWAP or the opposite side of the range. Do not hold for extended trends.
+              </li>
+            </ol>
+          </div>
+
+          {/* Section 4: Confirmed Trend */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(34, 197, 94, 0.25)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#22c55e', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              📈 Confirmed Trend Day Playbook
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 10, fontStyle: 'italic' }}>
+              Triggers when a strong Trend Day classification is active.
+            </div>
+            <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Go-With the Trend:</strong> Position exclusively in the direction of the trend bias. Never attempt to fade the boundaries.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Wait for Retests:</strong> Even on trend days, NQ wicks back inside the IB range 91-96% of the time before running. Wait for the retest of the range boundary to establish positions.
+              </li>
+            </ol>
+          </div>
+
+          {/* Section 5: Turbulent */}
+          <div style={{ background: 'rgba(30, 41, 59, 0.25)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 8, padding: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              🌪️ Turbulent Day Playbook
+            </div>
+            <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 10, fontStyle: 'italic' }}>
+              Triggers when price action is highly rotational with wide wicks and elevated ATR.
+            </div>
+            <ol style={{ paddingLeft: 18, margin: 0, fontSize: 13, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Reduce Position Size:</strong> Cut size by 50% due to highly elevated volatility and noise to protect capital.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Wide Stop Loss:</strong> Use wider stop placement to absorb range noise and avoid being swatted out near boundaries.
+              </li>
+              <li style={{ lineHeight: 1.5 }}>
+                <strong style={{ color: '#e2e8f0' }}>Scalp Mentality:</strong> Take profits quickly near key levels. Do not hold for extended trend runs.
+              </li>
+            </ol>
+          </div>
+        </div>
+      );
+    }
     case 'day': {
       if (!c) return <div style={{ color: '#cbd5e1' }}>{isPastOpen ? 'Loading case data…' : 'Activates at 9:30 ET.'}</div>;
       return (
@@ -1383,6 +1538,64 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
               {c.compression?.coiled && <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 3, padding: '1px 6px' }}>COILED</span>}
               <span style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8' }}>{c.dayType?.source || 'LIT'}{c.dayType?.probability ? ` · ${c.dayType.probability}% prob` : ''}</span>
             </div>
+            {c.breakoutWarning && (
+              <div style={{
+                background: c.breakoutWarning.severity === 'WARNING' ? 'rgba(239,68,68,0.11)' : 'rgba(14,165,233,0.10)',
+                border: `1.5px solid ${c.breakoutWarning.severity === 'WARNING' ? 'rgba(239,68,68,0.40)' : 'rgba(14,165,233,0.30)'}`,
+                borderRadius: 6,
+                padding: '8px 12px',
+                marginBottom: 8,
+                fontSize: 13,
+                color: c.breakoutWarning.severity === 'WARNING' ? '#fca5a5' : '#7dd3fc',
+                lineHeight: 1.45
+              }}>
+                <div style={{ fontWeight: 800, textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.06em', marginBottom: 2 }}>
+                  {c.breakoutWarning.severity === 'WARNING' ? '⚠️ ' : '⚡ '}{c.breakoutWarning.title}
+                </div>
+                <div>{c.breakoutWarning.message}</div>
+              </div>
+            )}
+            {c.gapWarning && (() => {
+              let bg = 'rgba(14,165,233,0.10)';
+              let border = 'rgba(14,165,233,0.30)';
+              let color = '#7dd3fc';
+              let icon = '⚡ ';
+
+              if (c.gapWarning.type === 'GAP_VOID') {
+                bg = 'rgba(239,68,68,0.11)';
+                border = 'rgba(239,68,68,0.40)';
+                color = '#fca5a5';
+                icon = '⚠️ ';
+              } else if (c.gapWarning.type === 'GAP_PROXIMITY_FLOOR') {
+                bg = 'rgba(245,158,11,0.08)';
+                border = 'rgba(245,158,11,0.35)';
+                color = '#fcd34d';
+                icon = '⚡ ';
+              } else if (c.gapWarning.type === 'GAP_PROXIMITY_CEILING') {
+                bg = 'rgba(14,165,233,0.10)';
+                border = 'rgba(14,165,233,0.30)';
+                color = '#7dd3fc';
+                icon = '⚡ ';
+              }
+
+              return (
+                <div style={{
+                  background: bg,
+                  border: `1.5px solid ${border}`,
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  marginBottom: 8,
+                  fontSize: 13,
+                  color: color,
+                  lineHeight: 1.45
+                }}>
+                  <div style={{ fontWeight: 800, textTransform: 'uppercase', fontSize: 11, letterSpacing: '0.06em', marginBottom: 2 }}>
+                    {icon}{c.gapWarning.title}
+                  </div>
+                  <div>{c.gapWarning.message}</div>
+                </div>
+              );
+            })()}
             {dtClass === 'BALANCE' && (
               <div style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.40)', borderRadius: 6, padding: '8px 12px', marginBottom: 8 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: LR_AMBER, marginBottom: 2 }}>⚠ WEAK EDGE TODAY</div>
@@ -1586,7 +1799,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
 
 const MODAL_TITLES = {
   day: 'The Day', case: 'The Case', trigger: 'The Trigger',
-  levels: 'Key Levels', structure: 'Structure',
+  levels: 'Key Levels', playbooks: 'Regime Playbook Directory', structure: 'Structure',
   trades: 'Trade Timeline', setups: 'Setup Timeline', autocompute: 'Auto-Compute',
 };
 
@@ -1603,6 +1816,168 @@ function CaseReadDetailModal({ kind, c, isRTH = true, isPastOpen = true, title, 
       </div>
     </div>
   );
+}
+
+// Dynamically calculates execution playbooks and historical statistics based on the mix of
+// day-type classification, coil status, bias, current RTH breakout state, and structural levels.
+function getNuancedExecutionEdge({ dtClass, coiled, bias, trigger, currentPrice, ibHigh, ibLow, levels }) {
+  // Extract specific levels from the active levels array
+  const bracketHighLvl = levels?.find(l => l.label.toUpperCase() === 'BRACKET HIGH' || l.label.toUpperCase() === 'BRACKET_HIGH');
+  const bracketLowLvl  = levels?.find(l => l.label.toUpperCase() === 'BRACKET LOW' || l.label.toUpperCase() === 'BRACKET_LOW');
+  const bracketHighPrice = bracketHighLvl ? bracketHighLvl.price : null;
+  const bracketLowPrice  = bracketLowLvl ? bracketLowLvl.price : null;
+
+  const isBullBreak = ibHigh != null && currentPrice != null && currentPrice > ibHigh;
+  const isBearBreak = ibLow != null && currentPrice != null && currentPrice < ibLow;
+
+  // Check if we are near or breaking a bracket level
+  const isNearBracketHigh = bracketHighPrice != null && Math.abs(currentPrice - bracketHighPrice) <= 35;
+  const isNearBracketLow  = bracketLowPrice != null && Math.abs(currentPrice - bracketLowPrice) <= 35;
+
+  const title = "🎯 Nuanced Execution Playbook";
+  let description = "";
+  let action = [];
+  let stats = "";
+
+  // 1. Bracket Breakout / Test Scenario (High priority, highly specific)
+  if (isNearBracketHigh || (bracketHighPrice != null && currentPrice > bracketHighPrice)) {
+    const bTop = Math.round(bracketHighPrice);
+    description = `NQ is currently testing or breaking out of the 5-session multi-day Bracket High boundary at ${bTop}. This is a critical structural transition.`;
+    action = [
+      `Do Not Chase the Breakout Bar: Wait for confirmed acceptance above ${bTop + 5}. Look for NQ to build value (multiple 1-minute candle closes) and hold above ${bTop} for at least 5 to 10 minutes on strong volume before entering long.`,
+      `The Bracket Top (${bTop}) is the Line in the Sand: This level represents your ultimate invalidation floor. Place your stop-loss just below it at ${bTop - 5}. If price closes back below ${bTop}, the breakout has failed, the premise is broken, and you must exit immediately.`,
+      `If it Fails, it is a Fade Setup: If the breakout is rejected and NQ collapses back below ${bTop}, the playbook immediately flips to a responsive balance fade. Enter short on range acceptance, targeting the VWAP or opposite edge.`
+    ];
+    stats = "NQ multi-day breakouts have an 83.2% continuation rate when acceptance holds, but raw wicks fail 94.2% of the time.";
+    return { title, description, action, stats };
+  }
+
+  if (isNearBracketLow || (bracketLowPrice != null && currentPrice < bracketLowPrice)) {
+    const bBot = Math.round(bracketLowPrice);
+    description = `NQ is currently testing or breaking down from the 5-session multi-day Bracket Low boundary at ${bBot}.`;
+    action = [
+      `Do Not Chase the Breakdown Bar: Wait for confirmed acceptance below ${bBot - 5}. Look for NQ to build value and print consecutive 1-minute candle closes below ${bBot} for at least 5 to 10 minutes on solid volume.`,
+      `The Bracket Bottom (${bBot}) is the Line in the Sand: This boundary is your ultimate invalidation roof. Place your stop-loss just above it at ${bBot + 5}. If price closes back above ${bBot}, the breakdown has failed, the premise is broken, and you must exit immediately.`,
+      `If it Fails, it is a Fade Setup: If the breakdown is rejected and NQ rallies back above ${bBot}, the playbook flips to a responsive balance fade. Enter long on range acceptance, targeting the VWAP or opposite edge.`
+    ];
+    stats = "NQ multi-day breakdowns have a high failure rate unless weekly trend (NL30) aligns. Wicks back inside occur 94.2% of the time.";
+    return { title, description, action, stats };
+  }
+
+  // 2. Standard Intraday IB Breakout / Test scenarios
+  if (dtClass === 'BALANCE') {
+    if (coiled) {
+      if (isBullBreak) {
+        if (bias === 'SHORT') {
+          description = `NQ has broken above the IB High of ${Math.round(ibHigh)}, but the day's structural bias is bearish (A-Down day). This is a counter-bias breakout.`;
+          action = [
+            `FADE THE BREAKOUT: Do not buy NQ here. Under a bearish day-bias, bullish breaks are highly prone to trapping.`,
+            `Entry Trigger: Wait for NQ to print a clear rejection pattern (e.g. a 1-minute close back below the IB High at ${Math.round(ibHigh)}).`,
+            `Target & Stop: Place your stop above the breakout high, targeting range mean reversion back to VWAP and the opposite IB Low.`
+          ];
+          stats = "Historical Counter-Bias Breakout Trap Rate: 87.3%.";
+        } else {
+          description = `NQ is breaking above the IB High of ${Math.round(ibHigh)} from a COILED compression state.`;
+          action = [
+            `Wait for Pullback: Do not buy the immediate breakout bar. Wick pullback rates are 94.2%; price will highly likely retest the boundary.`,
+            `Execution: Wait for NQ to pull back and touch the IB High (${Math.round(ibHigh)}) or OR High to establish your entry.`,
+            `Stop-Loss: Set a strict invalidation stop below the OR Low. If it breaches, the breakout premise is dead.`
+          ];
+          stats = "General Wick Pullback Rate: 94.2%. 1m Close Hold Rate: 16.3% (83.7% re-enter the range).";
+        }
+      } else if (isBearBreak) {
+        if (bias === 'LONG') {
+          description = `NQ has broken below the IB Low of ${Math.round(ibLow)}, but the day's structural bias is bullish (A-Up day). This is a counter-bias breakout.`;
+          action = [
+            `FADE THE BREAKOUT: Do not short NQ here. Under a bullish day-bias, bearish breaks are extremely strong traps.`,
+            `Entry Trigger: Wait for NQ to reclaim the IB Low at ${Math.round(ibLow)} (a 1-minute close back inside the range).`,
+            `Target & Stop: Place your stop below the breakdown low, targeting range mean reversion back to VWAP and the opposite IB High.`
+          ];
+          stats = "Historical Counter-Bias Breakout Trap Rate: 100.0% (0/68 held outside the range).";
+        } else {
+          description = `NQ is breaking below the IB Low of ${Math.round(ibLow)} from a COILED compression state.`;
+          action = [
+            `Wait for Pullback: Do not short the immediate breakdown bar. NQ wicks back inside the IB low 96.7% of the time.`,
+            `Execution: Wait for NQ to pull back and touch the IB Low (${Math.round(ibLow)}) or OR Low to establish your entry.`,
+            `Stop-Loss: Set a strict invalidation stop above the OR High.`
+          ];
+          stats = "General Wick Pullback Rate: 94.2%. 1m Close Hold Rate: 16.3% (83.7% re-enter).";
+        }
+      } else {
+        description = "The market is in a compressed BALANCE regime (COILED). A breakout of the IB boundaries is imminent.";
+        action = [
+          `Anticipate Range Expansion: Prepare for a breakout in either direction. If NQ breaks above IB High (${Math.round(ibHigh)}), prepare to buy the pullback if bias is LONG/NEUTRAL.`,
+          `Bearish Breakout Plan: If NQ breaks below IB Low (${Math.round(ibLow)}), prepare to sell the pullback if bias is SHORT/NEUTRAL.`,
+          `Fading Traps: If a breakout occurs against the day's bias (e.g. bearish break on A-Up day), prepare to trade the counter-bias fade.`
+        ];
+        stats = "Compression precedes expansion — Trend day probability is highly elevated today.";
+      }
+    } else {
+      if (isBullBreak) {
+        description = `NQ is wicking/breaking above the IB High of ${Math.round(ibHigh)} on a standard, uncompressed BALANCE day.`;
+        action = [
+          `Fade the Extreme: Follow-through is historically very low on uncompressed balance days. Look to short wicks above ${Math.round(ibHigh)}.`,
+          `Execution: Wait for price to show rejection on the 1-minute chart, then enter short with a stop above the wick high.`,
+          `Target: Target range reversion back to VWAP or the center of value.`
+        ];
+        stats = "Balance Day Breakout Hold Rate: ~10%. Trap Rate: ~90%.";
+      } else if (isBearBreak) {
+        description = `NQ is wicking/breaking below the IB Low of ${Math.round(ibLow)} on a standard, uncompressed BALANCE day.`;
+        action = [
+          `Fade the Extreme: Follow-through is historically very low on uncompressed balance days. Look to buy wicks below ${Math.round(ibLow)}.`,
+          `Execution: Wait for price to show rejection on the 1-minute chart, then enter long with a stop below the wick low.`,
+          `Target: Target range reversion back to VWAP or the center of value.`
+        ];
+        stats = "Balance Day Breakout Hold Rate: ~10%. Trap Rate: ~90%.";
+      } else {
+        description = "Standard uncompressed BALANCE day. Prices are rotating within the morning boundaries.";
+        action = [
+          `Trade Responsive: Sell the IB High (${Math.round(ibHigh) || '—'}) and buy the IB Low (${Math.round(ibLow) || '—'}) on clear wicks / rejection patterns.`,
+          `Risk Management: Do not trade breakouts today; range extension follow-through is highly negative expected value.`,
+          `Exit Targets: Set conservative targets near the VWAP or opposite edge.`
+        ];
+        stats = "Wick Pullback Rate: 94.2%. Close Trap Rate: 75.3% within 10 minutes.";
+      }
+    }
+  } else if (dtClass === 'TREND') {
+    if (isBullBreak || isBearBreak) {
+      const aligned = (isBullBreak && bias === 'LONG') || (isBearBreak && bias === 'SHORT');
+      if (aligned) {
+        description = `NQ is expanding the range in alignment with a confirmed TREND day regime (Bias: ${bias}).`;
+        action = [
+          `Go-With the Trend: Position exclusively in the breakout direction. Do not fade the edges.`,
+          `Retest Entry: Price wicks back inside the IB range 91-96% of the time. Do not buy/sell the high/low of the breakout bar; wait for the retest.`,
+          `Stop Placement: Use a wider stop (e.g. below/above VWAP or the opposite OR boundary) to allow the trend structure to build.`
+        ];
+        stats = "Trend continuation probability is high (83.2% continuation rate on efficient opens).";
+      } else {
+        description = `NQ is attempting a counter-trend breakout against the confirmed TREND day regime (Bias: ${bias}).`;
+        action = [
+          `Avoid Trading: Counter-trend breakouts in a strong trend regime carry extremely high risk of immediate failure.`,
+          `Stand Aside: Wait for NQ to align with the primary trend direction, or stand light for the session.`
+        ];
+        stats = "Counter-trend setups have a sub-10% success rate on confirmed Trend days.";
+      }
+    } else {
+      description = `Confirmed TREND day regime is active, but NQ is currently consolidating within the IB range.`;
+      action = [
+        `Position Aligned: Look to enter in the direction of the trend bias (${bias}) near value support.`,
+        `Support/Resistance: Buy support near VWAP (if LONG) or sell resistance near VWAP (if SHORT).`,
+        `Hold Strategy: Hold for range expansion and measured move targets. Do not scalp range edges.`
+      ];
+      stats = "Trend days are characterized by one-way directionality. Acceptance is key.";
+    }
+  } else {
+    description = "NQ is in a highly volatile, TURBULENT regime. Price action is rotational with wide wicks.";
+    action = [
+      "Reduce Position Size: Cut size by 50% due to highly elevated volatility and noise.",
+      "Wide Stop Loss: Use wider stop placement to absorb range noise. Avoid tight stops near boundaries.",
+      "Scalp Mentality: Take profits quickly near key levels. Do not hold for extended trend runs."
+    ];
+    stats = "Turbulent days feature elevated ATR and high noise-to-signal ratios.";
+  }
+
+  return { title, description, action, stats };
 }
 
 // Live day/case/trigger read — large, readable banner at the top of the
@@ -1630,11 +2005,101 @@ function LiveReadBanner() {
 
   const { dayType, read, levels = [], trigger, compression, evidenceLog = [] } = c;
   const dtClass = dayType?.classification || 'FORMING';
-  const bias    = read?.bias || 'NEUTRAL';
+  const rawBias = read?.bias || 'NEUTRAL';
+  const conviction = read?.conviction ?? 0;
+  const bias    = (conviction < 5.0) ? 'NO LEAN' : rawBias;
   const meter   = read?.meterPosition || 0;
   function dirClr(dir) { return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE; }
   const biasClr = dirClr(bias);
   const dts = DT_STYLE[dtClass] || DT_STYLE.FORMING;
+
+  const ctx2 = c?._ctx || {};
+  const ibHigh = ctx2.ibHigh;
+  const ibLow  = ctx2.ibLow;
+  const orHigh = ctx2.orHigh;
+  const orLow  = ctx2.orLow;
+  const orWidth = ctx2.orWidth ? Math.round(ctx2.orWidth) : (orHigh && orLow ? Math.round(orHigh - orLow) : null);
+  const aUpLevel = ctx2.aUpLevel;
+  const aDownLevel = ctx2.aDownLevel;
+  const gLine = ctx2.gLine;
+  const currentPrice = c?.currentPrice;
+  const coiled = !!compression?.coiled;
+
+  const isIbBreakoutActive = !!c.breakoutWarning;
+  const isWickPullbackActive = isIbBreakoutActive && (c.breakoutWarning.type === 'BULL_NORMAL' || c.breakoutWarning.type === 'BEAR_NORMAL');
+  const is1mCloseTrapActive = isIbBreakoutActive && (c.breakoutWarning.type === 'BULL_NORMAL' || c.breakoutWarning.type === 'BEAR_NORMAL');
+  const isCounterAUpActive = isIbBreakoutActive && c.breakoutWarning.type === 'BEAR_COUNTER_ACD';
+  const isCounterADownActive = isIbBreakoutActive && c.breakoutWarning.type === 'BULL_COUNTER_ACD';
+  const isReassessmentActive = !!(c.dayTypeReassessment && c.dayTypeReassessment.reassessments && c.dayTypeReassessment.reassessments.length > 0);
+
+  const getRowStyle = (isActive, color = '#a78bfa', bg = 'rgba(167, 139, 250, 0.08)') => ({
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '4px 8px',
+    margin: '0 -8px',
+    borderRadius: 4,
+    background: isActive ? bg : 'transparent',
+    borderLeft: isActive ? `3px solid ${color}` : '3px solid transparent',
+    color: isActive ? '#cbd5e1' : '#94a3b8',
+    fontWeight: isActive ? '600' : 'normal',
+    transition: 'all 0.2s ease',
+  });
+
+  const getWickPullbackStatusText = () => {
+    if (!c.breakoutWarning) return '';
+    const isBull = c.breakoutWarning.type.includes('BULL');
+    const edge = isBull ? 'IB High' : 'IB Low';
+    const val = isBull ? ibHigh : ibLow;
+    return `STATUS ACTIVE:\nNQ broke ${edge} (${Math.round(val)}) and is currently in an active breakout (current NQ price: ${Math.round(currentPrice)}).\n\nWHY IT'S IN PLAY:\nStandard Initial Balance breakouts wick back to retest the broken boundary 94.2% of the time. Look for a pullback/retest of ${Math.round(val)} for a high-probability entry with smaller risk.`;
+  };
+
+  const get1mCloseTrapStatusText = () => {
+    if (!c.breakoutWarning) return '';
+    const isBull = c.breakoutWarning.type.includes('BULL');
+    const edge = isBull ? 'IB High' : 'IB Low';
+    const val = isBull ? ibHigh : ibLow;
+    return `STATUS ACTIVE:\nNQ closed a 1m candle outside ${edge} (${Math.round(val)}) and is in an active breakout (current NQ price: ${Math.round(currentPrice)}).\n\nWHY IT'S IN PLAY:\nHistorically, 75.3% of early 1-minute candle closes outside the Initial Balance range fail to sustain and trap back inside the range within 10 minutes. Limit risk by waiting to verify confirmation.`;
+  };
+
+  const getCounterAUpStatusText = () => {
+    return `STATUS ACTIVE:\nNQ broke below the IB Low (${Math.round(ibLow)}) under a bullish A-UP daily score (current NQ price: ${Math.round(currentPrice)}).\n\nWHY IT'S ACTIVE:\nThis counter-bias breakdown is active because it has failed and trapped 100% of the time historically (0/68 held outside). Fade the breakdown back to VWAP on a reclaim of the IB Low.`;
+  };
+
+  const getCounterADownStatusText = () => {
+    return `STATUS ACTIVE:\nNQ broke above the IB High (${Math.round(ibHigh)}) under a bearish A-DOWN daily score (current NQ price: ${Math.round(currentPrice)}).\n\nWHY IT'S ACTIVE:\nThis counter-bias breakout is active because it has failed and trapped 87.3% of the time historically. Fade the breakout back to range center on clear rejection.`;
+  };
+
+  const getReassessmentRowStatusText = (rowName) => {
+    if (!isReassessmentActive) return '';
+    const latest = c.dayTypeReassessment.reassessments[c.dayTypeReassessment.reassessments.length - 1];
+    const baseStatus = `STATUS ACTIVE:\nA live Day-Type Reassessment triggered at ${latest.time} shifting classification from ${latest.from} to ${latest.to} (current NQ price: ${Math.round(currentPrice)}).`;
+    
+    if (rowName === 'accuracy') {
+      return `${baseStatus}\n\nWHY THIS IS ACTIVE:\nWith a live day-type shift underway, the engine's historical ~68% end-to-end accuracy is now key. Keep in mind that 68% of these mid-session reassessments successfully predict the final closing day-type.`;
+    }
+    if (rowName === 'recovery') {
+      return `${baseStatus}\n\nWHY THIS IS ACTIVE:\nThe session has transitioned to ${latest.to}. The reassessment algorithm successfully recovers ~71% of Trend days originally missed at the open. Expect continuation and adapt sizing to trending conditions.`;
+    }
+    if (rowName === 'falsePositives') {
+      return `${baseStatus}\n\nWHY THIS IS ACTIVE:\nAlthough reassessed to ${latest.to}, there is a historical ~20% false positive rate where the trend fails to sustain and reverts to a balance bracket. Confirm the breakout with volume/order-flow.`;
+    }
+    if (rowName === 'actionableCue') {
+      return `${baseStatus}\n\nWHY THIS IS ACTIVE:\nBecause the day-type has reassessed, you must verify price action confirmation. If NQ wicks back inside or volume dries up, the reassessment may be a false positive (~20% rate).`;
+    }
+    return baseStatus;
+  };
+
+  const playbookEdge = getNuancedExecutionEdge({
+    dtClass,
+    coiled,
+    bias,
+    trigger,
+    currentPrice,
+    ibHigh,
+    ibLow,
+    levels
+  });
 
   const tState  = trigger?.state || 'WATCHING';
   const tActive = tState === 'ACTIVE' || tState === 'ACTIVE_MANAGING';
@@ -1654,54 +2119,151 @@ function LiveReadBanner() {
         {asOfTime && <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace' }}>{asOfTime} ET</span>}
       </div>
 
+      {/* ⚡ OPENING EXECUTION REFERENCE LEVELS (PROMINENT AT THE OPEN) */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 10,
+        marginBottom: 16,
+        padding: '12px 14px',
+        background: 'rgba(15, 23, 42, 0.4)',
+        border: '1px solid rgba(51, 65, 85, 0.45)',
+        borderRadius: 8
+      }}>
+        {/* OR5 Level */}
+        <div title={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>5-Min Opening Range</div>
+          {orHigh && orLow ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#f1f5f9', fontFamily: 'monospace' }}>
+                {fmtP(Math.round(orLow))} – {fmtP(Math.round(orHigh))}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                Width: <strong style={{ color: '#cbd5e1' }}>{fmtP(orWidth, 1)} pt</strong>
+                {(() => {
+                  if (orWidth < 47.5) return <span style={{ marginLeft: 6, color: '#34d399', fontWeight: 800 }}>TIGHT</span>;
+                  if (orWidth > 91.5) return <span style={{ marginLeft: 6, color: '#f87171', fontWeight: 800 }}>WIDE</span>;
+                  return null;
+                })()}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>Forming after 9:30 AM...</div>
+          )}
+        </div>
+
+        {/* A Up trigger */}
+        <div title={"A UP TRIGGER (BUY)\n\nThe price level NQ must cross AND sustain above for 5 minutes to generate a bullish A Up signal.\n\nCalculated as: OR High + (OR Range × A Multiplier)\n\nWhen fired:\n• NL30 aligned (+9 or higher): highest conviction long. Full size.\n• NL30 ranging: moderate conviction. Standard size.\n• NL30 bearish: counter-trend signal. Reduced size, tighter stops.\n\nIf price touches A Up but fails to sustain (rejected), the signal is invalid — do not chase."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #10b981' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>A Up Trigger (Buy)</div>
+          {aUpLevel ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#34d399', fontFamily: 'monospace' }}>
+                &ge; {fmtP(Math.round(aUpLevel))}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                Cross & sustain to trigger Long
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>Calculated from OR...</div>
+          )}
+        </div>
+
+        {/* A Down trigger */}
+        <div title={"A DOWN TRIGGER (SHORT)\n\nThe price level NQ must cross AND sustain below for 5 minutes to generate a bearish A Down signal.\n\nCalculated as: OR Low - (OR Range × A Multiplier)\n\nWhen fired:\n• NL30 aligned (-9 or lower): highest conviction short. Full size.\n• NL30 ranging: moderate conviction. Standard size.\n• NL30 bullish: counter-trend signal. Reduced size, tighter stops.\n\nIf price touches A Down but bounces back (rejected), the signal is invalid — do not chase."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #ef4444' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>A Down Trigger (Short)</div>
+          {aDownLevel ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#f87171', fontFamily: 'monospace' }}>
+                &le; {fmtP(Math.round(aDownLevel))}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                Cross & sustain to trigger Short
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>Calculated from OR...</div>
+          )}
+        </div>
+
+        {/* G-Line (Weekly Open) */}
+        <div title={"G-LINE (WEEKLY OPEN)\n\nThe first traded price of the CME weekly session (Sunday 6:00 PM ET). This is Mark Fisher's weekly pivot — the most important structural reference for multi-day bias.\n\nBULLISH LEAN: Price is above the G-Line. Longs have structural support. Pullbacks to the G-Line are buying opportunities.\nBEARISH LEAN: Price is below the G-Line. Shorts have structural support. Rallies to the G-Line are selling opportunities.\n\nThe more days price holds above/below the G-Line during the week, the stronger the weekly bias. A reclaim or loss of the G-Line mid-week is a significant structural shift."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #f59e0b' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>G-Line (Weekly Open)</div>
+          {gLine ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#fcd34d', fontFamily: 'monospace' }}>
+                {fmtP(Math.round(gLine))}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                Bias filter: {currentPrice >= gLine ? <strong style={{ color: '#34d399' }}>BULLISH LEAN</strong> : <strong style={{ color: '#f87171' }}>BEARISH LEAN</strong>}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>Weekly open ref...</div>
+          )}
+        </div>
+      </div>
+
+      {c.breakoutWarning && (
+        <div style={{
+          background: c.breakoutWarning.severity === 'WARNING' ? 'rgba(239,68,68,0.11)' : 'rgba(14,165,233,0.10)',
+          border: `1.5px solid ${c.breakoutWarning.severity === 'WARNING' ? 'rgba(239,68,68,0.40)' : 'rgba(14,165,233,0.30)'}`,
+          borderRadius: 6,
+          padding: '10px 14px',
+          marginBottom: 14,
+          fontSize: 14,
+          color: c.breakoutWarning.severity === 'WARNING' ? '#fca5a5' : '#7dd3fc',
+          lineHeight: 1.45
+        }}>
+          <div style={{ fontWeight: 800, textTransform: 'uppercase', fontSize: 12, letterSpacing: '0.08em', marginBottom: 2 }}>
+            {c.breakoutWarning.severity === 'WARNING' ? '⚠️ ' : '⚡ '}{c.breakoutWarning.title}
+          </div>
+          <div>{c.breakoutWarning.message}</div>
+        </div>
+      )}
+      {c.gapWarning && (() => {
+        let bg = 'rgba(14,165,233,0.10)';
+        let border = 'rgba(14,165,233,0.30)';
+        let color = '#7dd3fc';
+        let icon = '⚡ ';
+
+        if (c.gapWarning.type === 'GAP_VOID') {
+          bg = 'rgba(239,68,68,0.11)';
+          border = 'rgba(239,68,68,0.40)';
+          color = '#fca5a5';
+          icon = '⚠️ ';
+        } else if (c.gapWarning.type === 'GAP_PROXIMITY_FLOOR') {
+          bg = 'rgba(245,158,11,0.08)';
+          border = 'rgba(245,158,11,0.35)';
+          color = '#fcd34d';
+          icon = '⚡ ';
+        } else if (c.gapWarning.type === 'GAP_PROXIMITY_CEILING') {
+          bg = 'rgba(14,165,233,0.10)';
+          border = 'rgba(14,165,233,0.30)';
+          color = '#7dd3fc';
+          icon = '⚡ ';
+        }
+
+        return (
+          <div style={{
+            background: bg,
+            border: `1.5px solid ${border}`,
+            borderRadius: 6,
+            padding: '10px 14px',
+            marginBottom: 14,
+            fontSize: 14,
+            color: color,
+            lineHeight: 1.45
+          }}>
+            <div style={{ fontWeight: 800, textTransform: 'uppercase', fontSize: 12, letterSpacing: '0.08em', marginBottom: 2 }}>
+              {icon}{c.gapWarning.title}
+            </div>
+            <div>{c.gapWarning.message}</div>
+          </div>
+        );
+      })()}
+
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'stretch' }}>
-        {/* ─── THE DAY ─────────────────────────────────── */}
-        <div {...clickableProps('day')} style={{ flex: '1 1 260px', border: `1px solid ${dts.border}`, borderRadius: 8, padding: '12px 16px', background: dts.bg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-            <span style={{ fontSize: 20, fontWeight: 800, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{dtClass}</span>
-            {compression?.coiled && (
-              <span style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.05em' }}>COILED</span>
-            )}
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>{dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}</span>
-          </div>
-          {dtClass === 'BALANCE' && (
-            <div style={{ fontSize: 14, color: LR_AMBER, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
-              ⚠ WEAK edge today — breakout setups lose on balance days (interim). Stand light.
-            </div>
-          )}
-          {dayType?.playbook && <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.5 }}>{dayType.playbook}</div>}
-          <DayTypeReassessmentBanner reassessment={c.dayTypeReassessment} />
-        </div>
-
-        {/* ─── THE READ ────────────────────────────────── */}
-        <div {...clickableProps('case')} style={{ flex: '1 1 280px', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', transition: 'filter 0.12s ease' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: 18, fontWeight: 800, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{bias}</span>
-            <span style={{ fontSize: 16, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(read?.conviction ?? 0).toFixed(1)}/10</span>
-          </div>
-          <div style={{ position: 'relative', height: 7, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden', marginBottom: 5 }}>
-            <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
-            {meter > 15 ? (
-              <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.9 }} />
-            ) : meter < -15 ? (
-              <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.9 }} />
-            ) : (
-              <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
-            )}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontSize: 12, color: LR_CORAL, fontWeight: 700 }}>SHORT</span>
-            <span style={{ fontSize: 12, color: LR_TEAL, fontWeight: 700 }}>LONG</span>
-          </div>
-          {latestEv && (
-            <div style={{ fontSize: 14, background: 'rgba(15,23,42,0.45)', borderRadius: 5, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 7 }}>
-              <span style={{ color: latestEv.change === '↑' ? LR_TEAL : LR_CORAL, fontWeight: 800, fontSize: 16, flexShrink: 0, lineHeight: 1 }}>{latestEv.change}</span>
-              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e2e8f0' }}>{latestEv.reason}</span>
-              <span style={{ flexShrink: 0, fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>{typeof latestEv.time === 'string' ? latestEv.time.slice(11, 16) : ''}</span>
-            </div>
-          )}
-        </div>
-
         {/* ─── TRIGGER SLOT ────────────────────────────── */}
         <div {...clickableProps('trigger')} style={{ flex: '1 1 280px', border: `1.5px solid ${tBorder}`, borderRadius: 8, padding: '12px 16px', background: tBg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
           {tState === 'WATCHING' ? (
@@ -1740,6 +2302,129 @@ function LiveReadBanner() {
               )}
             </>
           )}
+        </div>
+
+        {/* ─── THE READ ────────────────────────────────── */}
+        <div {...clickableProps('case')} style={{ flex: '1 1 280px', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 8, padding: '12px 16px', cursor: 'pointer', transition: 'filter 0.12s ease' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{bias}</span>
+            <span style={{ fontSize: 16, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>{(read?.conviction ?? 0).toFixed(1)}/10</span>
+          </div>
+          <div style={{ position: 'relative', height: 7, background: 'rgba(51,65,85,0.55)', borderRadius: 4, overflow: 'hidden', marginBottom: 5 }}>
+            <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(100,116,139,0.5)' }} />
+            {meter > 15 ? (
+              <div style={{ position: 'absolute', left: '50%', width: `${Math.min(50, (meter / 100) * 50)}%`, height: '100%', background: LR_TEAL, borderRadius: '0 4px 4px 0', opacity: 0.9 }} />
+            ) : meter < -15 ? (
+              <div style={{ position: 'absolute', right: '50%', width: `${Math.min(50, (-meter / 100) * 50)}%`, height: '100%', background: LR_CORAL, borderRadius: '4px 0 0 4px', opacity: 0.9 }} />
+            ) : (
+              <div style={{ position: 'absolute', left: 'calc(50% - 3px)', width: 6, height: '100%', background: LR_SLATE, opacity: 0.55 }} />
+            )}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, color: LR_CORAL, fontWeight: 700 }}>SHORT</span>
+            <span style={{ fontSize: 12, color: LR_TEAL, fontWeight: 700 }}>LONG</span>
+          </div>
+          {latestEv && (
+            <div style={{ fontSize: 14, background: 'rgba(15,23,42,0.45)', borderRadius: 5, padding: '6px 10px', display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ color: latestEv.change === '↑' ? LR_TEAL : LR_CORAL, fontWeight: 800, fontSize: 16, flexShrink: 0, lineHeight: 1 }}>{latestEv.change}</span>
+              <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#e2e8f0' }}>{latestEv.reason}</span>
+              <span style={{ flexShrink: 0, fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>{typeof latestEv.time === 'string' ? latestEv.time.slice(11, 16) : ''}</span>
+            </div>
+          )}
+        </div>
+
+        {/* ─── THE DAY ─────────────────────────────────── */}
+        <div {...clickableProps('day')} style={{ flex: '1 1 260px', border: `1px solid ${dts.border}`, borderRadius: 8, padding: '12px 16px', background: dts.bg, cursor: 'pointer', transition: 'filter 0.12s ease' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 20, fontWeight: 800, color: dts.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{dtClass}</span>
+            {compression?.coiled && (
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.05em' }}>COILED</span>
+            )}
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>{dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}</span>
+          </div>
+          {dtClass === 'BALANCE' && (
+            <div style={{ fontSize: 14, color: LR_AMBER, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
+              ⚠ WEAK edge today — breakout setups lose on balance days (interim). Stand light.
+            </div>
+          )}
+          {dayType?.playbook && <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.5 }}>{dayType.playbook}</div>}
+          <DayTypeReassessmentBanner reassessment={c.dayTypeReassessment} />
+        </div>
+
+        {/* ─── OPENING RANGE (OR5) ────────────────────── */}
+        <div {...clickableProps('day')} style={{
+          flex: '1 1 260px',
+          border: '1px solid rgba(51,65,85,0.4)',
+          borderRadius: 8,
+          padding: '12px 16px',
+          background: 'rgba(15,23,42,0.15)',
+          cursor: 'pointer',
+          transition: 'filter 0.12s ease',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'space-between'
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Opening Range (OR5)</span>
+            </div>
+            {c._ctx?.orWidth != null ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 22, fontWeight: 800, color: '#f1f5f9', fontFamily: 'monospace' }}>
+                    {fmtP(c._ctx.orWidth, 1)} <span style={{ fontSize: 13, fontWeight: 'normal', color: '#64748b' }}>pts</span>
+                  </span>
+                  {(() => {
+                    const width = c._ctx.orWidth;
+                    let badgeLabel = 'NORMAL';
+                    let badgeColor = '#cbd5e1';
+                    let badgeBg = 'rgba(203,213,225,0.1)';
+                    let borderClr = 'rgba(203,213,225,0.2)';
+                    
+                    if (width < 47.5) {
+                      badgeLabel = 'TIGHT';
+                      badgeColor = '#34d399';
+                      badgeBg = 'rgba(52,211,153,0.12)';
+                      borderClr = 'rgba(52,211,153,0.25)';
+                    } else if (width > 91.5) {
+                      badgeLabel = 'WIDE';
+                      badgeColor = '#f87171';
+                      badgeBg = 'rgba(248,113,113,0.12)';
+                      borderClr = 'rgba(248,113,113,0.25)';
+                    }
+                    return (
+                      <span style={{
+                        fontSize: 10,
+                        fontWeight: 800,
+                        color: badgeColor,
+                        background: badgeBg,
+                        border: `1px solid ${borderClr}`,
+                        padding: '1px 6px',
+                        borderRadius: 3,
+                        letterSpacing: '0.05em'
+                      }}>
+                        {badgeLabel}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div style={{ fontSize: 12, color: '#cbd5e1', marginBottom: 8, fontFamily: 'monospace' }}>
+                  Range: {fmtP(c._ctx?.orLow, 1)} – {fmtP(c._ctx?.orHigh, 1)}
+                </div>
+                <p style={{ margin: 0, fontSize: 12, color: '#94a3b8', lineHeight: 1.45 }}>
+                  {c._ctx.orWidth < 47.5 
+                    ? '✅ Tight OR: compression/coiling. Statistically elevated breakout follow-through. Look for expansion.'
+                    : c._ctx.orWidth > 91.5
+                    ? '⚠️ Wide OR: expected extension already occurred. Breakouts have a high failure rate. Seek pullbacks/fades.'
+                    : 'Normal OR. Standard probabilities of breakout follow-through.'}
+                </p>
+              </>
+            ) : (
+              <div style={{ fontSize: 14, color: '#64748b', fontStyle: 'italic', marginTop: 10 }}>
+                OR wicks not yet formed (9:30–9:35 AM)
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1780,6 +2465,291 @@ function LiveReadBanner() {
           {compression.note}
         </div>
       )}
+
+      {/* Dynamic Nuanced Execution Playbook */}
+      {playbookEdge && (
+        <div style={{
+          marginTop: 12,
+          padding: '14px 18px',
+          background: 'rgba(30, 41, 59, 0.2)',
+          border: '1px solid rgba(139, 92, 246, 0.25)',
+          borderRadius: 8,
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a78bfa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>🎯 Nuanced Execution Playbook</span>
+            <span style={{ fontSize: 10, color: '#64748b', textTransform: 'none', fontWeight: 400, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>Dynamic Context-Aware Guide</span>
+              <span style={{ color: '#818cf8', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline' }} onClick={() => setActiveModal('playbooks')}>
+                [View All Playbooks]
+              </span>
+            </span>
+          </div>
+          <div style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 8 }}>
+            {playbookEdge.description}
+          </div>
+          <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.5, marginBottom: 8, padding: '10px 14px', background: 'rgba(15, 23, 42, 0.25)', borderLeft: '3px solid #818cf8', borderRadius: '0 6px 6px 0' }}>
+            <strong style={{ color: '#a78bfa', display: 'block', marginBottom: 6 }}>Execution Rules:</strong>
+            <ul style={{ paddingLeft: 18, margin: 0, display: 'flex', flexDirection: 'column', gap: 6, listStyleType: 'decimal' }}>
+              {playbookEdge.action.map((act, idx) => {
+                const parts = act.split(':');
+                if (parts.length > 1) {
+                  return (
+                    <li key={idx} style={{ lineHeight: 1.5 }}>
+                      <strong style={{ color: '#e2e8f0' }}>{parts[0]}:</strong>{parts.slice(1).join(':')}
+                    </li>
+                  );
+                }
+                return <li key={idx} style={{ lineHeight: 1.5 }}>{act}</li>;
+              })}
+            </ul>
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>
+            📊 <strong style={{ color: '#cbd5e1' }}>Backtest Probabilities: </strong>{playbookEdge.stats}
+          </div>
+        </div>
+      )}
+
+      {/* Session Edge Statistics Reference */}
+      <div style={{
+        marginTop: 14,
+        padding: '12px 16px',
+        background: 'rgba(30, 41, 59, 0.15)',
+        border: '1px solid rgba(51, 65, 85, 0.35)',
+        borderRadius: 8,
+      }}>
+        <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a78bfa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>📊 Session Edge Statistics</span>
+          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'none', fontWeight: 400, marginLeft: 'auto' }}>Based on NQ Backtests (n=310)</span>
+        </div>
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {/* Column 1: IB Breakout Stats */}
+          <div style={{ flex: '1 1 240px', minWidth: 200 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
+              IB BREAKOUT FOLLOW-THROUGH
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
+              <div style={getRowStyle(isWickPullbackActive, '#fbbf24', 'rgba(245, 158, 11, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Wick Pullback (re-touch):
+                  <InfoTooltip text="EXPLANATION: When NQ breaks the Initial Balance (IB) High or Low, it wicks/pulls back to touch that exact range edge 94.2% of the time before continuing.&#10;&#10;HOW TO USE: Do not buy/sell the breakout bar immediately. Wait for the retest/pullback to the broken IB level for a high-probability entry with smaller risk." />
+                </span>
+                <span style={{ color: '#fbbf24', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isWickPullbackActive && (
+                    <InfoTooltip text={getWickPullbackStatusText()}>
+                      <span style={{ 
+                        fontSize: 9, 
+                        background: 'rgba(245, 158, 11, 0.15)', 
+                        color: '#fbbf24', 
+                        padding: '1px 5px', 
+                        borderRadius: 3, 
+                        fontWeight: 800, 
+                        letterSpacing: '0.04em', 
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        IN PLAY
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  94.2%
+                </span>
+              </div>
+              <div style={getRowStyle(is1mCloseTrapActive, '#fbbf24', 'rgba(245, 158, 11, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  1m Close Trap (&le;10m):
+                  <InfoTooltip text="EXPLANATION: Even if NQ closes a 1-minute candle outside the IB High or Low, 75.3% of those early closes fail to hold and revert back inside the range within 10 minutes.&#10;&#10;HOW TO USE: Treat early breakouts with skepticism, especially on rotational days. Wait for sustained volume or multi-bar closes to confirm extension." />
+                </span>
+                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {is1mCloseTrapActive && (
+                    <InfoTooltip text={get1mCloseTrapStatusText()}>
+                      <span style={{ 
+                        fontSize: 9, 
+                        background: 'rgba(245, 158, 11, 0.15)', 
+                        color: '#fbbf24', 
+                        padding: '1px 5px', 
+                        borderRadius: 3, 
+                        fontWeight: 800, 
+                        letterSpacing: '0.04em', 
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        IN PLAY
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  75.3%
+                </span>
+              </div>
+              <div style={getRowStyle(isCounterAUpActive, '#ef4444', 'rgba(239, 68, 68, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Counter A-UP Bearish Break:
+                  <InfoTooltip text="EXPLANATION: On bullish A-UP days, if price breaks below the IB Low, it has failed and trapped 100% of the time historically (0/68 held).&#10;&#10;HOW TO USE: Never short IB Low breakdowns on a bullish number-line day. Instead, look to buy the reclaim of the IB Low, fading the trap back to VWAP." />
+                </span>
+                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isCounterAUpActive && (
+                    <InfoTooltip text={getCounterAUpStatusText()}>
+                      <span style={{ 
+                        fontSize: 9, 
+                        background: 'rgba(239, 68, 68, 0.15)', 
+                        color: '#ef4444', 
+                        padding: '1px 5px', 
+                        borderRadius: 3, 
+                        fontWeight: 800, 
+                        letterSpacing: '0.04em', 
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  100% Trap
+                </span>
+              </div>
+              <div style={getRowStyle(isCounterADownActive, '#ef4444', 'rgba(239, 68, 68, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Counter A-DOWN Bullish Break:
+                  <InfoTooltip text="EXPLANATION: On bearish A-DOWN days, if price breaks above the IB High, it has failed and trapped 87.3% of the time historically.&#10;&#10;HOW TO USE: Be extremely cautious buying IB High breakouts under a bearish daily score. Look for rejection patterns to fade the break back to range center." />
+                </span>
+                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isCounterADownActive && (
+                    <InfoTooltip text={getCounterADownStatusText()}>
+                      <span style={{ 
+                        fontSize: 9, 
+                        background: 'rgba(239, 68, 68, 0.15)', 
+                        color: '#ef4444', 
+                        padding: '1px 5px', 
+                        borderRadius: 3, 
+                        fontWeight: 800, 
+                        letterSpacing: '0.04em', 
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  87.3% Trap
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Column 2: Reassessment Stats */}
+          <div style={{ flex: '1 1 240px', minWidth: 200 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
+              DAY-TYPE REASSESSMENT
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
+              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  End-to-End Accuracy:
+                  <InfoTooltip text="EXPLANATION: The live reassessment engine correctly forecasts the final session classification (Trend vs Balance) ~68% of the time.&#10;&#10;HOW TO USE: Reassessments are highly reliable directional cues, but they are not guarantees. Treat updates as a prompt to check volume/price behavior." />
+                </span>
+                <span style={{ color: '#22c55e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isReassessmentActive && (
+                    <InfoTooltip text={getReassessmentRowStatusText('accuracy')}>
+                      <span style={{
+                        fontSize: 9,
+                        background: 'rgba(129, 140, 248, 0.15)',
+                        color: '#818cf8',
+                        padding: '1px 5px',
+                        borderRadius: 3,
+                        fontWeight: 800,
+                        letterSpacing: '0.04em',
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  ~68%
+                </span>
+              </div>
+              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Trend Day Recovery:
+                  <InfoTooltip text="EXPLANATION: The reassessment algorithm successfully recovers ~71% of Trend days that the static opening-range classification originally missed.&#10;&#10;HOW TO USE: When a Trend day reassessment is flagged, prepare to switch your strategy from rotational range fading to breakout/pullback expansion plays." />
+                </span>
+                <span style={{ color: '#22c55e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isReassessmentActive && (
+                    <InfoTooltip text={getReassessmentRowStatusText('recovery')}>
+                      <span style={{
+                        fontSize: 9,
+                        background: 'rgba(129, 140, 248, 0.15)',
+                        color: '#818cf8',
+                        padding: '1px 5px',
+                        borderRadius: 3,
+                        fontWeight: 800,
+                        letterSpacing: '0.04em',
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  ~71%
+                </span>
+              </div>
+              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Balance &rarr; Trend False Positives:
+                  <InfoTooltip text="EXPLANATION: About 20% of the times the engine reassesses a Balance day to a Trend day, the market fails to expand and instead remains rotational (whipsaw).&#10;&#10;HOW TO USE: Check volume. If a Trend reassessment triggers but volume remains low/normal, treat it with caution and keep trade size small." />
+                </span>
+                <span style={{ color: '#fbbf24', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isReassessmentActive && (
+                    <InfoTooltip text={getReassessmentRowStatusText('falsePositives')}>
+                      <span style={{
+                        fontSize: 9,
+                        background: 'rgba(129, 140, 248, 0.15)',
+                        color: '#818cf8',
+                        padding: '1px 5px',
+                        borderRadius: 3,
+                        fontWeight: 800,
+                        letterSpacing: '0.04em',
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  ~20%
+                </span>
+              </div>
+              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
+                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                  Actionable Cue:
+                  <InfoTooltip text="EXPLANATION: The final filter before acting on a day-type reassessment is checking real-time price action confirmation.&#10;&#10;HOW TO USE: If the day is reassessed to a Trend day, verify that price is holding outside the IB boundaries. If price repeatedly wicks back inside on light volume, do not trade the breakout." />
+                </span>
+                <span style={{ color: '#cbd5e1', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isReassessmentActive && (
+                    <InfoTooltip text={getReassessmentRowStatusText('actionableCue')}>
+                      <span style={{
+                        fontSize: 9,
+                        background: 'rgba(129, 140, 248, 0.15)',
+                        color: '#818cf8',
+                        padding: '1px 5px',
+                        borderRadius: 3,
+                        fontWeight: 800,
+                        letterSpacing: '0.04em',
+                        fontStyle: 'normal',
+                        cursor: 'help',
+                        marginRight: 4
+                      }}>
+                        ACTIVE
+                      </span>
+                    </InfoTooltip>
+                  )}
+                  Verify with price action
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       {activeModal && (
         <CaseReadDetailModal kind={activeModal} c={c} isRTH={true} isPastOpen={true} title={MODAL_TITLES[activeModal]} onClose={closeModal} />
@@ -1825,14 +2795,6 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
           <span className="nav-icon">📈</span>
           <span>Dashboard</span>
           <NavUpdateDot view="dashboard" />
-        </button>
-
-        <button
-          className={`nav-item ${currentView === 'edges' ? 'active' : ''}`}
-          onClick={() => setCurrentView('edges')}
-        >
-          <span className="nav-icon">💡</span>
-          <span>Antigravity Edges</span>
         </button>
 
         <button
@@ -2986,18 +3948,18 @@ function IntradayChartSection({ dateStr }) {
           const price = yMax - (yMax - yMin) * pct;
           return <g key={pct}>
             <line x1={M.l} x2={SVG_W - M.r} y1={y} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
-            <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{price.toFixed(0)}</text>
+            <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{fmtP(price)}</text>
           </g>;
         })}
 
         {/* IB High / Low lines */}
         {ibHigh && ibHigh > yMin && ibHigh < yMax && (<g>
           <line x1={M.l} x2={SVG_W - M.r} y1={yScale(ibHigh)} y2={yScale(ibHigh)} stroke="#60a5fa" strokeWidth={1.5} opacity={0.8} />
-          <text x={SVG_W - M.r + 4} y={yScale(ibHigh) - 3} fill="#60a5fa" fontSize={9} fontWeight="600">IBH {ibHigh.toFixed(0)}</text>
+          <text x={SVG_W - M.r + 4} y={yScale(ibHigh) - 3} fill="#60a5fa" fontSize={9} fontWeight="600">IBH {fmtP(ibHigh)}</text>
         </g>)}
         {ibLow && ibLow > yMin && ibLow < yMax && (<g>
           <line x1={M.l} x2={SVG_W - M.r} y1={yScale(ibLow)} y2={yScale(ibLow)} stroke="#60a5fa" strokeWidth={1.5} opacity={0.8} />
-          <text x={SVG_W - M.r + 4} y={yScale(ibLow) + 11} fill="#60a5fa" fontSize={9} fontWeight="600">IBL {ibLow.toFixed(0)}</text>
+          <text x={SVG_W - M.r + 4} y={yScale(ibLow) + 11} fill="#60a5fa" fontSize={9} fontWeight="600">IBL {fmtP(ibLow)}</text>
         </g>)}
 
         {/* T1 and stop horizontal lines from each setup */}
@@ -3070,9 +4032,9 @@ function IntradayChartSection({ dateStr }) {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '3px 10px' }}>
             <span style={{ color: '#64748b' }}>Fired</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fired_time} ET</span>
-            <span style={{ color: '#64748b' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.entryPx?.toFixed(2)}</span>
-            {hoveredSetup.stop_level != null && <><span style={{ color: '#64748b' }}>Stop</span><span style={{ color: '#f87171', fontFamily: 'monospace' }}>{hoveredSetup.stop_level.toFixed(2)}</span></>}
-            {hoveredSetup.t1_level != null && <><span style={{ color: '#64748b' }}>{hoveredSetup.t1_label || 'T1'}</span><span style={{ color: '#4ade80', fontFamily: 'monospace' }}>{hoveredSetup.t1_level.toFixed(2)}</span></>}
+            <span style={{ color: '#64748b' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fmtP(entryPx, 2)}</span>
+            {hoveredSetup.stop_level != null && <><span style={{ color: '#64748b' }}>Stop</span><span style={{ color: '#f87171', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.stop_level, 2)}</span></>}
+            {hoveredSetup.t1_level != null && <><span style={{ color: '#64748b' }}>{hoveredSetup.t1_label || 'T1'}</span><span style={{ color: '#4ade80', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.t1_level, 2)}</span></>}
             <span style={{ color: '#64748b' }}>Result</span><span style={{ color: hoveredSetup.color }}>{hoveredSetup.resolution || hoveredSetup.status || '—'}</span>
           </div>
         </div>
@@ -3106,7 +4068,7 @@ function IntradayChartSection({ dateStr }) {
             const isLive = s.status === 'ACTIVE';
             const resInfo = SETUP_RESOLUTION_TEXT[s.resolution] || null;
             const conviction = getSetupConviction(s.setup_type, hitRatesData, 'NEUTRAL');
-            const fmtPx = v => v != null ? parseFloat(v).toFixed(2) : '—';
+            const fmtPx = v => v != null ? fmtP(parseFloat(v), 2) : '—';
             return (
               <div key={s.id || i} style={{
                 display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px', flexWrap: 'wrap',
@@ -4222,8 +5184,8 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                       <td style={{ padding: '2px 6px' }}>{new Date(ep.time).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td>
                       <td style={{ padding: '2px 6px', fontFamily: 'monospace', fontSize: 12 }} title={account || ''}>{account ? account.split('-').pop() : '—'}</td>
                       <td style={{ padding: '2px 6px', textAlign: 'right', fontFamily: 'monospace' }}>{ftfRaw}</td>
-                      <td style={{ padding: '2px 6px', textAlign: 'right', color: sessionPnl >= 0 ? '#22c55e' : '#ef4444' }}>${sessionPnl?.toFixed(2)}</td>
-                      <td style={{ padding: '2px 6px', textAlign: 'right', color: ep.cumPnl >= startBalance ? '#22c55e' : '#ef4444' }}>${(ep.cumPnl - startBalance).toFixed(2)}</td>
+                      <td style={{ padding: '2px 6px', textAlign: 'right', color: sessionPnl >= 0 ? '#22c55e' : '#ef4444' }}>${fmtP(sessionPnl, 2)}</td>
+                      <td style={{ padding: '2px 6px', textAlign: 'right', color: ep.cumPnl >= startBalance ? '#22c55e' : '#ef4444' }}>${fmtP(ep.cumPnl - startBalance, 2)}</td>
                     </tr>
                   );
                 })}
@@ -4558,7 +5520,7 @@ function RecapDatePicker({ value, onChange, dailyPerf }) {
                 : '1px solid transparent';
               return (
                 <div key={dateStr} onClick={() => { onChange(dateStr); setOpen(false); }}
-                  title={hasTrade ? `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(0)}` : ''}
+                  title={hasTrade ? `${pnl >= 0 ? '+' : ''}$${fmtP(pnl)}` : ''}
                   style={{ textAlign: 'center', padding: '4px 2px', borderRadius: 4, cursor: 'pointer', fontSize: 13,
                     background: bg, border, color: isSelected ? '#fff' : hasTrade ? 'var(--text-primary)' : 'var(--text-muted)',
                     fontWeight: isSelected || hasTrade ? 600 : 400 }}>
@@ -6638,7 +7600,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                   <g key={k}>
                     <line x1={0} x2={iW} y1={y} y2={y} stroke={cfg.color} strokeWidth={1} strokeDasharray={cfg.dash || '0'} opacity={0.85} />
                     <text x={iW + 6} y={y - 1} fill={cfg.color} fontSize={10} fontWeight="600">{cfg.label}</text>
-                    <text x={iW + 6} y={y + 10} fill={cfg.color} fontSize={9} opacity={0.7}>{price?.toFixed(2)}</text>
+                    <text x={iW + 6} y={y + 10} fill={cfg.color} fontSize={9} opacity={0.7}>{fmtP(price, 2)}</text>
                   </g>
                 );
               })}
@@ -6714,7 +7676,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                       <polygon points={pts} fill={col} stroke={isHov ? '#fff' : '#0d1117'} strokeWidth={isHov ? 1.5 : 1} />
                       <text x={t.isOffLeft ? ex+14 : ex-14} y={ey+4}
                         textAnchor={t.isOffLeft ? 'start' : 'end'}
-                        fill={col} fontSize={8}>{t.entryPrice.toFixed(0)}</text>
+                        fill={col} fontSize={8}>{fmtP(t.entryPrice)}</text>
                     </g>
                   );
                 }
@@ -6738,7 +7700,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                 if (!ht || !htTrade) return null;
                 const acctShort = htTrade.account ? htTrade.account.split('-').pop() : '—';
                 const isLive = htTrade.account && !htTrade.account.includes('TEST') && !htTrade.account.includes('PRACTICE');
-                const pnlStr = `${ht.pnl >= 0 ? '+' : ''}$${ht.pnl.toFixed(2)}`;
+                const pnlStr = `${ht.pnl >= 0 ? '+' : ''}$${fmtP(ht.pnl, 2)}`;
                 const tx = ht.isOffLeft ? 20 : ht.isOffRight ? iW - 20 : Math.min(iW - 80, Math.max(0, ht.entryX - 40));
                 const ty = Math.max(0, ht.entryY - 38);
                 const ttW = 90, ttH = 28;
@@ -6783,7 +7745,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                   <g>
                     <rect x={bx} y={4} width={182} height={58} fill="rgba(13,17,23,0.92)" rx={5} stroke="#1e2a3a" strokeWidth={1} />
                     <text x={bx+8} y={20} fill="#94a3b8" fontSize={11} fontWeight="600">{timeStr} EST</text>
-                    <text x={bx+8} y={35} fill={col} fontSize={10}>O {(+hoverBar.open).toFixed(2)}  H {(+hoverBar.high).toFixed(2)}  L {(+hoverBar.low).toFixed(2)}  C {(+hoverBar.close).toFixed(2)}</text>
+                    <text x={bx+8} y={35} fill={col} fontSize={10}>O {fmtP(+hoverBar.open, 2)}  H {fmtP(+hoverBar.high, 2)}  L {fmtP(+hoverBar.low, 2)}  C {fmtP(+hoverBar.close, 2)}</text>
                     <text x={bx+8} y={50} fill="#64748b" fontSize={9}>Vol {hoverBar.volume?.toLocaleString()}</text>
                   </g>
                 );
@@ -6800,9 +7762,9 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
         const gapStr = l.gap != null ? (Math.abs(l.gap) < 3 ? 'Flat open' : l.gap > 0 ? `Gap Up +${l.gap} pts` : `Gap Down ${l.gap} pts`) : null;
         return (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-            {ibType && <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 20, background: 'var(--card-bg)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>IB Range: {l.ibRange?.toFixed(0)} pts — {ibType}</span>}
+            {ibType && <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 20, background: 'var(--card-bg)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>IB Range: {fmtP(l?.ibRange)} pts — {ibType}</span>}
             {gapStr && <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 20, background: 'var(--card-bg)', border: '1px solid var(--border-color)', color: l.gap > 3 ? 'var(--accent-green)' : l.gap < -3 ? 'var(--accent-red)' : 'var(--text-secondary)' }}>{gapStr} from prior close</span>}
-            {l.pdClose != null && <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 20, background: 'var(--card-bg)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>Prior Close: {l.pdClose?.toFixed(2)}</span>}
+            {l.pdClose != null && <span style={{ fontSize: 13, padding: '3px 10px', borderRadius: 20, background: 'var(--card-bg)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>Prior Close: {fmtP(l.pdClose, 2)}</span>}
           </div>
         );
       })()}
@@ -6844,9 +7806,9 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                           {acctShort}
                         </span>
                       </td>
-                      <td style={{ padding: '6px 10px' }}>{timeStr} @ {ep?.toFixed(2)}</td>
-                      <td style={{ padding: '6px 10px', color: 'var(--text-muted)' }}>{xp?.toFixed(2)}</td>
-                      <td style={{ padding: '6px 10px', color: pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>${pnl >= 0 ? '+' : ''}{pnl?.toFixed(2)}</td>
+                      <td style={{ padding: '6px 10px' }}>{timeStr} @ {fmtP(ep, 2)}</td>
+                      <td style={{ padding: '6px 10px', color: 'var(--text-muted)' }}>{fmtP(xp, 2)}</td>
+                      <td style={{ padding: '6px 10px', color: pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>${pnl >= 0 ? '+' : ''}{fmtP(pnl, 2)}</td>
                       <td style={{ padding: '6px 10px' }}>
                         {nearLvls.length ? nearLvls.map(l => (
                           <span key={l} style={{ fontSize: 13, padding: '1px 6px', borderRadius: 10, marginRight: 4, background: 'rgba(139,92,246,0.15)', color: 'var(--accent-purple)', border: '1px solid rgba(139,92,246,0.3)' }}>{l}</span>
@@ -7024,7 +7986,7 @@ function ScenarioPatBar({ data, dataKey = 'avgPnl', nameKey = 'label', height = 
         <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
         <Tooltip
           contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
-          formatter={(v) => [v != null ? `$${parseFloat(v).toFixed(0)}` : '—', 'Avg P&L']}
+          formatter={(v) => [v != null ? `$${fmtP(parseFloat(v))}` : '—', 'Avg P&L']}
           labelFormatter={(l, payload) => {
             const d = payload?.[0]?.payload;
             return d ? `${l} — ${d.winRate}% WR · ${d.count ?? d.days} ${d.count != null ? 'fills' : 'days'}` : l;
@@ -7432,7 +8394,7 @@ function ScenarioTesterView() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
                     <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={d => d.slice(5)} interval={Math.floor(sc.equityCurve.length / 8)} />
                     <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${v >= 0 ? '' : '-'}${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(1)+'k' : Math.abs(v).toFixed(0)}`} />
-                    <Tooltip formatter={(v, n) => [v != null ? `$${v.toFixed(0)}` : '—', n === 'equity' ? 'Scenario' : 'Actual']} labelFormatter={l => `Date: ${l}`} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }} />
+                    <Tooltip formatter={(v, n) => [v != null ? `$${fmtP(v)}` : '—', n === 'equity' ? 'Scenario' : 'Actual']} labelFormatter={l => `Date: ${l}`} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }} />
                     <ReferenceLine y={0} stroke="#334155" />
                     <Line type="monotone" dataKey="actual" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="actual" />
                     <Line type="monotone" dataKey="equity" stroke="#6366f1" strokeWidth={2.5} dot={false} name="equity" />
@@ -7564,7 +8526,7 @@ function ScenarioTesterView() {
                       <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#475569' }} />
                       <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
                       <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
-                        formatter={v => [`$${parseFloat(v).toFixed(0)}`, 'Avg P&L']}
+                        formatter={v => [`$${fmtP(parseFloat(v))}`, 'Avg P&L']}
                         labelFormatter={(l, payload) => { const d = payload?.[0]?.payload; return d ? `${l} — ${d.winRate}% WR · ${d.days} days` : l; }} />
                       <ReferenceLine y={0} stroke="#334155" />
                       <Bar dataKey="avgPnl" radius={[3, 3, 0, 0]}>
@@ -7848,7 +8810,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
   const [effData, setEffData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
-  const [activeSection, setActiveSection] = useState('efficiency'); // 'efficiency' | 'volume' | 'keylevels' | 'edge' | 'chartreview' | 'playbook'
+  const [activeSection, setActiveSection] = useState('explanations'); // 'efficiency' | 'volume' | 'keylevels' | 'edge' | 'chartreview' | 'playbook'
   const [chartReviewDate, setChartReviewDate] = useState('');
   const [vpDate, setVpDate] = useState('');
   const [vpSession, setVpSession] = useState('rth');
@@ -8134,14 +9096,14 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       {/* Section Tabs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-color)', paddingBottom: 0 }}>
         {[
+          ['explanations', 'Playbook & Weekly Patterns'],
           ['efficiency', 'Efficiency Analysis'],
           ['volume', 'Volume Profile'],
           ['keylevels', 'Key Level Analysis'],
           ['edge', 'Edge Analysis'],
           ['chartreview', 'Chart Review'],
           ['playbook', 'Playbook'],
-          ['backlog', 'Improvements Backlog'],
-          ['explanations', 'Playbook & Weekly Patterns']
+          ['backlog', 'Improvements Backlog']
         ].map(([v, l]) => (
           <button key={v} onClick={() => setActiveSection(v)}
             style={{
@@ -8972,9 +9934,9 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                       display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 };
                     return (
                   <div style={{ fontSize: 13, marginBottom: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
-                    <span style={{ color: 'var(--accent-purple)', fontWeight: 700 }}>POC {poc.toFixed(2)}</span>
-                    <span style={{ color: 'var(--accent-green)' }}>VAH {vah.toFixed(2)}</span>
-                    <span style={{ color: 'var(--accent-red)' }}>VAL {val.toFixed(2)}</span>
+                    <span style={{ color: 'var(--accent-purple)', fontWeight: 700 }}>POC {fmtP(poc, 2)}</span>
+                    <span style={{ color: 'var(--accent-green)' }}>VAH {fmtP(vah, 2)}</span>
+                    <span style={{ color: 'var(--accent-red)' }}>VAL {fmtP(val, 2)}</span>
                     <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
                       <button style={btnStyle} onClick={() => applyZoom(0.6)}>+</button>
                       <button style={btnStyle} onClick={() => applyZoom(1.67)}>−</button>
@@ -9044,7 +10006,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                         <span style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)',
                           fontSize: 13, fontWeight: 700, color: 'var(--text-primary)',
                           padding: '1px 6px', borderRadius: 3, whiteSpace: 'nowrap', transform: 'translateY(-50%)' }}>
-                          {vpHover.price.toFixed(2)}
+                          {vpHover.fmtP(price, 2)}
                         </span>
                       </div>
                     )}
@@ -9739,8 +10701,8 @@ function ACDSessionState({ todayData, nl, pivot }) {
   const { today, aMultiplier, systemFailureWarning } = todayData;
 
   const orRange  = orHigh && orLow ? parseFloat(orHigh) - parseFloat(orLow) : null;
-  const aUpCalc  = orRange ? (parseFloat(orHigh) + orRange * aMultiplier).toFixed(2) : '—';
-  const aDownCalc = orRange ? (parseFloat(orLow)  - orRange * aMultiplier).toFixed(2) : '—';
+  const aUpCalc  = orRange ? fmtP(parseFloat(orHigh) + orRange * aMultiplier, 2) : '—';
+  const aDownCalc = orRange ? fmtP(parseFloat(orLow) - orRange * aMultiplier, 2) : '—';
 
   const trend = nl?.trend || 'RANGING';
   const pivotBias = pivot ? '(pivot not set)' : null;
@@ -9788,15 +10750,15 @@ function ACDSessionState({ todayData, nl, pivot }) {
               })()}
             </span>
             <span style={{ fontSize: 13, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-              {liveSetup.currentPrice?.toFixed(2)} · updated {liveSetup.barTime} ET
+              {liveSetup.fmtP(currentPrice, 2)} · updated {liveSetup.barTime} ET
               {(() => { const f = liveSetup.timeline?.find(e => e.event === 'A Up fired' || e.event === 'A Down fired'); return f ? ` · signal fired ${f.time} ET` : ''; })()}
             </span>
           </div>
           <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.5 }}>{liveSetup.description}</div>
           {liveSetup.setup !== 'No signal' && (
             <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 13, color: 'var(--text-muted)' }}>
-              <span>Session H: <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{liveSetup.sessionHigh?.toFixed(2)}</strong></span>
-              <span>Session L: <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{liveSetup.sessionLow?.toFixed(2)}</strong></span>
+              <span>Session H: <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{liveSetup.fmtP(sessionHigh, 2)}</strong></span>
+              <span>Session L: <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{liveSetup.fmtP(sessionLow, 2)}</strong></span>
               <span>{liveSetup.barsAnalyzed} bars analyzed</span>
             </div>
           )}
@@ -9844,7 +10806,7 @@ function ACDSessionState({ todayData, nl, pivot }) {
                     {label}
                     {label === 'VAH' && <InfoTooltip text="Prior day's RTH value area — where 70% of yesterday's volume traded.&#10;&#10;VAH: Value Area High — NQ above = above accepted value&#10;POC: Point of Control — highest volume price, key magnet&#10;VAL: Value Area Low — NQ below = below accepted value&#10;&#10;A Up above VAH = breaking out of accepted value (stronger signal). A Up inside VA = weaker signal." />}
                   </div>
-                  <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, color }}>{price ? parseFloat(price).toFixed(2) : '—'}</div>
+                  <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, color }}>{price ? fmtP(parseFloat(price), 2) : '—'}</div>
                   {nqPrice && label === 'VAH' && price && (
                     <div style={{ fontSize: 9, color: parseFloat(nqPrice) > parseFloat(price) ? '#22c55e' : '#94a3b8', marginTop: 1 }}>
                       {parseFloat(nqPrice) > parseFloat(price) ? 'NQ above ▲' : 'NQ below ▼'}
@@ -9866,7 +10828,7 @@ function ACDSessionState({ todayData, nl, pivot }) {
           <div style={{ display: 'flex', gap: 14, marginTop: 6, padding: '8px 12px', background: 'rgba(59,130,246,0.07)', borderRadius: 7, border: '1px solid rgba(59,130,246,0.15)' }}>
             <div>
               <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>NQ Last</div>
-              <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>{parseFloat(nqLive.close).toFixed(2)}</div>
+              <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>{fmtP(parseFloat(nqLive.close), 2)}</div>
               <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{nqLive.barAgeMinutes}m ago</div>
             </div>
             {nqLive.pivot && (() => {
@@ -10029,15 +10991,15 @@ function ACDDailyLogTable({ logs }) {
             return (
               <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 13 }}>{d.trade_date?.toString().slice(0, 10)}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.or_high ? parseFloat(d.or_high).toFixed(2) : '—'}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.or_low ? parseFloat(d.or_low).toFixed(2) : '—'}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#22c55e' }}>{d.a_up_level ? parseFloat(d.a_up_level).toFixed(2) : '—'}</td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#ef4444' }}>{d.a_down_level ? parseFloat(d.a_down_level).toFixed(2) : '—'}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.or_high ? fmtP(parseFloat(d.or_high), 2) : '—'}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.or_low ? fmtP(parseFloat(d.or_low), 2) : '—'}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#22c55e' }}>{d.a_up_level ? fmtP(parseFloat(d.a_up_level), 2) : '—'}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace', color: '#ef4444' }}>{d.a_down_level ? fmtP(parseFloat(d.a_down_level), 2) : '—'}</td>
                 <td style={{ padding: '7px 10px', fontWeight: 600, color: sigColor }}>{signal}</td>
                 <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700, color: scoreColor(d.daily_score) }}>
                   {d.daily_score > 0 ? '+' : ''}{d.daily_score}
                 </td>
-                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.session_close ? parseFloat(d.session_close).toFixed(2) : '—'}</td>
+                <td style={{ padding: '7px 10px', fontFamily: 'monospace' }}>{d.session_close ? fmtP(parseFloat(d.session_close), 2) : '—'}</td>
                 <td style={{ padding: '7px 10px', color: 'var(--text-muted)', fontSize: 13, maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.notes || ''}</td>
               </tr>
             );
@@ -10118,7 +11080,7 @@ function ACDCorrelationReport({ accounts, selectedAccounts }) {
   );
 
   const pct = v => v !== null && v !== undefined ? `${(parseFloat(v) * 100).toFixed(1)}%` : '—';
-  const pnlFmt = v => v !== null && v !== undefined ? `${parseFloat(v) >= 0 ? '+' : ''}$${parseFloat(v).toFixed(0)}` : '—';
+  const pnlFmt = v => v !== null && v !== undefined ? `${parseFloat(v) >= 0 ? '+' : ''}$${fmtP(parseFloat(v))}` : '—';
   const pnlColor = v => v === null ? 'var(--text-muted)' : v >= 0 ? '#22c55e' : '#ef4444';
 
   const rows = [
@@ -10340,15 +11302,15 @@ function ACDBacktestRunner() {
                       </span>
                     </td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.or_minutes}</td>
-                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{parseFloat(r.a_multiplier).toFixed(2)}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{fmtP(parseFloat(r.a_multiplier), 2)}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.sustain_minutes}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.total_signals}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: parseFloat(r.win_rate) >= 0.55 ? '#22c55e' : parseFloat(r.win_rate) >= 0.45 ? '#fbbf24' : '#ef4444' }}>{pct(r.win_rate)}</td>
-                    <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#22c55e' }}>{r.avg_win_r ? parseFloat(r.avg_win_r).toFixed(2) + 'R' : '—'}</td>
-                    <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#ef4444' }}>{r.avg_loss_r ? parseFloat(r.avg_loss_r).toFixed(2) + 'R' : '—'}</td>
-                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.payoff_ratio ? parseFloat(r.payoff_ratio).toFixed(2) : '—'}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#22c55e' }}>{r.avg_win_r ? fmtP(parseFloat(r.avg_win_r), 2) + 'R' : '—'}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: '#ef4444' }}>{r.avg_loss_r ? fmtP(parseFloat(r.avg_loss_r), 2) + 'R' : '—'}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.payoff_ratio ? fmtP(parseFloat(r.payoff_ratio), 2) : '—'}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace', fontWeight: i < 3 ? 700 : 400, color: parseFloat(r.ev_per_signal) >= 0 ? '#22c55e' : '#ef4444' }}>{ev(r.ev_per_signal)}</td>
-                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.profit_factor ? parseFloat(r.profit_factor).toFixed(2) : '—'}</td>
+                    <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{r.profit_factor ? fmtP(parseFloat(r.profit_factor), 2) : '—'}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: parseFloat(r.win_rate_nl_above_9) >= 0.6 ? '#22c55e' : 'var(--text-primary)' }}>{pct(r.win_rate_nl_above_9)}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace', color: parseFloat(r.win_rate_nl_below_9) >= 0.6 ? '#22c55e' : 'var(--text-primary)' }}>{pct(r.win_rate_nl_below_9)}</td>
                     <td style={{ padding: '6px 8px', fontFamily: 'monospace' }}>{pct(r.win_rate_nl_ranging)}</td>
@@ -10360,7 +11322,7 @@ function ACDBacktestRunner() {
           </div>
           {results[0] && (
             <div style={{ marginTop: 14, padding: '10px 14px', background: 'rgba(34,197,94,0.08)', borderRadius: 8, fontSize: 13, border: '1px solid rgba(34,197,94,0.2)' }}>
-              Best parameters: <strong>OR {results[0].or_minutes} min · A multiplier {parseFloat(results[0].a_multiplier).toFixed(2)} · Sustain {results[0].sustain_minutes} min</strong>
+              Best parameters: <strong>OR {results[0].or_minutes} min · A multiplier {fmtP(parseFloat(results[0].a_multiplier), 2)} · Sustain {results[0].sustain_minutes} min</strong>
               {' — '}{pct(results[0].win_rate)} WR, {ev(results[0].ev_per_signal)} EV/signal
               {results[0].win_rate_nl_above_9 && ` · Win rate when NL > +9: ${pct(results[0].win_rate_nl_above_9)}`}
             </div>
@@ -10539,7 +11501,7 @@ function AcdCorrelationInsights({ onComplete }) {
         ))}
         {pivotLevel && (
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: 'var(--text-muted)', paddingTop: 4 }}>
-            <span>NQ {nqClose?.toFixed(0)} vs pivot {parseFloat(pivotLevel).toFixed(0)}</span>
+            <span>NQ {fmtP(nqClose)} vs pivot {fmtP(parseFloat(pivotLevel))}</span>
             <span style={{ color: pivotBias === 'ABOVE_R1' ? '#22c55e' : pivotBias === 'BELOW_S1' ? '#ef4444' : '#f59e0b' }}>
               {pivotBias === 'ABOVE_R1' ? 'above R1' : pivotBias === 'BELOW_S1' ? 'below S1' : 'inside zone'}
             </span>
@@ -10559,7 +11521,7 @@ function AcdCorrelationInsights({ onComplete }) {
         </div>
         {pivotLevel && (
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: pivotBias === 'ABOVE_R1' ? '#22c55e' : pivotBias === 'BELOW_S1' ? '#ef4444' : '#f59e0b' }}>{parseFloat(pivotLevel).toFixed(0)}</div>
+            <div style={{ fontSize: 18, fontWeight: 700, fontFamily: 'monospace', color: pivotBias === 'ABOVE_R1' ? '#22c55e' : pivotBias === 'BELOW_S1' ? '#ef4444' : '#f59e0b' }}>{fmtP(parseFloat(pivotLevel))}</div>
             <div style={{ fontSize: 13, color: '#94a3b8' }}>
               {pivotBias === 'ABOVE_R1' ? 'Above R1' : pivotBias === 'BELOW_S1' ? 'Below S1' : 'Inside Zone'}
             </div>
@@ -10850,7 +11812,7 @@ function TradeTimelinePanel() {
                   const pts  = ev.estimated_pts != null ? parseFloat(ev.estimated_pts) : null;
                   const sPts = ev.stop_pts != null ? parseFloat(ev.stop_pts) : null;
                   const pnl  = ev.actual_pnl != null ? parseFloat(ev.actual_pnl) : ev.matched_trade_pnl != null ? parseFloat(ev.matched_trade_pnl) : null;
-                  const pnlStr = pnl != null ? (pnl >= 0 ? `+$${pnl.toFixed(2)} actual` : `−$${Math.abs(pnl).toFixed(2)} actual`) : null;
+                  const pnlStr = pnl != null ? (pnl >= 0 ? `+$${fmtP(pnl, 2)} actual` : `−$${Math.abs(pnl).toFixed(2)} actual`) : null;
                   if (!ev.resolution) return (
                     <span style={{ fontSize: 12, fontWeight: 700, color: '#22c55e', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', paddingTop: 2 }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', display: 'inline-block', flexShrink: 0 }} />
@@ -10933,23 +11895,23 @@ function ACDSessionTimeline() {
           <InfoTooltip text="A running log of every ACD setup event that fired today, in order. Multiple setups can occur — for example, A Up can test and fail in the morning, then A Down can fire in the afternoon. Refreshes every 30 seconds." />
         </div>
         <div style={{ display: 'flex', gap: 16, fontSize: 13, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-          <span>OR {orHigh?.toFixed(0)} / {orLow?.toFixed(0)}</span>
-          <span style={{ color: '#22c55e' }}>A Up {aUpLevel?.toFixed(0)}</span>
-          <span style={{ color: '#ef4444' }}>A Down {aDownLevel?.toFixed(0)}</span>
-          {gLine  && <span style={{ color: '#f59e0b' }}>G-Line {gLine?.toFixed(0)}</span>}
-          {pwHigh && <span style={{ color: '#c084fc' }}>PW Hi {pwHigh?.toFixed(0)}</span>}
-          {pwLow  && <span style={{ color: '#c084fc' }}>PW Lo {pwLow?.toFixed(0)}</span>}
-          {pmVAH  && <span style={{ color: '#10b981' }}>PM VAH {pmVAH?.toFixed(0)}</span>}
-          {pmVAL  && <span style={{ color: '#10b981' }}>PM VAL {pmVAL?.toFixed(0)}</span>}
-          <span>H {sessionHigh?.toFixed(0)} · L {sessionLow?.toFixed(0)}</span>
-          <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Now: {currentPrice?.toFixed(2)}</span>
+          <span>OR {fmtP(orHigh)} / {fmtP(orLow)}</span>
+          <span style={{ color: '#22c55e' }}>A Up {fmtP(aUpLevel)}</span>
+          <span style={{ color: '#ef4444' }}>A Down {fmtP(aDownLevel)}</span>
+          {gLine  && <span style={{ color: '#f59e0b' }}>G-Line {fmtP(gLine)}</span>}
+          {pwHigh && <span style={{ color: '#c084fc' }}>PW Hi {fmtP(pwHigh)}</span>}
+          {pwLow  && <span style={{ color: '#c084fc' }}>PW Lo {fmtP(pwLow)}</span>}
+          {pmVAH  && <span style={{ color: '#10b981' }}>PM VAH {fmtP(pmVAH)}</span>}
+          {pmVAL  && <span style={{ color: '#10b981' }}>PM VAL {fmtP(pmVAL)}</span>}
+          <span>H {fmtP(sessionHigh)} · L {fmtP(sessionLow)}</span>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>Now: {fmtP(currentPrice, 2)}</span>
           <span style={{ color: '#a0aec0', fontSize: 13 }}>updated {barTime} ET</span>
         </div>
       </div>
 
       {timeline.length === 0 ? (
         <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: '12px 0', textAlign: 'center' }}>
-          No setups have fired yet today. Watching for price to test A Up ({aUpLevel?.toFixed(2)}) or A Down ({aDownLevel?.toFixed(2)}).
+          No setups have fired yet today. Watching for price to test A Up ({fmtP(aUpLevel, 2)}) or A Down ({fmtP(aDownLevel, 2)}).
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -11022,7 +11984,7 @@ function ACDSessionTimeline() {
                 </span>
                 {SETUP_DEFINITIONS[baseEvent] && <InfoTooltip text={SETUP_DEFINITIONS[baseEvent]} />}
                 <span style={{ fontFamily: 'monospace', fontSize: 13, color: event.color, opacity: 0.85 }}>
-                  {event.price?.toFixed(2)}
+                  {event.fmtP(price, 2)}
                 </span>
                 <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#94a3b8' }}>
                   {event.time} ET
@@ -11066,8 +12028,8 @@ function ACDSessionTimeline() {
               <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6 }}>{event.note}</div>
               {/* Footer */}
               <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)', display: 'flex', gap: 16 }}>
-                <span>Session H: <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{live.sessionHigh?.toFixed(2)}</strong></span>
-                <span>Session L: <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{live.sessionLow?.toFixed(2)}</strong></span>
+                <span>Session H: <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{live.fmtP(sessionHigh, 2)}</strong></span>
+                <span>Session L: <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{live.fmtP(sessionLow, 2)}</strong></span>
                 <span>{live.barsAnalyzed} bars analyzed</span>
               </div>
             </div>
@@ -11463,10 +12425,10 @@ function AuctionHistoryView() {
                       ['ACD NL30', `${day.nl30 > 0 ? '+' : ''}${day.nl30} (${day.nlTrend?.replace(/_/g,' ')})`],
                       ['OR condition', day.orCond],
                       ['Pivot bias', day.pivotBias || '—'],
-                      ['Prior VAH', day.priorVAH?.toFixed(2)],
-                      ['Prior VAL', day.priorVAL?.toFixed(2)],
-                      ['OR High', day.orHigh?.toFixed(2)],
-                      ['OR Low',  day.orLow?.toFixed(2)],
+                      ['Prior VAH', day.fmtP(priorVAH, 2)],
+                      ['Prior VAL', day.fmtP(priorVAL, 2)],
+                      ['OR High', day.fmtP(orHigh, 2)],
+                      ['OR Low',  day.fmtP(orLow, 2)],
                       ['A signal', day.aUpFired ? 'A UP fired' : day.aDownFired ? 'A DOWN fired' : 'No signal'],
                     ].map(([label, value]) => (
                       <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(100,116,139,0.1)' }}>
@@ -11581,12 +12543,12 @@ function AuctionDayChart({ day, fullSize = false }) {
 
   // Level config
   const levelLines = [
-    { price: day.orHigh,   color: '#60a5fa', dash: '',    label: `IBH ${day.orHigh?.toFixed(0)}`,    width: 1.5 },
-    { price: day.orLow,    color: '#60a5fa', dash: '',    label: `IBL ${day.orLow?.toFixed(0)}`,     width: 1.5 },
-    { price: day.priorVAH, color: '#22c55e', dash: '4 3', label: `PD VAH ${day.priorVAH?.toFixed(0)}`, width: 1 },
-    { price: day.priorVAL, color: '#ef4444', dash: '4 3', label: `PD VAL ${day.priorVAL?.toFixed(0)}`, width: 1 },
-    { price: day.aUpLevel && day.aUpFired ? day.aUpLevel : null,   color: '#22c55e', dash: '', label: `A Up ${day.aUpLevel?.toFixed(0)}`,   width: 1.5 },
-    { price: day.aDownLevel && day.aDownFired ? day.aDownLevel : null, color: '#ef4444', dash: '', label: `A Dn ${day.aDownLevel?.toFixed(0)}`, width: 1.5 },
+    { price: day.orHigh,   color: '#60a5fa', dash: '',    label: `IBH ${day.fmtP(orHigh)}`,    width: 1.5 },
+    { price: day.orLow,    color: '#60a5fa', dash: '',    label: `IBL ${day.fmtP(orLow)}`,     width: 1.5 },
+    { price: day.priorVAH, color: '#22c55e', dash: '4 3', label: `PD VAH ${day.fmtP(priorVAH)}`, width: 1 },
+    { price: day.priorVAL, color: '#ef4444', dash: '4 3', label: `PD VAL ${day.fmtP(priorVAL)}`, width: 1 },
+    { price: day.aUpLevel && day.aUpFired ? day.aUpLevel : null,   color: '#22c55e', dash: '', label: `A Up ${day.fmtP(aUpLevel)}`,   width: 1.5 },
+    { price: day.aDownLevel && day.aDownFired ? day.aDownLevel : null, color: '#ef4444', dash: '', label: `A Dn ${day.fmtP(aDownLevel)}`, width: 1.5 },
   ].filter(l => l.price && parseFloat(l.price) > yMin && parseFloat(l.price) < yMax);
 
   // Top setups that paid
@@ -11619,7 +12581,7 @@ function AuctionDayChart({ day, fullSize = false }) {
             const price = yMax - (yMax - yMin) * pct;
             return <g key={pct}>
               <line x1={M.l + VP_W} x2={SVG_W - M.r} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-              <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{price.toFixed(0)}</text>
+              <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{fmtP(price)}</text>
             </g>;
           })}
 
@@ -11749,7 +12711,7 @@ function AuctionDayChart({ day, fullSize = false }) {
                   </div>
                   <div style={{ fontWeight: 600, color: '#e2e8f0', fontSize: 13 }}>{e.setup}</div>
                   <div style={{ color: '#cbd5e1', marginTop: 2, display: 'flex', gap: 8 }}>
-                    <span style={{ fontFamily: 'monospace' }}>{e.price?.toFixed(2)}</span>
+                    <span style={{ fontFamily: 'monospace' }}>{e.fmtP(price, 2)}</span>
                     <span>{e.time} ET</span>
                   </div>
                 </div>
@@ -12013,7 +12975,7 @@ function buildAuctionExplanations(ctx) {
   const { orHigh, orLow, priorVAH, priorVAL, priorPOC, nqPrice, aUpLevel, aDownLevel,
           avgOrRange, orRange, timeline = [], sessionHigh, sessionLow } = ctx || {};
 
-  const p  = v => v ? parseFloat(v).toFixed(2) : '—';
+  const p  = v => v ? fmtP(parseFloat(v), 2) : '—';
   const pts = (a, b) => (a && b) ? Math.abs(parseFloat(a) - parseFloat(b)).toFixed(0) + 'pts' : '';
 
   // Timeline helpers
@@ -12171,33 +13133,37 @@ function ThisSetupHistorically() {
 // Renders a narrative string (blocks separated by \n\n, with "LABEL:" headers) —
 // shared by the inline Phase 1 card and the Auction Read detail modal.
 function NarrativeBlocks({ narrative, title }) {
+  const [open, setOpen] = React.useState(false);
   if (!narrative) return null;
   return (
-    <div style={{ marginTop: 12, padding: '12px 16px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 8 }}>
-      {title && (
-        <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 10 }}>
-          {title}
+    <div style={{ marginTop: 6 }}>
+      <button onClick={() => setOpen(o => !o)}
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, color: '#64748b', padding: 0, fontFamily: 'Arial, sans-serif', display: 'flex', alignItems: 'center', gap: 4 }}>
+        {open ? '▲' : '▼'} {title || 'Guidance'}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, padding: '10px 14px', background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6 }}>
+          {narrative.split('\n\n').map((block, i) => {
+            const isHeader = block.match(/^[A-Z][A-Z\s:]+:/);
+            return (
+              <div key={i} style={{ marginBottom: 8 }}>
+                {isHeader ? (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 2 }}>
+                      {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+                      {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{block}</div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
-      {narrative.split('\n\n').map((block, i) => {
-        const isHeader = block.match(/^[A-Z][A-Z\s:]+:/);
-        return (
-          <div key={i} style={{ marginBottom: 10 }}>
-            {isHeader ? (
-              <>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
-                  {block.match(/^([A-Z][A-Z\s:–\-—]+:)/)?.[1]}
-                </div>
-                <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>
-                  {block.replace(/^[A-Z][A-Z\s:–\-—]+:\s*/, '')}
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.65, whiteSpace: 'pre-line' }}>{block}</div>
-            )}
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -12224,10 +13190,9 @@ function AuctionReadDetailModal({ p1Direction, p1Bias, ltSentence, phase1Narrati
                 <span style={{ color: '#cbd5e1', fontWeight: 700 }}>Structural context: </span>{ltSentence}
               </div>
             )}
+            <NarrativeBlocks narrative={phase1Narrative} title="Morning Guidance" />
           </div>
         )}
-
-        <NarrativeBlocks narrative={phase1Narrative} title="Morning Guidance" />
 
         {sessionBias && (
           <div style={{ padding: '10px 14px', background: `${biasColor[sessionBias.level]}10`, border: `2px solid ${biasColor[sessionBias.level]}`, borderRadius: 8, marginTop: 16, marginBottom: 6 }}>
@@ -12235,10 +13200,9 @@ function AuctionReadDetailModal({ p1Direction, p1Bias, ltSentence, phase1Narrati
               SESSION BIAS: {sessionBias.level}
             </div>
             <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>{sessionBias.text}</div>
+            <NarrativeBlocks narrative={phase2Narrative} title="Opening Guidance" />
           </div>
         )}
-
-        <NarrativeBlocks narrative={phase2Narrative} title="Opening Guidance" />
       </div>
     </div>
   );
@@ -12793,10 +13757,9 @@ function AuctionReadCard({ nl, todayData }) {
                   <span style={{ color: '#cbd5e1', fontWeight: 700 }}>Structural context: </span>{ltSentence}
                 </div>
               )}
+              <NarrativeBlocks narrative={generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx)} title="Morning Guidance" />
             </div>
           )}
-          {/* ── Phase 1 Narrative ── */}
-          <NarrativeBlocks narrative={generatePhase1Narrative(read.overnight_inventory, read.open_vs_prior_value, nlTrend, pivotBias, read.prior_day_profile, explCtx, ltCtx)} title="Morning Guidance" />
         </div>
       )}
 
@@ -12874,9 +13837,9 @@ function AuctionReadCard({ nl, todayData }) {
               <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.6, marginBottom: (sessionBias.level === 'GREEN' || sessionBias.level === 'AMBER') ? 8 : 4 }}>{sessionBias.text}</div>
               {sessionBias.level === 'RED' && liveCtx && (() => {
                 const isLongBias = p1Direction === 'LONG';
-                const orH = liveCtx.orHigh?.toFixed(0);
-                const orL = liveCtx.orLow?.toFixed(0);
-                const g = liveCtx.gLine ? liveCtx.gLine.toFixed(0) : null;
+                const orH = liveCtx.fmtP(orHigh);
+                const orL = liveCtx.fmtP(orLow);
+                const g = liveCtx.gLine ? liveCtx.fmtP(gLine) : null;
                 const days = liveCtx.gLineDaysHeld;
                 const cur = liveCtx.currentPrice;
                 const aboveGLine = cur != null && liveCtx.gLine != null && cur > liveCtx.gLine;
@@ -12927,7 +13890,7 @@ function AuctionReadCard({ nl, todayData }) {
                           <span style={{ color: '#94a3b8' }}> — {aboveGLine ? 'hold above = weekly longs intact · break below = weekly bias shifts to sellers' : 'below G-Line = weekly bias with sellers · reclaim = bulls fighting back'}</span>
                           {gPts && cur && (
                             <span style={{ color: '#94a3b8', marginLeft: 8 }}>
-                              Current: <span style={{ fontFamily: 'monospace' }}>{cur.toFixed(0)}</span> is {gPts}pts {aboveGLine ? 'above' : 'below'} G-Line
+                              Current: <span style={{ fontFamily: 'monospace' }}>{fmtP(cur)}</span> is {gPts}pts {aboveGLine ? 'above' : 'below'} G-Line
                             </span>
                           )}
                         </div>
@@ -12979,8 +13942,8 @@ function AuctionReadCard({ nl, todayData }) {
                 const t1Label = isCounterTrend && ct
                   ? `${ct.nearestTarget?.label || 'structural support'}`
                   : 'OR measured move';
-                const stopStrong = isLong ? orL.toFixed(2) : orH.toFixed(2);
-                const stopAggr   = ((orH + orL) / 2).toFixed(2);
+                const stopStrong = isLong ? fmtP(orL, 2) : fmtP(orH, 2);
+                const stopAggr   = fmtP((orH + orL) / 2, 2);
                 return (
                   <div style={{ padding: '8px 10px', background: isCounterTrend ? 'rgba(251,191,36,0.06)' : 'rgba(0,0,0,0.2)', borderRadius: 6, fontSize: 13, color: '#94a3b8', border: isCounterTrend ? '1px solid rgba(251,191,36,0.3)' : 'none' }}>
                     {isCounterTrend && (
@@ -13926,9 +14889,9 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
             {tpo?.available && (
               <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: 7, minWidth: 130 }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 3 }}>5-day composite POC <InfoTooltip text="Point of Control from the last 5 sessions — the price where the market has spent the most TIME. This is the strongest magnet price.\n\nAbove composite VA: buyers accepting prices above multi-session fair value — initiative territory.\nBelow composite VA: sellers pushing below multi-session fair value.\nInside composite VA: market rotating within accepted range — responsive strategies.\n\nPrice consistently returns to the composite POC. It is the center of gravity for the multi-day auction." /></div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#e879f9', fontFamily: 'monospace' }}>{tpo.poc?.toFixed(0)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#e879f9', fontFamily: 'monospace' }}>{tpo.fmtP(poc)}</div>
                 <div style={{ fontSize: 13, color: tpo.priceVsVA === 'ABOVE' ? '#22c55e' : tpo.priceVsVA === 'BELOW' ? '#ef4444' : '#fbbf24' }}>
-                  price {tpo.priceVsVA?.toLowerCase()} VA ({tpo.val?.toFixed(0)}–{tpo.vah?.toFixed(0)})
+                  price {tpo.priceVsVA?.toLowerCase()} VA ({tpo.fmtP(val)}–{tpo.fmtP(vah)})
                 </div>
               </div>
             )}
@@ -14033,10 +14996,10 @@ function CompositeProfileCard() {
       {/* Key levels summary */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         {[
-          ['Composite POC', poc?.toFixed(0), '#e879f9', 'Most time spent — strongest magnet'],
-          ['Composite VAH', vah?.toFixed(0), '#22c55e', '70% value area high'],
-          ['Composite VAL', val?.toFixed(0), '#ef4444', '70% value area low'],
-          ['Current', currentPrice?.toFixed(0), priceColor, priceVsVA + ' value area'],
+          ['Composite POC', fmtP(poc), '#e879f9', 'Most time spent — strongest magnet'],
+          ['Composite VAH', fmtP(vah), '#22c55e', '70% value area high'],
+          ['Composite VAL', fmtP(val), '#ef4444', '70% value area low'],
+          ['Current', fmtP(currentPrice), priceColor, priceVsVA + ' value area'],
         ].map(([label, val2, color, sub]) => (
           <div key={label} style={{ padding: '6px 12px', background: 'rgba(0,0,0,0.2)', border: `1px solid ${color}30`, borderRadius: 6, minWidth: 100 }}>
             <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 2 }}>{label}</div>
@@ -14063,7 +15026,7 @@ function CompositeProfileCard() {
             return (
               <div key={row.px} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 10, marginBottom: 1 }}>
                 <div style={{ width: 52, textAlign: 'right', fontSize: 11, color: isPoc ? '#e879f9' : isVah ? '#22c55e' : isVal ? '#ef4444' : isCur ? priceColor : '#374151', fontWeight: (isPoc || isVah || isVal || isCur) ? 700 : 400, flexShrink: 0, fontFamily: 'monospace' }}>
-                  {(isPoc || isVah || isVal || isCur) ? row.px.toFixed(0) : ''}
+                  {(isPoc || isVah || isVal || isCur) ? fmtP(row.px) : ''}
                 </div>
                 <div style={{ width: barW, height: 8, background: barColor, borderRadius: 1, flexShrink: 0, minWidth: 1 }} />
                 {isCur && <div style={{ width: 2, height: 12, background: priceColor, flexShrink: 0, marginLeft: -2 }} />}
@@ -15048,7 +16011,9 @@ function PlaybookWeeklyPatternsSection() {
     { key: 'C_REVERSAL_LONG', label: 'C Reversal Long ↑', desc: 'C Up fires in opposite direction of a failed A Down, confirming thesis reversed.', stop: 'Session low.', target: 'Opposite extreme of yesterday\'s range.' },
     { key: 'C_REVERSAL_SHORT', label: 'C Reversal Short ↓', desc: 'C Down fires in opposite direction of a failed A Up, confirming thesis reversed.', stop: 'Session high.', target: 'Opposite extreme of yesterday\'s range.' },
     { key: 'C_STANDALONE_UP', label: 'C Standalone Up ↑', desc: 'C Up fires but no A signal ever fired previously during the session.', stop: 'OR Low.', target: 'Prior day VAH or OR measured move.' },
-    { key: 'C_STANDALONE_DOWN', label: 'C Standalone Down ↓', desc: 'C Down fires but no A signal ever fired previously during the session.', stop: 'OR High.', target: 'Prior day VAL or OR measured move.' }
+    { key: 'C_STANDALONE_DOWN', label: 'C Standalone Down ↓', desc: 'C Down fires but no A signal ever fired previously during the session.', stop: 'OR High.', target: 'Prior day VAL or OR measured move.' },
+    { key: 'GAP_FILL_LONG', label: 'Gap Fill Long ↑', desc: 'Price enters an unfilled down-gap zone from a previous session, triggering a long to fill up to the gap ceiling.', stop: '15 points below the gap floor entry limit.', target: 'Gap ceiling (prior session low).' },
+    { key: 'GAP_FILL_SHORT', label: 'Gap Fill Short ↓', desc: 'Price enters an unfilled up-gap zone from a previous session, triggering a short to fill down to the gap floor.', stop: '15 points above the gap ceiling entry limit.', target: 'Gap floor (prior session high).' }
   ];
 
   const PRICE_ACTION_EDGES = [
@@ -16025,9 +16990,9 @@ function LongTermStructurePage({ setCurrentView }) {
                 {isHov && (
                   <div style={{ position: 'absolute', left: '50%', top: -70, transform: 'translateX(-50%)', background: '#1a2535', border: '1px solid rgba(100,116,139,0.5)', borderRadius: 6, padding: '6px 10px', fontSize: 13, color: '#94a3b8', zIndex: 10, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
                     <div style={{ color: '#e2e8f0', fontWeight: 700, marginBottom: 3 }}>{d.date}</div>
-                    <div style={{ color: '#22c55e' }}>VAH {d.vah?.toFixed(0)}</div>
-                    <div style={{ color: '#e879f9' }}>POC {d.poc?.toFixed(0)}</div>
-                    <div style={{ color: '#ef4444' }}>VAL {d.val?.toFixed(0)}</div>
+                    <div style={{ color: '#22c55e' }}>VAH {d.fmtP(vah)}</div>
+                    <div style={{ color: '#e879f9' }}>POC {d.fmtP(poc)}</div>
+                    <div style={{ color: '#ef4444' }}>VAL {d.fmtP(val)}</div>
                     <div style={{ color: '#cbd5e1', marginTop: 2, fontSize: 13 }}>Range {(d.vah - d.val)?.toFixed(0)} pts</div>
                   </div>
                 )}
@@ -16252,8 +17217,8 @@ function LongTermStructurePage({ setCurrentView }) {
                 {[
                   ['Mon IB High', weeklyStructure.monIBHigh?.toFixed(0)],
                   ['Mon IB Low', weeklyStructure.monIBLow?.toFixed(0)],
-                  ['Week High', weeklyStructure.weekHigh?.toFixed(0)],
-                  ['Week Low', weeklyStructure.weekLow?.toFixed(0)],
+                  ['Week High', weeklyStructure.fmtP(weekHigh)],
+                  ['Week Low', weeklyStructure.fmtP(weekLow)],
                   ['IB Range', weeklyStructure.monIBRange?.toFixed(0) + ' pts'],
                   ['Week Range', weeklyStructure.weekRange?.toFixed(0) + ' pts'],
                   ['NW ±50%', weeklyStructure.monIBHigh && weeklyStructure.monIBRange ? (weeklyStructure.monIBHigh + weeklyStructure.monIBRange * 0.5).toFixed(0) + ' / ' + (weeklyStructure.monIBLow - weeklyStructure.monIBRange * 0.5).toFixed(0) : '—'],
@@ -16364,7 +17329,7 @@ function ACDAutoPanel({ onComplete }) {
       const d = await r.json();
       if (d.error) { setTodayStatus(`error: ${d.error}`); return; }
       const sig = d.aUpFired ? (d.cUpConfirmed ? 'A Up + C (+4)' : 'A Up (+1)') : d.aDownFired ? (d.cDownConfirmed ? 'A Down + C (-4)' : 'A Down (-1)') : 'No signal (0)';
-      setTodayStatus(`done: OR ${parseFloat(d.orHigh).toFixed(0)}–${parseFloat(d.orLow).toFixed(0)}, ${sig}`);
+      setTodayStatus(`done: OR ${fmtP(parseFloat(d.orHigh))}–${fmtP(parseFloat(d.orLow))}, ${sig}`);
       if (onComplete) onComplete();
     } catch(e) { setTodayStatus(`error: ${e.message}`); }
   };
@@ -16375,7 +17340,7 @@ function ACDAutoPanel({ onComplete }) {
       const r = await fetch(`${API_URL}/acd/pivot/autocompute`, { method: 'POST' });
       const d = await r.json();
       if (d.error) { setPivotStatus(`error: ${d.error}`); return; }
-      setPivotStatus(`done: pivot ${parseFloat(d.pivot_level).toFixed(2)}, R1 ${parseFloat(d.pivot_r1).toFixed(2)}, S1 ${parseFloat(d.pivot_s1).toFixed(2)}`);
+      setPivotStatus(`done: pivot ${fmtP(parseFloat(d.pivot_level), 2)}, R1 ${fmtP(parseFloat(d.pivot_r1), 2)}, S1 ${fmtP(parseFloat(d.pivot_s1), 2)}`);
       if (onComplete) onComplete();
     } catch(e) { setPivotStatus(`error: ${e.message}`); }
   };
@@ -17086,118 +18051,7 @@ function SessionStatusBar({ conf, onStateChange }) {
   };
   const sc = stateColors[state] ?? stateColors.NO_SETUP;
 
-  // Session gate: block trading when confluence < 5 OR Phase 1 not logged
   const confluenceScore = conf?.score ?? null;
-  const phase1Logged = conf?.phase1Logged ?? true; // default open when data unavailable
-  const gateActive = isOpen && (confluenceScore !== null && confluenceScore < 5) || (isOpen && !phase1Logged);
-  const _gateKey = `gate_override_${new Date().toLocaleDateString('en-CA')}`;
-  const [gateOverridden, setGateOverridden] = React.useState(() => {
-    try { return !!localStorage.getItem(_gateKey); } catch { return false; }
-  });
-  const [showOverrideInput, setShowOverrideInput] = React.useState(false);
-  const [overrideText, setOverrideText] = React.useState('');
-  const [overrideLogging, setOverrideLogging] = React.useState(false);
-
-  const persistGateOverride = (val) => {
-    setGateOverridden(val);
-    try { if (val) localStorage.setItem(_gateKey, '1'); else localStorage.removeItem(_gateKey); } catch {}
-  };
-
-  const handleOverride = async () => {
-    if (overrideText.trim().toUpperCase() !== 'OVERRIDE') return;
-    setOverrideLogging(true);
-    try {
-      await fetch(`${API_URL}/rule-overrides`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rule_violated: !phase1Logged ? 'PHASE1_NOT_LOGGED' : 'STAND_ASIDE_CONFLUENCE',
-          confluence_score: confluenceScore,
-        }),
-      });
-    } catch (_) {}
-    setOverrideLogging(false);
-    persistGateOverride(true);
-    setShowOverrideInput(false);
-    setOverrideText('');
-  };
-
-  if (gateActive && !gateOverridden) {
-    const reason = !phase1Logged
-      ? 'Phase 1 pre-market assessment not logged'
-      : `Confluence ${confluenceScore}/12`;
-    const winRateNote = confluenceScore !== null && confluenceScore < 5
-      ? 'Pattern memory: 25–35% win rate at this confluence level.'
-      : 'No pre-market context logged — execution without preparation.';
-    return (
-      <div style={{
-        padding: '20px 24px',
-        background: 'rgba(239,68,68,0.06)',
-        border: '2px solid #ef4444',
-        borderRadius: 12,
-        marginBottom: 12,
-        fontFamily: 'Arial, sans-serif',
-      }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
-          STAND ASIDE — {reason}
-        </div>
-        <div style={{ fontSize: 14, color: '#fca5a5', lineHeight: 1.6, marginBottom: 16 }}>
-          {winRateNote} Your data says don't trade today.
-        </div>
-        {!showOverrideInput ? (
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              style={{ padding: '8px 16px', background: 'rgba(239,68,68,0.15)', border: '1px solid #ef4444', borderRadius: 6, color: '#fca5a5', fontSize: 13, cursor: 'pointer' }}
-              onClick={() => setShowOverrideInput(true)}
-            >
-              I understand the risk — trade anyway
-            </button>
-            <button
-              style={{ padding: '8px 16px', background: 'rgba(34,197,94,0.12)', border: '1px solid #22c55e', borderRadius: 6, color: '#22c55e', fontSize: 13, cursor: 'pointer' }}
-              onClick={() => persistGateOverride(true)}
-            >
-              Stand aside — close this
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 13, color: '#94a3b8' }}>Type <strong style={{ color: '#ef4444' }}>OVERRIDE</strong> to confirm:</span>
-            <input
-              type="text"
-              value={overrideText}
-              onChange={e => setOverrideText(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleOverride()}
-              placeholder="OVERRIDE"
-              style={{
-                background: '#0f172a', border: '1px solid #ef4444', borderRadius: 4,
-                color: '#f8fafc', padding: '6px 10px', fontSize: 13, width: 120,
-                textTransform: 'uppercase', letterSpacing: '0.1em',
-              }}
-              autoFocus
-            />
-            <button
-              disabled={overrideText.trim().toUpperCase() !== 'OVERRIDE' || overrideLogging}
-              onClick={handleOverride}
-              style={{
-                padding: '6px 14px', borderRadius: 4, fontSize: 13, cursor: 'pointer',
-                background: overrideText.trim().toUpperCase() === 'OVERRIDE' ? 'rgba(239,68,68,0.25)' : 'rgba(71,85,105,0.3)',
-                border: `1px solid ${overrideText.trim().toUpperCase() === 'OVERRIDE' ? '#ef4444' : '#475569'}`,
-                color: overrideText.trim().toUpperCase() === 'OVERRIDE' ? '#fca5a5' : '#64748b',
-              }}
-            >
-              {overrideLogging ? 'Logging…' : 'Confirm override'}
-            </button>
-            <button
-              onClick={() => { setShowOverrideInput(false); setOverrideText(''); }}
-              style={{ padding: '6px 12px', background: 'transparent', border: '1px solid #334155', borderRadius: 4, color: '#cbd5e1', fontSize: 13, cursor: 'pointer' }}
-            >
-              Cancel
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   const dayType = live?.dayType || null;
 
@@ -17256,11 +18110,11 @@ function SessionStatusBar({ conf, onStateChange }) {
                 <div style={{ display: 'flex', gap: 16 }}>
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 13, color: '#cbd5e1' }}>A Up</div>
-                    <div style={{ fontSize: 17, fontWeight: 800, color: '#22c55e', fontFamily: 'monospace' }}>{live.aUpLevel?.toFixed(0)}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: '#22c55e', fontFamily: 'monospace' }}>{live.fmtP(aUpLevel)}</div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontSize: 13, color: '#cbd5e1' }}>A Down</div>
-                    <div style={{ fontSize: 17, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{live.aDownLevel?.toFixed(0)}</div>
+                    <div style={{ fontSize: 17, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{live.fmtP(aDownLevel)}</div>
                   </div>
                 </div>
               )}
@@ -17357,7 +18211,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                     {confluenceScore}/12
                   </div>
                 )}
-                {currentPx && <div style={{ fontSize: 13, color: '#cbd5e1', fontFamily: 'monospace' }}>Now: {currentPx?.toFixed(0)}</div>}
+                {currentPx && <div style={{ fontSize: 13, color: '#cbd5e1', fontFamily: 'monospace' }}>Now: {fmtP(currentPx)}</div>}
               </div>
             </div>
             {/* Reference TP levels — subtle guidance only, not a signal */}
@@ -17397,18 +18251,18 @@ function SessionStatusBar({ conf, onStateChange }) {
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 13, color: '#94a3b8' }}>{trtLong ? 'Entry zone' : 'A Up (rejected)'}</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: trtLong ? '#22c55e' : '#f97316', fontFamily: 'monospace' }}>
-                  {trtLong ? live.orLow?.toFixed(0) : live.aUpLevel?.toFixed(0)}
+                  {trtLong ? live.fmtP(orLow) : live.fmtP(aUpLevel)}
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 13, color: '#94a3b8' }}>{trtLong ? 'A Down (rejected)' : 'Entry zone'}</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: trtLong ? '#f97316' : '#ef4444', fontFamily: 'monospace' }}>
-                  {trtLong ? live.aDownLevel?.toFixed(0) : live.orHigh?.toFixed(0)}
+                  {trtLong ? live.fmtP(aDownLevel) : live.fmtP(orHigh)}
                 </div>
               </div>
             </div>
           )}
-          {currentPx && <div style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>Now: {currentPx?.toFixed(0)}</div>}
+          {currentPx && <div style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>Now: {fmtP(currentPx)}</div>}
         </div>
       )}
 
@@ -17556,7 +18410,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                 </>
               )}
 
-              {currentPx && <div style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>Now: {currentPx?.toFixed(0)}</div>}
+              {currentPx && <div style={{ marginLeft: 'auto', fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>Now: {fmtP(currentPx)}</div>}
             </div>
             {/* Conditional edge by day type — real replay win rates, not blended */}
             {setupStats?.byDayType && (() => {
@@ -17742,40 +18596,8 @@ function SessionStatusBar({ conf, onStateChange }) {
         );
       })()}
 
-      {/* Proximity confidence banner — shown when any key level is within 25 pts */}
-      {proximity?.nearLevels?.length > 0 && (
-        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {proximity.nearLevels.slice(0, 4).map(nl => {
-            const rr = nl.nl30Filtered?.rate ?? nl.respectRate;
-            const conf = rr >= 55 ? { color: '#22c55e', label: 'strong' } : rr >= 45 ? { color: '#f59e0b', label: 'moderate' } : { color: '#cbd5e1', label: 'weak' };
-            const condTouches = nl.nl30Filtered?.touches;
-            const isUnfiltered = !nl.nl30Filtered;
-            const cvnLabelMap = { '5d VAH': 'composite_vah', '5d POC': 'composite_poc', '5d VAL': 'composite_val', 'PD VAH': 'prior_day_vah', 'PD POC': 'prior_day_poc', 'PD VAL': 'prior_day_val' };
-            const cvnEntry = live?.conviction?.[cvnLabelMap[nl.label]];
-            const cvnStars = cvnEntry?.stars != null ? ('★'.repeat(cvnEntry.stars) || '—') : null;
-            const cvnColor = cvnEntry?.stars >= 3 ? '#22c55e' : cvnEntry?.stars >= 2 ? '#f59e0b' : cvnEntry?.stars >= 1 ? '#f97316' : '#475569';
-            return (
-              <div key={`${nl.key}-${nl.side}`}
-                style={{ padding: '6px 10px', background: 'rgba(15,23,42,0.8)', border: `1px solid ${conf.color}40`, borderLeft: `3px solid ${conf.color}`, borderRadius: 6, fontSize: 13, fontFamily: 'monospace' }}>
-                <div style={{ color: nl.side === 'resistance' ? '#ef4444' : '#22c55e', fontWeight: 700 }}>
-                  Approaching {nl.label} {nl.price?.toFixed(0)} — {nl.dist}pts away
-                  {cvnEntry && <span style={{ color: cvnColor, marginLeft: 8, fontSize: 13 }}>{cvnStars} {(cvnEntry.rate * 100).toFixed(0)}% reversal rate</span>}
-                </div>
-                <div style={{ color: conf.color, marginTop: 2 }}>
-                  Respect rate ({proximity.nl30State}): <strong>{rr ?? '—'}%</strong>
-                  {isUnfiltered && <span style={{ color: '#94a3b8', marginLeft: 4 }}>(unfiltered)</span>}
-                  {condTouches < 20 && !isUnfiltered && <span style={{ color: '#fbbf24', marginLeft: 4 }}>({condTouches} touches — limited)</span>}
-                </div>
-                {nl.openCallFiltered && (
-                  <div style={{ color: '#a0aec0', marginTop: 1 }}>
-                    {proximity.openingCall?.replace(/_/g, ' ')}: {nl.openCallFiltered.rate}% ({nl.openCallFiltered.touches} touches)
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+
+
 
       {state === 'SIGNAL_ACTIVE' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -17929,7 +18751,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                   <div style={{ fontSize: 13, color: conf.color }}>{conf.structural?.label} · {conf.session?.label}</div>
                 </div>
               )}
-              <div style={{ fontSize: 13, color: '#cbd5e1', fontFamily: 'monospace' }}>Now: {currentPx?.toFixed(0)}</div>
+              <div style={{ fontSize: 13, color: '#cbd5e1', fontFamily: 'monospace' }}>Now: {fmtP(currentPx)}</div>
             </div>
           </div>
           {/* Statistical move estimate — independent analytical model, NOT the trade's canonical T1/Stop */}
@@ -18018,11 +18840,11 @@ function SessionStatusBar({ conf, onStateChange }) {
               </div>}
               {sessHigh != null && <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1' }}>Session High</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e', fontFamily: 'monospace' }}>{sessHigh.toFixed(0)}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e', fontFamily: 'monospace' }}>{fmtP(sessHigh)}</div>
               </div>}
               {sessLow != null && <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1' }}>Session Low</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{sessLow.toFixed(0)}</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{fmtP(sessLow)}</div>
               </div>}
             </div>
           </div>
@@ -18068,30 +18890,7 @@ function SessionStatusBar({ conf, onStateChange }) {
       )}
 
       {state === 'CLOSED' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: 13, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 2 }}>Session closed</div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: '#cbd5e1' }}>Review EOD read below ↓</div>
-          </div>
-          {live?.sessionHigh && live?.sessionLow && (
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>Session High</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#22c55e', fontFamily: 'monospace' }}>{live.sessionHigh?.toFixed(0)}</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>Session Low</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#ef4444', fontFamily: 'monospace' }}>{live.sessionLow?.toFixed(0)}</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>Range</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace' }}>
-                  {live.sessionHigh && live.sessionLow ? Math.round(live.sessionHigh - live.sessionLow) : '—'}pts
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <div style={{ fontSize: 13, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Session closed</div>
       )}
     </div>
   );
@@ -18322,7 +19121,7 @@ function PhaseChangeBacktestPanel() {
   };
 
   const pct = (n) => n != null ? `${(n * 100).toFixed(0)}%` : '—';
-  const pts = (n) => n != null ? `${parseFloat(n).toFixed(0)} pts` : '—';
+  const pts = (n) => n != null ? `${fmtP(parseFloat(n))} pts` : '—';
   const sep = { borderBottom: '1px solid #1e293b', paddingBottom: 14, marginBottom: 14 };
   const thStyle = { fontSize: 13, color: '#94a3b8', fontWeight: 600, textAlign: 'right', paddingBottom: 4 };
   const tdStyle = { fontSize: 13, color: 'var(--text-primary)', fontFamily: 'monospace', textAlign: 'right', padding: '3px 0' };
@@ -19109,7 +19908,9 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
   }, [c, isRTH]);
   const dtClass  = c?.dayType?.classification || 'FORMING';
   const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
-  const bias     = c?.read?.bias || 'NEUTRAL';
+  const rawBias  = c?.read?.bias || 'NEUTRAL';
+  const conviction = c?.read?.conviction ?? 0;
+  const bias     = (conviction < 5.0) ? 'NO LEAN' : rawBias;
   const meter    = c?.read?.meterPosition || 0;
   const biasClr  = dirClr(bias);
   const caseFor  = c?.caseFor  || [];
@@ -19340,7 +20141,12 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
         <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase' }}>{(c?.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
       </div>
     );
-    if (!tSetup) return null;
+    if (!tSetup) return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#64748b', flexShrink: 0 }} />
+        <span style={{ fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>Watching for session setups...</span>
+      </div>
+    );
     return (
       <>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
@@ -19580,36 +20386,6 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
       <SessionStatusBar conf={conf} onStateChange={onStateChange} />
       <SetupEventModal event={selectedSetupEvent} onClose={() => setSelectedSetupEvent(null)} />
 
-      {/* Outer layout — setups panel (left) + fixed card grid (right) */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 12, alignItems: 'start' }}>
-      <div style={{ position: 'sticky', top: 12 }}>
-        <SetupsPanel dayType={c?.dayType} bias={bias} autoASignal={autoASignal} onOpenSetup={setSelectedSetupEvent} />
-      </div>
-
-      <div>
-      {/* Fixed 2-column card grid — positions never change */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-
-        {/* Row 1 — day + case */}
-        <div onClick={() => setActiveModal('day')}     style={CS('day',     isRTH ? dts.border : undefined)}><CHdr id="day"     title="The Day"     />{dayCardBody}</div>
-        <div onClick={() => setActiveModal('case')}    style={CS('case')}                                   ><CHdr id="case"    title="The Case"    sub={biasSince ? `lean since ${biasSince}` : undefined} />{caseCardBody}</div>
-
-        {/* Row 2 — auction + trigger */}
-        <div style={CS('auction')}                                                                          ><CHdr id="auction"   title="Auction Read"    />{auctionCardBody}</div>
-        <div onClick={() => setActiveModal('trigger')} style={CS('trigger', tBorder)}                       ><CHdr id="trigger" title="The Trigger" sub={firedAtDisplay ? `fired ${firedAtDisplay}` : isForming ? `forming · ${structScore}/7` : undefined} />{triggerCardBody}</div>
-
-        {/* Row 3 — levels + structure */}
-        <div onClick={() => setActiveModal('levels')}    style={CS('levels')}                               ><CHdr id="levels"    title="Levels"          />{levelsCardBody}</div>
-        <div onClick={() => setActiveModal('structure')} style={CS('structure')}                            ><CHdr id="structure" title="Structure"        />{structureCardBody}</div>
-
-        {/* Row 4 — trades */}
-        <div onClick={() => setActiveModal('trades')}    style={CS('trades')}                               ><CHdr id="trades"    title="Trade Timeline"  /><span style={{ fontSize: 12, color: '#cbd5e1' }}>Today's fills &amp; events</span></div>
-
-        {/* Row 5 — auto-compute */}
-        <div onClick={() => setActiveModal('autocompute')}  style={CS('autocompute')}                       ><CHdr id="autocompute"  title="Auto-Compute"    /><span style={{ fontSize: 12, color: '#cbd5e1' }}>ACD parameters &amp; signals</span></div>
-
-      </div>
-
       {/* Modal overlay */}
       {activeModal && (
         <div onClick={closeModal} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.78)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -19622,8 +20398,6 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
           </div>
         </div>
       )}
-      </div>
-      </div>
     </div>
   );
 }
@@ -19636,6 +20410,7 @@ const TREND_WITH_SETUPS = new Set([
   'OPEN_DRIVE_LONG', 'OPEN_DRIVE_SHORT',
   'BRACKET_BREAKOUT_LONG', 'BRACKET_BREAKOUT_SHORT',
   'OPEN_TEST_DRIVE_LONG', 'OPEN_TEST_DRIVE_SHORT',
+  'GAP_FILL_LONG', 'GAP_FILL_SHORT',
 ]);
 const FADE_EDGE_SETUPS = new Set([
   'TRT_LONG', 'TRT_SHORT', 'TRT_LONG_V2', 'TRT_SHORT_V2',
@@ -19729,11 +20504,29 @@ function SetupsPanel({ dayType, bias, autoASignal, onOpenSetup }) {
 }
 
 function SetupCard({ s, dtClass, bias, autoASignal, hitRatesData, onOpenSetup }) {
+  const { caseData: c } = React.useContext(CaseContext);
+  const trigger = c?.trigger;
+
   const dir = setupDirection(s.setup_type);
   const clr = dirClr(dir);
   const label = SETUP_DISPLAY_LABELS[s.setup_type] || s.setup_type.replace(/_/g, ' ');
-  const isLive = s.status === 'ACTIVE';
-  const resInfo = SETUP_RESOLUTION_TEXT[s.resolution] || null;
+
+  const orLow = c?._ctx?.orLow;
+  const orHigh = c?._ctx?.orHigh;
+  const currentPrice = c?.currentPrice;
+  const isThisSetupLong = dir === 'LONG';
+
+  const isTriggerPremiseBroken = trigger?.state === 'RESOLVED' && trigger?.resolvedReason === 'PREMISE_BROKEN';
+
+  const setupPremiseBroken = s.status === 'ACTIVE' && (
+    (isTriggerPremiseBroken && trigger?.setup?.type === s.setup_type) ||
+    (isThisSetupLong && orLow != null && currentPrice != null && currentPrice < orLow - 5) ||
+    (!isThisSetupLong && orHigh != null && currentPrice != null && currentPrice > orHigh + 5)
+  );
+
+  const isLive = s.status === 'ACTIVE' && !setupPremiseBroken;
+  const resolutionVal = setupPremiseBroken ? 'PREMISE_BROKEN' : s.resolution;
+  const resInfo = SETUP_RESOLUTION_TEXT[resolutionVal] || null;
 
   const conviction = getSetupConviction(s.setup_type, hitRatesData, bias);
 
@@ -19769,12 +20562,23 @@ function SetupCard({ s, dtClass, bias, autoASignal, hitRatesData, onOpenSetup })
     else flags.push({ ok: false, text: `counter to ${bias} lean` });
   }
   if (dir && autoASignal) {
-    const aDir = autoASignal === 'A_UP' ? 'LONG' : 'SHORT';
-    if (dir === aDir) flags.push({ ok: true, text: `aligned with ${autoASignal}` });
-    else flags.push({ ok: false, text: `counter to ${autoASignal}` });
+    const aSetupFlipped =
+      (autoASignal === 'A_UP' && (
+        (isTriggerPremiseBroken && trigger?.setup?.type?.includes('A_UP')) ||
+        (orLow != null && currentPrice != null && currentPrice < orLow - 5)
+      )) ||
+      (autoASignal === 'A_DOWN' && (
+        (isTriggerPremiseBroken && trigger?.setup?.type?.includes('A_DOWN')) ||
+        (orHigh != null && currentPrice != null && currentPrice > orHigh + 5)
+      ));
+    if (!aSetupFlipped) {
+      const aDir = autoASignal === 'A_UP' ? 'LONG' : 'SHORT';
+      if (dir === aDir) flags.push({ ok: true, text: `aligned with ${autoASignal}` });
+      else flags.push({ ok: false, text: `counter to ${autoASignal}` });
+    }
   }
 
-  const fmtPx = (v) => v != null ? parseFloat(v).toFixed(2) : '—';
+  const fmtPx = (v) => v != null ? fmtP(parseFloat(v), 2) : '—';
 
   return (
     <div
@@ -19886,7 +20690,9 @@ function CaseView({ setCurrentView, nl, todayData }) {
   const { dayType, read, caseFor = [], caseAgainst = [], levels = [], trigger, compression, evidenceLog = [], juice, whatFlipsIt } = c;
   const dtClass  = dayType?.classification || 'FORMING';
   const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
-  const bias     = read?.bias || 'NEUTRAL';
+  const rawBias  = read?.bias || 'NEUTRAL';
+  const conviction = read?.conviction ?? 0;
+  const bias     = (conviction < 5.0) ? 'NO LEAN' : rawBias;
   const meter    = read?.meterPosition || 0;
   const biasClr  = dirClr(bias);
 
@@ -19992,7 +20798,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
         {/* Bias + conviction */}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6 }}>
           <span style={{ fontSize: 22, fontWeight: 900, color: biasClr, textTransform: 'uppercase', letterSpacing: '0.06em', lineHeight: 1 }}>
-            {bias}
+            {bias === 'NO LEAN' ? 'NO LEAN — AWAIT COIL BREAK' : bias}
           </span>
           <span style={{ fontSize: 15, color: biasClr, fontFamily: 'monospace', fontWeight: 700 }}>
             {(read?.conviction ?? 0).toFixed(1)}<span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 400 }}>/10</span>
@@ -20265,7 +21071,10 @@ function CaseView({ setCurrentView, nl, todayData }) {
 }
 
 function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
-  const [tab, setTab] = React.useState('dashboard');
+  const [tab, setTab] = React.useState(() => {
+    return sessionStorage.getItem('acd-dash-tab') || 'morning';
+  });
+  React.useEffect(() => { sessionStorage.setItem('acd-dash-tab', tab); }, [tab]);
   const [todayData, setTodayData] = React.useState(null);
   const [nl, setNl] = React.useState(null);
   const [logs, setLogs] = React.useState([]);
@@ -20298,7 +21107,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       </div>
 
       <div style={{ display: 'flex', gap: 2, marginBottom: 0, borderBottom: '1px solid var(--border-color)' }}>
-        {[['dashboard', 'Dashboard'], ['history', 'History'], ['walkthrough', 'Pre-Market Walkthrough'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
+        {[['morning', 'Daily Prep'], ['dashboard', 'Dashboard'], ['edges', 'Antigravity Edges'], ['history', 'History'], ['walkthrough', 'Pre-Market Walkthrough'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{label}</button>
         ))}
       </div>
@@ -20306,23 +21115,47 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ order: -1 }}><LiveReadBanner /></div>
+            <div style={{ order: -2 }}>
+              <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
+                <ErrorBoundary name="Live Commentary"><TeleprinterFeed maxHeight={360} /></ErrorBoundary>
+              </CollapsibleSection>
+            </div>
+            <div style={{ order: -1 }}>
+              <CollapsibleSection title="Live Read" defaultOpen>
+                <LiveReadBanner />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start', padding: '0 4px' }}>
+                  <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
+                  <ErrorBoundary name="Gap Context" compact><GapContextCard /></ErrorBoundary>
+                </div>
+              </CollapsibleSection>
+            </div>
             <div style={{ order: 0 }}>
               <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
                 updateId="acd-dash-trade-plan" updateView="acd"
                 dataSignature={JSON.stringify({ todayData, nl, cardState })}>
-                <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} onStateChange={setCardState} />
+                <ErrorBoundary name="Dashboard Cards">
+                  <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} onStateChange={setCardState} />
+                </ErrorBoundary>
               </CollapsibleSection>
             </div>
-            <div style={{ order: 1 }}><AuctionReadSummary nl={nl} todayData={todayData} defaultOpen /></div>
-            <div style={{ order: 2 }}><MorningBriefPanel /></div>
-            <div style={{ order: 3 }}><BigPictureSnapshot setCurrentView={setCurrentView} /></div>
-            <div style={{ order: 5 }}>
-              <CollapsibleSection title="End-of-Day Outcome" defaultOpen>
-                <EodOutcomePrompt />
-              </CollapsibleSection>
-            </div>
+
+
           </div>
+        )}
+        {tab === 'morning' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <CollapsibleSection title="Auction Read" defaultOpen>
+              <ErrorBoundary name="Auction Read Summary" compact><AuctionReadSummary nl={nl} todayData={todayData} defaultOpen /></ErrorBoundary>
+            </CollapsibleSection>
+            <CollapsibleSection title="AI Morning Brief" defaultOpen>
+              <ErrorBoundary name="Morning Brief" compact><MorningBriefPanel /></ErrorBoundary>
+            </CollapsibleSection>
+          </div>
+        )}
+        {tab === 'edges' && (
+          <ErrorBoundary name="Antigravity Edges">
+            <AntigravityEdgesView />
+          </ErrorBoundary>
         )}
         {tab === 'walkthrough' && <PreMarketWalkthrough />}
         {tab === 'chart' && (
@@ -20644,7 +21477,7 @@ function PositionSizingPanel({ stats, settings, onSaveSettings }) {
             ['Kelly Fraction', kelly > 0 ? `${(kelly * 100).toFixed(1)}%` : '—', '#94a3b8'],
             ['Half Kelly (ceiling)', halfKelly > 0 ? `${(halfKelly * 100).toFixed(1)}%` : '—', '#86efac'],
             ['Your risk %', `${localRiskPct.toFixed(2)}%  ${aboveHalfKelly ? '⚠ Above Kelly' : '✓ Within Kelly'}`, aboveHalfKelly ? '#f97316' : '#22c55e'],
-            ['Dollar risk/trade', `$${dollarRisk.toFixed(0)}`, 'var(--text-primary)'],
+            ['Dollar risk/trade', `$${fmtP(dollarRisk)}`, 'var(--text-primary)'],
             ['Contracts @ risk %', `${contracts}`, 'var(--text-primary)'],
             ['Contracts @ Half Kelly', halfKelly > 0 ? `${halfKellyContracts}` : '—', '#86efac'],
           ].map(([label, val, color]) => (
@@ -20839,7 +21672,7 @@ function SessionRiskGate({ settings }) {
         {(phase === 'active' || phase === 'limit_hit') && (
           <>
             <span style={{ fontSize: 13, fontFamily: 'monospace', color: sessionPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700 }}>
-              {sessionPnl >= 0 ? '+' : ''}${sessionPnl?.toFixed(2)}
+              {sessionPnl >= 0 ? '+' : ''}${fmtP(sessionPnl, 2)}
             </span>
             <div style={{ flex: 1, minWidth: 120 }}>
               <div style={{ height: 8, background: 'var(--border-color)', borderRadius: 4, overflow: 'hidden' }}>
@@ -20865,7 +21698,7 @@ function SessionRiskGate({ settings }) {
           <>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Morning session closed</span>
             <span style={{ fontSize: 13, fontFamily: 'monospace', fontWeight: 700, color: sessionPnl >= 0 ? '#22c55e' : '#ef4444' }}>
-              Final: {sessionPnl >= 0 ? '+' : ''}${sessionPnl?.toFixed(2)}
+              Final: {sessionPnl >= 0 ? '+' : ''}${fmtP(sessionPnl, 2)}
             </span>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input placeholder="Type OVERRIDE to trade" value={overrideInput} onChange={e => setOverrideInput(e.target.value)}

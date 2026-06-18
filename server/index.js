@@ -149,7 +149,7 @@ async function autoBulkBackfillIfEmpty() {
       const priorFrom  = `${priorYear}-${String(priorMonth).padStart(2,'0')}-01`;
       const priorTo    = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}-01`;
       const monthYear  = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`;
-      const pr = await query(`SELECT MAX(high) as h, MIN(low) as l, (SELECT close FROM price_bars WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 ORDER BY ts DESC LIMIT 1) as c FROM price_bars WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorFrom, priorTo]);
+      const pr = await query(`SELECT MAX(high) as h, MIN(low) as l, (SELECT close FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 ORDER BY ts DESC LIMIT 1) as c FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [priorFrom, priorTo]);
       const { h: ph, l: pl, c: pc } = pr.rows[0];
       if (ph && pl && pc) {
         const piv = (parseFloat(ph) + parseFloat(pl) + parseFloat(pc)) / 3;
@@ -489,6 +489,18 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[combo_backtest] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // Vol predictive backtest — every Sunday 7:15 PM ET (after combo backtest)
+  cron.schedule('15 19 * * 0', async () => {
+    try {
+      const { spawn } = await import('child_process');
+      const child = spawn('node', ['scripts/volatility_predictive_backtest.mjs'], {
+        cwd: process.cwd(), detached: true, stdio: 'ignore',
+      });
+      child.unref();
+      console.log('[vol_backtest] Weekly re-run started');
+    } catch (err) { console.error('[vol_backtest] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Monthly Report — 7:00 PM ET first Sunday of month
   cron.schedule('0 19 * * 0', async () => {
     try {
@@ -705,9 +717,9 @@ httpServer.listen(PORT, () => {
       const priorTo    = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}-01`;
       const pr = await query(`
         SELECT MAX(high) as h, MIN(low) as l,
-          (SELECT close FROM price_bars WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
+          (SELECT close FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
            AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 ORDER BY ts DESC LIMIT 1) as c
-        FROM price_bars WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
+        FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1::date AND ts < $2::date
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       `, [priorFrom, priorTo]);
       const { h, l, c } = pr.rows[0];

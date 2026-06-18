@@ -87,7 +87,7 @@ export async function runSetupBacktest(db, { verbose = false, setupIds = null } 
       const sessionEnd = `${setup.trade_date} 16:00:00`;
       const { rows: bars } = await db.query(`
         SELECT open::float, high::float, low::float, close::float
-        FROM price_bars
+        FROM price_bars_primary
         WHERE ts > $1 AND ts <= $2
         ORDER BY ts
       `, [setup.fired_at, sessionEnd]);

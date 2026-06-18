@@ -76,7 +76,7 @@ export async function runPhaseChangeBacktest(params, onProgress) {
 
   // Get sessions with price bars
   const sessQ = await query(`
-    SELECT DISTINCT ts::date::text as date FROM price_bars WHERE symbol='NQ'
+    SELECT DISTINCT ts::date::text as date FROM price_bars_primary WHERE symbol='NQ'
       AND EXTRACT(hour FROM ts) BETWEEN 9 AND 11
       ${startDate ? `AND ts::date >= '${startDate}'` : ''}
       ${endDate ? `AND ts::date <= '${endDate}'` : ''}
@@ -99,7 +99,7 @@ export async function runPhaseChangeBacktest(params, onProgress) {
     const barsQ = await query(`
       SELECT ts, open::float, high::float, low::float, close::float,
         volume, num_trades, bid_volume, ask_volume
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 11
       ORDER BY ts ASC

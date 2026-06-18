@@ -74,6 +74,13 @@ const TODO_ITEMS = [
   { category: 'E: Secondary Backtest & Reporting Improvements', priority: 48, title: 'Trade Timeline Event Reconstruction', impact: '5% improvement in setup-confluence debugging', description: 'In the backtester, reconstruct the chronological order of level touches, daily score changes, and setup fires to build a trade timeline.' },
   { category: 'E: Secondary Backtest & Reporting Improvements', priority: 49, title: 'P&L Drawdown Duration Curve', impact: '5% improvement in equity curve drawdown management', description: 'Plot a chart showing how long your account stays in drawdowns, helping you optimize your risk-recovery phases.' },
   { category: 'E: Secondary Backtest & Reporting Improvements', priority: 50, title: 'Account Comparison Statistics', impact: '5% increase in trade execution discipline under pressure', description: 'Compare Sim vs. Live account metrics side-by-side to highlight behavioral gaps and execution slippage under financial pressure.' },
+
+  // Category F
+  { category: 'F: Institutional Nice-to-Haves', priority: 51, title: 'Cross-Asset Divergence (SMT) Alerts', impact: '25% - 30% reduction in false breakout entries', description: 'Scan correlation divergences between NQ, ES, and RTY. Trigger warnings on the dashboard when one index breaks its IB range while others fail to confirm.' },
+  { category: 'F: Institutional Nice-to-Haves', priority: 52, title: 'CVD Divergence & Absorption Scanner', impact: '20% improvement in counter-trend entry precision', description: 'Integrate Cumulative Volume Delta (CVD) tracking to detect when aggressive buyers or sellers are being absorbed by institutional limit orders at key extremes.' },
+  { category: 'F: Institutional Nice-to-Haves', priority: 53, title: 'Order Flow Tape Speed Indicator', impact: '15% reduction in breakout slippage and premature entries', description: 'Measure Prints Per Second (Speed of Tape) at daily/weekly boundaries to identify institutional participation vs. retail exhaustion.' },
+  { category: 'F: Institutional Nice-to-Haves', priority: 54, title: 'Dynamic Point of Control (POC) Migration Monitor', impact: '12% increase in playbook alignment correctness', description: 'Track the migration speed of the Volume Profile POC. Signal a directional trend lean when POC shifts rapidly, or a rotational lean when it remains fixed.' },
+  { category: 'F: Institutional Nice-to-Haves', priority: 55, title: 'Implied vs. Realized Volatility (IV/RV) Spread Tracker', impact: '10% improvement in average trade expectancy', description: 'Compare implied volatility (VXN options pricing) against trailing realized volatility to determine options-pricing premium and tailor the playbook.' },
 ];
 
 async function run() {

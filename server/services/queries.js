@@ -38,7 +38,7 @@ export async function getValueArea(date) {
   const r = await query(`
     WITH vp AS (
       SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
         AND EXTRACT(hour FROM ts) < 16
       GROUP BY ROUND(low/0.25)*0.25
@@ -66,7 +66,7 @@ export async function getPriorMonthValueArea(forDate) {
   const r = await query(`
     WITH vp AS (
       SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars WHERE symbol='NQ'
+      FROM price_bars_primary WHERE symbol='NQ'
         AND ts >= $1::date AND ts < $2::date
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
         AND EXTRACT(hour FROM ts) < 16
@@ -97,7 +97,7 @@ export async function getRTHBars(date, startMin = 575, endMin = 960) {
     SELECT ts, high::float, low::float, close::float, open::float,
            volume::bigint,
            EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) as bar_min
-    FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+    FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
       AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN $2 AND $3
     ORDER BY ts
   `, [date, startMin, endMin]);
@@ -115,7 +115,7 @@ export async function getRTHBars(date, startMin = 575, endMin = 960) {
 export async function getGLine(date) {
   const r = await query(`
     SELECT (array_agg(open ORDER BY ts ASC))[1]::float as g_line
-    FROM price_bars WHERE symbol='NQ'
+    FROM price_bars_primary WHERE symbol='NQ'
       AND ts::date = date_trunc('week', ($1::text)::date) - INTERVAL '1 day'
       AND EXTRACT(hour FROM ts) >= 18
   `, [date]);
@@ -136,7 +136,7 @@ export async function getGLineDaysHeld(date, gLine, currentPrice = null) {
   const r = await query(`
     SELECT ts::date as session_date,
            (array_agg(close ORDER BY ts DESC))[1]::float as session_close
-    FROM price_bars
+    FROM price_bars_primary
     WHERE symbol='NQ'
       AND ts::date >= date_trunc('week', ($1::text)::date)
       AND ts::date < ($1::text)::date
@@ -167,7 +167,7 @@ export async function getGLineDaysHeld(date, gLine, currentPrice = null) {
 export async function getPriorWeekRange(date) {
   const r = await query(`
     SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
-    FROM price_bars WHERE symbol='NQ'
+    FROM price_bars_primary WHERE symbol='NQ'
       AND ts::date >= date_trunc('week', ($1::text)::date) - INTERVAL '7 days'
       AND ts::date <  date_trunc('week', ($1::text)::date)
       AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570

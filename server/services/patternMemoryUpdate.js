@@ -37,14 +37,14 @@ async function deriveStructuralState(tradeDate) {
   const pocQ = await query(`
     WITH days AS (
       SELECT DISTINCT ts::date::text as d
-      FROM price_bars WHERE symbol='NQ'
+      FROM price_bars_primary WHERE symbol='NQ'
         AND ts::date < ($1::text)::date
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
       ORDER BY d DESC LIMIT 5
     )
     SELECT d, (
       WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-        FROM price_bars WHERE symbol='NQ' AND ts::date::text=days.d
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date::text=days.d
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
       poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
       SELECT poc_row.poc_px FROM poc_row LIMIT 1
@@ -58,7 +58,7 @@ async function deriveStructuralState(tradeDate) {
   const vaQ = await query(`
     SELECT ts::date::text as d,
       MAX(high)::float as day_high, MIN(low)::float as day_low
-    FROM price_bars WHERE symbol='NQ'
+    FROM price_bars_primary WHERE symbol='NQ'
       AND ts::date < ($1::text)::date
       AND ts::date >= ($1::text)::date - INTERVAL '7 days'
       AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
@@ -190,7 +190,7 @@ export async function populateDailyLog(tradeDate, io = null) {
   const sessQ = await query(`
     SELECT MAX(high)::float as sess_high, MIN(low)::float as sess_low,
            (array_agg(close ORDER BY ts DESC))[1]::float as sess_close
-    FROM price_bars WHERE symbol='NQ' AND ts::date = ($1::text)::date
+    FROM price_bars_primary WHERE symbol='NQ' AND ts::date = ($1::text)::date
       AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
   `, [tradeDate]);
   const sess = sessQ.rows[0] || {};
@@ -230,8 +230,8 @@ export async function populateDailyLog(tradeDate, io = null) {
   // Value migrated vs prior day VA
   const priorVaQ = await query(`
     WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars WHERE symbol='NQ'
-        AND ts::date=(SELECT MAX(ts::date) FROM price_bars WHERE symbol='NQ' AND ts::date<($1::text)::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16)
+      FROM price_bars_primary WHERE symbol='NQ'
+        AND ts::date=(SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date<($1::text)::date AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16)
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
     total AS (SELECT SUM(vol) as t FROM vp),
     poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
@@ -242,7 +242,7 @@ export async function populateDailyLog(tradeDate, io = null) {
   `, [tradeDate]);
   const todayVaQ = await query(`
     WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars WHERE symbol='NQ' AND ts::date=($1::text)::date
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=($1::text)::date
         AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
     total AS (SELECT SUM(vol) as t FROM vp),
     poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
@@ -479,6 +479,7 @@ const SETUP_TYPES = [
   'FAILED_AUCTION_SHORT','FAILED_AUCTION_LONG',
   'VALUE_AREA_RESPONSIVE_LONG','VALUE_AREA_RESPONSIVE_SHORT',
   'BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
+  'GAP_FILL_LONG','GAP_FILL_SHORT',
 ];
 
 export async function updateSetupMoveStats(tradeDate) {

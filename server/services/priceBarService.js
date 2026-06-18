@@ -107,7 +107,7 @@ export async function ingestBarFile(filePath) {
     'SELECT id, bars_inserted, file_size FROM price_bar_ingests WHERE filename = $1',
     [filename]
   );
-  if (existing.rows.length > 0 && existing.rows[0].file_size === currentSize) {
+  if (existing.rows.length > 0 && existing.rows[0].file_size != null && Number(existing.rows[0].file_size) === currentSize) {
     console.log(`⏭️  No changes: ${filename} (${existing.rows[0].bars_inserted} bars, same file size)`);
     return { skipped: true, bars_inserted: existing.rows[0].bars_inserted, filename };
   }
@@ -185,6 +185,21 @@ export async function ingestBarFile(filePath) {
       bars_inserted = $4, date_from = $5, date_to = $6, file_size = $7, ingested_at = NOW()
   `, [filename, contract, symbol, barsInserted, dateFrom, dateTo, currentSize]);
 
+  // Keep the contract calendar up to date so price_bars_primary view stays correct across rollovers
+  await query(`
+    INSERT INTO price_bars_contract_calendar (symbol, trade_date, contract, bar_count)
+    SELECT symbol, trade_date, contract, bar_count FROM (
+      SELECT symbol, ts::date AS trade_date, contract, COUNT(*) AS bar_count,
+        ROW_NUMBER() OVER (PARTITION BY symbol, ts::date ORDER BY COUNT(*) DESC) AS rn
+      FROM price_bars
+      WHERE symbol = $1 AND ts::date >= $2::date AND ts::date <= $3::date
+      GROUP BY symbol, ts::date, contract
+    ) ranked WHERE rn = 1
+    ON CONFLICT (symbol, trade_date) DO UPDATE
+      SET contract = EXCLUDED.contract, bar_count = EXCLUDED.bar_count
+      WHERE EXCLUDED.bar_count > price_bars_contract_calendar.bar_count
+  `, [symbol, dateFrom, dateTo]);
+
   console.log(`✅ ${filename}: ${barsInserted.toLocaleString()} bars upserted`);
   return { skipped: false, bars_inserted: barsInserted, filename, contract, symbol, date_from: dateFrom, date_to: dateTo };
 }
@@ -213,7 +228,7 @@ export async function scanAndIngestNewBarFiles(dataDir) {
     if (!ingestedMap.has(name)) return true; // new file
     const storedSize = ingestedMap.get(name);
     const currentSize = fs.statSync(f).size;
-    return storedSize === null || storedSize !== currentSize; // grown or never size-tracked
+    return storedSize == null || Number(storedSize) !== currentSize; // grown or never size-tracked
   });
 
   if (!filesToProcess.length) {
@@ -242,7 +257,7 @@ export async function getBars(symbol, fromUtc, toUtc, intervalMins = 1) {
   if (intervalMins === 1) {
     const result = await query(`
       SELECT ts, open, high, low, close, volume, num_trades, bid_volume, ask_volume, contract
-      FROM price_bars
+      FROM price_bars_primary
       WHERE symbol = $1 AND ts >= $2 AND ts <= $3
       ORDER BY ts ASC
     `, [symbol.toUpperCase(), fromUtc, toUtc]);
@@ -261,7 +276,7 @@ export async function getBars(symbol, fromUtc, toUtc, intervalMins = 1) {
       SUM(volume)                        AS volume,
       SUM(num_trades)                    AS num_trades,
       MIN(contract)                      AS contract
-    FROM price_bars
+    FROM price_bars_primary
     WHERE symbol = $1 AND ts >= $2 AND ts <= $3
     GROUP BY bar_ts
     ORDER BY bar_ts ASC

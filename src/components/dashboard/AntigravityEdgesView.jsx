@@ -1,3 +1,4 @@
+const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React, { useState, useEffect } from 'react';
 
 const API_URL = '/api';
@@ -122,8 +123,16 @@ export default function AntigravityEdgesView() {
     combinedDelta: 0
   };
 
+  const monStats = tradeBacktest?.allTime?.dowStats?.[1] || { winRate: 40.0, avgPnl: -339 };
+  const friStats = tradeBacktest?.allTime?.dowStats?.[5] || { winRate: 36.4, avgPnl: 374 };
+
+  const monWinRate = monStats.winRate;
+  const monAvgPnl = monStats.avgPnl;
+  const friRedRate = (100 - friStats.winRate);
+
   // Determine current day-of-week guidelines
-  const targetDateStr = setups?.date || liveStatus?.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const todayETStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const targetDateStr = setups?.isFallback ? todayETStr : (setups?.date || liveStatus?.date || todayETStr);
   const targetDateParts = targetDateStr.split('-');
   const targetD = new Date(parseInt(targetDateParts[0]), parseInt(targetDateParts[1]) - 1, parseInt(targetDateParts[2]), 12, 0, 0);
   const dayOfWeek = targetD.getDay(); // 0=Sunday, 1=Monday, ...
@@ -135,7 +144,7 @@ export default function AntigravityEdgesView() {
       return {
         title: "Monday Mean Reversion Protocol",
         alert: "⚠️ HIGH LOSS RISK DAY",
-        text: "Mondays represent your highest historical loss rates (21.9% WR, -$847 avg P&L). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Use 50% max sizing. Avoid breakouts before 11:00 AM ET.",
+        text: `Mondays represent a historical loss rate (${monWinRate.toFixed(1)}% WR, ${monAvgPnl < 0 ? '-' : ''}${fmtP(Math.abs(monAvgPnl))} avg P&L on live accounts). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Use 50% max sizing. Avoid breakouts before 11:00 AM ET.`,
         recs: ["FAILED_AUCTION_LONG/SHORT", "VALUE_AREA_RESPONSIVE_LONG/SHORT", "TRT_LONG/SHORT"]
       };
     }
@@ -143,7 +152,7 @@ export default function AntigravityEdgesView() {
       return {
         title: "Friday Capital Preservation Protocol",
         alert: "⚠️ AFTERNOON SQUARING RISK",
-        text: "Fridays have a 74% red rate for your account due to afternoon givebacks. Keep stops tight and lock in gains early. Expect sharp afternoon reversals of the morning trend ('Friday -> AM Reverses in PM') as institutions square books before the weekend. Shut screens by 12:30 PM ET.",
+        text: `Fridays have a ${friRedRate.toFixed(1)}% red rate for your account due to afternoon givebacks. Keep stops tight and lock in gains early. Expect sharp afternoon reversals of the morning trend ('Friday -> AM Reverses in PM') as institutions square books before the weekend. Shut screens by 12:30 PM ET.`,
         recs: ["GAP_UP/DOWN_FILL", "VALUE_AREA_RESPONSIVE_LONG"]
       };
     }
@@ -227,7 +236,7 @@ export default function AntigravityEdgesView() {
             id: 'pot-trt-long',
             setup_type: 'POTENTIAL TRAPPED SHORTS (TRT LONG)',
             confidence: 'MEDIUM',
-            condition: `OR5 is WIDE (${liveStatus.or5Range?.toFixed(1)} pts). Standard breakouts have a 95% fail rate. Reversal is the dominant edge.`,
+            condition: `OR5 is WIDE (${liveStatus.or5Range?.toFixed(1)} pts). Standard breakouts have a high failure rate in wide ranges. Reversal is the dominant edge.`,
             trigger: 'Price attempts breakout lower (A Down), rejects, and reclaims the opening range high.',
             recommendation: 'Target opposite side IB. Stop at session low. Keep risk tight.'
           });
@@ -237,7 +246,7 @@ export default function AntigravityEdgesView() {
             id: 'pot-trt-short',
             setup_type: 'POTENTIAL TRAPPED LONGS (TRT SHORT)',
             confidence: 'MEDIUM',
-            condition: `OR5 is WIDE (${liveStatus.or5Range?.toFixed(1)} pts). Standard breakouts have a 95% fail rate. Reversal is the dominant edge.`,
+            condition: `OR5 is WIDE (${liveStatus.or5Range?.toFixed(1)} pts). Standard breakouts have a high failure rate in wide ranges. Reversal is the dominant edge.`,
             trigger: 'Price attempts breakout higher (A Up), rejects, and reclaims the opening range low.',
             recommendation: 'Target opposite side IB. Stop at session high. Keep risk tight.'
           });
@@ -290,7 +299,7 @@ export default function AntigravityEdgesView() {
               <span style={liveStatus.isLive ? liveBadgeStyle : historicalBadgeStyle}>
                 {liveStatus.isLive ? 'LIVE SESSION ACTIVE' : `HISTORICAL REPLAY - ${liveStatus.date}`}
               </span>
-              <span style={priceLabelStyle}>NQ Close: <strong style={{ color: '#fff' }}>{liveStatus.currentPrice?.toFixed(2)}</strong></span>
+              <span style={priceLabelStyle}>NQ Close: <strong style={{ color: '#fff' }}>{liveStatus.fmtP(liveStatus.currentPrice, 2)}</strong></span>
             </div>
             
             <div style={grid3Style}>
@@ -300,13 +309,21 @@ export default function AntigravityEdgesView() {
                 <div style={cardItemValueStyle(liveStatus.or5Status)}>
                   {liveStatus.or5Range?.toFixed(1)} pts
                   <span style={subtextStyle(liveStatus.or5Status)}>({liveStatus.or5Status})</span>
+                  {liveStatus.coiling?.active && (
+                    <span
+                      style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: liveStatus.coiling.popSurge ? '#f87171' : '#fb923c' }}
+                      title={`Coiling ${liveStatus.coiling.durationBars}min: ${liveStatus.coiling.range}pt range, volume at ${liveStatus.coiling.volRatio}% of baseline`}
+                    >
+                      {liveStatus.coiling.popSurge ? 'POP ⚡' : `COILING ${liveStatus.coiling.durationBars}m ⚠`}
+                    </span>
+                  )}
                 </div>
                 <p style={cardItemDescStyle}>
                   {liveStatus.or5Status === 'WIDE' 
-                    ? '⚠️ Range is WIDE (>91.5 pts). Breakout follow-through has a 95%+ failure rate today. Seek pullbacks/fades only.' 
+                    ? `⚠️ Range is WIDE (>${limits?.Q4_LIMIT || 91.5} pts). Breakout follow-through has a high historical failure rate. Seek pullbacks/fades only.` 
                     : liveStatus.or5Status === 'TIGHT'
-                    ? '✅ Range is TIGHT (<47.5 pts). Clean breakout follow-through probability is elevated (12%).'
-                    : 'Range is normal. Breakouts are average edge.'}
+                    ? `✅ Range is TIGHT (<${limits?.Q1_LIMIT || 47.5} pts). Clean breakout follow-through probability is statistically elevated.`
+                    : 'Range is normal. Breakouts have average probability of follow-through.'}
                 </p>
               </div>
 
@@ -332,9 +349,9 @@ export default function AntigravityEdgesView() {
                 </div>
                 <p style={cardItemDescStyle}>
                   {isMonday 
-                    ? '⚠️ Mondays are your highest-loss days (21.9% WR). Avoid breakouts entirely, use 50% size, focus on reversion.'
+                    ? `⚠️ Mondays have a historical ${monWinRate.toFixed(1)}% win rate (${monAvgPnl < 0 ? '-' : ''}${fmtP(Math.abs(monAvgPnl))} avg P&L on live accounts). Avoid breakouts entirely, use 50% size, focus on reversion.`
                     : isFriday
-                    ? '⚠️ Fridays have a 74% historical red rate for you. Keep risk tight and focus on capital preservation.'
+                    ? `⚠️ Fridays have a ${friRedRate.toFixed(1)}% historical red rate for you. Keep risk tight and focus on capital preservation.`
                     : 'Tuesday-Thursday is your sweet spot. Standard risk parameters allowed.'}
                 </p>
               </div>
@@ -418,19 +435,29 @@ export default function AntigravityEdgesView() {
           }}>
             {(() => {
               const feed = [];
-              const targetDateStr = setups?.date || liveStatus?.date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+              const todayETStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+              const targetDateStr = setups?.isFallback ? todayETStr : (setups?.date || liveStatus?.date || todayETStr);
               const parts = targetDateStr.split('-');
               const todayD = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]), 12, 0, 0);
               const dayOfWeek = todayD.getDay(); // 0=Sunday, 1=Monday, ...
               const isMonday = dayOfWeek === 1;
               const isFriday = dayOfWeek === 5;
 
+              const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const nowETStr = `${String(nowET.getHours()).padStart(2, '0')}:${String(nowET.getMinutes()).padStart(2, '0')}:${String(nowET.getSeconds()).padStart(2, '0')}`;
+              const isLive = liveStatus?.active && liveStatus?.isLive;
+
+              const shouldShowEvent = (eventTime) => {
+                if (!isLive) return true; // Show all events for historical replay
+                return eventTime <= nowETStr;
+              };
+
               // 08:30:00 (Premarket Prep)
               let prepText = "";
               if (dayOfWeek === 1) {
-                prepText = "☕ Monday Mean Reversion Protocol active. Mondays are statistically your highest-loss days (21.9% WR, -$847 avg P&L). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Risk parameters: 50% max sizing. Do not execute breakouts before 11:00 AM ET. Sierra Chart pre-trade sizing rules must be active to restrict size automatically.";
+                prepText = `☕ Monday Mean Reversion Protocol active. Mondays have a historical ${monWinRate.toFixed(1)}% win rate (${monAvgPnl < 0 ? '-' : ''}${fmtP(Math.abs(monAvgPnl))} avg P&L on live accounts). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Risk parameters: 50% max sizing. Do not execute breakouts before 11:00 AM ET. Sierra Chart pre-trade sizing rules must be active to restrict size automatically.`;
               } else if (dayOfWeek === 5) {
-                prepText = "☕ Friday Capital Preservation Protocol active. Fridays carry a 74.2% historical red rate, mostly driven by overtrading and givebacks in the afternoon close squaring window. Focus strictly on morning Gap Fills. Hard rule: Shut down screens by 12:30 PM ET regardless of P&L. No new entries after 12:00 PM.";
+                prepText = `☕ Friday Capital Preservation Protocol active. Fridays carry a ${friRedRate.toFixed(1)}% historical red rate, mostly driven by overtrading and givebacks in the afternoon close squaring window. Focus strictly on morning Gap Fills. Hard rule: Shut down screens by 12:30 PM ET regardless of P&L. No new entries after 12:00 PM.`;
               } else if (dayOfWeek === 2 || dayOfWeek === 4) {
                 prepText = `☕ ${dayOfWeek === 2 ? 'Tuesday' : 'Thursday'} Trend Sweet Spot Playbook active. Tuesday/Thursday are mid-week liquidity days showing clean, sustained trend characteristics. Standard sizing and breakout/continuation plays are fully authorized. Seek high-probability Initial Balance breakouts and key level touches.`;
               } else if (dayOfWeek === 3) {
@@ -438,15 +465,18 @@ export default function AntigravityEdgesView() {
               } else {
                 prepText = "☕ Weekend Prep Protocol active. Market closed. Review current playbook metrics and verify setup detections in the Chart Review sub-tab.";
               }
-              feed.push({
-                time: "08:30:00",
-                type: "system",
-                text: prepText
-              });
+
+              if (shouldShowEvent("08:30:00")) {
+                feed.push({
+                  time: "08:30:00",
+                  type: "system",
+                  text: prepText
+                });
+              }
 
               // Base open event
               if (liveStatus?.active) {
-                const openPrice = liveStatus.currentPrice ? (liveStatus.currentPrice - (liveStatus.gapOpenValue || 0)).toFixed(2) : '30,333.50';
+                const openPrice = liveStatus.currentPrice ? fmtP(liveStatus.currentPrice - (liveStatus.gapOpenValue || 0), 2) : '30,333.50';
                 let openText = `🔔 RTH Market Open: NQ opened at ${openPrice}. Gap Status: ${liveStatus.gapStatus === 'INSIDE' ? 'Inside Range' : 'GAP ' + liveStatus.gapStatus} (${liveStatus.gapOpenValue?.toFixed(1) || 0} pts). `;
                 if (liveStatus.gapStatus === 'UP') {
                   openText += "An upside gap opens with a 66% statistical probability of filling back to yesterday's High. The playbook directive is to look to fade early drives that sweep highs and reject, targeting yesterday's range boundaries.";
@@ -455,55 +485,69 @@ export default function AntigravityEdgesView() {
                 } else {
                   openText += "NQ opened inside yesterday's range. Responsive value area trading is active. Sweeps of yesterday's High or Low show a 30% failure rate; look for failed sweeps of value area boundaries to fade back to the POC.";
                 }
-                feed.push({
-                  time: "09:30:00",
-                  type: "info",
-                  text: openText
-                });
+                
+                if (shouldShowEvent("09:30:00")) {
+                  feed.push({
+                    time: "09:30:00",
+                    type: "info",
+                    text: openText
+                  });
+                }
 
                 // OR5 event
                 if (liveStatus.or5Range != null) {
                   let or5Text = `📊 Opening 5-Minute Range established: ${liveStatus.or5Range.toFixed(1)} pts. Classified as ${liveStatus.or5Status}. `;
                   if (liveStatus.or5Status === 'WIDE') {
-                    or5Text += "The range is WIDE (>= 91.5 pts). This indicates high volatility absorption. Breakout follow-through has a 95% historical failure rate. Avoid chasing breakout lines. Focus exclusively on pullbacks to the VWAP, VAH/VAL, or fading range boundaries.";
+                    or5Text += `The range is WIDE (>= ${limits?.Q4_LIMIT || 91.5} pts). This indicates high volatility absorption. Breakout follow-through has an elevated historical failure rate. Avoid chasing breakout lines. Focus on pullbacks to the VWAP, VAH/VAL, or fading range boundaries.`;
                   } else if (liveStatus.or5Status === 'TIGHT') {
-                    or5Text += "The range is TIGHT (< 47.5 pts). This is a classic coil setup. Clean breakout follow-through probability is elevated (12%+). Watch the range extremes for a high-momentum breakout drive.";
+                    or5Text += `The range is TIGHT (< ${limits?.Q1_LIMIT || 47.5} pts). This is a classic coil setup. Clean breakout follow-through probability is statistically elevated. Watch the range extremes for a high-momentum breakout drive.`;
                   } else {
                     or5Text += "The range is normal. Expected trend follow-through is average. Standard playbook execution rules apply.";
                   }
-                  feed.push({
-                    time: "09:35:00",
-                    type: "info",
-                    text: or5Text
-                  });
+                  
+                  if (shouldShowEvent("09:35:00")) {
+                    feed.push({
+                      time: "09:35:00",
+                      type: "info",
+                      text: or5Text
+                    });
+                  }
                 }
 
                 // 10:00:00 AM sweep window
-                feed.push({
-                  time: "10:00:00",
-                  type: "system",
-                  text: "⏰ Institutional Sweep Window: The 10:00 AM pivot window is active. Historically, retail morning drives from 9:30 to 9:55 AM exhaust in this 10-minute window (9:55 - 10:05). Sweeps of the session extreme on decreasing volume are prime setups for high-probability reversals."
-                });
+                if (shouldShowEvent("10:00:00")) {
+                  feed.push({
+                    time: "10:00:00",
+                    type: "system",
+                    text: "⏰ Institutional Sweep Window: The 10:00 AM pivot window is active. Historically, retail morning drives from 9:30 to 9:55 AM exhaust in this 10-minute window (9:55 - 10:05). Sweeps of the session extreme on decreasing volume are prime setups for high-probability reversals."
+                  });
+                }
 
                 // First Hour Texture Metrics (10:30:00)
                 if (liveStatus.firstHourStats) {
                   const fhs = liveStatus.firstHourStats;
-                  const isFhChop = fhs.efficiency < 0.25 || fhs.choppinessIndex > 60;
                   let textureText = `🔬 First Hour Market Texture Audit: The Initial Balance is set (IB range: ${fhs.avgRange ? (fhs.avgRange * 6).toFixed(1) : '0.0'} pts). `;
-                  textureText += `Kaufman Efficiency Ratio: ${fhs.efficiency} (${fhs.efficiency < 0.25 ? 'Low/Choppy' : 'High/Trending'}). `;
-                  textureText += `Choppiness Index: ${fhs.choppinessIndex} (${fhs.choppinessIndex > 60 ? 'Chop Regime' : 'Trend Regime'}). `;
-                  textureText += `Reversal Rate: ${fhs.reversalRate}% (${fhs.reversalRate > 65 ? 'Whippy' : 'Smooth'}). `;
+                  textureText += `Kaufman Efficiency Ratio: ${fhs.efficiency}. `;
+                  textureText += `Choppiness Index: ${fhs.choppinessIndex}. `;
+                  textureText += `Reversal Rate: ${fhs.reversalRate}%. `;
                   
-                  if (isFhChop) {
-                    textureText += "The math confirms a highly choppy, whippy environment with low net progress. This validates Monday chop guidelines: standard breakouts are highly likely to trap. Strict mean-reversion bias is mandated. Halve your size if you take any trades.";
+                  let textureDesc = "";
+                  if (fhs.efficiency < 0.25 && fhs.choppinessIndex > 60) {
+                    textureDesc = "The first hour texture confirms a highly choppy, whippy environment with low net directional progress. Breakouts have a high failure rate; seek mean-reversion fades near key levels.";
+                  } else if (fhs.efficiency >= 0.38 && fhs.choppinessIndex < 50) {
+                    textureDesc = "The first hour texture confirms an efficient, trending environment. Trend-aligned breakout setups and pullbacks are statistically favored.";
                   } else {
-                    textureText += "The math confirms a highly efficient, trending environment. Trend-following breakout setups have strong statistical backing. Trailing stops can be widened to let runners ride.";
+                    textureDesc = "The first hour texture is transitional/mixed. Volatility and direction are balanced; standard risk management parameters apply with no strong structural bias.";
                   }
-                  feed.push({
-                    time: "10:30:00",
-                    type: "info",
-                    text: textureText
-                  });
+                  textureText += textureDesc;
+                  
+                  if (shouldShowEvent("10:30:00")) {
+                    feed.push({
+                      time: "10:30:00",
+                      type: "info",
+                      text: textureText
+                    });
+                  }
                 }
 
                 // Midday Lock & Behavioral Decay (12:30:00)
@@ -515,11 +559,14 @@ export default function AntigravityEdgesView() {
                 } else {
                   middayText = "☕ Midday Check: Market liquidity typically drops during the lunch hour (12:00 - 13:30 ET). Avoid entering new positions inside value areas. Let morning setups resolve.";
                 }
-                feed.push({
-                  time: "12:30:00",
-                  type: "system",
-                  text: middayText
-                });
+                
+                if (shouldShowEvent("12:30:00")) {
+                  feed.push({
+                    time: "12:30:00",
+                    type: "system",
+                    text: middayText
+                  });
+                }
 
                 // PM Trend / Power Hour (15:30:00)
                 let pmText = "";
@@ -528,22 +575,28 @@ export default function AntigravityEdgesView() {
                 } else {
                   pmText = "Power Hour Check: Final hour of trading. Institutional book-squaring is active. Keep risk tight and manage any open runner contracts.";
                 }
-                feed.push({
-                  time: "15:30:00",
-                  type: "system",
-                  text: pmText
-                });
+                
+                if (shouldShowEvent("15:30:00")) {
+                  feed.push({
+                    time: "15:30:00",
+                    type: "system",
+                    text: pmText
+                  });
+                }
               }
 
               // Setups fired & resolved
               if (setups?.list) {
                 setups.list.forEach(s => {
                   // Fired
-                  feed.push({
-                    time: s.fired_time + ":00",
-                    type: "alert",
-                    text: `🎯 Setup Fired: ${s.setup_type} detected. Entry zone: ${s.entry_zone_low} - ${s.entry_zone_high}. Stop Loss: ${s.stop_level}. Target: ${s.t1_level}. Baseline WR: ${(s.baselineWr * 100).toFixed(1)}% (N=${s.sampleN}). Adjusted WR: ${(s.adjustedWr * 100).toFixed(1)}% (Confidence: ${s.confidence}). Recommendation: ${s.recommendation}`
-                  });
+                  const firedTimeStr = s.fired_time + ":00";
+                  if (shouldShowEvent(firedTimeStr)) {
+                    feed.push({
+                      time: firedTimeStr,
+                      type: "alert",
+                      text: `🎯 Setup Fired: ${s.setup_type} detected. Entry zone: ${s.entry_zone_low} - ${s.entry_zone_high}. Stop Loss: ${s.stop_level}. Target: ${s.t1_level}. Baseline WR: ${(s.baselineWr * 100).toFixed(1)}% (N=${s.sampleN}). Adjusted WR: ${(s.adjustedWr * 100).toFixed(1)}% (Confidence: ${s.confidence}). Recommendation: ${s.recommendation}`
+                    });
+                  }
 
                   // Resolved
                   if (s.resolution) {
@@ -567,16 +620,64 @@ export default function AntigravityEdgesView() {
                     } else if (s.setup_type.includes('BREAKOUT') && liveStatus?.or5Status === 'WIDE') {
                       resolutionContext = isWinner
                         ? " Outlier: Breakout resolved successfully on a wide OR day."
-                        : " Breakout failure is highly correlated with the wide opening range (95% fail rate).";
+                        : " Breakout failure is correlated with the wide opening range (elevated failure rate).";
                     }
 
-                    feed.push({
-                      time: resTimeStr,
-                      type: isWinner ? 'success' : 'danger',
-                      text: `${isWinner ? '✅' : '❌'} Setup Resolved: ${s.setup_type} hit ${isWinner ? 'Target 1' : 'Stop Loss'}.${pnlText}.${resolutionContext}`
-                    });
+                    if (shouldShowEvent(resTimeStr)) {
+                      feed.push({
+                        time: resTimeStr,
+                        type: isWinner ? 'success' : 'danger',
+                        text: `${isWinner ? '✅' : '❌'} Setup Resolved: ${s.setup_type} hit ${isWinner ? 'Target 1' : 'Stop Loss'}.${pnlText}.${resolutionContext}`
+                      });
+                    }
                   }
                 });
+              }
+
+              // Coiling alerts — phase-aware, injected at current time
+              if (isLive && liveStatus?.coiling?.active) {
+                const coil = liveStatus.coiling;
+                const activeSetupsCount = setups?.list?.filter(s => s.status === 'ACTIVE').length || 0;
+                const volCtx = coil.volRatio != null ? `${coil.volRatio}% of session baseline` : `${coil.avgVolume} contracts/min`;
+
+                // Level context helpers
+                const levelStr = (lvl) => lvl ? ` [${lvl.label} ${lvl.dist === 0 ? 'AT' : lvl.dist + ' pts from'} ${lvl.value}]` : '';
+                const highCtx = levelStr(coil.highLevel);
+                const lowCtx  = levelStr(coil.lowLevel);
+                const levelSummary = (coil.highLevel || coil.lowLevel)
+                  ? ` Key levels — HIGH${highCtx || ' (open air)'}  |  LOW${lowCtx || ' (open air)'}.`
+                  : '';
+                const triggerNote = (coil.highLevel || coil.lowLevel)
+                  ? ` Wait for price to test the level before entering — the level IS the trigger.`
+                  : ` No key level at either boundary — lower-conviction pop setup.`;
+
+                // Pop trigger alert — highest priority, always shown
+                if (coil.popSurge) {
+                  const popBoundary = coil.popDir === 'high' ? coil.high : coil.low;
+                  const popLevel = coil.popDir === 'high' ? coil.highLevel : coil.lowLevel;
+                  const popLevelStr = popLevel ? ` (${popLevel.label} confluence, ${popLevel.dist} pts)` : '';
+                  feed.push({
+                    time: nowETStr,
+                    type: 'danger',
+                    text: `🚨 POP TRIGGER: Volume surge (${coil.volSurgeRatio}x) at coil ${coil.popDir === 'high' ? 'HIGH' : 'LOW'} (${popBoundary})${popLevelStr}. Large participants re-entered the book. Watch for a 1-min close outside ${coil.low}–${coil.high} — that's the breakout confirmation.`
+                  });
+                }
+
+                // Stand-aside alert when no setups active
+                if (activeSetupsCount === 0) {
+                  let coilText, coilType;
+                  if (coil.coilPhase === 'optimal') {
+                    coilText = `⚠️ COILING (${coil.durationBars} min): NQ compressing inside a ${coil.range}-pt range (${coil.low}–${coil.high}), volume ${volCtx}. Sweet spot — release probable in next ${Math.max(1, 15 - coil.durationBars)} min.${levelSummary}${triggerNote}`;
+                    coilType = 'warning';
+                  } else if (coil.coilPhase === 'stale') {
+                    coilText = `⚠️ COIL STALE (${coil.durationBars} min): The ${coil.range}-pt coil has lasted >20 min. Transitioning to dead-zone drift. Don't anticipate a breakout until volume picks back up.${levelSummary}`;
+                    coilType = 'warning';
+                  } else {
+                    coilText = `⚠️ COILING NASCENT (${coil.durationBars} min): NQ beginning to coil inside ${coil.low}–${coil.high}, volume ${volCtx}. Wait for 5+ min confirmed compression.${levelSummary}`;
+                    coilType = 'warning';
+                  }
+                  feed.push({ time: nowETStr, type: coilType, text: coilText });
+                }
               }
 
               // Sort by timestamp (descending: newest first)
@@ -591,6 +692,7 @@ export default function AntigravityEdgesView() {
                 if (item.type === 'success') { textCol = '#a7f3d0'; timeCol = '#10b981'; bg = 'rgba(16, 185, 129, 0.03)'; borderCol = 'rgba(16, 185, 129, 0.08)'; }
                 else if (item.type === 'danger') { textCol = '#fca5a5'; timeCol = '#f87171'; bg = 'rgba(239, 68, 68, 0.03)'; borderCol = 'rgba(239, 68, 68, 0.08)'; }
                 else if (item.type === 'alert') { textCol = '#e0f2fe'; timeCol = '#38bdf8'; bg = 'rgba(56, 189, 248, 0.03)'; borderCol = 'rgba(56, 189, 248, 0.08)'; }
+                else if (item.type === 'warning') { textCol = '#fed7aa'; timeCol = '#fb923c'; bg = 'rgba(251, 146, 60, 0.04)'; borderCol = 'rgba(251, 146, 60, 0.12)'; }
                 else if (item.type === 'system') { textCol = '#94a3b8'; timeCol = '#64748b'; }
 
                 return (
@@ -633,10 +735,10 @@ export default function AntigravityEdgesView() {
             {/* Window selector tabs */}
             <div style={tabGroupStyle}>
               {[
-                { key: 'last30', label: 'Last 30 Days' },
-                { key: 'last60', label: 'Last 60 Days' },
-                { key: 'last90', label: 'Last 90 Days' },
-                { key: 'allTime', label: 'All-Time (341d)' }
+                { key: 'last30', label: `Last 30 Days (${tradeBacktest.last30?.windowSize || 0}d)` },
+                { key: 'last60', label: `Last 60 Days (${tradeBacktest.last60?.windowSize || 0}d)` },
+                { key: 'last90', label: `Last 90 Days (${tradeBacktest.last90?.windowSize || 0}d)` },
+                { key: 'allTime', label: `All-Time (${tradeBacktest.allTime?.windowSize || 0}d)` }
               ].map(tab => (
                 <button
                   key={tab.key}
@@ -817,7 +919,7 @@ export default function AntigravityEdgesView() {
                         <div style={metricValueStyle}>{(s.baselineWr * 100).toFixed(1)}% <span style={sampleLabel}>(N={s.sampleN})</span></div>
                       </div>
                       <div>
-                        <div style={metricLabelStyle}>Adjusted WR</div>
+                        <div style={metricLabelStyle}>Heuristic WR *</div>
                         <div style={{ ...metricValueStyle, color: confColor }}>{(s.adjustedWr * 100).toFixed(1)}%</div>
                       </div>
                       <div>
@@ -827,13 +929,17 @@ export default function AntigravityEdgesView() {
                     </div>
 
                     <div style={setupLevelsGrid}>
-                      <div><strong>Entry Zone:</strong> {s.entry_zone_low?.toFixed(2)} - {s.entry_zone_high?.toFixed(2)}</div>
-                      <div><strong>Stop-Loss:</strong> <span style={{ color: '#f87171' }}>{s.stop_level?.toFixed(2)}</span></div>
-                      <div><strong>Target (T1):</strong> <span style={{ color: '#34d399' }}>{s.t1_level?.toFixed(2)}</span></div>
+                      <div><strong>Entry Zone:</strong> {fmtP(s.entry_zone_low, 2)} - {fmtP(s.entry_zone_high, 2)}</div>
+                      <div><strong>Stop-Loss:</strong> <span style={{ color: '#f87171' }}>{fmtP(s.stop_level, 2)}</span></div>
+                      <div><strong>Target (T1):</strong> <span style={{ color: '#34d399' }}>{fmtP(s.t1_level, 2)}</span></div>
                     </div>
 
                     <div style={recBoxStyle(s.confidence)}>
                       {s.recommendation}
+                    </div>
+
+                    <div style={{ fontSize: '9px', color: '#64748b', marginTop: '8px', textAlign: 'right', fontStyle: 'italic' }}>
+                      * Heuristic WR uses qualitative coaching assumptions, not database measurements.
                     </div>
                   </div>
                 );
@@ -980,11 +1086,11 @@ Risk: Enter reversal plays with stop-loss at the extreme of the 10:00 AM pivot w
                   <td style={tableColHeaderStyle}>
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                       <strong>Wide OR Follow-thru</strong>
-                      <InfoTooltip text={`Wide OR Breakout (<5% Success Rate)
+                      <InfoTooltip text={`Wide OR Breakout (Low Success Rate)
 
-Trigger: Opening range (OR5) exceeds 91.5 pts.
+Trigger: Opening range (OR5) exceeds Q4 limit.
 
-Mechanics: Wide opening ranges indicate high volatility but also mean the day's expected extension has already occurred. Breakouts have an extremely high failure rate (>95%). Fades or Trapped setups (TRT) are the dominant edge.
+Mechanics: Wide opening ranges indicate high volatility but also mean the day's expected extension has already occurred. Breakouts have an elevated historical failure rate. Fades or Trapped setups (TRT) are the dominant edge.
 
 Risk: Avoid trend-following breakouts; enter only fading reversals with tight risk.`} />
                     </div>

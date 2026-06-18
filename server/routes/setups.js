@@ -13,6 +13,7 @@ const FALLBACK_MEDIANS = {
   'FAILED_AUCTION_SHORT': 28, 'FAILED_AUCTION_LONG': 28,
   'VALUE_AREA_RESPONSIVE_LONG': 28, 'VALUE_AREA_RESPONSIVE_SHORT': 28,
   'BRACKET_BREAKOUT_LONG': 40, 'BRACKET_BREAKOUT_SHORT': 40,
+  'GAP_FILL_LONG': 40, 'GAP_FILL_SHORT': 40,
 };
 const DEFAULT_FALLBACK = 32;
 const getFallback = (setupType) => FALLBACK_MEDIANS[setupType] ?? DEFAULT_FALLBACK;
@@ -84,7 +85,7 @@ router.get('/setups/tp-recommendation', async (req, res) => {
 
     // Overnight high/low from price_bars
     const prevDateQ = await query(
-      `SELECT ts::date::text as d FROM price_bars WHERE symbol='NQ' AND ts::date < $1
+      `SELECT ts::date::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
        AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16
        ORDER BY ts::date DESC LIMIT 1`, [todayET]);
     let overnightHigh = null, overnightLow = null;
@@ -92,7 +93,7 @@ router.get('/setups/tp-recommendation', async (req, res) => {
     if (prevDate) {
       const onQ = await query(`
         SELECT MAX(high)::float as h, MIN(low)::float as l
-        FROM price_bars WHERE symbol='NQ'
+        FROM price_bars_primary WHERE symbol='NQ'
           AND ((ts::date::text = $1 AND EXTRACT(HOUR FROM ts) >= 16)
                OR (ts::date::text = $2 AND EXTRACT(HOUR FROM ts) < 10))
       `, [prevDate, todayET]);
@@ -163,7 +164,7 @@ router.get('/setups/tp-recommendation', async (req, res) => {
       FROM (
         SELECT MAX(high)::float - MIN(low)::float as dr,
                ROW_NUMBER() OVER (ORDER BY ts::date DESC) as rn
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol='NQ' AND ts::date < CURRENT_DATE AND ts::date >= CURRENT_DATE-21
           AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16
         GROUP BY ts::date

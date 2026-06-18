@@ -380,7 +380,7 @@ router.get('/stats/optimization', async (req, res) => {
       FROM trades t
       LEFT JOIN LATERAL (
         SELECT MAX(high::numeric) AS max_high, MIN(low::numeric) AS min_low
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol = CASE regexp_replace(t.symbol, '[HMUZ]\\d{1,2}$', '')
             WHEN 'MNQ' THEN 'NQ' WHEN 'MES' THEN 'ES' WHEN 'M2K' THEN 'RTY'
             ELSE regexp_replace(t.symbol, '[HMUZ]\\d{1,2}$', '') END
@@ -391,7 +391,7 @@ router.get('/stats/optimization', async (req, res) => {
         SELECT
           SUM((high::numeric + low::numeric + close::numeric) / 3 * volume::numeric)
             / NULLIF(SUM(volume::numeric), 0) AS vwap_at_entry
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol = CASE regexp_replace(t.symbol, '[HMUZ]\\d{1,2}$', '')
             WHEN 'MNQ' THEN 'NQ' WHEN 'MES' THEN 'ES' WHEN 'M2K' THEN 'RTY'
             ELSE regexp_replace(t.symbol, '[HMUZ]\\d{1,2}$', '') END
@@ -607,7 +607,7 @@ router.get('/stats/trade-location', async (req, res) => {
     for (const { date, barSymbol, trades: dayTrades } of Object.values(groups)) {
       const barsRes = await query(`
         SELECT ts, high::numeric AS high, low::numeric AS low, volume::numeric AS volume
-        FROM price_bars
+        FROM price_bars_primary
         WHERE symbol = $1
           AND ts >= ($2::date + time '09:30:00')
           AND ts <  ($2::date + time '16:15:00')
