@@ -21238,6 +21238,157 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         )}
         {tab === 'backtest' && (
           <>
+            <CollapsibleSection title="Backtest & Edge Registry" defaultOpen>
+              <div style={{ padding: '8px 16px', fontFamily: 'Arial, sans-serif' }}>
+                <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginBottom: 16 }}>
+                  Complete registry of all backtested edges, setups, and the test methodologies used. Updated June 2026. All tests run on 12-month NQ data (2025-06-18 to present) unless noted.
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Test Methodologies</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginBottom: 20 }}>
+                  {[
+                    { name: 'Forward-Bar Directional WR', desc: '"Did price go my way within N bars?" vs unconditional baseline. First screen — does an edge exist?' },
+                    { name: 'Bracket Resolution Replay', desc: '"Did price hit fixed T1 before fixed stop?" with MFE/MAE. Tests actual trade setups with defined risk. Timezone-corrected (et_min matching).' },
+                    { name: 'Controlled Confluence Test', desc: 'Compares near vs away WR within same (setup_type + day_type + NL30) groups. Isolates a level\'s independent contribution after removing confounds.' },
+                    { name: 'Target Optimization', desc: 'For each validated confluence, tests fixed-point targets (10-100pt) at a given stop to find maximum expectancy per contract.' },
+                    { name: 'Level Fade Backtest', desc: '"Does price bounce off this level?" as standalone trade with confirmation bars, MFE/MAE, day-type splits. Full 19-level test.' },
+                    { name: 'OR Width Controlled Test', desc: 'Tests tight (<47.5pt) vs normal vs wide (>91.5pt) OR effect on each setup within same control groups.' },
+                  ].map((t, i) => (
+                    <div key={i} style={{ padding: '8px 10px', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 6 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 3 }}>{t.name}</div>
+                      <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.4 }}>{t.desc}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Active Setups (in active_setups, weekly backtest cron)</div>
+                <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                        {['Setup', 'Edge (10bar)', 'Freq', 'Best Context', 'Tests Applied', 'Status'].map(h => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { name: '9 EMA Snap-Back', edge: '+23.5%', freq: '1.0/day', ctx: 'All regimes', tests: 'Fwd WR, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'VA_RESP_SHORT', edge: '+17.4%', freq: '0.25/day', ctx: 'TURB 90%, NL30-aligned 93%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'OPEN_DRIVE_LONG', edge: '+15.9%', freq: '0.17/day', ctx: 'TREND 83%, tight OR +14%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'OPEN_DRIVE_SHORT', edge: '+18.9%', freq: '0.09/day', ctx: '@VA 78%, tight OR +45%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'IB_BEARISH', edge: '+1.3%', freq: '0.37/day', ctx: 'TREND 73%, tight OR +15%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'BRACKET_BK_LONG', edge: '+4.4%', freq: '0.20/day', ctx: '@PD1-VA 73%, wide OR +11%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'TRT_LONG', edge: '+24% @20bar', freq: '0.12/day', ctx: 'TREND 100%, 120min expiry', tests: 'Fwd WR, Bracket, OR Width', status: 'ACTIVE', color: '#f59e0b' },
+                        { name: 'OTD_LONG', edge: '+0.6%', freq: '0.31/day', ctx: 'Marginal edge', tests: 'Fwd WR, Bracket, OR Width', status: 'ACTIVE', color: '#64748b' },
+                        { name: 'C_STANDALONE_DOWN', edge: '-12% / +32% @PD2', freq: '0.49/day', ctx: 'PD-2 VA only (81%)', tests: 'Fwd WR, Bracket, Confluence', status: 'GATED', color: '#f59e0b' },
+                        { name: 'OTD_SHORT', edge: '-5.6% / +23% @PD2', freq: '0.29/day', ctx: 'PD-2 VA only, tight OR +32%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'GATED', color: '#f59e0b' },
+                        { name: 'IB_BULLISH', edge: '-7.5%', freq: '0.34/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'C_STANDALONE_UP', edge: '-6.5%', freq: '0.51/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'VA_RESP_LONG', edge: '-5.0%', freq: '0.14/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'TRT_SHORT', edge: '-10.1%', freq: '0.10/day', ctx: 'Tight OR 100% N=6 only', tests: 'Fwd WR, Bracket, OR Width', status: 'REMOVED', color: '#ef4444' },
+                      ].map((s, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
+                          <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{s.name}</td>
+                          <td style={{ padding: '5px 8px', color: s.color, fontWeight: 700 }}>{s.edge}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.ctx}</td>
+                          <td style={{ padding: '5px 8px', color: '#64748b', fontSize: 10 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px' }}><span style={{ fontSize: 9, fontWeight: 800, color: s.color, background: `${s.color}20`, padding: '1px 5px', borderRadius: 3 }}>{s.status}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Signal-Only Edges (not in active_setups — manual management)</div>
+                <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                        {['Signal', 'WR', 'Edge vs Baseline', 'Freq', 'Tests Applied', 'Why Signal-Only'].map(h => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { name: 'RSI Div Bearish (5min)', wr: '86.1%', edge: '+34.9%', freq: '0.61/day', tests: 'Fwd WR, Confirmation filter', why: 'Moving target — price reverts partially, not to fixed level' },
+                        { name: 'RSI Div Bullish (5min)', wr: '90.0%', edge: '+21.9%', freq: '0.34/day', tests: 'Fwd WR, Confirmation filter', why: 'Same — scalp with manual profit-taking at value area' },
+                        { name: 'Coiling/Vol Expansion', wr: '54.3% (stop)', edge: '28.6% stop @VWAP', freq: '0.84/day', tests: 'Prior session only (AGY)', why: 'NOT tested with controlled methodology this session' },
+                      ].map((s, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
+                          <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{s.name}</td>
+                          <td style={{ padding: '5px 8px', color: '#10b981', fontWeight: 700 }}>{s.wr}</td>
+                          <td style={{ padding: '5px 8px', color: '#34d399' }}>{s.edge}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
+                          <td style={{ padding: '5px 8px', color: '#64748b', fontSize: 10 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px', color: '#f59e0b', fontSize: 10 }}>{s.why}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Confluence Levels (controlled-test-validated, target-optimized)</div>
+                <div style={{ overflowX: 'auto', marginBottom: 20 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #334155', color: '#94a3b8' }}>
+                        {['Level', 'Controlled Δ', 'Target', 'Hit Rate', 'Exp/ct', 'Profile'].map(h => (
+                          <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { name: 'PD-2 VAH', delta: '+44.8%', target: '15pt', hit: '83%', exp: '$45', profile: 'Scalp' },
+                        { name: 'PD-2 VAL', delta: '+20.5%', target: '75pt', hit: '33%', exp: '$55', profile: 'Extension' },
+                        { name: 'PW Low', delta: '+15.0%', target: '100pt', hit: '33%', exp: '$100', profile: 'Extension' },
+                        { name: 'PD-3 VAH', delta: '+14.7%', target: '15pt', hit: '85%', exp: '$48', profile: 'Scalp' },
+                        { name: 'PD-1 VAH', delta: '+9.6%', target: '30pt', hit: '52%', exp: '$31', profile: 'Scalp' },
+                        { name: 'PD-1 POC', delta: '+9.0%', target: '20pt', hit: '62%', exp: '$25', profile: 'Scalp' },
+                        { name: 'OR Midpoint', delta: '+6.9%', target: '20pt', hit: '69%', exp: '$38', profile: 'Scalp' },
+                        { name: 'PW High', delta: '+5.1%', target: '15pt', hit: '72%', exp: '$26', profile: 'Scalp' },
+                      ].map((l, i) => (
+                        <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
+                          <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{l.name}</td>
+                          <td style={{ padding: '5px 8px', color: '#10b981', fontWeight: 700 }}>{l.delta}</td>
+                          <td style={{ padding: '5px 8px', color: '#a78bfa' }}>{l.target}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{l.hit}</td>
+                          <td style={{ padding: '5px 8px', color: '#34d399', fontWeight: 700 }}>{l.exp}</td>
+                          <td style={{ padding: '5px 8px', color: l.profile === 'Extension' ? '#f59e0b' : '#94a3b8', fontWeight: 600, fontSize: 10 }}>{l.profile}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Anti-Confluence (levels that HURT setups)</div>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+                  {[
+                    { name: 'IB High', delta: '-23.9%', note: 'Setups near IB High perform dramatically worse' },
+                    { name: 'IB Low', delta: '-28.1%', note: 'Worst anti-confluence — avoid setups near IB Low' },
+                    { name: 'VWAP', delta: '-1.3%', note: 'Raw edge (+3.9%) was a confound — disappeared after controlling' },
+                    { name: 'PD High', delta: '-1.3%', note: 'Raw edge (+8.8%) was a confound — correlated with good setups, not causal' },
+                  ].map((a, i) => (
+                    <div key={i} style={{ flex: 1, padding: '6px 10px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#f87171' }}>{a.name}: {a.delta}</div>
+                      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>{a.note}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Not Yet Fully Tested</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
+                  • <strong>Coiling/Vol Expansion</strong> — backtested in prior session (AGY, different methodology). Needs controlled confluence test, target optimization, and OR width split.<br />
+                  • <strong>RSI Divergence</strong> — tested with forward-bar WR and confirmation filter, but NOT controlled test (no confound isolation). Edge is directional, not structurally validated.<br />
+                  • <strong>24hr VWAP</strong> — not tested (requires overnight bars outside RTH window).<br />
+                  • <strong>3-month VA levels</strong> — not tested (insufficient data in developing_value_log for 3-month composite).<br />
+                  • <strong>Prior Month VA</strong> — level fade test showed no standalone edge; not tested as confluence filter.
+                </div>
+              </div>
+            </CollapsibleSection>
             <CollapsibleSection title="Level Confluence" defaultOpen>
               <LevelConfluenceReference />
             </CollapsibleSection>
