@@ -1290,9 +1290,9 @@ export default function AntigravityEdgesView() {
             📉 15-Min RSI Divergence (Scalp Reversal)
           </h2>
           {(() => {
-            const rsiBullTooltip = `RSI BULLISH DIVERGENCE (15-min)\n\nWHAT IT IS:\nPrice makes a LOWER swing low, but RSI(14) makes a HIGHER swing low. This means selling pressure is weakening — sellers pushed price lower but with less momentum. The market is running out of sellers.\n\nTHE TRIGGER (not just the divergence):\nDivergence alone is a CONDITION, not a signal. Divergence can persist for multiple swings without reversing. The trigger fires ONLY when the confirmation bar (the bar after the swing low) CLOSES HIGHER than the swing bar. This confirms the reversal has actually begun.\n\nWithout confirmation: 76.9% WR (N=26)\nWith confirmation bar: 90.0% WR (N=20) — the confirmation adds +13%\n\nWHEN IT WORKS BEST:\n• RSI ≤ 40 at the swing: 88.2% WR — strongest when RSI is in the lower zone\n• BALANCE days: 80%+ WR — range-bound markets revert cleanly\n• First divergence of the day is more reliable than subsequent ones\n• Small RSI delta (<5 pts) actually works BETTER than large gaps\n\nWHEN IT FAILS:\n• TURBULENT days: 60% WR — wide swings overpower the reversion\n• RSI > 40 (midrange): drops to 55.6% — not stretched enough to revert\n• Holding too long: edge decays past 3 bars (45 min)\n\nEXECUTION:\n1. Divergence forms on 15-min chart (lower low + higher RSI low)\n2. WAIT for the next 15-min bar to close HIGHER (confirmation)\n3. Enter long on that confirmation close\n4. Stop: below the swing low (or 1.5x the swing bar range)\n5. Target: 2R, value area midpoint, or 9 EMA\n6. Hold 3 bars MAX (45 min). Take profit — do not hold for continuation\n7. If no confirmation bar appears, the divergence is NOT triggered — stand aside\n\nBACKTEST: 12 months NQ, 15-min bars. Baseline long WR: 53.5%.`;
+            const rsiBullTooltip = `RSI BULLISH DIVERGENCE (5-min)\n\nWHAT IT IS:\nPrice makes a LOWER swing low, but RSI(14) makes a HIGHER swing low. Selling pressure weakening.\n\nTHE TRIGGER:\nDivergence alone is a CONDITION. Wait for CONFIRMATION BAR — next 5-min bar must close HIGHER.\n\nCONTROLLED TEST (5-min, 12mo):\n• Controlled WR: 54.8% vs 53.1% baseline = +1.7% independent edge\n• MARGINAL — only works on BALANCE days (62% WR, N=42)\n• TURBULENT: 44% — fails\n• RSI > 40: 61% WR (better when NOT oversold)\n• RSI ≤ 30: 25% WR — counterintuitively terrible\n\nCONTEXT GATE: BALANCE days only. Skip TURBULENT.\n\nEXECUTION:\n1. 5-min divergence forms (lower low + higher RSI low)\n2. WAIT for next bar to close HIGHER (confirmation)\n3. Enter long. Stop below swing low. Target 2R or VA midpoint.\n4. Hold 3-5 bars (15-25 min). Scalp only.\n\nFREQUENCY: 0.34/day (27% of days)`;
 
-            const rsiBearTooltip = `RSI BEARISH DIVERGENCE (15-min)\n\nWHAT IT IS:\nPrice makes a HIGHER swing high, but RSI(14) makes a LOWER swing high. This means buying pressure is weakening — buyers pushed price higher but with less momentum. Institutional distribution is happening: smart money is selling into the new highs.\n\nTHE TRIGGER (not just the divergence):\nDivergence alone is a CONDITION. It can persist — price keeps making higher highs while RSI keeps declining. The trigger fires ONLY when the confirmation bar (the bar after the swing high) CLOSES LOWER. This confirms sellers have actually taken control.\n\nWithout confirmation: 76.6% WR (N=47)\nWith confirmation bar: 86.1% WR (N=36) — the confirmation adds +9.5%\nOn BALANCE days: 84.6% WR (N=26) — highest edge context\n\nWHEN IT WORKS BEST:\n• BALANCE days: 84.6% — range-bound days revert most reliably\n• RSI ≥ 60: 77.4% — upper RSI zone confirms exhaustion\n• Confirmation bar closes below swing bar low: 87.5% (N=24) — strictest trigger\n• First bearish divergence of the day: 78% vs 67% for subsequent\n\nWHEN IT FAILS:\n• TREND days: 53.6% WR at 10 bars — the uptrend fights you\n• Holding too long: 83% at 2 bars → 60% at 8 bars. This is a SCALP.\n• Large RSI delta (≥10 pts): counterintuitively WORSE (25%) — dramatic divergence often means the move is just getting started, not ending\n\nEXECUTION:\n1. Divergence forms on 15-min chart (higher high + lower RSI high)\n2. WAIT for the next 15-min bar to close LOWER (confirmation)\n3. Enter short on that confirmation close\n4. Stop: above the swing high (or 1.5x the swing bar range)\n5. Target: 2R, value area midpoint, or 9 EMA\n6. Hold 2-3 bars MAX (30-45 min). Take profit at first sign of support\n7. If no confirmation bar appears → divergence persisting → stand aside\n\nCRITICAL: If the divergence "persists" (price makes yet ANOTHER higher high after your signal), it means the trend is stronger than the exhaustion. Do NOT re-enter on the second divergence — first occurrence only.\n\nBACKTEST: 12 months NQ, 15-min bars. Baseline short WR: 46.5%.`;
+            const rsiBearTooltip = `RSI BEARISH DIVERGENCE (5-min)\n\nWHAT IT IS:\nPrice makes a HIGHER swing high, but RSI(14) makes a LOWER swing high. Buying pressure weakening — institutional distribution.\n\nTHE TRIGGER:\nWait for CONFIRMATION BAR — next 5-min bar must close LOWER.\n\nCONTROLLED TEST (5-min, 12mo):\n• Controlled WR: 51.9% vs 46.9% baseline = +5.0% independent edge\n• Best at 3 bars: 57.9% WR (+11.0%) — scalp window\n• TREND days: 55% WR (N=40) — works\n• RSI 50-60: 61% WR — better at midrange than extreme overbought\n• RSI ≥ 70: 44% — worse at extremes\n\nCONTEXT: Fire on TREND and BALANCE. Suppress TURBULENT.\n\nEXECUTION:\n1. 5-min divergence forms (higher high + lower RSI high)\n2. WAIT for next bar to close LOWER (confirmation)\n3. Enter short. Stop above swing high. Target 2R or VA midpoint.\n4. Hold 2-3 bars (10-15 min). Scalp only — edge decays fast.\n5. Do NOT re-enter on persisting divergence.\n\nFREQUENCY: 0.61/day (43% of days)`;
 
             // We don't have live RSI div detection on the frontend — show the static edge card
             // with live status from liveStatus if available
@@ -1305,38 +1305,38 @@ export default function AntigravityEdgesView() {
                 <div style={setupCardStyle('MEDIUM')}>
                   <div style={setupHeaderStyle}>
                     <span style={setupTypeStyle}>
-                      RSI BULLISH DIVERGENCE (15min)
+                      RSI BULLISH DIVERGENCE (5min)
                       <InfoTooltip text={rsiBullTooltip} />
                     </span>
                     <span style={setupBadgeStyle('#3b82f6', 'rgba(59,130,246,0.1)')}>SCALP REVERSAL</span>
                   </div>
                   <div style={setupMetricsGrid}>
                     <div>
-                      <div style={metricLabelStyle}>Confirmed WR</div>
-                      <div style={{ ...metricValueStyle, color: '#10b981' }}>90.0% <span style={sampleLabel}>(N=20)</span></div>
+                      <div style={metricLabelStyle}>Controlled Δ</div>
+                      <div style={{ ...metricValueStyle, color: '#f59e0b' }}>+1.7% <span style={sampleLabel}>(marginal)</span></div>
                     </div>
                     <div>
-                      <div style={metricLabelStyle}>Unconfirmed WR</div>
-                      <div style={{ ...metricValueStyle, color: '#94a3b8' }}>76.9% <span style={sampleLabel}>(N=26)</span></div>
+                      <div style={metricLabelStyle}>BALANCE WR</div>
+                      <div style={{ ...metricValueStyle, color: '#34d399' }}>62% <span style={sampleLabel}>(N=42)</span></div>
                     </div>
                     <div>
-                      <div style={metricLabelStyle}>RSI ≤ 40 WR</div>
-                      <div style={{ ...metricValueStyle, color: '#10b981' }}>88.2% <span style={sampleLabel}>(N=17)</span></div>
+                      <div style={metricLabelStyle}>Frequency</div>
+                      <div style={metricValueStyle}>0.34/day</div>
                     </div>
                   </div>
                   <div style={setupLevelsGrid}>
-                    <div><strong>Signal:</strong> Price lower low + RSI higher low</div>
-                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next bar closes HIGHER</span></div>
-                    <div><strong>Context:</strong> <span style={{ color: isBalance ? '#34d399' : '#f59e0b' }}>{isBalance ? 'BALANCE — optimal' : dayType + ' — reduced edge'}</span></div>
+                    <div><strong>Signal:</strong> 5-min lower low + higher RSI low</div>
+                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next 5-min bar closes HIGHER</span></div>
+                    <div><strong>Context:</strong> <span style={{ color: isBalance ? '#34d399' : '#f59e0b' }}>{isBalance ? 'BALANCE — 62% WR ✅' : dayType + ' — skip (marginal edge)'}</span></div>
                   </div>
                   <div style={recBoxStyle('MEDIUM')}>
-                    <strong>How to trade:</strong> Divergence alone is a condition, NOT a signal. Wait for the CONFIRMATION BAR — the 15-min bar after the swing low must close higher than the swing bar. This confirms sellers have exhausted. Without this, divergence can persist. Enter long on confirmation close, stop below swing low, target 2R or value area midpoint. Hold 3 bars max (45 min). Best when RSI ≤ 40.
+                    <strong>How to trade:</strong> BALANCE days only — marginal +1.7% controlled edge overall, but 62% on BALANCE. Wait for 5-min confirmation bar to close higher. Enter long, stop below swing low, target 2R or VA midpoint. Hold 3-5 bars max (15-25 min). RSI > 40 works better (61%) than oversold (25%). Scalp only.
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
-                    <div><div style={metricLabelStyle}>Raw div</div><div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>76.9%</div></div>
-                    <div><div style={metricLabelStyle}>+ Confirm</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>90.0%</div></div>
-                    <div><div style={metricLabelStyle}>RSI ≤ 40</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>88.2%</div></div>
-                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>53.5%</div></div>
+                    <div><div style={metricLabelStyle}>Ctrl Δ</div><div style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>+1.7%</div></div>
+                    <div><div style={metricLabelStyle}>BALANCE</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>62%</div></div>
+                    <div><div style={metricLabelStyle}>RSI>40</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>61%</div></div>
+                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>53.1%</div></div>
                   </div>
                 </div>
 
@@ -1344,38 +1344,38 @@ export default function AntigravityEdgesView() {
                 <div style={setupCardStyle('HIGH')}>
                   <div style={setupHeaderStyle}>
                     <span style={setupTypeStyle}>
-                      RSI BEARISH DIVERGENCE (15min)
+                      RSI BEARISH DIVERGENCE (5min)
                       <InfoTooltip text={rsiBearTooltip} />
                     </span>
                     <span style={setupBadgeStyle('#10b981', 'rgba(16,185,129,0.1)')}>HIGH EDGE — BALANCE DAYS</span>
                   </div>
                   <div style={setupMetricsGrid}>
                     <div>
-                      <div style={metricLabelStyle}>Confirmed WR</div>
-                      <div style={{ ...metricValueStyle, color: '#10b981' }}>86.1% <span style={sampleLabel}>(N=36)</span></div>
+                      <div style={metricLabelStyle}>Controlled Δ</div>
+                      <div style={{ ...metricValueStyle, color: '#34d399' }}>+5.0% <span style={sampleLabel}>(real edge)</span></div>
                     </div>
                     <div>
-                      <div style={metricLabelStyle}>BALANCE Day WR</div>
-                      <div style={{ ...metricValueStyle, color: '#10b981' }}>84.6% <span style={sampleLabel}>(N=26)</span></div>
+                      <div style={metricLabelStyle}>3-bar WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>57.9% <span style={sampleLabel}>(+11.0%)</span></div>
                     </div>
                     <div>
-                      <div style={metricLabelStyle}>Strict Confirm WR</div>
-                      <div style={{ ...metricValueStyle, color: '#10b981' }}>87.5% <span style={sampleLabel}>(N=24)</span></div>
+                      <div style={metricLabelStyle}>Frequency</div>
+                      <div style={metricValueStyle}>0.61/day</div>
                     </div>
                   </div>
                   <div style={setupLevelsGrid}>
-                    <div><strong>Signal:</strong> Price higher high + RSI lower high</div>
-                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next bar closes LOWER</span></div>
-                    <div><strong>Context:</strong> <span style={{ color: isBalance ? '#10b981' : '#f59e0b' }}>{isBalance ? 'BALANCE — highest edge (84.6%)' : dayType + ' — reduced conviction'}</span></div>
+                    <div><strong>Signal:</strong> 5-min higher high + lower RSI high</div>
+                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next 5-min bar closes LOWER</span></div>
+                    <div><strong>Context:</strong> TREND (55%) and BALANCE (51%). Skip TURBULENT.</div>
                   </div>
                   <div style={recBoxStyle('HIGH')}>
-                    <strong>How to trade:</strong> Divergence = condition, NOT signal. Price is making new highs but RSI is declining — institutional distribution (smart money selling into strength). The TRIGGER is the confirmation bar: the 15-min bar after the swing high must close LOWER. This confirms buyers have lost control. Without this, divergence can persist — price keeps making higher highs with lower RSI for multiple swings. Enter short on confirmation close, stop above swing high, target 2R or value area midpoint. Hold 2-3 bars max (30-45 min). Do NOT re-enter if divergence persists after your exit.
+                    <strong>How to trade:</strong> Price making new highs but RSI declining — institutional distribution. Wait for 5-min confirmation bar to close LOWER. Enter short, stop above swing high, target 2R or VA midpoint. Hold 2-3 bars MAX (10-15 min) — the edge is strongest at 3 bars (+11%) and decays fast. RSI 50-60 works better (61%) than extreme overbought (44%). Do NOT re-enter on persisting divergence.
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
-                    <div><div style={metricLabelStyle}>Raw div</div><div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>76.6%</div></div>
-                    <div><div style={metricLabelStyle}>+ Confirm</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>86.1%</div></div>
-                    <div><div style={metricLabelStyle}>Strict</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>87.5%</div></div>
-                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>46.5%</div></div>
+                    <div><div style={metricLabelStyle}>3bar</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>57.9%</div></div>
+                    <div><div style={metricLabelStyle}>Ctrl Δ</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>+5.0%</div></div>
+                    <div><div style={metricLabelStyle}>RSI 50-60</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>61%</div></div>
+                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>46.9%</div></div>
                   </div>
                 </div>
               </div>

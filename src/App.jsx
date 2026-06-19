@@ -2569,14 +2569,15 @@ function LiveReadBanner() {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: '#94a3b8' }}>
               {[
-                { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', freq: '1.0/day', color: '#10b981', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). Signal-only — manage manually.' },
-                { name: 'RSI Div Bearish', wr: '86.1%', delta: '+34.9%', freq: '0.6/day', color: '#10b981', tip: '15-min RSI bearish divergence with confirmation bar. 86.1% WR at 3 bars. Best on BALANCE days (84.6%). Scalp — 30 min max.' },
-                { name: 'RSI Div Bullish', wr: '90.0%', delta: '+21.9%', freq: '0.3/day', color: '#34d399', tip: '15-min RSI bullish divergence with confirmation bar. 90.0% WR (N=20). Best when RSI ≤ 40. Scalp — 45 min max.' },
-                { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', freq: '0.09/day', color: '#34d399', tip: 'Open drive down, pullback to OR Low. 68.2% WR at 10 bars (N=22). At VA level: 78%. NL30 aligned: 80%.' },
-                { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', freq: '0.25/day', color: '#34d399', tip: 'Price at PD VAH inside value, non-drive open. 66.7% WR (N=60). TURBULENT: 90%. NL30 aligned: 93%. Tight 18pt stop.' },
-                { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', freq: '0.17/day', color: '#34d399', tip: 'Open drive up, pullback to OR High. 66.7% WR at 10 bars (N=42). TREND days: 83%.' },
-                { name: 'BRACKET_BK_LONG', wr: '55.1%', delta: '+4.4%', freq: '0.20/day', color: '#94a3b8', tip: 'Bracket top exceeded. 55.1% WR (N=49). At PD-1 VA: 73%. Moderate edge.' },
-                { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', freq: '0.12/day', color: '#f59e0b', tip: 'Trend reversal — A+C failed, price through OR. Edge at 20 bars (75% WR), not 10. Needs 120 min. Slow burn.' },
+                { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', freq: '1.0/day', color: '#10b981', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). All regimes.' },
+                { name: 'Absorption Long', wr: '71.4%', delta: '+18.4%', freq: '10% days', color: '#10b981', tip: 'Support held + RSI rising + price flat. 71.4% WR 5bar (N=35). BALANCE: 73.9% 20bar. @PD1-VA: 90.9%. Tight OR: 76.9%. 25pt stop / 40pt target. Runner.' },
+                { name: 'Coil→VWAP', wr: '65.3%', delta: '+16.1%', freq: '1.08/day', color: '#34d399', tip: 'Coil + volume surge → fade toward VWAP. TREND: 65.3% (N=49). R:R 3.08. Hold 10 bars max.' },
+                { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', freq: '0.09/day', color: '#34d399', tip: 'Pullback to OR Low. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91% (+45%).' },
+                { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', freq: '0.25/day', color: '#34d399', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Tight OR: 82% (+19%).' },
+                { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', freq: '0.17/day', color: '#34d399', tip: 'Pullback to OR High. 66.7% WR (N=42). TREND: 83%. Tight OR: 78% (+14%).' },
+                { name: 'RSI Div Bearish', wr: '57.9%', delta: '+5.0%', freq: '0.6/day', color: '#94a3b8', tip: '5-min RSI bearish div + confirm bar. Controlled +5.0%. 3-bar scalp (+11%). RSI 50-60: 61%. TREND/BALANCE.' },
+                { name: 'BRACKET_BK_LONG', wr: '55.1%', delta: '+4.4%', freq: '0.20/day', color: '#94a3b8', tip: 'Bracket top exceeded. 55.1% WR (N=49). @PD1-VA: 73%. Wide OR: 63% (+11%). Suppressed on tight OR.' },
+                { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', freq: '0.12/day', color: '#f59e0b', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
               ].map((s, i) => (
                 <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
