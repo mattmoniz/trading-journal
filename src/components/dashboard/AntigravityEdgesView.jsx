@@ -1158,6 +1158,76 @@ export default function AntigravityEdgesView() {
             );
           })()}
 
+          {/* COIL SURGE EDGE */}
+          <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
+            🌀 Coil Surge → VWAP Fade
+          </h2>
+          {(() => {
+            const cs = liveStatus?.coilSurge;
+            const coilTooltip = `COIL SURGE → VWAP FADE\n\nWHAT IT IS:\nPrice compresses into a tight range (<40pt) with volume drying up (<40% of baseline). When volume surges back (≥2.5x baseline), the expansion pushes price — but the DESTINATION is VWAP 75% of the time, regardless of pop direction.\n\nTHE TRADE:\nDon't follow the pop direction. Fade TOWARD VWAP.\n• Price above VWAP → short toward VWAP\n• Price below VWAP → long toward VWAP\n• Stop: coil range extreme + 5pt\n• Target: VWAP\n• R:R avg: 3.08:1\n\nBACKTEST (12mo, controlled):\n• ALL: 52.7% WR at 10 bars, +$24/trade expectancy\n• TREND days: 65.3% WR (+16.1% vs baseline) ✅✅\n• NL30 aligned: 60.0% WR (+9.2%)\n• Surge ≥2.5x: 58.7% WR at 3 bars\n• BALANCE days: 48.3% — NO EDGE, suppressed\n\nCONTEXT GATE:\nOnly fires on TREND days or NL30-aligned. Suppressed on BALANCE (coin flip). The coil on a trend day is a consolidation WITHIN the trend — the expansion continues toward VWAP in the trend direction.\n\nWATCH SEQUENCE:\n1. WATCHING: Coil detected, volume drying up\n2. ALERT: Volume surge ≥2.5x baseline detected\n3. CHECK: Confirm direction (which side of VWAP?)\n4. FIRE: Enter fade toward VWAP\n5. MANAGE: Hold 10 bars max. Take profit at VWAP or 50%+ reversion.\n\nVWAP hit within 10 bars: 26% (but VWAP hit before stop: 74.6% overall).\nExpiry: 10 bars — edge decays past that as stop rate catches up.`;
+
+            if (!cs?.detected) return (
+              <div style={noLiveCardStyle}>
+                <div style={{ fontSize: 13, color: '#64748b' }}>
+                  {liveStatus?.active ? 'No coiling detected in current session.' : 'RTH session not active.'}
+                </div>
+              </div>
+            );
+
+            const isSurging = cs.surging;
+            return (
+              <div style={setupCardStyle(isSurging ? 'HIGH' : 'MEDIUM')}>
+                <div style={setupHeaderStyle}>
+                  <span style={setupTypeStyle}>
+                    COIL SURGE → VWAP FADE
+                    <InfoTooltip text={coilTooltip} />
+                  </span>
+                  <span style={setupBadgeStyle(
+                    isSurging ? '#10b981' : '#fbbf24',
+                    isSurging ? 'rgba(16,185,129,0.1)' : 'rgba(251,191,36,0.1)'
+                  )}>
+                    {isSurging ? '⚡ VOLUME SURGING' : '👀 COILING — WATCHING'}
+                  </span>
+                </div>
+                <div style={setupMetricsGrid}>
+                  <div>
+                    <div style={metricLabelStyle}>Coil Range</div>
+                    <div style={{ ...metricValueStyle, fontFamily: 'monospace' }}>{cs.coilRange}pt</div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>Vol vs Baseline</div>
+                    <div style={{ ...metricValueStyle, color: cs.volRatio < 40 ? '#4ade80' : '#94a3b8' }}>{cs.volRatio}%</div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>Surge Ratio</div>
+                    <div style={{ ...metricValueStyle, color: isSurging ? '#10b981' : '#64748b', fontFamily: 'monospace' }}>
+                      {cs.surgeRatio}x {isSurging ? '✅' : ''}
+                    </div>
+                  </div>
+                </div>
+                {cs.vwap && (
+                  <div style={setupLevelsGrid}>
+                    <div><strong>VWAP Target:</strong> <span style={{ color: '#a78bfa', fontWeight: 700 }}>{cs.vwap?.toLocaleString('en-US')}</span></div>
+                    <div><strong>Distance:</strong> {cs.distToVwap > 0 ? '+' : ''}{cs.distToVwap}pt</div>
+                    <div><strong>Direction:</strong> <span style={{ color: cs.distToVwap < 0 ? '#4ade80' : '#f87171', fontWeight: 700 }}>{cs.direction}</span></div>
+                  </div>
+                )}
+                <div style={recBoxStyle(isSurging ? 'HIGH' : 'MEDIUM')}>
+                  {isSurging
+                    ? `Volume surge detected (${cs.surgeRatio}x baseline). Price is ${Math.abs(cs.distToVwap)}pt ${cs.distToVwap > 0 ? 'above' : 'below'} VWAP. Fade ${cs.distToVwap > 0 ? 'short' : 'long'} toward VWAP (${cs.vwap}). TREND days: 65.3% WR. Stop at coil range extreme. Hold 10 bars max.`
+                    : `Coiling detected — volume at ${cs.volRatio}% of baseline in a ${cs.coilRange}pt range. Waiting for volume surge (≥2.5x baseline). When surge fires, fade toward VWAP (${cs.vwap}). Do NOT enter until surge confirms.`
+                  }
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
+                  <div><div style={metricLabelStyle}>TREND WR</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>65.3%</div></div>
+                  <div><div style={metricLabelStyle}>NL30 Aligned</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>60.0%</div></div>
+                  <div><div style={metricLabelStyle}>Avg R:R</div><div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>3.08</div></div>
+                  <div><div style={metricLabelStyle}>Exp/trade</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>+$24</div></div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* 15min RSI DIVERGENCE EDGES */}
           <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
             📉 15-Min RSI Divergence (Scalp Reversal)

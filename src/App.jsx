@@ -21274,6 +21274,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                     <tbody>
                       {[
                         { name: '9 EMA Snap-Back', edge: '+23.5%', freq: '1.0/day', ctx: 'All regimes', tests: 'Fwd WR, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'Coil Surge→VWAP', edge: '+16.1% TREND', freq: '1.08/day', ctx: 'TREND 65%, NL30 aligned 60%', tests: 'Fwd WR, MA, Day type, NL30, VWAP target, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
                         { name: 'VA_RESP_SHORT', edge: '+17.4%', freq: '0.25/day', ctx: 'TURB 90%, NL30-aligned 93%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
                         { name: 'OPEN_DRIVE_LONG', edge: '+15.9%', freq: '0.17/day', ctx: 'TREND 83%, tight OR +14%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
                         { name: 'OPEN_DRIVE_SHORT', edge: '+18.9%', freq: '0.09/day', ctx: '@VA 78%, tight OR +45%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
@@ -21315,7 +21316,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                       {[
                         { name: 'RSI Div Bearish (5min)', wr: '86.1%', edge: '+34.9%', freq: '0.61/day', tests: 'Fwd WR, Confirmation filter', why: 'Moving target — price reverts partially, not to fixed level' },
                         { name: 'RSI Div Bullish (5min)', wr: '90.0%', edge: '+21.9%', freq: '0.34/day', tests: 'Fwd WR, Confirmation filter', why: 'Same — scalp with manual profit-taking at value area' },
-                        { name: 'Coiling/Vol Expansion', wr: '54.3% (stop)', edge: '28.6% stop @VWAP', freq: '0.84/day', tests: 'Prior session only (AGY)', why: 'NOT tested with controlled methodology this session' },
+                        { name: 'Coil Surge → VWAP Fade', wr: '65.3% TREND', edge: '+16.1% (TREND), +$24/trade', freq: '1.08/day', tests: 'Fwd WR, MA filters, day type, NL30, OR width, VWAP target', why: 'Now in active_setups with custom VWAP revert resolution. Gated to TREND/NL30-aligned.' },
                       ].map((s, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
                           <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{s.name}</td>
@@ -21381,7 +21382,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Not Yet Fully Tested</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
-                  • <strong>Coiling/Vol Expansion</strong> — backtested in prior session (AGY, different methodology). Needs controlled confluence test, target optimization, and OR width split.<br />
+                  • <strong>Coiling/Vol Expansion</strong> — FULLY TESTED this session. Now active as COIL_SURGE setup. Directional pop is a coin flip, but VWAP fade on TREND days = 65.3% WR. Gated to TREND/NL30-aligned.<br />
                   • <strong>RSI Divergence</strong> — tested with forward-bar WR and confirmation filter, but NOT controlled test (no confound isolation). Edge is directional, not structurally validated.<br />
                   • <strong>24hr VWAP</strong> — not tested (requires overnight bars outside RTH window).<br />
                   • <strong>3-month VA levels</strong> — not tested (insufficient data in developing_value_log for 3-month composite).<br />

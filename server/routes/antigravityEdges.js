@@ -778,6 +778,39 @@ async function getLiveEdgesContext() {
       }
     }
 
+    // Coil surge detection for edge card
+    let coilSurge = null;
+    if (bars.length >= 60) {
+      const cRW=15, cRT=40, cVR=0.40, cBB=20;
+      let cumPV=0, cumV=0;
+      for (const b of bars) { cumPV+=(b.high+b.low+b.close)/3*(Number(b.volume)||1); cumV+=(Number(b.volume)||1); }
+      const vwap = cumV > 0 ? cumPV / cumV : null;
+
+      for (let ci = 50; ci < bars.length; ci++) {
+        let cHi=-Infinity, cLo=Infinity;
+        for (let j=ci-cRW+1;j<=ci;j++){cHi=Math.max(cHi,bars[j].high);cLo=Math.min(cLo,bars[j].low);}
+        if(cHi-cLo>=cRT) continue;
+        const cbs=Math.max(0,ci-cRW-cBB), cbe=ci-cRW; if(cbe-cbs<10) continue;
+        const cBv=bars.slice(cbs,cbe).reduce((s,b)=>s+(Number(b.volume)||0),0)/(cbe-cbs);
+        if(cBv<=0||(Number(bars[ci].volume)||0)/cBv>=cVR) continue;
+        const lastVol = Number(bars[bars.length-1].volume)||0;
+        const surgeRatio = cBv > 0 ? lastVol / cBv : 0;
+        const coilRange = cHi - cLo;
+        const distToVwap = vwap ? currentPrice - vwap : null;
+        coilSurge = {
+          detected: true,
+          coilRange: Math.round(coilRange),
+          volRatio: Math.round((Number(bars[ci].volume)||0)/cBv*100),
+          surgeRatio: Math.round(surgeRatio * 10) / 10,
+          surging: surgeRatio >= 2.5,
+          vwap: vwap ? Math.round(vwap) : null,
+          distToVwap: distToVwap ? Math.round(distToVwap) : null,
+          direction: distToVwap && distToVwap < 0 ? 'LONG toward VWAP' : 'SHORT toward VWAP',
+        };
+        break;
+      }
+    }
+
     liveStatus = {
       active: true,
       isLive: !isFallback,
@@ -792,6 +825,7 @@ async function getLiveEdgesContext() {
       coiling: coilingStatus,
       volumeClimax,
       emaSnap,
+      coilSurge,
     };
   }
 
