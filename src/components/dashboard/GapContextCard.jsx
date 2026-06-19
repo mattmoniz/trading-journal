@@ -12,6 +12,44 @@ function fmtPts(n) {
   return s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+function InfoTooltip({ text, children }) {
+  const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const ref = React.useRef(null);
+
+  const handleMouseEnter = () => {
+    if (ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      const tooltipWidth = 320;
+      const left = Math.min(
+        Math.max(tooltipWidth / 2 + 8, rect.left + rect.width / 2),
+        window.innerWidth - tooltipWidth / 2 - 8
+      );
+      setPos({ top: rect.top - 8, left });
+    }
+    setVisible(true);
+  };
+
+  return (
+    <span ref={ref} style={{ display: 'block', cursor: 'help' }}
+      onMouseEnter={handleMouseEnter} onMouseLeave={() => setVisible(false)}
+      onClick={() => setVisible(v => !v)}>
+      {children}
+      {visible && (
+        <div style={{
+          position: 'fixed', top: pos.top, left: pos.left,
+          transform: 'translate(-50%, -100%)', marginTop: -6,
+          width: 320, padding: '10px 13px', background: '#1a2535',
+          border: '1px solid rgba(100,116,139,0.5)', borderRadius: 8, fontSize: 13,
+          color: '#cbd5e1', boxShadow: '0 6px 20px rgba(0,0,0,0.7)',
+          zIndex: 99999, pointerEvents: 'none', lineHeight: 1.7, whiteSpace: 'pre-line' }}>
+          <div style={{ color: '#cbd5e1' }}>{text}</div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 function GapRow({ gap, isLargest }) {
   const isUp = gap.type === 'up';
   const dirColor = isUp ? '#4ade80' : '#f87171';
@@ -56,12 +94,22 @@ function GapRow({ gap, isLargest }) {
     biasText = `Below ${fmtPts(gap.gapHigh)} risks fast drop to ${fmtPts(gap.gapLow)} (${fmtPts(gap.gapSize)} pt void, no stops).`;
   }
 
-  return (
+  const isInside = gap.priceRelation === 'inside';
+
+  const warningText = isInside
+    ? `NQ has entered the ${isUp ? 'up' : 'down'}-gap void from ${fmtDate(gap.fromDate)} to ${fmtDate(gap.toDate)} (${fmtPts(gap.gapLow)}–${fmtPts(gap.gapHigh)}). Expect fast travel toward ${isUp ? fmtPts(gap.gapLow) : fmtPts(gap.gapHigh)} (no structural support/resistance inside the void).`
+    : null;
+
+  const rowContent = (
     <div style={{
-      borderLeft: `3px solid ${dirColor}`,
       paddingLeft: 10,
       marginBottom: 10,
       opacity: gap.sessionAge > 20 && gap.gapSize < 50 ? 0.65 : 1,
+      background: isInside ? (isUp ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)') : 'transparent',
+      border: isInside ? `1.5px dashed ${isUp ? 'rgba(74, 222, 128, 0.4)' : 'rgba(248, 113, 113, 0.4)'}` : 'none',
+      borderLeft: `3px solid ${dirColor}`,
+      borderRadius: isInside ? 6 : 0,
+      padding: isInside ? '8px 12px' : '2px 0 2px 10px',
     }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 3 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: dirColor }}>{dirLabel}</span>
@@ -83,6 +131,11 @@ function GapRow({ gap, isLargest }) {
       )}
     </div>
   );
+
+  if (isInside && warningText) {
+    return <InfoTooltip text={warningText}>{rowContent}</InfoTooltip>;
+  }
+  return rowContent;
 }
 
 export default function GapContextCard() {

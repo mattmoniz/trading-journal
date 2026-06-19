@@ -31,6 +31,7 @@
     "react-pivottable": "^0.11.1",
     "react-plotly.js": "^2.6.0",
     "recharts": "^3.7.0",
+    "simple-statistics": "^7.9.0",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   },

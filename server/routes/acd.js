@@ -2333,6 +2333,36 @@ export default function createACDRouter(io) {
             resolved_at=NOW(), updated_at=NOW()
           WHERE trade_date=$1 AND status='ACTIVE'
         `, [todayET]).catch(() => {});
+
+        const lastSetupQ = await query(`
+          SELECT id, setup_type as type,
+            CASE WHEN setup_type ILIKE '%_LONG' OR setup_type ILIKE '%_UP' OR setup_type ILIKE '%BULL%' THEN 'LONG'
+                 WHEN setup_type ILIKE '%_SHORT' OR setup_type ILIKE '%_DOWN' OR setup_type ILIKE '%BEAR%' THEN 'SHORT'
+                 ELSE NULL END as direction,
+            price_at_detection as entry, stop_level as stop, t1_level as target, status, resolution, resolved_at
+          FROM active_setups
+          WHERE trade_date=$1
+          ORDER BY id DESC LIMIT 1
+        `, [todayET]);
+
+        if (lastSetupQ.rows.length > 0) {
+          const s = lastSetupQ.rows[0];
+          return res.json({
+            setup: {
+              setupId: s.id,
+              type: s.type,
+              direction: s.direction,
+              entry: s.entry,
+              stop: s.stop,
+              target: s.target,
+              isExpired: false,
+              status: s.status,
+              resolution: s.resolution,
+              resolvedAt: s.resolved_at
+            },
+            sessionClosed: true
+          });
+        }
         return res.json({ setup: null, sessionClosed: true });
       }
       const noNewEntries = etMin >= 12 * 60; // noon–1 PM: manage open trades only
@@ -2345,7 +2375,7 @@ export default function createACDRouter(io) {
       if (!isRTH) return res.json({ setup: null, reason: 'market closed' });
 
       // ── Fetch all data sources in parallel ────────────────────────────────────
-      const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row] = await Promise.all([
+      const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
         // Today's OR levels + ACD/C state
         query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
         // Auction reads for today
@@ -2393,6 +2423,13 @@ export default function createACDRouter(io) {
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
           ORDER BY ts
         `, [todayET]),
+        query(`
+          SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+                 high::float, low::float, close::float, open::float
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY ts
+        `, [todayET]),
       ]);
 
       // Prior day value area — cached (changes only between days)
@@ -2431,6 +2468,21 @@ export default function createACDRouter(io) {
           }
         }
         setCached(todayET, 'pdVA', { pdVAH, pdVAL, pdPOC });
+      }
+
+      // PD-2 VA levels (2-day-prior value area) — strong confluence filter
+      let pd2VAH = null, pd2VAL = null;
+      const cachedPD2 = getCached(todayET, 'pd2VA');
+      if (cachedPD2) {
+        ({ pd2VAH, pd2VAL } = cachedPD2);
+      } else {
+        const pd2Q = await query(`
+          SELECT vah::float, val::float FROM developing_value_log
+          WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
+          ORDER BY trade_date DESC LIMIT 1
+        `, [todayET]);
+        if (pd2Q.rows[0]) { pd2VAH = pd2Q.rows[0].vah; pd2VAL = pd2Q.rows[0].val; }
+        setCached(todayET, 'pd2VA', { pd2VAH, pd2VAL });
       }
 
       // NL30 state — cached
@@ -2642,7 +2694,7 @@ export default function createACDRouter(io) {
               target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80) * 1.5),
               targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Range Extension',
               keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (reversal confirmed)',
-              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} in the opening, then reversed through OR Low (${orL?.toFixed(0)}) — initiative sellers dominated. Stop above probe high (${probeHigh.toFixed(0)}).`,
+              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} then reversed through OR Low (${orL?.toFixed(0)}).\n\nEDGE: OTD_SHORT has -5.6% directional edge at baseline and is GATED to PD-2 VA confluence only. At PD-2 VA: 73% WR (+23%, N=11). On TURBULENT days: 60% WR (+11%). NL30 aligned: 69% WR. EXECUTION: Short with stop above probe high (${probeHigh.toFixed(0)}). Target PD VAL or OR extension. Only fires when price is near PD-2 VA levels.`,
               history: await getHistory('TRANSITIONAL'),
             };
           } else if (otdLongSignaled && currentPrice > orH) {
@@ -2824,7 +2876,7 @@ export default function createACDRouter(io) {
           target: trtLongT1.value,
           targetLabel: trtLongT1.label,
           keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (failed resistance)',
-          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal — stop below A Down level (${trtLongStop}).`,
+          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal.\n\nEDGE: TRT_LONG has -4.3% edge at 10 bars but +24% edge at 20 bars (75% WR, N=28) — it's a slow-burn reversal. On TREND days: 100% WR (N small). EXECUTION: This trade needs TIME. Don't cut early. Expiry is 120 min. Target PD VAH or OR measured move. Stop below A Down level (${trtLongStop}).${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction zone.' : ''}`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -2870,11 +2922,11 @@ export default function createACDRouter(io) {
               keyLevelLabel: 'IB Midpoint',
               description: conflicting
                 ? (isBull
-                  ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Buyers showed up in the IB but couldn't sustain the A level. Half conviction only: smaller size, wider stop tolerance.`
-                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Sellers showed up in the IB but couldn't sustain the A level. Half conviction only: smaller size, wider stop tolerance.`)
+                  ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Half conviction only: smaller size, wider stop tolerance.`
+                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH has +1.3% directional edge at baseline (N=89). On TREND days: 73% WR. On TURBULENT: 62% WR (+13%). At PD-2 VA: 69% WR (+20%). EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop above IB High + 2pt. Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — 69% WR zone.' : ''}`)
                 : (isBull
-                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the opening range. Lean long on pullbacks to IB midpoint.`
-                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the opening range. Lean short on rallies to IB midpoint.`),
+                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating. NOTE: IB_BULLISH has -7.5% directional edge and is SUPPRESSED. This should not fire.`
+                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH has +1.3% directional edge at baseline (N=89). Best contexts: TREND days 73% WR, TURBULENT 62% WR (+13%), at PD-2 VA 69% WR (+20%). NL30 aligned: 63% WR. NL30 counter: 49% WR (suppressed). EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop above IB High + 2pt (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — 69% WR, high-conviction zone.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
             };
           }
@@ -2902,8 +2954,8 @@ export default function createACDRouter(io) {
             keyLevel: +(isBull ? orH : orL).toFixed(0),
             keyLevelLabel: isBull ? 'OR High (support)' : 'OR Low (resistance)',
             description: isBull
-              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level. Buyers who missed the drive are entering here.`
-              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level. Sellers who missed the drive are entering here.`,
+              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG has +15.9% directional edge (66.7% WR at 10 bars, N=42). On TREND days: 83% WR (N=6). NL30 aligned: 60% WR. EXECUTION: Buy the pullback to OR High. Stop below OR Low -2pt (${+(orL - 2).toFixed(0)}). Target OR measured move. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT has +18.9% directional edge (68.2% WR at 10 bars, N=22). At VA level: 78% WR. NL30 aligned: 80% WR (N=10). EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target OR measured move or PD VAL.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
             history: await getHistory('TRENDING_UP'),
           };
         }
@@ -3064,8 +3116,8 @@ export default function createACDRouter(io) {
             keyLevel: +(isBull ? bracketTop : bracketBot).toFixed(0),
             keyLevelLabel: isBull ? 'Prior Bracket Top' : 'Prior Bracket Bottom',
             description: isBull
-              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}. Prior bracket top becomes support — target: value area measured move.`
-              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}. Prior bracket bottom becomes resistance.`,
+              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}.\n\nEDGE: BRACKET_BREAKOUT_LONG has +4.4% directional edge (55.1% WR at 10 bars, N=49). At PD-1 VA: 73% WR (N=11). Best on BALANCE days: 57% WR. EXECUTION: Prior bracket top becomes support. Buy pullbacks to the bracket boundary. Stop 5pt inside bracket (${+(bracketTop - 5).toFixed(0)}). Target value area measured move.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}.\n\nEDGE: BRACKET_BREAKOUT_SHORT has +30.7% directional edge (80% WR at 10 bars, N=10 ⚠small). Strongest setup in the backtest by edge delta. EXECUTION: Prior bracket bottom becomes resistance. Short rallies to bracket boundary. Stop 5pt inside bracket (${+(bracketBot + 5).toFixed(0)}). Target value area extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
             history: await getHistory(isBull ? 'TRENDING_UP' : 'TRENDING_DOWN'),
           };
         }
@@ -3091,8 +3143,8 @@ export default function createACDRouter(io) {
             keyLevel: +(isFade ? pdVAH : pdVAL).toFixed(0),
             keyLevelLabel: isFade ? 'Prior Day VAH' : 'Prior Day VAL',
             description: isFade
-              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) with a non-drive open. Responsive sellers defend VAH — target POC (${pdPOC?.toFixed(0)}).`
-              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}). Responsive buyers defend VAL — target POC (${pdPOC?.toFixed(0)}).`,
+              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VA_RESP_SHORT is the #1 profitable setup — +17.4% directional edge (66.7% WR at 10 bars, N=60). On TURBULENT days: 90% WR (N=10). On BALANCE: 65% WR. NL30 aligned: 93% WR (N=14). EXECUTION: Tight stop just above VAH +8pt (${+(pdVAH + 8).toFixed(0)}). Target PD POC (${pdPOC?.toFixed(0)}) or PD VAL. The small stop (18pt avg) with large target is WHY this setup is profitable — one win covers 6-8 losses.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
+              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}). NOTE: VA_RESP_LONG has -5.0% directional edge and is SUPPRESSED.`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -3123,7 +3175,7 @@ export default function createACDRouter(io) {
             target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
             targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Range Extension',
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
-            description: `No A signal today. First C Down: price closing below OR Low (${orL?.toFixed(0)}) with no prior A. Building data for standalone C setups.`,
+            description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: C_STANDALONE_DOWN has -12% directional edge at baseline (37.3% WR) and is GATED to PD-2 VA confluence only. At PD-2 VA: 81% WR (+32%, N=16). On TURBULENT days: 69% WR. This setup ONLY fires when price is within 25pt of PD-2 VAH (${pd2VAH ? Math.round(pd2VAH) : '—'}) or PD-2 VAL (${pd2VAL ? Math.round(pd2VAL) : '—'}). Without PD-2 confluence, the edge is negative — do not trade.`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -3215,6 +3267,134 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── 15min RSI Divergence detection ──────────────────────────────────────
+      let rsiDivSetup = null;
+      if (allRthBarsRow.rows.length >= 20) {
+        // Resample to 15min
+        const fifteenBk = {};
+        for (const b of allRthBarsRow.rows) {
+          const bk = Math.floor(b.et_min / 15) * 15;
+          if (!fifteenBk[bk]) fifteenBk[bk] = { open: b.open, high: b.high, low: b.low, close: b.close };
+          else { fifteenBk[bk].high = Math.max(fifteenBk[bk].high, b.high); fifteenBk[bk].low = Math.min(fifteenBk[bk].low, b.low); fifteenBk[bk].close = b.close; }
+        }
+        const fb15 = Object.values(fifteenBk);
+        if (fb15.length >= 17) {
+          const fc = fb15.map(b => b.close), fh = fb15.map(b => b.high), fl = fb15.map(b => b.low);
+          // RSI(14)
+          const rsiArr = new Array(fc.length).fill(null);
+          let ag = 0, al = 0;
+          for (let i = 1; i <= 14; i++) { const d = fc[i] - fc[i-1]; ag += d > 0 ? d : 0; al += d < 0 ? -d : 0; }
+          ag /= 14; al /= 14;
+          rsiArr[14] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+          for (let i = 15; i < fc.length; i++) {
+            const d = fc[i] - fc[i-1]; ag = (ag * 13 + (d > 0 ? d : 0)) / 14; al = (al * 13 + (d < 0 ? -d : 0)) / 14;
+            rsiArr[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+          }
+          // Swing detection (N=2 for 15min — smaller window, faster detection)
+          const SW = 2;
+          const sHighs = [], sLows = [];
+          for (let i = SW; i < fc.length - SW; i++) {
+            let isH = true, isL = true;
+            for (let j = 1; j <= SW; j++) {
+              if (fh[i] <= fh[i-j] || fh[i] <= fh[i+j]) isH = false;
+              if (fl[i] >= fl[i-j] || fl[i] >= fl[i+j]) isL = false;
+            }
+            if (isH) sHighs.push({ idx: i, price: fh[i], rsi: rsiArr[i] });
+            if (isL) sLows.push({ idx: i, price: fl[i], rsi: rsiArr[i] });
+          }
+          // Check for divergence using the two most recent swing points
+          // Bullish: price lower low + RSI higher low + CONFIRMATION bar closes higher
+          if (sLows.length >= 2) {
+            const curr = sLows[sLows.length - 1], prev = sLows[sLows.length - 2];
+            if (curr.idx - prev.idx <= 12 && curr.price < prev.price && curr.rsi != null && prev.rsi != null && curr.rsi > prev.rsi) {
+              const last = fc.length - 1;
+              const confirmIdx = curr.idx + 1;
+              const confirmed = confirmIdx <= last && fc[confirmIdx] > fc[curr.idx];
+              if (confirmed && last - confirmIdx <= 2) {
+                const stopDist = Math.max(20, Math.round((fh[curr.idx] - fl[curr.idx]) * 1.5));
+                const rsiDelta = (curr.rsi - prev.rsi).toFixed(1);
+                rsiDivSetup = {
+                  type: 'RSI_DIV_BULLISH',
+                  direction: 'LONG',
+                  entry: currentPrice,
+                  stop: currentPrice - stopDist,
+                  target: t1Guard('LONG', currentPrice, currentPrice + stopDist * 2),
+                  targetLabel: '2R Target',
+                  description: `15min RSI BULLISH divergence CONFIRMED. Price made lower low (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made higher low (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ+${rsiDelta}). Confirmation bar closed higher — selling exhaustion confirmed. WR with confirmation: 90.0% (N=20). Scalp long — hold 3 bars (45min) max. Take profit at value area midpoint or 2R.`,
+                  history: { winRate: 0.900, occurrences: 20, avgPnl: null, t1HitRate: 0.900 },
+                };
+              }
+            }
+          }
+          // Bearish: price higher high + RSI lower high + CONFIRMATION bar closes lower
+          if (!rsiDivSetup && sHighs.length >= 2) {
+            const curr = sHighs[sHighs.length - 1], prev = sHighs[sHighs.length - 2];
+            if (curr.idx - prev.idx <= 12 && curr.price > prev.price && curr.rsi != null && prev.rsi != null && curr.rsi < prev.rsi) {
+              const last = fc.length - 1;
+              const confirmIdx = curr.idx + 1;
+              const confirmed = confirmIdx <= last && fc[confirmIdx] < fc[curr.idx];
+              if (confirmed && last - confirmIdx <= 2) {
+                const stopDist = Math.max(20, Math.round((fh[curr.idx] - fl[curr.idx]) * 1.5));
+                const rsiDelta = (prev.rsi - curr.rsi).toFixed(1);
+                rsiDivSetup = {
+                  type: 'RSI_DIV_BEARISH',
+                  direction: 'SHORT',
+                  entry: currentPrice,
+                  stop: currentPrice + stopDist,
+                  target: t1Guard('SHORT', currentPrice, currentPrice - stopDist * 2),
+                  targetLabel: '2R Target',
+                  description: `15min RSI BEARISH divergence CONFIRMED. Price made higher high (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made lower high (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ-${rsiDelta}). Confirmation bar closed lower — buying exhaustion confirmed. WR with confirmation: 86.1% (N=36). On BALANCE days: 84.6%. Scalp short — hold 2-3 bars (30-45min) max. Take profit at value area midpoint or 2R.`,
+                  history: { winRate: 0.861, occurrences: 36, avgPnl: null, t1HitRate: 0.861 },
+                };
+              }
+            }
+          }
+        }
+      }
+
+      // ── 9 EMA Snap-Back detection ──────────────────────────────────────────
+      let emaSnapSetup = null;
+      if (allRthBarsRow.rows.length >= 14) {
+        const fiveBk = {};
+        for (const b of allRthBarsRow.rows) {
+          const bk = Math.floor(b.et_min / 5) * 5;
+          if (!fiveBk[bk]) fiveBk[bk] = { open: b.open, high: b.high, low: b.low, close: b.close };
+          else { fiveBk[bk].high = Math.max(fiveBk[bk].high, b.high); fiveBk[bk].low = Math.min(fiveBk[bk].low, b.low); fiveBk[bk].close = b.close; }
+        }
+        const fb = Object.values(fiveBk);
+        if (fb.length >= 14) {
+          const fc = fb.map(b => b.close), fh = fb.map(b => b.high), fl = fb.map(b => b.low);
+          const ema9 = new Array(fc.length).fill(null);
+          const ek = 2 / 10;
+          ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+          for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
+          const tr = fc.map((c, i) => i === 0 ? fh[i] - fl[i] : Math.max(fh[i] - fl[i], Math.abs(fh[i] - fc[i - 1]), Math.abs(fl[i] - fc[i - 1])));
+          const atr = new Array(fc.length).fill(null);
+          atr[13] = tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
+          for (let i = 14; i < fc.length; i++) atr[i] = tr[i] * (2 / 15) + atr[i - 1] * (1 - 2 / 15);
+          const last = fc.length - 1;
+          if (ema9[last] != null && atr[last] != null && atr[last] > 0.5) {
+            const dev = fc[last] - ema9[last];
+            const devATR = Math.abs(dev) / atr[last];
+            if (devATR >= 2.0) {
+              const isLong = dev < 0;
+              const emaVal = Math.round(ema9[last] * 100) / 100;
+              const stopDist = Math.round(atr[last]);
+              emaSnapSetup = {
+                type: isLong ? 'EMA_SNAPBACK_LONG' : 'EMA_SNAPBACK_SHORT',
+                direction: isLong ? 'LONG' : 'SHORT',
+                entry: currentPrice,
+                stop: isLong ? currentPrice - stopDist : currentPrice + stopDist,
+                target: emaVal,
+                targetLabel: '9 EMA',
+                description: `Price stretched ${devATR.toFixed(1)}× ATR from 5-min 9 EMA. 96.2% revert within 15 min (N=533). Scalp fade toward EMA at ${Math.round(emaVal)}.`,
+                history: { winRate: 0.962, occurrences: 533, avgPnl: null, t1HitRate: 0.962 },
+              };
+            }
+          }
+        }
+      }
+
       // ── Priority selection (spec order) ──────────────────────────────────────
       // Integrity guard: a setup must not fire with the stop on the wrong side of
       // entry (non-positive risk — e.g. VALUE_AREA_RESPONSIVE's ±8pt buffer can land
@@ -3223,22 +3403,55 @@ export default function createACDRouter(io) {
       // drifted past the OR boundary by fire time). Such a setup is pre-invalidated
       // at the moment of detection — reject it and fall through to the next-priority
       // candidate rather than persisting a guaranteed-instant-stop "setup".
+      // ── Edge-based filtering ─────────────────────────────────────────────
+      // Backtested 12mo forward-bar directional WR vs baseline (June 2025–2026).
+      // Removed: setups with negative directional edge at baseline.
+      // Gated: setups that only work with PD-2 VA confluence.
+      // NL30 counter-trend suppression: counter-trend setups = 40.2% WR (below baseline).
+      const isNL30Aligned = (dir) =>
+        (dir === 'LONG' && nl30State === 'BULLISH') || (dir === 'SHORT' && nl30State === 'BEARISH');
+      const isNL30Counter = (dir) =>
+        (dir === 'LONG' && nl30State === 'BEARISH') || (dir === 'SHORT' && nl30State === 'BULLISH');
+      const nearPD2VA = currentPrice && (
+        (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
+        (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
+      );
+
+      // Suppress counter-trend setups (40.2% directional WR = worse than baseline)
+      const suppressIfCounter = (setup) => {
+        if (!setup) return null;
+        if (isNL30Counter(setup.direction)) return null;
+        return setup;
+      };
+
+      // Gate to PD-2 VA only (negative baseline edge, but +20-30% at PD-2 VA)
+      const gateIfNoPD2 = (setup) => {
+        if (!setup) return null;
+        if (!nearPD2VA) return null;
+        return setup;
+      };
+
       const candidates = [
         trtMah,
-        trtLongV2, trtShortV2,
-        trt,
+        suppressIfCounter(trt?.type === 'TRT_LONG' ? trt : null),  // TRT_LONG: +24% at 20bar, keep but only aligned
+        // TRT_SHORT: -10.1% edge, removed
         gapFill,
-        aUpStrong, aDownStrong,
-        otdSetup,
-        aUpWeak, aDownWeak,
-        ibSetup,
-        openDrive,
-        cPairedLong, cPairedShort,
-        cReversalLong, cReversalShort,
-        failedAuction,
-        bracketBreakout,
-        valueAreaResp,
-        cStandalone
+        suppressIfCounter(aUpStrong), suppressIfCounter(aDownStrong),
+        suppressIfCounter(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null), // OTD_LONG: +0.6%, marginal
+        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null), // OTD_SHORT: -5.6% baseline, +23% @PD2
+        suppressIfCounter(aUpWeak), suppressIfCounter(aDownWeak),
+        // IB_BULLISH: -7.5% edge, removed
+        ibSetup?.type === 'IB_BEARISH' ? suppressIfCounter(ibSetup) : null, // IB_BEARISH: +1.3%, keep
+        suppressIfCounter(openDrive),
+        suppressIfCounter(cPairedLong), suppressIfCounter(cPairedShort),
+        suppressIfCounter(cReversalLong), suppressIfCounter(cReversalShort),
+        suppressIfCounter(failedAuction),
+        suppressIfCounter(bracketBreakout),
+        // VALUE_AREA_RESPONSIVE_SHORT: +17.4% edge, keep
+        // VALUE_AREA_RESPONSIVE_LONG: -5.0% edge, removed
+        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfCounter(valueAreaResp) : null,
+        gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null), // -12% baseline, +32% @PD2
+        // C_STANDALONE_UP: -6.5% edge, removed
       ];
       let active = null;
       for (const cand of candidates) {
@@ -3269,7 +3482,9 @@ export default function createACDRouter(io) {
 
       // Expiry per setup type (minutes from fired_at); null = no time expiry
       const EXPIRY_WINDOW = {
-        TRT_SHORT: 50, TRT_LONG: 50, TRT_SHORT_V2: 50, TRT_LONG_V2: 50, TRT_MAH_SHORT: 50, TRT_MAH_LONG: 50,
+        EMA_SNAPBACK_LONG: 15, EMA_SNAPBACK_SHORT: 15,
+        RSI_DIV_BULLISH: 45, RSI_DIV_BEARISH: 30,
+        TRT_SHORT: 50, TRT_LONG: 120, TRT_SHORT_V2: 50, TRT_LONG_V2: 50, TRT_MAH_SHORT: 50, TRT_MAH_LONG: 50,
         OPEN_TEST_DRIVE_SHORT: 45, OPEN_TEST_DRIVE_LONG: 45,
         IB_BULLISH: null, IB_BEARISH: null,
         OPEN_DRIVE_LONG: null, OPEN_DRIVE_SHORT: null,
@@ -3386,6 +3601,17 @@ export default function createACDRouter(io) {
       const minsRemaining = Math.max(0, Math.round((new Date(expiresAt) - etNow) / 60000));
       const isExpired = minsRemaining === 0;
 
+
+       // Compute ET hour for time-of-day edge badge (10 AM ET = backtested +9.7% WR lift)
+       const firedEtHour = (() => {
+         try {
+           const [hh, mm] = (detectedAt || '').split(':').map(Number);
+           if (isNaN(hh)) return null;
+           const d = new Date();
+           d.setUTCHours(hh, mm || 0, 0, 0);
+           return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(d), 10);
+         } catch { return null; }
+       })();
       res.json({
         setup: {
           ...active,
@@ -3393,7 +3619,7 @@ export default function createACDRouter(io) {
           stop: persistedLevels.stop,
           target: persistedLevels.target,
           targetLabel: persistedLevels.targetLabel,
-          detectedAt, minsRemaining, isExpired, setupId,
+          detectedAt, minsRemaining, isExpired, setupId, firedEtHour,
         },
         noNewEntries: !!noNewEntries,
       });

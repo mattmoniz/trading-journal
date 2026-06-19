@@ -498,10 +498,58 @@ export default function VolatilityRegimeCard() {
   if (!data) return null;
 
   if (!data.available) {
+    const isForming = data.barsLoaded !== undefined && data.barsRequired !== undefined;
+    const progressPct = isForming ? Math.min(100, (data.barsLoaded / data.barsRequired) * 100) : 0;
+
     return (
       <div style={cardStyle}>
+        <style>{`
+          @keyframes pulse-yellow {
+            0% {
+              transform: scale(0.95);
+              box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+            }
+            70% {
+              transform: scale(1);
+              box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+            }
+            100% {
+              transform: scale(0.95);
+              box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+            }
+          }
+        `}</style>
         <div style={titleStyle}>Volatility Regime (live)</div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>{data.reason}</div>
+        {isForming ? (
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                Forming ({data.barsLoaded}/{data.barsRequired}m)
+                <span style={{
+                  width: 6,
+                  height: 6,
+                  backgroundColor: '#f59e0b',
+                  borderRadius: '50%',
+                  display: 'inline-block',
+                  animation: 'pulse-yellow 1.8s infinite ease-in-out',
+                }} />
+              </span>
+              <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>
+                {progressPct.toFixed(0)}%
+              </span>
+            </div>
+            
+            <div style={{ width: '100%', height: 5, backgroundColor: 'rgba(100,116,139,0.15)', borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
+              <div style={{ width: `${progressPct}%`, height: '100%', backgroundColor: '#f59e0b', borderRadius: 3, transition: 'width 0.4s ease-out' }} />
+            </div>
+
+            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>
+              Accumulating regular trading hours (RTH) price bars. Needs 15 minutes of data to compute the first 5-minute standard deviation. Ready at 9:45 AM ET.
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{data.reason}</div>
+        )}
       </div>
     );
   }
@@ -540,6 +588,57 @@ export default function VolatilityRegimeCard() {
         <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, lineHeight: 1.3 }}>{regime.note}</div>
       )}
       <TextureMetrics texture={data.texture} etMin={data.etMin} />
+      {data.emaSnap && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              9 EMA Snap-Back
+            </span>
+            {data.emaSnap.stretched && (
+              <span style={{
+                fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase',
+                padding: '1px 6px', borderRadius: 3,
+                color: '#fbbf24', background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)',
+              }}>
+                STRETCHED — FADE
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '2px 6px' }}>
+            <div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>9 EMA</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', fontFamily: 'monospace' }}>
+                {data.emaSnap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>ATR(14)</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace' }}>
+                {data.emaSnap.atr14.toFixed(1)}pt
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>Deviation</div>
+              <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
+                color: data.emaSnap.absDeviationATR >= 2.0 ? '#fbbf24' : data.emaSnap.absDeviationATR >= 1.5 ? '#fb923c' : '#94a3b8' }}>
+                {data.emaSnap.deviationATR > 0 ? '+' : ''}{data.emaSnap.deviationATR.toFixed(2)} ATR
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>Raw</div>
+              <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
+                color: data.emaSnap.deviation > 0 ? '#4ade80' : '#f87171' }}>
+                {data.emaSnap.deviation > 0 ? '+' : ''}{data.emaSnap.deviation.toFixed(1)}pt
+              </div>
+            </div>
+          </div>
+          {data.emaSnap.stretched && (
+            <div style={{ marginTop: 4, fontSize: 11, color: '#fbbf24', fontWeight: 600 }}>
+              {data.emaSnap.triggerLevel} · 96% revert within 15min (N=533)
+            </div>
+          )}
+        </div>
+      )}
       <PredictiveStats data={data} btStats={btStats} />
     </div>
   );

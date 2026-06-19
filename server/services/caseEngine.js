@@ -20,6 +20,11 @@ const REASSESSMENT_CHECKPOINTS = [660, 690, 720, 750, 780, 840, 900, 945]; // 11
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
+function fmtNum(n) {
+  if (n == null || isNaN(n)) return '—';
+  return Math.round(n).toLocaleString('en-US');
+}
+
 function resolveAsOf(tradeDate, asOf) {
   if (!asOf) return `${tradeDate} 16:00:00`;
   if (/^\d{2}:\d{2}$/.test(asOf))   return `${tradeDate} ${asOf}:00`;
@@ -560,7 +565,7 @@ export async function computeCase(tradeDate, asOf) {
         gapWarning = {
           severity: 'WARNING',
           title: 'Gap Fill in Progress',
-          message: `NQ has entered the ${gap.type === 'up' ? 'up' : 'down'}-gap void from ${gap.fromDate} to ${gap.toDate} (${Math.round(gap.gapLow)}–${Math.round(gap.gapHigh)}). Expect fast travel toward ${gap.type === 'up' ? Math.round(gap.gapLow) : Math.round(gap.gapHigh)} (no structural support/resistance inside the void).`,
+          message: `NQ has entered the ${gap.type === 'up' ? 'up' : 'down'}-gap void from ${gap.fromDate} to ${gap.toDate} (${fmtNum(gap.gapLow)}–${fmtNum(gap.gapHigh)}). Expect fast travel toward ${gap.type === 'up' ? fmtNum(gap.gapLow) : fmtNum(gap.gapHigh)} (no structural support/resistance inside the void).`,
           type: 'GAP_VOID'
         };
         break;
@@ -571,7 +576,7 @@ export async function computeCase(tradeDate, asOf) {
           gapWarning = {
             severity: 'INFO',
             title: 'Gap Ceiling Proximity',
-            message: `NQ is within ${Math.round(distHigh)} pts of the gap ceiling (${Math.round(gap.gapHigh)}). Dropping below risks a fast ${Math.round(gap.gapSize)} pt move to complete the fill.`,
+            message: `NQ is within ${fmtNum(distHigh)} pts of the gap ceiling (${fmtNum(gap.gapHigh)}). Dropping below risks a fast ${fmtNum(gap.gapSize)} pt move to complete the fill.`,
             type: 'GAP_PROXIMITY_CEILING'
           };
           break;
@@ -579,7 +584,7 @@ export async function computeCase(tradeDate, asOf) {
           gapWarning = {
             severity: 'INFO',
             title: 'Gap Floor Proximity',
-            message: `NQ is within ${Math.round(distLow)} pts of the gap floor (${Math.round(gap.gapLow)}). Rallies above risk a fast ${Math.round(gap.gapSize)} pt move to complete the fill.`,
+            message: `NQ is within ${fmtNum(distLow)} pts of the gap floor (${fmtNum(gap.gapLow)}). Rallies above risk a fast ${fmtNum(gap.gapSize)} pt move to complete the fill.`,
             type: 'GAP_PROXIMITY_FLOOR'
           };
           break;
@@ -669,20 +674,31 @@ export async function computeCase(tradeDate, asOf) {
           : (currentPrice <= ibLow + pullbackBuffer && currentPrice >= ibLow);
 
         if (isCurrentlyOutside || isWithinPullback) {
+        const breakTimeStr = `${String(Math.floor(firstBreak.time / 60)).padStart(2, '0')}:${String(firstBreak.time % 60).padStart(2, '0')}`;
+        const ibMid = Math.round((ibHigh + ibLow) / 2);
         if (isBull) {
           if (acd?.a_down_fired) {
             breakoutWarning = {
               severity: 'WARNING',
               title: 'Counter-ACD Breakout Warning',
-              message: `NQ broke IB High (${ibHigh}) on a bearish A-DOWN day. Historical trap rate: 87.3%. Look to fade.`,
-              type: 'BULL_COUNTER_ACD'
+              message: `NQ broke IB High (${fmtNum(ibHigh)}) on a bearish A-DOWN day. Historical trap rate: 87.3%. Look to fade.`,
+              type: 'BULL_COUNTER_ACD',
+              firedTime: breakTimeStr,
+              priceFired: Math.round(ibHigh),
+              targets: [
+                { label: 'T1 (IB Mid)', price: ibMid },
+                { label: 'T2 (IB Low)', price: Math.round(ibLow) }
+              ],
+              stopPrice: 'session high'
             };
           } else {
             breakoutWarning = {
               severity: 'INFO',
               title: 'IB Breakout Active',
-              message: `NQ broke IB High (${ibHigh}). Average pullback rate: 94.2% (91.6% touch re-entry). Wait for a pullback inside the range before entering.`,
-              type: 'BULL_NORMAL'
+              message: `NQ broke IB High (${fmtNum(ibHigh)}). Average pullback rate: 94.2% (91.6% touch re-entry). Wait for a pullback inside the range before entering.`,
+              type: 'BULL_NORMAL',
+              firedTime: breakTimeStr,
+              priceFired: Math.round(ibHigh)
             };
           }
         } else { // BEAR
@@ -690,15 +706,24 @@ export async function computeCase(tradeDate, asOf) {
             breakoutWarning = {
               severity: 'WARNING',
               title: 'Counter-ACD Breakout Warning',
-              message: `NQ broke IB Low (${ibLow}) on a bullish A-UP day. Historical trap rate: 100.0%. Look to fade.`,
-              type: 'BEAR_COUNTER_ACD'
+              message: `NQ broke IB Low (${fmtNum(ibLow)}) on a bullish A-UP day. Historical trap rate: 100.0%. Look to fade.`,
+              type: 'BEAR_COUNTER_ACD',
+              firedTime: breakTimeStr,
+              priceFired: Math.round(ibLow),
+              targets: [
+                { label: 'T1 (IB Mid)', price: ibMid },
+                { label: 'T2 (IB High)', price: Math.round(ibHigh) }
+              ],
+              stopPrice: 'session low'
             };
           } else {
             breakoutWarning = {
               severity: 'INFO',
               title: 'IB Breakout Active',
-              message: `NQ broke IB Low (${ibLow}). Average pullback rate: 94.2% (96.7% touch re-entry). Wait for a pullback inside the range before entering.`,
-              type: 'BEAR_NORMAL'
+              message: `NQ broke IB Low (${fmtNum(ibLow)}). Average pullback rate: 94.2% (96.7% touch re-entry). Wait for a pullback inside the range before entering.`,
+              type: 'BEAR_NORMAL',
+              firedTime: breakTimeStr,
+              priceFired: Math.round(ibLow)
             };
           }
         }
@@ -714,17 +739,90 @@ export async function computeCase(tradeDate, asOf) {
     getGLine(tradeDate),
   ]);
 
+  let trtWarning = null;
+  if (orHigh && orLow && aUpLevel && aDownLevel && asOfMinutes >= RTH_START + 5 && asOfMinutes < 16 * 60) {
+    const postOrBars = bars.filter(b => barMinutes(b) >= RTH_START + 5);
+    const reachedAUp = postOrBars.some(b => Number(b.high) >= aUpLevel);
+    const reachedADown = postOrBars.some(b => Number(b.low) <= aDownLevel);
+    const failedAUp = reachedAUp && !acd?.a_up_fired && currentPrice < orHigh;
+    const failedADown = reachedADown && !acd?.a_down_fired && currentPrice > orLow;
+
+    const isBullTrend = nl30 > 9;
+    const isBearTrend = nl30 < -9;
+
+    const biasDir = acd?.a_up_fired ? 'LONG' : acd?.a_down_fired ? 'SHORT' : isBullTrend ? 'LONG' : isBearTrend ? 'SHORT' : 'NEUTRAL';
+    
+    const totalVol = postOrBars.reduce((s, b) => s + (Number(b.volume) || 1), 0);
+    const vwap = postOrBars.reduce((s, b) => s + Number(b.close) * (Number(b.volume) || 1), 0) / (totalVol || 1);
+    const p3_vwap_holding = biasDir === 'LONG' ? currentPrice > vwap
+                          : biasDir === 'SHORT' ? currentPrice < vwap : false;
+
+    const split = Math.max(1, postOrBars.length - 20);
+    const earlyBars = postOrBars.slice(0, split);
+    const earlyVol = earlyBars.reduce((s, b) => s + (Number(b.volume) || 1), 0);
+    const earlyVwap = earlyBars.reduce((s, b) => s + Number(b.close) * (Number(b.volume) || 1), 0) / (earlyVol || 1);
+    const p3_value_migrating = biasDir === 'LONG' ? vwap > earlyVwap
+                             : biasDir === 'SHORT' ? vwap < earlyVwap : false;
+
+    const last10 = postOrBars.slice(-10);
+    const avgClosePos = last10.reduce((s, b) => {
+      const rng = Number(b.high) - Number(b.low);
+      return s + (rng > 0 ? (Number(b.close) - Number(b.low)) / rng : 0.5);
+    }, 0) / (last10.length || 1);
+    const p3_delta_confirming = biasDir === 'LONG' ? avgClosePos > 0.55
+                              : biasDir === 'SHORT' ? avgClosePos < 0.45 : false;
+
+    const last20 = postOrBars.slice(-20);
+    const acceptCount = last20.filter(b =>
+      biasDir === 'LONG' ? Number(b.close) > orHigh : biasDir === 'SHORT' ? Number(b.close) < orLow : false
+    ).length;
+    const p3_auction_accepted = last20.length > 0 && acceptCount / last20.length >= 0.4;
+
+    const last16 = postOrBars.slice(-16);
+    let p3_rotations_increasing = false;
+    if (last16.length >= 8) {
+      const half = Math.floor(last16.length / 2);
+      const firstHalf = last16.slice(0, half);
+      const secondHalf = last16.slice(half);
+      const rng1 = Math.max(...firstHalf.map(b => Number(b.high))) - Math.min(...firstHalf.map(b => Number(b.low)));
+      const rng2 = Math.max(...secondHalf.map(b => Number(b.high))) - Math.min(...secondHalf.map(b => Number(b.low)));
+      p3_rotations_increasing = rng2 > rng1 * 1.15;
+    }
+
+    const p3Score = [p3_vwap_holding, p3_value_migrating, p3_delta_confirming, p3_auction_accepted, p3_rotations_increasing].filter(Boolean).length;
+
+    if (failedADown && isBullTrend && !acd?.a_down_fired) {
+      trtWarning = {
+        severity: p3Score >= 2 ? 'INFO' : 'WARNING',
+        title: `Trend Resumption (TRT Long) — P3: ${p3Score}/5`,
+        message: `NQ tested A Down level (${fmtNum(aDownLevel)}) but failed to sustain. Structural trend is BULLISH (NL30=${nl30 > 0 ? '+' : ''}${nl30}). Lean Long near OR Low (${fmtNum(orLow)}). Stop below session low. P3 confirmation is ${p3Score >= 3 ? 'STRONG' : p3Score >= 2 ? 'MODERATE' : 'WEAK (STAND ASIDE)'}.`,
+        type: 'TRT_LONG',
+        p3Score
+      };
+    } else if (failedAUp && isBearTrend && !acd?.a_up_fired) {
+      trtWarning = {
+        severity: p3Score >= 2 ? 'INFO' : 'WARNING',
+        title: `Trend Resumption (TRT Short) — P3: ${p3Score}/5`,
+        message: `NQ tested A Up level (${fmtNum(aUpLevel)}) but failed to sustain. Structural trend is BEARISH (NL30=${nl30 > 0 ? '+' : ''}${nl30}). Lean Short near OR High (${fmtNum(orHigh)}). Stop above session high. P3 confirmation is ${p3Score >= 3 ? 'STRONG' : p3Score >= 2 ? 'MODERATE' : 'WEAK (STAND ASIDE)'}.`,
+        type: 'TRT_SHORT',
+        p3Score
+      };
+    }
+  }
+
   // 4. Structural levels (5-day composite VA, bracket, prior-day VA)
   const structLevels = await getStructuralLevels(tradeDate);
 
-  // 5. Overnight range
+  // 5. Overnight range & VWAP
   const onQ = await query(`
-    SELECT MAX(high)::float as on_high, MIN(low)::float as on_low
+    SELECT MAX(high)::float as on_high, MIN(low)::float as on_low,
+           SUM(close::float * volume::float) / NULLIF(SUM(volume::float), 0) as on_vwap
     FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1
       AND (EXTRACT(hour FROM ts) >= 18 OR EXTRACT(hour FROM ts) < 9)
   `, [tradeDate]);
   const onHigh = onQ.rows[0]?.on_high ?? null;
   const onLow  = onQ.rows[0]?.on_low  ?? null;
+  const onVwap = onQ.rows[0]?.on_vwap  ?? null;
 
   // 5a. Compression detection (NR4/NR7 + day-range narrowing)
   const compression = await computeCompression(tradeDate, orWidth);
@@ -739,6 +837,7 @@ export async function computeCase(tradeDate, asOf) {
     aDownLevel && { price: aDownLevel, label: 'A Down Level',  timeframes: ['INTRADAY'], role: 'SUPPORT'    },
     onHigh   && { price: onHigh,   label: 'Overnight High',    timeframes: ['INTRADAY'], role: 'RESISTANCE' },
     onLow    && { price: onLow,    label: 'Overnight Low',     timeframes: ['INTRADAY'], role: 'SUPPORT'    },
+    onVwap   && { price: onVwap,   label: 'Overnight VWAP',    timeframes: ['INTRADAY'], role: 'PIVOT'      },
     pwHigh   && { price: pwHigh,   label: 'Prior Week High',   timeframes: ['WEEKLY'],   role: 'RESISTANCE' },
     pwLow    && { price: pwLow,    label: 'Prior Week Low',    timeframes: ['WEEKLY'],   role: 'SUPPORT'    },
     gLine    && { price: gLine,    label: 'G-Line (WK Open)',  timeframes: ['WEEKLY'],   role: currentPrice >= gLine ? 'SUPPORT' : 'RESISTANCE' },
@@ -908,6 +1007,29 @@ export async function computeCase(tradeDate, asOf) {
     }
   }
 
+  // PD-2 VA confluence (2-day-prior value area — backtested +20-32% edge boost)
+  const pd2vaQ = await query(`
+    SELECT vah::float, val::float FROM developing_value_log
+    WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
+    ORDER BY trade_date DESC LIMIT 1
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  const pd2vah = pd2vaQ.rows[0]?.vah, pd2val = pd2vaQ.rows[0]?.val;
+  if (pd2vah && pd2val && currentPrice) {
+    const nearPD2VAH = Math.abs(currentPrice - pd2vah) <= 25;
+    const nearPD2VAL = Math.abs(currentPrice - pd2val) <= 25;
+    if (nearPD2VAH || nearPD2VAL) {
+      const w = 10;
+      const lvl = nearPD2VAH ? `PD-2 VAH (${Math.round(pd2vah)})` : `PD-2 VAL (${Math.round(pd2val)})`;
+      const dist = nearPD2VAH ? Math.round(currentPrice - pd2vah) : Math.round(currentPrice - pd2val);
+      const entry = { point: `At ${lvl} — high-confluence zone`, value: `${dist > 0 ? '+' : ''}${dist}pt from level`, weight: w, confirmed: true };
+      if ((nearPD2VAH && currentPrice < pd2vah) || (nearPD2VAL && currentPrice > pd2val)) {
+        meter += w; caseFor.push(entry);
+      } else {
+        meter -= w; caseAgainst.push(entry);
+      }
+    }
+  }
+
   // Delta (confirmed 3-bar window, scanning last 10 bars)
   if (deltaConf) {
     const w     = 12;
@@ -1022,13 +1144,18 @@ export async function computeCase(tradeDate, asOf) {
     : `Confirmed break of IB High (${ibHigh}) or IB Low (${ibLow}) with volume and delta alignment`;
 
   // 11. Active setups at asOf (most recent fired, regardless of current status)
+  // Restrict to high-probability setups (win_rate >= 50% for today's day type, or overall baseline)
+  const currentDayType = dayTypeReassessment?.classification || dayType?.classification || 'OVERALL';
   const setupQ = await query(`
-    SELECT id, setup_type, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level,
-           confluence_score_at_detection, structural_level_type, nl30_at_detection, status
-    FROM active_setups
-    WHERE trade_date = $1 AND fired_at <= $2 AND status = 'ACTIVE'
-    ORDER BY fired_at DESC LIMIT 1
-  `, [tradeDate, asOfFull]);
+    SELECT a.id, a.setup_type, a.fired_at, a.entry_zone_low, a.entry_zone_high, a.stop_level, a.t1_level,
+           a.confluence_score_at_detection, a.structural_level_type, a.nl30_at_detection, a.status
+    FROM active_setups a
+    LEFT JOIN setup_daytype_winrates w1 ON w1.setup_type = a.setup_type AND w1.day_type = $3 AND w1.computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
+    LEFT JOIN setup_daytype_winrates w2 ON w2.setup_type = a.setup_type AND w2.day_type = 'OVERALL' AND w2.computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
+    WHERE a.trade_date = $1 AND a.fired_at <= $2 AND a.status = 'ACTIVE'
+      AND COALESCE(w1.win_rate, w2.win_rate, 0.50) >= 0.50
+    ORDER BY a.fired_at DESC LIMIT 1
+  `, [tradeDate, asOfFull, currentDayType]);
   const latestSetup = setupQ.rows[0] || null;
 
   // 12. Juice
@@ -1176,6 +1303,7 @@ export async function computeCase(tradeDate, asOf) {
     dayTypeReassessment,
     breakoutWarning,
     gapWarning,
+    trtWarning,
 
     read: {
       bias,
@@ -1214,7 +1342,7 @@ export async function computeCase(tradeDate, asOf) {
       nl30, nl10, nlTrend, openingType,
       orHigh, orLow, orWidth: orWidth ? Math.round(orWidth * 4) / 4 : null,
       ibHigh, ibLow, ibWidth: ibWidth ? Math.round(ibWidth * 4) / 4 : null,
-      aUpLevel, aDownLevel, gLine, pwHigh, pwLow,
+      aUpLevel, aDownLevel, gLine, pwHigh, pwLow, onVwap,
       avgVol: Math.round(avgVol), cumDelta, barsLoaded: bars.length,
       deltaConfirmed: !!deltaConf, volConfirmed: volConf.confirmed,
     },

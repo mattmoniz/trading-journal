@@ -186,8 +186,29 @@ function FeedItem({ item }) {
   );
 }
 
+function NewsItem({ item }) {
+  const timeText = item.pubDate ? new Date(item.pubDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : '';
+  const dateText = item.pubDate ? new Date(item.pubDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  return (
+    <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.02)', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline' }}>
+        <a href={item.link} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 600, fontSize: 13, textDecoration: 'none', transition: 'color 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.color = '#93c5fd'} onMouseLeave={e => e.currentTarget.style.color = '#60a5fa'}>
+          {item.title}
+        </a>
+        <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{dateText} {timeText}</span>
+      </div>
+      {item.description && (
+        <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{item.description}</div>
+      )}
+    </div>
+  );
+}
+
 export default function TeleprinterFeed({ maxHeight = 480 }) {
   const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState('commentary'); // 'commentary' or 'news'
+  const [news, setNews] = useState([]);
+  const [newsLoading, setNewsLoading] = useState(false);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -204,8 +225,30 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== 'news') return;
+    let cancelled = false;
+    const loadNews = () => {
+      setNewsLoading(true);
+      fetch(`${API_URL}/antigravity/news`)
+        .then(r => r.json())
+        .then(d => {
+          if (!cancelled) {
+            setNews(d);
+            setNewsLoading(false);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setNewsLoading(false);
+        });
+    };
+    loadNews();
+    const id = setInterval(loadNews, 5 * 60 * 1000); // refresh news every 5 minutes
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeTab]);
+
+  useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [data]);
+  }, [data, news, activeTab]);
 
   const PANEL = {
     background: 'var(--card-bg)',
@@ -228,14 +271,54 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
 
   return (
     <div style={PANEL}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
-        📻 Live Commentary & Feed
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid rgba(139,92,246,0.15)', paddingBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          📻 Live Feed & Commentary
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={() => setActiveTab('commentary')} style={{
+            background: activeTab === 'commentary' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
+            border: activeTab === 'commentary' ? '1px solid rgba(139, 92, 246, 0.5)' : '1px solid transparent',
+            color: activeTab === 'commentary' ? '#e9d5ff' : '#94a3b8',
+            borderRadius: 4,
+            padding: '3px 8px',
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            transition: 'all 0.15s ease'
+          }}>Commentary</button>
+          <button onClick={() => setActiveTab('news')} style={{
+            background: activeTab === 'news' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
+            border: activeTab === 'news' ? '1px solid rgba(139, 92, 246, 0.5)' : '1px solid transparent',
+            color: activeTab === 'news' ? '#e9d5ff' : '#94a3b8',
+            borderRadius: 4,
+            padding: '3px 8px',
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: 'pointer',
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            transition: 'all 0.15s ease'
+          }}>News Feed</button>
+        </div>
       </div>
+
       <div ref={scrollRef} style={{ maxHeight, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 6 }}>
-        {feed.length === 0
-          ? <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
-          : feed.map((item, i) => <FeedItem key={i} item={item} />)
-        }
+        {activeTab === 'commentary' ? (
+          feed.length === 0
+            ? <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
+            : feed.map((item, i) => <FeedItem key={i} item={item} />)
+        ) : (
+          newsLoading && news.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>Fetching latest news...</div>
+          ) : news.length === 0 ? (
+            <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No news articles available.</div>
+          ) : (
+            news.map((item, i) => <NewsItem key={i} item={item} />)
+          )
+        )}
       </div>
     </div>
   );

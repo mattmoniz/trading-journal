@@ -1,4 +1,5 @@
 import express from 'express';
+import https from 'https';
 import { query } from '../db.js';
 
 const router = express.Router();
@@ -740,6 +741,43 @@ async function getLiveEdgesContext() {
       }
     }
 
+    // 9 EMA Snap-Back computation on 5-min resampled bars
+    let emaSnap = null;
+    const fiveBuckets = {};
+    for (const b of bars) {
+      const bk = Math.floor(b.et_min / 5) * 5;
+      if (!fiveBuckets[bk]) fiveBuckets[bk] = { open: b.open, high: b.high, low: b.low, close: b.close };
+      else { fiveBuckets[bk].high = Math.max(fiveBuckets[bk].high, b.high); fiveBuckets[bk].low = Math.min(fiveBuckets[bk].low, b.low); fiveBuckets[bk].close = b.close; }
+    }
+    const fiveBars = Object.values(fiveBuckets);
+    if (fiveBars.length >= 14) {
+      const fc = fiveBars.map(b => b.close), fh = fiveBars.map(b => b.high), fl = fiveBars.map(b => b.low);
+      const ema9 = new Array(fc.length).fill(null);
+      const ek = 2 / 10;
+      ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+      for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
+      const tr = fc.map((c, i) => i === 0 ? fh[i] - fl[i] : Math.max(fh[i] - fl[i], Math.abs(fh[i] - fc[i - 1]), Math.abs(fl[i] - fc[i - 1])));
+      const atr = new Array(fc.length).fill(null);
+      atr[13] = tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
+      for (let i = 14; i < fc.length; i++) atr[i] = tr[i] * (2 / 15) + atr[i - 1] * (1 - 2 / 15);
+      const last = fc.length - 1;
+      if (ema9[last] != null && atr[last] != null && atr[last] > 0.5) {
+        const dev = fc[last] - ema9[last];
+        const devATR = dev / atr[last];
+        emaSnap = {
+          ema9: Math.round(ema9[last] * 100) / 100,
+          atr14: Math.round(atr[last] * 100) / 100,
+          price: fc[last],
+          deviation: Math.round(dev * 100) / 100,
+          deviationATR: Math.round(devATR * 100) / 100,
+          absDeviationATR: Math.round(Math.abs(devATR) * 100) / 100,
+          stretched: Math.abs(devATR) >= 2.0,
+          direction: dev > 0 ? 'ABOVE' : 'BELOW',
+          triggerLevel: Math.abs(devATR) >= 2.0 ? (dev > 0 ? 'FADE SHORT toward EMA' : 'FADE LONG toward EMA') : null,
+        };
+      }
+    }
+
     liveStatus = {
       active: true,
       isLive: !isFallback,
@@ -753,6 +791,7 @@ async function getLiveEdgesContext() {
       firstHourStats,
       coiling: coilingStatus,
       volumeClimax,
+      emaSnap,
     };
   }
 
@@ -841,6 +880,35 @@ async function getLiveEdgesContext() {
 
   const tradeBacktest = await getTradeBacktest();
 
+  // Confluence levels for edge display (controlled-test-validated)
+  const confLevelsQ = await query(`
+    SELECT trade_date::text as d, vah::float, val::float, poc::float, session_high::float as sh, session_low::float as sl
+    FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 3
+  `, [targetDate]).catch(() => ({ rows: [] }));
+  const pd1va = confLevelsQ.rows[0] || null;
+  const pd2va = confLevelsQ.rows[1] || null;
+  const pd3va = confLevelsQ.rows[2] || null;
+
+  // Prior week high/low
+  const pwQ = await query(`
+    SELECT MAX(session_high)::float as pwh, MIN(session_low)::float as pwl
+    FROM (SELECT session_high, session_low FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 5) x
+  `, [targetDate]).catch(() => ({ rows: [] }));
+  const pwHigh = pwQ.rows[0]?.pwh || null;
+  const pwLow = pwQ.rows[0]?.pwl || null;
+
+  const orMid = acdToday?.or_high && acdToday?.or_low ? (acdToday.or_high + acdToday.or_low) / 2 : null;
+
+  const pd2VA = pd2va ? { vah: pd2va.vah, val: pd2va.val } : null;
+
+  const confluenceLevels = {
+    pd1: pd1va ? { vah: pd1va.vah, val: pd1va.val, poc: pd1va.poc, high: pd1va.sh, low: pd1va.sl } : null,
+    pd2: pd2va ? { vah: pd2va.vah, val: pd2va.val } : null,
+    pd3: pd3va ? { vah: pd3va.vah } : null,
+    pw: { high: pwHigh, low: pwLow },
+    orMid,
+  };
+
   return {
     windows: resultsByWindow,
     liveStatus,
@@ -850,7 +918,9 @@ async function getLiveEdgesContext() {
       isFallback,
       list: processedSetups
     },
-    tradeBacktest
+    tradeBacktest,
+    pd2VA,
+    confluenceLevels,
   };
 }
 
@@ -859,6 +929,45 @@ router.get('/antigravity/edges-context', async (req, res) => {
   try {
     const data = await getLiveEdgesContext();
     res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/antigravity/news
+router.get('/antigravity/news', async (req, res) => {
+  try {
+    const url = 'https://finance.yahoo.com/news/rssindex';
+    https.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    }, (rssRes) => {
+      let data = '';
+      rssRes.on('data', chunk => data += chunk);
+      rssRes.on('end', () => {
+        const items = [];
+        const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+        let match;
+        while ((match = itemRegex.exec(data)) !== null) {
+          const content = match[1];
+          const titleMatch = content.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) || content.match(/<title>([\s\S]*?)<\/title>/);
+          const linkMatch = content.match(/<link>([\s\S]*?)<\/link>/);
+          const pubDateMatch = content.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+          const descriptionMatch = content.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) || content.match(/<description>([\s\S]*?)<\/description>/);
+
+          if (titleMatch) {
+            items.push({
+              title: titleMatch[1].trim(),
+              link: linkMatch ? linkMatch[1].trim() : '#',
+              pubDate: pubDateMatch ? pubDateMatch[1].trim() : '',
+              description: descriptionMatch ? descriptionMatch[1].trim().replace(/<[^>]*>?/gm, '') : ''
+            });
+          }
+        }
+        res.json(items.slice(0, 15)); // return top 15 news items
+      });
+    }).on('error', (e) => {
+      res.status(500).json({ error: e.message });
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

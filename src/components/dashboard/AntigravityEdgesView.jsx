@@ -102,7 +102,7 @@ export default function AntigravityEdgesView() {
     );
   }
 
-  const { windows, liveStatus, limits, setups, tradeBacktest } = data;
+  const { windows, liveStatus, limits, setups, tradeBacktest, pd2VA, confluenceLevels } = data;
   const last30 = windows?.last30;
   const last60 = windows?.last60;
   const last90 = windows?.last90;
@@ -895,8 +895,76 @@ export default function AntigravityEdgesView() {
         
         {/* LEFT COLUMN: ACTIVE SETUPS (THE TRUST BUILDER) */}
         <div>
+          {/* CONFLUENCE LEVELS — Controlled-test-validated edge boosters */}
+          {confluenceLevels && (() => {
+            const price = liveStatus?.currentPrice;
+            const PROX = 25;
+            const levels = [
+              { name: 'PD-2 VAH', val: confluenceLevels.pd2?.vah, target: 15, hitRate: 83, exp: 45, ctrlDelta: 44.8, role: 'resistance', color: '#f87171' },
+              { name: 'PD-2 VAL', val: confluenceLevels.pd2?.val, target: 75, hitRate: 33, exp: 55, ctrlDelta: 20.5, role: 'support', color: '#4ade80' },
+              { name: 'PW Low', val: confluenceLevels.pw?.low, target: 100, hitRate: 33, exp: 100, ctrlDelta: 15.0, role: 'support', color: '#4ade80' },
+              { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, exp: 48, ctrlDelta: 14.7, role: 'resistance', color: '#f87171' },
+              { name: 'PD-1 VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, exp: 31, ctrlDelta: 9.6, role: 'resistance', color: '#fb923c' },
+              { name: 'PD-1 POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, exp: 25, ctrlDelta: 9.0, role: 'magnet', color: '#a78bfa' },
+              { name: 'OR Mid', val: confluenceLevels.orMid, target: 20, hitRate: 69, exp: 38, ctrlDelta: 6.9, role: 'pivot', color: '#60a5fa' },
+              { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, exp: 26, ctrlDelta: 5.1, role: 'resistance', color: '#fb923c' },
+            ].filter(l => l.val != null);
+
+            const confTooltip = `CONFLUENCE LEVELS (Controlled-Test-Validated)\n\nThese levels independently improve setup win rates after controlling for setup type, day type, and NL30 alignment. The "Controlled Δ" is the edge contribution of JUST the level, isolated from all other factors.\n\nMETHODOLOGY: Controlled confluence test\n• For each level, compare setup WR when near (±25pt) vs away\n• Control group: same setup type + same day type + same NL30 bucket\n• This isolates the level's independent contribution\n\nTARGET CALIBRATION:\n• Each target is optimized for maximum expectancy at a 20pt stop\n• Hit rate = % of trades reaching target within 20 bars (20 min)\n• Exp = expected value per contract after accounting for stop losses\n\nANTI-CONFLUENCE (levels that HURT setups):\n• IB High: -23.9% controlled delta — setups near IB High perform worse\n• IB Low: -28.1% controlled delta — worst anti-confluence\n• These levels should REDUCE conviction, not increase it\n\nCONFLUENCE COUNT:\n• 0 levels: 48.2% WR\n• 2+ levels: 45.0% WR but better risk (MAE -29pt vs -65pt)\n• 4+ levels: 57.9% WR — high conviction\n• 5+ levels: 61.5% WR — highest conviction zone`;
+
+            const nearCount = levels.filter(l => price && Math.abs(price - l.val) <= PROX).length;
+
+            return (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <h2 style={{ ...sectionTitleStyle, margin: 0 }}>
+                    📐 Confluence Levels
+                    <InfoTooltip text={confTooltip} />
+                  </h2>
+                  {nearCount > 0 && (
+                    <span style={{ fontSize: 10, fontWeight: 800, color: nearCount >= 3 ? '#10b981' : '#fbbf24',
+                      background: nearCount >= 3 ? 'rgba(16,185,129,0.15)' : 'rgba(251,191,36,0.15)',
+                      border: `1px solid ${nearCount >= 3 ? 'rgba(16,185,129,0.3)' : 'rgba(251,191,36,0.3)'}`,
+                      padding: '2px 8px', borderRadius: 4, letterSpacing: '0.04em' }}>
+                      {nearCount} ACTIVE CONFLUENCE{nearCount > 1 ? 'S' : ''}
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                  {levels.map(l => {
+                    const dist = price ? Math.round(price - l.val) : null;
+                    const isNear = dist != null && Math.abs(dist) <= PROX;
+                    return (
+                      <div key={l.name} style={{
+                        padding: '10px 12px', borderRadius: 6,
+                        background: isNear ? 'rgba(251,191,36,0.08)' : 'rgba(30,41,59,0.15)',
+                        border: `1px solid ${isNear ? 'rgba(251,191,36,0.3)' : 'rgba(148,163,184,0.1)'}`,
+                        borderLeft: `3px solid ${l.color}`,
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>{l.name}</span>
+                          {isNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
+                        </div>
+                        <div style={{ fontSize: 15, fontWeight: 800, color: l.color, fontFamily: 'monospace' }}>
+                          {l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                        </div>
+                        <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                          {dist != null ? `${dist > 0 ? '+' : ''}${dist}pt away` : '—'}
+                          {' · '}T: {l.target}pt ({l.hitRate}% hit) · ${l.exp}/ct
+                        </div>
+                        <div style={{ fontSize: 9, color: l.ctrlDelta > 10 ? '#10b981' : '#94a3b8', marginTop: 1 }}>
+                          Controlled Δ: +{l.ctrlDelta.toFixed(1)}% independent edge
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           <h2 style={sectionTitleStyle}>
-            🎯 Today's Actionable Setups 
+            🎯 Today's Actionable Setups
             {setups?.isFallback && <span style={fallbackBadgeStyle}>Recent Session: {setups.date}</span>}
           </h2>
           
@@ -993,6 +1061,199 @@ export default function AntigravityEdgesView() {
               </div>
             </div>
           )}
+          {/* 9 EMA SNAP-BACK EDGE */}
+          <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
+            🧲 9 EMA Snap-Back Edge (Mean Reversion)
+          </h2>
+          {(() => {
+            const snap = liveStatus?.emaSnap;
+            if (!snap) return (
+              <div style={noLiveCardStyle}>
+                <div style={{ fontSize: 13, color: '#64748b' }}>
+                  {liveStatus?.active ? 'Waiting for enough 5-min bars to compute 9 EMA + ATR(14)...' : 'RTH session not active. Snap-back monitor initializes at 9:45 AM ET.'}
+                </div>
+              </div>
+            );
+
+            const isStretched = snap.stretched;
+            const devColor = snap.absDeviationATR >= 2.5 ? '#ef4444' : snap.absDeviationATR >= 2.0 ? '#fbbf24' : snap.absDeviationATR >= 1.5 ? '#fb923c' : '#94a3b8';
+            const confLevel = snap.absDeviationATR >= 2.5 ? 'HIGH' : snap.absDeviationATR >= 2.0 ? 'MEDIUM' : 'LOW';
+            const confColor = confLevel === 'HIGH' ? '#10b981' : confLevel === 'MEDIUM' ? '#3b82f6' : '#64748b';
+            const confBg = confLevel === 'HIGH' ? 'rgba(16,185,129,0.1)' : confLevel === 'MEDIUM' ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)';
+            const dirLabel = snap.direction === 'ABOVE' ? 'SHORT (fade back to EMA)' : 'LONG (fade back to EMA)';
+            const dirColor = snap.direction === 'ABOVE' ? '#f87171' : '#34d399';
+
+            return (
+              <div style={setupCardStyle(isStretched ? confLevel : null)}>
+                <div style={setupHeaderStyle}>
+                  <span style={setupTypeStyle}>
+                    9 EMA SNAP-BACK
+                    <InfoTooltip text={`9 EMA SNAP-BACK (Mean Reversion)\n\nWhen the 5-min close stretches ≥2.0 ATR(14) from the 9-period EMA, price snaps back toward the EMA 96.2% of the time within 15 minutes (3 bars).\n\nBACKTEST (12 months, NQ 5-min):\n• ≥2.0 ATR: 96.2% revert, N=533\n• ≥2.5 ATR: 99.1% revert, N=228\n• ≥3.0 ATR: 99.1% revert, N=109\n• Baseline revert rate: 72.7%\n• Edge vs baseline: +23.5%\n\nWorks on ALL day types:\n• TREND: 93.3% revert\n• BALANCE: 94.9% revert\n• TURBULENT: 92.8% revert\n\nEXECUTION:\n1. Wait for 5-min bar to CLOSE at ≥2.0 ATR from 9 EMA\n2. Enter opposite direction (fade the stretch)\n3. Target: the 9 EMA value\n4. Stop: session extreme or 1 ATR beyond entry\n5. Hold 3-5 bars max (15-25 min) — this is a scalp\n\nThe edge is in the snap-back, not continuation. Take profit at the EMA.`} />
+                  </span>
+                  <span style={setupBadgeStyle(isStretched ? confColor : '#64748b', isStretched ? confBg : 'rgba(100,116,139,0.1)')}>
+                    {isStretched ? `${confLevel} — FADE TRIGGER` : 'MONITORING'}
+                  </span>
+                </div>
+
+                <div style={setupMetricsGrid}>
+                  <div>
+                    <div style={metricLabelStyle}>9 EMA</div>
+                    <div style={{ ...metricValueStyle, color: '#a78bfa', fontFamily: 'monospace' }}>
+                      {snap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>5m ATR(14)</div>
+                    <div style={{ ...metricValueStyle, fontFamily: 'monospace' }}>
+                      {snap.atr14.toFixed(1)} pts
+                    </div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>Deviation</div>
+                    <div style={{ ...metricValueStyle, color: devColor, fontFamily: 'monospace' }}>
+                      {snap.deviationATR > 0 ? '+' : ''}{snap.deviationATR.toFixed(2)} ATR
+                    </div>
+                  </div>
+                </div>
+
+                {isStretched ? (
+                  <>
+                    <div style={setupLevelsGrid}>
+                      <div><strong>Direction:</strong> <span style={{ color: dirColor, fontWeight: 700 }}>{dirLabel}</span></div>
+                      <div><strong>Entry:</strong> Current price ({snap.price.toLocaleString('en-US', { maximumFractionDigits: 0 })})</div>
+                      <div><strong>Target:</strong> <span style={{ color: '#a78bfa' }}>9 EMA ({snap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })})</span></div>
+                    </div>
+                    <div style={recBoxStyle(confLevel)}>
+                      Price is {snap.absDeviationATR.toFixed(1)}× ATR {snap.direction === 'ABOVE' ? 'above' : 'below'} the 9 EMA —
+                      {snap.absDeviationATR >= 2.5 ? ' extreme stretch. 99.1% revert rate (N=228). High conviction fade.' : ' stretched. 96.2% revert rate within 15 min (N=533). Fade toward EMA.'}
+                      {' '}Scalp only — take profit at EMA, do not hold for continuation. Stop at session {snap.direction === 'ABOVE' ? 'high' : 'low'} or {snap.atr14.toFixed(0)}pt beyond entry.
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+                    Deviation is {snap.absDeviationATR.toFixed(2)} ATR — below the 2.0 ATR trigger threshold. No fade signal active.
+                    {snap.absDeviationATR >= 1.5 && <span style={{ color: '#fb923c', fontWeight: 600 }}> Approaching trigger zone.</span>}
+                  </div>
+                )}
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
+                  <div>
+                    <div style={metricLabelStyle}>≥2.0 ATR</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>96.2% <span style={sampleLabel}>(N=533)</span></div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>≥2.5 ATR</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>99.1% <span style={sampleLabel}>(N=228)</span></div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>≥3.0 ATR</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>99.1% <span style={sampleLabel}>(N=109)</span></div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>Baseline</div>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>72.7%</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* 15min RSI DIVERGENCE EDGES */}
+          <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
+            📉 15-Min RSI Divergence (Scalp Reversal)
+          </h2>
+          {(() => {
+            const rsiBullTooltip = `RSI BULLISH DIVERGENCE (15-min)\n\nWHAT IT IS:\nPrice makes a LOWER swing low, but RSI(14) makes a HIGHER swing low. This means selling pressure is weakening — sellers pushed price lower but with less momentum. The market is running out of sellers.\n\nTHE TRIGGER (not just the divergence):\nDivergence alone is a CONDITION, not a signal. Divergence can persist for multiple swings without reversing. The trigger fires ONLY when the confirmation bar (the bar after the swing low) CLOSES HIGHER than the swing bar. This confirms the reversal has actually begun.\n\nWithout confirmation: 76.9% WR (N=26)\nWith confirmation bar: 90.0% WR (N=20) — the confirmation adds +13%\n\nWHEN IT WORKS BEST:\n• RSI ≤ 40 at the swing: 88.2% WR — strongest when RSI is in the lower zone\n• BALANCE days: 80%+ WR — range-bound markets revert cleanly\n• First divergence of the day is more reliable than subsequent ones\n• Small RSI delta (<5 pts) actually works BETTER than large gaps\n\nWHEN IT FAILS:\n• TURBULENT days: 60% WR — wide swings overpower the reversion\n• RSI > 40 (midrange): drops to 55.6% — not stretched enough to revert\n• Holding too long: edge decays past 3 bars (45 min)\n\nEXECUTION:\n1. Divergence forms on 15-min chart (lower low + higher RSI low)\n2. WAIT for the next 15-min bar to close HIGHER (confirmation)\n3. Enter long on that confirmation close\n4. Stop: below the swing low (or 1.5x the swing bar range)\n5. Target: 2R, value area midpoint, or 9 EMA\n6. Hold 3 bars MAX (45 min). Take profit — do not hold for continuation\n7. If no confirmation bar appears, the divergence is NOT triggered — stand aside\n\nBACKTEST: 12 months NQ, 15-min bars. Baseline long WR: 53.5%.`;
+
+            const rsiBearTooltip = `RSI BEARISH DIVERGENCE (15-min)\n\nWHAT IT IS:\nPrice makes a HIGHER swing high, but RSI(14) makes a LOWER swing high. This means buying pressure is weakening — buyers pushed price higher but with less momentum. Institutional distribution is happening: smart money is selling into the new highs.\n\nTHE TRIGGER (not just the divergence):\nDivergence alone is a CONDITION. It can persist — price keeps making higher highs while RSI keeps declining. The trigger fires ONLY when the confirmation bar (the bar after the swing high) CLOSES LOWER. This confirms sellers have actually taken control.\n\nWithout confirmation: 76.6% WR (N=47)\nWith confirmation bar: 86.1% WR (N=36) — the confirmation adds +9.5%\nOn BALANCE days: 84.6% WR (N=26) — highest edge context\n\nWHEN IT WORKS BEST:\n• BALANCE days: 84.6% — range-bound days revert most reliably\n• RSI ≥ 60: 77.4% — upper RSI zone confirms exhaustion\n• Confirmation bar closes below swing bar low: 87.5% (N=24) — strictest trigger\n• First bearish divergence of the day: 78% vs 67% for subsequent\n\nWHEN IT FAILS:\n• TREND days: 53.6% WR at 10 bars — the uptrend fights you\n• Holding too long: 83% at 2 bars → 60% at 8 bars. This is a SCALP.\n• Large RSI delta (≥10 pts): counterintuitively WORSE (25%) — dramatic divergence often means the move is just getting started, not ending\n\nEXECUTION:\n1. Divergence forms on 15-min chart (higher high + lower RSI high)\n2. WAIT for the next 15-min bar to close LOWER (confirmation)\n3. Enter short on that confirmation close\n4. Stop: above the swing high (or 1.5x the swing bar range)\n5. Target: 2R, value area midpoint, or 9 EMA\n6. Hold 2-3 bars MAX (30-45 min). Take profit at first sign of support\n7. If no confirmation bar appears → divergence persisting → stand aside\n\nCRITICAL: If the divergence "persists" (price makes yet ANOTHER higher high after your signal), it means the trend is stronger than the exhaustion. Do NOT re-enter on the second divergence — first occurrence only.\n\nBACKTEST: 12 months NQ, 15-min bars. Baseline short WR: 46.5%.`;
+
+            // We don't have live RSI div detection on the frontend — show the static edge card
+            // with live status from liveStatus if available
+            const dayType = liveStatus?.dayType || null;
+            const isBalance = !dayType || dayType === 'BALANCE';
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* Bullish Divergence Card */}
+                <div style={setupCardStyle('MEDIUM')}>
+                  <div style={setupHeaderStyle}>
+                    <span style={setupTypeStyle}>
+                      RSI BULLISH DIVERGENCE (15min)
+                      <InfoTooltip text={rsiBullTooltip} />
+                    </span>
+                    <span style={setupBadgeStyle('#3b82f6', 'rgba(59,130,246,0.1)')}>SCALP REVERSAL</span>
+                  </div>
+                  <div style={setupMetricsGrid}>
+                    <div>
+                      <div style={metricLabelStyle}>Confirmed WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>90.0% <span style={sampleLabel}>(N=20)</span></div>
+                    </div>
+                    <div>
+                      <div style={metricLabelStyle}>Unconfirmed WR</div>
+                      <div style={{ ...metricValueStyle, color: '#94a3b8' }}>76.9% <span style={sampleLabel}>(N=26)</span></div>
+                    </div>
+                    <div>
+                      <div style={metricLabelStyle}>RSI ≤ 40 WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>88.2% <span style={sampleLabel}>(N=17)</span></div>
+                    </div>
+                  </div>
+                  <div style={setupLevelsGrid}>
+                    <div><strong>Signal:</strong> Price lower low + RSI higher low</div>
+                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next bar closes HIGHER</span></div>
+                    <div><strong>Context:</strong> <span style={{ color: isBalance ? '#34d399' : '#f59e0b' }}>{isBalance ? 'BALANCE — optimal' : dayType + ' — reduced edge'}</span></div>
+                  </div>
+                  <div style={recBoxStyle('MEDIUM')}>
+                    <strong>How to trade:</strong> Divergence alone is a condition, NOT a signal. Wait for the CONFIRMATION BAR — the 15-min bar after the swing low must close higher than the swing bar. This confirms sellers have exhausted. Without this, divergence can persist. Enter long on confirmation close, stop below swing low, target 2R or value area midpoint. Hold 3 bars max (45 min). Best when RSI ≤ 40.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
+                    <div><div style={metricLabelStyle}>Raw div</div><div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>76.9%</div></div>
+                    <div><div style={metricLabelStyle}>+ Confirm</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>90.0%</div></div>
+                    <div><div style={metricLabelStyle}>RSI ≤ 40</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>88.2%</div></div>
+                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>53.5%</div></div>
+                  </div>
+                </div>
+
+                {/* Bearish Divergence Card */}
+                <div style={setupCardStyle('HIGH')}>
+                  <div style={setupHeaderStyle}>
+                    <span style={setupTypeStyle}>
+                      RSI BEARISH DIVERGENCE (15min)
+                      <InfoTooltip text={rsiBearTooltip} />
+                    </span>
+                    <span style={setupBadgeStyle('#10b981', 'rgba(16,185,129,0.1)')}>HIGH EDGE — BALANCE DAYS</span>
+                  </div>
+                  <div style={setupMetricsGrid}>
+                    <div>
+                      <div style={metricLabelStyle}>Confirmed WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>86.1% <span style={sampleLabel}>(N=36)</span></div>
+                    </div>
+                    <div>
+                      <div style={metricLabelStyle}>BALANCE Day WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>84.6% <span style={sampleLabel}>(N=26)</span></div>
+                    </div>
+                    <div>
+                      <div style={metricLabelStyle}>Strict Confirm WR</div>
+                      <div style={{ ...metricValueStyle, color: '#10b981' }}>87.5% <span style={sampleLabel}>(N=24)</span></div>
+                    </div>
+                  </div>
+                  <div style={setupLevelsGrid}>
+                    <div><strong>Signal:</strong> Price higher high + RSI lower high</div>
+                    <div><strong>Trigger:</strong> <span style={{ color: '#10b981', fontWeight: 700 }}>Next bar closes LOWER</span></div>
+                    <div><strong>Context:</strong> <span style={{ color: isBalance ? '#10b981' : '#f59e0b' }}>{isBalance ? 'BALANCE — highest edge (84.6%)' : dayType + ' — reduced conviction'}</span></div>
+                  </div>
+                  <div style={recBoxStyle('HIGH')}>
+                    <strong>How to trade:</strong> Divergence = condition, NOT signal. Price is making new highs but RSI is declining — institutional distribution (smart money selling into strength). The TRIGGER is the confirmation bar: the 15-min bar after the swing high must close LOWER. This confirms buyers have lost control. Without this, divergence can persist — price keeps making higher highs with lower RSI for multiple swings. Enter short on confirmation close, stop above swing high, target 2R or value area midpoint. Hold 2-3 bars max (30-45 min). Do NOT re-enter if divergence persists after your exit.
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
+                    <div><div style={metricLabelStyle}>Raw div</div><div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>76.6%</div></div>
+                    <div><div style={metricLabelStyle}>+ Confirm</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>86.1%</div></div>
+                    <div><div style={metricLabelStyle}>Strict</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>87.5%</div></div>
+                    <div><div style={metricLabelStyle}>Baseline</div><div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>46.5%</div></div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* RIGHT COLUMN: LOOKBACK TABLE & AUDIT ACCORDION */}

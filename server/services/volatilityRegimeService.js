@@ -196,6 +196,8 @@ export async function computeLiveVolatilityRegime() {
     return {
       available: false,
       reason: `not enough bars yet today (${oneMin.length} 1-min bars, need >=15 for a 5-min stdev)`,
+      barsLoaded: oneMin.length,
+      barsRequired: 15,
       etMin,
     };
   }
@@ -255,6 +257,48 @@ export async function computeLiveVolatilityRegime() {
       : null,
   } : null;
 
+  // 9 EMA deviation in ATR(14) units on 5-min bars (mean-reversion trigger)
+  const allFive = fiveMinBars(allRTHBars);
+  let emaSnap = null;
+  if (allFive.length >= 14) {
+    const fc = allFive.map(b => b.close);
+    const fh = allFive.map(b => b.high);
+    const fl = allFive.map(b => b.low);
+
+    // 9 EMA
+    const ema9 = new Array(fc.length).fill(null);
+    const ek = 2 / 10;
+    ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+    for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
+
+    // ATR(14)
+    const tr = fc.map((c, i) => i === 0 ? fh[i] - fl[i] : Math.max(fh[i] - fl[i], Math.abs(fh[i] - fc[i - 1]), Math.abs(fl[i] - fc[i - 1])));
+    const atr = new Array(fc.length).fill(null);
+    atr[13] = tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
+    const ak = 2 / 15;
+    for (let i = 14; i < fc.length; i++) atr[i] = tr[i] * ak + atr[i - 1] * (1 - ak);
+
+    const last = fc.length - 1;
+    if (ema9[last] != null && atr[last] != null && atr[last] > 0.5) {
+      const dev = fc[last] - ema9[last];
+      const devATR = dev / atr[last];
+      const absDevATR = Math.abs(devATR);
+      emaSnap = {
+        ema9: Math.round(ema9[last] * 100) / 100,
+        atr14: Math.round(atr[last] * 100) / 100,
+        price: fc[last],
+        deviation: Math.round(dev * 100) / 100,
+        deviationATR: Math.round(devATR * 100) / 100,
+        absDeviationATR: Math.round(absDevATR * 100) / 100,
+        stretched: absDevATR >= 2.0,
+        direction: dev > 0 ? 'ABOVE' : 'BELOW',
+        triggerLevel: absDevATR >= 2.0
+          ? (dev > 0 ? 'FADE SHORT toward EMA' : 'FADE LONG toward EMA')
+          : null,
+      };
+    }
+  }
+
   return {
     available: true,
     etMin,
@@ -273,5 +317,6 @@ export async function computeLiveVolatilityRegime() {
     trend,
     history,
     texture,
+    emaSnap,
   };
 }
