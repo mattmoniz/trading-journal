@@ -2549,7 +2549,7 @@ function LiveReadBanner() {
         </div>
       )}
 
-      {/* Session Edge Statistics Reference */}
+      {/* Session Edge Statistics — Backtested (controlled confluence test, 12mo NQ) */}
       <div style={{
         marginTop: 14,
         padding: '12px 16px',
@@ -2558,403 +2558,105 @@ function LiveReadBanner() {
         borderRadius: 8,
       }}>
         <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a78bfa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>📊 Session Edge Statistics</span>
-          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'none', fontWeight: 400, marginLeft: 'auto' }}>Based on NQ Backtests (n=310)</span>
+          <span>📊 Backtested Edge Statistics</span>
+          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'none', fontWeight: 400, marginLeft: 'auto' }}>Controlled tests, 12mo NQ (2025-2026)</span>
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          {/* Column 1: IB Breakout Stats */}
-          <div style={{ flex: '1 1 200px', minWidth: 180 }}>
+          {/* Column 1: Ranked Positive-Edge Setups */}
+          <div style={{ flex: '1 1 220px', minWidth: 200 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              IB BREAKOUT FOLLOW-THROUGH
+              RANKED POSITIVE-EDGE SETUPS
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
-              <div style={getRowStyle(isWickPullbackActive, '#fbbf24', 'rgba(245, 158, 11, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Wick Pullback (re-touch):
-                  <InfoTooltip text="EXPLANATION: When NQ breaks the Initial Balance (IB) High or Low, it wicks/pulls back to touch that exact range edge 94.2% of the time before continuing.&#10;&#10;HOW TO USE: Do not buy/sell the breakout bar immediately. Wait for the retest/pullback to the broken IB level for a high-probability entry with smaller risk." />
-                </span>
-                <span style={{ color: '#fbbf24', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isWickPullbackActive && (
-                    <InfoTooltip text={getWickPullbackStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(245, 158, 11, 0.15)', 
-                        color: '#fbbf24', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        IN PLAY
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  94.2%
-                </span>
-              </div>
-              <div style={getRowStyle(is1mCloseTrapActive, '#fbbf24', 'rgba(245, 158, 11, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  1m Close Trap (&le;10m):
-                  <InfoTooltip text="EXPLANATION: Even if NQ closes a 1-minute candle outside the IB High or Low, 75.3% of those early closes fail to sustain and revert back inside the range within 10 minutes.&#10;&#10;HOW TO USE: Treat early breakouts with skepticism, especially on rotational days. Wait for sustained volume or multi-bar closes to confirm extension." />
-                </span>
-                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {is1mCloseTrapActive && (
-                    <InfoTooltip text={get1mCloseTrapStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(245, 158, 11, 0.15)', 
-                        color: '#fbbf24', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        IN PLAY
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  75.3%
-                </span>
-              </div>
-              <div style={getRowStyle(isCounterAUpActive, '#ef4444', 'rgba(239, 68, 68, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Counter A-UP Bearish Break:
-                  <InfoTooltip text="EXPLANATION: On bullish A-UP days, if price breaks below the IB Low, it has failed and trapped 100% of the time historically (0/68 held).&#10;&#10;HOW TO USE: Never short IB Low breakdowns on a bullish number-line day. Instead, look to buy the reclaim of the IB Low, fading the trap back to VWAP." />
-                </span>
-                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isCounterAUpActive && (
-                    <InfoTooltip text={getCounterAUpStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(239, 68, 68, 0.15)', 
-                        color: '#ef4444', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  100% Trap
-                </span>
-              </div>
-              <div style={getRowStyle(isCounterADownActive, '#ef4444', 'rgba(239, 68, 68, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Counter A-DOWN Bullish Break:
-                  <InfoTooltip text="EXPLANATION: On bearish A-DOWN days, if price breaks above the IB High, it has failed and trapped 87.3% of the time historically.&#10;&#10;HOW TO USE: Be extremely cautious buying IB High breakouts under a bearish daily score. Look for rejection patterns to fade the break back to range center." />
-                </span>
-                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isCounterADownActive && (
-                    <InfoTooltip text={getCounterADownStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(239, 68, 68, 0.15)', 
-                        color: '#ef4444', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  87.3% Trap
-                </span>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: '#94a3b8' }}>
+              {[
+                { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', freq: '1.0/day', color: '#10b981', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). Signal-only — manage manually.' },
+                { name: 'RSI Div Bearish', wr: '86.1%', delta: '+34.9%', freq: '0.6/day', color: '#10b981', tip: '15-min RSI bearish divergence with confirmation bar. 86.1% WR at 3 bars. Best on BALANCE days (84.6%). Scalp — 30 min max.' },
+                { name: 'RSI Div Bullish', wr: '90.0%', delta: '+21.9%', freq: '0.3/day', color: '#34d399', tip: '15-min RSI bullish divergence with confirmation bar. 90.0% WR (N=20). Best when RSI ≤ 40. Scalp — 45 min max.' },
+                { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', freq: '0.09/day', color: '#34d399', tip: 'Open drive down, pullback to OR Low. 68.2% WR at 10 bars (N=22). At VA level: 78%. NL30 aligned: 80%.' },
+                { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', freq: '0.25/day', color: '#34d399', tip: 'Price at PD VAH inside value, non-drive open. 66.7% WR (N=60). TURBULENT: 90%. NL30 aligned: 93%. Tight 18pt stop.' },
+                { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', freq: '0.17/day', color: '#34d399', tip: 'Open drive up, pullback to OR High. 66.7% WR at 10 bars (N=42). TREND days: 83%.' },
+                { name: 'BRACKET_BK_LONG', wr: '55.1%', delta: '+4.4%', freq: '0.20/day', color: '#94a3b8', tip: 'Bracket top exceeded. 55.1% WR (N=49). At PD-1 VA: 73%. Moderate edge.' },
+                { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', freq: '0.12/day', color: '#f59e0b', tip: 'Trend reversal — A+C failed, price through OR. Edge at 20 bars (75% WR), not 10. Needs 120 min. Slow burn.' },
+              ].map((s, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    {s.name} <InfoTooltip text={s.tip} />
+                  </span>
+                  <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ color: s.color, fontWeight: 700 }}>{s.wr}</span>
+                    <span style={{ color: '#64748b', fontSize: 10 }}>{s.delta}</span>
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Column 2: Reassessment Stats */}
+          {/* Column 2: Confluence Levels */}
           <div style={{ flex: '1 1 200px', minWidth: 180 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              DAY-TYPE REASSESSMENT
+              CONFLUENCE EDGE (Controlled Δ)
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
-              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  End-to-End Accuracy:
-                  <InfoTooltip text="EXPLANATION: The live reassessment engine correctly forecasts the final session classification (Trend vs Balance) ~68% of the time.&#10;&#10;HOW TO USE: Reassessments are highly reliable directional cues, but they are not guarantees. Treat updates as a prompt to check volume/price behavior." />
-                </span>
-                <span style={{ color: '#22c55e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isReassessmentActive && (
-                    <InfoTooltip text={getReassessmentRowStatusText('accuracy')}>
-                      <span style={{
-                        fontSize: 9,
-                        background: 'rgba(129, 140, 248, 0.15)',
-                        color: '#818cf8',
-                        padding: '1px 5px',
-                        borderRadius: 3,
-                        fontWeight: 800,
-                        letterSpacing: '0.04em',
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  ~68%
-                </span>
-              </div>
-              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Trend Day Recovery:
-                  <InfoTooltip text="EXPLANATION: The reassessment algorithm successfully recovers ~71% of Trend days that the static opening-range classification originally missed.&#10;&#10;HOW TO USE: When a Trend day reassessment is flagged, prepare to switch your strategy from rotational range fading to breakout/pullback expansion plays." />
-                </span>
-                <span style={{ color: '#22c55e', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isReassessmentActive && (
-                    <InfoTooltip text={getReassessmentRowStatusText('recovery')}>
-                      <span style={{
-                        fontSize: 9,
-                        background: 'rgba(129, 140, 248, 0.15)',
-                        color: '#818cf8',
-                        padding: '1px 5px',
-                        borderRadius: 3,
-                        fontWeight: 800,
-                        letterSpacing: '0.04em',
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  ~71%
-                </span>
-              </div>
-              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Balance &rarr; Trend False Positives:
-                  <InfoTooltip text="EXPLANATION: About 20% of the times the engine reassesses a Balance day to a Trend day, the market fails to expand and instead remains rotational (whipsaw).&#10;&#10;HOW TO USE: Check volume. If a Trend reassessment triggers but volume remains low/normal, treat it with caution and keep trade size small." />
-                </span>
-                <span style={{ color: '#fbbf24', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isReassessmentActive && (
-                    <InfoTooltip text={getReassessmentRowStatusText('falsePositives')}>
-                      <span style={{
-                        fontSize: 9,
-                        background: 'rgba(129, 140, 248, 0.15)',
-                        color: '#818cf8',
-                        padding: '1px 5px',
-                        borderRadius: 3,
-                        fontWeight: 800,
-                        letterSpacing: '0.04em',
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  ~20%
-                </span>
-              </div>
-              <div style={getRowStyle(isReassessmentActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Actionable Cue:
-                  <InfoTooltip text="EXPLANATION: The final filter before acting on a day-type reassessment is checking real-time price action confirmation.&#10;&#10;HOW TO USE: If the day is reassessed to a Trend day, verify that price is holding outside the IB boundaries. If price repeatedly wicks back inside on light volume, do not trade the breakout." />
-                </span>
-                <span style={{ color: '#cbd5e1', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isReassessmentActive && (
-                    <InfoTooltip text={getReassessmentRowStatusText('actionableCue')}>
-                      <span style={{
-                        fontSize: 9,
-                        background: 'rgba(129, 140, 248, 0.15)',
-                        color: '#818cf8',
-                        padding: '1px 5px',
-                        borderRadius: 3,
-                        fontWeight: 800,
-                        letterSpacing: '0.04em',
-                        fontStyle: 'normal',
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  Verify with price action
-                </span>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: '#94a3b8' }}>
+              {[
+                { name: 'PD-2 VAH', delta: '+44.8%', color: '#10b981', tip: 'Strongest confluence. Setups near 2-day-prior VAH have +44.8% controlled edge. Target: 15pt (83% hit). $45/ct expectancy.' },
+                { name: 'PD-2 VAL', delta: '+20.5%', color: '#10b981', tip: 'Extension target profile. +20.5% controlled edge. Target: 75pt (33% hit). $55/ct — let runners go.' },
+                { name: 'PW Low', delta: '+15.0%', color: '#10b981', tip: 'Prior week low as support. +15.0% controlled edge. Target: 100pt (33% hit). $100/ct potential.' },
+                { name: 'PD-3 VAH', delta: '+14.7%', color: '#34d399', tip: '3-day-prior VAH resistance. +14.7% controlled edge. Scalp target: 15pt (85% hit). $48/ct.' },
+                { name: 'PD-1 VAH', delta: '+9.6%', color: '#34d399', tip: 'Prior day VAH. +9.6% controlled edge. Target: 30pt (52% hit). $31/ct.' },
+                { name: 'PD-1 POC', delta: '+9.0%', color: '#34d399', tip: 'Prior day POC magnet. +9.0% controlled edge. Target: 20pt (62% hit). $25/ct.' },
+                { name: 'OR Midpoint', delta: '+6.9%', color: '#94a3b8', tip: 'Opening range midpoint pivot. +6.9% controlled edge. Target: 20pt (69% hit). $38/ct.' },
+              ].map((l, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{l.name} <InfoTooltip text={l.tip} /></span>
+                  <span style={{ color: l.color, fontWeight: 700 }}>{l.delta}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 10, color: '#64748b' }}>
+              ANTI-CONFLUENCE (avoid):
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#f87171', marginTop: 2 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB High</span><span>-23.9%</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB Low</span><span>-28.1%</span></div>
             </div>
           </div>
 
-          {/* Column 3: Gap & Opening Range Edges */}
+          {/* Column 3: Removed/Gated Setups + Context */}
           <div style={{ flex: '1 1 200px', minWidth: 180 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              GAP & OPENING RANGE EDGES
+              NEGATIVE EDGE (REMOVED/GATED)
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: '#94a3b8' }}>
-              <div style={getRowStyle(isGapUpActive, '#34d399', 'rgba(52, 211, 153, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Gap Up Fill Probability:
-                  <InfoTooltip text="EXPLANATION: When NQ opens with a gap up relative to the previous day's high, it fills that gap (price retraces to yesterday's high) ~70.3% of the time during RTH.&#10;&#10;HOW TO USE: If a gap up is active, look for short entry confirmation on a shift in order flow to ride the gap fill downward, or wait for the fill to complete before buying." />
-                </span>
-                <span style={{ color: '#34d399', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isGapUpActive && (
-                    <InfoTooltip text={getGapUpStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(52, 211, 153, 0.15)', 
-                        color: '#34d399', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        IN PLAY
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  70.3%
-                </span>
-              </div>
-              <div style={getRowStyle(isGapDownActive, '#34d399', 'rgba(52, 211, 153, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Gap Down Fill Probability:
-                  <InfoTooltip text="EXPLANATION: When NQ opens with a gap down relative to the previous day's low, it fills that gap (price retraces to yesterday's low) ~68.5% of the time during RTH.&#10;&#10;HOW TO USE: If a gap down is active, look for long entry confirmation on a reclaim pattern to trade the gap fill upward, or wait for the fill to complete before shorting." />
-                </span>
-                <span style={{ color: '#34d399', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isGapDownActive && (
-                    <InfoTooltip text={getGapDownStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(52, 211, 153, 0.15)', 
-                        color: '#34d399', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        IN PLAY
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  68.5%
-                </span>
-              </div>
-              <div style={getRowStyle(isSweepActive, '#fbbf24', 'rgba(245, 158, 11, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Prior Extremes Sweep Fade:
-                  <InfoTooltip text="EXPLANATION: On inside-open days, when price wicks outside yesterday's high or low but fails to hold, NQ wicks back inside and reverses to the opposite side of yesterday's range ~54% of the time.&#10;&#10;HOW TO USE: Avoid chasing breakouts of yesterday's extremes immediately. If price sweeps a level and returns inside the prior day's range, look to play the mean-reversion back to yesterday's POC or VAL." />
-                </span>
-                <span style={{ color: '#fbbf24', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isSweepActive && (
-                    <InfoTooltip text={getSweepStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(245, 158, 11, 0.15)', 
-                        color: '#fbbf24', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  ~54% Fade
-                </span>
-              </div>
-              <div style={getRowStyle(isPivotActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  10:00 AM Pivot Window (±5m):
-                  <InfoTooltip text="EXPLANATION: There is a statistically significant tendency for NQ to establish either its absolute high or low of the session between 9:55 AM and 10:05 AM ET (the 10:00 AM reversal window).&#10;&#10;HOW TO USE: Watch for exhaustive candle patterns or divergence during this time. High-probability setups set their extremes here on rotational days." />
-                </span>
-                <span style={{ color: '#cbd5e1', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isPivotActive && (
-                    <InfoTooltip text={getPivotStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(129, 140, 248, 0.15)', 
-                        color: '#818cf8', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        IN PLAY
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  ~35% Set
-                </span>
-              </div>
-              <div style={getRowStyle(isTightOrActive, '#818cf8', 'rgba(129, 140, 248, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Tight OR5 Trend Expansion:
-                  <InfoTooltip text="EXPLANATION: A tight 5-minute Opening Range (under 47.5 pts) indicates extreme market compression, leading to a clean, trending expansion session 42.5% of the time (historically elevated compared to the ~20% baseline).&#10;&#10;HOW TO USE: Prepare for breakout expansion plays. Authorize trend-following trades and trailing stops rather than mean-reversion fades." />
-                </span>
-                <span style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isTightOrActive && (
-                    <InfoTooltip text={getTightOrStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(129, 140, 248, 0.15)', 
-                        color: '#818cf8', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  42.5%
-                </span>
-              </div>
-              <div style={getRowStyle(isWideOrActive, '#ef4444', 'rgba(239, 68, 68, 0.08)')}>
-                <span style={{ display: 'inline-flex', alignItems: 'center' }}>
-                  Wide OR5 Breakout Failure:
-                  <InfoTooltip text="EXPLANATION: A wide 5-minute Opening Range (over 91.5 pts) indicates that the expected volatility extension has already occurred at the open. Out of these days, 79.8% fail to sustain breakouts and remain rotational.&#10;&#10;HOW TO USE: Avoid buying/selling breakouts. Focus strictly on range fades and mean-reversion plays back to the center." />
-                </span>
-                <span style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isWideOrActive && (
-                    <InfoTooltip text={getWideOrStatusText()}>
-                      <span style={{ 
-                        fontSize: 9, 
-                        background: 'rgba(239, 68, 68, 0.15)', 
-                        color: '#ef4444', 
-                        padding: '1px 5px', 
-                        borderRadius: 3, 
-                        fontWeight: 800, 
-                        letterSpacing: '0.04em', 
-                        cursor: 'help',
-                        marginRight: 4
-                      }}>
-                        ACTIVE
-                      </span>
-                    </InfoTooltip>
-                  )}
-                  79.8%
-                </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}>
+              {[
+                { name: 'C_STANDALONE_DOWN', edge: '-12.0%', status: 'GATED to PD-2 VA (81% there)', color: '#f59e0b' },
+                { name: 'OTD_SHORT', edge: '-5.6%', status: 'GATED to PD-2 VA (73% there)', color: '#f59e0b' },
+                { name: 'IB_BULLISH', edge: '-7.5%', status: 'REMOVED', color: '#ef4444' },
+                { name: 'C_STANDALONE_UP', edge: '-6.5%', status: 'REMOVED', color: '#ef4444' },
+                { name: 'VA_RESP_LONG', edge: '-5.0%', status: 'REMOVED', color: '#ef4444' },
+                { name: 'TRT_SHORT', edge: '-10.1%', status: 'REMOVED', color: '#ef4444' },
+              ].map((s, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0', color: '#94a3b8' }}>
+                  <span>{s.name}</span>
+                  <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <span style={{ color: '#ef4444', fontWeight: 600 }}>{s.edge}</span>
+                    <span style={{ fontSize: 8, color: s.color, background: `${s.color}20`, padding: '1px 4px', borderRadius: 2, fontWeight: 700 }}>{s.status.split(' ')[0]}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 8, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>CONFLUENCE COUNT EFFECT</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: '#94a3b8' }}>
+                <div>0 levels: <span style={{ color: '#64748b' }}>48.2% WR</span></div>
+                <div>2+ levels: <span style={{ color: '#94a3b8' }}>45.0% WR, better MAE</span></div>
+                <div>4+ levels: <span style={{ color: '#34d399', fontWeight: 700 }}>57.9% WR ✅</span></div>
               </div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Old Session Edge Statistics content removed — replaced with backtested data above */}
 
       {activeModal && (
         <CaseReadDetailModal kind={activeModal} c={currentCase} isRTH={isRTH} isPastOpen={true} title={MODAL_TITLES[activeModal]} onClose={closeModal} />
