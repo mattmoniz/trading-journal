@@ -2575,7 +2575,7 @@ function LiveReadBanner() {
                 { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', freq: '0.09/day', color: '#34d399', tip: 'Pullback to OR Low. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91% (+45%).' },
                 { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', freq: '0.25/day', color: '#34d399', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Tight OR: 82% (+19%).' },
                 { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', freq: '0.17/day', color: '#34d399', tip: 'Pullback to OR High. 66.7% WR (N=42). TREND: 83%. Tight OR: 78% (+14%).' },
-                { name: 'RSI Div Bearish', wr: '57.9%', delta: '+5.0%', freq: '0.6/day', color: '#94a3b8', tip: '5-min RSI bearish div + confirm bar. Controlled +5.0%. 3-bar scalp (+11%). RSI 50-60: 61%. TREND/BALANCE.' },
+                { name: 'RSI Div (via Absorption)', wr: '71.4%', delta: '+18.4%', freq: '10% days', color: '#64748b', tip: 'RSI divergence edge is captured by Absorption Long setup (71.4% WR) which adds structural context (support level + price flat). Standalone RSI div only +5% controlled edge — removed as separate signal.' },
                 { name: 'BRACKET_BK_LONG', wr: '55.1%', delta: '+4.4%', freq: '0.20/day', color: '#94a3b8', tip: 'Bracket top exceeded. 55.1% WR (N=49). @PD1-VA: 73%. Wide OR: 63% (+11%). Suppressed on tight OR.' },
                 { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', freq: '0.12/day', color: '#f59e0b', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
               ].map((s, i) => (
@@ -21319,6 +21319,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                         { name: 'RSI Div Bearish (5min)', wr: '86.1%', edge: '+34.9%', freq: '0.61/day', tests: 'Fwd WR, Confirmation filter', why: 'Moving target — price reverts partially, not to fixed level' },
                         { name: 'RSI Div Bullish (5min)', wr: '90.0%', edge: '+21.9%', freq: '0.34/day', tests: 'Fwd WR, Confirmation filter', why: 'Same — scalp with manual profit-taking at value area' },
                         { name: 'Coil Surge → VWAP Fade', wr: '65.3% TREND', edge: '+16.1% (TREND), +$24/trade', freq: '1.08/day', tests: 'Fwd WR, MA filters, day type, NL30, OR width, VWAP target', why: 'Now in active_setups with custom VWAP revert resolution. Gated to TREND/NL30-aligned.' },
+                        { name: 'RSI Divergence (retired)', wr: '57.9%/54.8%', edge: '+5.0% bear / +1.7% bull', freq: '0.6/day', tests: 'Fwd WR, Controlled, Confirmation filter', why: 'RETIRED: Absorption Long captures the same edge better (71.4% WR vs 54.8%). Standalone RSI div is noise next to absorption.' },
                       ].map((s, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
                           <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{s.name}</td>
