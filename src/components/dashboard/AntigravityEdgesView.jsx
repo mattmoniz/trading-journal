@@ -1287,9 +1287,10 @@ export default function AntigravityEdgesView() {
 
           {/* 15min RSI DIVERGENCE EDGES */}
           <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
-            📉 15-Min RSI Divergence (Scalp Reversal)
+            📉 RSI Divergence (5-min Scalp)
           </h2>
           {(() => {
+            const rd = liveStatus?.rsiDiv;
             const rsiBullTooltip = `RSI BULLISH DIVERGENCE (5-min)\n\nWHAT IT IS:\nPrice makes a LOWER swing low, but RSI(14) makes a HIGHER swing low. Selling pressure weakening.\n\nTHE TRIGGER:\nDivergence alone is a CONDITION. Wait for CONFIRMATION BAR — next 5-min bar must close HIGHER.\n\nCONTROLLED TEST (5-min, 12mo):\n• Controlled WR: 54.8% vs 53.1% baseline = +1.7% independent edge\n• MARGINAL — only works on BALANCE days (62% WR, N=42)\n• TURBULENT: 44% — fails\n• RSI > 40: 61% WR (better when NOT oversold)\n• RSI ≤ 30: 25% WR — counterintuitively terrible\n\nCONTEXT GATE: BALANCE days only. Skip TURBULENT.\n\nEXECUTION:\n1. 5-min divergence forms (lower low + higher RSI low)\n2. WAIT for next bar to close HIGHER (confirmation)\n3. Enter long. Stop below swing low. Target 2R or VA midpoint.\n4. Hold 3-5 bars (15-25 min). Scalp only.\n\nFREQUENCY: 0.34/day (27% of days)`;
 
             const rsiBearTooltip = `RSI BEARISH DIVERGENCE (5-min)\n\nWHAT IT IS:\nPrice makes a HIGHER swing high, but RSI(14) makes a LOWER swing high. Buying pressure weakening — institutional distribution.\n\nTHE TRIGGER:\nWait for CONFIRMATION BAR — next 5-min bar must close LOWER.\n\nCONTROLLED TEST (5-min, 12mo):\n• Controlled WR: 51.9% vs 46.9% baseline = +5.0% independent edge\n• Best at 3 bars: 57.9% WR (+11.0%) — scalp window\n• TREND days: 55% WR (N=40) — works\n• RSI 50-60: 61% WR — better at midrange than extreme overbought\n• RSI ≥ 70: 44% — worse at extremes\n\nCONTEXT: Fire on TREND and BALANCE. Suppress TURBULENT.\n\nEXECUTION:\n1. 5-min divergence forms (higher high + lower RSI high)\n2. WAIT for next bar to close LOWER (confirmation)\n3. Enter short. Stop above swing high. Target 2R or VA midpoint.\n4. Hold 2-3 bars (10-15 min). Scalp only — edge decays fast.\n5. Do NOT re-enter on persisting divergence.\n\nFREQUENCY: 0.61/day (43% of days)`;
@@ -1301,6 +1302,66 @@ export default function AntigravityEdgesView() {
 
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {/* Live RSI Divergence Status */}
+                {rd && (
+                  <div style={{
+                    padding: '10px 14px', borderRadius: 6,
+                    background: rd.confirmed ? 'rgba(16,185,129,0.1)' : rd.building ? 'rgba(251,191,36,0.08)' : 'rgba(30,41,59,0.2)',
+                    border: `1.5px solid ${rd.confirmed ? 'rgba(16,185,129,0.4)' : rd.building ? 'rgba(251,191,36,0.3)' : 'rgba(51,65,85,0.3)'}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 800, color: rd.confirmed ? '#10b981' : rd.building ? '#fbbf24' : '#94a3b8' }}>
+                        {rd.confirmed ? '⚡ RSI DIVERGENCE CONFIRMED — FIRE' : rd.building ? '👀 RSI DIVERGENCE BUILDING' : '📊 RSI DIVERGENCE DETECTED'}
+                      </span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: rd.type === 'BEARISH' ? '#f87171' : '#4ade80',
+                        background: rd.type === 'BEARISH' ? 'rgba(248,113,113,0.15)' : 'rgba(74,222,128,0.15)',
+                        padding: '2px 6px', borderRadius: 3 }}>
+                        {rd.type}
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, fontSize: 11 }}>
+                      <div>
+                        <div style={{ color: '#64748b', fontSize: 9 }}>{rd.type === 'BEARISH' ? 'Swing Highs' : 'Swing Lows'}</div>
+                        <div style={{ color: '#e2e8f0', fontFamily: 'monospace', fontWeight: 700 }}>
+                          {rd.type === 'BEARISH' ? `${rd.swingHigh1?.toLocaleString()} → ${rd.swingHigh2?.toLocaleString()}` : `${rd.swingLow1?.toLocaleString()} → ${rd.swingLow2?.toLocaleString()}`}
+                        </div>
+                        <div style={{ color: rd.type === 'BEARISH' ? '#4ade80' : '#f87171', fontSize: 9 }}>price {rd.type === 'BEARISH' ? '↑ higher' : '↓ lower'}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#64748b', fontSize: 9 }}>RSI at swings</div>
+                        <div style={{ color: '#e2e8f0', fontFamily: 'monospace', fontWeight: 700 }}>{rd.rsi1} → {rd.rsi2}</div>
+                        <div style={{ color: rd.type === 'BEARISH' ? '#f87171' : '#4ade80', fontSize: 9 }}>RSI {rd.type === 'BEARISH' ? '↓ lower' : '↑ higher'} (Δ{rd.rsiDelta})</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#64748b', fontSize: 9 }}>Current RSI</div>
+                        <div style={{ color: '#a78bfa', fontFamily: 'monospace', fontWeight: 700 }}>{rd.currentRsi}</div>
+                      </div>
+                      <div>
+                        <div style={{ color: '#64748b', fontSize: 9 }}>Bars since swing</div>
+                        <div style={{ color: '#e2e8f0', fontWeight: 700 }}>{rd.barsFromSwing}</div>
+                        <div style={{ color: '#64748b', fontSize: 9 }}>{rd.confirmed ? 'Confirmed ✓' : rd.building ? 'Waiting for confirm bar' : ''}</div>
+                      </div>
+                    </div>
+                    {rd.confirmed && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: rd.type === 'BEARISH' ? '#fca5a5' : '#86efac', fontWeight: 600 }}>
+                        {rd.type === 'BEARISH'
+                          ? 'Confirmation bar closed lower. Enter SHORT. Stop above swing high. Target 2R. Hold 2-3 bars (10-15 min). Scalp only.'
+                          : 'Confirmation bar closed higher. Enter LONG (BALANCE days only). Stop below swing low. Target 2R. Hold 3-5 bars.'}
+                      </div>
+                    )}
+                    {rd.building && (
+                      <div style={{ marginTop: 6, fontSize: 11, color: '#fbbf24' }}>
+                        Divergence forming — waiting for confirmation bar. Do NOT enter yet. {rd.type === 'BEARISH' ? 'Need next 5-min bar to close LOWER.' : 'Need next 5-min bar to close HIGHER.'}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {!rd && liveStatus?.active && (
+                  <div style={{ padding: '8px 12px', background: 'rgba(30,41,59,0.2)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 6, fontSize: 12, color: '#64748b' }}>
+                    No RSI divergence detected on 5-min bars. Monitoring swing highs/lows vs RSI(14).
+                  </div>
+                )}
+
                 {/* Bullish Divergence Card */}
                 <div style={setupCardStyle('MEDIUM')}>
                   <div style={setupHeaderStyle}>

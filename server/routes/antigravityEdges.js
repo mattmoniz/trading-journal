@@ -778,6 +778,72 @@ async function getLiveEdgesContext() {
       }
     }
 
+    // RSI Divergence detection for edge card (5-min)
+    let rsiDiv = null;
+    if (fiveBars.length >= 17) {
+      const fc = fiveBars.map(b => b.close), fh = fiveBars.map(b => b.high), fl = fiveBars.map(b => b.low);
+      const rsiArr = new Array(fc.length).fill(null);
+      let rag = 0, ral = 0;
+      for (let i = 1; i <= 14; i++) { const d = fc[i] - fc[i-1]; rag += d > 0 ? d : 0; ral += d < 0 ? -d : 0; }
+      rag /= 14; ral /= 14;
+      rsiArr[14] = ral === 0 ? 100 : 100 - 100 / (1 + rag / ral);
+      for (let i = 15; i < fc.length; i++) {
+        const d = fc[i] - fc[i-1]; rag = (rag * 13 + (d > 0 ? d : 0)) / 14; ral = (ral * 13 + (d < 0 ? -d : 0)) / 14;
+        rsiArr[i] = ral === 0 ? 100 : 100 - 100 / (1 + rag / ral);
+      }
+      // Swing detection (N=3)
+      const SW = 3, sHighs = [], sLows = [];
+      for (let i = SW; i < fc.length - SW; i++) {
+        let isH = true, isL = true;
+        for (let j = 1; j <= SW; j++) { if (fh[i] <= fh[i-j] || fh[i] <= fh[i+j]) isH = false; if (fl[i] >= fl[i-j] || fl[i] >= fl[i+j]) isL = false; }
+        if (isH) sHighs.push({ idx: i, price: fh[i], rsi: rsiArr[i] });
+        if (isL) sLows.push({ idx: i, price: fl[i], rsi: rsiArr[i] });
+      }
+      const last = fc.length - 1;
+      // Check for bearish divergence (building or confirmed)
+      if (sHighs.length >= 2) {
+        const curr = sHighs[sHighs.length - 1], prev = sHighs[sHighs.length - 2];
+        if (curr.idx - prev.idx <= 40 && curr.price > prev.price && curr.rsi != null && prev.rsi != null && curr.rsi < prev.rsi) {
+          const barsFromSwing = last - curr.idx;
+          const confirmed = barsFromSwing >= 1 && fc[curr.idx + 1] < fc[curr.idx];
+          rsiDiv = {
+            type: 'BEARISH',
+            detected: true,
+            confirmed,
+            building: !confirmed && barsFromSwing <= 5,
+            swingHigh1: Math.round(prev.price),
+            swingHigh2: Math.round(curr.price),
+            rsi1: Math.round(prev.rsi),
+            rsi2: Math.round(curr.rsi),
+            rsiDelta: Math.round(prev.rsi - curr.rsi),
+            barsFromSwing,
+            currentRsi: rsiArr[last] != null ? Math.round(rsiArr[last]) : null,
+          };
+        }
+      }
+      // Check for bullish divergence (only if no bearish)
+      if (!rsiDiv && sLows.length >= 2) {
+        const curr = sLows[sLows.length - 1], prev = sLows[sLows.length - 2];
+        if (curr.idx - prev.idx <= 40 && curr.price < prev.price && curr.rsi != null && prev.rsi != null && curr.rsi > prev.rsi) {
+          const barsFromSwing = last - curr.idx;
+          const confirmed = barsFromSwing >= 1 && fc[curr.idx + 1] > fc[curr.idx];
+          rsiDiv = {
+            type: 'BULLISH',
+            detected: true,
+            confirmed,
+            building: !confirmed && barsFromSwing <= 5,
+            swingLow1: Math.round(prev.price),
+            swingLow2: Math.round(curr.price),
+            rsi1: Math.round(prev.rsi),
+            rsi2: Math.round(curr.rsi),
+            rsiDelta: Math.round(curr.rsi - prev.rsi),
+            barsFromSwing,
+            currentRsi: rsiArr[last] != null ? Math.round(rsiArr[last]) : null,
+          };
+        }
+      }
+    }
+
     // Absorption detection for edge card
     let absorption = null;
     if (bars.length >= 30) {
@@ -855,6 +921,7 @@ async function getLiveEdgesContext() {
       emaSnap,
       coilSurge,
       absorption,
+      rsiDiv,
     };
   }
 
