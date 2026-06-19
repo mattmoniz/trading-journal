@@ -778,6 +778,34 @@ async function getLiveEdgesContext() {
       }
     }
 
+    // Absorption detection for edge card
+    let absorption = null;
+    if (bars.length >= 30) {
+      const absFiveBk = {};
+      for (const b of bars) { const bk=Math.floor(b.et_min/5)*5; if(!absFiveBk[bk])absFiveBk[bk]={high:b.high,low:b.low,close:b.close};else{absFiveBk[bk].high=Math.max(absFiveBk[bk].high,b.high);absFiveBk[bk].low=Math.min(absFiveBk[bk].low,b.low);absFiveBk[bk].close=b.close;}}
+      const absFb=Object.values(absFiveBk);
+      if(absFb.length>=20){
+        const absC=absFb.map(b=>b.close);
+        const absRsi=new Array(absC.length).fill(null);
+        let aag=0,aal=0;for(let i=1;i<=14;i++){const d=absC[i]-absC[i-1];aag+=d>0?d:0;aal+=d<0?-d:0;}aag/=14;aal/=14;
+        absRsi[14]=aal===0?100:100-100/(1+aag/aal);
+        for(let i=15;i<absC.length;i++){const d=absC[i]-absC[i-1];aag=(aag*13+(d>0?d:0))/14;aal=(aal*13+(d<0?-d:0))/14;absRsi[i]=aal===0?100:100-100/(1+aag/aal);}
+        const AW=15,last=absC.length-1;
+        if(last>=AW+5&&absRsi[last]!=null&&absRsi[last-AW]!=null){
+          const wb=absFb.slice(last-AW,last+1);
+          const wH=Math.max(...wb.map(b=>b.high)),wL=Math.min(...wb.map(b=>b.low));
+          const rsiDrift=absRsi[last]-absRsi[last-AW];
+          const priceDrift=absC[last]-absC[last-AW];
+          const priceFlat=Math.abs(priceDrift)<(wH-wL)*0.3;
+          const lowCluster=wb.filter(b=>Math.abs(b.low-wL)<5).length;
+          const highCluster=wb.filter(b=>Math.abs(b.high-wH)<5).length;
+          const bullDetected=lowCluster>=4&&rsiDrift>5&&priceFlat;
+          const watching=lowCluster>=3&&rsiDrift>3&&priceFlat; // approaching threshold
+          if(bullDetected||watching) absorption={detected:bullDetected,watching:watching&&!bullDetected,lowCluster,highCluster,rsiDrift:Math.round(rsiDrift*10)/10,wRange:Math.round(wH-wL),supportLevel:Math.round(wL)};
+        }
+      }
+    }
+
     // Coil surge detection for edge card
     let coilSurge = null;
     if (bars.length >= 60) {
@@ -826,6 +854,7 @@ async function getLiveEdgesContext() {
       volumeClimax,
       emaSnap,
       coilSurge,
+      absorption,
     };
   }
 

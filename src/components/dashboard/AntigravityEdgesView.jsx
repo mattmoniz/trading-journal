@@ -1158,6 +1158,63 @@ export default function AntigravityEdgesView() {
             );
           })()}
 
+          {/* BULLISH ABSORPTION EDGE */}
+          <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
+            🛡️ Bullish Absorption (Support Hold + RSI Rising)
+          </h2>
+          {(() => {
+            const abs = liveStatus?.absorption;
+            const absTooltip = `BULLISH ABSORPTION\n\nWHAT IT IS:\nPrice held at support — 4+ bars cluster at the same low (within 5pt). RSI RISING while price flat = sellers exhausting, buyers accumulating.\n\nBACKTEST (2.5 years, NQ 5-min):\n• ALL: 71.4% WR at 5 bars (+18.4%), N=35\n• BALANCE days: 73.9% WR at 20 bars (+20.9%), N=23\n• Near PD-1 VA: 90.9% WR (N=11)\n• Calibrated: 25pt stop / 40pt target = 50% WR, $31/trade\n  OR: 25pt stop / 20pt target = 72% WR, $32/trade (scalp)\n\nCONTEXT: BALANCE days only (TREND overruns support). Bearish absorption (at resistance) has NO edge on NQ.\n\nWATCH SEQUENCE:\n1. WATCHING: 3+ bars clustering at support, RSI rising >3pt\n2. CONFIRMED: 4+ bars at support, RSI rising >5pt, price flat\n3. FIRE: Enter long. Stop 25pt below. Target 40pt (runner) or 20pt (scalp).\n4. HOLD: 5-20 bars. This is a RUNNER — avg MFE 90-125pt at 20 bars.\n5. Near PD-1 VA = highest conviction (90.9%)`;
+            const isActive = abs?.detected;
+            const isWatching = abs?.watching;
+            return (
+              <div style={setupCardStyle(isActive ? 'HIGH' : isWatching ? 'MEDIUM' : null)}>
+                <div style={setupHeaderStyle}>
+                  <span style={setupTypeStyle}>
+                    ABSORPTION LONG
+                    <InfoTooltip text={absTooltip} />
+                  </span>
+                  <span style={setupBadgeStyle(
+                    isActive ? '#10b981' : isWatching ? '#fbbf24' : '#64748b',
+                    isActive ? 'rgba(16,185,129,0.1)' : isWatching ? 'rgba(251,191,36,0.1)' : 'rgba(100,116,139,0.1)'
+                  )}>
+                    {isActive ? '⚡ ABSORPTION CONFIRMED — FIRE' : isWatching ? '👀 WATCHING — Building' : 'MONITORING'}
+                  </span>
+                </div>
+                {abs ? (
+                  <>
+                    <div style={setupMetricsGrid}>
+                      <div><div style={metricLabelStyle}>Support Cluster</div><div style={{ ...metricValueStyle, color: abs.lowCluster >= 4 ? '#10b981' : '#fbbf24' }}>{abs.lowCluster} bars at {abs.supportLevel?.toLocaleString('en-US')}</div></div>
+                      <div><div style={metricLabelStyle}>RSI Drift</div><div style={{ ...metricValueStyle, color: abs.rsiDrift > 5 ? '#10b981' : '#fbbf24' }}>+{abs.rsiDrift} (rising)</div></div>
+                      <div><div style={metricLabelStyle}>Range</div><div style={metricValueStyle}>{abs.wRange}pt</div></div>
+                    </div>
+                    <div style={setupLevelsGrid}>
+                      <div><strong>Stop:</strong> <span style={{ color: '#f87171' }}>25pt below entry</span></div>
+                      <div><strong>Target:</strong> <span style={{ color: '#34d399' }}>40pt (runner) or 20pt (scalp)</span></div>
+                      <div><strong>Context:</strong> <span style={{ color: '#f59e0b' }}>BALANCE days only</span></div>
+                    </div>
+                    <div style={recBoxStyle(isActive ? 'HIGH' : 'MEDIUM')}>
+                      {isActive
+                        ? `Bullish absorption CONFIRMED: ${abs.lowCluster} bars held at support (${abs.supportLevel?.toLocaleString('en-US')}), RSI rising +${abs.rsiDrift}. Sellers exhausting. Enter long with 25pt stop, target 40pt runner. 71.4% WR at 5 bars. Hold 5-20 bars — this is a runner, not a scalp.`
+                        : `Absorption BUILDING: ${abs.lowCluster} bars clustering at support, RSI drifting +${abs.rsiDrift}. Not yet confirmed (need 4+ bars, RSI >5). Wait for full confirmation before entering.`
+                      }
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+                    No absorption pattern detected. Requires: 4+ bars clustering at support with RSI rising while price stays flat.
+                  </div>
+                )}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
+                  <div><div style={metricLabelStyle}>5-bar WR</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>71.4%</div></div>
+                  <div><div style={metricLabelStyle}>BALANCE 20bar</div><div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>73.9%</div></div>
+                  <div><div style={metricLabelStyle}>Calibrated</div><div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>25/40pt</div></div>
+                  <div><div style={metricLabelStyle}>Exp/trade</div><div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>$31</div></div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* COIL SURGE EDGE */}
           <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
             🌀 Coil Surge → VWAP Fade

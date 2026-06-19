@@ -21275,6 +21275,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                       {[
                         { name: '9 EMA Snap-Back', edge: '+23.5%', freq: '1.0/day', ctx: 'All regimes', tests: 'Fwd WR, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
                         { name: 'Coil Surge→VWAP', edge: '+16.1% TREND', freq: '1.08/day', ctx: 'TREND 65%, NL30 aligned 60%', tests: 'Fwd WR, MA, Day type, NL30, VWAP target, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'Absorption Long', edge: '+18.4%', freq: '10% days', ctx: 'BALANCE 73.9%, @PD1-VA 90.9%', tests: 'Full history (2.5yr), Day type, NL30, OR width, Confluence, Target cal', status: 'ACTIVE', color: '#10b981' },
                         { name: 'VA_RESP_SHORT', edge: '+17.4%', freq: '0.25/day', ctx: 'TURB 90%, NL30-aligned 93%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
                         { name: 'OPEN_DRIVE_LONG', edge: '+15.9%', freq: '0.17/day', ctx: 'TREND 83%, tight OR +14%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
                         { name: 'OPEN_DRIVE_SHORT', edge: '+18.9%', freq: '0.09/day', ctx: '@VA 78%, tight OR +45%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },

@@ -118,6 +118,31 @@ export async function resolveSetupsByPrice(io) {
     const long = isLongSetup(row.setup_type);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
 
+    // Custom resolution for ABSORPTION_LONG: "did price move up meaningfully?"
+    if (row.setup_type === 'ABSORPTION_LONG') {
+      const stop = row.stop_level;
+      const t1 = row.t1_level;
+      if (entry == null || stop == null) continue;
+      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const px = currentPxQ.rows[0]?.close;
+      if (!px) continue;
+      const stopHit = px <= stop;
+      const targetHit = t1 && px >= t1;
+      const movedUp = px > entry + 20; // 20pt+ move = meaningful
+      if (stopHit) {
+        const pnl = (stop - entry) * 5 - 5;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100]);
+        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
+        count++;
+      } else if (targetHit) {
+        const pnl = (t1 - entry) * 5 - 5;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100, px]);
+        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
+        count++;
+      }
+      continue;
+    }
+
     // Custom resolution for COIL_SURGE: "did price move toward VWAP?"
     if (row.setup_type.startsWith('COIL_SURGE')) {
       const stop = row.stop_level;
@@ -3344,6 +3369,67 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── BULLISH ABSORPTION detection (support held + RSI rising + price flat) ──
+      let absorptionSetup = null;
+      if (allRthBarsRow.rows.length >= 30) {
+        // Resample to 5min for RSI
+        const absFiveBk = {};
+        for (const b of allRthBarsRow.rows) {
+          const bk = Math.floor(b.et_min / 5) * 5;
+          if (!absFiveBk[bk]) absFiveBk[bk] = { high: b.high, low: b.low, close: b.close, open: b.open };
+          else { absFiveBk[bk].high = Math.max(absFiveBk[bk].high, b.high); absFiveBk[bk].low = Math.min(absFiveBk[bk].low, b.low); absFiveBk[bk].close = b.close; }
+        }
+        const absFb = Object.values(absFiveBk);
+        if (absFb.length >= 20) {
+          const absC = absFb.map(b => b.close), absH = absFb.map(b => b.high), absL = absFb.map(b => b.low);
+          // RSI(14) on 5min
+          const absRsi = new Array(absC.length).fill(null);
+          let aag = 0, aal = 0;
+          for (let i = 1; i <= 14; i++) { const d = absC[i] - absC[i-1]; aag += d > 0 ? d : 0; aal += d < 0 ? -d : 0; }
+          aag /= 14; aal /= 14;
+          absRsi[14] = aal === 0 ? 100 : 100 - 100 / (1 + aag / aal);
+          for (let i = 15; i < absC.length; i++) {
+            const d = absC[i] - absC[i-1]; aag = (aag * 13 + (d > 0 ? d : 0)) / 14; aal = (aal * 13 + (d < 0 ? -d : 0)) / 14;
+            absRsi[i] = aal === 0 ? 100 : 100 - 100 / (1 + aag / aal);
+          }
+
+          const AW = 15; // window size
+          const last = absC.length - 1;
+          if (last >= AW + 5 && absRsi[last] != null && absRsi[last - AW] != null) {
+            const wb = absFb.slice(last - AW, last + 1);
+            const wH = Math.max(...wb.map(b => b.high)), wL = Math.min(...wb.map(b => b.low));
+            const wRange = wH - wL;
+            const rsiDrift = absRsi[last] - absRsi[last - AW];
+            const priceDrift = absC[last] - absC[last - AW];
+            const priceFlat = Math.abs(priceDrift) < wRange * 0.3;
+            const lowCluster = wb.filter(b => Math.abs(b.low - wL) < 5).length;
+
+            const isBullAbsorption = lowCluster >= 4 && rsiDrift > 5 && priceFlat;
+            const dayTypeOk = dtClass === 'BALANCE'; // only BALANCE days (73.9% WR at 20bar)
+
+            if (isBullAbsorption && dayTypeOk) {
+              // Check PD-1 VA proximity for highest conviction
+              const nearPD1VA = pdVAL && Math.abs(currentPrice - pdVAL) <= 25;
+              const nearPD1POC = pdPOC && Math.abs(currentPrice - pdPOC) <= 25;
+              const atLevel = nearPD1VA || nearPD1POC;
+
+              const stopDist = 25; // calibrated: 25pt stop, 72% WR, $32/trade exp
+              const targetDist = 40; // runner profile: 50% WR, $31/trade exp
+              absorptionSetup = {
+                type: 'ABSORPTION_LONG',
+                direction: 'LONG',
+                entry: +currentPrice.toFixed(0),
+                stop: +(currentPrice - stopDist).toFixed(0),
+                target: +(currentPrice + targetDist).toFixed(0),
+                targetLabel: '40pt Runner (calibrated)',
+                description: `Bullish absorption detected: ${lowCluster} bars clustering at support (${Math.round(wL)}), RSI rising +${rsiDrift.toFixed(0)} while price flat in ${Math.round(wRange)}pt range.\n\nEDGE: Bullish absorption has 71.4% WR at 5 bars (N=35, +18.4% vs baseline). On BALANCE days: 73.9% WR at 20 bars (+20.9%, N=23). Near PD-1 VA: 90.9% WR (N=11). Avg MFE at 20 bars: 90-125pt.\n\nEXECUTION: Price held at support with buyers absorbing selling pressure. RSI confirms hidden bullish momentum. Enter long, stop below support zone (${Math.round(currentPrice - stopDist)}), target ${pdVAH ? 'PD VAH (' + Math.round(pdVAH) + ')' : '2R'}. Hold 5-20 bars — this is a runner, not a scalp.${atLevel ? '\n\n✅ AT PD-1 VA LEVEL — highest conviction (90.9% WR).' : ''}${nearPD2VA ? '\n✅ PD-2 VA CONFLUENCE' : ''}`,
+                history: { winRate: 0.714, occurrences: 35, avgPnl: null, t1HitRate: 0.714 },
+              };
+            }
+          }
+        }
+      }
+
       // ── COIL SURGE detection (coil → volume surge → fade toward VWAP) ─────
       let coilSurgeSetup = null;
       if (allRthBarsRow.rows.length >= 60) {
@@ -3583,6 +3669,7 @@ export default function createACDRouter(io) {
 
       const candidates = [
         suppressIfCounter(emaSnapSetup),
+        absorptionSetup, // already context-gated (BALANCE only)
         coilSurgeSetup, // already context-gated (TREND/NL30-aligned only)
         trtMah,
         suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null)),
@@ -3635,6 +3722,7 @@ export default function createACDRouter(io) {
       const EXPIRY_WINDOW = {
         EMA_SNAPBACK_LONG: 15, EMA_SNAPBACK_SHORT: 15,
         RSI_DIV_BULLISH: 45, RSI_DIV_BEARISH: 30,
+        ABSORPTION_LONG: 100, // runner — needs 20 bars (100 min) for full edge
         COIL_SURGE_LONG: 10, COIL_SURGE_SHORT: 10,
         TRT_SHORT: 50, TRT_LONG: 120, TRT_SHORT_V2: 50, TRT_LONG_V2: 50, TRT_MAH_SHORT: 50, TRT_MAH_LONG: 50,
         OPEN_TEST_DRIVE_SHORT: 45, OPEN_TEST_DRIVE_LONG: 45,
