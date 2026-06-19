@@ -117,6 +117,56 @@ export async function resolveSetupsByPrice(io) {
   for (const row of active.rows) {
     const long = isLongSetup(row.setup_type);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
+
+    // Custom resolution for EMA_SNAPBACK: "did price revert toward the 9 EMA?"
+    if (row.setup_type.startsWith('EMA_SNAPBACK')) {
+      const stop = row.stop_level;
+      if (entry == null || stop == null) continue;
+      const bars = await query(`
+        SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+          ts, high::float, low::float, close::float
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        ORDER BY ts
+      `, [row.trade_date]);
+      if (bars.rows.length < 14) continue;
+      // Resample to 5min and compute current 9 EMA
+      const fiveBk = {};
+      for (const b of bars.rows) {
+        const bk = Math.floor(b.et_min / 5) * 5;
+        if (!fiveBk[bk]) fiveBk[bk] = { high: b.high, low: b.low, close: b.close };
+        else { fiveBk[bk].high = Math.max(fiveBk[bk].high, b.high); fiveBk[bk].low = Math.min(fiveBk[bk].low, b.low); fiveBk[bk].close = b.close; }
+      }
+      const fb = Object.values(fiveBk);
+      if (fb.length < 9) continue;
+      const fc = fb.map(b => b.close);
+      const ema9 = new Array(fc.length).fill(null);
+      const ek = 2 / 10;
+      ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+      for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
+      const currentEMA = ema9[fc.length - 1];
+      const currentPrice = fc[fc.length - 1];
+      if (currentEMA == null) continue;
+
+      const entryDistFromEMA = Math.abs(entry - (row.t1_level || currentEMA));
+      const currentDistFromEMA = Math.abs(currentPrice - currentEMA);
+      const reverted = currentDistFromEMA < entryDistFromEMA * 0.5; // price moved >50% back toward EMA
+      const stopHit = long ? fb[fb.length - 1].low <= stop : fb[fb.length - 1].high >= stop;
+
+      if (stopHit) {
+        const pnl = (long ? (stop - entry) : (entry - stop)) * 5 - 5;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100]);
+        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
+        count++;
+      } else if (reverted) {
+        const revertPts = Math.abs(currentPrice - entry);
+        const pnl = revertPts * 5 - 5;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='EMA_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100, currentPrice]);
+        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
+        count++;
+      }
+      continue;
+    }
     const stop = row.stop_level;
     const t1 = row.t1_level;
     if (entry == null || stop == null || t1 == null) continue;
@@ -3412,6 +3462,8 @@ export default function createACDRouter(io) {
         (dir === 'LONG' && nl30State === 'BULLISH') || (dir === 'SHORT' && nl30State === 'BEARISH');
       const isNL30Counter = (dir) =>
         (dir === 'LONG' && nl30State === 'BEARISH') || (dir === 'SHORT' && nl30State === 'BULLISH');
+      const isTightOR = orRange != null && orRange < 47.5;
+      const isWideOR = orRange != null && orRange > 91.5;
       const nearPD2VA = currentPrice && (
         (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
         (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
@@ -3431,27 +3483,40 @@ export default function createACDRouter(io) {
         return setup;
       };
 
+      // OR width gating: tight ORs boost short setups, wide ORs boost breakouts
+      const suppressIfWideOR = (setup) => {
+        if (!setup) return null;
+        if (isWideOR && (setup.type === 'TRT_SHORT' || setup.type === 'TRT_LONG')) return null;
+        return setup;
+      };
+      const suppressIfTightOR = (setup) => {
+        if (!setup) return null;
+        if (isTightOR && setup.type === 'BRACKET_BREAKOUT_LONG') return null; // -27% on tight
+        if (isTightOR && setup.type === 'OPEN_TEST_DRIVE_LONG') return null; // -28% on tight
+        return setup;
+      };
+
       const candidates = [
+        suppressIfCounter(emaSnapSetup),
         trtMah,
-        suppressIfCounter(trt?.type === 'TRT_LONG' ? trt : null),  // TRT_LONG: +24% at 20bar, keep but only aligned
-        // TRT_SHORT: -10.1% edge, removed
+        suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null)),
+        // TRT_SHORT: -10.1% edge overall, removed (but 100% on tight OR N=6 — too small to trust)
         gapFill,
         suppressIfCounter(aUpStrong), suppressIfCounter(aDownStrong),
-        suppressIfCounter(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null), // OTD_LONG: +0.6%, marginal
-        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null), // OTD_SHORT: -5.6% baseline, +23% @PD2
+        suppressIfCounter(suppressIfTightOR(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null)),
+        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null), // +32% on tight OR
         suppressIfCounter(aUpWeak), suppressIfCounter(aDownWeak),
-        // IB_BULLISH: -7.5% edge, removed
-        ibSetup?.type === 'IB_BEARISH' ? suppressIfCounter(ibSetup) : null, // IB_BEARISH: +1.3%, keep
-        suppressIfCounter(openDrive),
+        // IB_BULLISH: -7.5% edge, removed (-14% on tight OR)
+        ibSetup?.type === 'IB_BEARISH' ? suppressIfCounter(ibSetup) : null, // +15% on tight OR
+        suppressIfCounter(openDrive), // OPEN_DRIVE_SHORT: +45% on tight OR, OPEN_DRIVE_LONG: +14% on tight
         suppressIfCounter(cPairedLong), suppressIfCounter(cPairedShort),
         suppressIfCounter(cReversalLong), suppressIfCounter(cReversalShort),
         suppressIfCounter(failedAuction),
-        suppressIfCounter(bracketBreakout),
-        // VALUE_AREA_RESPONSIVE_SHORT: +17.4% edge, keep
+        suppressIfCounter(suppressIfTightOR(bracketBreakout)), // BRACKET_BREAKOUT_LONG: -27% on tight, +11% on wide
+        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfCounter(valueAreaResp) : null, // +19% on tight OR
         // VALUE_AREA_RESPONSIVE_LONG: -5.0% edge, removed
-        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfCounter(valueAreaResp) : null,
-        gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null), // -12% baseline, +32% @PD2
-        // C_STANDALONE_UP: -6.5% edge, removed
+        gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null),
+        // C_STANDALONE_UP: -6.5% edge, removed (-14% on wide OR)
       ];
       let active = null;
       for (const cand of candidates) {
