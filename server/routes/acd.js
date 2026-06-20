@@ -3559,10 +3559,17 @@ export default function createACDRouter(io) {
       let emaSnapSetup = null;
       if (allRthBarsRow.rows.length >= 14) {
         const fiveBk = {};
+        const fiveCount = {};
         for (const b of allRthBarsRow.rows) {
           const bk = Math.floor(b.et_min / 5) * 5;
           if (!fiveBk[bk]) fiveBk[bk] = { open: b.open, high: b.high, low: b.low, close: b.close };
           else { fiveBk[bk].high = Math.max(fiveBk[bk].high, b.high); fiveBk[bk].low = Math.min(fiveBk[bk].low, b.low); fiveBk[bk].close = b.close; }
+          fiveCount[bk] = (fiveCount[bk] || 0) + 1;
+        }
+        // Drop last bucket if incomplete (<5 bars) to avoid partial-bar false triggers
+        const bucketKeys = Object.keys(fiveBk).sort((a, b) => +a - +b);
+        if (bucketKeys.length > 0 && fiveCount[bucketKeys[bucketKeys.length - 1]] < 5) {
+          delete fiveBk[bucketKeys[bucketKeys.length - 1]];
         }
         const fb = Object.values(fiveBk);
         if (fb.length >= 14) {
