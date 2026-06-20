@@ -170,40 +170,22 @@ export async function resolveSetupsByPrice(io) {
       continue;
     }
 
-    // Custom resolution for EMA_SNAPBACK: "did price revert toward the 9 EMA?"
+    // Custom resolution for EMA_SNAPBACK: "did price revert toward the FROZEN EMA?"
+    // t1_level = EMA value frozen at fire time. Do NOT recompute — EMA drifts toward price
+    // in trends, which would falsely trigger reversion without actual price movement.
     if (row.setup_type.startsWith('EMA_SNAPBACK')) {
       const stop = row.stop_level;
-      if (entry == null || stop == null) continue;
-      const bars = await query(`
-        SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-          ts, high::float, low::float, close::float
-        FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1
-          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-        ORDER BY ts
-      `, [row.trade_date]);
-      if (bars.rows.length < 14) continue;
-      // Resample to 5min and compute current 9 EMA
-      const fiveBk = {};
-      for (const b of bars.rows) {
-        const bk = Math.floor(b.et_min / 5) * 5;
-        if (!fiveBk[bk]) fiveBk[bk] = { high: b.high, low: b.low, close: b.close };
-        else { fiveBk[bk].high = Math.max(fiveBk[bk].high, b.high); fiveBk[bk].low = Math.min(fiveBk[bk].low, b.low); fiveBk[bk].close = b.close; }
-      }
-      const fb = Object.values(fiveBk);
-      if (fb.length < 9) continue;
-      const fc = fb.map(b => b.close);
-      const ema9 = new Array(fc.length).fill(null);
-      const ek = 2 / 10;
-      ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
-      for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
-      const currentEMA = ema9[fc.length - 1];
-      const currentPrice = fc[fc.length - 1];
-      if (currentEMA == null) continue;
+      const frozenEMA = row.t1_level; // EMA at fire time — static benchmark
+      if (entry == null || stop == null || frozenEMA == null) continue;
 
-      const entryDistFromEMA = Math.abs(entry - (row.t1_level || currentEMA));
-      const currentDistFromEMA = Math.abs(currentPrice - currentEMA);
-      const reverted = currentDistFromEMA < entryDistFromEMA * 0.5; // price moved >50% back toward EMA
-      const stopHit = long ? fb[fb.length - 1].low <= stop : fb[fb.length - 1].high >= stop;
+      const currentPxQ = await query(`SELECT close::float, high::float, low::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const px = currentPxQ.rows[0]?.close;
+      if (!px) continue;
+
+      const entryDistFromEMA = Math.abs(entry - frozenEMA);
+      const currentDistFromEMA = Math.abs(px - frozenEMA);
+      const reverted = currentDistFromEMA < entryDistFromEMA * 0.5;
+      const stopHit = long ? currentPxQ.rows[0].low <= stop : currentPxQ.rows[0].high >= stop;
 
       if (stopHit) {
         const pnl = (long ? (stop - entry) : (entry - stop)) * 5 - 5;
@@ -211,9 +193,9 @@ export async function resolveSetupsByPrice(io) {
         if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
         count++;
       } else if (reverted) {
-        const revertPts = Math.abs(currentPrice - entry);
+        const revertPts = Math.abs(px - entry);
         const pnl = revertPts * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='EMA_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100, currentPrice]);
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='EMA_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100, px]);
         if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
         count++;
       }
