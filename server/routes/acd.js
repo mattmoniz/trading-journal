@@ -3629,6 +3629,21 @@ export default function createACDRouter(io) {
         (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
       );
 
+      // Compression confluence: VWAP within 15pt of PD-2 VA level
+      // When VWAP sits on PD-2 VA, WR = 70.4% (N=27) vs 46.9% when apart.
+      // The "anti-confluence paradox" — VWAP alone hurts (-1.3%), but VWAP
+      // confirming PD-2 creates a 72.5% zone (N=40). Gate: distance ≤15pt.
+      let cumPV = 0, cumTV = 0;
+      for (const b of allRthBarsRow.rows) {
+        cumPV += (b.high + b.low + b.close) / 3 * (Number(b.vol) || 1);
+        cumTV += (Number(b.vol) || 1);
+      }
+      const liveVwap = cumTV > 0 ? cumPV / cumTV : null;
+      const vwapPD2compressed = liveVwap && (
+        (pd2VAH && Math.abs(liveVwap - pd2VAH) <= 15) ||
+        (pd2VAL && Math.abs(liveVwap - pd2VAL) <= 15)
+      );
+
       // Suppress counter-trend setups (40.2% directional WR = worse than baseline)
       const suppressIfCounter = (setup) => {
         if (!setup) return null;

@@ -1028,6 +1028,28 @@ export async function computeCase(tradeDate, asOf) {
         meter -= w; caseAgainst.push(entry);
       }
     }
+
+    // VWAP compression check: is VWAP within 15pt of PD-2 VA?
+    // When compressed: 70.4% WR (N=27) vs 46.9% when apart
+    let cumPV2 = 0, cumTV2 = 0;
+    for (const b of bars) {
+      cumPV2 += (Number(b.high) + Number(b.low) + Number(b.close)) / 3 * (Number(b.volume || b.vol) || 1);
+      cumTV2 += (Number(b.volume || b.vol) || 1);
+    }
+    const vwapNow = cumTV2 > 0 ? cumPV2 / cumTV2 : null;
+    if (vwapNow) {
+      const vwapDist2VAH = pd2vah ? Math.abs(vwapNow - pd2vah) : 999;
+      const vwapDist2VAL = pd2val ? Math.abs(vwapNow - pd2val) : 999;
+      const compressed = Math.min(vwapDist2VAH, vwapDist2VAL) <= 15;
+      if (compressed) {
+        const compLvl = vwapDist2VAH < vwapDist2VAL ? `PD-2 VAH (${Math.round(pd2vah)})` : `PD-2 VAL (${Math.round(pd2val)})`;
+        const w = 8;
+        meter += currentPrice > vwapNow ? -w : w;
+        const entry = { point: `VWAP↔PD-2 compressed (${Math.round(Math.min(vwapDist2VAH, vwapDist2VAL))}pt) — 70.4% WR zone`, value: `VWAP=${Math.round(vwapNow)} near ${compLvl}`, weight: w, confirmed: true };
+        if (currentPrice < vwapNow) caseFor.push(entry);
+        else caseAgainst.push(entry);
+      }
+    }
   }
 
   // Delta (confirmed 3-bar window, scanning last 10 bars)
