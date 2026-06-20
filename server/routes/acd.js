@@ -2409,47 +2409,16 @@ export default function createACDRouter(io) {
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 
-      // Session close at 1:00 PM ET: expire all remaining active setups, return null
-      // No new entries after noon; setups stay visible for management until 1 PM.
-      if (etMin >= 13 * 60) {
+      // Session close at 4:00 PM ET: expire all remaining active setups
+      if (etMin >= 16 * 60) {
         await query(`
           UPDATE active_setups SET status='EXPIRED', resolution='SESSION_CLOSED',
             resolved_at=NOW(), updated_at=NOW()
           WHERE trade_date=$1 AND status='ACTIVE'
         `, [todayET]).catch(() => {});
-
-        const lastSetupQ = await query(`
-          SELECT id, setup_type as type,
-            CASE WHEN setup_type ILIKE '%_LONG' OR setup_type ILIKE '%_UP' OR setup_type ILIKE '%BULL%' THEN 'LONG'
-                 WHEN setup_type ILIKE '%_SHORT' OR setup_type ILIKE '%_DOWN' OR setup_type ILIKE '%BEAR%' THEN 'SHORT'
-                 ELSE NULL END as direction,
-            price_at_detection as entry, stop_level as stop, t1_level as target, status, resolution, resolved_at
-          FROM active_setups
-          WHERE trade_date=$1
-          ORDER BY id DESC LIMIT 1
-        `, [todayET]);
-
-        if (lastSetupQ.rows.length > 0) {
-          const s = lastSetupQ.rows[0];
-          return res.json({
-            setup: {
-              setupId: s.id,
-              type: s.type,
-              direction: s.direction,
-              entry: s.entry,
-              stop: s.stop,
-              target: s.target,
-              isExpired: false,
-              status: s.status,
-              resolution: s.resolution,
-              resolvedAt: s.resolved_at
-            },
-            sessionClosed: true
-          });
-        }
         return res.json({ setup: null, sessionClosed: true });
       }
-      const noNewEntries = etMin >= 12 * 60; // noon–1 PM: manage open trades only
+      const noNewEntries = false; // setups fire throughout RTH session
 
       // Setup detection itself depends on today's OR/A-levels, which aren't
       // computed until 9:35 ET — opening this gate at 8:30 just stops the
