@@ -1052,6 +1052,28 @@ export async function computeCase(tradeDate, asOf) {
     }
   }
 
+  // POC Migration streak (2-day consecutive direction)
+  // Aligned with setup: 54.2% WR. Counter: 41.5%. Delta: +12.7%.
+  const pocMigQ2 = await query(`
+    SELECT migration_dir_vs_prior FROM developing_value_log
+    WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 2
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  if (pocMigQ2.rows.length >= 2) {
+    const dir1 = pocMigQ2.rows[0].migration_dir_vs_prior;
+    const dir2 = pocMigQ2.rows[1].migration_dir_vs_prior;
+    if (dir1 === dir2 && (dir1 === 'HIGHER' || dir1 === 'LOWER')) {
+      const w = 8;
+      const pocLabel = dir1 === 'HIGHER' ? 'POC migrating HIGHER (2-day streak)' : 'POC migrating LOWER (2-day streak)';
+      if (dir1 === 'HIGHER') {
+        meter += w;
+        caseFor.push({ point: pocLabel, value: 'Aligned +12.7% edge when setup matches', weight: w, confirmed: true });
+      } else {
+        meter -= w;
+        caseAgainst.push({ point: pocLabel, value: 'Aligned +12.7% edge when setup matches', weight: w, confirmed: true });
+      }
+    }
+  }
+
   // Delta (confirmed 3-bar window, scanning last 10 bars)
   if (deltaConf) {
     const w     = 12;

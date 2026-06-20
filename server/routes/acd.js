@@ -3658,6 +3658,46 @@ export default function createACDRouter(io) {
         return setup;
       };
 
+      // Sequential gate: if first setup of the day FAILED, suppress C_STANDALONE in same direction
+      // Death sequences: OTD fails → C_STANDALONE = 9-14% WR. After prior win → next WR 52% vs 41.8% after loss.
+      const priorSetupsQ = await query(`
+        SELECT setup_type, resolution,
+          CASE WHEN setup_type LIKE '%LONG%' OR setup_type LIKE '%BULLISH%' OR setup_type LIKE '%_UP' THEN 'LONG' ELSE 'SHORT' END as dir
+        FROM active_setups WHERE trade_date=$1 AND status='RESOLVED' ORDER BY fired_at
+      `, [todayET]).catch(() => ({ rows: [] }));
+      const priorSetups = priorSetupsQ.rows;
+      const lastPrior = priorSetups[priorSetups.length - 1];
+      const priorFailed = lastPrior && lastPrior.resolution !== 'TARGET_HIT';
+      const priorFailedDir = priorFailed ? lastPrior.dir : null;
+
+      const suppressIfDeathSequence = (setup) => {
+        if (!setup) return null;
+        if (!priorFailedDir) return setup;
+        // If prior setup failed and this is C_STANDALONE in the SAME direction → 9-14% WR death sequence
+        if (setup.type === 'C_STANDALONE_UP' && priorFailedDir === 'LONG') return null;
+        if (setup.type === 'C_STANDALONE_DOWN' && priorFailedDir === 'SHORT') return null;
+        return setup;
+      };
+
+      // POC migration filter: 2-day consecutive POC migration direction
+      // Aligned with setup: 54.2% WR. Counter: 41.5% WR. Delta: +12.7%.
+      const pocMigQ = await query(`
+        SELECT migration_dir_vs_prior FROM developing_value_log
+        WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 2
+      `, [todayET]).catch(() => ({ rows: [] }));
+      const pocMig = pocMigQ.rows;
+      const pocStreakUp = pocMig.length >= 2 && pocMig[0].migration_dir_vs_prior === 'HIGHER' && pocMig[1].migration_dir_vs_prior === 'HIGHER';
+      const pocStreakDn = pocMig.length >= 2 && pocMig[0].migration_dir_vs_prior === 'LOWER' && pocMig[1].migration_dir_vs_prior === 'LOWER';
+      const pocDir = pocStreakUp ? 'HIGHER' : pocStreakDn ? 'LOWER' : null;
+
+      const suppressIfPOCCounter = (setup) => {
+        if (!setup || !pocDir) return setup;
+        // If POC is migrating HIGHER but setup is SHORT (or vice versa) → counter, suppress
+        const isCounter = (setup.direction === 'LONG' && pocDir === 'LOWER') || (setup.direction === 'SHORT' && pocDir === 'HIGHER');
+        if (isCounter) return null;
+        return setup;
+      };
+
       // OR width gating: tight ORs boost short setups, wide ORs boost breakouts
       const suppressIfWideOR = (setup) => {
         if (!setup) return null;
@@ -3676,23 +3716,23 @@ export default function createACDRouter(io) {
         absorptionSetup, // already context-gated (BALANCE only)
         coilSurgeSetup, // already context-gated (TREND/NL30-aligned only)
         trtMah,
-        suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null)),
-        // TRT_SHORT: -10.1% edge overall, removed (but 100% on tight OR N=6 — too small to trust)
+        suppressIfPOCCounter(suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null))),
+        // TRT_SHORT: -10.1% edge overall, removed
         gapFill,
-        suppressIfCounter(aUpStrong), suppressIfCounter(aDownStrong),
-        suppressIfCounter(suppressIfTightOR(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null)),
-        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null), // +32% on tight OR
-        suppressIfCounter(aUpWeak), suppressIfCounter(aDownWeak),
-        // IB_BULLISH: -7.5% edge, removed (-14% on tight OR)
-        ibSetup?.type === 'IB_BEARISH' ? suppressIfCounter(ibSetup) : null, // +15% on tight OR
-        suppressIfCounter(openDrive), // OPEN_DRIVE_SHORT: +45% on tight OR, OPEN_DRIVE_LONG: +14% on tight
-        suppressIfCounter(cPairedLong), suppressIfCounter(cPairedShort),
-        suppressIfCounter(cReversalLong), suppressIfCounter(cReversalShort),
-        suppressIfCounter(failedAuction),
-        suppressIfCounter(suppressIfTightOR(bracketBreakout)), // BRACKET_BREAKOUT_LONG: -27% on tight, +11% on wide
-        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfCounter(valueAreaResp) : null, // +19% on tight OR
+        suppressIfPOCCounter(suppressIfCounter(aUpStrong)), suppressIfPOCCounter(suppressIfCounter(aDownStrong)),
+        suppressIfPOCCounter(suppressIfCounter(suppressIfTightOR(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null))),
+        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null),
+        suppressIfPOCCounter(suppressIfCounter(aUpWeak)), suppressIfPOCCounter(suppressIfCounter(aDownWeak)),
+        // IB_BULLISH: -7.5% edge, removed
+        ibSetup?.type === 'IB_BEARISH' ? suppressIfPOCCounter(suppressIfCounter(ibSetup)) : null,
+        suppressIfPOCCounter(suppressIfCounter(openDrive)),
+        suppressIfPOCCounter(suppressIfCounter(cPairedLong)), suppressIfPOCCounter(suppressIfCounter(cPairedShort)),
+        suppressIfPOCCounter(suppressIfCounter(cReversalLong)), suppressIfPOCCounter(suppressIfCounter(cReversalShort)),
+        suppressIfPOCCounter(suppressIfCounter(failedAuction)),
+        suppressIfPOCCounter(suppressIfCounter(suppressIfTightOR(bracketBreakout))),
+        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfPOCCounter(suppressIfCounter(valueAreaResp)) : null,
         // VALUE_AREA_RESPONSIVE_LONG: -5.0% edge, removed
-        gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null),
+        suppressIfDeathSequence(gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null)),
         // C_STANDALONE_UP: -6.5% edge, removed (-14% on wide OR)
       ];
       let active = null;
