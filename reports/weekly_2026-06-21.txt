@@ -1,0 +1,95 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-06-21  (2026-06-15 – 2026-06-21)
+Generated   : 2026-06-21T22:00:10.625Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 4
+Total P&L     : +$2978.50
+Daily avg     : +$744.63
+Win days      : 1 / 4 (25%)
+Best day      : 2026-06-17  +$5237.00
+Worst day     : 2026-06-18  -$786.00
+
+  2026-06-15  -$697.50
+  2026-06-16  -$775.00
+  2026-06-17  +$5237.00
+  2026-06-18  -$786.00
+
+SETUP STATISTICS
+----------------------------------------
+A_DOWN_WEAK                    fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$297.50
+A_UP_STRONG                    fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$305.00
+BRACKET_BREAKOUT_LONG          fired: 2 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$90.00
+C_PAIRED_LONG                  fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$305.00
+C_PAIRED_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$420.00
+C_STANDALONE_DOWN              fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$640.00
+C_STANDALONE_UP                fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$760.00
+FAILED_AUCTION_LONG            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$275.00
+GAP_FILL_SHORT                 fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$522.50
+IB_BEARISH                     fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+OPEN_DRIVE_LONG                fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$197.50
+OPEN_TEST_DRIVE_LONG           fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$662.50
+TRT_LONG                       fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$940.00
+TRT_MAH_SHORT                  fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$1315.00
+VALUE_AREA_RESPONSIVE_SHORT    fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$870.00
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-06-15  score: +4  A↑ C↑  [?]
+  2026-06-16  score: +4  A↑ C↑  [?]
+  2026-06-17  score: -4  A↓ C↓  [?]
+  2026-06-18  score: -4  A↓ C↓  [?]
+  2026-06-19  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 148
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills: 148 | wr: 39% | avg fill pnl: +$0.46
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+No coaching data this week.
+
+FLAGS (auto-detected)
+----------------------------------------
+Low win-day rate: 1/4 (25%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-06-21 — Flag Interpretation
+
+A 25% win-day rate (1 out of 4 trading days) signals that the trader is either consistently failing to identify the dominant intraday trend or is entering on false ACD levels that aren't confirming and holding. This pattern typically points to one of two culprits: choppy, non-trending conditions where A-level breakouts are repeatedly failing and reversing, or a discipline breakdown where the trader is anticipating confirmation rather than waiting for it. In either case, the market is likely not rewarding directional conviction, and forcing trades in that environment compounds losses across multiple sessions.
+
+**Actionable Adjustment:** Next week, implement a strict "two failed A-level" rule — if both the A Up and A Down fail to hold on a given day, classify it as a C-day and sit out, preserving capital rather than switching directions and getting chopped up on both sides.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+WEEK SUMMARY:
+4 trading days, +$2,978.50 total, best day +$5,237.00, worst day -$786.00. Zero recorded fills across all sessions — 0 of 148 fills annotated. P&L exists but no execution data supports it; the record is structurally incomplete.
+
+STRONGEST MOMENT:
+Insufficient trade data. No fills were imported and no annotations exist, so no specific decision can be objectively evaluated. The signal scorecard shows BIAS_LONG correct on both June 15 and June 18 (76% all-time, n=29), but without fills there is no way to confirm participation or tie P&L to those signals.
+
+BIGGEST LEAK:
+Zero annotation coverage — 0 of 148 fills logged with any context marker. This is the only measurable pattern this week and it repeated across all 4 days. Without annotations, the all-time REACTION win rate of 74% (n=27) and PLANNED sample (limited, n=8) cannot be applied to anything you actually did. Cost: one full week of process data, permanently unrecoverable.
+
+PROCESS GRADE: D
+P&L was positive but process left nothing to evaluate — no fills, no annotations, and at least one session flagged as a potentially incomplete data import.
+
+FOCUS FOR NEXT WEEK:
+Annotate every fill in real time using the existing context markers (REACTION, PLANNED). Target: 100% annotation coverage. If a fill has no label by session close, add a note explaining why before shutdown. Measure success as fills annotated ÷ total fills = 1.00.
+
+============================================================
