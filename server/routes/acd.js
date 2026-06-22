@@ -3957,7 +3957,54 @@ export default function createACDRouter(io) {
           if (tripleStack) {
             const tsColor = tripleStack.conviction === 'MAXIMUM' || tripleStack.conviction === 'VERY HIGH' ? '🔥' : tripleStack.conviction === 'HIGH' ? '✅' : tripleStack.conviction === 'AVOID' ? '🚫' : tripleStack.conviction === 'LOW' ? '⚠️' : '';
             brief.push(`**TRIPLE STACK:** ${tsColor} ${tripleStack.conviction} conviction (${tripleStack.wr} WR). ${tripleStack.note}`);
+
+            // Flip logic: when AVOID fires, the opposite direction has edge
+            if (tripleStack.conviction === 'AVOID') {
+              const oppDir = active.direction === 'LONG' ? 'SHORT' : 'LONG';
+              const atTop = rangeQuintile === 'TOP' || rangeQuintile === 'UPPER';
+              const atBot = rangeQuintile === 'BOT' || rangeQuintile === 'LOWER';
+              const flipNote = atTop && oppDir === 'SHORT'
+                ? `The FADE SHORT has edge here. TOP of range + this setup direction is 0% WR = the opposite side wins. If you see a failed breakout or exhaustion at this level, the short is the high-conviction play. Log via Quick Trade Log: balance_ceiling_fade.`
+                : atBot && oppDir === 'LONG'
+                ? `The BOUNCE LONG has edge here. BOTTOM of range + this setup direction is losing = the bounce is the play. If you see absorption at support, the long is high conviction. Log via Quick Trade Log: balance_floor_bounce.`
+                : `The opposite direction (${oppDir}) may have edge. This combo loses — if you see a reversal/rejection, consider the ${oppDir} fade.`;
+              brief.push(`**FLIP:** ↔ ${flipNote}`);
+            }
           }
+
+          // Exhaustion detection at balance edges
+          if (rangeQuintile && (rangeQuintile === 'TOP' || rangeQuintile === 'BOT') && allRthBarsRow.rows.length >= 10) {
+            const last10 = allRthBarsRow.rows.slice(-10);
+            const last5 = last10.slice(-5);
+            const prior5 = last10.slice(0, 5);
+
+            const avgRange5 = last5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
+            const avgRangePrior = prior5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
+            const rangeShrinking = avgRange5 < avgRangePrior * 0.6;
+
+            const lastBar = last5[last5.length - 1];
+            const barRange = lastBar.high - lastBar.low;
+            const wickRatio = rangeQuintile === 'TOP'
+              ? (lastBar.high - Math.max(lastBar.open, lastBar.close)) / (barRange || 1)
+              : (Math.min(lastBar.open, lastBar.close) - lastBar.low) / (barRange || 1);
+            const wickRejection = wickRatio > 0.5;
+
+            const closeNearExtreme = rangeQuintile === 'TOP'
+              ? (lastBar.close - lastBar.low) / (barRange || 1) < 0.3
+              : (lastBar.high - lastBar.close) / (barRange || 1) < 0.3;
+
+            const exhaustionSigns = [];
+            if (rangeShrinking) exhaustionSigns.push('bar ranges shrinking (momentum dying)');
+            if (wickRejection) exhaustionSigns.push(`long ${rangeQuintile === 'TOP' ? 'upper' : 'lower'} wick (${rangeQuintile === 'TOP' ? 'sellers' : 'buyers'} stepping in)`);
+            if (closeNearExtreme) exhaustionSigns.push(`close near ${rangeQuintile === 'TOP' ? 'low' : 'high'} of bar (${rangeQuintile === 'TOP' ? 'buyers couldn\'t hold' : 'sellers couldn\'t push'})`);
+
+            if (exhaustionSigns.length >= 2) {
+              brief.push(`**EXHAUSTION:** ⚡ ${exhaustionSigns.length} signs detected at ${rangeQuintile} of range: ${exhaustionSigns.join('; ')}. This is what a reversal looks like before it happens. Watch for the failed breakout to confirm.`);
+            } else if (exhaustionSigns.length === 1) {
+              brief.push(`**EXHAUSTION WATCH:** ${exhaustionSigns[0]}. One sign — not confirmed yet. Need 2+ for high-conviction reversal read.`);
+            }
+          }
+
           if (rangeQuintile) {
             brief.push(`**RANGE POSITION:** Price is in the ${rangeQuintile} quintile of the 20-day range (${Math.round(r20.lo)}–${Math.round(r20.hi)}). ${
               rangeQuintile === 'BOT' ? 'Bottom of range — strong mean-reversion zone (71% up, +170pt avg). Bounce setups high conviction.' :
