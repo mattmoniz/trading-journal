@@ -299,7 +299,7 @@ export default function AntigravityEdgesView() {
               <span style={liveStatus.isLive ? liveBadgeStyle : historicalBadgeStyle}>
                 {liveStatus.isLive ? 'LIVE SESSION ACTIVE' : `HISTORICAL REPLAY - ${liveStatus.date}`}
               </span>
-              <span style={priceLabelStyle}>NQ Close: <strong style={{ color: '#fff' }}>{liveStatus.fmtP(liveStatus.currentPrice, 2)}</strong></span>
+              <span style={priceLabelStyle}>NQ Close: <strong style={{ color: '#fff' }}>{fmtP(liveStatus.currentPrice, 2)}</strong></span>
             </div>
             
             <div style={grid3Style}>
@@ -906,7 +906,7 @@ export default function AntigravityEdgesView() {
               { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, exp: 48, ctrlDelta: 14.7, role: 'resistance', color: '#f87171' },
               { name: 'PD-1 VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, exp: 31, ctrlDelta: 9.6, role: 'resistance', color: '#fb923c' },
               { name: 'PD-1 POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, exp: 25, ctrlDelta: 9.0, role: 'magnet', color: '#a78bfa' },
-              { name: 'OR Mid', val: confluenceLevels.orMid, target: 20, hitRate: 69, exp: 38, ctrlDelta: 6.9, role: 'pivot', color: '#60a5fa' },
+              { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, exp: 16, ctrlDelta: 18.0, role: 'pivot', color: '#60a5fa', note: 'With absorption: 60% WR. Log via Quick Trade Log.' },
               { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, exp: 26, ctrlDelta: 5.1, role: 'resistance', color: '#fb923c' },
             ].filter(l => l.val != null);
 
@@ -955,6 +955,7 @@ export default function AntigravityEdgesView() {
                         <div style={{ fontSize: 9, color: l.ctrlDelta > 10 ? '#10b981' : '#94a3b8', marginTop: 1 }}>
                           Controlled Δ: +{l.ctrlDelta.toFixed(1)}% independent edge
                         </div>
+                        {l.note && isNear && <div style={{ fontSize: 9, color: '#fbbf24', marginTop: 2, fontWeight: 600 }}>{l.note}</div>}
                       </div>
                     );
                   })}

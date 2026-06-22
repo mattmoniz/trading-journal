@@ -7,11 +7,14 @@ import DashboardView from './components/dashboard/DashboardView.jsx';
 import AntigravityEdgesView from './components/dashboard/AntigravityEdgesView.jsx';
 import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import MorningBriefPanel from './components/dashboard/MorningBriefPanel.jsx';
+import SessionForecastPanel from './components/dashboard/SessionForecastPanel.jsx';
+import BalanceZonePanel from './components/dashboard/BalanceZonePanel.jsx';
 import PostLossCooldown from './components/dashboard/PostLossCooldown.jsx';
 import { NavUpdateDot, SectionUpdateDot, Dot, useDataUpdateDot, useFieldUpdateDots } from './components/shared/UpdateDot.jsx';
 import PreMarketWalkthrough from './components/dashboard/PreMarketWalkthrough.jsx';
 import VolatilityRegimeCard from './components/dashboard/VolatilityRegimeCard.jsx';
 import GapContextCard from './components/dashboard/GapContextCard.jsx';
+import BehavioralGuideCard from './components/dashboard/BehavioralGuideCard.jsx';
 import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
@@ -359,7 +362,15 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
 function App() {
   const [currentView, setCurrentView] = useState('acd');
   const [currentDate, setCurrentDate] = useState(new Date().toLocaleDateString('en-CA'));
+  const [forecast, setForecast] = useState(null);
   const [stats, setStats] = useState({});
+
+  useEffect(() => {
+    fetch(`${API_URL}/morning-brief/forecast/${currentDate}`)
+      .then(r => r.json())
+      .then(d => setForecast(d))
+      .catch(() => {});
+  }, [currentDate]);
   const [accounts, setAccounts] = useState([]);
   const [selectedAccounts, setSelectedAccounts] = useState([]);
   const [toasts, setToasts] = useState([]);
@@ -2376,8 +2387,11 @@ function LiveReadBanner() {
         borderRadius: 8
       }}>
         {/* OR5 Level */}
-        <div title={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>5-Min Opening Range</div>
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>5-Min Opening Range</div>
+            <InfoTooltip text={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>=91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} />
+          </div>
           {orHigh && orLow ? (
             <div>
               <div style={{ fontSize: 16, fontWeight: 800, color: ctx2.barsLoaded < 5 ? '#fb923c' : '#f1f5f9', fontFamily: 'monospace' }}>
@@ -2405,8 +2419,11 @@ function LiveReadBanner() {
         </div>
 
         {/* A Up Trigger */}
-        <div title={"A UP TRIGGER LEVEL\n\nCalculated as OR5 High + A Multiplier * OR5 Width. If price crosses and prints a 1m candle close above this level, the bullish A Up signal is officially fired."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #34d399' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>A Up Trigger</div>
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #34d399' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>A Up Trigger</div>
+            <InfoTooltip text={"A UP TRIGGER LEVEL\n\nCalculated as OR5 High + A Multiplier * OR5 Width. If price crosses and prints a 1m candle close above this level, the bullish A Up signal is officially fired."} />
+          </div>
           {aUpLevel ? (
             <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
               &ge; {fmtP(Math.round(aUpLevel))}
@@ -2419,8 +2436,11 @@ function LiveReadBanner() {
         </div>
 
         {/* A Down Trigger */}
-        <div title={"A DOWN TRIGGER LEVEL\n\nCalculated as OR5 Low - A Multiplier * OR5 Width. If price crosses and prints a 1m candle close below this level, the bearish A Down signal is officially fired."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #fb923c' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>A Down Trigger</div>
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #fb923c' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>A Down Trigger</div>
+            <InfoTooltip text={"A DOWN TRIGGER LEVEL\n\nCalculated as OR5 Low - A Multiplier * OR5 Width. If price crosses and prints a 1m candle close below this level, the bearish A Down signal is officially fired."} />
+          </div>
           {aDownLevel ? (
             <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
               &le; {fmtP(Math.round(aDownLevel))}
@@ -2433,8 +2453,11 @@ function LiveReadBanner() {
         </div>
 
         {/* G-Line (Weekly Open) */}
-        <div title={"G-LINE (WEEKLY OPEN)\n\nThe weekly opening price of NQ. Serves as the ultimate macro directional divider.\n\nABOVE G-LINE: Long setups have structural confirmation. Favor longs.\nBELOW G-LINE: Short setups have structural confirmation. Favor shorts."} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#fb923c') : '#64748b'}` }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>G-Line (Wk Open)</div>
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>G-Line (Wk Open)</div>
+            <InfoTooltip text={"G-LINE (WEEKLY OPEN)\n\nThe weekly opening price of NQ. Serves as the ultimate macro directional divider.\n\nABOVE G-LINE: Long setups have structural confirmation. Favor longs.\nBELOW G-LINE: Short setups have structural confirmation. Favor shorts."} />
+          </div>
           {gLine ? (
             <div>
               <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
@@ -2549,115 +2572,7 @@ function LiveReadBanner() {
         </div>
       )}
 
-      {/* Session Edge Statistics — Backtested (controlled confluence test, 12mo NQ) */}
-      <div style={{
-        marginTop: 14,
-        padding: '12px 16px',
-        background: 'rgba(30, 41, 59, 0.15)',
-        border: '1px solid rgba(51, 65, 85, 0.35)',
-        borderRadius: 8,
-      }}>
-        <div style={{ fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a78bfa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>📊 Backtested Edge Statistics</span>
-          <span style={{ fontSize: 10, color: '#64748b', textTransform: 'none', fontWeight: 400, marginLeft: 'auto' }}>Controlled tests, 12mo NQ (2025-2026)</span>
-        </div>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-          {/* Column 1: Ranked Positive-Edge Setups */}
-          <div style={{ flex: '1 1 220px', minWidth: 200 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              RANKED POSITIVE-EDGE SETUPS
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: '#94a3b8' }}>
-              {[
-                { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', freq: '1.0/day', color: '#10b981', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). All regimes.' },
-                { name: 'Absorption Long', wr: '71.4%', delta: '+18.4%', freq: '10% days', color: '#10b981', tip: 'Support held + RSI rising + price flat. 71.4% WR 5bar (N=35). BALANCE: 73.9% 20bar. @PD1-VA: 90.9%. Tight OR: 76.9%. 25pt stop / 40pt target. Runner.' },
-                { name: 'Coil→VWAP', wr: '65.3%', delta: '+16.1%', freq: '1.08/day', color: '#34d399', tip: 'Coil + volume surge → fade toward VWAP. TREND: 65.3% (N=49). R:R 3.08. Hold 10 bars max.' },
-                { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', freq: '0.09/day', color: '#34d399', tip: 'Pullback to OR Low. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91% (+45%).' },
-                { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', freq: '0.25/day', color: '#34d399', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Tight OR: 82% (+19%).' },
-                { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', freq: '0.17/day', color: '#34d399', tip: 'Pullback to OR High. 66.7% WR (N=42). TREND: 83%. Tight OR: 78% (+14%).' },
-                { name: 'RSI Div (via Absorption)', wr: '71.4%', delta: '+18.4%', freq: '10% days', color: '#64748b', tip: 'RSI divergence edge is captured by Absorption Long setup (71.4% WR) which adds structural context (support level + price flat). Standalone RSI div only +5% controlled edge — removed as separate signal.' },
-                { name: 'BRACKET_BK_LONG', wr: '55.1%', delta: '+4.4%', freq: '0.20/day', color: '#94a3b8', tip: 'Bracket top exceeded. 55.1% WR (N=49). @PD1-VA: 73%. Wide OR: 63% (+11%). Suppressed on tight OR.' },
-                { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', freq: '0.12/day', color: '#f59e0b', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
-              ].map((s, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                    {s.name} <InfoTooltip text={s.tip} />
-                  </span>
-                  <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ color: s.color, fontWeight: 700 }}>{s.wr}</span>
-                    <span style={{ color: '#64748b', fontSize: 10 }}>{s.delta}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Column 2: Confluence Levels */}
-          <div style={{ flex: '1 1 200px', minWidth: 180 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              CONFLUENCE EDGE (Controlled Δ)
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11, color: '#94a3b8' }}>
-              {[
-                { name: 'PD-2 VAH', delta: '+44.8%', color: '#10b981', tip: 'Strongest confluence. Setups near 2-day-prior VAH have +44.8% controlled edge. Target: 15pt (83% hit). $45/ct expectancy.' },
-                { name: 'PD-2 VAL', delta: '+20.5%', color: '#10b981', tip: 'Extension target profile. +20.5% controlled edge. Target: 75pt (33% hit). $55/ct — let runners go.' },
-                { name: 'PW Low', delta: '+15.0%', color: '#10b981', tip: 'Prior week low as support. +15.0% controlled edge. Target: 100pt (33% hit). $100/ct potential.' },
-                { name: 'PD-3 VAH', delta: '+14.7%', color: '#34d399', tip: '3-day-prior VAH resistance. +14.7% controlled edge. Scalp target: 15pt (85% hit). $48/ct.' },
-                { name: 'PD-1 VAH', delta: '+9.6%', color: '#34d399', tip: 'Prior day VAH. +9.6% controlled edge. Target: 30pt (52% hit). $31/ct.' },
-                { name: 'PD-1 POC', delta: '+9.0%', color: '#34d399', tip: 'Prior day POC magnet. +9.0% controlled edge. Target: 20pt (62% hit). $25/ct.' },
-                { name: 'OR Midpoint', delta: '+6.9%', color: '#94a3b8', tip: 'Opening range midpoint pivot. +6.9% controlled edge. Target: 20pt (69% hit). $38/ct.' },
-              ].map((l, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>{l.name} <InfoTooltip text={l.tip} /></span>
-                  <span style={{ color: l.color, fontWeight: 700 }}>{l.delta}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 10, color: '#64748b' }}>
-              ANTI-CONFLUENCE (avoid):
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#f87171', marginTop: 2 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB High</span><span>-23.9%</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB Low</span><span>-28.1%</span></div>
-            </div>
-          </div>
-
-          {/* Column 3: Removed/Gated Setups + Context */}
-          <div style={{ flex: '1 1 200px', minWidth: 180 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51, 65, 85, 0.25)', paddingBottom: 4, marginBottom: 6 }}>
-              NEGATIVE EDGE (REMOVED/GATED)
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11 }}>
-              {[
-                { name: 'C_STANDALONE_DOWN', edge: '-12.0%', status: 'GATED to PD-2 VA (81% there)', color: '#f59e0b' },
-                { name: 'OTD_SHORT', edge: '-5.6%', status: 'GATED to PD-2 VA (73% there)', color: '#f59e0b' },
-                { name: 'IB_BULLISH', edge: '-7.5%', status: 'REMOVED', color: '#ef4444' },
-                { name: 'C_STANDALONE_UP', edge: '-6.5%', status: 'REMOVED', color: '#ef4444' },
-                { name: 'VA_RESP_LONG', edge: '-5.0%', status: 'REMOVED', color: '#ef4444' },
-                { name: 'TRT_SHORT', edge: '-10.1%', status: 'REMOVED', color: '#ef4444' },
-              ].map((s, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0', color: '#94a3b8' }}>
-                  <span>{s.name}</span>
-                  <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ color: '#ef4444', fontWeight: 600 }}>{s.edge}</span>
-                    <span style={{ fontSize: 8, color: s.color, background: `${s.color}20`, padding: '1px 4px', borderRadius: 2, fontWeight: 700 }}>{s.status.split(' ')[0]}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 8, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)' }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>CONFLUENCE COUNT EFFECT</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: '#94a3b8' }}>
-                <div>0 levels: <span style={{ color: '#64748b' }}>48.2% WR</span></div>
-                <div>2+ levels: <span style={{ color: '#94a3b8' }}>45.0% WR, better MAE</span></div>
-                <div>4+ levels: <span style={{ color: '#34d399', fontWeight: 700 }}>57.9% WR ✅</span></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Old Session Edge Statistics content removed — replaced with backtested data above */}
+      {/* Backtested Edge Statistics moved to Backtest tab */}
 
       {activeModal && (
         <CaseReadDetailModal kind={activeModal} c={currentCase} isRTH={isRTH} isPastOpen={true} title={MODAL_TITLES[activeModal]} onClose={closeModal} />
@@ -4229,6 +4144,14 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
     }
   }, [openToChart]);
 
+  const [feedbackLogs, setFeedbackLogs] = React.useState([]);
+  useEffect(() => {
+    fetch(`${API_URL}/acd/feedback?days=365`)
+      .then(r => r.json())
+      .then(d => setFeedbackLogs((d.feedback || []).filter(f => f.trade_date === dateStr)))
+      .catch(() => {});
+  }, [dateStr]);
+
   useEffect(() => {
     fetch(`${API_URL}/annotations?date=${dateStr}`)
       .then(r => r.json())
@@ -4796,6 +4719,26 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
           </div>
           <button className="day-modal-close" onClick={onClose}>✕</button>
         </div>
+
+        {/* Trade Feedback Logs */}
+        {feedbackLogs.length > 0 && (
+          <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Trade Feedback Log ({feedbackLogs.length})</div>
+            {feedbackLogs.map(f => (
+              <div key={f.id} style={{ padding: '4px 0', borderBottom: '1px solid rgba(30,41,59,0.3)', fontSize: 11 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600, color: f.action === 'TAKEN' ? '#22c55e' : '#f59e0b' }}>{f.action}</span>
+                  <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{f.setup_type}</span>
+                  <span style={{ color: '#64748b' }}>{f.direction}</span>
+                  {f.contracts > 1 && <span style={{ color: '#64748b' }}>{f.contracts}ct</span>}
+                  <span style={{ color: '#64748b' }}>{(f.tags || []).join(', ')}</span>
+                  {f.pnl != null && <span style={{ color: f.pnl >= 0 ? '#22c55e' : '#ef4444', fontFamily: 'monospace', fontWeight: 700 }}>${f.pnl}</span>}
+                </div>
+                {f.note && <div style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', marginTop: 2 }}>{f.note}</div>}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* AI Coaching Review — prominent, always visible after header */}
         {(() => {
@@ -18005,10 +17948,11 @@ function SessionStatusBar({ conf, onStateChange }) {
             </span>
           )}
           {p3Score != null && (
-            <span style={{ fontSize: 13, fontWeight: 700, color: p3Color, background: `${p3Color}15`, border: `1px solid ${p3Color}44`, borderRadius: 5, padding: '2px 7px', letterSpacing: '0.05em', cursor: 'help' }}
-              title={p3Tooltip}>
-              P3: {p3Score}/5
-            </span>
+            <InfoTooltip text={p3Tooltip}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: p3Color, background: `${p3Color}15`, border: `1px solid ${p3Color}44`, borderRadius: 5, padding: '2px 7px', letterSpacing: '0.05em', cursor: 'help' }}>
+                P3: {p3Score}/5
+              </span>
+            </InfoTooltip>
           )}
           {dllStatus?.anyDllHit && (
             <span style={{ fontSize: 13, fontWeight: 700, color: '#ef4444', background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 5, padding: '2px 7px', letterSpacing: '0.07em', textTransform: 'uppercase' }}
@@ -18379,9 +18323,31 @@ function SessionStatusBar({ conf, onStateChange }) {
                 </div>
               );
             })()}
-            {/* Plain-English description */}
-            <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, padding: '6px 0', borderTop: '1px solid rgba(99,102,241,0.2)' }}>
-              {sc2.description}
+            {/* Trade Brief */}
+            <div style={{ padding: '8px 0', borderTop: '1px solid rgba(99,102,241,0.2)' }}>
+              {(sc2.description || '').split('\n\n').map((block, i) => {
+                if (!block.trim()) return null;
+                const isSep = block.trim() === '---';
+                if (isSep) return <div key={i} style={{ borderTop: '1px solid rgba(51,65,85,0.3)', margin: '6px 0' }} />;
+                const isWhyNow = block.includes('**WHY NOW:**');
+                const isConfluence = block.includes('**CONFLUENCE:**');
+                const isPace = block.includes('**PACE:**');
+                const isHold = block.includes('**HOLD:**');
+                const isSize = block.includes('**SIZE:**');
+                const isWarning = block.startsWith('⚠️');
+                const labelColor = isWhyNow ? '#a78bfa' : isConfluence ? '#60a5fa' : isPace ? '#f59e0b' : isHold ? '#34d399' : isSize ? '#818cf8' : isWarning ? '#f59e0b' : '#94a3b8';
+                const bg = isWarning ? 'rgba(245,158,11,0.06)' : isWhyNow ? 'rgba(139,92,246,0.04)' : 'transparent';
+                const rendered = block.replace(/\*\*([^*]+)\*\*/g, '|||$1|||');
+                const parts = rendered.split('|||');
+                return (
+                  <div key={i} style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5, marginBottom: 6, padding: (isWarning || isWhyNow) ? '6px 8px' : '0', background: bg, borderRadius: 4, borderLeft: (isWhyNow || isPace || isHold || isSize) ? `2px solid ${labelColor}` : 'none', paddingLeft: (isWhyNow || isPace || isHold || isSize) ? 10 : undefined }}>
+                    {parts.map((p, j) => j % 2 === 1
+                      ? <strong key={j} style={{ color: labelColor, fontWeight: 700 }}>{p}</strong>
+                      : <span key={j} style={{ color: isWarning ? '#fbbf24' : '#94a3b8' }}>{p}</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {/* RECOMMENDED TP section */}
             {tpRec && (() => {
@@ -18530,6 +18496,8 @@ function SessionStatusBar({ conf, onStateChange }) {
                 </div>
               );
             })()}
+            {/* ── Trade Feedback ── */}
+            <TradeFeedbackBar setupCard={sc2} />
           </div>
         );
       })()}
@@ -18566,9 +18534,10 @@ function SessionStatusBar({ conf, onStateChange }) {
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
             {/* Direction */}
             <div style={{ minWidth: 120 }}>
-              <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 2, fontWeight: 600 }}>{signalDegrading ? '⚠ SIGNAL DEGRADING' : isCounterTrend ? '⚡ COUNTER-TREND' : 'SIGNAL ACTIVE'}</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: sc.accent, letterSpacing: '0.04em' }}>
+              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{signalDegrading ? '⚠ SIGNAL DEGRADING' : isCounterTrend ? '⚡ COUNTER-TREND' : 'ACD SIGNAL DETECTED'}</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em' }}>
                 {isLong ? '↑ A UP' : '↓ A DOWN'}
+                <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400, marginLeft: 8 }}>context — not a trade signal</span>
               </div>
               {aFireEvent?.time && (
                 <div style={{ fontSize: 13, color: sc.accent, marginTop: 2, fontFamily: 'monospace' }}>fired {aFireEvent.time} ET</div>
@@ -18839,6 +18808,694 @@ function SessionStatusBar({ conf, onStateChange }) {
 // updatedAt: string timestamp (e.g. "13:36 ET"). Badge shows when collapsed + unseen.
 // Badge disappears permanently after the user opens then closes the section with that updatedAt.
 // Reappears if updatedAt changes (new data arrives).
+function BacktestedEdgeStatsCard() {
+  const [edgeData, setEdgeData] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setEdgeData).catch(() => {});
+  }, []);
+
+  const price = edgeData?.liveStatus?.currentPrice;
+  const cl = edgeData?.confluenceLevels;
+  const PROX = 25;
+  const isNear = (val) => price && val && Math.abs(price - val) <= PROX;
+
+  const setups = [
+    { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', color: '#10b981', status: 'ACTIVE', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). All regimes.' },
+    { name: 'Absorption Long', wr: '71.4%', delta: '+18.4%', color: '#10b981', status: 'ACTIVE', tip: 'Support held + RSI rising + price flat on 2-min bars. 71.4% WR 5bar (N=35). BALANCE: 73.9%. @PD1-VA: 90.9%. 25pt stop / 40pt target.' },
+    { name: 'Coil→VWAP', wr: '65.3%', delta: '+16.1%', color: '#34d399', status: 'ACTIVE', tip: 'Coil + volume surge → fade toward VWAP. TREND: 65.3% (N=49). R:R 3.08. Hold 10 bars max.' },
+    { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR Low after opening drive. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91%.' },
+    { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', color: '#34d399', status: 'ACTIVE', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Tight OR: 82%.' },
+    { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR High after opening drive. 66.7% WR (N=42). TREND: 83%. Tight OR: 78%.' },
+    { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', color: '#f59e0b', status: 'ACTIVE', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
+    { name: 'IB_BEARISH', wr: '55.0%', delta: '+1.3%', color: '#94a3b8', status: 'ACTIVE', tip: 'IB range break short. 45% filtered WR (backtest). Best on TURBULENT + POC aligned. Workhorse setup.' },
+    { name: 'C_STANDALONE_DOWN', wr: '57.0%', delta: '-12%→+63%', color: '#f59e0b', status: 'GATED', tip: '-12% raw. GATED to PD-2 VA proximity where WR=63%. Death sequence gate also active.' },
+  ];
+
+  const confLevels = [
+    { name: 'PD-2 VAH', delta: '+44.8%', color: '#10b981', val: cl?.pd2?.vah, tip: 'Strongest confluence. +44.8% controlled edge. Target: 15pt (83% hit). $45/ct.' },
+    { name: 'PD-2 VAL', delta: '+20.5%', color: '#10b981', val: cl?.pd2?.val, tip: 'Extension target. +20.5% controlled edge. Target: 75pt (33% hit). $55/ct.' },
+    { name: 'PW Low', delta: '+15.0%', color: '#10b981', val: cl?.pw?.low, tip: 'Prior week low support. +15.0% edge. Target: 100pt (33% hit). $100/ct.' },
+    { name: 'PD-3 VAH', delta: '+14.7%', color: '#34d399', val: cl?.pd3?.vah, tip: '3-day-prior VAH resistance. +14.7% edge. Scalp: 15pt (85% hit). $48/ct.' },
+    { name: 'PD-1 VAH', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.vah, tip: 'Prior day VAH. +9.6% edge. Target: 30pt (52% hit). $31/ct.' },
+    { name: 'PD-1 POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
+    { name: 'OR Mid', delta: '+18.0%', color: '#60a5fa', val: cl?.orMid, tip: 'OR midpoint. With absorption: 60% WR, +$16 exp. 15pt target/15pt stop. Log via Quick Trade Log.' },
+    { name: 'PW High', delta: '+5.1%', color: '#fb923c', val: cl?.pw?.high, tip: 'Prior week high resistance. +5.1% edge. Target: 15pt (72% hit).' },
+  ];
+
+  const removed = [
+    { name: 'OTD_SHORT', edge: '-5.6%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'OTD_LONG', edge: '-20%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'IB_BULLISH', edge: '-7.5%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'C_STANDALONE_UP', edge: '-6.5%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'VA_RESP_LONG', edge: '-5.0%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'TRT_SHORT', edge: '-10.1%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'BRACKET_BK_LONG', edge: '-14%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'BRACKET_BK_SHORT', edge: '-100%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'TRT_MAH_SHORT', edge: '-13%', status: 'REMOVED', color: '#ef4444' },
+    { name: 'GAP_FILL', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
+    { name: 'FAILED_AUCTION', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
+    { name: 'A_UP/DOWN', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
+    { name: 'C_PAIRED', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
+  ];
+
+  const rowSt = (active) => ({
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 6px', margin: '0 -6px', borderRadius: 4,
+    background: active ? 'rgba(251,191,36,0.08)' : 'transparent',
+    borderLeft: active ? '3px solid #fbbf24' : '3px solid transparent',
+  });
+
+  return (
+    <div style={{ padding: '8px 16px' }}>
+      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10 }}>Controlled tests, 12mo NQ (2025-2026). Confluence levels highlight when price is within 25pt.</div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 240px', minWidth: 220 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>RANKED ACTIVE SETUPS</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#94a3b8' }}>
+            {setups.map((s, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }} title={s.tip}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {s.name}
+                  <span style={{ fontSize: 8, fontWeight: 800, color: s.status === 'ACTIVE' ? '#10b981' : '#f59e0b', background: s.status === 'ACTIVE' ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)', padding: '0 4px', borderRadius: 2 }}>{s.status}</span>
+                </span>
+                <span style={{ display: 'flex', gap: 6 }}>
+                  <span style={{ color: s.color, fontWeight: 700 }}>{s.wr}</span>
+                  <span style={{ color: '#64748b', fontSize: 10 }}>{s.delta}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ flex: '1 1 220px', minWidth: 200 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>CONFLUENCE EDGE (Controlled Delta)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
+            {confLevels.map((l, i) => {
+              const active = isNear(l.val);
+              const dist = price && l.val ? Math.round(price - l.val) : null;
+              return (
+                <div key={i} style={rowSt(active)} title={l.tip}>
+                  <span style={{ color: active ? '#e2e8f0' : '#94a3b8', fontWeight: active ? 700 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    {l.name}
+                    {l.val != null && <span style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>{fmtP(l.val, 0)}</span>}
+                    {active && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '0 4px', borderRadius: 2 }}>ACTIVE</span>}
+                  </span>
+                  <span style={{ display: 'flex', gap: 4 }}>
+                    <span style={{ color: l.color, fontWeight: 700 }}>{l.delta}</span>
+                    {dist != null && <span style={{ fontSize: 9, color: '#64748b' }}>{dist > 0 ? '+' : ''}{dist}pt</span>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 10, color: '#64748b' }}>ANTI-CONFLUENCE (avoid):</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#f87171', marginTop: 2 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB High</span><span>-23.9%</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB Low</span><span>-28.1%</span></div>
+          </div>
+        </div>
+
+        <div style={{ flex: '1 1 200px', minWidth: 180 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>REMOVED / SHADOW TRACKED</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
+            {removed.map((s, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1px 0', color: '#64748b' }}>
+                <span>{s.name}</span>
+                <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <span style={{ color: '#ef4444', fontWeight: 600, fontSize: 10 }}>{s.edge}</span>
+                  <span style={{ fontSize: 7, color: '#ef4444', background: 'rgba(239,68,68,0.12)', padding: '0 3px', borderRadius: 2, fontWeight: 700 }}>SHADOW</span>
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 8, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>CONFLUENCE COUNT EFFECT</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: '#94a3b8' }}>
+              <div>0 levels: <span style={{ color: '#64748b' }}>48.2% WR</span></div>
+              <div>2+ levels: <span style={{ color: '#94a3b8' }}>45.0% WR, better MAE</span></div>
+              <div>4+ levels: <span style={{ color: '#34d399', fontWeight: 700 }}>57.9% WR</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EdgeSectionsPanel() {
+  const [data, setData] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(e => setErr(e.message));
+    const iv = setInterval(() => { fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(() => {}); }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+  if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
+  if (!data) return <div style={{ fontSize: 12, color: '#64748b' }}>Loading edge data...</div>;
+
+  const { liveStatus, setups, confluenceLevels, windows, overnightContext } = data;
+  const price = liveStatus?.currentPrice;
+  const PROX = 25;
+  const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
+  const inv = overnightContext?.overnight_inventory;
+  const ovp = overnightContext?.open_vs_prior_value;
+  const pdp = overnightContext?.prior_day_profile;
+  const cellSt = (v) => ({ padding: '6px 10px', fontSize: 12, color: v != null && v >= 60 ? '#22c55e' : v != null && v >= 45 ? '#f59e0b' : '#94a3b8', fontFamily: 'monospace', textAlign: 'center' });
+
+  const rawLevels = confluenceLevels ? [
+    { name: 'PD-2 VAH', val: confluenceLevels.pd2?.vah, target: 15, hitRate: 83, ctrlDelta: 44.8, color: '#f87171', role: 'resistance' },
+    { name: 'PD-2 VAL', val: confluenceLevels.pd2?.val, target: 75, hitRate: 33, ctrlDelta: 20.5, color: '#4ade80', role: 'support' },
+    { name: 'PW Low', val: confluenceLevels.pw?.low, target: 100, hitRate: 33, ctrlDelta: 15.0, color: '#4ade80', role: 'support' },
+    { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, ctrlDelta: 14.7, color: '#f87171', role: 'resistance' },
+    { name: 'PD-3 VAL', val: confluenceLevels.pd3?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
+    { name: 'PD-3 POC', val: confluenceLevels.pd3?.poc, target: 20, hitRate: 0, ctrlDelta: 0, color: '#a78bfa', role: 'magnet' },
+    { name: 'PD-1 VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, ctrlDelta: 9.6, color: '#fb923c', role: 'resistance' },
+    { name: 'PD-1 VAL', val: confluenceLevels.pd1?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
+    { name: 'PD-1 POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, ctrlDelta: 9.0, color: '#a78bfa', role: 'magnet' },
+    { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, ctrlDelta: 18.0, color: '#60a5fa', role: 'pivot' },
+    { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, ctrlDelta: 5.1, color: '#fb923c', role: 'resistance' },
+    { name: 'Floor PP', val: confluenceLevels.floorPivots?.pp, target: 20, hitRate: 99, ctrlDelta: 0, color: '#94a3b8', role: 'pivot' },
+    { name: 'Floor S1', val: confluenceLevels.floorPivots?.s1, target: 20, hitRate: 40, ctrlDelta: 0, color: '#64748b', role: 'support' },
+    { name: 'Floor R1', val: confluenceLevels.floorPivots?.r1, target: 20, hitRate: 45, ctrlDelta: 0, color: '#64748b', role: 'resistance' },
+    { name: 'Floor S2', val: confluenceLevels.floorPivots?.s2, target: 20, hitRate: 41, ctrlDelta: 0, color: '#475569', role: 'support' },
+    { name: 'Floor S3', val: confluenceLevels.floorPivots?.s3, target: 20, hitRate: 37, ctrlDelta: 0, color: '#475569', role: 'support' },
+    { name: 'PD-1 High', val: confluenceLevels.pd1?.high, target: 20, hitRate: 0, ctrlDelta: 0, color: '#fb923c', role: 'resistance' },
+    { name: 'PD-1 Low', val: confluenceLevels.pd1?.low, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
+  ].filter(l => l.val != null) : [];
+
+  // Zone clustering: group levels within 15pt of each other
+  const ZONE_PROX = 15;
+  const zones = [];
+  const used = new Set();
+  const sorted = [...rawLevels].sort((a, b) => a.val - b.val);
+  for (let i = 0; i < sorted.length; i++) {
+    if (used.has(i)) continue;
+    const cluster = [sorted[i]];
+    used.add(i);
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (used.has(j)) continue;
+      if (Math.abs(sorted[j].val - sorted[i].val) <= ZONE_PROX) {
+        cluster.push(sorted[j]);
+        used.add(j);
+      }
+    }
+    if (cluster.length >= 2) {
+      const lo = Math.min(...cluster.map(l => l.val));
+      const hi = Math.max(...cluster.map(l => l.val));
+      const mid = (lo + hi) / 2;
+      zones.push({ levels: cluster, lo, hi, mid, count: cluster.length });
+    }
+  }
+
+  // Levels sorted by distance from price, with zone info attached
+  const levels = sorted.map(l => {
+    const zone = zones.find(z => z.levels.includes(l));
+    return { ...l, zone, note: null };
+  });
+
+  const firedTypes = new Set((setups?.list || []).map(s => s.setup_type));
+  const potentials = [];
+  if (liveStatus?.active) {
+    if (liveStatus.gapStatus === 'UP' && !firedTypes.has('GAP_UP_FILL')) potentials.push({ id: 'gap-up', type: 'GAP UP FILL (SHORT)', cond: `Gap up ${liveStatus.gapOpenValue?.toFixed(0)}pts`, dir: 'Fade early highs → yesterday High' });
+    if (liveStatus.gapStatus === 'DOWN' && !firedTypes.has('GAP_DOWN_FILL')) potentials.push({ id: 'gap-dn', type: 'GAP DOWN FILL (LONG)', cond: `Gap down ${liveStatus.gapOpenValue?.toFixed(0)}pts`, dir: 'Buy reclaim → yesterday Low' });
+    if ((liveStatus.barsCount || 0) <= 120) {
+      if (liveStatus.or5Status === 'TIGHT') {
+        if (!firedTypes.has('IB_BULLISH')) potentials.push({ id: 'ib-bull', type: 'IB BREAKOUT LONG', cond: `Tight OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'Break+hold above IB High → 100%/200% expansion' });
+        if (!firedTypes.has('IB_BEARISH')) potentials.push({ id: 'ib-bear', type: 'IB BREAKOUT SHORT', cond: `Tight OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'Break+hold below IB Low → 100%/200% expansion' });
+      }
+      if (liveStatus.or5Status === 'WIDE') {
+        potentials.push({ id: 'trt-l', type: 'TRAPPED SHORTS (TRT LONG)', cond: `Wide OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'A Down rejects → reclaim OR High' });
+        potentials.push({ id: 'trt-s', type: 'TRAPPED LONGS (TRT SHORT)', cond: `Wide OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'A Up rejects → reclaim OR Low' });
+      }
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
+      {/* Overnight Structural Context */}
+      {(inv || ovp || pdp) && (
+        <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa', marginBottom: 4 }}>Overnight Structural Context</div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11 }}>
+            {inv && <span style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>
+              Inventory: <strong>{inv.replace(/_/g, ' ')}</strong>
+            </span>}
+            {ovp && <span style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>
+              Open: <strong>{ovp.replace(/_/g, ' ')}</strong>
+            </span>}
+            {pdp && <span style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>
+              Prior Day: <strong>{pdp.replace(/_/g, ' ')}</strong>
+            </span>}
+          </div>
+          {pdp === 'NONTREND' && <div style={{ fontSize: 10, color: '#fbbf24', marginTop: 3 }}>Prior NONTREND: first directional move is high conviction (61% WR). Hold for full target.</div>}
+          {((inv === 'SHORT_TRAPPED' && ovp === 'ABOVE_VALUE') || (inv === 'LONG_TRAPPED' && ovp === 'BELOW_VALUE')) && (
+            <div style={{ fontSize: 10, color: '#22c55e', marginTop: 3 }}>Both aligned: inventory + value support same direction. Backtested 63% WR (N=113). Size up.</div>
+          )}
+        </div>
+      )}
+      {/* Confluence Zones + Levels */}
+      {levels.length > 0 && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>📐 Confluence Levels</div>
+            {zones.length > 0 && <span style={{ fontSize: 10, color: '#fbbf24', fontWeight: 700 }}>{zones.length} zone{zones.length > 1 ? 's' : ''} detected</span>}
+          </div>
+          {/* Show zones first */}
+          {zones.filter(z => {
+            const dist = price ? Math.abs(price - z.mid) : 999;
+            return dist <= 300;
+          }).sort((a, b) => Math.abs((price || 0) - a.mid) - Math.abs((price || 0) - b.mid)).map((z, zi) => {
+            const zDist = price ? Math.round(price - z.mid) : null;
+            const isZoneNear = zDist != null && Math.abs(zDist) <= PROX + 10;
+            return (
+              <div key={zi} style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 6, background: isZoneNear ? 'rgba(251,191,36,0.06)' : 'rgba(30,41,59,0.2)', border: `1px solid ${isZoneNear ? 'rgba(251,191,36,0.3)' : 'rgba(51,65,85,0.3)'}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: isZoneNear ? '#fbbf24' : '#cbd5e1' }}>
+                      ZONE: {z.lo.toLocaleString('en-US', { maximumFractionDigits: 0 })} — {z.hi.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </span>
+                    <span style={{ fontSize: 9, color: '#94a3b8' }}>({z.count} levels, {Math.round(z.hi - z.lo)}pt spread)</span>
+                    {isZoneNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
+                  </div>
+                  {zDist != null && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{zDist > 0 ? '+' : ''}{zDist}pt</span>}
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {z.levels.map(l => (
+                    <span key={l.name} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: `${l.color}15`, border: `1px solid ${l.color}30`, color: l.color, fontWeight: 600 }}>
+                      {l.name} {l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {/* Individual levels not in zones */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
+            {levels.filter(l => !l.zone).map(l => {
+              const dist = price ? Math.round(price - l.val) : null;
+              const isNear = dist != null && Math.abs(dist) <= PROX;
+              return (
+                <div key={l.name} style={{ padding: '8px 10px', borderRadius: 6, background: isNear ? 'rgba(251,191,36,0.08)' : 'rgba(30,41,59,0.15)', border: `1px solid ${isNear ? 'rgba(251,191,36,0.3)' : 'rgba(148,163,184,0.1)'}`, borderLeft: `3px solid ${l.color}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>{l.name}</span>
+                    {isNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: l.color, fontFamily: 'monospace' }}>{l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
+                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>{dist != null ? `${dist > 0 ? '+' : ''}${dist}pt` : ''}{l.ctrlDelta > 0 ? ` · +${l.ctrlDelta.toFixed(1)}% edge` : ''}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Active Setups */}
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>🎯 Today's Actionable Setups</div>
+        {setups?.list?.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
+            {setups.list.map(s => {
+              const cc = s.confidence === 'HIGH' ? '#10b981' : s.confidence === 'MEDIUM' ? '#3b82f6' : s.confidence === 'LOW' ? '#f59e0b' : '#ef4444';
+              const edgeCtx = {
+                'VALUE_AREA_RESPONSIVE_SHORT': 'Fade PD-1 VAH. 66.7% WR controlled. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
+                'IB_BEARISH': 'IB range break short. 45% filtered WR. Best on TURBULENT + POC aligned. Workhorse setup.',
+                'OPEN_DRIVE_SHORT': 'Pullback to OR Low after opening drive. 68% WR. Best WED/FRI + tight OR.',
+                'OPEN_DRIVE_LONG': 'Pullback to OR High after opening drive. 67% WR. Best TREND + tight OR.',
+                'TRT_LONG': 'Trapped shorts reversal. 75% WR at 20 bars. 120-min expiry. Suppress on wide OR.',
+                'C_STANDALONE_DOWN': 'C signal break. 63% filtered WR. ONLY near PD-2 VA (gated). Death sequence gate active.',
+                'ABSORPTION_LONG': 'Bullish absorption at support. 71% WR on BALANCE. 2-min bar detection. Runner profile.',
+                'EMA_SNAPBACK_LONG': '9 EMA stretch fade long. 96% directional reversion. Scalp toward EMA.',
+                'EMA_SNAPBACK_SHORT': '9 EMA stretch fade short. 96% directional reversion. Scalp toward EMA.',
+                'COIL_SURGE_LONG': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
+                'COIL_SURGE_SHORT': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
+              }[s.setup_type] || s.recommendation || '';
+              return (
+                <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderLeft: `3px solid ${cc}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{s.setup_type}</span>
+                    <span style={{ fontSize: 9, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+                    <span>WR: <strong style={{ color: cc }}>{(s.adjustedWr * 100).toFixed(0)}%</strong> (N={s.sampleN})</span>
+                    <span>Fired: {s.fired_time} ET</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8' }}>
+                    <span>Entry: {fmtP(s.entry_zone_low, 0)}-{fmtP(s.entry_zone_high, 0)}</span>
+                    <span style={{ color: '#f87171' }}>Stop: {fmtP(s.stop_level, 0)}</span>
+                    <span style={{ color: '#34d399' }}>T1: {fmtP(s.t1_level, 0)}</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: '#a78bfa', marginTop: 4, lineHeight: 1.4, fontStyle: 'italic' }}>{edgeCtx}</div>
+                  {s.recommendation && s.recommendation !== 'Execute standard risk parameters.' && <div style={{ fontSize: 10, color: '#cbd5e1', marginTop: 2, lineHeight: 1.4 }}>{s.recommendation}</div>}
+                </div>
+              );
+            })}
+          </div>
+        ) : <div style={{ fontSize: 11, color: '#64748b' }}>No setups active or detected.</div>}
+      </div>
+
+      {/* Potential Watchlist */}
+      {potentials.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#8b5cf6', marginBottom: 6 }}>👀 Potential Setup Watchlist</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
+            {potentials.map(p => (
+              <div key={p.id} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(15,23,42,0.3)', border: '1px solid rgba(139,92,246,0.15)', borderLeft: '3px solid #8b5cf6' }}>
+                <div style={{ fontWeight: 700, color: '#cbd5e1', marginBottom: 2 }}>{p.type}</div>
+                <div style={{ fontSize: 10, color: '#94a3b8' }}>{p.cond} — {p.dir}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic Lookback */}
+      {allTime && (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', marginBottom: 6 }}>📊 Dynamic Lookback Comparison</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #334155' }}>
+                <th style={{ textAlign: 'left', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>Edge</th>
+                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>30d</th>
+                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>90d</th>
+                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>All</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ['Gap Up Fill', last30?.gapUpFillPct, last90?.gapUpFillPct, allTime?.gapUpFillPct],
+                ['Gap Down Fill', last30?.gapDownFillPct, last90?.gapDownFillPct, allTime?.gapDownFillPct],
+                ['Failed Sweeps', last30?.sweepPct, last90?.sweepPct, allTime?.sweepPct],
+                ['10AM Pivot', last30?.tenAmPivotPct, last90?.tenAmPivotPct, allTime?.tenAmPivotPct],
+                ['IB Wick Pullback', last30?.ibWickPct, last90?.ibWickPct, allTime?.ibWickPct],
+              ].map(([name, v30, v90, vAll], i) => (
+                <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
+                  <td style={{ padding: '4px 8px', color: '#cbd5e1', fontWeight: 600, fontSize: 11 }}>{name}</td>
+                  <td style={cellSt(v30)}>{v30 != null ? v30 + '%' : '—'}</td>
+                  <td style={cellSt(v90)}>{v90 != null ? v90 + '%' : '—'}</td>
+                  <td style={cellSt(vAll)}>{vAll != null ? vAll + '%' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradeLogRow({ log, onUpdate }) {
+  const [mode, setMode] = React.useState(null); // 'close' | 'note' | 'edit'
+  const [pnlVal, setPnlVal] = React.useState('');
+  const [noteVal, setNoteVal] = React.useState(log.note || '');
+  const [editPnl, setEditPnl] = React.useState(log.pnl != null ? String(log.pnl) : '');
+
+  const closeTrade = async () => {
+    if (!pnlVal) return;
+    await fetch(`${API_URL}/acd/feedback/${log.id}/close`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pnl: parseFloat(pnlVal), note: noteVal || null }) }).catch(() => {});
+    setMode(null); if (onUpdate) onUpdate();
+  };
+  const saveNote = async () => {
+    await fetch(`${API_URL}/acd/feedback/${log.id}/close`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: noteVal, pnl: log.pnl != null ? log.pnl : null }) }).catch(() => {});
+    setMode(null); if (onUpdate) onUpdate();
+  };
+  const saveEdit = async () => {
+    await fetch(`${API_URL}/acd/feedback/${log.id}/close`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pnl: editPnl ? parseFloat(editPnl) : log.pnl, note: noteVal || log.note }) }).catch(() => {});
+    setMode(null); if (onUpdate) onUpdate();
+  };
+
+  const linkSt = { color: '#a5b4fc', cursor: 'pointer', textDecoration: 'underline', fontSize: 11, fontWeight: 600 };
+  const inputSt = { padding: '4px 8px', borderRadius: 4, border: '1px solid #475569', background: '#1e293b', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' };
+  const pnlColor = log.pnl >= 0 ? '#4ade80' : '#f87171';
+
+  return (
+    <div style={{ padding: '8px 10px', marginBottom: 4, borderRadius: 6, background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(51,65,85,0.3)' }}>
+      <div style={{ fontSize: 12, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span style={{ fontWeight: 700, fontSize: 11, color: log.action === 'TAKEN' ? '#4ade80' : '#fbbf24', background: log.action === 'TAKEN' ? 'rgba(74,222,128,0.1)' : 'rgba(251,191,36,0.1)', padding: '1px 8px', borderRadius: 4 }}>{log.action}</span>
+        <span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 13 }}>{log.setup_type}</span>
+        <span style={{ color: '#94a3b8', fontSize: 11 }}>{(log.tags || []).join(', ')}</span>
+        {log.pnl != null && <span style={{ color: pnlColor, fontFamily: 'monospace', fontWeight: 800, fontSize: 14 }}>${log.pnl}</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          {log.pnl == null && log.action === 'TAKEN' && mode !== 'close' && <span onClick={() => setMode('close')} style={linkSt}>close</span>}
+          {mode === null && <span onClick={() => setMode('note')} style={linkSt}>note</span>}
+          {mode === null && log.pnl != null && <span onClick={() => setMode('edit')} style={linkSt}>edit</span>}
+          {mode === null && <span onClick={() => setMode('delete')} style={{ ...linkSt, color: '#f87171' }}>delete</span>}
+        </span>
+      </div>
+      {log.note && mode !== 'note' && <div style={{ fontSize: 12, color: '#cbd5e1', fontStyle: 'italic', marginTop: 4, paddingLeft: 4, borderLeft: '2px solid #475569', lineHeight: 1.4 }}>{log.note}</div>}
+      {mode === 'close' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <input type="number" value={pnlVal} onChange={e => setPnlVal(e.target.value)} placeholder="P&L e.g. -78" style={{ ...inputSt, width: 90 }} onKeyDown={e => e.key === 'Enter' && closeTrade()} autoFocus />
+          <input value={noteVal} onChange={e => setNoteVal(e.target.value)} placeholder="note (optional)" style={{ ...inputSt, width: 200 }} onKeyDown={e => e.key === 'Enter' && closeTrade()} />
+          <span onClick={closeTrade} style={{ color: '#4ade80', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>save</span>
+          <span onClick={() => setMode(null)} style={{ color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}>cancel</span>
+        </div>
+      )}
+      {mode === 'note' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <input value={noteVal} onChange={e => setNoteVal(e.target.value)} placeholder="e.g. should have waited for PW-Hi" style={{ ...inputSt, width: 320 }} onKeyDown={e => e.key === 'Enter' && saveNote()} autoFocus />
+          <span onClick={saveNote} style={{ color: '#4ade80', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>save</span>
+          <span onClick={() => setMode(null)} style={{ color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}>cancel</span>
+        </div>
+      )}
+      {mode === 'edit' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>P&L:</span>
+          <input type="number" value={editPnl} onChange={e => setEditPnl(e.target.value)} style={{ ...inputSt, width: 80 }} onKeyDown={e => e.key === 'Enter' && saveEdit()} autoFocus />
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>Note:</span>
+          <input value={noteVal} onChange={e => setNoteVal(e.target.value)} style={{ ...inputSt, width: 200 }} onKeyDown={e => e.key === 'Enter' && saveEdit()} />
+          <span onClick={saveEdit} style={{ color: '#4ade80', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>save</span>
+          <span onClick={() => setMode(null)} style={{ color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}>cancel</span>
+        </div>
+      )}
+      {mode === 'delete' && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+          <span style={{ fontSize: 12, color: '#f87171' }}>Delete this entry?</span>
+          <span onClick={async () => { await fetch(`${API_URL}/acd/feedback/${log.id}`, { method: 'DELETE' }).catch(() => {}); if (onUpdate) onUpdate(); }} style={{ color: '#f87171', cursor: 'pointer', fontWeight: 700, fontSize: 12 }}>yes, delete</span>
+          <span onClick={() => setMode(null)} style={{ color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}>cancel</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuickTradeLog() {
+  const [open, setOpen] = React.useState(false);
+  const [action, setAction] = React.useState(null);
+  const [setupType, setSetupType] = React.useState('');
+  const [customType, setCustomType] = React.useState('');
+  const [direction, setDirection] = React.useState('LONG');
+  const [tags, setTags] = React.useState([]);
+  const [pnl, setPnl] = React.useState('');
+  const [contracts, setContracts] = React.useState('1');
+  const [submitted, setSubmitted] = React.useState(false);
+  const [recentLogs, setRecentLogs] = React.useState([]);
+
+  const SETUP_TYPES = ['IB_BEARISH', 'OPEN_DRIVE_LONG', 'OPEN_DRIVE_SHORT', 'VALUE_AREA_RESPONSIVE_SHORT', 'C_STANDALONE_DOWN', 'TRT_LONG', 'ABSORPTION_LONG', 'EMA_SNAPBACK_LONG', 'EMA_SNAPBACK_SHORT', 'COIL_SURGE_LONG', 'COIL_SURGE_SHORT'];
+  const ALL_TAGS = ['absorption', 'level_confluence', 'momentum', 'volume', 'gut_read', 'no_confluence', 'momentum_wrong', 'too_extended', 'after_loss', 'choppy'];
+
+  const loadRecent = () => {
+    fetch(`${API_URL}/acd/feedback?days=1`).then(r => r.json()).then(d => setRecentLogs(d.feedback || [])).catch(() => {});
+  };
+  React.useEffect(() => { if (open) loadRecent(); }, [open]);
+
+  const toggleTag = (t) => setTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+
+  const submit = async () => {
+    const type = setupType === 'CUSTOM' ? customType : setupType;
+    if (!type || !action) return;
+    try {
+      const r = await fetch(`${API_URL}/acd/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setupType: type, action, direction, tags, contracts: parseInt(contracts) || 1, entryPrice: null }),
+      });
+      const d = await r.json();
+      if (d.feedback?.id && action === 'TAKEN' && pnl) {
+        await fetch(`${API_URL}/acd/feedback/${d.feedback.id}/close`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pnl: parseFloat(pnl) }),
+        });
+      }
+      setSubmitted(true);
+      loadRecent();
+      setTimeout(() => { setSubmitted(false); setAction(null); setSetupType(''); setCustomType(''); setTags([]); setPnl(''); setContracts('1'); }, 2000);
+    } catch {}
+  };
+
+  const chip = (active) => ({
+    padding: '3px 9px', borderRadius: 12, fontSize: 10, fontWeight: 600, cursor: 'pointer', border: '1px solid',
+    background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
+    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#64748b',
+  });
+
+  const selStyle = { padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 11, fontFamily: 'monospace' };
+  const btnS = (c) => ({ padding: '5px 14px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: `1px solid ${c}`, background: `${c}12`, color: c });
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 8 }}>
+        <button onClick={() => setOpen(true)} style={{ padding: '6px 16px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid #334155', background: 'rgba(15,23,42,0.6)', color: '#94a3b8' }}>
+          + Quick Trade Log
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 10, padding: '10px 14px', background: 'rgba(15,23,42,0.5)', border: '1px solid #1e293b', borderRadius: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Quick Trade Log</span>
+        <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 14 }}>x</button>
+      </div>
+
+      {submitted ? (
+        <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>Logged</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={setupType} onChange={e => setSetupType(e.target.value)} style={selStyle}>
+              <option value="">Setup type...</option>
+              {SETUP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              <option value="CUSTOM">Custom...</option>
+            </select>
+            {setupType === 'CUSTOM' && (
+              <input value={customType} onChange={e => setCustomType(e.target.value)} placeholder="e.g. manual_absorption" style={{ ...selStyle, width: 140 }} />
+            )}
+            <select value={direction} onChange={e => setDirection(e.target.value)} style={selStyle}>
+              <option value="LONG">LONG</option>
+              <option value="SHORT">SHORT</option>
+            </select>
+            <button onClick={() => setAction('TAKEN')} style={{ ...btnS(action === 'TAKEN' ? '#22c55e' : '#475569'), fontSize: 12, padding: '6px 18px' }}>Taking</button>
+            <button onClick={() => setAction('PASSED')} style={{ ...btnS(action === 'PASSED' ? '#f59e0b' : '#475569'), fontSize: 12, padding: '6px 18px' }}>Passing</button>
+            {!action && <span style={{ fontSize: 10, color: '#f59e0b' }}>select one</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {ALL_TAGS.map(t => <span key={t} onClick={() => toggleTag(t)} style={chip(tags.includes(t))}>{t.replace(/_/g, ' ')}</span>)}
+          </div>
+          {action === 'TAKEN' && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 10, color: '#64748b' }}>Contracts:</span>
+              <input type="number" value={contracts} onChange={e => setContracts(e.target.value)} style={{ ...selStyle, width: 40 }} />
+              <span style={{ fontSize: 10, color: '#64748b' }}>P&L ($):</span>
+              <input type="number" value={pnl} onChange={e => setPnl(e.target.value)} placeholder="later" style={{ ...selStyle, width: 80 }} onKeyDown={e => e.key === 'Enter' && submit()} />
+            </div>
+          )}
+          <button onClick={submit} disabled={!setupType || !action} style={{ ...btnS('#6366f1'), alignSelf: 'flex-start', opacity: !setupType || !action ? 0.4 : 1 }}>Log Trade</button>
+
+          {recentLogs.length > 0 && (
+            <div style={{ borderTop: '1px solid #1e293b', paddingTop: 6, marginTop: 2 }}>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Today's logs:</div>
+              {recentLogs.map(l => (
+                <TradeLogRow key={l.id} log={l} onUpdate={loadRecent} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradeFeedbackBar({ setupCard }) {
+  const [sent, setSent] = React.useState(null);
+  const [tags, setTags] = React.useState([]);
+  const [closing, setClosing] = React.useState(false);
+  const [pnl, setPnl] = React.useState('');
+  const [feedbackId, setFeedbackId] = React.useState(null);
+
+  if (!setupCard?.type) return null;
+
+  const TAKE_TAGS = ['absorption', 'level_confluence', 'momentum', 'volume', 'gut_read'];
+  const PASS_TAGS = ['no_confluence', 'momentum_wrong', 'too_extended', 'after_loss', 'choppy'];
+  const activeTags = sent === 'TAKEN' ? TAKE_TAGS : sent === 'PASSED' ? PASS_TAGS : [];
+
+  const toggleTag = (t) => setTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+
+  const submit = async (action) => {
+    setSent(action);
+    try {
+      const r = await fetch(`${API_URL}/acd/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setupId: setupCard.setupId, setupType: setupCard.type, action, direction: setupCard.direction, tags, entryPrice: setupCard.entry, contracts: 1 }),
+      });
+      const d = await r.json();
+      if (d.feedback?.id) setFeedbackId(d.feedback.id);
+    } catch {}
+  };
+
+  const updateTags = async () => {
+    if (!feedbackId) return;
+    try {
+      await fetch(`${API_URL}/acd/feedback`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setupId: setupCard.setupId, setupType: setupCard.type, action: sent, direction: setupCard.direction, tags, entryPrice: setupCard.entry }),
+      });
+    } catch {}
+  };
+  React.useEffect(() => { if (feedbackId && tags.length > 0) updateTags(); }, [tags]);
+
+  const closeTrade = async () => {
+    if (!feedbackId || !pnl) return;
+    try {
+      await fetch(`${API_URL}/acd/feedback/${feedbackId}/close`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pnl: parseFloat(pnl) }),
+      });
+      setClosing(false);
+      setPnl('done');
+    } catch {}
+  };
+
+  const chipStyle = (active) => ({
+    padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid',
+    background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
+    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#64748b',
+  });
+
+  const btnStyle = (color) => ({
+    padding: '6px 18px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+    border: `1px solid ${color}`, background: `${color}15`, color,
+  });
+
+  return (
+    <div style={{ borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 8, marginTop: 4 }}>
+      {!sent && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Trade Log:</span>
+          <button onClick={() => submit('TAKEN')} style={btnStyle('#22c55e')}>Taking It</button>
+          <button onClick={() => submit('PASSED')} style={btnStyle('#f59e0b')}>Passing</button>
+        </div>
+      )}
+      {sent && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: sent === 'TAKEN' ? '#22c55e' : '#f59e0b', fontWeight: 700 }}>
+              {sent === 'TAKEN' ? 'TAKING' : 'PASSED'} — {setupCard.type}
+            </span>
+            {activeTags.map(t => (
+              <span key={t} onClick={() => toggleTag(t)} style={chipStyle(tags.includes(t))}>
+                {t.replace(/_/g, ' ')}
+              </span>
+            ))}
+          </div>
+          {sent === 'TAKEN' && !closing && pnl !== 'done' && (
+            <button onClick={() => setClosing(true)} style={{ ...btnStyle('#818cf8'), alignSelf: 'flex-start', marginTop: 2 }}>Close Trade</button>
+          )}
+          {closing && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>P&L ($):</span>
+              <input type="number" value={pnl} onChange={e => setPnl(e.target.value)} placeholder="e.g. 150 or -80"
+                style={{ width: 90, padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' }}
+                onKeyDown={e => e.key === 'Enter' && closeTrade()} />
+              <button onClick={closeTrade} style={btnStyle('#22c55e')}>Submit</button>
+            </div>
+          )}
+          {pnl === 'done' && <span style={{ fontSize: 11, color: '#22c55e', fontWeight: 600 }}>Trade logged</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CollapsibleSection({ title, defaultOpen = false, children, badge, updatedAt, fetchedAt, updateId, updateView, dataSignature }) {
   const [open, setOpen] = React.useState(defaultOpen);
   const lastSeenAt = React.useRef(defaultOpen ? updatedAt : null); // pre-seen if starts open
@@ -21094,6 +21751,12 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   const [pivot, setPivot] = React.useState(null);
   const [loadedAt, setLoadedAt] = React.useState(null);
   const [cardState, setCardState] = React.useState(null);
+  const [forecast, setForecast] = React.useState(null);
+
+  React.useEffect(() => {
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    fetch(`${API_URL}/morning-brief/forecast/${todayET}`).then(r => r.json()).then(setForecast).catch(() => {});
+  }, []);
 
   const loadAll = React.useCallback(() => {
     Promise.all([
@@ -21128,21 +21791,35 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div style={{ order: -3 }}>
+              <QuickTradeLog />
+            </div>
             <div style={{ order: -2 }}>
               <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
                 <ErrorBoundary name="Live Commentary"><TeleprinterFeed maxHeight={360} /></ErrorBoundary>
               </CollapsibleSection>
             </div>
+            <div style={{ order: -1.5 }}>
+              <ErrorBoundary name="Balance Zone Panel"><BalanceZonePanel /></ErrorBoundary>
+              <CollapsibleSection title="Session Forecast & First Hour Script" defaultOpen>
+                <ErrorBoundary name="Session Forecast"><SessionForecastPanel date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} /></ErrorBoundary>
+              </CollapsibleSection>
+            </div>
             <div style={{ order: -1 }}>
               <CollapsibleSection title="Live Read" defaultOpen>
                 <LiveReadBanner />
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start', padding: '0 4px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, alignItems: 'start', padding: '0 4px' }}>
                   <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
                   <ErrorBoundary name="Gap Context" compact><GapContextCard /></ErrorBoundary>
                 </div>
               </CollapsibleSection>
             </div>
             <div style={{ order: 0 }}>
+              <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
+                <ErrorBoundary name="Edge Sections" compact><EdgeSectionsPanel /></ErrorBoundary>
+              </CollapsibleSection>
+            </div>
+            <div style={{ order: 1 }}>
               <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
                 updateId="acd-dash-trade-plan" updateView="acd"
                 dataSignature={JSON.stringify({ todayData, nl, cardState })}>
@@ -21158,50 +21835,30 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         {tab === 'morning' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {(() => {
-              const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-              const dow = nowET.getDay();
-              const dowNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-              const monStats = todayData?.tradeBacktest?.allTime?.dowStats?.[1] || { winRate: 40.0, avgPnl: -339 };
-              const friStats = todayData?.tradeBacktest?.allTime?.dowStats?.[5] || { winRate: 36.4, avgPnl: 374 };
-              const pd = dow === 1 ? {
-                title: 'Monday Mean Reversion Protocol', alert: '⚠️ HIGH LOSS RISK DAY',
-                text: `Mondays represent a historical loss rate (${monStats.winRate.toFixed(1)}% WR, ${monStats.avgPnl < 0 ? '-' : ''}$${fmtP(Math.abs(monStats.avgPnl))} avg P&L on live accounts). Standard breakout plays have an extremely high failure rate. Focus strictly on fading early range extensions. Use 50% max sizing.`,
-                recs: ['FAILED_AUCTION_LONG/SHORT','VALUE_AREA_RESPONSIVE_LONG/SHORT','TRT_LONG/SHORT']
-              } : dow === 5 ? {
-                title: 'Friday Capital Preservation Protocol', alert: '⚠️ AFTERNOON SQUARING RISK',
-                text: `Fridays have a ${(100 - friStats.winRate).toFixed(1)}% red rate due to afternoon givebacks. Keep stops tight, lock in gains early. Shut screens by 12:30 PM ET.`,
-                recs: ['GAP_UP/DOWN_FILL','VALUE_AREA_RESPONSIVE_LONG']
-              } : (dow === 2 || dow === 4) ? {
-                title: `${dowNames[dow]} Trend Sweet Spot Playbook`, alert: '✅ MID-WEEK LIQUIDITY SWEET SPOT',
-                text: 'Elevated statistical probability of clean, sustained trends. Standard position sizes and risk parameters are fully authorized. Play standard breakout, trend-following, and key level touch setups.',
-                recs: ['IB_BULLISH/BEARISH','OPEN_DRIVE_LONG/SHORT','BRACKET_BREAKOUT_LONG/SHORT']
-              } : dow === 3 ? {
-                title: 'Wednesday Trend Continuation Playbook', alert: '✅ MORNING MOMENTUM RUNNERS',
-                text: 'Wednesdays show a strong tendency for morning momentum to continue into the PM session. Ride morning momentum and avoid counter-trend fading before 1:30 PM ET.',
-                recs: ['IB_BULLISH/BEARISH','OPEN_TEST_DRIVE_LONG/SHORT']
-              } : { title: 'Weekend', alert: '☕ MARKET CLOSED', text: 'Use this time to review your Morning Brief and complete the Pre-Market Walkthrough.', recs: [] };
-              const isWarn = pd.alert.includes('⚠️');
+              const etDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+              const dow = new Date(etDateStr + 'T12:00:00').getDay();
+              if (dow >= 1 && dow <= 5) return null;
               return (
                 <div style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.06) 0%, rgba(15,23,42,0.4) 100%)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8, padding: '14px 18px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: '#a78bfa', display: 'flex', alignItems: 'center', gap: 6 }}>🧠 {pd.title}</span>
-                    <span style={{ fontSize: 9, fontWeight: 800, background: isWarn ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)', color: isWarn ? '#f87171' : '#34d399', padding: '2px 8px', borderRadius: 4, letterSpacing: '0.03em' }}>{pd.alert}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 15, fontWeight: 800, color: '#a78bfa' }}>Weekend</span>
+                    <span style={{ fontSize: 9, fontWeight: 800, background: 'rgba(16,185,129,0.15)', color: '#34d399', padding: '2px 8px', borderRadius: 4 }}>MARKET CLOSED</span>
                   </div>
-                  <p style={{ margin: 0, fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>{pd.text}</p>
-                  {pd.recs.length > 0 && (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 10, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Focus Setups:</span>
-                      {pd.recs.map(r => <span key={r} style={{ fontSize: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', color: '#94a3b8', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>{r}</span>)}
-                    </div>
-                  )}
+                  <p style={{ margin: 0, fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
+                    Use this time to review your{' '}
+                    <span onClick={() => setTab('morning')} style={{ color: '#818cf8', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Morning Brief</span>
+                    {' '}and complete the{' '}
+                    <span onClick={() => setTab('walkthrough')} style={{ color: '#818cf8', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Pre-Market Walkthrough</span>.
+                  </p>
                 </div>
               );
             })()}
+            <ErrorBoundary name="Session Forecast"><SessionForecastPanel date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} /></ErrorBoundary>
+            <CollapsibleSection title="Live Edges & Confluence" defaultOpen>
+              <ErrorBoundary name="Edge Sections" compact><EdgeSectionsPanel /></ErrorBoundary>
+            </CollapsibleSection>
             <CollapsibleSection title="Auction Read" defaultOpen>
               <ErrorBoundary name="Auction Read Summary" compact><AuctionReadSummary nl={nl} todayData={todayData} defaultOpen /></ErrorBoundary>
-            </CollapsibleSection>
-            <CollapsibleSection title="AI Morning Brief" defaultOpen>
-              <ErrorBoundary name="Morning Brief" compact><MorningBriefPanel /></ErrorBoundary>
             </CollapsibleSection>
           </div>
         )}
@@ -21239,6 +21896,9 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         )}
         {tab === 'backtest' && (
           <>
+            <CollapsibleSection title="Backtested Edge Statistics" defaultOpen>
+              <BacktestedEdgeStatsCard />
+            </CollapsibleSection>
             <CollapsibleSection title="Backtest & Edge Registry" defaultOpen>
               <div style={{ padding: '8px 16px', fontFamily: 'Arial, sans-serif' }}>
                 <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginBottom: 16 }}>

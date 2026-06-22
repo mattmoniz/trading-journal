@@ -575,13 +575,39 @@ export async function generateWeeklyReport(weekEnd) {
   }
   const { start, end } = await getWeekRange(weekEnd);
 
-  const [pnlData, setupData, acdData, qualityData, giveBackData] = await Promise.all([
+  const [pnlData, setupData, acdData, qualityData, giveBackData, dynamicEdgesQ] = await Promise.all([
     getPnlSection(start, end),
     getSetupSection(start, end),
     getAcdSection(start, end),
     getTradeQualitySection(start, end),
     getGiveBackSection(start, end),
+    query(`SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
+           FROM dynamic_edges_mining
+           WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
+           ORDER BY status DESC, ABS(deviation) DESC`).catch(() => ({ rows: [] })),
   ]);
+
+  const dynamicBoosters = (dynamicEdgesQ?.rows || []).filter(e => e.status === 'POSITIVE_BOOSTER');
+  const dynamicDrags = (dynamicEdgesQ?.rows || []).filter(e => e.status === 'NEGATIVE_DRAG');
+
+  let dynamicEdgesLines = '  No statistically significant dynamic edges mined yet.';
+  if (dynamicBoosters.length > 0 || dynamicDrags.length > 0) {
+    const lines = [];
+    if (dynamicBoosters.length > 0) {
+      lines.push('  🚀 Active Boosters (Size Up / Confirm):');
+      for (const e of dynamicBoosters) {
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (+${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+      }
+    }
+    if (dynamicDrags.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push('  🛑 Active Drags (Size Down / Filter):');
+      for (const e of dynamicDrags) {
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+      }
+    }
+    dynamicEdgesLines = lines.join('\n');
+  }
 
   const flagsText = await buildFlags(pnlData, setupData, acdData, qualityData, giveBackData);
   const [interpretation, weeklyAssessment] = await Promise.all([
@@ -605,6 +631,10 @@ export async function generateWeeklyReport(weekEnd) {
     'SETUP STATISTICS',
     dash,
     setupData.text,
+    '',
+    'DYNAMIC MINED EDGES (Statistical shifts)',
+    dash,
+    dynamicEdgesLines,
     '',
     'ACD SIGNAL ACCURACY',
     dash,

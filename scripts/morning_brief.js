@@ -27,7 +27,7 @@ async function runMorningBrief(targetDate) {
   let evalAccounts = [];
   try { evalAccounts = await computeEvalProgress(); } catch (_) {}
 
-  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ, onQ, pwPdQ] = await Promise.all([
+  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ, onQ, pwPdQ, dynamicEdgesQ] = await Promise.all([
     // Today's ACD
     query(`SELECT trade_date::text, day_type, daily_score, or_high, or_low,
              a_up_fired, a_down_fired, a_up_level, a_down_level,
@@ -130,6 +130,12 @@ async function runMorningBrief(targetDate) {
                            AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 16) as pd_low_bar
       FROM price_bars WHERE symbol='NQ'
     `, [targetDate]),
+
+    // Active dynamic edges from mining
+    query(`SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
+           FROM dynamic_edges_mining
+           WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
+           ORDER BY status DESC, ABS(deviation) DESC`).catch(() => ({ rows: [] })),
   ]);
 
   // Structural levels via direct TPO query (same as phaseChangeDetector)
@@ -400,6 +406,51 @@ async function runMorningBrief(targetDate) {
     return lines.join('\n') || '  All accounts need better performance to reach target.';
   })();
 
+  const dynamicBoosters = (dynamicEdgesQ?.rows || []).filter(e => e.status === 'POSITIVE_BOOSTER');
+  const dynamicDrags = (dynamicEdgesQ?.rows || []).filter(e => e.status === 'NEGATIVE_DRAG');
+
+  let dynamicEdgesLines = '  No statistically significant dynamic edges mined yet.';
+  if (dynamicBoosters.length > 0 || dynamicDrags.length > 0) {
+    const lines = [];
+    if (dynamicBoosters.length > 0) {
+      lines.push('  🚀 Active Boosters (Size Up / Confirm):');
+      for (const e of dynamicBoosters) {
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (+${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+      }
+    }
+    if (dynamicDrags.length > 0) {
+      if (lines.length > 0) lines.push('');
+      lines.push('  🛑 Active Drags (Size Down / Filter):');
+      for (const e of dynamicDrags) {
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+      }
+    }
+    dynamicEdgesLines = lines.join('\n');
+  }
+
+  const balanceRegime = Math.abs(nl10) <= 6 ? 'BALANCE (Oscillating/Overlapping)' : 'IMBALANCE (Expansion/Trend)';
+  
+  let balanceTacticalPlaybook = '';
+  if (Math.abs(nl10) <= 6) {
+    balanceTacticalPlaybook = [
+      `  Balance Character: RANGING`,
+      `  Tactical Playbook: BALANCE FADE (Mean Reversion)`,
+      `    · Favour fading extremes. Do NOT chase breakouts.`,
+      `    · Look to sell near Composite VAH or Bracket High, buy near Composite VAL or Bracket Low.`,
+      `    · Target: Composite POC.`
+    ].join('\n');
+  } else {
+    const dir = nl10 > 0 ? 'BULL' : 'BEAR';
+    const action = nl10 > 0 ? 'Buy pullbacks to old boundaries / support levels' : 'Sell rallies to old boundaries / resistance levels';
+    balanceTacticalPlaybook = [
+      `  Balance Character: TRENDING (${dir} EXPANSION)`,
+      `  Tactical Playbook: DIRECTIONAL MOMENTUM (Trend Follow)`,
+      `    · Value is migrating. Do NOT fade the trend.`,
+      `    · Action: ${action}.`,
+      `    · Key Retest Level: ${nl10 > 0 ? 'Composite VAH / pd VAH' : 'Composite VAL / pd VAL'}.`
+    ].join('\n');
+  }
+
   const sep = '─'.repeat(60);
   const importStatusMark = importStatus === 'GREEN' ? '✓' : importStatus === 'AMBER' ? '⚠' : '✗';
   const gLineLines = gLine
@@ -421,9 +472,13 @@ async function runMorningBrief(targetDate) {
     'STRUCTURAL CONTEXT',
     `  State         : ${structState}`,
     `  NL30          : ${nl30} (${nl30Label})  |  NL10: ${nl10}`,
+    `  Regime        : ${balanceRegime}`,
     `  Confluence    : ${confluenceScore}/12`,
     `  Opening call  : ${openingCall}`,
     `  A signal      : ${aSignal}`,
+    '',
+    'BALANCE REGIME PLAYBOOK',
+    balanceTacticalPlaybook,
     '',
     "TODAY'S ACD LEVELS",
     `  OR            : ${orRange}`,
@@ -447,6 +502,20 @@ async function runMorningBrief(targetDate) {
     '',
     'ACTIVE SETUPS',
     setupLines,
+    '',
+    'DYNAMIC MINED EDGES (Statistical shifts)',
+    dynamicEdgesLines,
+    '',
+    'BEHAVIORAL LEVEL MAP & SESSIONS FORECAST',
+    (() => {
+      const p = (v) => v != null ? fmtPrice(v) : '—';
+      return [
+        `  POC Magnet (${p(pdPoc)}) : Expect fast approach (16 pts/bar), touch-and-go (1.3 bar dwell). Target only, no entry.`,
+        `  VAH Edge   (${p(pdVah)}) : Expect heavy retests (4.4 avg) & churn (4.8 bar dwell). Let it absorb before fade.`,
+        `  VAL Edge   (${p(pdVal)}) : Fast resolution (2.1 bar dwell, 2.3 retests). Support holds or breaks quickly.`,
+        `  Balance Excursions   : 83% return within 15 bars (65% in 5). Limit is ~29pt max excursion before snapback.`,
+      ].join('\n');
+    })(),
     '',
     'LEVEL CONFLUENCE WATCH',
     (() => {

@@ -109,14 +109,15 @@ function isLongSetup(setupType) {
 // so a real T1/stop touch is never preempted by a timer or OR-break invalidation.
 export async function resolveSetupsByPrice(io) {
   const active = await query(`
-    SELECT id, setup_type, trade_date, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level
-    FROM active_setups WHERE status='ACTIVE'
+    SELECT id, setup_type, trade_date, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status
+    FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
 
   let count = 0;
   for (const row of active.rows) {
     const long = isLongSetup(row.setup_type);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const statusMatch = row.status; // 'ACTIVE' or 'SHADOW'
 
     // Custom resolution for ABSORPTION_LONG: "did price move up meaningfully?"
     if (row.setup_type === 'ABSORPTION_LONG') {
@@ -128,16 +129,15 @@ export async function resolveSetupsByPrice(io) {
       if (!px) continue;
       const stopHit = px <= stop;
       const targetHit = t1 && px >= t1;
-      const movedUp = px > entry + 20; // 20pt+ move = meaningful
       if (stopHit) {
         const pnl = (stop - entry) * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$3`, [row.id, Math.round(pnl * 100) / 100, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
         count++;
       } else if (targetHit) {
         const pnl = (t1 - entry) * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100, px]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$4`, [row.id, Math.round(pnl * 100) / 100, px, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
         count++;
       }
       continue;
@@ -146,7 +146,7 @@ export async function resolveSetupsByPrice(io) {
     // Custom resolution for COIL_SURGE: "did price move toward VWAP?"
     if (row.setup_type.startsWith('COIL_SURGE')) {
       const stop = row.stop_level;
-      const t1 = row.t1_level; // VWAP at fire time
+      const t1 = row.t1_level;
       if (entry == null || stop == null || t1 == null) continue;
       const targetDist = Math.abs(t1 - entry);
       const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
@@ -157,46 +157,41 @@ export async function resolveSetupsByPrice(io) {
       const stopHit = long ? px <= stop : px >= stop;
       if (stopHit) {
         const pnl = (long ? (stop - entry) : (entry - stop)) * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$3`, [row.id, Math.round(pnl * 100) / 100, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
         count++;
       } else if (reverted) {
         const revertPts = Math.abs(px - entry);
         const pnl = revertPts * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='VWAP_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE'`, [row.id, Math.round(pnl * 100) / 100, px]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='VWAP_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$4`, [row.id, Math.round(pnl * 100) / 100, px, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
         count++;
       }
       continue;
     }
 
     // Custom resolution for EMA_SNAPBACK: "did price revert toward the FROZEN EMA?"
-    // t1_level = EMA value frozen at fire time. Do NOT recompute — EMA drifts toward price
-    // in trends, which would falsely trigger reversion without actual price movement.
     if (row.setup_type.startsWith('EMA_SNAPBACK')) {
       const stop = row.stop_level;
-      const frozenEMA = row.t1_level; // EMA at fire time — static benchmark
+      const frozenEMA = row.t1_level;
       if (entry == null || stop == null || frozenEMA == null) continue;
-
       const currentPxQ = await query(`SELECT close::float, high::float, low::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
       const px = currentPxQ.rows[0]?.close;
       if (!px) continue;
-
       const entryDistFromEMA = Math.abs(entry - frozenEMA);
       const currentDistFromEMA = Math.abs(px - frozenEMA);
       const reverted = currentDistFromEMA < entryDistFromEMA * 0.5;
       const stopHit = long ? currentPxQ.rows[0].low <= stop : currentPxQ.rows[0].high >= stop;
-
       if (stopHit) {
         const pnl = (long ? (stop - entry) : (entry - stop)) * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='STOP_HIT', resolution_method='PRICE_CLEAN', actual_pnl=$2, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$3`, [row.id, Math.round(pnl * 100) / 100, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'STOP_HIT' });
         count++;
       } else if (reverted) {
         const revertPts = Math.abs(px - entry);
         const pnl = revertPts * 5 - 5;
-        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='EMA_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status='ACTIVE' RETURNING *`, [row.id, Math.round(pnl * 100) / 100, px]);
-        if (io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution='TARGET_HIT', resolution_method='EMA_REVERT', actual_pnl=$2, price_at_resolution=$3, resolved_at=NOW(), updated_at=NOW() WHERE id=$1 AND status=$4`, [row.id, Math.round(pnl * 100) / 100, px, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution: 'TARGET_HIT' });
         count++;
       }
       continue;
@@ -247,9 +242,9 @@ export async function resolveSetupsByPrice(io) {
       UPDATE active_setups
       SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_outcome=$2,
           actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW()
-      WHERE id=$1 AND status='ACTIVE'
+      WHERE id=$1 AND status=$7
       RETURNING *
-    `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt]);
+    `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}
@@ -268,7 +263,7 @@ export async function expireStaleSetups(io) {
   const expired = await query(`
     UPDATE active_setups
     SET status = 'EXPIRED', resolution = 'TIME_EXPIRED', resolved_at = NOW(), updated_at = NOW()
-    WHERE status = 'ACTIVE'
+    WHERE status IN ('ACTIVE', 'SHADOW')
       AND expires_at IS NOT NULL
       AND expires_at < NOW()
     RETURNING *
@@ -3320,20 +3315,24 @@ export default function createACDRouter(io) {
         }
       }
 
+      // Day type classification for setup gating
+      const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
+      const dtClass = dtClassRow.rows[0]?.day_type || null;
+
       // ── BULLISH ABSORPTION detection (support held + RSI rising + price flat) ──
+      // Uses 2-min bars: 5-min was too coarse (16 fires/yr, 0 morning). 2-min
+      // fires ~83/yr with 32 morning detections on BALANCE days.
       let absorptionSetup = null;
       if (allRthBarsRow.rows.length >= 30) {
-        // Resample to 5min for RSI
-        const absFiveBk = {};
+        const absTwoBk = {};
         for (const b of allRthBarsRow.rows) {
-          const bk = Math.floor(b.et_min / 5) * 5;
-          if (!absFiveBk[bk]) absFiveBk[bk] = { high: b.high, low: b.low, close: b.close, open: b.open };
-          else { absFiveBk[bk].high = Math.max(absFiveBk[bk].high, b.high); absFiveBk[bk].low = Math.min(absFiveBk[bk].low, b.low); absFiveBk[bk].close = b.close; }
+          const bk = Math.floor(b.et_min / 2) * 2;
+          if (!absTwoBk[bk]) absTwoBk[bk] = { high: b.high, low: b.low, close: b.close, open: b.open };
+          else { absTwoBk[bk].high = Math.max(absTwoBk[bk].high, b.high); absTwoBk[bk].low = Math.min(absTwoBk[bk].low, b.low); absTwoBk[bk].close = b.close; }
         }
-        const absFb = Object.values(absFiveBk);
-        if (absFb.length >= 20) {
-          const absC = absFb.map(b => b.close), absH = absFb.map(b => b.high), absL = absFb.map(b => b.low);
-          // RSI(14) on 5min
+        const absFb = Object.values(absTwoBk);
+        if (absFb.length >= 25) {
+          const absC = absFb.map(b => b.close);
           const absRsi = new Array(absC.length).fill(null);
           let aag = 0, aal = 0;
           for (let i = 1; i <= 14; i++) { const d = absC[i] - absC[i-1]; aag += d > 0 ? d : 0; aal += d < 0 ? -d : 0; }
@@ -3344,7 +3343,7 @@ export default function createACDRouter(io) {
             absRsi[i] = aal === 0 ? 100 : 100 - 100 / (1 + aag / aal);
           }
 
-          const AW = 15; // window size
+          const AW = 20;
           const last = absC.length - 1;
           if (last >= AW + 5 && absRsi[last] != null && absRsi[last - AW] != null) {
             const wb = absFb.slice(last - AW, last + 1);
@@ -3355,17 +3354,16 @@ export default function createACDRouter(io) {
             const priceFlat = Math.abs(priceDrift) < wRange * 0.3;
             const lowCluster = wb.filter(b => Math.abs(b.low - wL) < 5).length;
 
-            const isBullAbsorption = lowCluster >= 4 && rsiDrift > 5 && priceFlat;
-            const dayTypeOk = dtClass === 'BALANCE'; // only BALANCE days (73.9% WR at 20bar)
+            const isBullAbsorption = lowCluster >= 4 && rsiDrift > 4 && priceFlat;
+            const dayTypeOk = dtClass === 'BALANCE';
 
             if (isBullAbsorption && dayTypeOk) {
-              // Check PD-1 VA proximity for highest conviction
               const nearPD1VA = pdVAL && Math.abs(currentPrice - pdVAL) <= 25;
               const nearPD1POC = pdPOC && Math.abs(currentPrice - pdPOC) <= 25;
               const atLevel = nearPD1VA || nearPD1POC;
 
-              const stopDist = 25; // calibrated: 25pt stop, 72% WR, $32/trade exp
-              const targetDist = 40; // runner profile: 50% WR, $31/trade exp
+              const stopDist = 25;
+              const targetDist = 40;
               absorptionSetup = {
                 type: 'ABSORPTION_LONG',
                 direction: 'LONG',
@@ -3373,7 +3371,7 @@ export default function createACDRouter(io) {
                 stop: +(currentPrice - stopDist).toFixed(0),
                 target: +(currentPrice + targetDist).toFixed(0),
                 targetLabel: '40pt Runner (calibrated)',
-                description: `Bullish absorption detected: ${lowCluster} bars clustering at support (${Math.round(wL)}), RSI rising +${rsiDrift.toFixed(0)} while price flat in ${Math.round(wRange)}pt range.\n\nEDGE: Bullish absorption has 71.4% WR at 5 bars (N=35, +18.4% vs baseline). On BALANCE days: 73.9% WR at 20 bars (+20.9%, N=23). Near PD-1 VA: 90.9% WR (N=11). Avg MFE at 20 bars: 90-125pt.\n\nEXECUTION: Price held at support with buyers absorbing selling pressure. RSI confirms hidden bullish momentum. Enter long, stop below support zone (${Math.round(currentPrice - stopDist)}), target ${pdVAH ? 'PD VAH (' + Math.round(pdVAH) + ')' : '2R'}. Hold 5-20 bars — this is a runner, not a scalp.${atLevel ? '\n\n✅ AT PD-1 VA LEVEL — highest conviction (90.9% WR).' : ''}${nearPD2VA ? '\n✅ PD-2 VA CONFLUENCE' : ''}`,
+                description: `Bullish absorption detected: ${lowCluster} 2-min bars clustering at support (${Math.round(wL)}), RSI rising +${rsiDrift.toFixed(0)} while price flat in ${Math.round(wRange)}pt range.\n\nEDGE: Bullish absorption has 71.4% WR at 5 bars (N=35, +18.4% vs baseline). On BALANCE days: 73.9% WR at 20 bars (+20.9%, N=23). Near PD-1 VA: 90.9% WR (N=11).\n\nEXECUTION: Price held at support with buyers absorbing selling pressure. RSI confirms hidden bullish momentum. Enter long, stop below support zone (${Math.round(currentPrice - stopDist)}), target ${pdVAH ? 'PD VAH (' + Math.round(pdVAH) + ')' : '2R'}.${atLevel ? '\n\n✅ AT PD-1 VA LEVEL — highest conviction (90.9% WR).' : ''}${nearPD2VA ? '\n✅ PD-2 VA CONFLUENCE' : ''}`,
                 history: { winRate: 0.714, occurrences: 35, avgPnl: null, t1HitRate: 0.714 },
               };
             }
@@ -3613,6 +3611,18 @@ export default function createACDRouter(io) {
         (pd2VAL && Math.abs(liveVwap - pd2VAL) <= 15)
       );
 
+      // Overnight structural reads — 2.5yr backtest: aligned=61% WR, counter=31% WR (N=977)
+      const arRow2 = await query(`SELECT overnight_inventory, open_vs_prior_value, prior_day_profile FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
+      const overnightInv = arRow2.rows[0]?.overnight_inventory;
+      const openVsValue = arRow2.rows[0]?.open_vs_prior_value;
+      const priorDayProfile = arRow2.rows[0]?.prior_day_profile;
+      const isOvernightAligned = (dir) =>
+        (dir === 'LONG' && (overnightInv === 'SHORT_TRAPPED' || openVsValue === 'ABOVE_VALUE')) ||
+        (dir === 'SHORT' && (overnightInv === 'LONG_TRAPPED' || openVsValue === 'BELOW_VALUE'));
+      const isOvernightCounter = (dir) =>
+        (dir === 'LONG' && (overnightInv === 'LONG_TRAPPED' || openVsValue === 'BELOW_VALUE')) ||
+        (dir === 'SHORT' && (overnightInv === 'SHORT_TRAPPED' || openVsValue === 'ABOVE_VALUE'));
+
       // Suppress counter-trend setups (40.2% directional WR = worse than baseline)
       const suppressIfCounter = (setup) => {
         if (!setup) return null;
@@ -3684,26 +3694,32 @@ export default function createACDRouter(io) {
         suppressIfCounter(emaSnapSetup),
         absorptionSetup, // already context-gated (BALANCE only)
         coilSurgeSetup, // already context-gated (TREND/NL30-aligned only)
-        trtMah,
         suppressIfPOCCounter(suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null))),
-        // TRT_SHORT: -10.1% edge overall, removed
-        gapFill,
-        suppressIfPOCCounter(suppressIfCounter(aUpStrong)), suppressIfPOCCounter(suppressIfCounter(aDownStrong)),
-        suppressIfPOCCounter(suppressIfCounter(suppressIfTightOR(otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null))),
-        gateIfNoPD2(otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null),
-        suppressIfPOCCounter(suppressIfCounter(aUpWeak)), suppressIfPOCCounter(suppressIfCounter(aDownWeak)),
-        // IB_BULLISH: -7.5% edge, removed
         ibSetup?.type === 'IB_BEARISH' ? suppressIfPOCCounter(suppressIfCounter(ibSetup)) : null,
         suppressIfPOCCounter(suppressIfCounter(openDrive)),
-        suppressIfPOCCounter(suppressIfCounter(cPairedLong)), suppressIfPOCCounter(suppressIfCounter(cPairedShort)),
-        suppressIfPOCCounter(suppressIfCounter(cReversalLong)), suppressIfPOCCounter(suppressIfCounter(cReversalShort)),
-        suppressIfPOCCounter(suppressIfCounter(failedAuction)),
-        suppressIfPOCCounter(suppressIfCounter(suppressIfTightOR(bracketBreakout))),
         valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfPOCCounter(suppressIfCounter(valueAreaResp)) : null,
-        // VALUE_AREA_RESPONSIVE_LONG: -5.0% edge, removed
         suppressIfDeathSequence(gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null)),
-        // C_STANDALONE_UP: -6.5% edge, removed (-14% on wide OR)
       ];
+      // Shadow setups: removed from active candidates but still tracked for
+      // forward-testing. They persist to active_setups with status='SHADOW',
+      // resolve against price like normal, and build WR data over time.
+      const shadowCandidates = [
+        trtMah, gapFill,
+        aUpStrong, aDownStrong, aUpWeak, aDownWeak,
+        otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null,
+        otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null,
+        ibSetup?.type === 'IB_BULLISH' ? ibSetup : null,
+        openDrive?.type === 'OPEN_DRIVE_LONG' ? null : openDrive, // OPEN_DRIVE_LONG is active
+        cPairedLong, cPairedShort, cReversalLong, cReversalShort,
+        failedAuction, bracketBreakout,
+        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_LONG' ? valueAreaResp : null,
+        cStandalone?.type === 'C_STANDALONE_UP' ? cStandalone : null,
+        trt?.type === 'TRT_SHORT' ? trt : null,
+      ].filter(Boolean);
+      // Priority selection: candidates array is ordered by priority.
+      // Take the first valid candidate, but check for directional conflicts
+      // against already-active setups and apply post-loss size reduction.
+      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       let active = null;
       for (const cand of candidates) {
         if (!cand) continue;
@@ -3716,13 +3732,267 @@ export default function createACDRouter(io) {
         active = cand;
         break;
       }
+
+      if (active) {
+        // Directional conflict check: suppress if opposite-direction setup is already active today
+        const activeToday = await query(`
+          SELECT setup_type, fired_at::text as fired_at FROM active_setups
+          WHERE trade_date=$1 AND status='ACTIVE'
+        `, [todayET]).catch(() => ({ rows: [] }));
+        const oppositeActive = activeToday.rows.find(s => inferDirection(s.setup_type) !== active.direction);
+        if (oppositeActive) {
+          console.log(`[setup-detection] CONFLICT: ${active.type} (${active.direction}) vs active ${oppositeActive.setup_type} (${inferDirection(oppositeActive.setup_type)}). Standing aside.`);
+          active = null;
+        }
+
+        // Build full trade brief: WHY NOW + PACE + SIZE
+        if (active) {
+          const lossesToday = await query(`
+            SELECT COUNT(*)::int as count FROM active_setups
+            WHERE trade_date=$1 AND (resolution='STOP_HIT' OR (status='RESOLVED' AND actual_pnl < 0))
+          `, [todayET]).catch(() => ({ rows: [{ count: 0 }] }));
+          const hasLossToday = (lossesToday.rows[0]?.count || 0) > 0;
+          let sizeMult = hasLossToday ? 0.5 : 1.0;
+
+          const aligned = isOvernightAligned(active.direction);
+          const counter = isOvernightCounter(active.direction);
+
+          // 20-day range quintile
+          const range20Q = await query(`
+            SELECT MAX(h) as hi, MIN(l) as lo FROM (
+              SELECT MAX(high)::float as h, MIN(low)::float as l
+              FROM price_bars_primary WHERE symbol='NQ'
+              AND ts::date BETWEEN ($1::date - 20) AND ($1::date - 1)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+              GROUP BY ts::date
+            ) x
+          `, [todayET]).catch(() => ({ rows: [] }));
+          const r20 = range20Q.rows[0];
+          let rangeQuintile = null;
+          if (r20?.hi && r20?.lo && currentPrice) {
+            const pct = (currentPrice - r20.lo) / (r20.hi - r20.lo);
+            rangeQuintile = pct >= 0.80 ? 'TOP' : pct >= 0.60 ? 'UPPER' : pct >= 0.40 ? 'MID' : pct >= 0.20 ? 'LOWER' : 'BOT';
+          }
+
+          // Day type for triple stack
+          const dayTypeForStack = dtMap[todayET]?.day_type || dtClass || null;
+          const dayTypeLabel = dayTypeForStack === 'TREND' ? 'TREND' : dayTypeForStack === 'BALANCE' ? 'BALANCE' : dayTypeForStack === 'TURBULENT' ? 'TURBULENT' : null;
+
+          // Triple stack conviction assessment
+          const alignLabel = aligned ? 'ALIGNED' : counter ? 'COUNTER' : 'NEUTRAL';
+          let tripleStack = null;
+          // Money combos (from backtest)
+          if (alignLabel === 'ALIGNED' && dayTypeLabel === 'TURBULENT') {
+            tripleStack = { conviction: 'MAXIMUM', wr: '83-100%', note: 'ALIGNED + TURBULENT is the strongest combo in the system. Every range quintile shows 83%+ WR. Full size with conviction.' };
+          } else if (rangeQuintile === 'MID' && alignLabel === 'ALIGNED' && dayTypeLabel === 'TREND') {
+            tripleStack = { conviction: 'VERY HIGH', wr: '88%', note: 'MID range + ALIGNED + TREND. Price has room, structure supports, trend confirms. 7 of 8 trades won.' };
+          } else if (rangeQuintile === 'MID' && alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
+            tripleStack = { conviction: 'HIGH', wr: '75%', note: 'MID range + ALIGNED + BALANCE. Sweet spot — balanced auction with structural support.' };
+          } else if (rangeQuintile === 'UPPER' && alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
+            tripleStack = { conviction: 'HIGH', wr: '69%', note: 'UPPER range + ALIGNED + BALANCE. Good room with structural backing.' };
+          }
+          // Death combos
+          else if (alignLabel === 'COUNTER' && dayTypeLabel === 'BALANCE' && (rangeQuintile === 'UPPER' || rangeQuintile === 'LOWER')) {
+            tripleStack = { conviction: 'AVOID', wr: '0%', note: `${rangeQuintile} + COUNTER + BALANCE = 0% WR (N=12-18). Do NOT take this trade. Every single one lost.` };
+          } else if (alignLabel === 'COUNTER' && dayTypeLabel === 'TREND') {
+            tripleStack = { conviction: 'AVOID', wr: '13-27%', note: 'COUNTER + TREND. Fighting momentum with structural headwind. Skip unless you see overwhelming absorption.' };
+          } else if (alignLabel === 'COUNTER' && dayTypeLabel === 'BALANCE') {
+            tripleStack = { conviction: 'LOW', wr: '25-34%', note: 'COUNTER + BALANCE. Structural headwind in a range day. Reduce size significantly or skip.' };
+          }
+          // Moderate combos
+          else if (alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
+            tripleStack = { conviction: 'MODERATE', wr: '51-55%', note: 'ALIGNED + BALANCE. Structure supports but no trend confirmation. Standard size, manage normally.' };
+          } else if (alignLabel === 'ALIGNED' && dayTypeLabel === 'TREND') {
+            tripleStack = { conviction: 'MODERATE', wr: '55%', note: 'ALIGNED + TREND. Good combo. Go with the trend, use structure as confirmation.' };
+          }
+
+          // Setup profiles with backtested stats (1yr, 6 surviving setups)
+          const PROFILES = {
+            'VALUE_AREA_RESPONSIVE_SHORT': {
+              style: 'sniper',
+              stats: 'WR: 18% | Avg Win: $457 | Avg Loss: $55 | R:R 5.7:1',
+              stop: 'Stop: ~19pt (tight). Cut IMMEDIATELY if price accepts above VAH — no second chances.',
+              target: 'Target: PD-1 POC or VAL (avg winner +107pt). Do NOT take profit at +20pt — avg winner is 5x your stop.',
+              pace: 'Quick rejection expected at PD-1 VAH. Price should stall and reverse within 3-5 bars. If it keeps making new highs after your entry, the fade is failing.',
+              hold: 'RUNNER profile. You will lose most of these (~82%) but winners are massive ($457 avg). The math works because R:R is 5.7:1. Let winners run to POC/VAL — that is where the edge lives.',
+              bestWR: 'TURB 90%, NL30 aligned 93%, after NONTREND 75%',
+              conviction: 'Almost always fires counter to overnight (fading VAH when price is above value). That is the point — you are fading. Trust the R:R, not the WR.',
+            },
+            'IB_BEARISH': {
+              style: 'grinder',
+              stats: 'WR: 47% | Avg Win: $202 | Avg Loss: $233 | R:R 0.87:1',
+              stop: 'Stop: ~133pt (wide). This is structural, not a scalp. The wide stop is necessary — IB breaks retest.',
+              target: 'Target: 1x IB extension below (avg winner +88pt). Take partial at IB Mid if offered.',
+              pace: 'Steady selling over 30-60 min. NOT a crash. Expect pullbacks to IB Low — hold through them. If price reclaims IB Low and holds above for 10+ bars, the break is failing.',
+              hold: 'GRINDER. Be patient. This trade needs time to work. When below value with trapped longs (88% WR, N=32), it grinds in your favor all session.',
+              bestWR: 'Below value 88% (N=32), TURB 81%, aligned 77% (N=13)',
+              conviction: 'HIGHEST conviction when aligned (77% WR). When counter: 25% WR — seriously consider skipping unless you see strong volume confirmation.',
+            },
+            'OPEN_DRIVE_SHORT': {
+              style: 'scalp',
+              stats: 'WR: 53% | Avg Win: $112 | Avg Loss: $120 | R:R 0.93:1',
+              stop: 'Stop: ~51pt. Wider than it looks — the opening drive creates a range you are fading.',
+              target: 'Target: OR Low (avg winner +55pt). Take it when offered — this is not a runner.',
+              pace: 'FAST. You know within 15 bars if this works. If no selling follow-through by 10:00 AM, exit. Do not hold past IB close.',
+              hold: 'Morning trade only. If it is working by 10:00, hold to target. If price is churning sideways, the drive is absorbing and you should cut.',
+              bestWR: 'WED 86%, TURB 88%, aligned 71% (N=7)',
+              conviction: 'When aligned: 71% WR — hold with confidence. On Wednesday + TURBULENT, this is one of your best setups.',
+            },
+            'OPEN_DRIVE_LONG': {
+              style: 'scalp',
+              stats: 'WR: 54% | Avg Win: $134 | Avg Loss: $152 | R:R 0.88:1',
+              stop: 'Stop: ~59pt. Entry is on pullback to OR High — stop below OR Low.',
+              target: 'Target: OR measured move up (avg winner +62pt). Similar to drive short — take profits, do not overstay.',
+              pace: 'FAST. Entry on first touch of OR High after pullback. If it bounces, ride. If it slices through OR High, cut immediately.',
+              hold: 'Know within 15 bars. Monday is actually strong for this setup (+19% vs other days). TREND days = 83% WR.',
+              bestWR: 'TREND 83%, tight OR 78%, Monday +19%',
+              conviction: 'Overnight alignment does not significantly change WR here. Use day type — TREND is key.',
+            },
+            'TRT_LONG': {
+              style: 'grinder',
+              stats: 'WR: 56% | Avg Win: $111 | Avg Loss: ~$0 (expired) | R:R high',
+              stop: 'Stop: ~117pt (very wide). This is a reversal — trapped shorts are unwinding. You need room for the rotation.',
+              target: 'Target: opposite side of OR (avg winner +55pt at $5/pt). Do not take profit early — the edge is at 20 bars, NOT 10.',
+              pace: 'SLOW. This takes 1-2 hours to play out. A+C failed and price pushes through OR — the reversal grinds, it does not spike. Be patient.',
+              hold: 'DO NOT CUT EARLY. 120 min expiry. If you exit at +10pt, you leave 75% of the edge on the table. The whole point of this setup is that it takes time to resolve.',
+              bestWR: 'BALANCE 83%, TUE 83%',
+              conviction: 'Small sample on overnight alignment. Rely on day type — BALANCE days are your sweet spot. Suppressed on wide OR.',
+            },
+            'C_STANDALONE_DOWN': {
+              style: 'sniper',
+              stats: 'WR: 63% | Avg Win: $264 | Avg Loss: ~$0 (expired) | R:R high',
+              stop: 'Stop: ~90pt. Only fires near PD-2 VA (gated). Death sequence gate also active — no cascading after a loss.',
+              target: 'Target: 1x OR extension below OR Low (avg winner +93pt). Let it run — trapped longs create a selling cascade.',
+              pace: 'Fast initial move after C signal confirms. Once price breaks below OR Low near PD-2 VA, trapped longs accelerate the sell-off. Reassess at 1x OR extension.',
+              hold: 'If the PD-2 VA gate is met, this is high conviction (63% WR). Let it run. Do not take quick profit — the cascade is the edge.',
+              bestWR: 'TURB 72%, NONTREND prior 75% (N=8)',
+              conviction: 'When counter: 25% WR — consider skipping. When PD-2 VA gate is met + NONTREND prior day: 75% WR. That is your highest conviction C trade.',
+            },
+          };
+          const prof = PROFILES[active.type] || { style: 'standard', pace: 'Monitor price action at entry zone.', bestWR: '', holdNote: '' };
+
+          // Build WHY NOW section
+          const whyParts = [];
+          if (overnightInv === 'SHORT_TRAPPED' && active.direction === 'SHORT')
+            whyParts.push('Short trapped inventory means sellers from overnight are under pressure — forced buying could push against you initially, but structural imbalance favors downside resolution');
+          else if (overnightInv === 'LONG_TRAPPED' && active.direction === 'SHORT')
+            whyParts.push('Long trapped inventory — overnight longs need to exit. Selling pressure builds as trapped participants capitulate');
+          else if (overnightInv === 'SHORT_TRAPPED' && active.direction === 'LONG')
+            whyParts.push('Short trapped inventory — overnight shorts are squeezed. Covering creates buying fuel for upside continuation');
+          else if (overnightInv === 'LONG_TRAPPED' && active.direction === 'LONG')
+            whyParts.push('Long trapped inventory is structural headwind — overnight longs may sell into your rally');
+
+          if (openVsValue === 'BELOW_VALUE' && active.direction === 'SHORT')
+            whyParts.push('Open below prior value area confirms institutional selling. Price rejected from value — downside continuation likely');
+          else if (openVsValue === 'ABOVE_VALUE' && active.direction === 'LONG')
+            whyParts.push('Open above prior value area confirms institutional buying. Value migrating higher — upside continuation likely');
+          else if (openVsValue === 'ABOVE_VALUE' && active.direction === 'SHORT')
+            whyParts.push('Open above value — you are fading into strength. Structural headwind');
+          else if (openVsValue === 'BELOW_VALUE' && active.direction === 'LONG')
+            whyParts.push('Open below value — you are buying into weakness. Structural headwind');
+          else if (openVsValue === 'INSIDE_VALUE')
+            whyParts.push('Open inside value — balanced, no strong structural tilt. Context-dependent');
+
+          if (priorDayProfile === 'NONTREND')
+            whyParts.push('Prior day was NONTREND (extreme balance). Today resolves — first sustained directional move has 61% WR (N=23). This is a high-conviction break');
+          else if (priorDayProfile === 'TREND')
+            whyParts.push('Prior day was a TREND day. Continuation bias — look for pullback entries, not fade entries');
+          else if (priorDayProfile === 'NEUTRAL')
+            whyParts.push('Prior day was NEUTRAL — unfinished business at yesterday\'s extremes. Expect test of prior range boundary before direction resolves');
+
+          // Nearby confluence levels
+          const confParts = [];
+          if (active.entry && pd2VAH && Math.abs(active.entry - pd2VAH) <= 25) confParts.push(`PD-2 VAH (${Math.round(pd2VAH)}) — strongest confluence +44.8%`);
+          if (active.entry && pd2VAL && Math.abs(active.entry - pd2VAL) <= 25) confParts.push(`PD-2 VAL (${Math.round(pd2VAL)}) — +20.5% controlled edge`);
+          if (active.entry && pdVAH && Math.abs(active.entry - pdVAH) <= 25) confParts.push(`PD-1 VAH (${Math.round(pdVAH)}) — +9.6% controlled edge`);
+          if (active.entry && pdVAL && Math.abs(active.entry - pdVAL) <= 25) confParts.push(`PD-1 VAL (${Math.round(pdVAL)}) — support level`);
+          if (active.entry && pdPOC && Math.abs(active.entry - pdPOC) <= 25) confParts.push(`PD-1 POC (${Math.round(pdPOC)}) — price magnet +9.0%`);
+
+          // Rolling momentum: last 10 resolved trades for this setup
+          const momentumQ = await query(`
+            SELECT resolution, actual_pnl::float as pnl, trade_date::text as d
+            FROM active_setups WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT')
+            ORDER BY trade_date DESC, fired_at DESC LIMIT 10
+          `, [active.type]).catch(() => ({ rows: [] }));
+          let momentumLine = null;
+          if (momentumQ.rows.length >= 3) {
+            const recent = momentumQ.rows;
+            const recentW = recent.filter(r => r.resolution === 'TARGET_HIT').length;
+            const recentWR = (recentW / recent.length * 100).toFixed(0);
+            const allTimeWR = prof.stats?.match(/WR:\s*(\d+)%/)?.[1] || '—';
+            // Streak
+            let streak = 0, streakType = recent[0]?.resolution === 'TARGET_HIT' ? 'win' : 'loss';
+            for (const r of recent) { if ((r.resolution === 'TARGET_HIT') === (streakType === 'win')) streak++; else break; }
+            const lastWin = recent.find(r => r.resolution === 'TARGET_HIT');
+            const lastLoss = recent.find(r => r.resolution === 'STOP_HIT');
+            const streakIcon = streakType === 'win' && streak >= 3 ? '🔥' : streakType === 'loss' && streak >= 3 ? '❄️' : streak >= 2 ? (streakType === 'win' ? '📈' : '📉') : '—';
+            const momentum = parseInt(recentWR) > parseInt(allTimeWR) + 10 ? 'HOT' : parseInt(recentWR) < parseInt(allTimeWR) - 10 ? 'COOLING' : 'NORMAL';
+            momentumLine = `${streakIcon} ${streak}-${streakType} streak | Last ${recent.length}: ${recentW}W/${recent.length - recentW}L (${recentWR}%) vs ${allTimeWR}% all-time`;
+            if (lastWin) momentumLine += ` | Last win: ${lastWin.d} $${Math.round(lastWin.pnl)}`;
+            if (lastLoss) momentumLine += ` | Last loss: ${lastLoss.d} $${Math.round(lastLoss.pnl)}`;
+            if (momentum === 'COOLING') momentumLine += ' — consider reduced size or skip';
+          }
+
+          // Assemble trade brief
+          const brief = [];
+
+          if (momentumLine) brief.push(`**MOMENTUM:** ${momentumLine}`);
+
+          if (aligned || counter || whyParts.length > 0) {
+            brief.push(`**WHY NOW:** ${whyParts.join('. ') || 'No strong overnight directional tilt.'}`);
+          }
+          if (confParts.length > 0) {
+            brief.push(`**CONFLUENCE:** ${confParts.join(' | ')}`);
+          }
+          brief.push(`**STATS:** ${prof.stats || ''}`);
+          brief.push(`**STOP:** ${prof.stop || ''}`);
+          brief.push(`**TARGET:** ${prof.target || ''}`);
+          brief.push(`**PACE:** ${prof.pace}`);
+          brief.push(`**HOLD:** ${prof.hold || prof.holdNote || ''} Best conditions: ${prof.bestWR || 'standard'}.`);
+          brief.push(`**CONVICTION:** ${prof.conviction || 'Standard context.'}`);
+
+          // Triple stack assessment
+          if (tripleStack) {
+            const tsColor = tripleStack.conviction === 'MAXIMUM' || tripleStack.conviction === 'VERY HIGH' ? '🔥' : tripleStack.conviction === 'HIGH' ? '✅' : tripleStack.conviction === 'AVOID' ? '🚫' : tripleStack.conviction === 'LOW' ? '⚠️' : '';
+            brief.push(`**TRIPLE STACK:** ${tsColor} ${tripleStack.conviction} conviction (${tripleStack.wr} WR). ${tripleStack.note}`);
+          }
+          if (rangeQuintile) {
+            brief.push(`**RANGE POSITION:** Price is in the ${rangeQuintile} quintile of the 20-day range (${Math.round(r20.lo)}–${Math.round(r20.hi)}). ${
+              rangeQuintile === 'BOT' ? 'Bottom of range — strong mean-reversion zone (71% up, +170pt avg). Bounce setups high conviction.' :
+              rangeQuintile === 'LOWER' ? 'Lower range — danger zone for longs (44% up). Downtrends accelerate here.' :
+              rangeQuintile === 'MID' ? 'Middle of range — balanced. Setups work best here (51% WR).' :
+              rangeQuintile === 'UPPER' ? 'Upper range — slight upward bias continues.' :
+              'Top of range — strength tends to continue but large reversals start here. Watch for exhaustion.'
+            }`);
+          }
+
+          // Size section — overnight is advisory, only post-loss is mechanical
+          if (hasLossToday) {
+            brief.push(`**SIZE:** 0.5x (post-loss protection). Overnight context is ${aligned ? 'supportive — consider standard size if read is strong' : counter ? 'opposing — stay small' : 'neutral'}.`);
+          } else if (aligned) {
+            brief.push(`**SIZE:** Standard or size up. Overnight structure supports this direction (61% WR when aligned, N=126). Your call based on what you see at the level.`);
+          } else if (counter) {
+            brief.push(`**SIZE:** Overnight structure opposes this direction (31% WR when counter, N=145). Consider reduced size — but big winners can come from counter setups. Use your read.`);
+          } else {
+            brief.push(`**SIZE:** Standard. No strong overnight directional tilt.`);
+          }
+
+          if (hasLossToday) brief.unshift(`⚠️ **A prior setup failed today — size reduced 50% (Death Sequence protection).**`);
+
+          active.sizeMultiplier = sizeMult;
+          active.tradeBrief = brief.join('\n\n');
+          active.overnightAlignment = aligned ? 'ALIGNED' : counter ? 'COUNTER' : 'NEUTRAL';
+          active.paceProfile = prof.style;
+          active.description = brief.join('\n\n') + (active.description ? '\n\n---\n\n' + active.description : '');
+        }
+      }
+
       if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
       // price_bars.ts stores ET times as TIMESTAMP WITHOUT TIME ZONE — pg returns them
       // as JS Dates where UTC fields equal the ET hours/minutes.
-      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const latestBarTs = latestBarRow.rows[0]?.ts; // ET time stored as UTC by pg driver
       const firedAtTs = latestBarTs
         ? latestBarTs.toISOString().replace('T', ' ').slice(0, 19)
@@ -3865,6 +4135,30 @@ export default function createACDRouter(io) {
            return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(d), 10);
          } catch { return null; }
        })();
+      // Persist shadow setups (fire-and-forget, don't block response)
+      if (shadowCandidates.length > 0) {
+        (async () => {
+          for (const shadow of shadowCandidates) {
+            if (!shadow || shadow.type === active?.type) continue;
+            const isLongS = shadow.direction === 'LONG';
+            const riskOk = shadow.stop == null || (isLongS ? shadow.stop < shadow.entry : shadow.stop > shadow.entry);
+            if (!riskOk) continue;
+            let sT1 = shadow.target;
+            if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
+            await query(`
+              INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
+                entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
+                status)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW')
+              ON CONFLICT DO NOTHING
+            `, [
+              todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
+              shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
+            ]).catch(() => {});
+          }
+        })();
+      }
+
       res.json({
         setup: {
           ...active,
@@ -3873,6 +4167,7 @@ export default function createACDRouter(io) {
           target: persistedLevels.target,
           targetLabel: persistedLevels.targetLabel,
           detectedAt, minsRemaining, isExpired, setupId, firedEtHour,
+          sizeMultiplier: active.sizeMultiplier ?? 1.0,
         },
         noNewEntries: !!noNewEntries,
       });
@@ -4178,6 +4473,137 @@ export default function createACDRouter(io) {
         } : null,
         setupStats,
       });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Trade Feedback API ──────────────────────────────────────────────────
+  const FEEDBACK_TAGS = [
+    'absorption', 'level_confluence', 'momentum', 'volume', 'gut_read',
+    'no_confluence', 'momentum_wrong', 'too_extended', 'after_loss', 'choppy',
+  ];
+
+  router.post('/acd/feedback', async (req, res) => {
+    try {
+      const { setupId, setupType, action, direction, tags, note, entryPrice, contracts } = req.body;
+      if (!setupType || !action) return res.status(400).json({ error: 'setupType and action required' });
+      if (!['TAKEN', 'PASSED'].includes(action)) return res.status(400).json({ error: 'action must be TAKEN or PASSED' });
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const r = await query(`
+        INSERT INTO trade_feedback (trade_date, setup_id, setup_type, action, direction, tags, note, entry_price, contracts)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (trade_date, setup_type, setup_id) DO UPDATE SET
+          action=EXCLUDED.action, tags=EXCLUDED.tags, note=EXCLUDED.note,
+          entry_price=EXCLUDED.entry_price, contracts=EXCLUDED.contracts
+        RETURNING *
+      `, [todayET, setupId || null, setupType, action, direction || null,
+          tags || [], note || null, entryPrice || null, contracts || 1]);
+      res.json({ feedback: r.rows[0] });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.patch('/acd/feedback/:id/close', async (req, res) => {
+    try {
+      const { exitPrice, pnl, note } = req.body;
+      const r = await query(`
+        UPDATE trade_feedback SET exit_price=$2, pnl=$3, note=COALESCE($4, note), closed_at=NOW()
+        WHERE id=$1 RETURNING *
+      `, [req.params.id, exitPrice || null, pnl || null, note || null]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      res.json({ feedback: r.rows[0] });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete('/acd/feedback/:id', async (req, res) => {
+    try {
+      const r = await query(`DELETE FROM trade_feedback WHERE id=$1 RETURNING id`, [req.params.id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      res.json({ deleted: r.rows[0].id });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/acd/feedback', async (req, res) => {
+    try {
+      const days = parseInt(req.query.days) || 30;
+      const r = await query(`
+        SELECT f.*, s.resolution as system_resolution, s.actual_pnl as system_pnl
+        FROM trade_feedback f
+        LEFT JOIN active_setups s ON s.id = f.setup_id
+        WHERE f.trade_date >= CURRENT_DATE - $1::int
+        ORDER BY f.trade_date DESC, f.created_at DESC
+      `, [days]);
+      res.json({ feedback: r.rows, tags: FEEDBACK_TAGS });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/acd/feedback/calibration', async (req, res) => {
+    try {
+      const days = parseInt(req.query.days) || 90;
+
+      // User WR by setup (trades they TOOK)
+      const userWR = await query(`
+        SELECT f.setup_type,
+          COUNT(*) FILTER (WHERE f.pnl > 0)::int as user_wins,
+          COUNT(*) FILTER (WHERE f.pnl IS NOT NULL)::int as user_decided,
+          ROUND(AVG(f.pnl) FILTER (WHERE f.pnl IS NOT NULL)::numeric, 2) as user_avg_pnl
+        FROM trade_feedback f
+        WHERE f.action='TAKEN' AND f.trade_date >= CURRENT_DATE - $1::int
+        GROUP BY f.setup_type
+      `, [days]);
+
+      // System WR by setup (all resolved setups, same period)
+      const systemWR = await query(`
+        SELECT setup_type,
+          COUNT(*) FILTER (WHERE resolution='TARGET_HIT')::int as sys_wins,
+          COUNT(*) FILTER (WHERE resolution IN ('TARGET_HIT','STOP_HIT'))::int as sys_decided,
+          ROUND(AVG(actual_pnl) FILTER (WHERE resolution IN ('TARGET_HIT','STOP_HIT'))::numeric, 2) as sys_avg_pnl
+        FROM active_setups
+        WHERE status='RESOLVED' AND trade_date >= CURRENT_DATE - $1::int
+        GROUP BY setup_type
+      `, [days]);
+
+      // User skip accuracy (trades they PASSED — what was the system outcome?)
+      const skipWR = await query(`
+        SELECT f.setup_type,
+          COUNT(*) FILTER (WHERE s.resolution='TARGET_HIT')::int as skip_wins,
+          COUNT(*) FILTER (WHERE s.resolution IN ('TARGET_HIT','STOP_HIT'))::int as skip_decided
+        FROM trade_feedback f
+        JOIN active_setups s ON s.id = f.setup_id
+        WHERE f.action='PASSED' AND f.trade_date >= CURRENT_DATE - $1::int
+          AND s.resolution IN ('TARGET_HIT','STOP_HIT')
+        GROUP BY f.setup_type
+      `, [days]);
+
+      // Tag-level WR (which tags correlate with wins?)
+      const tagWR = await query(`
+        SELECT unnest(f.tags) as tag,
+          COUNT(*) FILTER (WHERE f.pnl > 0)::int as wins,
+          COUNT(*) FILTER (WHERE f.pnl IS NOT NULL)::int as decided,
+          ROUND(AVG(f.pnl) FILTER (WHERE f.pnl IS NOT NULL)::numeric, 2) as avg_pnl
+        FROM trade_feedback f
+        WHERE f.action='TAKEN' AND f.trade_date >= CURRENT_DATE - $1::int
+        GROUP BY unnest(f.tags)
+        HAVING COUNT(*) FILTER (WHERE f.pnl IS NOT NULL) >= 3
+      `, [days]);
+
+      const sysMap = {}; for (const r of systemWR.rows) sysMap[r.setup_type] = r;
+      const skipMap = {}; for (const r of skipWR.rows) skipMap[r.setup_type] = r;
+
+      const calibration = userWR.rows.map(u => {
+        const s = sysMap[u.setup_type] || {};
+        const sk = skipMap[u.setup_type] || {};
+        const userWr = u.user_decided > 0 ? u.user_wins / u.user_decided : null;
+        const sysWr = s.sys_decided > 0 ? s.sys_wins / s.sys_decided : null;
+        const skipWr = sk.skip_decided > 0 ? sk.skip_wins / sk.skip_decided : null;
+        return {
+          setupType: u.setup_type,
+          userWR: userWr, userN: u.user_decided, userAvgPnl: u.user_avg_pnl,
+          systemWR: sysWr, systemN: s.sys_decided || 0, systemAvgPnl: s.sys_avg_pnl,
+          wrDelta: userWr != null && sysWr != null ? userWr - sysWr : null,
+          skipWR: skipWr, skipN: sk.skip_decided || 0,
+        };
+      });
+
+      res.json({ calibration, tagEdges: tagWR.rows, days, tags: FEEDBACK_TAGS });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

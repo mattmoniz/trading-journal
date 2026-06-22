@@ -1,7 +1,18 @@
 import express from 'express';
 import { query } from '../db.js';
+import { getSessionForecast } from '../services/sessionForecastService.js';
 
 const router = express.Router();
+
+router.get('/forecast/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const forecast = await getSessionForecast(date);
+    res.json(forecast);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/dates', async (req, res) => {
   try {

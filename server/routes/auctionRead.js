@@ -406,6 +406,19 @@ router.get('/auction-read/auto', async (req, res) => {
     // Latest price for pre-market display
     const latestClose = latestBar.rows[0]?.close || null;
 
+    // Auto-persist reads so they accumulate for backtesting
+    if (overnight_inventory || open_vs_prior_value || prior_day_profile) {
+      query(`
+        INSERT INTO auction_reads (trade_date, overnight_inventory, open_vs_prior_value, prior_day_profile)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (trade_date) DO UPDATE SET
+          overnight_inventory = COALESCE(auction_reads.overnight_inventory, EXCLUDED.overnight_inventory),
+          open_vs_prior_value = COALESCE(auction_reads.open_vs_prior_value, EXCLUDED.open_vs_prior_value),
+          prior_day_profile = COALESCE(auction_reads.prior_day_profile, EXCLUDED.prior_day_profile),
+          updated_at = NOW()
+      `, [todayET, overnight_inventory, open_vs_prior_value, prior_day_profile]).catch(() => {});
+    }
+
     res.json({
       open_vs_prior_value, overnight_inventory, or_condition, prior_day_profile,
       prior_day_vah: vah || null, prior_day_val: val || null, prior_day_poc: poc || null,

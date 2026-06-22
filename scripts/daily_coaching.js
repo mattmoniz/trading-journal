@@ -316,6 +316,19 @@ async function buildCoachingContext(targetDate) {
   const annotatedFillIds = new Set(annotationsQ.rows.flatMap(a => a.trade_ids));
   const unannotatedFills = trades.filter(t => !annotatedFillIds.has(t.id));
 
+  // ── Trade feedback logs (from Quick Trade Log) ──────────────────────────────
+  const feedbackQ = await query(`
+    SELECT setup_type, action, direction, tags, pnl::float, note, contracts
+    FROM trade_feedback WHERE trade_date = $1 ORDER BY created_at
+  `, [targetDate]).catch(() => ({ rows: [] }));
+  const feedbackSummary = feedbackQ.rows.length === 0
+    ? null
+    : feedbackQ.rows.map((f, i) => {
+        const pnlStr = f.pnl != null ? `P&L: $${f.pnl}` : 'open';
+        const tagStr = (f.tags || []).length ? `tags: ${f.tags.join(', ')}` : '';
+        return `  [Feedback ${i + 1}] ${f.action} ${f.setup_type} ${f.direction || ''} ${f.contracts || 1}ct — ${pnlStr} ${tagStr}${f.note ? ` — "${f.note}"` : ''}`;
+      }).join('\n');
+
   const annotationsSummary = annotationsQ.rows.length === 0
     ? 'None — trader added no notes for this session.'
     : annotationsQ.rows.map((a, i) => {
@@ -374,6 +387,7 @@ async function buildCoachingContext(targetDate) {
     // Annotation context
     annotationsSummary, unannotatedSummary, annotatedCount: annotationsQ.rows.length,
     unannotatedCount: unannotatedFills.length,
+    feedbackSummary,
     rawContext: { acd, ar, dpl, setups, nl30 },
   };
 }
@@ -451,7 +465,10 @@ Largest profit seen on a losing trade: ${ctx.largestMissed > 0 ? '+$' + ctx.larg
 `}TRADER ANNOTATIONS (${ctx.annotatedCount} of ${ctx.totalTrades} fills annotated):
 ${ctx.annotationsSummary}
 
-${ctx.unannotatedCount > 0 ? `UNANNOTATED FILLS:\n${ctx.unannotatedSummary}\n\n` : ''}${ctx.multipleAccounts ? 'IMPORTANT: Multiple accounts traded today. Address each account separately.\n\n' : ''}Respond in exactly this format:
+${ctx.feedbackSummary ? `TRADE FEEDBACK LOG (from Quick Trade Log — trader's real-time decisions and notes):
+${ctx.feedbackSummary}
+
+` : ''}${ctx.unannotatedCount > 0 ? `UNANNOTATED FILLS:\n${ctx.unannotatedSummary}\n\n` : ''}${ctx.multipleAccounts ? 'IMPORTANT: Multiple accounts traded today. Address each account separately.\n\n' : ''}Respond in exactly this format:
 
 WHAT HAPPENED:
 [2–3 sentences on today's price action, ACD context, and signal outcome. Reference the OR range, signal, and session close.]
