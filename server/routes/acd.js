@@ -3623,10 +3623,12 @@ export default function createACDRouter(io) {
         (dir === 'LONG' && (overnightInv === 'LONG_TRAPPED' || openVsValue === 'BELOW_VALUE')) ||
         (dir === 'SHORT' && (overnightInv === 'SHORT_TRAPPED' || openVsValue === 'ABOVE_VALUE'));
 
-      // Suppress counter-trend setups (40.2% directional WR = worse than baseline)
+      // Suppress only on DOUBLE headwind: NL30 counter AND overnight counter (20% WR).
+      // NL30 counter alone = 33% WR but IB_BEARISH is 52% and TURBULENT days are 67%.
+      // Let the triple-stack conviction system handle sizing, not blanket suppression.
       const suppressIfCounter = (setup) => {
         if (!setup) return null;
-        if (isNL30Counter(setup.direction)) return null;
+        if (isNL30Counter(setup.direction) && isOvernightCounter(setup.direction)) return null;
         return setup;
       };
 
