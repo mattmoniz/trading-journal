@@ -4656,5 +4656,40 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // ── Monte Carlo API ─────────────────────────────────────────────────
+  router.post('/acd/monte-carlo/run', async (req, res) => {
+    try {
+      const { runMonteCarlo } = await import('../services/monteCarloService.js');
+      const result = await runMonteCarlo(req.body || {});
+      if (result.error) return res.status(400).json(result);
+      const saved = await query(`INSERT INTO monte_carlo_runs (name, config, results, summary) VALUES ($1, $2, $3, $4) RETURNING id`,
+        [req.body.name || `Run ${new Date().toISOString().slice(0,16)}`, JSON.stringify(result.config), JSON.stringify({ equityDistribution: result.equityDistribution, drawdownDistribution: result.drawdownDistribution, sampleCurves: result.sampleCurves }), JSON.stringify(result.summary)]);
+      res.json({ id: saved.rows[0].id, summary: result.summary });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.post('/acd/monte-carlo/optimize', async (req, res) => {
+    try {
+      const { runOptimizer } = await import('../services/monteCarloService.js');
+      const result = await runOptimizer(req.body || {});
+      res.json(result);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/acd/monte-carlo/runs', async (req, res) => {
+    try {
+      const r = await query(`SELECT id, name, run_date, summary, notes FROM monte_carlo_runs ORDER BY run_date DESC LIMIT 20`);
+      res.json({ runs: r.rows });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.get('/acd/monte-carlo/runs/:id', async (req, res) => {
+    try {
+      const r = await query(`SELECT * FROM monte_carlo_runs WHERE id=$1`, [req.params.id]);
+      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+      res.json(r.rows[0]);
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
   return router;
 }
