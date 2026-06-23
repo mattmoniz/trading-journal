@@ -1224,4 +1224,134 @@ router.get('/antigravity/news', async (req, res) => {
   }
 });
 
+// ─── LIVE EXHAUSTION DETECTOR ────────────────────────────────────────
+router.get('/antigravity/exhaustion', async (req, res) => {
+  try {
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const etMin = nowET.getHours() * 60 + nowET.getMinutes();
+    const timestamp = `${String(nowET.getHours()).padStart(2,'0')}:${String(nowET.getMinutes()).padStart(2,'0')}:${String(nowET.getSeconds()).padStart(2,'0')}`;
+
+    // Get last 15 bars
+    const barsQ = await query(`
+      SELECT ts, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+        open::float, high::float, low::float, close::float, volume::bigint as vol
+      FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 15
+    `);
+    const bars = barsQ.rows.reverse();
+    if (bars.length < 10) return res.json({ signals: [], timestamp });
+
+    const currentPrice = bars[bars.length - 1].close;
+
+    // Get levels to check
+    const dvlQ = await query(`SELECT vah::float, val::float, poc::float FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
+    const pd1 = dvlQ.rows[0] || {};
+
+    const acdQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
+    const acd = acdQ.rows[0] || {};
+    const orMid = acd.or_high && acd.or_low ? (acd.or_high + acd.or_low) / 2 : null;
+
+    const fpQ = await query(`SELECT MAX(high)::float as h, MIN(low)::float as l, (array_agg(close ORDER BY ts DESC))[1]::float as c FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]);
+    const fp = fpQ.rows[0];
+    let floorPP = null, floorS1 = null, floorR1 = null;
+    if (fp?.h && fp?.l && fp?.c) {
+      const pp = (fp.h + fp.l + fp.c) / 3;
+      floorPP = pp; floorS1 = 2 * pp - fp.h; floorR1 = 2 * pp - fp.l;
+    }
+
+    const ibQ = await query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]);
+    const ib = ibQ.rows[0] || {};
+
+    const PROX = 25;
+    const levels = [
+      { name: 'PD-1 VAH', price: pd1.vah, role: 'resistance' },
+      { name: 'PD-1 VAL', price: pd1.val, role: 'support' },
+      { name: 'PD-1 POC', price: pd1.poc, role: 'magnet' },
+      { name: 'OR Mid', price: orMid, role: 'pivot' },
+      { name: 'Floor PP', price: floorPP, role: 'pivot' },
+      { name: 'Floor S1', price: floorS1, role: 'support' },
+      { name: 'Floor R1', price: floorR1, role: 'resistance' },
+      { name: 'IB High', price: ib.h, role: 'resistance' },
+      { name: 'IB Low', price: ib.l, role: 'support' },
+    ].filter(l => l.price != null);
+
+    const signals = [];
+    const last10 = bars.slice(-10);
+    const last5 = last10.slice(-5);
+    const prior5 = last10.slice(0, 5);
+    const lastBar = bars[bars.length - 1];
+    const barRange = lastBar.high - lastBar.low;
+
+    const avgRange5 = last5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
+    const avgRangePrior = prior5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
+    const rangeShrinking = avgRange5 < avgRangePrior * 0.6;
+
+    // Volume analysis
+    const avgVol5 = last5.reduce((s, b) => s + Number(b.vol || 0), 0) / 5;
+    const avgVolPrior = prior5.reduce((s, b) => s + Number(b.vol || 0), 0) / 5;
+    const volDeclining = avgVol5 < avgVolPrior * 0.6;
+    const volSpiking = avgVol5 > avgVolPrior * 1.5;
+
+    for (const level of levels) {
+      const dist = Math.abs(currentPrice - level.price);
+      if (dist > PROX) continue;
+
+      const isApproachingFromBelow = currentPrice > level.price;
+      const isApproachingFromAbove = currentPrice < level.price;
+
+      const signs = [];
+
+      if (rangeShrinking) signs.push('bar ranges shrinking (momentum fading)');
+
+      // Wick analysis relative to level
+      if (isApproachingFromBelow && barRange > 0) {
+        const upperWick = (lastBar.high - Math.max(lastBar.open, lastBar.close)) / barRange;
+        if (upperWick > 0.5) signs.push('long upper wick (sellers stepping in)');
+        const closeNearLow = (lastBar.close - lastBar.low) / barRange < 0.3;
+        if (closeNearLow) signs.push('close near low of bar (buyers couldn\'t hold)');
+      }
+      if (isApproachingFromAbove && barRange > 0) {
+        const lowerWick = (Math.min(lastBar.open, lastBar.close) - lastBar.low) / barRange;
+        if (lowerWick > 0.5) signs.push('long lower wick (buyers stepping in)');
+        const closeNearHigh = (lastBar.high - lastBar.close) / barRange < 0.3;
+        if (closeNearHigh) signs.push('close near high of bar (sellers couldn\'t push)');
+      }
+
+      if (volDeclining) signs.push('volume declining into the level');
+      if (volSpiking && signs.length >= 1) signs.push('volume spike with no follow-through');
+
+      // Absorption: bar clustering
+      const clusterBars = last5.filter(b => {
+        if (level.role === 'support') return Math.abs(b.low - level.price) < 8;
+        return Math.abs(b.high - level.price) < 8;
+      }).length;
+      if (clusterBars >= 3) signs.push(`${clusterBars} bars clustering at level (absorption)`);
+
+      const type = signs.length >= 3 ? 'EXHAUSTION' : signs.length >= 2 ? 'EXHAUSTION_BUILDING' : signs.length >= 1 ? 'WATCH' : null;
+      if (!type) continue;
+
+      const direction = level.role === 'resistance' ? 'FADE SHORT' : level.role === 'support' ? 'FADE LONG' : 'WATCH BOTH';
+
+      signals.push({
+        type,
+        level: level.name,
+        levelPrice: Math.round(level.price),
+        currentPrice: Math.round(currentPrice),
+        distance: Math.round(dist),
+        direction,
+        signs,
+        timestamp,
+        barsSinceApproach: bars.filter(b => Math.abs(b.close - level.price) <= PROX).length,
+      });
+    }
+
+    // Sort by severity
+    signals.sort((a, b) => b.signs.length - a.signs.length);
+
+    res.json({ signals, timestamp, price: Math.round(currentPrice), barsAnalyzed: bars.length });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 export default router;
