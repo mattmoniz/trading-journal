@@ -1327,10 +1327,13 @@ router.get('/antigravity/exhaustion', async (req, res) => {
       }).length;
       if (clusterBars >= 3) signs.push(`${clusterBars} bars clustering at level (absorption)`);
 
-      const type = signs.length >= 3 ? 'EXHAUSTION' : signs.length >= 2 ? 'EXHAUSTION_BUILDING' : signs.length >= 1 ? 'WATCH' : null;
-      if (!type) continue;
+      // FLIPPED LOGIC: 0 signs = level defended (62% fade WR, N=170)
+      // More signs = level weakening (34% fade WR = 66% breakout, N=119)
+      const type = signs.length === 0 ? 'DEFENDED' : signs.length >= 2 ? 'WEAKENING' : 'CAUTION';
 
-      const direction = level.role === 'resistance' ? 'FADE SHORT' : level.role === 'support' ? 'FADE LONG' : 'WATCH BOTH';
+      const direction = signs.length === 0
+        ? (level.role === 'resistance' ? 'FADE SHORT (62% WR)' : level.role === 'support' ? 'FADE LONG (62% WR)' : 'FADE (62% WR)')
+        : (level.role === 'resistance' ? 'BREAKOUT LIKELY — do NOT fade' : level.role === 'support' ? 'BREAKDOWN LIKELY — do NOT buy' : 'BREAKOUT LIKELY');
 
       signals.push({
         type,

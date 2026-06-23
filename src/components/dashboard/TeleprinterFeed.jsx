@@ -258,7 +258,7 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
           setExhaustion(d);
           if (d.signals?.length > 0) {
             setExhaustionHistory(prev => {
-              const newEntries = d.signals.filter(s => s.type === 'EXHAUSTION' || s.type === 'EXHAUSTION_BUILDING');
+              const newEntries = d.signals.filter(s => s.type === 'DEFENDED' || s.type === 'WEAKENING');
               if (newEntries.length === 0) return prev;
               const updated = [...newEntries.map(s => ({ ...s, time: d.timestamp })), ...prev];
               return updated.slice(0, 50);
@@ -322,7 +322,7 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
             borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
             textTransform: 'uppercase', letterSpacing: '0.05em', transition: 'all 0.15s ease'
           }}>
-            Exhaustion{exhaustion?.signals?.filter(s => s.type === 'EXHAUSTION').length > 0 ? ` (${exhaustion.signals.filter(s => s.type === 'EXHAUSTION').length})` : ''}
+            Exhaustion{exhaustion?.signals?.filter(s => s.type === 'DEFENDED').length > 0 ? ` (${exhaustion.signals.filter(s => s.type === 'DEFENDED').length})` : ''}
           </button>
           <button onClick={() => setActiveTab('news')} style={{
             background: activeTab === 'news' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
@@ -341,14 +341,14 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
               exhaustion.signals.map((s, i) => (
                 <div key={i} style={{
                   padding: '8px 10px', borderRadius: 6,
-                  background: s.type === 'EXHAUSTION' ? 'rgba(245,158,11,0.08)' : s.type === 'EXHAUSTION_BUILDING' ? 'rgba(139,92,246,0.06)' : 'rgba(30,41,59,0.3)',
-                  border: `1px solid ${s.type === 'EXHAUSTION' ? 'rgba(245,158,11,0.3)' : s.type === 'EXHAUSTION_BUILDING' ? 'rgba(139,92,246,0.2)' : 'rgba(51,65,85,0.2)'}`,
-                  borderLeft: `3px solid ${s.type === 'EXHAUSTION' ? '#f59e0b' : s.type === 'EXHAUSTION_BUILDING' ? '#818cf8' : '#475569'}`,
+                  background: s.type === 'DEFENDED' ? 'rgba(245,158,11,0.08)' : s.type === 'WEAKENING' ? 'rgba(139,92,246,0.06)' : 'rgba(30,41,59,0.3)',
+                  border: `1px solid ${s.type === 'DEFENDED' ? 'rgba(245,158,11,0.3)' : s.type === 'WEAKENING' ? 'rgba(139,92,246,0.2)' : 'rgba(51,65,85,0.2)'}`,
+                  borderLeft: `3px solid ${s.type === 'DEFENDED' ? '#f59e0b' : s.type === 'WEAKENING' ? '#818cf8' : '#475569'}`,
                 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, color: s.type === 'EXHAUSTION' ? '#f59e0b' : '#818cf8', background: s.type === 'EXHAUSTION' ? 'rgba(245,158,11,0.15)' : 'rgba(139,92,246,0.12)', padding: '1px 6px', borderRadius: 3 }}>
-                        {s.type === 'EXHAUSTION' ? '⚡ EXHAUSTION' : s.type === 'EXHAUSTION_BUILDING' ? '🔄 BUILDING' : '👀 WATCH'}
+                      <span style={{ fontSize: 9, fontWeight: 800, color: s.type === 'DEFENDED' ? '#f59e0b' : '#818cf8', background: s.type === 'DEFENDED' ? 'rgba(245,158,11,0.15)' : 'rgba(139,92,246,0.12)', padding: '1px 6px', borderRadius: 3 }}>
+                        {s.type === 'DEFENDED' ? '🛡️ DEFENDED' : s.type === 'WEAKENING' ? '⚠️ WEAKENING' : '👀 WATCH'}
                       </span>
                       <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{s.level}</span>
                       <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>{s.levelPrice}</span>
@@ -361,8 +361,8 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
                       <div key={j} style={{ fontSize: 11, color: '#cbd5e1', paddingLeft: 8 }}>• {sign}</div>
                     ))}
                   </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: s.type === 'EXHAUSTION' ? '#fbbf24' : '#94a3b8', marginTop: 4 }}>
-                    → {s.direction} {s.type === 'EXHAUSTION' ? '— high conviction reversal setup' : s.type === 'EXHAUSTION_BUILDING' ? '— watch for confirmation' : ''}
+                  <div style={{ fontSize: 11, fontWeight: 600, color: s.type === 'DEFENDED' ? '#fbbf24' : '#94a3b8', marginTop: 4 }}>
+                    → {s.direction} {s.type === 'DEFENDED' ? '— level defended — high conviction fade' : s.type === 'WEAKENING' ? '— level weakening — breakout likely, do NOT fade' : ''}
                   </div>
                 </div>
               ))
@@ -377,7 +377,7 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
                 {exhaustionHistory.slice(0, 15).map((s, i) => (
                   <div key={i} style={{ fontSize: 10, color: '#94a3b8', display: 'flex', gap: 8, padding: '2px 0', borderBottom: '1px solid rgba(30,41,59,0.3)' }}>
                     <span style={{ fontFamily: 'monospace', color: '#64748b', minWidth: 55 }}>{s.time}</span>
-                    <span style={{ color: s.type === 'EXHAUSTION' ? '#f59e0b' : '#818cf8', fontWeight: 600, minWidth: 16 }}>{s.type === 'EXHAUSTION' ? '⚡' : '🔄'}</span>
+                    <span style={{ color: s.type === 'DEFENDED' ? '#f59e0b' : '#818cf8', fontWeight: 600, minWidth: 16 }}>{s.type === 'DEFENDED' ? '⚡' : '🔄'}</span>
                     <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{s.level}</span>
                     <span style={{ color: '#64748b' }}>{s.levelPrice}</span>
                     <span style={{ color: '#94a3b8' }}>{s.signs.length} signs → {s.direction}</span>
