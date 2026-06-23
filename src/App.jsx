@@ -9,6 +9,9 @@ import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import MorningBriefPanel from './components/dashboard/MorningBriefPanel.jsx';
 import SessionForecastPanel from './components/dashboard/SessionForecastPanel.jsx';
 import BalanceZonePanel from './components/dashboard/BalanceZonePanel.jsx';
+import TradeCalibrationCard from './components/dashboard/TradeCalibrationCard.jsx';
+import DayOfWeekPlaybookCard from './components/dashboard/DayOfWeekPlaybookCard.jsx';
+import PreSessionChecklist from './components/dashboard/PreSessionChecklist.jsx';
 import PostLossCooldown from './components/dashboard/PostLossCooldown.jsx';
 import { NavUpdateDot, SectionUpdateDot, Dot, useDataUpdateDot, useFieldUpdateDots } from './components/shared/UpdateDot.jsx';
 import PreMarketWalkthrough from './components/dashboard/PreMarketWalkthrough.jsx';
@@ -2121,7 +2124,7 @@ function getNuancedExecutionEdge({ dtClass, coiled, bias, trigger, currentPrice,
 
 // Live day/case/trigger read — large, readable banner at the top of the
 // Morning Prep main column. Sourced from CaseContext (same /api/case poll).
-function LiveReadBanner() {
+function LiveReadBanner({ forecast }) {
   const { caseData: c, loading } = React.useContext(CaseContext);
   const [lastSession, setLastSession] = React.useState(null);
   const [lastSessionLoading, setLastSessionLoading] = React.useState(false);
@@ -2375,6 +2378,44 @@ function LiveReadBanner() {
         )}
       </div>
 
+      {/* 🚨 Session Macro Events Calendar */}
+      {forecast?.macroEvents && forecast.macroEvents.length > 0 ? (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          marginBottom: 14,
+          padding: '10px 14px',
+          background: 'rgba(234, 88, 12, 0.08)',
+          border: '1px solid rgba(234, 88, 12, 0.3)',
+          borderRadius: 8
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: '#f97316', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>🚨 ACTIVE MACRO NEWS TODAY</span>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            {forecast.macroEvents.map((e, idx) => (
+              <span key={idx} style={{ fontSize: 11, color: '#cbd5e1', background: 'rgba(15, 23, 42, 0.4)', padding: '3px 8px', borderRadius: 4, border: '1px solid rgba(234, 88, 12, 0.15)' }}>
+                <strong>{e.release_time.slice(0, 5)} ET</strong> · <span style={{ color: '#fb923c', fontWeight: 600 }}>{e.event_type}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{
+          fontSize: 10.5,
+          color: '#64748b',
+          marginBottom: 12,
+          padding: '4px 10px',
+          background: 'rgba(255, 255, 255, 0.01)',
+          border: '1px solid rgba(255, 255, 255, 0.03)',
+          borderRadius: 6,
+          display: 'inline-block'
+        }}>
+          ☕ No high-impact macro news scheduled today. Focus strictly on technical levels.
+        </div>
+      )}
+
       {/* ⚡ OPENING EXECUTION REFERENCE LEVELS (PROMINENT AT THE OPEN) */}
       <div style={{
         display: 'grid',
@@ -2592,6 +2633,7 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
 
       <PostLossCooldown />
       <SystemHealthSummary onNavigate={setCurrentView} />
+      <QuickTradeLog />
 
       <nav className="nav-menu">
         <button
@@ -19052,62 +19094,6 @@ function EdgeSectionsPanel() {
           )}
         </div>
       )}
-      {/* Confluence Zones + Levels */}
-      {levels.length > 0 && (
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>📐 Confluence Levels</div>
-            {zones.length > 0 && <span style={{ fontSize: 10, color: '#fbbf24', fontWeight: 700 }}>{zones.length} zone{zones.length > 1 ? 's' : ''} detected</span>}
-          </div>
-          {/* Show zones first */}
-          {zones.filter(z => {
-            const dist = price ? Math.abs(price - z.mid) : 999;
-            return dist <= 300;
-          }).sort((a, b) => Math.abs((price || 0) - a.mid) - Math.abs((price || 0) - b.mid)).map((z, zi) => {
-            const zDist = price ? Math.round(price - z.mid) : null;
-            const isZoneNear = zDist != null && Math.abs(zDist) <= PROX + 10;
-            return (
-              <div key={zi} style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 6, background: isZoneNear ? 'rgba(251,191,36,0.06)' : 'rgba(30,41,59,0.2)', border: `1px solid ${isZoneNear ? 'rgba(251,191,36,0.3)' : 'rgba(51,65,85,0.3)'}` }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: isZoneNear ? '#fbbf24' : '#cbd5e1' }}>
-                      ZONE: {z.lo.toLocaleString('en-US', { maximumFractionDigits: 0 })} — {z.hi.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                    </span>
-                    <span style={{ fontSize: 9, color: '#94a3b8' }}>({z.count} levels, {Math.round(z.hi - z.lo)}pt spread)</span>
-                    {isZoneNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
-                  </div>
-                  {zDist != null && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{zDist > 0 ? '+' : ''}{zDist}pt</span>}
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {z.levels.map(l => (
-                    <span key={l.name} style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: `${l.color}15`, border: `1px solid ${l.color}30`, color: l.color, fontWeight: 600 }}>
-                      {l.name} {l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-          {/* Individual levels not in zones */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6 }}>
-            {levels.filter(l => !l.zone).map(l => {
-              const dist = price ? Math.round(price - l.val) : null;
-              const isNear = dist != null && Math.abs(dist) <= PROX;
-              return (
-                <div key={l.name} style={{ padding: '8px 10px', borderRadius: 6, background: isNear ? 'rgba(251,191,36,0.08)' : 'rgba(30,41,59,0.15)', border: `1px solid ${isNear ? 'rgba(251,191,36,0.3)' : 'rgba(148,163,184,0.1)'}`, borderLeft: `3px solid ${l.color}` }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>{l.name}</span>
-                    {isNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: l.color, fontFamily: 'monospace' }}>{l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
-                  <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>{dist != null ? `${dist > 0 ? '+' : ''}${dist}pt` : ''}{l.ctrlDelta > 0 ? ` · +${l.ctrlDelta.toFixed(1)}% edge` : ''}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Active Setups */}
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>🎯 Today's Actionable Setups</div>
@@ -19317,81 +19303,243 @@ function QuickTradeLog() {
       }
       setSubmitted(true);
       loadRecent();
-      setTimeout(() => { setSubmitted(false); setAction(null); setSetupType(''); setCustomType(''); setTags([]); setPnl(''); setContracts('1'); }, 2000);
+      setTimeout(() => { setSubmitted(false); setAction(null); setSetupType(''); setCustomType(''); setTags([]); setPnl(''); setContracts('1'); setOpen(false); }, 1500);
     } catch {}
   };
 
   const chip = (active) => ({
-    padding: '3px 9px', borderRadius: 12, fontSize: 10, fontWeight: 600, cursor: 'pointer', border: '1px solid',
+    padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid',
     background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
     borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#64748b',
   });
 
-  const selStyle = { padding: '4px 8px', borderRadius: 4, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 11, fontFamily: 'monospace' };
-  const btnS = (c) => ({ padding: '5px 14px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: `1px solid ${c}`, background: `${c}12`, color: c });
+  const selStyle = { padding: '6px 10px', borderRadius: 4, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' };
 
-  if (!open) {
-    return (
-      <div style={{ marginBottom: 8 }}>
-        <button onClick={() => setOpen(true)} style={{ padding: '6px 16px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid #334155', background: 'rgba(15,23,42,0.6)', color: '#94a3b8' }}>
-          + Quick Trade Log
-        </button>
-      </div>
-    );
-  }
+  const sidebarButton = (
+    <button
+      onClick={() => setOpen(true)}
+      style={{
+        width: '100%',
+        padding: '10px 14px',
+        borderRadius: 8,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: 'pointer',
+        border: '1px dashed rgba(99, 102, 241, 0.4)',
+        background: 'rgba(99, 102, 241, 0.05)',
+        color: '#a5b4fc',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        transition: 'all 0.2s ease',
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.12)';
+        e.currentTarget.style.borderColor = '#6366f1';
+        e.currentTarget.style.boxShadow = '0 0 10px rgba(99, 102, 241, 0.2)';
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = 'rgba(99, 102, 241, 0.05)';
+        e.currentTarget.style.borderColor = 'rgba(99, 102, 241, 0.4)';
+        e.currentTarget.style.boxShadow = 'none';
+      }}
+    >
+      <span>➕</span>
+      <span>Quick Trade Log</span>
+    </button>
+  );
 
   return (
-    <div style={{ marginBottom: 10, padding: '10px 14px', background: 'rgba(15,23,42,0.5)', border: '1px solid #1e293b', borderRadius: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Quick Trade Log</span>
-        <button onClick={() => setOpen(false)} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 14 }}>x</button>
-      </div>
+    <>
+      {sidebarButton}
+      {open && (
+        <div 
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOpen(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            background: 'rgba(10, 10, 15, 0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div 
+            style={{ 
+              width: '90%', 
+              maxWidth: '520px', 
+              background: '#0b0f19', 
+              border: '1px solid rgba(99, 102, 241, 0.35)', 
+              borderRadius: 14,
+              padding: 24, 
+              boxShadow: '0 20px 50px rgba(0, 0, 0, 0.6)',
+              position: 'relative'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>⚡</span> Quick Trade Log
+              </span>
+              <button 
+                onClick={() => setOpen(false)} 
+                style={{ 
+                  background: 'transparent', 
+                  border: 'none', 
+                  color: '#64748b', 
+                  cursor: 'pointer', 
+                  fontSize: 18,
+                  padding: '4px 8px',
+                  borderRadius: 4,
+                  transition: 'all 0.15s ease'
+                }}
+                onMouseEnter={e => e.currentTarget.style.color = '#e2e8f0'}
+                onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
+              >
+                ✕
+              </button>
+            </div>
 
-      {submitted ? (
-        <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 600 }}>Logged</div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={setupType} onChange={e => setSetupType(e.target.value)} style={selStyle}>
-              <option value="">Setup type...</option>
-              {SETUP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              <option value="CUSTOM">Custom...</option>
-            </select>
-            {setupType === 'CUSTOM' && (
-              <input value={customType} onChange={e => setCustomType(e.target.value)} placeholder="e.g. manual_absorption" style={{ ...selStyle, width: 140 }} />
+            {submitted ? (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '30px 0', textAlign: 'center' }}>
+                <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(34, 197, 94, 0.15)', border: '2px solid #22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#22c55e' }}>✓</div>
+                <div style={{ fontSize: 16, color: '#f8fafc', fontWeight: 700 }}>Trade Logged Successfully</div>
+                <div style={{ fontSize: 13, color: '#64748b' }}>Updating feedback cache...</div>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select value={setupType} onChange={e => setSetupType(e.target.value)} style={selStyle}>
+                    <option value="">Setup type...</option>
+                    {SETUP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                    <option value="CUSTOM">Custom...</option>
+                  </select>
+                  {setupType === 'CUSTOM' && (
+                    <input value={customType} onChange={e => setCustomType(e.target.value)} placeholder="e.g. manual_absorption" style={{ ...selStyle, width: 160 }} />
+                  )}
+                  <select value={direction} onChange={e => setDirection(e.target.value)} style={selStyle}>
+                    <option value="LONG">LONG</option>
+                    <option value="SHORT">SHORT</option>
+                  </select>
+                </div>
+
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <button 
+                    onClick={() => setAction('TAKEN')} 
+                    style={{ 
+                      flex: 1, 
+                      padding: '8px 16px', 
+                      borderRadius: 6, 
+                      fontSize: 12, 
+                      fontWeight: 700, 
+                      cursor: 'pointer', 
+                      border: '1px solid ' + (action === 'TAKEN' ? '#22c55e' : '#334155'), 
+                      background: action === 'TAKEN' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(15, 23, 42, 0.3)', 
+                      color: action === 'TAKEN' ? '#4ade80' : '#94a3b8',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    Taking Trade
+                  </button>
+                  <button 
+                    onClick={() => setAction('PASSED')} 
+                    style={{ 
+                      flex: 1, 
+                      padding: '8px 16px', 
+                      borderRadius: 6, 
+                      fontSize: 12, 
+                      fontWeight: 700, 
+                      cursor: 'pointer', 
+                      border: '1px solid ' + (action === 'PASSED' ? '#f59e0b' : '#334155'), 
+                      background: action === 'PASSED' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(15, 23, 42, 0.3)', 
+                      color: action === 'PASSED' ? '#fbbf24' : '#94a3b8',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    Passing Trade
+                  </button>
+                </div>
+
+                <div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tags / Confluences</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {ALL_TAGS.map(t => <span key={t} onClick={() => toggleTag(t)} style={chip(tags.includes(t))}>{t.replace(/_/g, ' ')}</span>)}
+                  </div>
+                </div>
+
+                {action === 'TAKEN' && (
+                  <div style={{ display: 'flex', gap: 16, alignItems: 'center', background: 'rgba(15, 23, 42, 0.4)', padding: '12px 16px', borderRadius: 8, border: '1px solid #1e293b' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>Contracts:</span>
+                      <input type="number" value={contracts} onChange={e => setContracts(e.target.value)} style={{ ...selStyle, width: 50, padding: '5px' }} />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: '#94a3b8' }}>P&L ($):</span>
+                      <input type="number" value={pnl} onChange={e => setPnl(e.target.value)} placeholder="Closed P&L" style={{ ...selStyle, width: 100, padding: '5px' }} onKeyDown={e => e.key === 'Enter' && submit()} />
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                  <button 
+                    onClick={submit} 
+                    disabled={!setupType || !action} 
+                    style={{ 
+                      flex: 2, 
+                      padding: '10px 0', 
+                      borderRadius: 6, 
+                      fontSize: 13, 
+                      fontWeight: 700, 
+                      cursor: 'pointer', 
+                      border: '1px solid #6366f1', 
+                      background: 'rgba(99, 102, 241, 0.15)', 
+                      color: '#a5b4fc',
+                      opacity: !setupType || !action ? 0.4 : 1,
+                      transition: 'all 0.15s ease'
+                    }}
+                    onMouseEnter={e => { if (setupType && action) e.currentTarget.style.background = 'rgba(99, 102, 241, 0.3)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)'; }}
+                  >
+                    Confirm & Log
+                  </button>
+                  <button 
+                    onClick={() => setOpen(false)} 
+                    style={{ 
+                      flex: 1, 
+                      padding: '10px 0', 
+                      borderRadius: 6, 
+                      fontSize: 13, 
+                      fontWeight: 700, 
+                      cursor: 'pointer', 
+                      border: '1px solid #334155', 
+                      background: 'transparent', 
+                      color: '#94a3b8' 
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                {recentLogs.length > 0 && (
+                  <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Today's logs:</div>
+                    <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {recentLogs.map(l => (
+                        <TradeLogRow key={l.id} log={l} onUpdate={loadRecent} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
-            <select value={direction} onChange={e => setDirection(e.target.value)} style={selStyle}>
-              <option value="LONG">LONG</option>
-              <option value="SHORT">SHORT</option>
-            </select>
-            <button onClick={() => setAction('TAKEN')} style={{ ...btnS(action === 'TAKEN' ? '#22c55e' : '#475569'), fontSize: 12, padding: '6px 18px' }}>Taking</button>
-            <button onClick={() => setAction('PASSED')} style={{ ...btnS(action === 'PASSED' ? '#f59e0b' : '#475569'), fontSize: 12, padding: '6px 18px' }}>Passing</button>
-            {!action && <span style={{ fontSize: 10, color: '#f59e0b' }}>select one</span>}
           </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {ALL_TAGS.map(t => <span key={t} onClick={() => toggleTag(t)} style={chip(tags.includes(t))}>{t.replace(/_/g, ' ')}</span>)}
-          </div>
-          {action === 'TAKEN' && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 10, color: '#64748b' }}>Contracts:</span>
-              <input type="number" value={contracts} onChange={e => setContracts(e.target.value)} style={{ ...selStyle, width: 40 }} />
-              <span style={{ fontSize: 10, color: '#64748b' }}>P&L ($):</span>
-              <input type="number" value={pnl} onChange={e => setPnl(e.target.value)} placeholder="later" style={{ ...selStyle, width: 80 }} onKeyDown={e => e.key === 'Enter' && submit()} />
-            </div>
-          )}
-          <button onClick={submit} disabled={!setupType || !action} style={{ ...btnS('#6366f1'), alignSelf: 'flex-start', opacity: !setupType || !action ? 0.4 : 1 }}>Log Trade</button>
-
-          {recentLogs.length > 0 && (
-            <div style={{ borderTop: '1px solid #1e293b', paddingTop: 6, marginTop: 2 }}>
-              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4 }}>Today's logs:</div>
-              {recentLogs.map(l => (
-                <TradeLogRow key={l.id} log={l} onUpdate={loadRecent} />
-              ))}
-            </div>
-          )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -21741,6 +21889,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
 }
 
 function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
+  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const [tab, setTab] = React.useState(() => {
     return sessionStorage.getItem('acd-dash-tab') || 'morning';
   });
@@ -21790,76 +21939,102 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <div style={{ order: -3 }}>
-              <QuickTradeLog />
-            </div>
-            <div style={{ order: -2 }}>
-              <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
-                <ErrorBoundary name="Live Commentary"><TeleprinterFeed maxHeight={360} /></ErrorBoundary>
-              </CollapsibleSection>
-            </div>
-            <div style={{ order: -1.5 }}>
-              <ErrorBoundary name="Balance Zone Panel"><BalanceZonePanel /></ErrorBoundary>
-              <CollapsibleSection title="Session Forecast & First Hour Script" defaultOpen>
-                <ErrorBoundary name="Session Forecast"><SessionForecastPanel date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} /></ErrorBoundary>
-              </CollapsibleSection>
-            </div>
-            <div style={{ order: -1 }}>
-              <CollapsibleSection title="Live Read" defaultOpen>
-                <LiveReadBanner />
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, alignItems: 'start', padding: '0 4px' }}>
-                  <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
-                  <ErrorBoundary name="Gap Context" compact><GapContextCard /></ErrorBoundary>
-                </div>
-              </CollapsibleSection>
-            </div>
-            <div style={{ order: 0 }}>
-              <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
-                <ErrorBoundary name="Edge Sections" compact><EdgeSectionsPanel /></ErrorBoundary>
-              </CollapsibleSection>
-            </div>
-            <div style={{ order: 1 }}>
-              <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
-                updateId="acd-dash-trade-plan" updateView="acd"
-                dataSignature={JSON.stringify({ todayData, nl, cardState })}>
-                <ErrorBoundary name="Dashboard Cards">
-                  <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} onStateChange={setCardState} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
+            
+            {/* Split Grid for Daily Execution Info */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+              
+              {/* Left Column: Log, Commentary & Edge Stats */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
+                  <ErrorBoundary name="Live Commentary">
+                    <TeleprinterFeed maxHeight={360} />
+                  </ErrorBoundary>
+                </CollapsibleSection>
+                <CollapsibleSection title="Backtested Edge Statistics" defaultOpen={false}>
+                  <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
+                </CollapsibleSection>
+              </div>
+
+              {/* Right Column: Balance Zones & Live Market Regimes */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ErrorBoundary name="Balance Zone Panel">
+                  <BalanceZonePanel />
                 </ErrorBoundary>
-              </CollapsibleSection>
+                
+                <CollapsibleSection title="Live Read & Market Regimes" defaultOpen>
+                  <LiveReadBanner forecast={forecast} />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
+                    <ErrorBoundary name="Gap Context" compact><GapContextCard /></ErrorBoundary>
+                  </div>
+                </CollapsibleSection>
+              </div>
+
             </div>
 
+            {/* Middle Section: Active Execution Setups */}
+            <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
+              <ErrorBoundary name="Edge Sections" compact>
+                <EdgeSectionsPanel />
+              </ErrorBoundary>
+            </CollapsibleSection>
+
+            {/* Bottom Section: Active Trade Entry / Monitoring Cards */}
+            <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
+              updateId="acd-dash-trade-plan" updateView="acd"
+              dataSignature={JSON.stringify({ todayData, nl, cardState })}>
+              <ErrorBoundary name="Dashboard Cards">
+                <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} onStateChange={setCardState} />
+              </ErrorBoundary>
+            </CollapsibleSection>
 
           </div>
         )}
         {tab === 'morning' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {(() => {
-              const etDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-              const dow = new Date(etDateStr + 'T12:00:00').getDay();
-              if (dow >= 1 && dow <= 5) return null;
-              return (
-                <div style={{ background: 'linear-gradient(135deg, rgba(139,92,246,0.06) 0%, rgba(15,23,42,0.4) 100%)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 8, padding: '14px 18px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <span style={{ fontSize: 15, fontWeight: 800, color: '#a78bfa' }}>Weekend</span>
-                    <span style={{ fontSize: 9, fontWeight: 800, background: 'rgba(16,185,129,0.15)', color: '#34d399', padding: '2px 8px', borderRadius: 4 }}>MARKET CLOSED</span>
-                  </div>
-                  <p style={{ margin: 0, fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
-                    Use this time to review your{' '}
-                    <span onClick={() => setTab('morning')} style={{ color: '#818cf8', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Morning Brief</span>
-                    {' '}and complete the{' '}
-                    <span onClick={() => setTab('walkthrough')} style={{ color: '#818cf8', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}>Pre-Market Walkthrough</span>.
-                  </p>
-                </div>
-              );
-            })()}
-            <ErrorBoundary name="Session Forecast"><SessionForecastPanel date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} /></ErrorBoundary>
-            <CollapsibleSection title="Live Edges & Confluence" defaultOpen>
-              <ErrorBoundary name="Edge Sections" compact><EdgeSectionsPanel /></ErrorBoundary>
-            </CollapsibleSection>
-            <CollapsibleSection title="Auction Read" defaultOpen>
-              <ErrorBoundary name="Auction Read Summary" compact><AuctionReadSummary nl={nl} todayData={todayData} defaultOpen /></ErrorBoundary>
-            </CollapsibleSection>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
+            
+            {/* Playbook Alerts & Dynamic Warnings */}
+            {forecast?.isMacroDay && (
+              <div style={{ padding: '12px 18px', background: 'rgba(234, 88, 12, 0.15)', border: '1px solid rgba(234, 88, 12, 0.4)', borderRadius: 10, color: '#fb923c', fontSize: 13, fontWeight: 700 }}>
+                ⚠️ MACRO OVERRIDE ACTIVE: {forecast.macroEvents.map(e => e.event_type).join(' + ')} Today. Calendar DOW statistics are secondary, expect high-vol expansion post-release.
+              </div>
+            )}
+
+            {/* Split Grid for Core Planning */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+              
+              {/* Left Side: Session Forecast (Levels, Pivot, Targets) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ErrorBoundary name="Session Forecast">
+                  <SessionForecastPanel date={todayET} />
+                </ErrorBoundary>
+              </div>
+
+              {/* Right Side: Narrative Read & Day Guidelines */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ErrorBoundary name="Day-of-Week Playbook">
+                  <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
+                </ErrorBoundary>
+
+                <ErrorBoundary name="Pre-Session Checklist">
+                  <PreSessionChecklist />
+                </ErrorBoundary>
+              </div>
+
+            </div>
+
+            {/* Calibration & Edge Baseline Comparisons */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+              <ErrorBoundary name="Backtested Edge Statistics">
+                <BacktestedEdgeStatsCard />
+              </ErrorBoundary>
+
+              <ErrorBoundary name="Trade Calibration">
+                <TradeCalibrationCard />
+              </ErrorBoundary>
+            </div>
+
           </div>
         )}
         {tab === 'edges' && (
