@@ -297,9 +297,6 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
 
   return (
     <div style={PANEL}>
-      <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, borderBottom: '1px solid rgba(139,92,246,0.15)', paddingBottom: 8 }}>
-        📻 Live Feed
-      </div>
 
       <div ref={scrollRef} style={{ maxHeight, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 6 }}>
         {/* Exhaustion/Defended signals at top */}
