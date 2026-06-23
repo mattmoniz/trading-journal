@@ -297,108 +297,38 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
 
   return (
     <div style={PANEL}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid rgba(139,92,246,0.15)', paddingBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          📻 Live Feed & Commentary
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={() => setActiveTab('commentary')} style={{
-            background: activeTab === 'commentary' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
-            border: activeTab === 'commentary' ? '1px solid rgba(139, 92, 246, 0.5)' : '1px solid transparent',
-            color: activeTab === 'commentary' ? '#e9d5ff' : '#94a3b8',
-            borderRadius: 4,
-            padding: '3px 8px',
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-            textTransform: 'uppercase',
-            letterSpacing: '0.05em',
-            transition: 'all 0.15s ease'
-          }}>Commentary</button>
-          <button onClick={() => setActiveTab('exhaustion')} style={{
-            background: activeTab === 'exhaustion' ? 'rgba(245, 158, 11, 0.2)' : 'transparent',
-            border: activeTab === 'exhaustion' ? '1px solid rgba(245, 158, 11, 0.5)' : '1px solid transparent',
-            color: activeTab === 'exhaustion' ? '#fbbf24' : '#94a3b8',
-            borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
-            textTransform: 'uppercase', letterSpacing: '0.05em', transition: 'all 0.15s ease'
-          }}>
-            Exhaustion{exhaustion?.signals?.filter(s => s.type === 'DEFENDED').length > 0 ? ` (${exhaustion.signals.filter(s => s.type === 'DEFENDED').length})` : ''}
-          </button>
-          <button onClick={() => setActiveTab('news')} style={{
-            background: activeTab === 'news' ? 'rgba(139, 92, 246, 0.2)' : 'transparent',
-            border: activeTab === 'news' ? '1px solid rgba(139, 92, 246, 0.5)' : '1px solid transparent',
-            color: activeTab === 'news' ? '#e9d5ff' : '#94a3b8',
-            borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600, cursor: 'pointer',
-            textTransform: 'uppercase', letterSpacing: '0.05em', transition: 'all 0.15s ease'
-          }}>News</button>
-        </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, borderBottom: '1px solid rgba(139,92,246,0.15)', paddingBottom: 8 }}>
+        📻 Live Feed
       </div>
 
       <div ref={scrollRef} style={{ maxHeight, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 6 }}>
-        {activeTab === 'exhaustion' ? (
-          <>
-            {exhaustion?.signals?.length > 0 ? (
-              exhaustion.signals.map((s, i) => (
-                <div key={i} style={{
-                  padding: '8px 10px', borderRadius: 6,
-                  background: s.type === 'DEFENDED' ? 'rgba(245,158,11,0.08)' : s.type === 'WEAKENING' ? 'rgba(139,92,246,0.06)' : 'rgba(30,41,59,0.3)',
-                  border: `1px solid ${s.type === 'DEFENDED' ? 'rgba(245,158,11,0.3)' : s.type === 'WEAKENING' ? 'rgba(139,92,246,0.2)' : 'rgba(51,65,85,0.2)'}`,
-                  borderLeft: `3px solid ${s.type === 'DEFENDED' ? '#f59e0b' : s.type === 'WEAKENING' ? '#818cf8' : '#475569'}`,
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, color: s.type === 'DEFENDED' ? '#f59e0b' : '#818cf8', background: s.type === 'DEFENDED' ? 'rgba(245,158,11,0.15)' : 'rgba(139,92,246,0.12)', padding: '1px 6px', borderRadius: 3 }}>
-                        {s.type === 'DEFENDED' ? '🛡️ DEFENDED' : s.type === 'WEAKENING' ? '⚠️ WEAKENING' : '👀 WATCH'}
-                      </span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{s.level}</span>
-                      <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>{s.levelPrice}</span>
-                      <span style={{ fontSize: 10, color: '#64748b' }}>{s.distance}pt away</span>
-                    </div>
-                    <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{s.timestamp}</span>
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {s.signs.map((sign, j) => (
-                      <div key={j} style={{ fontSize: 11, color: '#cbd5e1', paddingLeft: 8 }}>• {sign}</div>
-                    ))}
-                  </div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: s.type === 'DEFENDED' ? '#fbbf24' : '#94a3b8', marginTop: 4 }}>
-                    → {s.direction} {s.type === 'DEFENDED' ? '— level defended — high conviction fade' : s.type === 'WEAKENING' ? '— level weakening — breakout likely, do NOT fade' : ''}
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>
-                No exhaustion signals detected. Scanning {exhaustion?.barsAnalyzed || 0} bars at {(exhaustion?.timestamp || '—')} ET.
+        {/* Exhaustion/Defended signals at top */}
+        {exhaustion?.signals?.length > 0 && exhaustion.signals.map((s, i) => (
+          <div key={`exh-${i}`} style={{
+            padding: '8px 10px', borderRadius: 6,
+            background: s.type === 'DEFENDED' ? 'rgba(34,197,94,0.06)' : s.type === 'WEAKENING' ? 'rgba(239,68,68,0.06)' : 'rgba(30,41,59,0.3)',
+            border: `1px solid ${s.type === 'DEFENDED' ? 'rgba(34,197,94,0.2)' : s.type === 'WEAKENING' ? 'rgba(239,68,68,0.2)' : 'rgba(51,65,85,0.2)'}`,
+            borderLeft: `3px solid ${s.type === 'DEFENDED' ? '#22c55e' : s.type === 'WEAKENING' ? '#ef4444' : '#475569'}`,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: 9, fontWeight: 800, color: s.type === 'DEFENDED' ? '#22c55e' : '#ef4444', background: s.type === 'DEFENDED' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.12)', padding: '1px 6px', borderRadius: 3 }}>
+                  {s.type === 'DEFENDED' ? '🛡️ DEFENDED' : s.type === 'WEAKENING' ? '⚠️ WEAKENING' : '👀 CAUTION'}
+                </span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{s.level}</span>
+                <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>{s.levelPrice}</span>
               </div>
-            )}
-            {exhaustionHistory.length > 0 && (
-              <div style={{ borderTop: '1px solid rgba(51,65,85,0.3)', paddingTop: 8, marginTop: 4 }}>
-                <div style={{ fontSize: 10, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>Recent History</div>
-                {exhaustionHistory.slice(0, 15).map((s, i) => (
-                  <div key={i} style={{ fontSize: 10, color: '#94a3b8', display: 'flex', gap: 8, padding: '2px 0', borderBottom: '1px solid rgba(30,41,59,0.3)' }}>
-                    <span style={{ fontFamily: 'monospace', color: '#64748b', minWidth: 55 }}>{s.time}</span>
-                    <span style={{ color: s.type === 'DEFENDED' ? '#f59e0b' : '#818cf8', fontWeight: 600, minWidth: 16 }}>{s.type === 'DEFENDED' ? '⚡' : '🔄'}</span>
-                    <span style={{ fontWeight: 600, color: '#e2e8f0' }}>{s.level}</span>
-                    <span style={{ color: '#64748b' }}>{s.levelPrice}</span>
-                    <span style={{ color: '#94a3b8' }}>{s.signs.length} signs → {s.direction}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </>
-        ) : activeTab === 'commentary' ? (
-          feed.length === 0
-            ? <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
-            : feed.map((item, i) => <FeedItem key={i} item={item} />)
-        ) : (
-          newsLoading && news.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>Fetching latest news...</div>
-          ) : news.length === 0 ? (
-            <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No news articles available.</div>
-          ) : (
-            news.map((item, i) => <NewsItem key={i} item={item} />)
-          )
-        )}
+              <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{s.timestamp}</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 4 }}>{s.signs.length > 0 ? s.signs.join(' · ') : 'Clean approach — no exhaustion signs'}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: s.type === 'DEFENDED' ? '#4ade80' : '#f87171', marginTop: 2 }}>→ {s.direction}</div>
+          </div>
+        ))}
+        {/* Commentary feed */}
+        {feed.length === 0 && (!exhaustion?.signals?.length)
+          ? <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
+          : feed.map((item, i) => <FeedItem key={i} item={item} />)
+        }
       </div>
     </div>
   );
