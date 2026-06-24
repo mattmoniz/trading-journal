@@ -574,20 +574,19 @@ export default function SessionForecastPanel({ date }) {
           <div>3. <strong style={{ color: '#a78bfa' }}>Overnight inventory forming.</strong> Today opened at {price ? fmtP(ls.sessionOpen || price) : '—'}. If closing well below the open → <strong style={{ color: '#ef4444' }}>LONG_TRAPPED</strong> tomorrow. Today's buyers are underwater — forced selling creates directional fuel. If closing near the open → <strong style={{ color: '#94a3b8' }}>NEUTRAL</strong>. If closing well above → <strong style={{ color: '#22c55e' }}>SHORT_TRAPPED</strong>.</div>
           {(() => {
             const nextDow = dow === 5 ? 1 : dow + 1;
-            const nextPB = DOW_PLAYBOOKS[nextDow];
-            if (!nextPB || dow === 6 || dow === 0) return null;
-            const best = nextPB.setups[0];
-            const avoid = nextPB.setups.find(s => s.verdict === 'AVOID');
+            const nextDowName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][nextDow];
+            if (dow === 6 || dow === 0) return null;
+            const tomorrowBest = scalpPlaybook?.pipelineSetups?.[0];
             return (
-              <div>4. <strong style={{ color: '#a78bfa' }}>Tomorrow's playbook ({nextPB.name}).</strong> {best?.name} is the strongest setup ({best?.wr}% WR, {best?.delta} vs avg).{avoid ? ` ${avoid.name} underperforms (${avoid.wr}% WR) — skip unless everything aligns.` : ''}</div>
+              <div>4. <strong style={{ color: '#a78bfa' }}>Tomorrow's playbook ({nextDowName}).</strong> {tomorrowBest ? `${tomorrowBest.setup.replace(/_/g, ' ')} has best odds${tomorrowBest.wr != null ? ` (${tomorrowBest.wr}% WR, N=${tomorrowBest.n})` : ''}. Window: ${tomorrowBest.timeWindow}.` : 'Loading...'}</div>
             );
           })()}
           <div>5. <strong style={{ color: '#a78bfa' }}>Scenario to watch.</strong> {(() => {
             const nextDow = dow === 5 ? 1 : dow + 1;
-            const nextPB = DOW_PLAYBOOKS[nextDow];
-            const best = nextPB?.setups[0];
+            const nextDowName2 = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][(dow + 1) % 7];
+            const tmBest = scalpPlaybook?.pipelineSetups?.[0];
             if (cl.pd1?.val && price && price < cl.pd1.val) {
-              return `Price closing below VAL (${fmtP(cl.pd1.val)}) → tomorrow opens BELOW VALUE with likely LONG_TRAPPED inventory. ${nextPB ? `If ${best?.name} fires on ${nextPB.name} with that alignment → highest conviction setup of the week.` : ''} Watch for the reversal after early selling exhausts.`;
+              return `Price closing below VAL (${fmtP(cl.pd1.val)}) → tomorrow opens BELOW VALUE with likely LONG_TRAPPED inventory. ${tmBest ? `If ${tmBest.setup.replace(/_/g, ' ')} fires on ${nextDowName2} with that alignment → highest conviction setup of the week.` : ''} Watch for the reversal after early selling exhausts.`;
             }
             if (cl.pd1?.vah && price && price > cl.pd1.vah) {
               return `Price closing above VAH (${fmtP(cl.pd1.vah)}) → value migrating higher. Tomorrow's shorts face structural headwind. Look for continuation longs on pullbacks to today's VAH as support.`;
