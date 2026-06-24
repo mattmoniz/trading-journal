@@ -18984,10 +18984,7 @@ function BacktestedEdgeStatsCard() {
     { name: 'BRACKET_BK_LONG', edge: '-14%', status: 'REMOVED', color: '#ef4444' },
     { name: 'BRACKET_BK_SHORT', edge: '-100%', status: 'REMOVED', color: '#ef4444' },
     { name: 'TRT_MAH_SHORT', edge: '-13%', status: 'REMOVED', color: '#ef4444' },
-    { name: 'GAP_FILL', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
     { name: 'FAILED_AUCTION', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
-    { name: 'A_UP/DOWN', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
-    { name: 'C_PAIRED', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
   ];
 
   const rowSt = (active) => ({

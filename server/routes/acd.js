@@ -3907,14 +3907,15 @@ export default function createACDRouter(io) {
       // Shadow setups: removed from active candidates but still tracked for
       // forward-testing. They persist to active_setups with status='SHADOW',
       // resolve against price like normal, and build WR data over time.
+      // Removed dead code setups: C_REVERSAL_LONG/SHORT, A_UP_WEAK, A_DOWN_STRONG, GAP_FILL_LONG
+      // (never fired in 389 days — trigger conditions require same-day ACD contradictions that don't occur)
       const shadowCandidates = [
-        trtMah, gapFill,
-        aUpStrong, aDownStrong, aUpWeak, aDownWeak,
+        trtMah,
+        aDownWeak,
         otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null,
         otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null,
         ibSetup?.type === 'IB_BULLISH' ? ibSetup : null,
-        openDrive?.type === 'OPEN_DRIVE_LONG' ? null : openDrive, // OPEN_DRIVE_LONG is active
-        cPairedLong, cPairedShort, cReversalLong, cReversalShort,
+        cPairedLong, cPairedShort,
         failedAuction, bracketBreakout,
         valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_LONG' ? valueAreaResp : null,
         cStandalone?.type === 'C_STANDALONE_UP' ? cStandalone : null,
