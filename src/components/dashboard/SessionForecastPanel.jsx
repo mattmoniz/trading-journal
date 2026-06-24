@@ -79,7 +79,7 @@ function DailyRecap({ date }) {
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{s.time} {s.level} ({fmtP(s.levelPrice)})</span>
               <span>
-                <span style={{ color: s.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{s.result}</span>
+                <span style={{ color: s.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{s.result} ${s.result === 'WIN' ? (s.pnl * 2 - 1) : (-Math.abs(s.pnl) * 2 - 1)}</span>
                 <span style={{ color: '#64748b' }}> MFE {s.mfe}pt</span>
               </span>
             </div>
@@ -92,7 +92,7 @@ function DailyRecap({ date }) {
           {recap.vwapTrades.map((t, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{t.time} {t.direction} ({t.vwapDist}pt ext)</span>
-              <span style={{ color: t.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{t.result}</span>
+              <span style={{ color: t.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{t.result} ${t.result === 'WIN' ? (t.pnl * 2 - 1) : (-Math.abs(t.pnl) * 2 - 1)}</span>
             </div>
           ))}
         </>
