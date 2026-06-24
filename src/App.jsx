@@ -3991,7 +3991,6 @@ function IntradayChartSection({ dateStr }) {
                 borderBottom: i < setups.length - 1 ? '1px solid rgba(100,116,139,0.1)' : 'none',
               }}>
                 <span style={{ fontSize: 13, color: isLong ? '#4ade80' : '#f87171', minWidth: 14 }}>{isLong ? '▲' : '▼'}</span>
-                <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#94a3b8', minWidth: 50 }}>{s.fired_time} ET</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', minWidth: 160 }}>{label}</span>
                 <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#64748b' }}>
                   E {fmtPx(s.entry_zone_low ?? s.price_at_detection)}
@@ -4012,6 +4011,7 @@ function IntradayChartSection({ dateStr }) {
                   ) : (
                     <span style={{ fontSize: 11, color: '#64748b' }}>—</span>
                   )}
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#64748b' }}>{s.fired_time} ET</span>
                 </span>
               </div>
             );
@@ -18968,6 +18968,10 @@ function BacktestedEdgeStatsCard() {
     { name: '2D POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
     { name: 'OR Mid', delta: '+18.0%', color: '#60a5fa', val: cl?.orMid, tip: 'OR midpoint. With absorption: 60% WR, +$16 exp. 15pt target/15pt stop. Log via Quick Trade Log.' },
     { name: 'PW High', delta: '+5.1%', color: '#fb923c', val: cl?.pw?.high, tip: 'Prior week high resistance. +5.1% edge. Target: 15pt (72% hit).' },
+    { name: '2D VAL', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.val, tip: 'Prior day VAL. 64% fade WR (N=76). Best 12-2PM.' },
+    { name: 'PP', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.pp, tip: 'Floor Pivot Point. 55% fade WR. Best at 10AM (68%).' },
+    { name: 'S1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.s1, tip: 'Floor S1. 61% fade WR. Best 12-2PM (75%). BALANCE days 77%.' },
+    { name: 'R1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.r1, tip: 'Floor R1. 53% fade WR. Coils after 3+ losses (100% WR N=4).' },
   ];
 
   const removed = [

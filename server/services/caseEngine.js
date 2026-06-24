@@ -14,9 +14,11 @@ import { query } from '../db.js';
 import { getNL, getPriorWeekRange, getGLine, getConvictionData, computeDynamicConviction } from './queries.js';
 import { getStructuralLevels } from './phaseChangeDetector.js';
 import { runReassessment, describeLiveReassessment } from './dayTypeReassessmentService.js';
+import { computeProfile } from './developingValueService.js';
 
 const RTH_START = 570; // 09:30 in minutes from midnight
 const REASSESSMENT_CHECKPOINTS = [660, 690, 720, 750, 780, 840, 900, 945]; // 11:00 .. 15:45 ET
+const avgRange20Cache = new Map();
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -166,7 +168,7 @@ function dayTypeAccuracyNote(type, stats) {
 // accuracyStats (from getDayTypeAccuracyStats) so the returned note reflects real numbers;
 // omit it for a conservative "measuring" fallback. lowConfidence stays true while measured
 // overall accuracy is below 60%, or while it hasn't been measured yet (n=0).
-export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats = null }) {
+export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats = null, aUpFired = false, aDownFired = false, cUpConfirmed = false, cDownConfirmed = false }) {
   const overallPct    = accuracyStats?.overall?.pct;
   const lowConfidence = overallPct == null || overallPct < 60;
 
@@ -188,10 +190,13 @@ export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accur
 
   const longDrive = openingType.includes('LONG');
   const shortDrive = openingType.includes('SHORT');
-  const alignedTrend = isDrive && wideOR && ((longDrive && nlBull) || (shortDrive && nlBear));
+  // Use ACD signals to override opening type when available
+  const effectiveLong = aUpFired ? true : aDownFired ? false : longDrive;
+  const effectiveShort = aDownFired ? true : aUpFired ? false : shortDrive;
+  const alignedTrend = (isDrive || aUpFired || aDownFired) && wideOR && ((effectiveLong && nlBull) || (effectiveShort && nlBear));
 
   if (alignedTrend) {
-    const long = longDrive;
+    const long = effectiveLong;
     return {
       classification: 'TREND', probability: Math.abs(nl30) > 15 ? 75 : 65, source: 'LITERATURE', sampleSize: 0,
       lowConfidence,
@@ -456,23 +461,43 @@ function buildExitPlaybook(dayTypeClass) {
   };
 }
 
-async function getOpenGaps(tradeDate, currentPrice) {
+const gapsHistoryCache = new Map();
+
+async function getOpenGaps(tradeDate, currentPrice, bars = []) {
   try {
-    const rangesQ = await query(`
-      SELECT d, rth_low, rth_high FROM (
-        SELECT ts::date::text as d,
-          MIN(low)::float as rth_low,
-          MAX(high)::float as rth_high
-        FROM price_bars_primary
-        WHERE symbol='NQ'
-          AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
-          AND ts::date <= $1
-        GROUP BY ts::date
-        ORDER BY ts::date DESC
-        LIMIT 40
-      ) sub ORDER BY d ASC
-    `, [tradeDate]);
-    const sessions = rangesQ.rows;
+    let sessions = [];
+    if (gapsHistoryCache.has(tradeDate)) {
+      sessions = [...gapsHistoryCache.get(tradeDate)];
+    } else {
+      const rangesQ = await query(`
+        SELECT d, rth_low, rth_high FROM (
+          SELECT ts::date::text as d,
+            MIN(low)::float as rth_low,
+            MAX(high)::float as rth_high
+          FROM price_bars_primary
+          WHERE symbol='NQ'
+            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+            AND ts::date < $1
+          GROUP BY ts::date
+          ORDER BY ts::date DESC
+          LIMIT 39
+        ) sub ORDER BY d ASC
+      `, [tradeDate]);
+      sessions = rangesQ.rows;
+      if (sessions.length > 0) {
+        gapsHistoryCache.set(tradeDate, sessions);
+        if (gapsHistoryCache.size > 100) {
+          const firstKey = gapsHistoryCache.keys().next().value;
+          gapsHistoryCache.delete(firstKey);
+        }
+      }
+    }
+
+    if (bars && bars.length > 0) {
+      const todayLow = Math.min(...bars.map(b => b.low));
+      const todayHigh = Math.max(...bars.map(b => b.high));
+      sessions = [...sessions, { d: tradeDate, rth_low: todayLow, rth_high: todayHigh }];
+    }
     if (sessions.length < 2) return [];
 
     const gaps = [];
@@ -541,6 +566,39 @@ export async function computeCase(tradeDate, asOf) {
     return { error: 'No RTH bar data for this date/time', asOf: asOfFull, tradeDate };
   }
 
+  const sessionOpen = bars.length ? Number(bars[0].open) : null;
+  const devProfile = computeProfile(bars);
+  const devPoc = devProfile ? devProfile.poc : null;
+
+  const pocHistoryQ = await query(`
+    SELECT poc::float, migration_dir_vs_prior as mig FROM developing_value_log
+    WHERE trade_date < $1
+    ORDER BY trade_date DESC LIMIT 3
+  `, [tradeDate]);
+  
+  const pocHistory = pocHistoryQ.rows;
+  const priorPoc = pocHistory[0]?.poc || null;
+  const pocChange = (devPoc && priorPoc) ? (devPoc - priorPoc) : null;
+
+  let poc2DayShift = null;
+  let poc2DayStreak = 'MIXED';
+
+  if (pocHistory.length >= 3) {
+    const pocYesterday = pocHistory[0].poc;
+    const poc3DaysAgo = pocHistory[2].poc;
+    poc2DayShift = pocYesterday - poc3DaysAgo;
+
+    const mig1 = pocHistory[0].mig;
+    const mig2 = pocHistory[1].mig;
+    if (mig1 === 'HIGHER' && mig2 === 'HIGHER') {
+      poc2DayStreak = 'HIGHER';
+    } else if (mig1 === 'LOWER' && mig2 === 'LOWER') {
+      poc2DayStreak = 'LOWER';
+    } else if (mig1 === 'HOLDING' && mig2 === 'HOLDING') {
+      poc2DayStreak = 'HOLDING';
+    }
+  }
+
   // 1b. Fetch trailing 5-session average RTH 1-minute bar volume baseline
   const statsVolQ = await query(`
     SELECT AVG(volume)::float as mean_vol
@@ -555,9 +613,12 @@ export async function computeCase(tradeDate, asOf) {
   const currentPrice  = Number(bars[bars.length - 1].close);
   const currentTs     = bars[bars.length - 1].ts;
   const asOfMinutes   = barMinutes(bars[bars.length - 1]);
+  const minsSinceOpen = Math.max(1, asOfMinutes - RTH_START);
+  const hoursSinceOpen = minsSinceOpen / 60;
+  const pocRoc = pocChange !== null ? (pocChange / hoursSinceOpen) : null;
 
   // Fetch open gaps and calculate gap warning
-  const openGaps = await getOpenGaps(tradeDate, currentPrice);
+  const openGaps = await getOpenGaps(tradeDate, currentPrice, bars);
   let gapWarning = null;
   if (asOfMinutes < 16 * 60) {
     for (const gap of openGaps) {
@@ -883,7 +944,7 @@ export async function computeCase(tradeDate, asOf) {
   // 7. Opening type & day type
   const openingType   = classifyOpeningType(bars);
   const accuracyStats = await getDayTypeAccuracyStats();
-  const dayType       = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats });
+  const dayType       = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats, aUpFired: !!acd?.a_up_fired, aDownFired: !!acd?.a_down_fired, cUpConfirmed: !!acd?.c_up_confirmed, cDownConfirmed: !!acd?.c_down_confirmed });
 
   // 7a. Live day-type REASSESSMENT (additive, read-only — see dayTypeReassessmentService.js).
   // Catches the static read's blind spot (TREND days called BALANCE at 10:05) using
@@ -891,20 +952,32 @@ export async function computeCase(tradeDate, asOf) {
   // vol-jump when present. Runs at checkpoints from 11:00 ET on, no-lookahead.
   let dayTypeReassessment = null;
   if (asOfMinutes >= RTH_START + 60) {
-    const avgRange20Q = await query(`
-      WITH sessions AS (
-        SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
-        FROM price_bars_primary
-        WHERE symbol = 'NQ'
-          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
-          AND ts::date < $1
-        GROUP BY ts::date
-        ORDER BY trade_date DESC
-        LIMIT 20
-      )
-      SELECT AVG(sess_high - sess_low)::float AS avg_range_20 FROM sessions
-    `, [tradeDate]);
-    const avgRange20 = avgRange20Q.rows[0]?.avg_range_20 ?? null;
+    let avgRange20 = null;
+    if (avgRange20Cache.has(tradeDate)) {
+      avgRange20 = avgRange20Cache.get(tradeDate);
+    } else {
+      const avgRange20Q = await query(`
+        WITH sessions AS (
+          SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
+          FROM price_bars_primary
+          WHERE symbol = 'NQ'
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
+            AND ts::date < $1
+          GROUP BY ts::date
+          ORDER BY trade_date DESC
+          LIMIT 20
+        )
+        SELECT AVG(sess_high - sess_low)::float AS avg_range_20 FROM sessions
+      `, [tradeDate]);
+      avgRange20 = avgRange20Q.rows[0]?.avg_range_20 ?? null;
+      if (avgRange20) {
+        avgRange20Cache.set(tradeDate, avgRange20);
+        if (avgRange20Cache.size > 100) {
+          const firstKey = avgRange20Cache.keys().next().value;
+          avgRange20Cache.delete(firstKey);
+        }
+      }
+    }
 
     if (avgRange20) {
       const reassessBars = bars.map(b => ({ ...b, et_min: barMinutes(b) }));
@@ -1389,6 +1462,8 @@ export async function computeCase(tradeDate, asOf) {
       aUpLevel, aDownLevel, gLine, pwHigh, pwLow, onVwap,
       avgVol: Math.round(avgVol), cumDelta, barsLoaded: bars.length,
       deltaConfirmed: !!deltaConf, volConfirmed: volConf.confirmed,
+      sessionOpen, devPoc, priorPoc, pocChange, pocRoc,
+      poc2DayShift, poc2DayStreak,
     },
   };
 }

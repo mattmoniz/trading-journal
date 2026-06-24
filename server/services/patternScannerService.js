@@ -744,7 +744,7 @@ export async function mineLevelFades() {
      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY d`);
 
   const cfg = { target: 20, stop: 25 };
-  const levelNames = ['PD_POC','PD_VAH','PD_VAL','OR_HIGH','OR_LOW','IB_HIGH','IB_LOW','FLOOR_PIVOT','FLOOR_R1','FLOOR_S1','PW_HIGH','PW_LOW','1M_VAH','1M_VAL','3M_VAH','3M_VAL'];
+  const levelNames = ['PD_POC','PD_VAH','PD_VAL','OR_HIGH','OR_LOW','IB_HIGH','IB_LOW','FLOOR_PIVOT','FLOOR_R1','FLOOR_S1','PW_HIGH','PW_LOW','PW_VAH','PW_VAL','1M_VAH','1M_VAL','3M_VAH','3M_VAL'];
   const allTrades = [];
 
   for (const dayRow of days.rows) {
@@ -790,7 +790,7 @@ export async function mineLevelFades() {
     const pwHigh = pwRes.rows[0]?.hi;
     const pwLow = pwRes.rows[0]?.lo;
 
-    // 1-month and 3-month value areas (composite volume profile)
+    // Composite value area helper
     const computeVA = async (interval) => {
       const res = await query(
         `SELECT close::float, volume::bigint as vol FROM price_bars_primary
@@ -805,6 +805,7 @@ export async function mineLevelFades() {
       for (const [price, vol] of sorted) { cumV += vol; levels.push(parseFloat(price)); if (cumV >= totalV * 0.7) break; }
       return { vah: Math.max(...levels), val: Math.min(...levels) };
     };
+    const pwVA = await computeVA('7 days');
     const m1VA = await computeVA('1 month');
     const m3VA = await computeVA('3 months');
 
@@ -815,6 +816,7 @@ export async function mineLevelFades() {
         case 'IB_HIGH': return ibH; case 'IB_LOW': return ibL;
         case 'FLOOR_PIVOT': return floorP; case 'FLOOR_R1': return floorR1; case 'FLOOR_S1': return floorS1;
         case 'PW_HIGH': return pwHigh; case 'PW_LOW': return pwLow;
+        case 'PW_VAH': return pwVA.vah; case 'PW_VAL': return pwVA.val;
         case '1M_VAH': return m1VA.vah; case '1M_VAL': return m1VA.val;
         case '3M_VAH': return m3VA.vah; case '3M_VAL': return m3VA.val;
       }

@@ -2961,7 +2961,7 @@ export default function createACDRouter(io) {
               entry: +currentPrice.toFixed(0),
               stop,
               target,
-              targetLabel: isBull ? (pdVAH && pdVAH > currentPrice ? 'Prior Day VAH' : 'IB Extension') : (pdVAL && pdVAL < currentPrice ? 'Prior Day VAL' : 'IB Extension'),
+              targetLabel: isBull ? 'T1: PD VAH (half off) · Runner: 38pt' : 'T1: PD VAL (half off) · Runner: 39pt',
               keyLevel: +ibMid.toFixed(0),
               keyLevelLabel: 'IB Midpoint',
               description: conflicting
@@ -2994,7 +2994,7 @@ export default function createACDRouter(io) {
             target: isBull
               ? t1Guard('LONG',  currentPrice, orH + (orRange || 0), currentPrice + (orRange || 80))
               : t1Guard('SHORT', currentPrice, orL - (orRange || 0), currentPrice - (orRange || 80)),
-            targetLabel: 'OR Measured Move',
+            targetLabel: isBull ? 'T1: OR Measured Move (half off) · Runner: 70pt' : 'T1: OR Measured Move (half off) · Runner: 65pt',
             keyLevel: +(isBull ? orH : orL).toFixed(0),
             keyLevelLabel: isBull ? 'OR High (support)' : 'OR Low (resistance)',
             description: isBull
@@ -3183,7 +3183,7 @@ export default function createACDRouter(io) {
             target: isFade
               ? t1Guard('SHORT', currentPrice, pdPOC, pdVAL, currentPrice - (orRange || 80) * 0.5)
               : t1Guard('LONG',  currentPrice, pdPOC, pdVAH, currentPrice + (orRange || 80) * 0.5),
-            targetLabel: 'Prior Day POC',
+            targetLabel: isFade ? 'T1: PD POC (half off) · Runner: 95pt' : 'T1: PD POC (half off) · Runner: 100pt',
             keyLevel: +(isFade ? pdVAH : pdVAL).toFixed(0),
             keyLevelLabel: isFade ? 'Prior Day VAH' : 'Prior Day VAL',
             description: isFade
@@ -3217,7 +3217,7 @@ export default function createACDRouter(io) {
             entry: +currentPrice.toFixed(0),
             stop: +(orH + 4).toFixed(0),
             target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
-            targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Range Extension',
+            targetLabel: 'T1: PD VAL (half off) · Runner: 45pt',
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
             description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: C_STANDALONE_DOWN has -12% directional edge at baseline (37.3% WR) and is GATED to PD-2 VA confluence only. At PD-2 VA: 81% WR (+32%, N=16). On TURBULENT days: 69% WR. This setup ONLY fires when price is within 25pt of PD-2 VAH (${pd2VAH ? Math.round(pd2VAH) : '—'}) or PD-2 VAL (${pd2VAL ? Math.round(pd2VAL) : '—'}). Without PD-2 confluence, the edge is negative — do not trade.`,
             history: await getHistory('BALANCE'),
