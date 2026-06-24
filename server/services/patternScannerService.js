@@ -445,10 +445,12 @@ function classifySession(bars, rotCount, closePct) {
   const move = closePrice - openPrice;
 
   if (range < 80) return 'NARROW_RANGE';
+  // Directional conviction first — a 300pt selloff is a trend day even with 50 rotations
+  if (Math.abs(move) > range * 0.4 && closePct > 70) return 'TREND_UP';
+  if (Math.abs(move) > range * 0.4 && closePct < 30) return 'TREND_DOWN';
+  // Then rotation-based classification
   if (rotCount >= 25) return 'EXTREME_CHOP';
   if (rotCount >= 15) return 'CHOP';
-  if (Math.abs(move) > range * 0.5 && closePct > 75) return 'TREND_UP';
-  if (Math.abs(move) > range * 0.5 && closePct < 25) return 'TREND_DOWN';
   if (closePct > 40 && closePct < 60) return 'BALANCE';
   if (closePct > 60) return 'DRIFT_UP';
   if (closePct < 40) return 'DRIFT_DOWN';
