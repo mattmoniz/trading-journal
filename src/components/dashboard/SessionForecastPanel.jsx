@@ -3,38 +3,8 @@ import React, { useState, useEffect } from 'react';
 const API_URL = '/api';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
-const DOW_PLAYBOOKS = {
-  1: { name: 'Monday', alert: 'HIGH LOSS RISK', alertColor: '#f87171', setups: [
-    { name: 'OPEN_DRIVE_LONG', wr: 60, delta: '+19%', verdict: 'BEST' },
-    { name: 'VA_RESP_SHORT', wr: 19, delta: '-8%', verdict: 'CAUTION' },
-    { name: 'C_STANDALONE_DOWN', wr: 36, delta: '-8%', verdict: 'STANDARD' },
-    { name: 'IB_BEARISH', wr: 40, delta: '-20%', verdict: 'AVOID' },
-    { name: 'OPEN_DRIVE_SHORT', wr: 44, delta: '-10%', verdict: 'CAUTION' },
-  ], guidance: 'Monday: opening 30 min chops. Wait for dust to settle. OD_LONG is your best play.' },
-  2: { name: 'Tuesday', alert: 'TRT + IB DAY', alertColor: '#34d399', setups: [
-    { name: 'TRT_LONG', wr: 83, delta: '+27%', verdict: 'BEST' },
-    { name: 'IB_BEARISH', wr: 58, delta: '+1%', verdict: 'STANDARD' },
-    { name: 'OPEN_DRIVE_LONG', wr: 30, delta: '-24%', verdict: 'AVOID' },
-  ], guidance: 'Tuesday is TRT day (83% WR). If opening drive fails → TRT is your play. Avoid OD_LONG.' },
-  3: { name: 'Wednesday', alert: 'OPEN DRIVE DAY', alertColor: '#34d399', setups: [
-    { name: 'OPEN_DRIVE_SHORT', wr: 86, delta: '+33%', verdict: 'BEST' },
-    { name: 'IB_BEARISH', wr: 56, delta: '-1%', verdict: 'STANDARD' },
-    { name: 'OPEN_DRIVE_LONG', wr: 50, delta: '+4%', verdict: 'STANDARD' },
-  ], guidance: 'Wednesday morning sets the tone. If drive is directional, ride it.' },
-  4: { name: 'Thursday', alert: 'BALANCED', alertColor: '#94a3b8', setups: [
-    { name: 'VA_RESP_SHORT', wr: 38, delta: '+11%', verdict: 'BEST' },
-    { name: 'TRT_LONG', wr: 60, delta: '+4%', verdict: 'STANDARD' },
-    { name: 'OPEN_DRIVE_SHORT', wr: 60, delta: '+7%', verdict: 'STANDARD' },
-    { name: 'IB_BEARISH', wr: 54, delta: '-3%', verdict: 'STANDARD' },
-  ], guidance: 'Thursday: play what you see. Trust your read + overnight context.' },
-  5: { name: 'Friday', alert: 'PM SQUARING RISK', alertColor: '#f59e0b', setups: [
-    { name: 'IB_BEARISH', wr: 80, delta: '+23%', verdict: 'BEST' },
-    { name: 'OPEN_DRIVE_SHORT', wr: 50, delta: '-3%', verdict: 'STANDARD' },
-    { name: 'OPEN_DRIVE_LONG', wr: 40, delta: '-14%', verdict: 'AVOID' },
-  ], guidance: 'Friday: take IB_BEARISH with conviction. Be flat by 12:30 PM.' },
-};
+// DOW_PLAYBOOKS removed — replaced by live backtested data from /api/morning-brief/scalp-playbook
 
-const verdictColors = { BEST: '#22c55e', STANDARD: '#94a3b8', CAUTION: '#f59e0b', AVOID: '#ef4444' };
 
 function DailyRecap({ date }) {
   const [recap, setRecap] = useState(null);
@@ -162,7 +132,7 @@ export default function SessionForecastPanel({ date }) {
   const rps = forecast?.rangePositions || {};
   const bracketAge = forecast?.bracketAge || 0;
   const dow = new Date(date + 'T12:00:00').getDay();
-  const playbook = DOW_PLAYBOOKS[dow];
+  // playbook now comes from scalpPlaybook (live data)
 
   // Build key levels with behavioral notes
   const keyLevels = [];
