@@ -355,6 +355,50 @@ export default function AntigravityEdgesView() {
                     : 'Tuesday-Thursday is your sweet spot. Standard risk parameters allowed.'}
                 </p>
               </div>
+
+              {/* Nasdaq Microstructure (IB & Volatility) */}
+              <div style={cardItemStyle}>
+                <div style={cardItemLabelStyle}>Nasdaq Microstructure (IB & ADR)</div>
+                {liveStatus.ibHigh && liveStatus.ibLow ? (
+                  <div style={cardItemValueStyle((liveStatus.currentSessionRange / liveStatus.adr20) >= 0.9 ? 'WIDE' : 'TIGHT')}>
+                    {Math.round(liveStatus.ibHigh - liveStatus.ibLow)} pt IB
+                    <span style={subtextStyle('NORMAL')}>
+                      {' · '}{Math.round(liveStatus.currentSessionRange || 0)}/{liveStatus.adr20} pt ADR ({Math.round(((liveStatus.currentSessionRange || 0) / (liveStatus.adr20 || 1)) * 100)}%)
+                    </span>
+                  </div>
+                ) : (
+                  <div style={cardItemValueStyle('NORMAL')}>
+                    Establishing...
+                    {liveStatus.adr20 && (
+                      <span style={subtextStyle('NORMAL')}>
+                        {' · '}ADR: {liveStatus.adr20} pts
+                      </span>
+                    )}
+                  </div>
+                )}
+                <p style={cardItemDescStyle}>
+                  {(() => {
+                    const ibWidth = liveStatus.ibHigh && liveStatus.ibLow ? (liveStatus.ibHigh - liveStatus.ibLow) : null;
+                    const pctOfAdr = liveStatus.currentSessionRange && liveStatus.adr20 ? (liveStatus.currentSessionRange / liveStatus.adr20) : 0;
+                    
+                    let text = "";
+                    if (ibWidth && ibWidth < 80) {
+                      text += "📈 Narrow IB (<80 pt): high breakout expansion probability. ";
+                    } else if (ibWidth && ibWidth > 150) {
+                      text += "📉 Wide IB (>150 pt): high breakout failure rate, focus on fading extensions. ";
+                    } else if (ibWidth) {
+                      text += "⚖️ Normal IB range. Standard breakouts/reversions active. ";
+                    }
+                    
+                    if (pctOfAdr >= 0.9) {
+                      text += "⚠️ Extended Session: Price has completed over 90% of expected daily range (ADR). Avoid chasing breakouts, favor reversion fades.";
+                    } else {
+                      text += `Daily move is at ${Math.round(pctOfAdr * 100)}% of expected ADR. Further room for extension exists.`;
+                    }
+                    return text;
+                  })()}
+                </p>
+              </div>
             </div>
           </div>
         ) : (
@@ -904,8 +948,8 @@ export default function AntigravityEdgesView() {
               { name: 'PD-2 VAL', val: confluenceLevels.pd2?.val, target: 75, hitRate: 33, exp: 55, ctrlDelta: 20.5, role: 'support', color: '#4ade80' },
               { name: 'PW Low', val: confluenceLevels.pw?.low, target: 100, hitRate: 33, exp: 100, ctrlDelta: 15.0, role: 'support', color: '#4ade80' },
               { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, exp: 48, ctrlDelta: 14.7, role: 'resistance', color: '#f87171' },
-              { name: 'PD-1 VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, exp: 31, ctrlDelta: 9.6, role: 'resistance', color: '#fb923c' },
-              { name: 'PD-1 POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, exp: 25, ctrlDelta: 9.0, role: 'magnet', color: '#a78bfa' },
+              { name: '2D VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, exp: 31, ctrlDelta: 9.6, role: 'resistance', color: '#fb923c' },
+              { name: '2D POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, exp: 25, ctrlDelta: 9.0, role: 'magnet', color: '#a78bfa' },
               { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, exp: 16, ctrlDelta: 18.0, role: 'pivot', color: '#60a5fa', note: 'With absorption: 60% WR. Log via Quick Trade Log.' },
               { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, exp: 26, ctrlDelta: 5.1, role: 'resistance', color: '#fb923c' },
             ].filter(l => l.val != null);
@@ -1062,57 +1106,55 @@ export default function AntigravityEdgesView() {
               </div>
             </div>
           )}
-          {/* 9 EMA SNAP-BACK EDGE */}
+          {/* VWAP MAGNET EDGE */}
           <h2 style={{ ...sectionTitleStyle, marginTop: '28px' }}>
-            🧲 9 EMA Snap-Back Edge (Mean Reversion)
+            🧲 VWAP Magnet (Mean Reversion)
           </h2>
           {(() => {
             const snap = liveStatus?.emaSnap;
             if (!snap) return (
               <div style={noLiveCardStyle}>
                 <div style={{ fontSize: 13, color: '#64748b' }}>
-                  {liveStatus?.active ? 'Waiting for enough 5-min bars to compute 9 EMA + ATR(14)...' : 'RTH session not active. Snap-back monitor initializes at 9:45 AM ET.'}
+                  {liveStatus?.active ? 'Computing VWAP distance...' : 'RTH session not active.'}
                 </div>
               </div>
             );
 
             const isStretched = snap.stretched;
-            const devColor = snap.absDeviationATR >= 2.5 ? '#ef4444' : snap.absDeviationATR >= 2.0 ? '#fbbf24' : snap.absDeviationATR >= 1.5 ? '#fb923c' : '#94a3b8';
-            const confLevel = snap.absDeviationATR >= 2.5 ? 'HIGH' : snap.absDeviationATR >= 2.0 ? 'MEDIUM' : 'LOW';
-            const confColor = confLevel === 'HIGH' ? '#10b981' : confLevel === 'MEDIUM' ? '#3b82f6' : '#64748b';
-            const confBg = confLevel === 'HIGH' ? 'rgba(16,185,129,0.1)' : confLevel === 'MEDIUM' ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)';
-            const dirLabel = snap.direction === 'ABOVE' ? 'SHORT (fade back to EMA)' : 'LONG (fade back to EMA)';
+            const dist = Math.abs(snap.deviation);
+            const confLevel = isStretched ? 'MEDIUM' : 'LOW';
+            const dirLabel = snap.direction === 'ABOVE' ? 'SHORT (fade to VWAP)' : 'LONG (fade to VWAP)';
             const dirColor = snap.direction === 'ABOVE' ? '#f87171' : '#34d399';
 
             return (
               <div style={setupCardStyle(isStretched ? confLevel : null)}>
                 <div style={setupHeaderStyle}>
                   <span style={setupTypeStyle}>
-                    9 EMA SNAP-BACK
-                    <InfoTooltip text={`9 EMA SNAP-BACK (Mean Reversion)\n\nWhen the 5-min close stretches ≥2.0 ATR(14) from the 9-period EMA, price snaps back toward the EMA 96.2% of the time within 15 minutes (3 bars).\n\nBACKTEST (12 months, NQ 5-min):\n• ≥2.0 ATR: 96.2% revert, N=533\n• ≥2.5 ATR: 99.1% revert, N=228\n• ≥3.0 ATR: 99.1% revert, N=109\n• Baseline revert rate: 72.7%\n• Edge vs baseline: +23.5%\n\nWorks on ALL day types:\n• TREND: 93.3% revert\n• BALANCE: 94.9% revert\n• TURBULENT: 92.8% revert\n\nEXECUTION:\n1. Wait for 5-min bar to CLOSE at ≥2.0 ATR from 9 EMA\n2. Enter opposite direction (fade the stretch)\n3. Target: the 9 EMA value\n4. Stop: session extreme or 1 ATR beyond entry\n5. Hold 3-5 bars max (15-25 min) — this is a scalp\n\nThe edge is in the snap-back, not continuation. Take profit at the EMA.`} />
+                    VWAP MAGNET
+                    <InfoTooltip text={`VWAP MAGNET (Mean Reversion)\n\nWhen price extends 25% of the developing range from VWAP, fade back toward VWAP.\n\nBACKTEST (90 days, 1-min bars):\n• 62% WR (N=460)\n• BALANCE days: 79% WR\n• 20pt target, 30pt stop\n• Range-scaled threshold (min 50pt)\n• 30-bar cooldown between trades\n\nReplaces EMA Snap-Back (0% WR, removed).\n\nEXECUTION:\n1. Check VWAP distance vs threshold\n2. Fade toward VWAP\n3. 20pt target, 30pt stop\n4. Scalp — don't hold for continuation`} />
                   </span>
-                  <span style={setupBadgeStyle(isStretched ? confColor : '#64748b', isStretched ? confBg : 'rgba(100,116,139,0.1)')}>
-                    {isStretched ? `${confLevel} — FADE TRIGGER` : 'MONITORING'}
+                  <span style={setupBadgeStyle(isStretched ? '#3b82f6' : '#64748b', isStretched ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)')}>
+                    {isStretched ? 'FADE ACTIVE' : 'MONITORING'}
                   </span>
                 </div>
 
                 <div style={setupMetricsGrid}>
                   <div>
-                    <div style={metricLabelStyle}>9 EMA</div>
+                    <div style={metricLabelStyle}>VWAP</div>
                     <div style={{ ...metricValueStyle, color: '#a78bfa', fontFamily: 'monospace' }}>
-                      {snap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                      {(snap.vwap || snap.ema9).toLocaleString('en-US', { maximumFractionDigits: 0 })}
                     </div>
                   </div>
                   <div>
-                    <div style={metricLabelStyle}>5m ATR(14)</div>
+                    <div style={metricLabelStyle}>Distance</div>
+                    <div style={{ ...metricValueStyle, color: isStretched ? '#fbbf24' : '#94a3b8', fontFamily: 'monospace' }}>
+                      {snap.deviation > 0 ? '+' : ''}{Math.round(snap.deviation)}pt
+                    </div>
+                  </div>
+                  <div>
+                    <div style={metricLabelStyle}>Threshold</div>
                     <div style={{ ...metricValueStyle, fontFamily: 'monospace' }}>
-                      {snap.atr14.toFixed(1)} pts
-                    </div>
-                  </div>
-                  <div>
-                    <div style={metricLabelStyle}>Deviation</div>
-                    <div style={{ ...metricValueStyle, color: devColor, fontFamily: 'monospace' }}>
-                      {snap.deviationATR > 0 ? '+' : ''}{snap.deviationATR.toFixed(2)} ATR
+                      {snap.threshold || '—'}pt
                     </div>
                   </div>
                 </div>
@@ -1121,40 +1163,18 @@ export default function AntigravityEdgesView() {
                   <>
                     <div style={setupLevelsGrid}>
                       <div><strong>Direction:</strong> <span style={{ color: dirColor, fontWeight: 700 }}>{dirLabel}</span></div>
-                      <div><strong>Entry:</strong> Current price ({snap.price.toLocaleString('en-US', { maximumFractionDigits: 0 })})</div>
-                      <div><strong>Target:</strong> <span style={{ color: '#a78bfa' }}>9 EMA ({snap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })})</span></div>
+                      <div><strong>Target:</strong> 20pt toward VWAP</div>
+                      <div><strong>Stop:</strong> 30pt</div>
                     </div>
                     <div style={recBoxStyle(confLevel)}>
-                      Price is {snap.absDeviationATR.toFixed(1)}× ATR {snap.direction === 'ABOVE' ? 'above' : 'below'} the 9 EMA —
-                      {snap.absDeviationATR >= 2.5 ? ' extreme stretch. 99.1% revert rate (N=228). High conviction fade.' : ' stretched. 96.2% revert rate within 15 min (N=533). Fade toward EMA.'}
-                      {' '}Scalp only — take profit at EMA, do not hold for continuation. Stop at session {snap.direction === 'ABOVE' ? 'high' : 'low'} or {snap.atr14.toFixed(0)}pt beyond entry.
+                      Price is {Math.round(dist)}pt from VWAP ({snap.triggerLevel}). 20pt target, 30pt stop. Scalp — don't hold.
                     </div>
                   </>
                 ) : (
                   <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
-                    Deviation is {snap.absDeviationATR.toFixed(2)} ATR — below the 2.0 ATR trigger threshold. No fade signal active.
-                    {snap.absDeviationATR >= 1.5 && <span style={{ color: '#fb923c', fontWeight: 600 }}> Approaching trigger zone.</span>}
+                    {Math.round(dist)}pt from VWAP — below threshold. No fade signal.
                   </div>
                 )}
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px', marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.4)', borderRadius: '6px' }}>
-                  <div>
-                    <div style={metricLabelStyle}>≥2.0 ATR</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>96.2% <span style={sampleLabel}>(N=533)</span></div>
-                  </div>
-                  <div>
-                    <div style={metricLabelStyle}>≥2.5 ATR</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>99.1% <span style={sampleLabel}>(N=228)</span></div>
-                  </div>
-                  <div>
-                    <div style={metricLabelStyle}>≥3.0 ATR</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981' }}>99.1% <span style={sampleLabel}>(N=109)</span></div>
-                  </div>
-                  <div>
-                    <div style={metricLabelStyle}>Baseline</div>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b' }}>72.7%</div>
-                  </div>
-                </div>
               </div>
             );
           })()}
@@ -1165,7 +1185,7 @@ export default function AntigravityEdgesView() {
           </h2>
           {(() => {
             const abs = liveStatus?.absorption;
-            const absTooltip = `BULLISH ABSORPTION\n\nWHAT IT IS:\nPrice held at support — 4+ bars cluster at the same low (within 5pt). RSI RISING while price flat = sellers exhausting, buyers accumulating.\n\nBACKTEST (2.5 years, NQ 5-min):\n• ALL: 71.4% WR at 5 bars (+18.4%), N=35\n• BALANCE days: 73.9% WR at 20 bars (+20.9%), N=23\n• Near PD-1 VA: 90.9% WR (N=11)\n• Calibrated: 25pt stop / 40pt target = 50% WR, $31/trade\n  OR: 25pt stop / 20pt target = 72% WR, $32/trade (scalp)\n\nCONTEXT: BALANCE days only (TREND overruns support). Bearish absorption (at resistance) has NO edge on NQ.\n\nWATCH SEQUENCE:\n1. WATCHING: 3+ bars clustering at support, RSI rising >3pt\n2. CONFIRMED: 4+ bars at support, RSI rising >5pt, price flat\n3. FIRE: Enter long. Stop 25pt below. Target 40pt (runner) or 20pt (scalp).\n4. HOLD: 5-20 bars. This is a RUNNER — avg MFE 90-125pt at 20 bars.\n5. Near PD-1 VA = highest conviction (90.9%)`;
+            const absTooltip = `BULLISH ABSORPTION\n\nWHAT IT IS:\nPrice held at support — 4+ bars cluster at the same low (within 5pt). RSI RISING while price flat = sellers exhausting, buyers accumulating.\n\nBACKTEST (2.5 years, NQ 5-min):\n• ALL: 71.4% WR at 5 bars (+18.4%), N=35\n• BALANCE days: 73.9% WR at 20 bars (+20.9%), N=23\n• Near 2D VA: 90.9% WR (N=11)\n• Calibrated: 25pt stop / 40pt target = 50% WR, $31/trade\n  OR: 25pt stop / 20pt target = 72% WR, $32/trade (scalp)\n\nCONTEXT: BALANCE days only (TREND overruns support). Bearish absorption (at resistance) has NO edge on NQ.\n\nWATCH SEQUENCE:\n1. WATCHING: 3+ bars clustering at support, RSI rising >3pt\n2. CONFIRMED: 4+ bars at support, RSI rising >5pt, price flat\n3. FIRE: Enter long. Stop 25pt below. Target 40pt (runner) or 20pt (scalp).\n4. HOLD: 5-20 bars. This is a RUNNER — avg MFE 90-125pt at 20 bars.\n5. Near 2D VA = highest conviction (90.9%)`;
             const isActive = abs?.detected;
             const isWatching = abs?.watching;
             return (

@@ -8,6 +8,7 @@ import SetupsTable from './SetupsTable.jsx';
 import OptimizationSection from './OptimizationSection.jsx';
 import BehaviorSection from './BehaviorSection.jsx';
 import DevelopingValueCard from './DevelopingValueCard.jsx';
+import ScalpPlaybookCard from './ScalpPlaybookCard.jsx';
 
 const API_URL = '/api';
 
@@ -211,6 +212,8 @@ export default function DashboardView({
         onDateRangeChange={handleDateRangeChange}
         onCustomDateChange={handleCustomDateChange}
       />
+
+      <ScalpPlaybookCard date={recapDate} />
 
       <DevelopingValueCard date={recapDate} title="Developing Value — Today's Session" windows={[5, 10, 20]} />
 

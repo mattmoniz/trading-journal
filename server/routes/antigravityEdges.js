@@ -2,9 +2,16 @@ import express from 'express';
 import https from 'https';
 import { query } from '../db.js';
 
+const edgesHistoryCache = new Map();
+let tradeBacktestCache = null;
+let tradeBacktestCacheTime = 0;
+
 const router = express.Router();
 
 async function getTradeBacktest() {
+  if (tradeBacktestCache && (Date.now() - tradeBacktestCacheTime < 30000)) {
+    return tradeBacktestCache;
+  }
   const isFunded = (acct) => /PRO\d|DIRECT\d/.test(acct || '');
 
   // Load raw trades
@@ -309,183 +316,215 @@ async function getTradeBacktest() {
     };
   }
 
+  tradeBacktestCache = results;
+  tradeBacktestCacheTime = Date.now();
   return results;
 }
 
 async function getLiveEdgesContext() {
-  // 1. Fetch all RTH price bars for NQ (9:30 ET to 16:00 ET)
-  // Limit to last 120 trading days — covers all analysis windows (30/60/90/allTime)
-  // without a full sequential scan of the entire price_bars table on every request.
-  const barsQ = await query(`
-    SELECT DISTINCT ON (ts)
-      ts::date::text as trade_date,
-      (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
-      open::float, high::float, low::float, close::float, volume::float
-    FROM price_bars_primary
-    WHERE symbol='NQ'
-      AND ts::date >= CURRENT_DATE - INTERVAL '170 days'
-      AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
-    ORDER BY ts, id DESC
-  `);
-
-  // Group bars by date
-  const sessions = {};
-  for (const bar of barsQ.rows) {
-    if (!sessions[bar.trade_date]) sessions[bar.trade_date] = [];
-    sessions[bar.trade_date].push(bar);
-  }
-
-  const sortedDates = Object.keys(sessions).sort();
-  const sessionData = [];
-
-  for (const date of sortedDates) {
-    const bars = sessions[date].sort((a, b) => a.et_min - b.et_min);
-    if (bars.length < 300) continue; // Require a reasonably complete RTH session
-
-    const open = bars[0].open;
-    const close = bars[bars.length - 1].close;
-    const high = Math.max(...bars.map(b => b.high));
-    const low = Math.min(...bars.map(b => b.low));
-    const range = high - low;
-
-    // OR5 Range
-    const or5Bars = bars.filter(b => b.et_min >= 570 && b.et_min <= 574);
-    const or5High = or5Bars.length ? Math.max(...or5Bars.map(b => b.high)) : null;
-    const or5Low = or5Bars.length ? Math.min(...or5Bars.map(b => b.low)) : null;
-    const or5Range = (or5High && or5Low) ? or5High - or5Low : null;
-
-    // OR30 Range
-    const or30Bars = bars.filter(b => b.et_min >= 570 && b.et_min <= 599);
-    const or30High = or30Bars.length ? Math.max(...or30Bars.map(b => b.high)) : null;
-    const or30Low = or30Bars.length ? Math.min(...or30Bars.map(b => b.low)) : null;
-    const or30Range = (or30High && or30Low) ? or30High - or30Low : null;
-
-    const highBar = bars.find(b => b.high === high);
-    const lowBar = bars.find(b => b.low === low);
-    const highTime = highBar ? highBar.et_min : null;
-    const lowTime = lowBar ? lowBar.et_min : null;
-
-    const morningBars = bars.filter(b => b.et_min >= 570 && b.et_min < 720);
-    const morningHigh = morningBars.length ? Math.max(...morningBars.map(b => b.high)) : null;
-    const morningLow = morningBars.length ? Math.min(...morningBars.map(b => b.low)) : null;
-
-    sessionData.push({
-      date, open, close, high, low, range,
-      or5Range, or30High, or30Low, or30Range,
-      morningHigh, morningLow, highTime, lowTime
-    });
-  }
-
-  const windows = [30, 60, 90, sessionData.length];
-  const resultsByWindow = {};
-
-  const allOr5Ranges = sessionData.map(s => s.or5Range).filter(r => r != null).sort((a, b) => a - b);
-  const Q1_LIMIT = allOr5Ranges.length > 0 ? parseFloat(allOr5Ranges[Math.floor(allOr5Ranges.length * 0.25)].toFixed(2)) : 47.5;
-  const Q4_LIMIT = allOr5Ranges.length > 0 ? parseFloat(allOr5Ranges[Math.floor(allOr5Ranges.length * 0.75)].toFixed(2)) : 91.5;
-
-  for (const w of windows) {
-    const subset = sessionData.slice(-w);
-    const windowKey = w === sessionData.length ? 'allTime' : `last${w}`;
-
-    // 1. Gaps
-    let gapUps = 0, gapUpsFilled = 0;
-    let gapDowns = 0, gapDownsFilled = 0;
-    let insideOpens = 0, sweepHighRejections = 0, sweepLowRejections = 0;
-
-    for (let i = 1; i < subset.length; i++) {
-      const prev = subset[i - 1];
-      const curr = subset[i];
-      if (curr.open > prev.high) {
-        gapUps++;
-        if (curr.low <= prev.high) gapUpsFilled++;
-      } else if (curr.open < prev.low) {
-        gapDowns++;
-        if (curr.high >= prev.low) gapDownsFilled++;
-      } else {
-        insideOpens++;
-        if (curr.morningHigh > prev.high && curr.close < prev.high) sweepHighRejections++;
-        if (curr.morningLow < prev.low && curr.close > prev.low) sweepLowRejections++;
-      }
-    }
-
-    const gapUpFillPct = gapUps > 0 ? (gapUpsFilled / gapUps * 100).toFixed(1) : '0.0';
-    const gapDownFillPct = gapDowns > 0 ? (gapDownsFilled / gapDowns * 100).toFixed(1) : '0.0';
-    const sweepPct = insideOpens > 0 ? ((sweepHighRejections + sweepLowRejections) / insideOpens * 100).toFixed(1) : '0.0';
-
-    // 2. 10:00 AM Pivot
-    let pivotCount = 0;
-    for (const s of subset) {
-      const isHighInWindow = s.highTime >= 595 && s.highTime <= 605;
-      const isLowInWindow = s.lowTime >= 595 && s.lowTime <= 605;
-      if (isHighInWindow || isLowInWindow) pivotCount++;
-    }
-    const pivotPct = (pivotCount / subset.length * 100).toFixed(1);
-
-    // 3. OR5 size behaviors (Tight vs Wide)
-    const tightOR = subset.filter(s => s.or5Range != null && s.or5Range < Q1_LIMIT);
-    const wideOR = subset.filter(s => s.or5Range != null && s.or5Range >= Q4_LIMIT);
-
-    const tightBreakoutRun = tightOR.filter(s => {
-      if (!s.or30Range) return false;
-      return Math.max(s.high - s.or30High, s.or30Low - s.low) >= 2.5 * s.or30Range;
-    });
-    const tightTrendDays = tightOR.filter(s => (s.high - s.close < 0.15 * s.range || s.close - s.low < 0.15 * s.range) && s.range > 220);
-
-    const wideBreakoutRun = wideOR.filter(s => {
-      if (!s.or30Range) return false;
-      return Math.max(s.high - s.or30High, s.or30Low - s.low) >= 2.5 * s.or30Range;
-    });
-    const wideTrendDays = wideOR.filter(s => (s.high - s.close < 0.15 * s.range || s.close - s.low < 0.15 * s.range) && s.range > 220);
-
-    resultsByWindow[windowKey] = {
-      windowSize: w,
-      gapUps,
-      gapUpsFilled,
-      gapUpFillPct: parseFloat(gapUpFillPct),
-      gapDowns,
-      gapDownsFilled,
-      gapDownFillPct: parseFloat(gapDownFillPct),
-      insideOpens,
-      sweepHighRejections,
-      sweepLowRejections,
-      sweepPct: parseFloat(sweepPct),
-      pivotCount,
-      pivotPct: parseFloat(pivotPct),
-      tightCount: tightOR.length,
-      tightRunPct: tightOR.length > 0 ? parseFloat((tightBreakoutRun.length / tightOR.length * 100).toFixed(1)) : 0,
-      tightTrendPct: tightOR.length > 0 ? parseFloat((tightTrendDays.length / tightOR.length * 100).toFixed(1)) : 0,
-      wideCount: wideOR.length,
-      wideRunPct: wideOR.length > 0 ? parseFloat((wideBreakoutRun.length / wideOR.length * 100).toFixed(1)) : 0,
-      wideTrendPct: wideOR.length > 0 ? parseFloat((wideTrendDays.length / wideOR.length * 100).toFixed(1)) : 0,
-    };
-  }
-
-  // Calculate live session info if active
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   let targetDate = todayET;
   let isFallback = false;
 
-  // Check if we have setups today. If not, check if we have price bars today (meaning today is a trading day).
+  // Check if we have setups today. If not, check if we have price bars today.
   const todaySetupsCount = await query(`
     SELECT COUNT(*) FROM active_setups WHERE trade_date=$1
-  `, [todayET]);
+  `, [todayET]).catch(() => ({ rows: [{ count: 0 }] }));
 
   const todayBarsCount = await query(`
     SELECT 1 FROM price_bars WHERE ts >= $1::date AND ts < $1::date + interval '1 day' LIMIT 1
-  `, [todayET]);
+  `, [todayET]).catch(() => ({ rows: [] }));
 
   const hasBarsToday = todayBarsCount.rows.length > 0;
-  const hasSetupsToday = parseInt(todaySetupsCount.rows[0].count) > 0;
+  const hasSetupsToday = parseInt(todaySetupsCount.rows[0]?.count || 0) > 0;
 
   if (!hasSetupsToday && !hasBarsToday) {
-    // If no setups and no price bars today, we are in a non-trading period (e.g. weekend or holiday).
-    // Fall back to the last trading day with price bars.
     const lastBarDateQ = await query(`
       SELECT ts::date::text as last_date FROM price_bars WHERE ts < $1 ORDER BY ts DESC LIMIT 1
-    `, [todayET]);
+    `, [todayET]).catch(() => ({ rows: [] }));
     if (lastBarDateQ.rows.length > 0) {
       targetDate = lastBarDateQ.rows[0].last_date;
       isFallback = true;
+    }
+  }
+
+  let resultsByWindow;
+  let Q1_LIMIT;
+  let Q4_LIMIT;
+  let lastSession;
+  let adr20;
+
+  if (edgesHistoryCache.has(targetDate)) {
+    const cached = edgesHistoryCache.get(targetDate);
+    resultsByWindow = cached.resultsByWindow;
+    Q1_LIMIT = cached.Q1_LIMIT;
+    Q4_LIMIT = cached.Q4_LIMIT;
+    lastSession = cached.lastSession;
+    adr20 = cached.adr20;
+  } else {
+    // 1. Fetch all RTH price bars for NQ (9:30 ET to 16:00 ET)
+    const barsQ = await query(`
+      SELECT DISTINCT ON (ts)
+        ts::date::text as trade_date,
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
+        open::float, high::float, low::float, close::float, volume::float
+      FROM price_bars_primary
+      WHERE symbol='NQ'
+        AND ts::date >= CURRENT_DATE - INTERVAL '170 days'
+        AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+      ORDER BY ts, id DESC
+    `);
+
+    // Group bars by date
+    const sessions = {};
+    for (const bar of barsQ.rows) {
+      if (!sessions[bar.trade_date]) sessions[bar.trade_date] = [];
+      sessions[bar.trade_date].push(bar);
+    }
+
+    const sortedDates = Object.keys(sessions).sort();
+    const sessionData = [];
+
+    for (const date of sortedDates) {
+      const bars = sessions[date].sort((a, b) => a.et_min - b.et_min);
+      if (bars.length < 300) continue; // Require a reasonably complete RTH session
+
+      const open = bars[0].open;
+      const close = bars[bars.length - 1].close;
+      const high = Math.max(...bars.map(b => b.high));
+      const low = Math.min(...bars.map(b => b.low));
+      const range = high - low;
+
+      // OR5 Range
+      const or5Bars = bars.filter(b => b.et_min >= 570 && b.et_min <= 574);
+      const or5High = or5Bars.length ? Math.max(...or5Bars.map(b => b.high)) : null;
+      const or5Low = or5Bars.length ? Math.min(...or5Bars.map(b => b.low)) : null;
+      const or5Range = (or5High && or5Low) ? or5High - or5Low : null;
+
+      // OR30 Range
+      const or30Bars = bars.filter(b => b.et_min >= 570 && b.et_min <= 599);
+      const or30High = or30Bars.length ? Math.max(...or30Bars.map(b => b.high)) : null;
+      const or30Low = or30Bars.length ? Math.min(...or30Bars.map(b => b.low)) : null;
+      const or30Range = (or30High && or30Low) ? or30High - or30Low : null;
+
+      const highBar = bars.find(b => b.high === high);
+      const lowBar = bars.find(b => b.low === low);
+      const highTime = highBar ? highBar.et_min : null;
+      const lowTime = lowBar ? lowBar.et_min : null;
+
+      const morningBars = bars.filter(b => b.et_min >= 570 && b.et_min < 720);
+      const morningHigh = morningBars.length ? Math.max(...morningBars.map(b => b.high)) : null;
+      const morningLow = morningBars.length ? Math.min(...morningBars.map(b => b.low)) : null;
+
+      sessionData.push({
+        date, open, close, high, low, range,
+        or5Range, or30High, or30Low, or30Range,
+        morningHigh, morningLow, highTime, lowTime
+      });
+    }
+
+    const windows = [30, 60, 90, sessionData.length];
+    resultsByWindow = {};
+
+    const allOr5Ranges = sessionData.map(s => s.or5Range).filter(r => r != null).sort((a, b) => a - b);
+    Q1_LIMIT = allOr5Ranges.length > 0 ? parseFloat(allOr5Ranges[Math.floor(allOr5Ranges.length * 0.25)].toFixed(2)) : 47.5;
+    Q4_LIMIT = allOr5Ranges.length > 0 ? parseFloat(allOr5Ranges[Math.floor(allOr5Ranges.length * 0.75)].toFixed(2)) : 91.5;
+
+    for (const w of windows) {
+      const subset = sessionData.slice(-w);
+      const windowKey = w === sessionData.length ? 'allTime' : `last${w}`;
+
+      // 1. Gaps
+      let gapUps = 0, gapUpsFilled = 0;
+      let gapDowns = 0, gapDownsFilled = 0;
+      let insideOpens = 0, sweepHighRejections = 0, sweepLowRejections = 0;
+
+      for (let i = 1; i < subset.length; i++) {
+        const prev = subset[i - 1];
+        const curr = subset[i];
+        if (curr.open > prev.high) {
+          gapUps++;
+          if (curr.low <= prev.high) gapUpsFilled++;
+        } else if (curr.open < prev.low) {
+          gapDowns++;
+          if (curr.high >= prev.low) gapDownsFilled++;
+        } else {
+          insideOpens++;
+          if (curr.morningHigh > prev.high && curr.close < prev.high) sweepHighRejections++;
+          if (curr.morningLow < prev.low && curr.close > prev.low) sweepLowRejections++;
+        }
+      }
+
+      const gapUpFillPct = gapUps > 0 ? (gapUpsFilled / gapUps * 100).toFixed(1) : '0.0';
+      const gapDownFillPct = gapDowns > 0 ? (gapDownsFilled / gapDowns * 100).toFixed(1) : '0.0';
+      const sweepPct = insideOpens > 0 ? ((sweepHighRejections + sweepLowRejections) / insideOpens * 100).toFixed(1) : '0.0';
+
+      // 2. 10:00 AM Pivot
+      let pivotCount = 0;
+      for (const s of subset) {
+        const isHighInWindow = s.highTime >= 595 && s.highTime <= 605;
+        const isLowInWindow = s.lowTime >= 595 && s.lowTime <= 605;
+        if (isHighInWindow || isLowInWindow) pivotCount++;
+      }
+      const pivotPct = (pivotCount / subset.length * 100).toFixed(1);
+
+      // 3. OR5 size behaviors (Tight vs Wide)
+      const tightOR = subset.filter(s => s.or5Range != null && s.or5Range < Q1_LIMIT);
+      const wideOR = subset.filter(s => s.or5Range != null && s.or5Range >= Q4_LIMIT);
+
+      const tightBreakoutRun = tightOR.filter(s => {
+        if (!s.or30Range) return false;
+        return Math.max(s.high - s.or30High, s.or30Low - s.low) >= 2.5 * s.or30Range;
+      });
+      const tightTrendDays = tightOR.filter(s => (s.high - s.close < 0.15 * s.range || s.close - s.low < 0.15 * s.range) && s.range > 220);
+
+      const wideBreakoutRun = wideOR.filter(s => {
+        if (!s.or30Range) return false;
+        return Math.max(s.high - s.or30High, s.or30Low - s.low) >= 2.5 * s.or30Range;
+      });
+      const wideTrendDays = wideOR.filter(s => (s.high - s.close < 0.15 * s.range || s.close - s.low < 0.15 * s.range) && s.range > 220);
+
+      resultsByWindow[windowKey] = {
+        windowSize: w,
+        gapUps,
+        gapUpsFilled,
+        gapUpFillPct: parseFloat(gapUpFillPct),
+        gapDowns,
+        gapDownsFilled,
+        gapDownFillPct: parseFloat(gapDownFillPct),
+        insideOpens,
+        sweepHighRejections,
+        sweepLowRejections,
+        sweepPct: parseFloat(sweepPct),
+        pivotCount,
+        pivotPct: parseFloat(pivotPct),
+        tightCount: tightOR.length,
+        tightRunPct: tightOR.length > 0 ? parseFloat((tightBreakoutRun.length / tightOR.length * 100).toFixed(1)) : 0,
+        tightTrendPct: tightOR.length > 0 ? parseFloat((tightTrendDays.length / tightOR.length * 100).toFixed(1)) : 0,
+        wideCount: wideOR.length,
+        wideRunPct: wideOR.length > 0 ? parseFloat((wideBreakoutRun.length / wideOR.length * 100).toFixed(1)) : 0,
+        wideTrendPct: wideOR.length > 0 ? parseFloat((wideTrendDays.length / wideOR.length * 100).toFixed(1)) : 0,
+      };
+    }
+
+    const priorSessions = sessionData.filter(s => s.date < targetDate);
+    lastSession = priorSessions.length > 0 ? priorSessions[priorSessions.length - 1] : null;
+    adr20 = priorSessions.length >= 20
+      ? Math.round(priorSessions.slice(-20).reduce((sum, s) => sum + s.range, 0) / 20)
+      : priorSessions.length > 0
+      ? Math.round(priorSessions.reduce((sum, s) => sum + s.range, 0) / priorSessions.length)
+      : 250;
+
+    edgesHistoryCache.set(targetDate, {
+      resultsByWindow,
+      Q1_LIMIT,
+      Q4_LIMIT,
+      lastSession,
+      adr20
+    });
+    if (edgesHistoryCache.size > 5) {
+      const firstKey = edgesHistoryCache.keys().next().value;
+      edgesHistoryCache.delete(firstKey);
     }
   }
 
@@ -530,8 +569,6 @@ async function getLiveEdgesContext() {
 
     // Gap status relative to yesterday — filter to sessions strictly before today
     // so today's live session (once it crosses 300 bars) doesn't pollute PDH/PDL/PDC
-    const priorSessions = sessionData.filter(s => s.date < targetDate);
-    const lastSession = priorSessions.length > 0 ? priorSessions[priorSessions.length - 1] : null;
     let gapOpenValue = 0;
     if (lastSession) {
       if (bars[0].open > lastSession.high) {
@@ -607,6 +644,12 @@ async function getLiveEdgesContext() {
     // IB high/low (first hour, 9:30–10:30)
     const ibHigh = fhBars.length > 0 ? Math.max(...fhBars.map(b => b.high)) : null;
     const ibLow  = fhBars.length > 0 ? Math.min(...fhBars.map(b => b.low)) : null;
+
+    // Expected Daily Range (ADR) & Current Session Range
+    
+    const currentSessionRange = bars.length > 0
+      ? Math.max(...bars.map(b => b.high)) - Math.min(...bars.map(b => b.low))
+      : null;
 
     // Key levels map for coil proximity check
     const keyLevels = [
@@ -741,8 +784,36 @@ async function getLiveEdgesContext() {
       }
     }
 
-    // 9 EMA Snap-Back computation on 5-min resampled bars
-    let emaSnap = null;
+    // VWAP magnet detection — replaces EMA snap (0% WR, removed)
+    let emaSnap = null; // kept as emaSnap key for frontend compat
+    let cumPV = 0, cumVol = 0;
+    for (const b of bars) {
+      cumPV += (b.high + b.low + b.close) / 3 * (Number(b.vol) || 1);
+      cumVol += (Number(b.vol) || 1);
+    }
+    const vwapVal = cumVol > 0 ? cumPV / cumVol : null;
+    if (vwapVal && currentPrice) {
+      const vwapDist = currentPrice - vwapVal;
+      const sessHiAgy = bars.length > 0 ? Math.max(...bars.map(b => b.high)) : 0;
+      const sessLoAgy = bars.length > 0 ? Math.min(...bars.map(b => b.low)) : 0;
+      const devRangeAgy = sessHiAgy - sessLoAgy;
+      const vwapThreshold = Math.max(50, Math.round(devRangeAgy * 0.25));
+      const extended = Math.abs(vwapDist) >= vwapThreshold;
+      emaSnap = {
+        ema9: Math.round(vwapVal * 100) / 100,
+        atr14: Math.round(Math.abs(vwapDist) * 100) / 100,
+        price: currentPrice,
+        deviation: Math.round(vwapDist * 100) / 100,
+        deviationATR: Math.round(vwapDist * 100) / 100,
+        absDeviationATR: Math.round(Math.abs(vwapDist)),
+        stretched: extended,
+        direction: vwapDist > 0 ? 'ABOVE' : 'BELOW',
+        triggerLevel: extended ? (vwapDist > 0 ? `VWAP MAGNET: fade SHORT toward VWAP (62% WR, ${vwapThreshold}pt threshold)` : `VWAP MAGNET: fade LONG toward VWAP (62% WR, ${vwapThreshold}pt threshold)`) : null,
+        threshold: vwapThreshold,
+        label: 'VWAP Distance',
+        vwap: Math.round(vwapVal),
+      };
+    }
     const fiveBuckets = {};
     for (const b of bars) {
       const bk = Math.floor(b.et_min / 5) * 5;
@@ -750,33 +821,6 @@ async function getLiveEdgesContext() {
       else { fiveBuckets[bk].high = Math.max(fiveBuckets[bk].high, b.high); fiveBuckets[bk].low = Math.min(fiveBuckets[bk].low, b.low); fiveBuckets[bk].close = b.close; }
     }
     const fiveBars = Object.values(fiveBuckets);
-    if (fiveBars.length >= 14) {
-      const fc = fiveBars.map(b => b.close), fh = fiveBars.map(b => b.high), fl = fiveBars.map(b => b.low);
-      const ema9 = new Array(fc.length).fill(null);
-      const ek = 2 / 10;
-      ema9[8] = fc.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
-      for (let i = 9; i < fc.length; i++) ema9[i] = fc[i] * ek + ema9[i - 1] * (1 - ek);
-      const tr = fc.map((c, i) => i === 0 ? fh[i] - fl[i] : Math.max(fh[i] - fl[i], Math.abs(fh[i] - fc[i - 1]), Math.abs(fl[i] - fc[i - 1])));
-      const atr = new Array(fc.length).fill(null);
-      atr[13] = tr.slice(0, 14).reduce((a, b) => a + b, 0) / 14;
-      for (let i = 14; i < fc.length; i++) atr[i] = tr[i] * (2 / 15) + atr[i - 1] * (1 - 2 / 15);
-      const last = fc.length - 1;
-      if (ema9[last] != null && atr[last] != null && atr[last] > 0.5) {
-        const dev = fc[last] - ema9[last];
-        const devATR = dev / atr[last];
-        emaSnap = {
-          ema9: Math.round(ema9[last] * 100) / 100,
-          atr14: Math.round(atr[last] * 100) / 100,
-          price: fc[last],
-          deviation: Math.round(dev * 100) / 100,
-          deviationATR: Math.round(devATR * 100) / 100,
-          absDeviationATR: Math.round(Math.abs(devATR) * 100) / 100,
-          stretched: Math.abs(devATR) >= 2.0,
-          direction: dev > 0 ? 'ABOVE' : 'BELOW',
-          triggerLevel: Math.abs(devATR) >= 2.0 ? (dev > 0 ? 'FADE SHORT toward EMA' : 'FADE LONG toward EMA') : null,
-        };
-      }
-    }
 
     // RSI Divergence detection for edge card (5-min)
     let rsiDiv = null;
@@ -922,6 +966,10 @@ async function getLiveEdgesContext() {
       coilSurge,
       absorption,
       rsiDiv,
+      ibHigh,
+      ibLow,
+      adr20,
+      currentSessionRange,
     };
   }
 
@@ -1264,11 +1312,11 @@ router.get('/antigravity/exhaustion', async (req, res) => {
 
     const PROX = 25;
     const levels = [
-      { name: 'PD-1 VAH', price: pd1.vah, role: 'resistance' },
-      { name: 'PD-1 VAL', price: pd1.val, role: 'support' },
-      { name: 'PD-1 POC', price: pd1.poc, role: 'magnet' },
+      { name: '2D VAH', price: pd1.vah, role: 'resistance' },
+      { name: '2D VAL', price: pd1.val, role: 'support' },
+      { name: '2D POC', price: pd1.poc, role: 'magnet' },
       { name: 'OR Mid', price: orMid, role: 'pivot' },
-      { name: 'Floor PP', price: floorPP, role: 'pivot' },
+      { name: 'PP', price: floorPP, role: 'pivot' },
       { name: 'Floor S1', price: floorS1, role: 'support' },
       { name: 'Floor R1', price: floorR1, role: 'resistance' },
       { name: 'IB High', price: ib.h, role: 'resistance' },

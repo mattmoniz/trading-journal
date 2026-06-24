@@ -302,23 +302,24 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
         {/* Exhaustion/Defended signals at top */}
         {exhaustion?.signals?.length > 0 && exhaustion.signals.map((s, i) => (
           <div key={`exh-${i}`} style={{
-            padding: '8px 10px', borderRadius: 6,
-            background: s.type === 'DEFENDED' ? 'rgba(34,197,94,0.06)' : s.type === 'WEAKENING' ? 'rgba(239,68,68,0.06)' : 'rgba(30,41,59,0.3)',
-            border: `1px solid ${s.type === 'DEFENDED' ? 'rgba(34,197,94,0.2)' : s.type === 'WEAKENING' ? 'rgba(239,68,68,0.2)' : 'rgba(51,65,85,0.2)'}`,
-            borderLeft: `3px solid ${s.type === 'DEFENDED' ? '#22c55e' : s.type === 'WEAKENING' ? '#ef4444' : '#475569'}`,
+            padding: '6px 10px', borderRadius: 6,
+            background: 'rgba(30,41,59,0.3)',
+            border: '1px solid rgba(51,65,85,0.3)',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: 9, fontWeight: 800, color: s.type === 'DEFENDED' ? '#22c55e' : '#ef4444', background: s.type === 'DEFENDED' ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.12)', padding: '1px 6px', borderRadius: 3 }}>
-                  {s.type === 'DEFENDED' ? '🛡️ DEFENDED' : s.type === 'WEAKENING' ? '⚠️ WEAKENING' : '👀 CAUTION'}
-                </span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>{s.level}</span>
-                <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>{s.levelPrice}</span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>LEVEL STATUS</span>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{s.level} {s.levelPrice}</span>
               </div>
-              <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>{s.timestamp}</span>
+              <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>{s.timestamp}</span>
             </div>
-            <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 4 }}>{s.signs.length > 0 ? s.signs.join(' · ') : 'Clean approach — no exhaustion signs'}</div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: s.type === 'DEFENDED' ? '#4ade80' : '#f87171', marginTop: 2 }}>→ {s.direction}</div>
+            <div style={{ fontSize: 10, color: '#64748b', paddingLeft: 4 }}>
+              {s.type === 'DEFENDED' ? 'Level holding — no exhaustion signs' : s.signs.length > 0 ? s.signs.join(' · ') : 'Approaching'}
+              {' · '}
+              <span style={{ color: s.type === 'DEFENDED' ? '#94a3b8' : '#94a3b8' }}>
+                Hist fade WR: {s.direction?.match(/\d+%/)?.[0] || '—'}
+              </span>
+            </div>
           </div>
         ))}
         {/* Commentary feed */}

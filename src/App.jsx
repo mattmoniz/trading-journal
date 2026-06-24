@@ -19,6 +19,8 @@ import VolatilityRegimeCard from './components/dashboard/VolatilityRegimeCard.js
 import GapContextCard from './components/dashboard/GapContextCard.jsx';
 import BehavioralGuideCard from './components/dashboard/BehavioralGuideCard.jsx';
 import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
+import LiveScriptsCard from './components/dashboard/LiveScriptsCard.jsx';
+import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import {
@@ -2207,6 +2209,11 @@ function LiveReadBanner({ forecast }) {
   const gLine = ctx2.gLine;
   const currentPrice = currentCase?.currentPrice;
   const coiled = !!compression?.coiled;
+  const devPoc = ctx2.devPoc;
+  const pocChange = ctx2.pocChange;
+  const pocRoc = ctx2.pocRoc;
+  const poc2DayShift = ctx2.poc2DayShift;
+  const poc2DayStreak = ctx2.poc2DayStreak;
 
   const isIbBreakoutActive = !!currentCase.breakoutWarning;
   const isWickPullbackActive = isIbBreakoutActive && (currentCase.breakoutWarning.type === 'BULL_NORMAL' || currentCase.breakoutWarning.type === 'BEAR_NORMAL');
@@ -2506,6 +2513,50 @@ function LiveReadBanner({ forecast }) {
               </div>
               <div style={{ fontSize: 12, color: currentPrice >= gLine ? '#34d399' : '#fb923c', marginTop: 2, fontWeight: 700 }}>
                 {currentPrice >= gLine ? 'NQ ABOVE (BULLISH)' : 'NQ BELOW (BEARISH)'}
+              </div>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+              Loading…
+            </span>
+          )}
+        </div>
+
+        {/* 2-Day POC Streak/Shift since last close */}
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#fb923c' : '#64748b')}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>2-Day POC Streak</div>
+            <InfoTooltip text={"2-DAY HISTORICAL POC SHIFT & STREAK\n\nThe POC shift over the 2 completed sessions preceding today (T-1 vs T-3):\n\nStreak is HIGHER/LOWER if both preceding daily migrations are in the same direction.\n\nCombined with today's intraday ROC, a matching streak yields an 80%+ win rate on breakout setups."} />
+          </div>
+          {poc2DayShift != null ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                {poc2DayShift >= 0 ? '+' : ''}{Math.round(poc2DayShift)} pts
+              </div>
+              <div style={{ fontSize: 12, color: poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#fb923c' : '#94a3b8'), marginTop: 2, fontWeight: 700 }}>
+                STREAK: {poc2DayStreak}
+              </div>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+              Loading…
+            </span>
+          )}
+        </div>
+
+        {/* POC ROC (Speed) */}
+        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>POC ROC (Speed)</div>
+            <InfoTooltip text={"POC RATE OF CHANGE (SPEED)\n\nThe rate of change in today's developing POC relative to yesterday's final POC, in points per hour:\n\nPOC ROC = (POC_dev - POC_prior) / Hours since 9:30 AM ET.\n\nSTABLE (<=10 pts/hr): Consolidation/range mode favored.\nTRENDING (>15 pts/hr): Rapid value migration. Fades are highly dangerous, breakouts are favored."} />
+          </div>
+          {pocRoc != null ? (
+            <div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                {pocRoc >= 0 ? '+' : ''}{pocRoc.toFixed(1)} pts/hr
+              </div>
+              <div style={{ fontSize: 12, color: Math.abs(pocRoc) > 15 ? (pocRoc >= 0 ? '#34d399' : '#fb923c') : '#94a3b8', marginTop: 2, fontWeight: 700 }}>
+                {Math.abs(pocRoc) > 15 ? 'FAST MIGRATION' : 'STABLE VALUE'}
               </div>
             </div>
           ) : (
@@ -18850,6 +18901,39 @@ function SessionStatusBar({ conf, onStateChange }) {
 // updatedAt: string timestamp (e.g. "13:36 ET"). Badge shows when collapsed + unseen.
 // Badge disappears permanently after the user opens then closes the section with that updatedAt.
 // Reappears if updatedAt changes (new data arrives).
+function OvernightContextStrip() {
+  const [data, setData] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(d => setData(d?.overnightContext)).catch(() => {});
+  }, []);
+  if (!data) return null;
+  const inv = data.overnight_inventory;
+  const ovp = data.open_vs_prior_value;
+  const pdp = data.prior_day_profile;
+  const aligned = (inv === 'SHORT_TRAPPED' && ovp === 'ABOVE_VALUE') || (inv === 'LONG_TRAPPED' && ovp === 'BELOW_VALUE');
+  return (
+    <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.06)', border: `1px solid ${aligned ? 'rgba(34,197,94,0.3)' : 'rgba(139,92,246,0.2)'}`, borderLeft: `3px solid ${aligned ? '#22c55e' : '#a78bfa'}` }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Overnight Structural Context</div>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
+        {inv && <span>Inventory: <strong style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>{inv.replace(/_/g, ' ')}</strong></span>}
+        {ovp && <span>Open: <strong style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>{ovp.replace(/_/g, ' ')}</strong></span>}
+        {pdp && <span>Prior Day: <strong style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>{pdp}</strong></span>}
+      </div>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
+        {inv === 'LONG_TRAPPED' && 'Yesterday\'s buyers underwater — bearish fuel. '}
+        {inv === 'SHORT_TRAPPED' && 'Yesterday\'s sellers squeezed — bullish fuel. '}
+        {inv === 'NEUTRAL' && 'No trapped participants. '}
+        {ovp === 'BELOW_VALUE' && 'Below yesterday\'s VA — IB_BEARISH 88% WR. '}
+        {ovp === 'ABOVE_VALUE' && 'Above yesterday\'s VA — bullish setups 61% WR. '}
+        {ovp === 'INSIDE_VALUE' && 'Inside VA — no directional tilt. '}
+        {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is high conviction (61% WR).'}
+        {pdp === 'TREND' && 'Yesterday trended — continuation or reversal, wait for OR to confirm.'}
+      </div>
+      {aligned && <div style={{ fontSize: 10, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+    </div>
+  );
+}
+
 function BacktestedEdgeStatsCard() {
   const [edgeData, setEdgeData] = React.useState(null);
   React.useEffect(() => {
@@ -18862,11 +18946,13 @@ function BacktestedEdgeStatsCard() {
   const isNear = (val) => price && val && Math.abs(price - val) <= PROX;
 
   const setups = [
-    { name: '9 EMA Snap-Back', wr: '96.2%', delta: '+23.5%', color: '#10b981', status: 'ACTIVE', tip: '5-min close ≥2.0 ATR from 9 EMA → fade toward EMA. 96.2% revert within 15 min (N=533). All regimes.' },
-    { name: 'Absorption Long', wr: '71.4%', delta: '+18.4%', color: '#10b981', status: 'ACTIVE', tip: 'Support held + RSI rising + price flat on 2-min bars. 71.4% WR 5bar (N=35). BALANCE: 73.9%. @PD1-VA: 90.9%. 25pt stop / 40pt target.' },
-    { name: 'Coil→VWAP', wr: '65.3%', delta: '+16.1%', color: '#34d399', status: 'ACTIVE', tip: 'Coil + volume surge → fade toward VWAP. TREND: 65.3% (N=49). R:R 3.08. Hold 10 bars max.' },
+    { name: 'VWAP Magnet', wr: '62%', delta: 'NEW', color: '#10b981', status: 'ACTIVE', tip: 'Price 25% of range from VWAP → fade toward VWAP. 62% WR (N=460). Self-scaling threshold. Best on BALANCE days (79% WR). 20pt target, 30pt stop.' },
+    { name: 'PD_POC Fade', wr: '64%', delta: 'NEW', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day POC. 64% WR (N=76), $80/trade. Best 12-2PM (70% WR). Coils: 3.6x win after 6+ losses.' },
+    { name: 'Floor S1 Fade', wr: '61%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at Floor Pivot S1. 61% WR (N=57). Best 12-2PM (75% WR). Skip after 2PM (44%). On BALANCE days: 77% WR.' },
+    { name: 'OR High Fade', wr: '57%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at OR High. 57% WR (N=182). Recent 30d: 66% WR. On Tuesdays: 71% WR. Coils after 3+ losses (79% WR).' },
+    { name: 'IB High Fade', wr: '58%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at IB High (post-IB only). 58% WR (N=166). Best 12-2PM (64%). On Wednesdays: 70% WR.' },
     { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR Low after opening drive. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91%.' },
-    { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', color: '#34d399', status: 'ACTIVE', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Tight OR: 82%.' },
+    { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', color: '#34d399', status: 'ACTIVE', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Coils 3.6x after drought.' },
     { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR High after opening drive. 66.7% WR (N=42). TREND: 83%. Tight OR: 78%.' },
     { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', color: '#f59e0b', status: 'ACTIVE', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
     { name: 'IB_BEARISH', wr: '55.0%', delta: '+1.3%', color: '#94a3b8', status: 'ACTIVE', tip: 'IB range break short. 45% filtered WR (backtest). Best on TURBULENT + POC aligned. Workhorse setup.' },
@@ -18878,8 +18964,8 @@ function BacktestedEdgeStatsCard() {
     { name: 'PD-2 VAL', delta: '+20.5%', color: '#10b981', val: cl?.pd2?.val, tip: 'Extension target. +20.5% controlled edge. Target: 75pt (33% hit). $55/ct.' },
     { name: 'PW Low', delta: '+15.0%', color: '#10b981', val: cl?.pw?.low, tip: 'Prior week low support. +15.0% edge. Target: 100pt (33% hit). $100/ct.' },
     { name: 'PD-3 VAH', delta: '+14.7%', color: '#34d399', val: cl?.pd3?.vah, tip: '3-day-prior VAH resistance. +14.7% edge. Scalp: 15pt (85% hit). $48/ct.' },
-    { name: 'PD-1 VAH', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.vah, tip: 'Prior day VAH. +9.6% edge. Target: 30pt (52% hit). $31/ct.' },
-    { name: 'PD-1 POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
+    { name: '2D VAH', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.vah, tip: 'Prior day VAH. +9.6% edge. Target: 30pt (52% hit). $31/ct.' },
+    { name: '2D POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
     { name: 'OR Mid', delta: '+18.0%', color: '#60a5fa', val: cl?.orMid, tip: 'OR midpoint. With absorption: 60% WR, +$16 exp. 15pt target/15pt stop. Log via Quick Trade Log.' },
     { name: 'PW High', delta: '+5.1%', color: '#fb923c', val: cl?.pw?.high, tip: 'Prior week high resistance. +5.1% edge. Target: 15pt (72% hit).' },
   ];
@@ -19010,9 +19096,9 @@ function EdgeSectionsPanel() {
     { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, ctrlDelta: 14.7, color: '#f87171', role: 'resistance' },
     { name: 'PD-3 VAL', val: confluenceLevels.pd3?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
     { name: 'PD-3 POC', val: confluenceLevels.pd3?.poc, target: 20, hitRate: 0, ctrlDelta: 0, color: '#a78bfa', role: 'magnet' },
-    { name: 'PD-1 VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, ctrlDelta: 9.6, color: '#fb923c', role: 'resistance' },
-    { name: 'PD-1 VAL', val: confluenceLevels.pd1?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
-    { name: 'PD-1 POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, ctrlDelta: 9.0, color: '#a78bfa', role: 'magnet' },
+    { name: '2D VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, ctrlDelta: 9.6, color: '#fb923c', role: 'resistance' },
+    { name: '2D VAL', val: confluenceLevels.pd1?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
+    { name: '2D POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, ctrlDelta: 9.0, color: '#a78bfa', role: 'magnet' },
     { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, ctrlDelta: 18.0, color: '#60a5fa', role: 'pivot' },
     { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, ctrlDelta: 5.1, color: '#fb923c', role: 'resistance' },
     { name: 'Floor PP', val: confluenceLevels.floorPivots?.pp, target: 20, hitRate: 99, ctrlDelta: 0, color: '#94a3b8', role: 'pivot' },
@@ -19020,8 +19106,8 @@ function EdgeSectionsPanel() {
     { name: 'Floor R1', val: confluenceLevels.floorPivots?.r1, target: 20, hitRate: 45, ctrlDelta: 0, color: '#64748b', role: 'resistance' },
     { name: 'Floor S2', val: confluenceLevels.floorPivots?.s2, target: 20, hitRate: 41, ctrlDelta: 0, color: '#475569', role: 'support' },
     { name: 'Floor S3', val: confluenceLevels.floorPivots?.s3, target: 20, hitRate: 37, ctrlDelta: 0, color: '#475569', role: 'support' },
-    { name: 'PD-1 High', val: confluenceLevels.pd1?.high, target: 20, hitRate: 0, ctrlDelta: 0, color: '#fb923c', role: 'resistance' },
-    { name: 'PD-1 Low', val: confluenceLevels.pd1?.low, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
+    { name: '2D High', val: confluenceLevels.pd1?.high, target: 20, hitRate: 0, ctrlDelta: 0, color: '#fb923c', role: 'resistance' },
+    { name: '2D Low', val: confluenceLevels.pd1?.low, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
   ].filter(l => l.val != null) : [];
 
   // Zone clustering: group levels within 15pt of each other
@@ -19073,27 +19159,7 @@ function EdgeSectionsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
-      {/* Overnight Structural Context */}
-      {(inv || ovp || pdp) && (
-        <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.2)' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa', marginBottom: 4 }}>Overnight Structural Context</div>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 11 }}>
-            {inv && <span style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>
-              Inventory: <strong>{inv.replace(/_/g, ' ')}</strong>
-            </span>}
-            {ovp && <span style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>
-              Open: <strong>{ovp.replace(/_/g, ' ')}</strong>
-            </span>}
-            {pdp && <span style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>
-              Prior Day: <strong>{pdp.replace(/_/g, ' ')}</strong>
-            </span>}
-          </div>
-          {pdp === 'NONTREND' && <div style={{ fontSize: 10, color: '#fbbf24', marginTop: 3 }}>Prior NONTREND: first directional move is high conviction (61% WR). Hold for full target.</div>}
-          {((inv === 'SHORT_TRAPPED' && ovp === 'ABOVE_VALUE') || (inv === 'LONG_TRAPPED' && ovp === 'BELOW_VALUE')) && (
-            <div style={{ fontSize: 10, color: '#22c55e', marginTop: 3 }}>Both aligned: inventory + value support same direction. Backtested 63% WR (N=113). Size up.</div>
-          )}
-        </div>
-      )}
+      {/* Overnight Structural Context — moved to right column top */}
       {/* Active Setups */}
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>🎯 Today's Actionable Setups</div>
@@ -19102,7 +19168,7 @@ function EdgeSectionsPanel() {
             {setups.list.map(s => {
               const cc = s.confidence === 'HIGH' ? '#10b981' : s.confidence === 'MEDIUM' ? '#3b82f6' : s.confidence === 'LOW' ? '#f59e0b' : '#ef4444';
               const edgeCtx = {
-                'VALUE_AREA_RESPONSIVE_SHORT': 'Fade PD-1 VAH. 66.7% WR controlled. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
+                'VALUE_AREA_RESPONSIVE_SHORT': 'Fade 2D VAH. 66.7% WR controlled. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
                 'IB_BEARISH': 'IB range break short. 45% filtered WR. Best on TURBULENT + POC aligned. Workhorse setup.',
                 'OPEN_DRIVE_SHORT': 'Pullback to OR Low after opening drive. 68% WR. Best WED/FRI + tight OR.',
                 'OPEN_DRIVE_LONG': 'Pullback to OR High after opening drive. 67% WR. Best TREND + tight OR.',
@@ -19153,38 +19219,7 @@ function EdgeSectionsPanel() {
         </div>
       )}
 
-      {/* Dynamic Lookback */}
-      {allTime && (
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', marginBottom: 6 }}>📊 Dynamic Lookback Comparison</div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid #334155' }}>
-                <th style={{ textAlign: 'left', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>Edge</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>30d</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>90d</th>
-                <th style={{ textAlign: 'center', padding: '4px 8px', color: '#94a3b8', fontWeight: 600 }}>All</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ['Gap Up Fill', last30?.gapUpFillPct, last90?.gapUpFillPct, allTime?.gapUpFillPct],
-                ['Gap Down Fill', last30?.gapDownFillPct, last90?.gapDownFillPct, allTime?.gapDownFillPct],
-                ['Failed Sweeps', last30?.sweepPct, last90?.sweepPct, allTime?.sweepPct],
-                ['10AM Pivot', last30?.tenAmPivotPct, last90?.tenAmPivotPct, allTime?.tenAmPivotPct],
-                ['IB Wick Pullback', last30?.ibWickPct, last90?.ibWickPct, allTime?.ibWickPct],
-              ].map(([name, v30, v90, vAll], i) => (
-                <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.2)' }}>
-                  <td style={{ padding: '4px 8px', color: '#cbd5e1', fontWeight: 600, fontSize: 11 }}>{name}</td>
-                  <td style={cellSt(v30)}>{v30 != null ? v30 + '%' : '—'}</td>
-                  <td style={cellSt(v90)}>{v90 != null ? v90 + '%' : '—'}</td>
-                  <td style={cellSt(vAll)}>{vAll != null ? vAll + '%' : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* Dynamic Lookback removed — replaced by nightly pattern scanner */}
     </div>
   );
 }
@@ -19276,7 +19311,7 @@ function QuickTradeLog() {
   const [submitted, setSubmitted] = React.useState(false);
   const [recentLogs, setRecentLogs] = React.useState([]);
 
-  const SETUP_TYPES = ['IB_BEARISH', 'OPEN_DRIVE_LONG', 'OPEN_DRIVE_SHORT', 'VALUE_AREA_RESPONSIVE_SHORT', 'C_STANDALONE_DOWN', 'TRT_LONG', 'ABSORPTION_LONG', 'EMA_SNAPBACK_LONG', 'EMA_SNAPBACK_SHORT', 'COIL_SURGE_LONG', 'COIL_SURGE_SHORT'];
+  const SETUP_TYPES = ['IB_BEARISH', 'OPEN_DRIVE_LONG', 'OPEN_DRIVE_SHORT', 'VALUE_AREA_RESPONSIVE_LONG', 'VALUE_AREA_RESPONSIVE_SHORT', 'C_STANDALONE_DOWN', 'TRT_LONG', 'ABSORPTION_LONG', 'EMA_SNAPBACK_LONG', 'EMA_SNAPBACK_SHORT', 'COIL_SURGE_LONG', 'COIL_SURGE_SHORT'];
   const ALL_TAGS = ['absorption', 'level_confluence', 'momentum', 'volume', 'gut_read', 'no_confluence', 'momentum_wrong', 'too_extended', 'after_loss', 'choppy'];
 
   const loadRecent = () => {
@@ -21940,12 +21975,17 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
-            
+
+            <TradeAlertBanner />
+
             {/* Split Grid for Daily Execution Info */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
               
-              {/* Left Column: Log, Commentary & Edge Stats */}
+              {/* Left Column: Live Scripts, Commentary & Edge Stats */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ErrorBoundary name="Live Scripts">
+                  <LiveScriptsCard date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} />
+                </ErrorBoundary>
                 <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
                   <ErrorBoundary name="Live Commentary">
                     <TeleprinterFeed maxHeight={360} />
@@ -21956,17 +21996,19 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </CollapsibleSection>
               </div>
 
-              {/* Right Column: Balance Zones & Live Market Regimes */}
+              {/* Right Column: Live Session Context */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <ErrorBoundary name="Overnight Context">
+                  <OvernightContextStrip />
+                </ErrorBoundary>
                 <ErrorBoundary name="Balance Zone Panel">
                   <BalanceZonePanel />
                 </ErrorBoundary>
-                
+
                 <CollapsibleSection title="Live Read & Market Regimes" defaultOpen>
                   <LiveReadBanner forecast={forecast} />
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div style={{ marginTop: 8 }}>
                     <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
-                    <ErrorBoundary name="Gap Context" compact><GapContextCard /></ErrorBoundary>
                   </div>
                 </CollapsibleSection>
               </div>
@@ -22109,8 +22151,11 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                     </thead>
                     <tbody>
                       {[
-                        { name: '9 EMA Snap-Back', edge: '+23.5%', freq: '1.0/day', ctx: 'All regimes', tests: 'Fwd WR, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'Coil Surge→VWAP', edge: '+16.1% TREND', freq: '1.08/day', ctx: 'TREND 65%, NL30 aligned 60%', tests: 'Fwd WR, MA, Day type, NL30, VWAP target, Custom Resolution', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'VWAP Magnet', edge: '62% WR', freq: '7.4/day', ctx: 'BALANCE 79%, range-scaled threshold', tests: '90d bar backtest, range-scaled, 30bar cooldown', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'PD_POC Fade', edge: '64% WR', freq: '1.2/day', ctx: 'Best 12-2PM (70%), TREND days 83%', tests: '90d bar backtest, 14 dimensions cross-cut', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'Floor S1 Fade', edge: '61% WR', freq: '0.9/day', ctx: 'BALANCE 77%, 12-2PM 75%', tests: '90d bar backtest, coil analysis', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'OR High Fade', edge: '57% WR', freq: '2.8/day', ctx: 'Tue 71%, coils 79% after 3+L', tests: '90d bar backtest, DOW analysis', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'IB High Fade', edge: '58% WR', freq: '2.6/day', ctx: 'Wed 70%, 12-2PM 64%', tests: '90d bar backtest, DOW analysis', status: 'ACTIVE', color: '#34d399' },
                         { name: 'Absorption Long', edge: '+18.4%', freq: '10% days', ctx: 'BALANCE 73.9%, @PD1-VA 90.9%', tests: 'Full history (2.5yr), Day type, NL30, OR width, Confluence, Target cal', status: 'ACTIVE', color: '#10b981' },
                         { name: 'VA_RESP_SHORT', edge: '+17.4%', freq: '0.25/day', ctx: 'TURB 90%, NL30-aligned 93%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
                         { name: 'OPEN_DRIVE_LONG', edge: '+15.9%', freq: '0.17/day', ctx: 'TREND 83%, tight OR +14%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
@@ -22185,8 +22230,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                         { name: 'PD-2 VAL', delta: '+20.5%', target: '75pt', hit: '33%', exp: '$55', profile: 'Extension' },
                         { name: 'PW Low', delta: '+15.0%', target: '100pt', hit: '33%', exp: '$100', profile: 'Extension' },
                         { name: 'PD-3 VAH', delta: '+14.7%', target: '15pt', hit: '85%', exp: '$48', profile: 'Scalp' },
-                        { name: 'PD-1 VAH', delta: '+9.6%', target: '30pt', hit: '52%', exp: '$31', profile: 'Scalp' },
-                        { name: 'PD-1 POC', delta: '+9.0%', target: '20pt', hit: '62%', exp: '$25', profile: 'Scalp' },
+                        { name: '2D VAH', delta: '+9.6%', target: '30pt', hit: '52%', exp: '$31', profile: 'Scalp' },
+                        { name: '2D POC', delta: '+9.0%', target: '20pt', hit: '62%', exp: '$25', profile: 'Scalp' },
                         { name: 'OR Midpoint', delta: '+6.9%', target: '20pt', hit: '69%', exp: '$38', profile: 'Scalp' },
                         { name: 'PW High', delta: '+5.1%', target: '15pt', hit: '72%', exp: '$26', profile: 'Scalp' },
                       ].map((l, i) => (

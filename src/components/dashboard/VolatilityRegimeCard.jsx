@@ -592,7 +592,7 @@ export default function VolatilityRegimeCard() {
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              9 EMA Snap-Back
+              VWAP Distance
             </span>
             {data.emaSnap.stretched && (
               <span style={{
@@ -600,41 +600,35 @@ export default function VolatilityRegimeCard() {
                 padding: '1px 6px', borderRadius: 3,
                 color: '#fbbf24', background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)',
               }}>
-                STRETCHED — FADE
+                60pt+ — FADE TO VWAP
               </span>
             )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '2px 6px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '2px 6px' }}>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>9 EMA</div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>VWAP</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', fontFamily: 'monospace' }}>
-                {data.emaSnap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                {data.emaSnap.vwap?.toLocaleString('en-US') || data.emaSnap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>ATR(14)</div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace' }}>
-                {data.emaSnap.atr14.toFixed(1)}pt
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>Deviation</div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>Distance</div>
               <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
-                color: data.emaSnap.absDeviationATR >= 2.0 ? '#fbbf24' : data.emaSnap.absDeviationATR >= 1.5 ? '#fb923c' : '#94a3b8' }}>
-                {data.emaSnap.deviationATR > 0 ? '+' : ''}{data.emaSnap.deviationATR.toFixed(2)} ATR
+                color: data.emaSnap.absDeviationATR >= 60 ? '#fbbf24' : data.emaSnap.absDeviationATR >= 40 ? '#fb923c' : '#94a3b8' }}>
+                {data.emaSnap.deviation > 0 ? '+' : ''}{Math.round(data.emaSnap.deviation)}pt
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>Raw</div>
+              <div style={{ fontSize: 9, color: '#64748b' }}>Side</div>
               <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
-                color: data.emaSnap.deviation > 0 ? '#4ade80' : '#f87171' }}>
-                {data.emaSnap.deviation > 0 ? '+' : ''}{data.emaSnap.deviation.toFixed(1)}pt
+                color: data.emaSnap.direction === 'ABOVE' ? '#4ade80' : '#f87171' }}>
+                {data.emaSnap.direction}
               </div>
             </div>
           </div>
           {data.emaSnap.stretched && (
             <div style={{ marginTop: 4, fontSize: 11, color: '#fbbf24', fontWeight: 600 }}>
-              {data.emaSnap.triggerLevel} · 96% revert within 15min (N=533)
+              {data.emaSnap.triggerLevel} · 20pt target, 30pt stop
             </div>
           )}
         </div>
