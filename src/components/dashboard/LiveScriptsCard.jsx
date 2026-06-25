@@ -17,8 +17,8 @@ const METRIC_INFO = {
     body: `Where current price sits within today's range.\n\n• 0% = At session low\n• 50% = Middle of range\n• 100% = At session high\n\nClose in top 25%: bullish close → 67% next day up.\nClose in bottom 25%: bearish close → only 40% next day up.\n\nUsed to project tomorrow's overnight inventory (LONG_TRAPPED vs SHORT_TRAPPED).`,
   },
   rotations: {
-    title: 'Rotation Count (65pt+)',
-    body: `Number of 65pt+ swings today. Measures chop intensity.\n\n• <10 = Quiet, trending day. Let winners run.\n• 10-15 = Normal rotational.\n• 15-25 = Choppy. Take profits quickly. Scalp mode.\n• 25+ = Extreme chop. Reduce size significantly.\n• 40+ = Violent — every move reverses. Consider sitting out.\n\nAvg: 21 rotations/day on NQ.`,
+    title: 'Rotation Count (65pt, 5-min close-to-close)',
+    body: `Meaningful 65pt+ directional swings on 5-min closes. Filters out intra-bar wick noise.\n\n• 2-4 = Clean trend day. One direction. Let winners run.\n• 5-8 = Normal rotational/chop. Level fades work.\n• 9-13 = Choppy. Take profits quickly. Scalp mode.\n• 14-21 = Extreme chop. Reduce size significantly.\n• 21+ = Violent session. Consider sitting out.\n\nMeasured on 5-min bar closes, not 1-min high/low — counts real directional swings, not bar volatility.`,
   },
   microTrend: {
     title: 'Micro Trend (5-min)',

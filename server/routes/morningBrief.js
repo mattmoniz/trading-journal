@@ -499,13 +499,20 @@ router.get('/live-session-context/:date', async (req, res) => {
     const ibRange = ibH && ibL ? Math.round(ibH - ibL) : null;
     const ibBroken = ibH && ibL ? (price > ibH ? 'ABOVE' : price < ibL ? 'BELOW' : 'INSIDE') : null;
 
-    // Rotations
-    let rots = 0, lastExt = bars[0].close, lastType = 'LOW';
+    // Rotations — 5-min close-to-close for meaningful swings
+    const fiveMapRot = {};
     for (const b of bars) {
-      if (b.high > lastExt && lastType === 'LOW' && b.high - lastExt >= 65) { rots++; lastExt = b.high; lastType = 'HIGH'; }
-      if (b.low < lastExt && lastType === 'HIGH' && lastExt - b.low >= 65) { rots++; lastExt = b.low; lastType = 'LOW'; }
-      if (b.high > lastExt && lastType === 'HIGH') lastExt = b.high;
-      if (b.low < lastExt && lastType === 'LOW') lastExt = b.low;
+      const bk = Math.floor(b.et_min / 5) * 5;
+      if (!fiveMapRot[bk]) fiveMapRot[bk] = { close: b.close };
+      else fiveMapRot[bk].close = b.close;
+    }
+    const fbRot = Object.values(fiveMapRot);
+    let rots = 0, lastExt = fbRot[0]?.close || 0, lastType = 'LOW';
+    for (const b of fbRot) {
+      if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= 65) { rots++; lastExt = b.close; lastType = 'HIGH'; }
+      if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= 65) { rots++; lastExt = b.close; lastType = 'LOW'; }
+      if (b.close > lastExt && lastType === 'HIGH') lastExt = b.close;
+      if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
     }
 
     // Micro trend (last 10 five-min bars)

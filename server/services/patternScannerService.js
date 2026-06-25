@@ -217,26 +217,35 @@ function detectStopSweeps(bars) {
 }
 
 function detectRotationProfile(bars) {
-  const rotations = [];
-  let lastExt = bars[0]?.close || 0;
-  let lastType = 'LOW';
-  let rotStart = bars[0]?.et_min || 570;
-
+  // Use 5-min close-to-close for meaningful rotations (not intra-bar wick noise)
+  const fiveMap = {};
   for (const bar of bars) {
-    if (bar.high > lastExt && lastType === 'LOW' && bar.high - lastExt >= 65) {
-      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'UP', size: Math.round(bar.high - lastExt) });
-      lastExt = bar.high;
+    const bk = Math.floor(bar.et_min / 5) * 5;
+    if (!fiveMap[bk]) fiveMap[bk] = { et_min: bk, close: bar.close };
+    else fiveMap[bk].close = bar.close;
+  }
+  const fb = Object.values(fiveMap).sort((a, b) => a.et_min - b.et_min);
+
+  const rotations = [];
+  let lastExt = fb[0]?.close || 0;
+  let lastType = 'LOW';
+  let rotStart = fb[0]?.et_min || 570;
+
+  for (const bar of fb) {
+    if (bar.close > lastExt && lastType === 'LOW' && bar.close - lastExt >= 65) {
+      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'UP', size: Math.round(bar.close - lastExt) });
+      lastExt = bar.close;
       lastType = 'HIGH';
       rotStart = bar.et_min;
     }
-    if (bar.low < lastExt && lastType === 'HIGH' && lastExt - bar.low >= 65) {
-      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'DOWN', size: Math.round(lastExt - bar.low) });
-      lastExt = bar.low;
+    if (bar.close < lastExt && lastType === 'HIGH' && lastExt - bar.close >= 65) {
+      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'DOWN', size: Math.round(lastExt - bar.close) });
+      lastExt = bar.close;
       lastType = 'LOW';
       rotStart = bar.et_min;
     }
-    if (bar.high > lastExt && lastType === 'HIGH') lastExt = bar.high;
-    if (bar.low < lastExt && lastType === 'LOW') lastExt = bar.low;
+    if (bar.close > lastExt && lastType === 'HIGH') lastExt = bar.close;
+    if (bar.close < lastExt && lastType === 'LOW') lastExt = bar.close;
   }
 
   if (rotations.length < 2) return { rotations, patterns: [] };
