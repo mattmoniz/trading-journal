@@ -2523,7 +2523,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* 2-Day POC Streak/Shift since last close */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#fb923c' : '#64748b')}` }}>
+        <div title={poc2DayStreak === 'HIGHER' ? 'Green = POC migrating higher (bullish value shift)' : poc2DayStreak === 'LOWER' ? 'Orange = POC migrating lower (bearish value shift)' : 'Gray = no clear POC direction'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#fb923c' : '#64748b')}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>2-Day POC Streak</div>
             <InfoTooltip text={"2-DAY HISTORICAL POC SHIFT & STREAK\n\nThe POC shift over the 2 completed sessions preceding today (T-1 vs T-3):\n\nStreak is HIGHER/LOWER if both preceding daily migrations are in the same direction.\n\nCombined with today's intraday ROC, a matching streak yields an 80%+ win rate on breakout setups."} />
@@ -2545,7 +2545,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* POC ROC (Speed) */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+        <div title={pocRoc >= 0 ? 'Green = value migrating higher (POC rising)' : 'Orange = value migrating lower (POC falling)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#fb923c') : '#64748b'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>POC ROC (Speed)</div>
             <InfoTooltip text={"POC RATE OF CHANGE (SPEED)\n\nThe rate of change in today's developing POC relative to yesterday's final POC, in points per hour:\n\nPOC ROC = (POC_dev - POC_prior) / Hours since 9:30 AM ET.\n\nSTABLE (<=10 pts/hr): Consolidation/range mode favored.\nTRENDING (>15 pts/hr): Rapid value migration. Fades are highly dangerous, breakouts are favored."} />

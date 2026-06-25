@@ -43,13 +43,13 @@ export default function LiveScriptsCard({ date }) {
           <span style={{ fontSize: 9, color: '#64748b' }}>{ts}</span>
         </div>
         <div style={{ display: 'flex', gap: 12, marginTop: 4, fontSize: 11, color: '#94a3b8', flexWrap: 'wrap' }}>
-          <span style={{ color: L.sessionChar === 'CHOP' ? '#fbbf24' : L.sessionChar.includes('TREND') ? '#4ade80' : '#94a3b8', fontWeight: 700 }}>{L.sessionChar}</span>
-          <span>{L.range}pt range</span>
-          <span>{L.rangePct}% of range</span>
-          <span>{L.rots} rotations</span>
-          <span style={{ color: L.microTrend === 'HIGHER_LOWS' ? '#4ade80' : L.microTrend === 'LOWER_LOWS' ? '#f87171' : '#94a3b8' }}>{L.microTrend}</span>
-          <span>Vol {L.volTrend}</span>
-          {L.efficiencyRatio != null && <span style={{ color: L.efficiencyRatio > 0.5 ? '#4ade80' : L.efficiencyRatio < 0.2 ? '#fbbf24' : '#94a3b8' }}>ER {L.efficiencyRatio}</span>}
+          <span title={`Session character: ${L.sessionChar}.\nCHOP = rotational, fade levels.\nTREND_UP/DOWN = directional, don't fade.\nBALANCE = VWAP is fair value.\nEXTREME_CHOP = violent rotations, reduce size.`} style={{ color: L.sessionChar === 'CHOP' ? '#fbbf24' : L.sessionChar.includes('TREND') ? '#4ade80' : '#94a3b8', fontWeight: 700, cursor: 'help' }}>{L.sessionChar}</span>
+          <span title={`Today's session range from high to low.\nAvg NQ daily range ~350pt.\n<200pt = narrow, >500pt = wide/volatile.`} style={{ cursor: 'help' }}>{L.range}pt range</span>
+          <span title={`Current price position within today's range.\n0% = at session low, 100% = at session high.\n<25% = lower quarter (bearish close forming).\n>75% = upper quarter (bullish close forming).`} style={{ cursor: 'help' }}>{L.rangePct}% of range</span>
+          <span title={`65pt+ rotations today.\n<10 = quiet/trending day.\n15-25 = normal chop.\n25+ = extreme chop, reduce size.\n40+ = violent — sit on hands.`} style={{ cursor: 'help' }}>{L.rots} rotations</span>
+          <span title={`5-min micro trend (last 10 bars).\nHIGHER_LOWS = bullish structure, dips are bought.\nLOWER_LOWS = bearish structure, rallies are sold.\nMIXED = no direction, rotational.`} style={{ color: L.microTrend === 'HIGHER_LOWS' ? '#4ade80' : L.microTrend === 'LOWER_LOWS' ? '#f87171' : '#94a3b8', cursor: 'help' }}>{L.microTrend}</span>
+          <span title={`Volume trend (1st half vs 2nd half of session).\nINCREASING = energy building, moves have follow-through.\nDECLINING = energy fading, breakouts will fail.\nSTABLE = normal volume.`} style={{ cursor: 'help' }}>Vol {L.volTrend}</span>
+          {L.efficiencyRatio != null && <span title={`Efficiency Ratio (30-bar rolling).\nMeasures directional conviction: net move / total move.\nER < 0.2 = choppy, overlapping bars. Fade levels.\nER 0.2-0.5 = mixed, normal.\nER > 0.5 = trending, clean moves. Don't fade.\nER > 0.7 = strong trend, ride it.`} style={{ color: L.efficiencyRatio > 0.5 ? '#4ade80' : L.efficiencyRatio < 0.2 ? '#fbbf24' : '#94a3b8', cursor: 'help' }}>ER {L.efficiencyRatio}</span>}
         </div>
       </div>
 
