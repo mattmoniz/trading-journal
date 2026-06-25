@@ -278,7 +278,7 @@ export default function SessionForecastPanel({ date }) {
       {/* Scalp Playbook moved to Dashboard tab — see ScalpPlaybookCard.jsx */}
       {false && (
         <div>
-          <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
+          <div style={{ fontSize: 13, lineHeight: 1.9, color: '#e2e8f0' }}>
             {scalpPlaybook.priorSession && (
               <div style={{ marginBottom: 6, fontSize: 11, color: '#94a3b8' }}>
                 Prior session: {scalpPlaybook.priorSession.type} ({scalpPlaybook.priorSession.range}pt, closed at {scalpPlaybook.priorSession.closePct}%)

@@ -65,7 +65,7 @@ export default function LiveScriptsCard({ date }) {
   useEffect(() => { fetchData(); }, [date]);
   useEffect(() => {
     const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
-    if (etH < 9 || etH >= 16) return;
+    if (etH < 8 || etH >= 17) return;
     const interval = setInterval(fetchData, 60000);
     return () => clearInterval(interval);
   }, [date]);
@@ -138,7 +138,7 @@ export default function LiveScriptsCard({ date }) {
         <div style={{ fontSize: 10, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
           Morning Script (Open — 12:00 PM)
         </div>
-        <div style={{ fontSize: 11, lineHeight: 1.7, color: '#cbd5e1' }}>
+        <div style={{ fontSize: 13, lineHeight: 1.9, color: '#e2e8f0' }}>
           <div>1. <strong style={{ color: '#818cf8' }}>Session: {L.sessionChar}.</strong>{' '}
             {L.sessionChar === 'CHOP' && `${L.rots} rotations. Level fades are your play. Scalp the edges.`}
             {L.sessionChar === 'TREND_UP' && `+${L.closeVsOpen}pt from open, ${L.rangePct}% of range. Buy dips at levels.`}
@@ -165,7 +165,7 @@ export default function LiveScriptsCard({ date }) {
         <div style={{ fontSize: 10, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
           Afternoon Script (1:00 PM — Close)
         </div>
-        <div style={{ fontSize: 11, lineHeight: 1.7, color: '#cbd5e1' }}>
+        <div style={{ fontSize: 13, lineHeight: 1.9, color: '#e2e8f0' }}>
           <div>1. <strong style={{ color: '#f59e0b' }}>Session: {L.sessionChar}.</strong>{' '}
             {L.sessionChar === 'CHOP' && `${L.rots} rotations. Afternoon will contract — fade toward POC at ${fmtP(L.poc)}.`}
             {L.sessionChar === 'TREND_UP' && `Trend intact. Pullbacks to VWAP (${fmtP(L.vwap)}) are buys.`}
