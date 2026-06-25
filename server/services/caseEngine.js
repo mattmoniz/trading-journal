@@ -1060,6 +1060,24 @@ export async function computeCase(tradeDate, asOf) {
     }
   }
 
+  // ACD signals — strongest directional indicators
+  if (acd?.a_up_fired) {
+    meter += 20;
+    caseFor.push({ point: 'A Up fired', value: 'Bullish breakout confirmed', weight: 20, confirmed: true });
+  }
+  if (acd?.a_down_fired) {
+    meter -= 20;
+    caseAgainst.push({ point: 'A Down fired', value: 'Bearish breakdown confirmed', weight: 20, confirmed: true });
+  }
+  if (acd?.c_up_confirmed) {
+    meter += 15;
+    caseFor.push({ point: 'C Up confirmed', value: 'Sustained above OR — follow-through', weight: 15, confirmed: true });
+  }
+  if (acd?.c_down_confirmed) {
+    meter -= 15;
+    caseAgainst.push({ point: 'C Down confirmed', value: 'Sustained below OR — follow-through', weight: 15, confirmed: true });
+  }
+
   // IB position (only meaningful after IB forms at 10:30)
   if (ibHigh && ibLow && asOfMinutes >= RTH_START + 60) {
     if (currentPrice > ibHigh) {
@@ -1368,23 +1386,40 @@ export async function computeCase(tradeDate, asOf) {
     let triggerState   = 'WATCHING';
     let resolvedReason = null;
 
-    if (impact >= 6) {
+    if (latestSetup) {
+      if (impact >= 6) {
+        triggerState = 'ACTIVE';
+      } else if (t1Hit) {
+        triggerState = 'RESOLVED'; resolvedReason = 'T1_REACHED';
+      } else if (stopHit) {
+        triggerState = 'RESOLVED'; resolvedReason = 'STOP_REACHED';
+      } else if (premiseBroken) {
+        triggerState = 'RESOLVED'; resolvedReason = 'PREMISE_BROKEN';
+      } else if (juiceGone) {
+        triggerState = 'RESOLVED'; resolvedReason = 'JUICE_EXHAUSTED';
+      } else {
+        const wasActive = checkSessionActivation(bars, latestSetup, nl30, levels, dayType.classification);
+        if (wasActive) triggerState = 'ACTIVE_MANAGING';
+      }
+    } else if (acd?.a_up_fired || acd?.a_down_fired) {
+      // ACD signal fired but no qualifying setup — still show directional bias
       triggerState = 'ACTIVE';
-    } else if (t1Hit) {
-      triggerState = 'RESOLVED'; resolvedReason = 'T1_REACHED';
-    } else if (stopHit) {
-      triggerState = 'RESOLVED'; resolvedReason = 'STOP_REACHED';
-    } else if (premiseBroken) {
-      triggerState = 'RESOLVED'; resolvedReason = 'PREMISE_BROKEN';
-    } else if (juiceGone) {
-      triggerState = 'RESOLVED'; resolvedReason = 'JUICE_EXHAUSTED';
-    } else {
-      // Latch: was the trigger ever active at any earlier bar this session?
-      const wasActive = checkSessionActivation(bars, latestSetup, nl30, levels, dayType.classification);
-      if (wasActive) triggerState = 'ACTIVE_MANAGING';
+      trigger = {
+        active: true,
+        state: 'ACTIVE',
+        resolvedReason: null,
+        exitPlaybook: buildExitPlaybook(dayType.classification),
+        setup: {
+          type: acd.a_up_fired ? 'A_UP_SIGNAL' : 'A_DOWN_SIGNAL',
+          direction: acd.a_up_fired ? 'LONG' : 'SHORT',
+          entry: currentPrice, stop: null, t1: null, rr: null,
+          stars: null, impactScore: 6, impactStack: [],
+          firedAt: null, rationale: [acd.a_up_fired ? 'A Up fired — bullish bias' : 'A Down fired — bearish bias'],
+        },
+      };
     }
 
-    trigger = {
+    if (latestSetup) trigger = {
       active: triggerState === 'ACTIVE' || triggerState === 'ACTIVE_MANAGING',
       state:  triggerState,
       resolvedReason,
@@ -1407,6 +1442,24 @@ export async function computeCase(tradeDate, asOf) {
           `Vol: ${volConf.confirmed ? 'sustained ' + volConf.relVol + 'x' : 'normal'}`,
           `NL30=${nl30} (${nlTrend})`,
         ].join(' | '),
+      },
+    };
+  }
+
+  // ACD signal override: when A fires but no qualifying setup, still show direction
+  if (trigger.state === 'WATCHING' && (acd?.a_up_fired || acd?.a_down_fired)) {
+    const aDir = acd.a_up_fired ? 'LONG' : 'SHORT';
+    trigger = {
+      active: true,
+      state: 'ACTIVE',
+      resolvedReason: null,
+      exitPlaybook: null,
+      setup: {
+        type: acd.a_up_fired ? 'A_UP_SIGNAL' : 'A_DOWN_SIGNAL',
+        direction: aDir,
+        entry: currentPrice, stop: null, t1: null, rr: null,
+        stars: null, impactScore: 6, impactStack: [],
+        firedAt: null, rationale: [acd.a_up_fired ? 'A Up fired' : 'A Down fired'],
       },
     };
   }

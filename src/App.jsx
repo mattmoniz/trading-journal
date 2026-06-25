@@ -1440,7 +1440,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
   const dts         = DT_STYLE[dtClass] || DT_STYLE.FORMING;
   const rawBias     = c?.read?.bias || 'NEUTRAL';
   const conviction  = c?.read?.conviction ?? 0;
-  const bias        = (conviction < 5.0) ? 'NO LEAN' : rawBias;
+  const bias        = (conviction < 3.5) ? 'NO LEAN' : rawBias;
   const meter       = c?.read?.meterPosition || 0;
   const biasClr     = dirClr(bias);
   const caseFor     = c?.caseFor || [];
@@ -2192,7 +2192,7 @@ function LiveReadBanner({ forecast }) {
   const dtClass = dayType?.classification || 'FORMING';
   const rawBias = read?.bias || 'NEUTRAL';
   const conviction = read?.conviction ?? 0;
-  const bias    = (conviction < 5.0) ? 'NO LEAN' : rawBias;
+  const bias    = (conviction < 3.5) ? 'NO LEAN' : rawBias;
   const meter   = read?.meterPosition || 0;
   function dirClr(dir) { return dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE; }
   const biasClr = dirClr(bias);
@@ -20689,7 +20689,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
   const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
   const rawBias  = c?.read?.bias || 'NEUTRAL';
   const conviction = c?.read?.conviction ?? 0;
-  const bias     = (conviction < 5.0) ? 'NO LEAN' : rawBias;
+  const bias     = (conviction < 3.5) ? 'NO LEAN' : rawBias;
   const meter    = c?.read?.meterPosition || 0;
   const biasClr  = dirClr(bias);
   const caseFor  = c?.caseFor  || [];
@@ -21546,7 +21546,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
   const dts      = DT_STYLE[dtClass] || DT_STYLE.FORMING;
   const rawBias  = read?.bias || 'NEUTRAL';
   const conviction = read?.conviction ?? 0;
-  const bias     = (conviction < 5.0) ? 'NO LEAN' : rawBias;
+  const bias     = (conviction < 3.5) ? 'NO LEAN' : rawBias;
   const meter    = read?.meterPosition || 0;
   const biasClr  = dirClr(bias);
 
