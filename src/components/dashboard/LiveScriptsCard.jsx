@@ -49,6 +49,7 @@ export default function LiveScriptsCard({ date }) {
           <span>{L.rots} rotations</span>
           <span style={{ color: L.microTrend === 'HIGHER_LOWS' ? '#4ade80' : L.microTrend === 'LOWER_LOWS' ? '#f87171' : '#94a3b8' }}>{L.microTrend}</span>
           <span>Vol {L.volTrend}</span>
+          {L.efficiencyRatio != null && <span style={{ color: L.efficiencyRatio > 0.5 ? '#4ade80' : L.efficiencyRatio < 0.2 ? '#fbbf24' : '#94a3b8' }}>ER {L.efficiencyRatio}</span>}
         </div>
       </div>
 

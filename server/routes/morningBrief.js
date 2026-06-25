@@ -600,8 +600,24 @@ router.get('/live-session-context/:date', async (req, res) => {
       resolvedSetups: resolvedSetups.map(s => ({ type: s.setup_type, result: s.resolution, pnl: s.pnl })),
       nearLevels,
       barsCount: bars.length,
-      // σ bands (StdDev from 1yr backtest: daily=111pt, weekly=251pt)
-      dailyVwapSigma: Math.round((price - vwap) / 111 * 10) / 10,
+      // Efficiency Ratio (30-bar rolling)
+      efficiencyRatio: (() => {
+        if (bars.length < 30) return null;
+        const w = bars.slice(-30);
+        const netMove = Math.abs(w[w.length-1].close - w[0].close);
+        const totalMove = w.reduce((s, b, i) => i === 0 ? 0 : s + Math.abs(b.close - w[i-1].close), 0);
+        return totalMove > 0 ? Math.round(netMove / totalMove * 100) / 100 : 0;
+      })(),
+      // σ bands — use session_analysis close_vs_vwap for rolling 30-day StdDev
+      dailyVwapSigma: await (async () => {
+        const recent = await query(
+          `SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`, [date]);
+        if (recent.rows.length < 10) return Math.round((price - vwap) / 111 * 10) / 10;
+        const dists = recent.rows.map(r => r.close_vs_vwap);
+        const mean = dists.reduce((a,b) => a+b, 0) / dists.length;
+        const std = Math.sqrt(dists.reduce((s, d) => s + (d - mean) ** 2, 0) / dists.length);
+        return std > 0 ? Math.round((price - vwap) / std * 10) / 10 : 0;
+      })(),
       weeklyVwap: await (async () => {
         const dow = new Date(date + 'T12:00:00').getDay();
         const mondayOffset = dow === 0 ? 6 : dow - 1;
@@ -621,6 +637,7 @@ router.get('/live-session-context/:date', async (req, res) => {
         let wPV=0,wV=0;
         for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
         const wVwap = wPV/wV;
+        // Rolling 30-day weekly VWAP StdDev (fallback to fixed 251)
         return Math.round((price - wVwap) / 251 * 10) / 10;
       })(),
     });
@@ -695,6 +712,27 @@ router.get('/trade-alerts/:date', async (req, res) => {
       if (recent.some(x => x.high > onHi + 3) && price < onHi - 5) {
         let conf = pd?.vah && Math.abs(onHi - pd.vah) <= 40 ? ` Conf: 2D VAH ${Math.round(pd.vah)}` : '';
         alerts.push({ id: 'onhSweep', type: 'STOP_SWEEP', msg: `ONH SWEPT ${Math.round(Math.max(...recent.map(x => x.high)))}, fading ${Math.round(price)}. SHORT. Stop above sweep.${conf}`, time: timeStr, color: '#ef4444' });
+      }
+    }
+
+    // Volume spike detection at key levels
+    const last20 = b.slice(-20);
+    const avgVol = last20.reduce((s, bar) => s + Number(bar.vol || 0), 0) / last20.length;
+    const lastBar = b[b.length - 1];
+    const lastVol = Number(lastBar.vol || 0);
+    const volRatio = avgVol > 0 ? lastVol / avgVol : 0;
+
+    if (volRatio >= 2.5) {
+      const nearLevel = [pd?.poc, pd?.vah, pd?.val, orH, orL, ibH, ibL].filter(Boolean)
+        .find(l => Math.abs(price - l) <= 15);
+      if (nearLevel) {
+        alerts.push({
+          id: 'volSpike',
+          type: 'VOLUME_SPIKE',
+          msg: `VOL SPIKE ${volRatio.toFixed(1)}x avg at ${Math.round(nearLevel)}. ${price > nearLevel ? 'Testing from above' : 'Testing from below'}. Watch for reversal or breakout confirmation.`,
+          time: timeStr,
+          color: '#f59e0b'
+        });
       }
     }
 
