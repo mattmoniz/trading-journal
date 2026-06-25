@@ -3,9 +3,58 @@ import React, { useState, useEffect } from 'react';
 const API_URL = '/api';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
+const METRIC_INFO = {
+  sessionChar: {
+    title: 'Session Character',
+    body: `How the day is classified based on price structure:\n\n• TREND_UP — Directional up day. Price above VWAP 87% of time. Buy dips to VWAP, never fade.\n• TREND_DOWN — Directional down day. Price below VWAP 86%. Short rallies to VWAP.\n• CHOP — 15-25 rotations. Rotational, no direction. Fade level touches.\n• EXTREME_CHOP — 25+ rotations. Violent, reduce size. Don't hold.\n• BALANCE — VWAP is fair value. Close near VWAP (-2pt avg). Fade any extension.\n• DRIFT_UP/DOWN — Slow directional drift. Lean with drift, expect VWAP reversion.`,
+  },
+  range: {
+    title: 'Session Range',
+    body: `High minus low of today's RTH session.\n\nAvg NQ daily range: ~350pt\n• <200pt = Narrow range day. Compression — breakout coming.\n• 200-400pt = Normal.\n• 400-600pt = Wide — volatile session.\n• 600pt+ = Extreme — reduce size, widen stops.`,
+  },
+  rangePct: {
+    title: 'Range Position',
+    body: `Where current price sits within today's range.\n\n• 0% = At session low\n• 50% = Middle of range\n• 100% = At session high\n\nClose in top 25%: bullish close → 67% next day up.\nClose in bottom 25%: bearish close → only 40% next day up.\n\nUsed to project tomorrow's overnight inventory (LONG_TRAPPED vs SHORT_TRAPPED).`,
+  },
+  rotations: {
+    title: 'Rotation Count (65pt+)',
+    body: `Number of 65pt+ swings today. Measures chop intensity.\n\n• <10 = Quiet, trending day. Let winners run.\n• 10-15 = Normal rotational.\n• 15-25 = Choppy. Take profits quickly. Scalp mode.\n• 25+ = Extreme chop. Reduce size significantly.\n• 40+ = Violent — every move reverses. Consider sitting out.\n\nAvg: 21 rotations/day on NQ.`,
+  },
+  microTrend: {
+    title: 'Micro Trend (5-min)',
+    body: `Last 10 five-minute bars — are lows rising or falling?\n\n• HIGHER_LOWS (green) — Bullish structure. Dips are being bought. Lean long on pullbacks.\n• LOWER_LOWS (red) — Bearish structure. Rallies are being sold. Lean short on bounces.\n• MIXED — No direction. Rotational. Fade levels both ways.\n\nThis is the short-term momentum read. It shifts faster than session character.`,
+  },
+  volTrend: {
+    title: 'Volume Trend',
+    body: `Compares 1st half vs 2nd half of session volume.\n\n• INCREASING — Energy building. Moves have follow-through. Breakouts more likely to hold.\n• DECLINING — Energy fading. Typical afternoon. Fade extensions — breakout attempts will fail.\n• STABLE — Normal volume distribution.\n\nINCREASING in PM is unusual and signals a potential late-day move.`,
+  },
+  er: {
+    title: 'Efficiency Ratio (ER)',
+    body: `Net price displacement / total bar-by-bar movement over 30 bars.\n\nMeasures how directional the market is RIGHT NOW:\n\n• ER < 0.15 — Pure chop. Overlapping bars. Fade everything.\n• ER 0.15-0.30 — Choppy. Level fades work (41% WR at levels).\n• ER 0.30-0.50 — Mixed. Normal conditions.\n• ER > 0.50 — Trending. Clean directional bars. Don't fade.\n• ER > 0.70 — Strong trend. Ride it. Fading = getting run over.\n\nUpdates every 60 seconds with live bars.`,
+  },
+};
+
+function MetricModal({ metric, onClose }) {
+  if (!metric) return null;
+  const info = METRIC_INFO[metric];
+  if (!info) return null;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 10, padding: '20px 24px', maxWidth: 480, width: '90%', maxHeight: '80vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <span style={{ fontSize: 15, fontWeight: 800, color: '#e2e8f0', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{info.title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 18 }}>✕</button>
+        </div>
+        <div style={{ fontSize: 12, lineHeight: 1.8, color: '#cbd5e1', whiteSpace: 'pre-line' }}>{info.body}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function LiveScriptsCard({ date }) {
   const [ctx, setCtx] = useState(null);
   const [edgeData, setEdgeData] = useState(null);
+  const [activeModal, setActiveModal] = useState(null);
 
   const fetchData = () => {
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -43,13 +92,13 @@ export default function LiveScriptsCard({ date }) {
           <span style={{ fontSize: 9, color: '#64748b' }}>{ts}</span>
         </div>
         <div style={{ display: 'flex', gap: 12, marginTop: 4, fontSize: 11, color: '#94a3b8', flexWrap: 'wrap' }}>
-          <span title={`Session character: ${L.sessionChar}.\nCHOP = rotational, fade levels.\nTREND_UP/DOWN = directional, don't fade.\nBALANCE = VWAP is fair value.\nEXTREME_CHOP = violent rotations, reduce size.`} style={{ color: L.sessionChar === 'CHOP' ? '#fbbf24' : L.sessionChar.includes('TREND') ? '#4ade80' : '#94a3b8', fontWeight: 700, cursor: 'help' }}>{L.sessionChar}</span>
-          <span title={`Today's session range from high to low.\nAvg NQ daily range ~350pt.\n<200pt = narrow, >500pt = wide/volatile.`} style={{ cursor: 'help' }}>{L.range}pt range</span>
-          <span title={`Current price position within today's range.\n0% = at session low, 100% = at session high.\n<25% = lower quarter (bearish close forming).\n>75% = upper quarter (bullish close forming).`} style={{ cursor: 'help' }}>{L.rangePct}% of range</span>
-          <span title={`65pt+ rotations today.\n<10 = quiet/trending day.\n15-25 = normal chop.\n25+ = extreme chop, reduce size.\n40+ = violent — sit on hands.`} style={{ cursor: 'help' }}>{L.rots} rotations</span>
-          <span title={`5-min micro trend (last 10 bars).\nHIGHER_LOWS = bullish structure, dips are bought.\nLOWER_LOWS = bearish structure, rallies are sold.\nMIXED = no direction, rotational.`} style={{ color: L.microTrend === 'HIGHER_LOWS' ? '#4ade80' : L.microTrend === 'LOWER_LOWS' ? '#f87171' : '#94a3b8', cursor: 'help' }}>{L.microTrend}</span>
-          <span title={`Volume trend (1st half vs 2nd half of session).\nINCREASING = energy building, moves have follow-through.\nDECLINING = energy fading, breakouts will fail.\nSTABLE = normal volume.`} style={{ cursor: 'help' }}>Vol {L.volTrend}</span>
-          {L.efficiencyRatio != null && <span title={`Efficiency Ratio (30-bar rolling).\nMeasures directional conviction: net move / total move.\nER < 0.2 = choppy, overlapping bars. Fade levels.\nER 0.2-0.5 = mixed, normal.\nER > 0.5 = trending, clean moves. Don't fade.\nER > 0.7 = strong trend, ride it.`} style={{ color: L.efficiencyRatio > 0.5 ? '#4ade80' : L.efficiencyRatio < 0.2 ? '#fbbf24' : '#94a3b8', cursor: 'help' }}>ER {L.efficiencyRatio}</span>}
+          <span onClick={() => setActiveModal('sessionChar')} style={{ color: L.sessionChar === 'CHOP' ? '#fbbf24' : L.sessionChar.includes('TREND') ? '#4ade80' : '#94a3b8', fontWeight: 700, cursor: 'pointer', borderBottom: '1px dotted #475569' }}>{L.sessionChar}</span>
+          <span onClick={() => setActiveModal('range')} style={{ cursor: 'pointer', borderBottom: '1px dotted #475569' }}>{L.range}pt range</span>
+          <span onClick={() => setActiveModal('rangePct')} style={{ cursor: 'pointer', borderBottom: '1px dotted #475569' }}>{L.rangePct}% of range</span>
+          <span onClick={() => setActiveModal('rotations')} style={{ cursor: 'pointer', borderBottom: '1px dotted #475569' }}>{L.rots} rotations</span>
+          <span onClick={() => setActiveModal('microTrend')} style={{ color: L.microTrend === 'HIGHER_LOWS' ? '#4ade80' : L.microTrend === 'LOWER_LOWS' ? '#f87171' : '#94a3b8', cursor: 'pointer', borderBottom: '1px dotted #475569' }}>{L.microTrend}</span>
+          <span onClick={() => setActiveModal('volTrend')} style={{ cursor: 'pointer', borderBottom: '1px dotted #475569' }}>Vol {L.volTrend}</span>
+          {L.efficiencyRatio != null && <span onClick={() => setActiveModal('er')} style={{ color: L.efficiencyRatio > 0.5 ? '#4ade80' : L.efficiencyRatio < 0.2 ? '#fbbf24' : '#94a3b8', cursor: 'pointer', borderBottom: '1px dotted #475569' }}>ER {L.efficiencyRatio}</span>}
         </div>
       </div>
 
@@ -139,6 +188,7 @@ export default function LiveScriptsCard({ date }) {
           </div>
         </div>
       </div>
+      <MetricModal metric={activeModal} onClose={() => setActiveModal(null)} />
     </div>
   );
 }

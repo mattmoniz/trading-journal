@@ -2435,7 +2435,7 @@ function LiveReadBanner({ forecast }) {
         borderRadius: 8
       }}>
         {/* OR5 Level */}
-        <div title="Blue border = neutral/informational reference level" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
+        <div title="Gray border = neutral/informational reference level" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #64748b' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>5-Min Opening Range</div>
             <InfoTooltip text={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>=91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} />
@@ -2484,7 +2484,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* A Down Trigger */}
-        <div title="Orange border = bearish condition active" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #fb923c' }}>
+        <div title="Red border = bearish condition active" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #ef4444' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>A Down Trigger</div>
             <InfoTooltip text={"A DOWN TRIGGER LEVEL\n\nCalculated as OR5 Low - A Multiplier * OR5 Width. If price crosses and prints a 1m candle close below this level, the bearish A Down signal is officially fired."} />
@@ -2501,7 +2501,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* G-Line (Weekly Open) */}
-        <div title={currentPrice >= gLine ? 'Green border = price above G-Line (bullish)' : 'Orange border = price below G-Line (bearish)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+        <div title={currentPrice >= gLine ? 'Green border = price above G-Line (bullish)' : 'Red border = price below G-Line (bearish)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#ef4444') : '#64748b'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>G-Line (Wk Open)</div>
             <InfoTooltip text={"G-LINE (WEEKLY OPEN)\n\nThe weekly opening price of NQ. Serves as the ultimate macro directional divider.\n\nABOVE G-LINE: Long setups have structural confirmation. Favor longs.\nBELOW G-LINE: Short setups have structural confirmation. Favor shorts."} />
@@ -2511,7 +2511,7 @@ function LiveReadBanner({ forecast }) {
               <div style={{ fontSize: 16, fontWeight: 800, color: '#cbd5e1', fontFamily: 'monospace' }}>
                 {fmtP(Math.round(gLine))}
               </div>
-              <div style={{ fontSize: 12, color: currentPrice >= gLine ? '#34d399' : '#fb923c', marginTop: 2, fontWeight: 700 }}>
+              <div style={{ fontSize: 12, color: currentPrice >= gLine ? '#34d399' : '#ef4444', marginTop: 2, fontWeight: 700 }}>
                 {currentPrice >= gLine ? 'NQ ABOVE (BULLISH)' : 'NQ BELOW (BEARISH)'}
               </div>
             </div>
@@ -2523,7 +2523,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* 2-Day POC Streak/Shift since last close */}
-        <div title={poc2DayStreak === 'HIGHER' ? 'Green = POC migrating higher (bullish value shift)' : poc2DayStreak === 'LOWER' ? 'Orange = POC migrating lower (bearish value shift)' : 'Gray = no clear POC direction'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#fb923c' : '#64748b')}` }}>
+        <div title={poc2DayStreak === 'HIGHER' ? 'Green = POC migrating higher (bullish value shift)' : poc2DayStreak === 'LOWER' ? 'Red = POC migrating lower (bearish value shift)' : 'Gray = no clear POC direction'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#ef4444' : '#64748b')}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>2-Day POC Streak</div>
             <InfoTooltip text={"2-DAY HISTORICAL POC SHIFT & STREAK\n\nThe POC shift over the 2 completed sessions preceding today (T-1 vs T-3):\n\nStreak is HIGHER/LOWER if both preceding daily migrations are in the same direction.\n\nCombined with today's intraday ROC, a matching streak yields an 80%+ win rate on breakout setups."} />
@@ -2545,7 +2545,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* POC ROC (Speed) */}
-        <div title={pocRoc >= 0 ? 'Green = value migrating higher (POC rising)' : 'Orange = value migrating lower (POC falling)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+        <div title={pocRoc >= 0 ? 'Green = value migrating higher (POC rising)' : 'Red = value migrating lower (POC falling)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#ef4444') : '#64748b'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>POC ROC (Speed)</div>
             <InfoTooltip text={"POC RATE OF CHANGE (SPEED)\n\nThe rate of change in today's developing POC relative to yesterday's final POC, in points per hour:\n\nPOC ROC = (POC_dev - POC_prior) / Hours since 9:30 AM ET.\n\nSTABLE (<=10 pts/hr): Consolidation/range mode favored.\nTRENDING (>15 pts/hr): Rapid value migration. Fades are highly dangerous, breakouts are favored."} />
