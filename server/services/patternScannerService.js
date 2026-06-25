@@ -457,9 +457,9 @@ function classifySession(bars, rotCount, closePct) {
   // Directional conviction first — a 300pt selloff is a trend day even with 50 rotations
   if (Math.abs(move) > range * 0.4 && closePct > 70) return 'TREND_UP';
   if (Math.abs(move) > range * 0.4 && closePct < 30) return 'TREND_DOWN';
-  // Then rotation-based classification
-  if (rotCount >= 25) return 'EXTREME_CHOP';
-  if (rotCount >= 15) return 'CHOP';
+  // Then rotation-based classification (5-min close-to-close thresholds)
+  if (rotCount >= 14) return 'EXTREME_CHOP';
+  if (rotCount >= 8) return 'CHOP';
   if (closePct > 40 && closePct < 60) return 'BALANCE';
   if (closePct > 60) return 'DRIFT_UP';
   if (closePct < 40) return 'DRIFT_DOWN';
