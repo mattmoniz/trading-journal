@@ -690,7 +690,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
 
     if (pd?.poc && Math.abs(price - pd.poc) <= 10) {
       const dir = price > pd.poc ? 'SHORT' : 'LONG';
-      alerts.push({ id: 'poc', type: 'POC_MAGNET', msg: `POC MAGNET: ${Math.round(price)} at PD POC ${Math.round(pd.poc)}. Fade ${dir}. 64% WR, 20pt target, 25pt stop.`, time: timeStr, color: '#a78bfa' });
+      alerts.push({ id: 'poc', type: 'POC_MAGNET', msg: `POC MAGNET: ${Math.round(price)} at PD POC ${Math.round(pd.poc)}. Fade ${dir}. 64% WR, 20pt target, 25pt stop.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
     }
 
     // Daily VWAP σ alert
@@ -704,7 +704,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
     })();
     if (Math.abs(dailySigma) >= 1.5) {
       const dir = dailySigma > 0 ? 'SHORT' : 'LONG';
-      alerts.push({ id: 'vwapDaily', type: 'DAILY_VWAP', msg: `DAILY VWAP: ${dailySigma > 0 ? '+' : ''}${dailySigma.toFixed(1)}σ (${Math.round(Math.abs(price - vwap))}pt). Fade ${dir} toward ${Math.round(vwap)}. 62% WR.`, time: timeStr, color: '#818cf8' });
+      alerts.push({ id: 'vwapDaily', type: 'DAILY_VWAP', msg: `DAILY VWAP: ${dailySigma > 0 ? '+' : ''}${dailySigma.toFixed(1)}σ (${Math.round(Math.abs(price - vwap))}pt). Fade ${dir} toward ${Math.round(vwap)}. 62% WR.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
     }
 
     // Weekly VWAP σ alert
@@ -719,7 +719,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
       const weeklySigma = (price - weeklyVwap) / 251;
       if (Math.abs(weeklySigma) >= 1.5) {
         const dir = weeklySigma > 0 ? 'SHORT' : 'LONG';
-        alerts.push({ id: 'vwapWeekly', type: 'WEEKLY_VWAP', msg: `WEEKLY VWAP: ${weeklySigma > 0 ? '+' : ''}${weeklySigma.toFixed(1)}σ (${Math.round(Math.abs(price - weeklyVwap))}pt). ${Math.abs(weeklySigma) >= 2 ? '91% next-day reversion at 2σ. ' : ''}Fade ${dir} toward ${Math.round(weeklyVwap)}.`, time: timeStr, color: '#f472b6' });
+        alerts.push({ id: 'vwapWeekly', type: 'WEEKLY_VWAP', msg: `WEEKLY VWAP: ${weeklySigma > 0 ? '+' : ''}${weeklySigma.toFixed(1)}σ (${Math.round(Math.abs(price - weeklyVwap))}pt). ${Math.abs(weeklySigma) >= 2 ? '91% next-day reversion at 2σ. ' : ''}Fade ${dir} toward ${Math.round(weeklyVwap)}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
       }
     }
 
@@ -823,7 +823,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
             const prIdx = rec.indexOf(prLo);
             const prF = fArr.slice(Math.max(0, ci - 15), ci);
             if (pp <= prLo * 1.015 && fArr[ci] > (prF[prIdx] || 0) + 0.1) {
-              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BULLISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 97% bounce 100pt+ within 14hr. Wait for intraday confirmation.`, time: timeStr, color: '#a78bfa' });
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BULLISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 97% bounce 100pt+ within 14hr. Wait for intraday confirmation.`, time: timeStr, color: '#4ade80' });
               break;
             }
           }
@@ -832,7 +832,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
             const prIdx = rec.indexOf(prHi);
             const prF = fArr.slice(Math.max(0, ci - 15), ci);
             if (pp >= prHi * 0.985 && fArr[ci] < (prF[prIdx] || 0) - 0.1) {
-              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BEARISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 74% drop 100pt+ within 22hr. Wait for intraday confirmation.`, time: timeStr, color: '#f472b6' });
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BEARISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 74% drop 100pt+ within 22hr. Wait for intraday confirmation.`, time: timeStr, color: '#ef4444' });
               break;
             }
           }

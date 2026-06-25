@@ -28,6 +28,7 @@ export default function TradeAlertBanner() {
           for (const a of (data.alerts || [])) {
             const existing = updated.findIndex(x => x.id === a.id);
             if (existing >= 0) {
+              // Update the message with latest values but keep original firstSeen
               updated[existing] = { ...a, firstSeen: updated[existing].firstSeen, expired: false };
             } else {
               updated.push({ ...a, firstSeen: new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }), expired: false });
