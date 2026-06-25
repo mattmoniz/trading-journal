@@ -592,11 +592,29 @@ router.get('/live-session-context/:date', async (req, res) => {
     if (m3VA.vah && Math.abs(price - m3VA.vah) < 60) nearLevels.push({ name: '3M VAH', price: Math.round(m3VA.vah), dist: Math.round(price - m3VA.vah) });
     if (m3VA.val && Math.abs(price - m3VA.val) < 60) nearLevels.push({ name: '3M VAL', price: Math.round(m3VA.val), dist: Math.round(price - m3VA.val) });
 
+    // 24hr VWAP (Globex session: 6 PM prior day → 5 PM today)
+    const globexStart = `${date}T00:00:00`; // bars stored in ET, midnight is within session
+    const allDayBars = await query(
+      `SELECT high::float, low::float, close::float, volume::bigint as vol
+       FROM price_bars_primary WHERE symbol='NQ' AND (
+         (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
+         (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
+       ) ORDER BY ts`, [date]).catch(() => ({ rows: [] }));
+    let vwap24 = null, vwap24Dist = null, vwap24Sigma = null;
+    if (allDayBars.rows.length > 50) {
+      let pv24 = 0, v24 = 0;
+      for (const b of allDayBars.rows) { pv24 += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v24 += Number(b.vol || 1); }
+      vwap24 = Math.round(pv24 / v24);
+      vwap24Dist = Math.round(price - vwap24);
+      vwap24Sigma = Math.round((price - vwap24) / 130 * 10) / 10; // ~130pt StdDev estimate for 24hr
+    }
+
     res.json({
       price: Math.round(price), openPrice: Math.round(openPrice),
       sessHi: Math.round(sessHi), sessLo: Math.round(sessLo),
       range: Math.round(range), rangePct, closeVsOpen,
       vwap: Math.round(vwap), vwapDist: Math.round(price - vwap),
+      vwap24, vwap24Dist, vwap24Sigma,
       poc, pocDist: Math.round(price - poc),
       orH: orH ? Math.round(orH) : null, orL: orL ? Math.round(orL) : null,
       ibH: ibH ? Math.round(ibH) : null, ibL: ibL ? Math.round(ibL) : null,
@@ -705,6 +723,15 @@ router.get('/trade-alerts/:date', async (req, res) => {
     if (Math.abs(dailySigma) >= 1.5) {
       const dir = dailySigma > 0 ? 'SHORT' : 'LONG';
       alerts.push({ id: 'vwapDaily', type: 'DAILY_VWAP', msg: `DAILY VWAP: ${dailySigma > 0 ? '+' : ''}${dailySigma.toFixed(1)}σ (${Math.round(Math.abs(price - vwap))}pt). Fade ${dir} toward ${Math.round(vwap)}. 62% WR.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
+    }
+
+    // 24hr VWAP σ alert (Globex session)
+    if (allDayBars.rows.length > 50 && vwap24) {
+      const sigma24 = (price - vwap24) / 130;
+      if (Math.abs(sigma24) >= 1.5) {
+        const dir = sigma24 > 0 ? 'SHORT' : 'LONG';
+        alerts.push({ id: 'vwap24', type: '24HR_VWAP', msg: `24HR VWAP: ${sigma24 > 0 ? '+' : ''}${sigma24.toFixed(1)}σ (${Math.round(Math.abs(price - vwap24))}pt). Fade ${dir} toward ${vwap24}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
+      }
     }
 
     // Weekly VWAP σ alert
