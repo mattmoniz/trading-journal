@@ -70,6 +70,19 @@ export default function LiveScriptsCard({ date }) {
         </div>
       </div>
 
+      {/* VWAP behavior context based on session type */}
+      {L.sessionChar && L.sessionChar !== 'DEVELOPING' && (
+        <div style={{ padding: '4px 14px', borderBottom: '1px solid #1e293b', fontSize: 10, color: '#94a3b8' }}>
+          {L.sessionChar === 'TREND_UP' && '📈 TREND UP — price above VWAP 87% of day. Buy dips TO VWAP, never fade it.'}
+          {L.sessionChar === 'TREND_DOWN' && '📉 TREND DOWN — price below VWAP 86% of day. Short rallies TO VWAP, never buy.'}
+          {(L.sessionChar === 'CHOP' || L.sessionChar === 'EXTREME_CHOP') && '🔀 CHOP — fade 50-100pt VWAP extensions. Crosses are noise (57% revert). Don\'t hold.'}
+          {L.sessionChar === 'BALANCE' && '⚖️ BALANCE — VWAP IS fair value (close -2pt avg). Fade any extension.'}
+          {L.sessionChar === 'DRIFT_UP' && '↗️ DRIFT UP — lean long, expect reversion to VWAP on pullbacks.'}
+          {L.sessionChar === 'DRIFT_DOWN' && '↘️ DRIFT DOWN — lean short, expect reversion to VWAP on rallies.'}
+          {Math.abs(L.weeklyVwapSigma || 0) >= 1.8 && <span style={{ color: '#ef4444', fontWeight: 700 }}> · Weekly VWAP {L.weeklyVwapSigma > 0 ? '+' : ''}{L.weeklyVwapSigma}σ — 91% next-day reversion at 2σ.</span>}
+        </div>
+      )}
+
       {/* Morning Script */}
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #1e293b' }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>

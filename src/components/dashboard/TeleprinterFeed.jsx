@@ -107,31 +107,7 @@ function buildFeed({ liveStatus, setups, limits, tradeBacktest }) {
   }
 
   // Setup fires and resolutions
-  if (setups?.list) {
-    setups.list.forEach(s => {
-      const firedTimeStr = s.fired_time + ":00";
-      if (shouldShowEvent(firedTimeStr)) {
-        feed.push({
-          time: firedTimeStr, type: "alert",
-          text: `🎯 Setup Fired: ${s.setup_type}. Entry ${s.entry_zone_low}–${s.entry_zone_high}. Stop: ${s.stop_level}. Target: ${s.t1_level}. Baseline WR: ${(s.baselineWr * 100).toFixed(1)}% (N=${s.sampleN}). Adjusted WR: ${(s.adjustedWr * 100).toFixed(1)}% (${s.confidence}). ${s.recommendation}`
-        });
-      }
-      if (s.resolution) {
-        const isWinner = s.resolution === 'TARGET_HIT';
-        const pnlText = s.actual_pnl != null ? ` P&L: ${isWinner ? '+' : ''}$${s.actual_pnl}` : '';
-        let resHour = parseInt(s.fired_time.split(':')[0]);
-        let resMin = parseInt(s.fired_time.split(':')[1]) + (isWinner ? 14 : 19);
-        if (resMin >= 60) { resHour += Math.floor(resMin / 60); resMin = resMin % 60; }
-        const resTimeStr = `${String(resHour).padStart(2, '0')}:${String(resMin).padStart(2, '0')}:00`;
-        let ctx = '';
-        if (s.setup_type.includes('BREAKOUT') && isMonday) ctx = isWinner ? ' Outlier: breakout resolved despite Monday friction.' : ' Breakout failure aligns with Monday chop.';
-        else if (s.setup_type.includes('BREAKOUT') && liveStatus?.or5Status === 'WIDE') ctx = isWinner ? ' Outlier: breakout resolved on wide OR day.' : ' Breakout failure correlated with wide OR.';
-        if (shouldShowEvent(resTimeStr)) {
-          feed.push({ time: resTimeStr, type: isWinner ? 'success' : 'danger', text: `${isWinner ? '✅' : '❌'} Setup Resolved: ${s.setup_type} hit ${isWinner ? 'Target 1' : 'Stop Loss'}.${pnlText}.${ctx}` });
-        }
-      }
-    });
-  }
+  // Setup fired/resolved removed from commentary feed — shown in Trade Alert Banner and Daily Recap instead
 
   // Coiling alerts
   if (isLive && liveStatus?.coiling?.active) {

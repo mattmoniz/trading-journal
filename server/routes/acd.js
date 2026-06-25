@@ -3676,6 +3676,23 @@ export default function createACDRouter(io) {
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
         if (pwRes.rows[0]?.lo) confLevels.push(pwRes.rows[0].lo);
         if (pwRes.rows[0]?.hi) confLevels.push(pwRes.rows[0].hi);
+        // PW composite VA
+        const pwVABars = await query(
+          `SELECT close::float, volume::bigint as vol FROM price_bars_primary
+           WHERE symbol='NQ' AND ts::date >= ($1::date - interval '7 days') AND ts::date < $1
+           AND EXTRACT(dow FROM ts::date) BETWEEN 1 AND 5
+           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
+        if (pwVABars.rows.length > 100) {
+          const vbk = {};
+          for (const b of pwVABars.rows) { const bk = Math.round(b.close / 25) * 25; vbk[bk] = (vbk[bk] || 0) + Number(b.vol || 0); }
+          const sorted = Object.entries(vbk).sort((a, b) => b[1] - a[1]);
+          const totalV = sorted.reduce((s, [, v]) => s + v, 0);
+          let cumV = 0; const vaLevels = [];
+          for (const [price, vol] of sorted) { cumV += vol; vaLevels.push(parseFloat(price)); if (cumV >= totalV * 0.7) break; }
+          const pwVAH = Math.max(...vaLevels);
+          const pwVAL = Math.min(...vaLevels);
+          confLevels.push(pwVAH, pwVAL);
+        }
 
         for (const level of sweepLevels) {
           if (stopSweepSetup) break;
