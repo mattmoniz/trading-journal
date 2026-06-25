@@ -52,6 +52,24 @@ export default function LiveScriptsCard({ date }) {
         </div>
       </div>
 
+      {/* VWAP σ Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px 14px', borderBottom: '1px solid #1e293b' }}>
+        <div style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, borderLeft: `3px solid ${Math.abs(L.dailyVwapSigma || 0) >= 2 ? '#fbbf24' : Math.abs(L.dailyVwapSigma || 0) >= 1 ? '#fb923c' : '#64748b'}` }}>
+          <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Daily VWAP</div>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: Math.abs(L.dailyVwapSigma || 0) >= 2 ? '#fbbf24' : '#cbd5e1' }}>
+            {L.dailyVwapSigma != null ? `${L.dailyVwapSigma > 0 ? '+' : ''}${L.dailyVwapSigma}σ` : '—'}
+          </div>
+          <div style={{ fontSize: 10, color: '#64748b' }}>{fmtP(L.vwap)} ({L.vwapDist > 0 ? '+' : ''}{L.vwapDist}pt)</div>
+        </div>
+        <div style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, borderLeft: `3px solid ${Math.abs(L.weeklyVwapSigma || 0) >= 2 ? '#ef4444' : Math.abs(L.weeklyVwapSigma || 0) >= 1 ? '#fb923c' : '#64748b'}` }}>
+          <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600, textTransform: 'uppercase' }}>Weekly VWAP</div>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: Math.abs(L.weeklyVwapSigma || 0) >= 2 ? '#ef4444' : '#cbd5e1' }}>
+            {L.weeklyVwapSigma != null ? `${L.weeklyVwapSigma > 0 ? '+' : ''}${L.weeklyVwapSigma}σ` : '—'}
+          </div>
+          <div style={{ fontSize: 10, color: '#64748b' }}>{L.weeklyVwap ? `${fmtP(L.weeklyVwap)} (${L.weeklyVwapSigma != null ? Math.round(L.weeklyVwapSigma * 251) + 'pt' : '—'})` : '—'}</div>
+        </div>
+      </div>
+
       {/* Morning Script */}
       <div style={{ padding: '10px 14px', borderBottom: '1px solid #1e293b' }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>

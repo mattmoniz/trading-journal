@@ -600,6 +600,29 @@ router.get('/live-session-context/:date', async (req, res) => {
       resolvedSetups: resolvedSetups.map(s => ({ type: s.setup_type, result: s.resolution, pnl: s.pnl })),
       nearLevels,
       barsCount: bars.length,
+      // σ bands (StdDev from 1yr backtest: daily=111pt, weekly=251pt)
+      dailyVwapSigma: Math.round((price - vwap) / 111 * 10) / 10,
+      weeklyVwap: await (async () => {
+        const dow = new Date(date + 'T12:00:00').getDay();
+        const mondayOffset = dow === 0 ? 6 : dow - 1;
+        const monday = new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
+        const wb = await query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [monday, date]);
+        if (wb.rows.length < 50) return null;
+        let wPV=0,wV=0;
+        for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
+        return Math.round(wPV/wV);
+      })(),
+      weeklyVwapSigma: await (async () => {
+        const dow = new Date(date + 'T12:00:00').getDay();
+        const mondayOffset = dow === 0 ? 6 : dow - 1;
+        const monday = new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
+        const wb = await query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [monday, date]);
+        if (wb.rows.length < 50) return null;
+        let wPV=0,wV=0;
+        for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
+        const wVwap = wPV/wV;
+        return Math.round((price - wVwap) / 251 * 10) / 10;
+      })(),
     });
   } catch (err) {
     console.error('[live-session-context]', err);
