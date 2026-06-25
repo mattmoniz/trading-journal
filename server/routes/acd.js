@@ -2558,6 +2558,10 @@ export default function createACDRouter(io) {
       const orRange = orH && orL ? orH - orL : null;
       const openingCall = arRow.rows[0]?.opening_call_type;
       const currentPrice = latestBarRow.rows[0]?.close || 0;
+      const nearPD2VA = currentPrice && (
+        (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
+        (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
+      );
       const avgVol = parseFloat(volumeCtxRow.rows[0]?.avg_vol) || 0;
       const ibBars = ibBarsRow.rows;
       const ibHigh = ibBars.length >= 3 ? Math.max(...ibBars.map(b => b.high)) : null;
@@ -3765,10 +3769,7 @@ export default function createACDRouter(io) {
         (dir === 'LONG' && nl30State === 'BEARISH') || (dir === 'SHORT' && nl30State === 'BULLISH');
       const isTightOR = orRange != null && orRange < 47.5;
       const isWideOR = orRange != null && orRange > 91.5;
-      const nearPD2VA = currentPrice && (
-        (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
-        (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
-      );
+      // nearPD2VA already computed above after pd2VA initialization
 
       // Compression confluence: VWAP within 15pt of PD-2 VA level
       // When VWAP sits on PD-2 VA, WR = 70.4% (N=27) vs 46.9% when apart.
