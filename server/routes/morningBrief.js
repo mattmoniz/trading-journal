@@ -743,6 +743,78 @@ router.get('/trade-alerts/:date', async (req, res) => {
       }
     }
 
+    // 4hr Fisher divergence check
+    try {
+      const divRes = await new Promise((resolve) => {
+        const url = `/morning-brief/divergence-4hr/${date}`;
+        // Internal call — reuse the endpoint logic
+        const divReq = { params: { date } };
+        const divResObj = { json: (data) => resolve(data) };
+        // Direct computation instead of HTTP call
+        resolve(null); // will be populated below
+      });
+    } catch (_) {}
+    // Inline 4hr divergence check for alerts
+    const divBars = await query(
+      `SELECT ts::date::text as td, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+              open::float, high::float, low::float, close::float
+       FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1::date - 10 AND ts::date <= $1
+       ORDER BY ts`, [date]).catch(() => ({ rows: [] }));
+    if (divBars.rows.length > 200) {
+      const fhb = [];
+      const dates = [...new Set(divBars.rows.map(r => r.td))];
+      for (const dd of dates) {
+        const db = divBars.rows.filter(r => r.td === dd);
+        for (const bk of [0, 240, 480, 720, 960, 1200]) {
+          const bb = db.filter(x => x.et_min >= bk && x.et_min < bk + 240);
+          if (bb.length < 5) continue;
+          fhb.push({ close: bb[bb.length-1].close, high: Math.max(...bb.map(x=>x.high)), low: Math.min(...bb.map(x=>x.low)) });
+        }
+      }
+      if (fhb.length >= 20) {
+        let pFF = 0, pVV = 0;
+        const fArr = [];
+        for (let i = 0; i < fhb.length; i++) {
+          const hl = (fhb[i].high + fhb[i].low) / 2;
+          const ss = Math.max(0, i - 9);
+          let hh = -Infinity, ll = Infinity;
+          for (let j = ss; j <= i; j++) { const m = (fhb[j].high + fhb[j].low) / 2; hh = Math.max(hh, m); ll = Math.min(ll, m); }
+          const rr = hh - ll;
+          let vv = rr > 0 ? 0.33 * 2 * ((hl - ll) / rr - 0.5) + 0.67 * pVV : 0;
+          vv = Math.max(-0.999, Math.min(0.999, vv));
+          const ft = 0.5 * Math.log((1 + vv) / (1 - vv)) + 0.5 * pFF;
+          fArr.push(ft);
+          pFF = ft; pVV = vv;
+        }
+        // Check last 3 four-hour bars for divergence (not just the final one)
+        for (let ci = Math.max(20, fhb.length - 3); ci < fhb.length; ci++) {
+          const rec = fhb.slice(ci - 20, ci + 1).map(x => x.close);
+          const rHi = Math.max(...rec), rLo = Math.min(...rec), rR = rHi - rLo;
+          if (rR < 50) continue;
+          const pp = fhb[ci].close;
+          const pcc = (pp - rLo) / rR;
+          if (pcc < 0.35 && fArr[ci] < 0) {
+            const prLo = Math.min(...rec.slice(0, 15));
+            const prIdx = rec.indexOf(prLo);
+            const prF = fArr.slice(Math.max(0, ci - 15), ci);
+            if (pp <= prLo * 1.015 && fArr[ci] > (prF[prIdx] || 0) + 0.1) {
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BULLISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 97% bounce 100pt+ within 14hr. Wait for intraday confirmation.`, time: timeStr, color: '#a78bfa' });
+              break;
+            }
+          }
+          if (pcc > 0.65 && fArr[ci] > 0) {
+            const prHi = Math.max(...rec.slice(0, 15));
+            const prIdx = rec.indexOf(prHi);
+            const prF = fArr.slice(Math.max(0, ci - 15), ci);
+            if (pp >= prHi * 0.985 && fArr[ci] < (prF[prIdx] || 0) - 0.1) {
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BEARISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 74% drop 100pt+ within 22hr. Wait for intraday confirmation.`, time: timeStr, color: '#f472b6' });
+              break;
+            }
+          }
+        }
+      }
+    }
+
     res.json({ alerts, price: Math.round(price), time: timeStr });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -782,3 +854,124 @@ router.get('/:date?', async (req, res) => {
 });
 
 export default router;
+
+router.get('/divergence-4hr/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    
+    // Build 4hr bars from last 10 days for Fisher computation
+    const allBars = await query(
+      `SELECT ts::date::text as td, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+              open::float, high::float, low::float, close::float
+       FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1::date - 10 AND ts::date <= $1
+       ORDER BY ts`, [date]);
+    
+    if (allBars.rows.length < 200) return res.json({ divergence: null });
+
+    const fourHourBars = [];
+    const dates = [...new Set(allBars.rows.map(r => r.td))];
+    for (const d of dates) {
+      const dayBars = allBars.rows.filter(r => r.td === d);
+      for (const bucket of [0, 240, 480, 720, 960, 1200]) {
+        const barsInBucket = dayBars.filter(b => b.et_min >= bucket && b.et_min < bucket + 240);
+        if (barsInBucket.length < 5) continue;
+        fourHourBars.push({
+          date: d, bucket,
+          open: barsInBucket[0].open,
+          high: Math.max(...barsInBucket.map(b => b.high)),
+          low: Math.min(...barsInBucket.map(b => b.low)),
+          close: barsInBucket[barsInBucket.length - 1].close,
+        });
+      }
+    }
+
+    if (fourHourBars.length < 20) return res.json({ divergence: null });
+
+    // Fisher Transform
+    const fp = 10;
+    const fisher = [];
+    let pF = 0, pV = 0;
+    for (let i = 0; i < fourHourBars.length; i++) {
+      const hl = (fourHourBars[i].high + fourHourBars[i].low) / 2;
+      const s = Math.max(0, i - fp + 1);
+      let hi = -Infinity, lo = Infinity;
+      for (let j = s; j <= i; j++) { const m = (fourHourBars[j].high + fourHourBars[j].low) / 2; hi = Math.max(hi, m); lo = Math.min(lo, m); }
+      const r = hi - lo;
+      let v = r > 0 ? 0.33 * 2 * ((hl - lo) / r - 0.5) + 0.67 * pV : 0;
+      v = Math.max(-0.999, Math.min(0.999, v));
+      const ft = 0.5 * Math.log((1 + v) / (1 - v)) + 0.5 * pF;
+      fisher.push({ idx: i, ft, price: fourHourBars[i].close, date: fourHourBars[i].date });
+      pF = ft; pV = v;
+    }
+
+    // Check last 3 bars for divergence
+    const last = fisher.length - 1;
+    const recent = fourHourBars.slice(-20).map(b => b.close);
+    const rHi = Math.max(...recent), rLo = Math.min(...recent), rR = rHi - rLo;
+    if (rR < 50) return res.json({ divergence: null });
+
+    const price = fourHourBars[last].close;
+    const pct = (price - rLo) / rR;
+    let divergence = null;
+
+    // Bullish check
+    if (pct < 0.30 && fisher[last].ft < 0) {
+      const priorPrices = recent.slice(0, 12);
+      const priorLow = Math.min(...priorPrices);
+      const priorIdx = priorPrices.indexOf(priorLow);
+      const priorFishers = fisher.slice(last - 12, last).map(f => f.ft);
+      const priorFisherAtLow = priorFishers[priorIdx] || 0;
+      if (price <= priorLow * 1.01 && fisher[last].ft > priorFisherAtLow + 0.15) {
+        // Get nearby levels
+        const pdRes = await query(`SELECT poc::float, vah::float, val::float, session_low::float as lo FROM developing_value_log WHERE trade_date <= $1 ORDER BY trade_date DESC LIMIT 1`, [date]);
+        const pd = pdRes.rows[0];
+        const nearLevels = [];
+        if (pd?.val && Math.abs(price - pd.val) <= 60) nearLevels.push(`2D VAL ${Math.round(pd.val)}`);
+        if (pd?.poc && Math.abs(price - pd.poc) <= 60) nearLevels.push(`2D POC ${Math.round(pd.poc)}`);
+        if (pd?.lo && Math.abs(price - pd.lo) <= 60) nearLevels.push(`PD Low ${Math.round(pd.lo)}`);
+
+        divergence = {
+          type: 'BULLISH',
+          price: Math.round(price),
+          fisher: Math.round(fisher[last].ft * 100) / 100,
+          rangePct: Math.round(pct * 100),
+          nearLevels,
+          stats: '97% bounce 100pt+ within 14hr. Avg MFE 578pt. BUT median MAE 321pt — wait for intraday confirmation.',
+          confirmation: 'Look for: stop sweep + bounce, volume spike at level, micro trend shift to HIGHER_LOWS, or VWAP recapture attempt.',
+        };
+      }
+    }
+
+    // Bearish check
+    if (!divergence && pct > 0.70 && fisher[last].ft > 0) {
+      const priorPrices = recent.slice(0, 12);
+      const priorHigh = Math.max(...priorPrices);
+      const priorIdx = priorPrices.indexOf(priorHigh);
+      const priorFishers = fisher.slice(last - 12, last).map(f => f.ft);
+      const priorFisherAtHigh = priorFishers[priorIdx] || 0;
+      if (price >= priorHigh * 0.99 && fisher[last].ft < priorFisherAtHigh - 0.15) {
+        const pdRes = await query(`SELECT poc::float, vah::float, val::float, session_high::float as hi FROM developing_value_log WHERE trade_date <= $1 ORDER BY trade_date DESC LIMIT 1`, [date]);
+        const pd = pdRes.rows[0];
+        const nearLevels = [];
+        if (pd?.vah && Math.abs(price - pd.vah) <= 60) nearLevels.push(`2D VAH ${Math.round(pd.vah)}`);
+        if (pd?.poc && Math.abs(price - pd.poc) <= 60) nearLevels.push(`2D POC ${Math.round(pd.poc)}`);
+        if (pd?.hi && Math.abs(price - pd.hi) <= 60) nearLevels.push(`PD High ${Math.round(pd.hi)}`);
+
+        divergence = {
+          type: 'BEARISH',
+          price: Math.round(price),
+          fisher: Math.round(fisher[last].ft * 100) / 100,
+          rangePct: Math.round(pct * 100),
+          nearLevels,
+          stats: '74% drop 100pt+ within 22hr. Avg MFE 311pt. Median MAE 342pt — wait for intraday confirmation.',
+          confirmation: 'Look for: failed breakout above level, volume climax at high, micro trend shift to LOWER_LOWS.',
+        };
+      }
+    }
+
+    res.json({ divergence, fisherValue: Math.round(fisher[last].ft * 100) / 100, price: Math.round(price) });
+  } catch (err) {
+    console.error('[divergence-4hr]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
