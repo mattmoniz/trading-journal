@@ -693,9 +693,34 @@ router.get('/trade-alerts/:date', async (req, res) => {
       alerts.push({ id: 'poc', type: 'POC_MAGNET', msg: `POC MAGNET: ${Math.round(price)} at PD POC ${Math.round(pd.poc)}. Fade ${dir}. 64% WR, 20pt target, 25pt stop.`, time: timeStr, color: '#a78bfa' });
     }
 
-    if (Math.abs(price - vwap) >= vwapThreshold) {
-      const dir = price > vwap ? 'SHORT' : 'LONG';
-      alerts.push({ id: 'vwap', type: 'VWAP_MAGNET', msg: `VWAP MAGNET: ${Math.round(Math.abs(price - vwap))}pt extended. Fade ${dir} toward ${Math.round(vwap)}. 62% WR, 20T/30S.`, time: timeStr, color: '#818cf8' });
+    // Daily VWAP σ alert
+    const dailySigma = await (async () => {
+      const recent = await query(`SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL`, [date]).catch(() => ({ rows: [] }));
+      if (recent.rows.length < 10) return Math.abs(price - vwap) / 111;
+      const dists = recent.rows.map(r => r.close_vs_vwap);
+      const mean = dists.reduce((a,b) => a+b, 0) / dists.length;
+      const std = Math.sqrt(dists.reduce((s, d) => s + (d - mean) ** 2, 0) / dists.length);
+      return std > 0 ? (price - vwap) / std : 0;
+    })();
+    if (Math.abs(dailySigma) >= 1.5) {
+      const dir = dailySigma > 0 ? 'SHORT' : 'LONG';
+      alerts.push({ id: 'vwapDaily', type: 'DAILY_VWAP', msg: `DAILY VWAP: ${dailySigma > 0 ? '+' : ''}${dailySigma.toFixed(1)}σ (${Math.round(Math.abs(price - vwap))}pt). Fade ${dir} toward ${Math.round(vwap)}. 62% WR.`, time: timeStr, color: '#818cf8' });
+    }
+
+    // Weekly VWAP σ alert
+    const dow = new Date(date + 'T12:00:00').getDay();
+    const mondayOffset = dow === 0 ? 6 : dow - 1;
+    const monday = new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
+    const weekBarsQ = await query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [monday, date]).catch(() => ({ rows: [] }));
+    if (weekBarsQ.rows.length > 50) {
+      let wPV = 0, wV = 0;
+      for (const wb of weekBarsQ.rows) { wPV += (wb.high + wb.low + wb.close) / 3 * Number(wb.vol || 1); wV += Number(wb.vol || 1); }
+      const weeklyVwap = wPV / wV;
+      const weeklySigma = (price - weeklyVwap) / 251;
+      if (Math.abs(weeklySigma) >= 1.5) {
+        const dir = weeklySigma > 0 ? 'SHORT' : 'LONG';
+        alerts.push({ id: 'vwapWeekly', type: 'WEEKLY_VWAP', msg: `WEEKLY VWAP: ${weeklySigma > 0 ? '+' : ''}${weeklySigma.toFixed(1)}σ (${Math.round(Math.abs(price - weeklyVwap))}pt). ${Math.abs(weeklySigma) >= 2 ? '91% next-day reversion at 2σ. ' : ''}Fade ${dir} toward ${Math.round(weeklyVwap)}.`, time: timeStr, color: '#f472b6' });
+      }
     }
 
     if (pd?.val && price < pd.val - 10) {

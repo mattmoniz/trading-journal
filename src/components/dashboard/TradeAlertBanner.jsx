@@ -21,20 +21,27 @@ export default function TradeAlertBanner() {
     fetch(`${API_URL}/morning-brief/trade-alerts/${d}`)
       .then(r => r.json())
       .then(data => {
-        if (data.alerts?.length > 0) {
-          setAlerts(prev => {
-            const updated = [...prev];
-            for (const a of data.alerts) {
-              const existing = updated.findIndex(x => x.id === a.id);
-              if (existing >= 0) {
-                updated[existing] = { ...a, firstSeen: updated[existing].firstSeen };
-              } else {
-                updated.push({ ...a, firstSeen: new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) });
-              }
+        const activeIds = new Set((data.alerts || []).map(a => a.id));
+        setAlerts(prev => {
+          const updated = [...prev];
+          // Add new alerts
+          for (const a of (data.alerts || [])) {
+            const existing = updated.findIndex(x => x.id === a.id);
+            if (existing >= 0) {
+              updated[existing] = { ...a, firstSeen: updated[existing].firstSeen, expired: false };
+            } else {
+              updated.push({ ...a, firstSeen: new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }), expired: false });
             }
-            return updated;
-          });
-        }
+          }
+          // Mark expired alerts (were active, now gone)
+          for (const a of updated) {
+            if (!activeIds.has(a.id) && !a.expired && !a.dismissed) {
+              a.expired = true;
+              a.expiredAt = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' });
+            }
+          }
+          return updated;
+        });
       })
       .catch(() => {});
   }, []);
@@ -66,9 +73,10 @@ export default function TradeAlertBanner() {
       {visible.map(a => (
         <div key={a.id} style={{
           padding: '8px 12px',
-          background: 'rgba(0,0,0,0.4)',
-          border: `1px solid ${a.color}40`,
-          borderLeft: `4px solid ${a.color}`,
+          background: a.expired ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.4)',
+          border: `1px solid ${a.expired ? '#47556940' : a.color + '40'}`,
+          borderLeft: `4px solid ${a.expired ? '#ef4444' : a.color}`,
+          opacity: a.expired ? 0.7 : 1,
           borderRadius: 6,
           display: 'flex',
           justifyContent: 'space-between',
@@ -84,8 +92,9 @@ export default function TradeAlertBanner() {
               }}>
                 {a.type.replace(/_/g, ' ')}
               </span>
-              <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 6 }}>
                 {a.firstSeen}
+                {a.expired && <span style={{ fontSize: 9, fontWeight: 800, color: '#ef4444', background: 'rgba(239,68,68,0.15)', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.04em' }}>EXPIRED {a.expiredAt}</span>}
               </span>
             </div>
             <div style={{ fontSize: 12, color: '#e2e8f0', fontWeight: 600 }}>
