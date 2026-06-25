@@ -2435,7 +2435,7 @@ function LiveReadBanner({ forecast }) {
         borderRadius: 8
       }}>
         {/* OR5 Level */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
+        <div title="Blue border = neutral/informational reference level" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #60a5fa' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>5-Min Opening Range</div>
             <InfoTooltip text={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>=91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} />
@@ -2467,7 +2467,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* A Up Trigger */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #34d399' }}>
+        <div title="Green border = bullish condition active" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #34d399' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>A Up Trigger</div>
             <InfoTooltip text={"A UP TRIGGER LEVEL\n\nCalculated as OR5 High + A Multiplier * OR5 Width. If price crosses and prints a 1m candle close above this level, the bullish A Up signal is officially fired."} />
@@ -2484,7 +2484,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* A Down Trigger */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #fb923c' }}>
+        <div title="Orange border = bearish condition active" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #fb923c' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>A Down Trigger</div>
             <InfoTooltip text={"A DOWN TRIGGER LEVEL\n\nCalculated as OR5 Low - A Multiplier * OR5 Width. If price crosses and prints a 1m candle close below this level, the bearish A Down signal is officially fired."} />
@@ -2501,7 +2501,7 @@ function LiveReadBanner({ forecast }) {
         </div>
 
         {/* G-Line (Weekly Open) */}
-        <div style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#fb923c') : '#64748b'}` }}>
+        <div title={currentPrice >= gLine ? 'Green border = price above G-Line (bullish)' : 'Orange border = price below G-Line (bearish)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#fb923c') : '#64748b'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>G-Line (Wk Open)</div>
             <InfoTooltip text={"G-LINE (WEEKLY OPEN)\n\nThe weekly opening price of NQ. Serves as the ultimate macro directional divider.\n\nABOVE G-LINE: Long setups have structural confirmation. Favor longs.\nBELOW G-LINE: Short setups have structural confirmation. Favor shorts."} />
@@ -21992,7 +21992,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                     <TeleprinterFeed maxHeight={360} />
                   </ErrorBoundary>
                 </CollapsibleSection>
-                <CollapsibleSection title="Backtested Edge Statistics" defaultOpen={false}>
+                <CollapsibleSection title="Backtested Edge Statistics" defaultOpen>
                   <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
                 </CollapsibleSection>
               </div>
