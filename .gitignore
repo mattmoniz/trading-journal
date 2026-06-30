@@ -57,6 +57,7 @@ __pycache__/
 # Database backups — contain real trading data, never commit
 backup_*.sql
 *.backup
+backups/*.sql
 run_analysis.sql
 LucidTrades_*.csv
 

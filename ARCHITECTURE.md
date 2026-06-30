@@ -3,221 +3,123 @@
 ## System Overview
 
 ```
-┌──────────────────────┐         ┌──────────────────────┐
-│   React Frontend     │ ◄─────► │   Express Backend    │
-│   (Port 5173)        │  HTTP   │   (Port 3001)        │
-│                      │         │                      │
-│  - Calendar View     │         │  - REST API          │
-│  - Dashboard         │         │  - File Upload       │
-│  - All Trades        │         │  - Sierra Watcher    │
-│  - Settings          │         │  - Socket.IO         │
-└──────────────────────┘         └──────────┬───────────┘
-                                            │
-                                            │ SQL
-                                            ▼
-                                 ┌──────────────────────┐
-                                 │   PostgreSQL DB      │
-                                 │   (Port 5432)        │
-                                 │                      │
-                                 │  - daily_logs        │
-                                 │  - trades            │
-                                 │  - trade_screenshots │
-                                 │  - setup_types       │
-                                 │  - custom_fields     │
-                                 └──────────────────────┘
-                                            ▲
-                                            │ import
-                                 ┌──────────────────────┐
-                                 │  Sierra Chart TAL    │
-                                 │  file watcher        │
-                                 │  (chokidar)          │
-                                 └──────────────────────┘
+┌──────────────────────┐         ┌──────────────────────────────────┐
+│   React Frontend     │ ◄─────► │   Express Backend                │
+│   (Vite, port 3000)  │  HTTP   │   (port 3002)                    │
+│                      │  +WS    │                                  │
+│  - Dashboard         │         │  - 27 route modules (/api/*)     │
+│  - Calendar          │         │  - 18+ service modules           │
+│  - All Trades        │         │  - Sierra Chart file watcher     │
+│  - ACD / Tearsheet   │         │  - Socket.IO (live updates)      │
+│  - Scenario/Backtest │         │  - node-cron scheduled jobs      │
+│  - Settings/Risk     │         │    (morning brief, EOD reports,  │
+└──────────────────────┘         │     pattern memory, coaching)    │
+                                  └──────────┬───────────────────────┘
+                                             │ SQL
+                                             ▼
+                                  ┌──────────────────────────────────┐
+                                  │   PostgreSQL DB                  │
+                                  │   (port 5432, db: trading_journal)│
+                                  │                                  │
+                                  │  ~49 core tables + price_bars    │
+                                  │  monthly partitions (2022-2027)  │
+                                  └──────────┬───────────────────────┘
+                                             ▲
+                                             │ import
+                                  ┌──────────────────────────────────┐
+                                  │  Sierra Chart TAL file watcher   │
+                                  │  (chokidar) + manual import      │
+                                  └──────────────────────────────────┘
 ```
+
+`scripts/` contains ~50 standalone analysis/backtest scripts run manually via `node` — they are **not** wired into the running app (a few exceptions are scheduled reporters, noted below).
 
 ---
 
-## Database Schema
+## Ports & Dev Workflow
 
-### Tables
+| Service | Port | Notes |
+|---|---|---|
+| Vite frontend | 3000 | `vite.config.js`; proxies `/api`, `/uploads`, `/socket.io` to 3002 |
+| Express backend | 3002 | Set via `.env` `PORT=3002` (code default is 3001 — `.env` wins) |
+| PostgreSQL | 5432 | db name `trading_journal` |
 
-| Table | Purpose |
-|-------|---------|
-| `daily_logs` | One row per trading day — sleep quality, mood, market condition, pre/post-market notes, lessons learned |
-| `trades` | Individual fills — entry/exit times, symbol, direction, qty, prices, P&L, fees, setup type, tags (JSONB), custom_fields (JSONB) |
-| `trade_screenshots` | Images attached to trades, stored in `server/uploads/` |
-| `setup_types` | Configurable setup names (pre-populated with defaults) |
-| `custom_field_definitions` | Configurable extra fields per trade |
+- Start everything: `./start.sh` (kills stale processes on 3000/3001/3002/5173, starts server + client via `concurrently`)
+- Stop everything: `./stop.sh` or `fuser -k 3002/tcp`
+- Server only: `npm run server` (nodemon) — Client only: `npm run client` (vite)
+- DB schema bootstrap: `npm run db:setup` (runs `server/schema.sql` — only covers the original 5 core tables; everything else was added ad hoc directly against the DB, not via tracked migrations)
+
+---
+
+## Database
+
+### Schema source of truth
+`server/schema.sql` is a full `pg_dump --schema-only` snapshot of the live DB (122 tables/views, after a 2026-06-30 cleanup dropped 6 confirmed-dead tables — see below), regenerated 2026-06-30. There is still no tracked migration history — tables beyond the original 5 (`daily_logs`, `trades`, `trade_screenshots`, `custom_field_definitions`, `setup_types`) were created ad hoc directly against the live DB — so `schema.sql` is a point-in-time dump, not hand-maintained DDL, and will drift again as soon as a table is added/altered without regenerating it. Regenerate with:
+
+```bash
+PGPASSWORD=$DB_PASSWORD pg_dump --schema-only --no-owner --no-privileges --no-comments \
+  -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
+  | sed '/^\\restrict /d; /^\\unrestrict /d' > server/schema.sql
+```
+
+`npm run db:setup` runs this file against an empty database — it is **not idempotent** (no `IF NOT EXISTS`), so it will error if run against a DB that already has these tables. To inspect current live schema directly instead of reading the dump:
+
+```sql
+SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY table_name;
+SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '<table>' ORDER BY ordinal_position;
+```
+
+### Table clusters
+
+| Cluster | Tables | Purpose |
+|---|---|---|
+| Core journal | `daily_logs`, `trades`, `trade_screenshots`, `custom_field_definitions`, `setup_types` | Manual + Sierra-imported trade records, screenshots, daily notes |
+| Price data | `price_bars` (parent, `PARTITION BY RANGE (ts)`) + `price_bars_YYYY_MM` (monthly partitions, 2022–2027) + `price_bars_primary` (view joining `price_bars` to `price_bars_contract_calendar` to pick the front-month contract per date), `price_bar_ingests` | 1-min OHLCV bars from Sierra Chart, true Postgres declarative partitioning by month |
+| ACD / opening range | `acd_daily_log`, `acd_weekly_log`, `acd_monthly_pivot`, `acd_backtest_results`, `acd_setup_events` | Opening range, structural levels, day-type classification, A/B/C signal state |
+| Auction / value | `developing_value_log`, `auction_reads`, `auction_history`, `wyckoff_levels` | POC/VAH/VAL migration tracking, opening-call classification, Wyckoff effort-result levels |
+| Setups & performance | `active_setups`, `setup_outcome_backtest`, `setup_daytype_winrates`, `setup_move_stats`, `setup_correlation_cache` | Live setup tracking + their historical backtested edge stats |
+| Pattern mining | `pattern_discoveries`, `pattern_stats`, `dynamic_edges_mining`, `condition_memory` | Nightly-mined OHLC/condition patterns and their hit rates |
+| Risk / behavioral guardrails | `post_loss_cooldowns`, `dll_daily_events`, `profit_lock_config`, `profit_lock_events`, `risk_settings`, `rule_overrides` | Daily loss limit tracking, 1PM profit-lock guard, cooldown-after-loss enforcement |
+| Sessions & timing | `trading_sessions`, `session_analysis`, `session_patterns` | Per-session OHLC/texture metrics (Monday texture, Friday bias, etc.) |
+| Review & coaching | `morning_briefs`, `premarket_walkthroughs`, `daily_coaching`, `weekly_assessments`, `trade_annotations`, `trade_feedback`, `trade_timeline_events` | Persisted output of scheduled/manual review jobs and trade-level annotations |
+| Engine evaluation | `engine_reads`, `daytype_accuracy_log`, `performance_audit`, `phase_change_alerts`, `phase_change_backtest_results`, `level_regime_performance`, `monte_carlo_runs` | Forward-test/backtest results for every signal system — **this is where backtest scripts write findings** (see `performance_audit`) |
+| Misc config | `account_settings`, `settings_todos`, `import_log`, `process_log`, `macro_events` | App settings, scheduled-job run log, macro calendar |
+
+### Dormant feature tables (code exists, never used — not dead, just empty)
+
+`phase_change_alerts`, `wyckoff_levels`, `trade_screenshots`, `trading_sessions`, `premarket_walkthroughs` all have a live route/service that can read/write them, but currently hold 0 rows because the feature has never been exercised. Don't drop these without also deciding to remove the feature — they're a product decision, not cleanup.
+
+### 2026-06-30 dead table cleanup
+
+Audited every non-partition table for code references (grep across `server/` + `scripts/` + `src/`) and row counts. Six tables had **zero references anywhere in the codebase** and were dropped after a full schema+data `pg_dump` backup at `backups/dead_tables_backup_20260630_090329.sql` (118MB — contains real account identifiers and trade-level financial data from `trades_backup_tz_fix`, so it's **gitignored, local-only, not in git history** — restore from that local file if any of these tables are ever needed back):
+
+- `price_bars_old` (633,844 rows) — pre-partition-migration backup; `scripts/migrate_price_bars_partition.sh` itself flagged this as droppable once the new partitioned `price_bars` was confirmed working
+- `trades_backup_tz_fix` (35,813 rows) — backup taken before the timezone-parsing fix in `db.js`, long since superseded by the live `trades` table
+- `calibration_snapshots`, `session_volume_summary`, `sot_signals` (0 rows) — scaffolded, never wired to surviving code
+- `intraday_snapshots` (14 rows) — small amount of orphaned data, no code reads it
 
 ### Key Columns in `trades`
 
 ```
 trades
-├── id                  # Primary key
-├── log_date            # Foreign key → daily_logs
-├── entry_time
-├── exit_time
-├── symbol
-├── direction           # LONG / SHORT
-├── quantity
-├── entry_price
-├── exit_price
-├── pnl
-├── fees
-├── setup_type
-├── trade_notes
+├── id, log_date (FK → daily_logs), entry_time, exit_time
+├── symbol, direction (LONG/SHORT), quantity, entry_price, exit_price
+├── pnl, fees, setup_type, trade_notes
 ├── tags                # JSONB array
-└── custom_fields       # JSONB — stores sierra_data, account, sierra_row, etc.
+└── custom_fields       # JSONB — sierra_data, account, sierra_row, etc.
 ```
 
 Key JSONB paths used by Sierra Chart imports:
 - `custom_fields->>'account'` — account identifier
 - `custom_fields->'sierra_data'->>'Entry DateTime'` — raw entry datetime (may end with ` BP`)
 - `custom_fields->'sierra_data'->>'Exit DateTime'` — raw exit datetime (may end with ` EP`)
-- `custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)'` — running account total
+- `custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)'` — running account total (use for P&L, see below)
 - `custom_fields->'sierra_data'->>'FlatToFlat Profit/Loss (C)'` — per-session P&L at EP boundary
 - `custom_fields->'sierra_data'->>'sierra_row'` — original file row number (sort tiebreaker)
 
-### View
+### P&L Calculation (CumPL Diff) — critical, don't regress this
 
-| View | Purpose |
-|------|---------|
-| `daily_performance` | Aggregated per-day stats: trade count, win rate, total P&L, best/worst trade |
-
-### Schema Relationships
-
-```
-daily_logs (1) ──────► trades (many)
-                            │
-                            └──────► trade_screenshots (many)
-
-daily_logs ──────────────► daily_performance (view, aggregated)
-```
-
----
-
-## API Routes Reference
-
-All stats endpoints support `?dateFrom=YYYY-MM-DD`, `?dateTo=YYYY-MM-DD`, `?account=...` filters.
-
-### Daily Logs (`/api/daily-logs`)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/daily-logs` | All logs with daily P&L |
-| GET | `/api/daily-logs/:date` | Single day log (auto-creates if missing) |
-| PUT | `/api/daily-logs/:date` | Update log fields |
-
-### Trades (`/api/trades`)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/trades` | All trades |
-| GET | `/api/trades/:date` | Trades for a specific date |
-| POST | `/api/trades` | Create trade |
-| PUT | `/api/trades/:id` | Update trade (including tags) |
-| DELETE | `/api/trades/:id` | Delete trade |
-
-### Screenshots
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/trades/:tradeId/screenshots` | Upload image (10 MB max) |
-| DELETE | `/api/screenshots/:id` | Delete screenshot |
-
-### Analytics (`/api/stats`)
-
-| Path | Description |
-|------|-------------|
-| `/api/stats/overview` | KPIs: total trades, win rate, profit factor, max drawdown, streaks |
-| `/api/stats/daily` | Daily P&L bar chart data |
-| `/api/stats/cumulative-pnl` | Equity curve |
-| `/api/stats/by-hour` | P&L by hour of day (ET) |
-| `/api/stats/by-day-of-week` | P&L by weekday |
-| `/api/stats/by-duration` | P&L by trade duration bucket |
-| `/api/stats/by-setup` | P&L by setup type |
-| `/api/stats/top-symbols` | Top performing symbols |
-
-### Other
-
-| Path | Description |
-|------|-------------|
-| `/api/accounts` | Unique account list ordered by most recently active |
-| `/api/sierra/status` | File watcher status |
-| `/api/sierra/import` | Manual import from file path |
-| `/api/sierra/history` | Import history (last 50) |
-| `/api/setup-types` | Setup type list |
-| `/api/custom-fields` | Custom field definitions |
-| `/api/trigger-export` | Triggers Sierra Chart TAL export via PowerShell |
-| `/health` | Health check |
-
----
-
-## Data Flow
-
-### Sierra Chart TAL Import
-
-```
-Sierra Chart exports TAL file
-        │
-        ▼
-chokidar detects file change
-        │
-        ▼  (wait SIERRA_STABILITY_THRESHOLD ms for file to settle)
-sierra.js parses tab-separated TAL file
-        │
-        ▼
-For each row: extract BP/EP markers, account, prices, CumPL
-        │
-        ▼
-Count-based dedup check against DB
-(entry_time, exit_time, symbol, direction, qty, entry_price, exit_price, account)
-        │
-        ▼
-INSERT only net-new rows into trades table
-        │
-        ▼
-Socket.IO broadcasts update to connected frontend clients
-```
-
-### Dashboard Load
-
-```
-Dashboard mounts
-        │
-        ├──► GET /api/stats/overview   ──► SQL aggregate over trades + daily_performance view
-        ├──► GET /api/stats/daily      ──► CumPL diff CTE (see below)
-        ├──► GET /api/stats/by-setup   ──► GROUP BY setup_type
-        └──► GET /api/accounts         ──► DISTINCT accounts ordered by last active
-                │
-                ▼
-        Render charts & KPI cards
-```
-
-### Manual Trade Add
-
-```
-User submits trade form
-        │
-        ▼
-POST /api/trades
-        │
-        ▼
-INSERT into trades (and daily_logs if date is new)
-        │
-        ▼
-Return new trade as JSON
-        │
-        ▼
-React updates trades state → TradeCard renders → stats refresh
-```
-
----
-
-## Key Design Decisions
-
-### P&L Calculation (CumPL Diff)
-
-Raw fill sums overcount P&L when positions are scaled. The correct approach uses `Cumulative Profit/Loss (C)` diffs at EP (end-of-flat) boundaries:
+Raw fill sums overcount P&L when positions are scaled. The correct approach uses `Cumulative Profit/Loss (C)` diffs at EP (flat-to-flat) boundaries:
 
 ```sql
 WITH ep_fills AS (
@@ -242,115 +144,105 @@ daily_cuml AS (
 -- JOIN daily_cuml, use COALESCE(cum_daily_pnl, SUM(t.pnl), 0) as daily_pnl
 ```
 
-Fallback to `SUM(t.pnl)` for Activity Log format data that lacks CumPL fields.
+Fallback to `SUM(t.pnl)` only for older Activity Log format data that lacks CumPL fields. Both `/api/daily-logs` and `/api/stats/daily` implement this pattern — keep them in sync if you touch one.
 
-### TAL Markers
+### TAL Markers & Dedup
 
-- **BP** (`Entry DateTime` ends with ` BP`): position opened from flat — marks session start
-- **EP** (`Exit DateTime` ends with ` EP`): position returned to flat — marks session end and is the authoritative P&L boundary
+- **BP** (`Entry DateTime` ends with ` BP`): position opened from flat — session start
+- **EP** (`Exit DateTime` ends with ` EP`): position returned to flat — session end, authoritative P&L boundary
+- Dedup key: `(entry_time, exit_time, symbol, direction, quantity, entry_price, exit_price, account)`. If the import file contains N rows matching a key and M already exist, only `N − M` are inserted — preserves legitimate repeated scale-ins without duplicating on re-import.
 
-Fill grouping in the UI uses BP → EP boundaries. The label sequence within a group is: Entry (BP fill), Add, Partial Exit, Exit (EP fill).
-
-### Count-Based Deduplication
-
-Sierra Chart can repeat identical fill rows (e.g., scaling in at the same price). The dedup key is `(entry_time, exit_time, symbol, direction, quantity, entry_price, exit_price, account)`. If the file contains N rows matching that key and M already exist in the DB, `N − M` rows are inserted. This preserves scaled-in positions without creating duplicates on re-import.
-
-### JSONB for Sierra Data
-
-Sierra Chart TAL columns are stored as JSONB in `custom_fields->'sierra_data'` rather than typed columns. This allows the schema to accommodate any TAL column without migrations, and lets both TAL and older Activity Log formats coexist in the same table.
-
-### Account Filter (Shared State)
-
-`/api/accounts` returns accounts ordered by most recently active. The app defaults to `data[0]`. Both Calendar and Dashboard share the selected account via state lifted to the App component.
+### Account filter (shared state)
+`/api/accounts` returns accounts ordered by most recently active; the app defaults to `data[0]`. Selected account is lifted to the `App` component so Calendar and Dashboard stay in sync.
 
 ---
 
-## File/Directory Structure
+## Backend Structure
 
 ```
-trading-journal/
-│
-├── package.json              # Dependencies and npm scripts
-├── vite.config.js            # Vite dev server config
-├── index.html                # HTML entry point (loads React)
-├── .env.example              # Environment variables template
-├── .gitignore                # Git ignore rules
-│
-├── start.sh                  # One-command startup (kills stale, checks pg, starts all)
-├── stop.sh                   # Force-kills all processes, frees ports
-├── restart.sh                # stop + start in sequence
-│
-├── server/
-│   ├── index.js              # Express server — all API routes, Sierra watcher setup
-│   ├── db.js                 # PostgreSQL connection pool and query helper
-│   ├── schema.sql            # Table/index/view definitions, pre-populated setup types
-│   ├── sierra.js             # TAL file parser, chokidar watcher, import logic
-│   ├── scripts/
-│   │   └── setupDb.js        # Reads schema.sql and runs it — called by npm run db:setup
-│   └── uploads/              # Screenshot storage (served as static files)
-│       └── .gitkeep
-│
-└── src/
-    ├── main.jsx              # React entry point — renders App to DOM
-    ├── App.jsx               # Main React app — all views, state, API calls
-    ├── App.css               # All component styles, dark theme, CSS variables
-    └── index.css             # Base CSS resets and fonts
+server/
+├── index.js              # Express app entry — mounts all 27 routers, Socket.IO, cron jobs, Sierra watcher init
+├── db.js                 # pg Pool + query() helper; also fixes a timestamp/timezone parsing bug globally
+├── schema.sql             # Original 5-table schema only (see DB section above)
+├── sierra.js              # TAL file parser, chokidar watcher
+├── routes/                # 27 files, one per domain, all mounted under /api
+├── services/               # 18 files, business logic called by routes (and by cron jobs in index.js)
+├── scripts/setupDb.js      # Runs schema.sql
+└── uploads/                # Screenshot storage, served as static files
 ```
 
-### Service Files
+### Routes (`server/routes/`, mounted under `/api`)
 
-| File | Role |
-|------|------|
-| `server/index.js` | Express app, all route handlers, multer file upload config, Sierra watcher initialization |
-| `server/db.js` | `pg` connection pool; exports a `query(sql, params)` helper used by all routes |
-| `server/schema.sql` | Source of truth for DB structure; re-runnable (uses `CREATE TABLE IF NOT EXISTS`) |
-| `server/sierra.js` | Parses TAL tab-separated format, extracts BP/EP markers, runs count-based dedup INSERT |
-| `server/scripts/setupDb.js` | One-shot script that reads `schema.sql` and executes it against the configured DB |
-| `src/App.jsx` | All React components (Calendar, Dashboard, DayModal, FillList, etc.) and `computeNetTrades` logic |
-| `src/App.css` | CSS variables (`--bg-primary`, `--accent-green`, `--accent-red`, etc.), all component styles |
+| Domain | File | Purpose |
+|---|---|---|
+| Core journal | `dailyLogs.js`, `trades.js`, `sierra.js` | Daily logs CRUD, trade CRUD, TAL import/history, chart uploads |
+| Stats/analytics | `stats.js`, `tearsheet.js`, `backtest.js` | Overview KPIs, by-hour/day/duration/setup breakdowns, risk-of-ruin, tearsheet (P&L distribution, timing heatmap, MAE), Kelly sizing |
+| ACD / opening range | `acd.js` (largest route file, ~4000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest |
+| Price data | `priceBars.js` | Bar ingest, partition-aware queries, volume profile |
+| Phase detection | `phaseChange.js` | Compression→expansion phase detection + backtest |
+| Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `wyckoff.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification, weekly VA migration, Wyckoff levels, key-level regime stats |
+| Setups | `setups.js`, `pattern.js`, `confluence.js`, `antigravityEdges.js` | Setup detection/backtest, pattern mining endpoints, level confluence score, fade/reversal edges |
+| Risk & behavior guardrails | `cooldown.js`, `profitLock.js`, `dll.js`, `behavior.js`, `ruleOverrides.js` | Post-loss cooldown, 1PM profit-lock guard, daily loss limit tracking, behavioral metrics, rule override testing |
+| Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
+| Prep & review | `morningBrief.js`, `premarketWalkthrough.js`, `calendar.js`, `annotations.js`, `longterm.js` | Pre-open forecast/scalp playbook, structured pre-market prep, coaching notes, trade annotations, multi-session structural state |
+| Config | `settings.js` | Health check, setup types, custom fields, settings/todos |
 
-### Key Sections in `src/App.jsx`
+### Services (`server/services/`)
 
-- `computeNetTrades()` — second-pass CumPL diff per account to produce per-session P&L for the intraday chart
-- `App()` — shared account state, lifted to top level so Calendar and Dashboard stay in sync
-- Day modal — fill grouping by BP/EP boundaries, per-group tags, intraday P&L chart
+| Service | Purpose |
+|---|---|
+| `acdService.js` | ACD computation engine (OR, structural level, daily score) |
+| `acdBacktest.js` | Backtests ACD parameters (OR width, bias, NL30) |
+| `caseEngine.js` | The evolving single session "read": opening type, delta confirmation, level hold, volatility — the conviction signal surfaced on Dashboard |
+| `dayTypeReassessmentService.js` | Live day-type reassessment at 11:00+ ET, called from inside `caseEngine` |
+| `developingValueService.js` | Single source of truth for live POC/VAH/VAL — descriptive only, no signals |
+| `engineReadHitRates.js` | Historical hit-rate lookups for A_UP/A_DOWN/BIAS signals; requires N≥20 before reporting a rate as decisive |
+| `monteCarloService.js` | Monte Carlo V2 — trade source selection, daily block bootstrapping, MAE-aware stop override |
+| `patternMemoryUpdate.js` | Nightly job populating `daily_performance_log`/`condition_memory`/`pattern_stats` |
+| `patternScannerService.js` | Pattern detectors run at bar-ingest time (compression/expansion, multi-bar rejection) |
+| `phaseChangeBacktest.js` / `phaseChangeDetector.js` | Backtest + live detection of market phase changes |
+| `priceBarService.js` | Sierra Chart filename parsing, bar ingest, monthly partition routing |
+| `queries.js` | Shared cross-service helpers (NL30/NL10, gap drift, prior-week range, conviction data) — widely imported |
+| `sessionForecastService.js` | Session bias forecast from prior 30 sessions (balance zone, opening, expected range) |
+| `setupBacktestService.js` | Backtests setups for hit rate, MAE, win rate by day type |
+| `setupEmitter.js` | Real-time setup detection + Socket.IO emission on each bar ingest |
+| `tradeImportService.js` | Sierra Chart export parsing with count-based dedup |
+| `volatilityRegimeService.js` | Live read-only volatility regime (morning vol z-score, trend strength) |
 
-### Key Sections in `server/index.js`
-
-- `/api/daily-logs` routes — include the CumPL diff CTE for accurate daily P&L
-- `/api/stats/*` routes — all support `dateFrom`, `dateTo`, `account` query params
-- `/api/trigger-export` — spawns PowerShell to drive Sierra Chart UI automation
-- Socket.IO setup — broadcasts `tradesUpdated` after each successful import
+### Scheduled jobs (node-cron, set up in `server/index.js`)
+Morning brief generation, EOD auto-import (4 PM), weekly report, monthly report, pattern memory nightly update, daily coaching. Each run is logged to `process_log` (see `logProcess()` calls in `index.js`).
 
 ---
 
-## Useful Database Queries
+## Frontend Structure
 
-```sql
--- View all trades for a date
-SELECT * FROM trades WHERE log_date = '2026-03-04' ORDER BY entry_time;
-
--- Check daily performance view
-SELECT * FROM daily_performance ORDER BY log_date DESC LIMIT 30;
-
--- Total P&L this month
-SELECT SUM(pnl) FROM trades WHERE entry_time >= DATE_TRUNC('month', CURRENT_DATE);
-
--- Best performing setup
-SELECT setup_type, COUNT(*), SUM(pnl) as total_pnl
-FROM trades WHERE exit_time IS NOT NULL
-GROUP BY setup_type ORDER BY total_pnl DESC;
-
--- Export to CSV
-COPY (SELECT * FROM trades ORDER BY entry_time DESC)
-TO '/tmp/trades_export.csv' WITH CSV HEADER;
-
--- Database size
-SELECT pg_size_pretty(pg_database_size('trading_journal'));
-
--- Add a new setup type
-INSERT INTO setup_types (name, description) VALUES ('Your New Setup', 'Description here');
 ```
+src/
+├── main.jsx               # Entry point
+├── App.jsx                # Global state (account, view routing, socket.io, profit-lock/DLL banners), ~all view switching
+├── App.css                # Dark theme, CSS variables
+└── components/dashboard/  # 31 components
+```
+
+Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `scenario`, `backtest`, `tearsheet`, `settings`, `risk`, `longterm`, `playbook`.
+
+| Group | Components |
+|---|---|
+| Pre-market context | `MorningBriefPanel`, `PreSessionChecklist`, `PreMarketWalkthrough`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard`, `GapContextCard` |
+| Live session | `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView`, `BehavioralGuideCard`, `PostLossCooldown` |
+| Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard` |
+| Performance viz | `PerformanceVisuals`, `PnlCharts`, `StatsGrid`, `SymbolsTable`, `SetupsTable` |
+| Utility | `SyncProgressPanel`, `RecapDatePicker`, `OptimizationSection`, `DashboardFilters`, `DashboardQuickNav`, `DashboardView` |
+
+Key logic in `App.jsx`: `computeNetTrades()` (second-pass CumPL diff per account for the intraday chart), shared account state, day modal with BP→EP fill grouping.
+
+---
+
+## `scripts/` — Ad-hoc Analysis & Backtests
+
+~50 standalone Node scripts run manually (`node scripts/backtest_X.js`) against the live DB via `server/db.js`. They are **not imported by the running app** — each one tests a specific edge hypothesis (delta divergence, overnight inventory, sweep-reclaim, flush-balance, confluence, etc.) and most write their findings into the `performance_audit` table for later reference. Treat this directory as a research lab, not production code — naming convention is `backtest_<hypothesis>.js`.
+
+A few scripts ARE wired in as scheduled jobs from `server/index.js` (morning brief, weekly/monthly report, daily coaching) — check `index.js` cron registrations before assuming a script is dead.
 
 ---
 
