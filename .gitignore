@@ -74,4 +74,7 @@ cumulative_pl
 .claude/settings.local.json
 .claude/logs/
 
+# Scratch / temp diagnostic scripts
+scratch/
+
 
