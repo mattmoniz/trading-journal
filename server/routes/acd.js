@@ -2999,6 +2999,8 @@ export default function createACDRouter(io) {
           if (priceSide) {
             // Conflicting signal: A Up tested and failed (for bullish IB) or A Down tested and failed (for bearish IB)
             // Both aUpLevel/aDownLevel are from acd_daily_log; ibBars is the 9:30–10:00 window
+            // WEAK WR = 33.3% (N=9 decided, 20 fired) — not yet suppressed because N<20 threshold.
+            // Revisit when forward-test accumulates 20 decided WEAK trades. (replay_ib_setups.js 2026-07-01)
             const aUpTestedInIB   = aUpLevel   && ibBars.some(b => b.high >= aUpLevel);
             const aDownTestedInIB = aDownLevel  && ibBars.some(b => b.low  <= aDownLevel);
             const conflicting = isBull ? (aUpTestedInIB && !aUpFired) : (aDownTestedInIB && !aDownFired);
