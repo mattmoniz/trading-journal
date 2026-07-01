@@ -76,7 +76,7 @@ function InfoTooltip({ text }) {
       onClick={() => setVisible(v => !v)}>
       <span style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 14, height: 14, borderRadius: '50%', fontSize: 9, fontWeight: 700,
+        width: 14, height: 14, borderRadius: '50%', fontSize: 11, fontWeight: 700,
         background: 'rgba(100,116,139,0.2)', color: '#94a3b8',
         border: '1px solid rgba(100,116,139,0.35)', cursor: 'help', lineHeight: 1,
       }}>i</span>
@@ -109,17 +109,27 @@ const TREND_LABEL = {
   'settling down': { text: 'Vol ↓ settling', color: '#4ade80' },
   'ramping up':    { text: 'Vol ↑ ramping',  color: '#f87171' },
   'flat':          { text: 'Vol → stable',   color: '#94a3b8' },
-  'insufficient data': { text: '', color: '#64748b' },
+  'insufficient data': { text: '', color: '#94a3b8' },
 };
 
 function VolChart({ history, zHigh, zLow, regimeColor, w, h, pad, showLabels }) {
+  const [hoverIdx, setHoverIdx] = useState(null);
   if (!history || history.length < 2) return null;
   const zs = history.map(p => p.z);
   const minZ = Math.min(...zs, zLow, -0.5) - 0.15;
   const maxZ = Math.max(...zs, zHigh, 0.5) + 0.15;
   const range = maxZ - minZ || 1;
+  const xPad = showLabels ? 50 : pad;
   const toY = z => h - pad - ((z - minZ) / range) * (h - 2 * pad);
-  const toX = i => pad + (i / (history.length - 1)) * (w - 2 * pad);
+  const toX = i => xPad + (i / (history.length - 1)) * (w - xPad - pad);
+
+  const fmtTime = (etMin) => {
+    if (etMin == null) return '';
+    const hh = Math.floor(etMin / 60), mm = etMin % 60;
+    const h12 = hh > 12 ? hh - 12 : hh;
+    const ampm = hh >= 12 ? 'PM' : 'AM';
+    return `${h12}:${String(mm).padStart(2, '0')} ${ampm}`;
+  };
 
   const points = history.map((p, i) => `${toX(i).toFixed(1)},${toY(p.z).toFixed(1)}`).join(' ');
   const zeroY = toY(0);
@@ -132,24 +142,43 @@ function VolChart({ history, zHigh, zLow, regimeColor, w, h, pad, showLabels }) 
   const lineW = showLabels ? 2 : 1.5;
   const dotR = showLabels ? 6 : 4;
 
+  const handleMouse = (e) => {
+    if (!showLabels) return;
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    let closest = 0, closestDist = Infinity;
+    for (let i = 0; i < history.length; i++) {
+      const dist = Math.abs(toX(i) - mx);
+      if (dist < closestDist) { closestDist = dist; closest = i; }
+    }
+    setHoverIdx(closestDist < 30 ? closest : null);
+  };
+
+  const hp = hoverIdx != null ? history[hoverIdx] : null;
+  const hx = hoverIdx != null ? toX(hoverIdx) : 0;
+  const hy = hoverIdx != null ? toY(hp.z) : 0;
+
   return (
-    <svg width={w} height={h} style={{ display: 'block' }}>
+    <svg width={w} height={h} style={{ display: 'block' }}
+      onMouseMove={showLabels ? handleMouse : undefined}
+      onMouseLeave={showLabels ? () => setHoverIdx(null) : undefined}>
       {/* High zone fill */}
-      <rect x={pad} y={pad} width={w - 2 * pad} height={Math.max(0, highY - pad)}
+      <rect x={xPad} y={pad} width={w - xPad - pad} height={Math.max(0, highY - pad)}
         fill="rgba(239,68,68,0.06)" />
       {/* Low zone fill */}
-      <rect x={pad} y={lowY} width={w - 2 * pad} height={Math.max(0, h - pad - lowY)}
+      <rect x={xPad} y={lowY} width={w - xPad - pad} height={Math.max(0, h - pad - lowY)}
         fill="rgba(59,130,246,0.06)" />
 
       {/* Threshold lines */}
-      <line x1={pad} y1={highY} x2={w - pad} y2={highY} stroke="rgba(239,68,68,0.5)" strokeWidth={lineW} strokeDasharray="6,4" />
-      <line x1={pad} y1={zeroY} x2={w - pad} y2={zeroY} stroke="rgba(148,163,184,0.35)" strokeWidth="1" strokeDasharray="4,4" />
-      <line x1={pad} y1={lowY}  x2={w - pad} y2={lowY}  stroke="rgba(59,130,246,0.5)" strokeWidth={lineW} strokeDasharray="6,4" />
+      <line x1={xPad} y1={highY} x2={w - pad} y2={highY} stroke="rgba(239,68,68,0.5)" strokeWidth={lineW} strokeDasharray="6,4" />
+      <line x1={xPad} y1={zeroY} x2={w - pad} y2={zeroY} stroke="rgba(148,163,184,0.35)" strokeWidth="1" strokeDasharray="4,4" />
+      <line x1={xPad} y1={lowY}  x2={w - pad} y2={lowY}  stroke="rgba(59,130,246,0.5)" strokeWidth={lineW} strokeDasharray="6,4" />
 
       {/* Labels */}
-      <text x={pad + 4} y={highY - 5} fill="rgba(239,68,68,0.7)" fontSize={labelSize} fontWeight="600">HIGH-VOL</text>
-      <text x={pad + 4} y={zeroY - 5} fill="rgba(148,163,184,0.5)" fontSize={labelSize - 1}>baseline</text>
-      <text x={pad + 4} y={lowY + labelSize + 3} fill="rgba(59,130,246,0.7)" fontSize={labelSize} fontWeight="600">LOW-VOL</text>
+      <text x={xPad + 4} y={highY - 5} fill="rgba(239,68,68,0.7)" fontSize={labelSize} fontWeight="600">HIGH-VOL</text>
+      <text x={xPad + 4} y={zeroY - 5} fill="rgba(148,163,184,0.5)" fontSize={labelSize - 1}>baseline</text>
+      <text x={xPad + 4} y={lowY + labelSize + 3} fill="rgba(59,130,246,0.7)" fontSize={labelSize} fontWeight="600">LOW-VOL</text>
 
       {/* Y-axis z-values */}
       {showLabels && <>
@@ -157,22 +186,42 @@ function VolChart({ history, zHigh, zLow, regimeColor, w, h, pad, showLabels }) 
         <text x={w - pad - 2} y={lowY + 14} textAnchor="end" fill="rgba(59,130,246,0.6)" fontSize="11">z={zLow.toFixed(1)}</text>
       </>}
 
+      {/* X-axis time labels (modal only) */}
+      {showLabels && history.map((p, i) => {
+        if (i % Math.max(1, Math.floor(history.length / 6)) !== 0 && i !== history.length - 1) return null;
+        return <text key={i} x={toX(i)} y={h - 6} textAnchor="middle" fill="#94a3b8" fontSize="10">{fmtTime(p.etMin)}</text>;
+      })}
+
       {/* Trend line */}
       <polyline points={points} fill="none" stroke="#a78bfa" strokeWidth={showLabels ? 3 : 2.5} strokeLinejoin="round" strokeLinecap="round" />
 
       {/* Data points (modal only) */}
       {showLabels && history.map((p, i) => (
-        <circle key={i} cx={toX(i)} cy={toY(p.z)} r="3" fill="#a78bfa" opacity="0.5" />
+        <circle key={i} cx={toX(i)} cy={toY(p.z)} r="3" fill="#a78bfa" opacity={hoverIdx === i ? 1 : 0.5} />
       ))}
 
-      {/* Current dot */}
-      <circle cx={lastX} cy={lastY} r={dotR + 2} fill={regimeColor} opacity="0.25" />
-      <circle cx={lastX} cy={lastY} r={dotR} fill={regimeColor} />
-      {showLabels && (
-        <text x={lastX} y={lastY - dotR - 6} textAnchor="middle" fill={regimeColor} fontSize="13" fontWeight="700">
-          z={history[history.length - 1].z.toFixed(2)}
-        </text>
+      {/* Crosshair on hover */}
+      {showLabels && hp && (
+        <>
+          <line x1={hx} y1={pad} x2={hx} y2={h - pad} stroke="rgba(226,232,240,0.3)" strokeWidth="1" strokeDasharray="3,3" />
+          <line x1={xPad} y1={hy} x2={w - pad} y2={hy} stroke="rgba(226,232,240,0.3)" strokeWidth="1" strokeDasharray="3,3" />
+          <circle cx={hx} cy={hy} r="5" fill="#a78bfa" stroke="#e2e8f0" strokeWidth="2" />
+          <rect x={hx - 50} y={hy - 36} width="100" height="30" rx="4" fill="rgba(15,23,42,0.9)" stroke="#64748b" />
+          <text x={hx} y={hy - 22} textAnchor="middle" fill="#e2e8f0" fontSize="11" fontWeight="700">{fmtTime(hp.etMin)}</text>
+          <text x={hx} y={hy - 10} textAnchor="middle" fill="#a78bfa" fontSize="11" fontWeight="600">z={hp.z.toFixed(2)}</text>
+        </>
       )}
+
+      {/* Current dot */}
+      {hoverIdx !== history.length - 1 && <>
+        <circle cx={lastX} cy={lastY} r={dotR + 2} fill={regimeColor} opacity="0.25" />
+        <circle cx={lastX} cy={lastY} r={dotR} fill={regimeColor} />
+        {showLabels && (
+          <text x={lastX} y={lastY - dotR - 6} textAnchor="middle" fill={regimeColor} fontSize="13" fontWeight="700">
+            z={history[history.length - 1].z.toFixed(2)}
+          </text>
+        )}
+      </>}
     </svg>
   );
 }
@@ -198,17 +247,17 @@ function VolChartModal({ history, zHigh, zLow, regimeColor, onClose }) {
             Volatility Z-Score — Intraday Trend
           </div>
           <button onClick={onClose} style={{
-            background: 'transparent', border: '1px solid #475569', borderRadius: 4,
+            background: 'transparent', border: '1px solid #64748b', borderRadius: 4,
             color: '#94a3b8', fontSize: 13, padding: '2px 10px', cursor: 'pointer',
           }}>Close</button>
         </div>
         <VolChart history={history} zHigh={zHigh} zLow={zLow} regimeColor={regimeColor}
           w={644} h={240} pad={30} showLabels />
-        <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 11, color: '#64748b' }}>
+        <div style={{ display: 'flex', gap: 16, marginTop: 12, fontSize: 11, color: '#94a3b8' }}>
           <span><span style={{ color: '#a78bfa' }}>---</span> Vol z-score</span>
           <span><span style={{ color: 'rgba(239,68,68,0.7)' }}>- -</span> High-vol threshold</span>
           <span><span style={{ color: 'rgba(59,130,246,0.7)' }}>- -</span> Low-vol threshold</span>
-          <span style={{ color: '#475569' }}>Shaded = regime zones</span>
+          <span style={{ color: '#64748b' }}>Shaded = regime zones</span>
         </div>
       </div>
     </div>
@@ -223,7 +272,7 @@ function Sparkline({ history, zHigh, zLow, regimeColor }) {
     <>
       <div onClick={() => setOpen(true)}
         style={{ cursor: 'pointer', borderRadius: 6, padding: 4, border: '1px solid transparent', transition: 'border-color 0.15s' }}
-        onMouseEnter={e => e.currentTarget.style.borderColor = '#475569'}
+        onMouseEnter={e => e.currentTarget.style.borderColor = '#64748b'}
         onMouseLeave={e => e.currentTarget.style.borderColor = 'transparent'}
         title="Click to expand chart">
         <VolChart history={history} zHigh={zHigh} zLow={zLow} regimeColor={regimeColor}
@@ -252,7 +301,9 @@ function TextureMetrics({ texture, etMin }) {
     avgBarRange, baselineAvgBarRange, barRangePct,
     morningRange, baselineMorningRange, morningRangePct,
     efficiencyRatio, reversalRate, choppinessIndex, barCount,
+    morningEfficiency,
   } = texture;
+  const playER = morningEfficiency != null ? morningEfficiency : efficiencyRatio;
 
   // Morning range vs baseline — catches large absolute displacement that stdev-of-returns misses
   const rangeColor = morningRangePct == null ? '#94a3b8'
@@ -289,45 +340,45 @@ function TextureMetrics({ texture, etMin }) {
 
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         Texture{' '}
-        <span style={{ fontWeight: 400, color: '#475569', textTransform: 'none', letterSpacing: 0 }}>({windowStr})</span>
+        <span style={{ fontWeight: 400, color: '#64748b', textTransform: 'none', letterSpacing: 0 }}>({windowStr})</span>
       </div>
 
       {wideBarWarning && (
-        <div style={{ fontSize: 10, color: '#fb923c', marginBottom: 5, fontWeight: 600 }}>
+        <div style={{ fontSize: 12, color: '#fb923c', marginBottom: 5, fontWeight: 600 }}>
           Wide bars — {avgBarRange.toFixed(0)}pt swings. Widen stops.
         </div>
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '2px 6px' }}>
         {morningRange != null && <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Range</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Range</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: rangeColor }}>{morningRange.toFixed(0)}pt</div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>{morningRangePct != null ? `${morningRangePct > 0 ? '+' : ''}${morningRangePct.toFixed(0)}%` : ''}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>{morningRangePct != null ? `${morningRangePct > 0 ? '+' : ''}${morningRangePct.toFixed(0)}%` : ''}</div>
         </div>}
         <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Avg bar</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Avg bar</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: barRangeColor }}>{avgBarRange.toFixed(1)}pt</div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>{barRangePct != null ? `${barRangePct > 0 ? '+' : ''}${barRangePct.toFixed(0)}%` : ''}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>{barRangePct != null ? `${barRangePct > 0 ? '+' : ''}${barRangePct.toFixed(0)}%` : ''}</div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Eff</div>
-          <div style={{ fontSize: 12, fontWeight: 700, color: effColor }}>{efficiencyRatio.toFixed(3)}</div>
-          <div style={{ fontSize: 9, color: effColor }}>{effLabel}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>{morningEfficiency != null ? 'AM Eff' : 'Eff'}</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: playER > 0.40 ? '#4ade80' : playER < 0.20 ? '#f87171' : '#94a3b8' }}>{playER.toFixed(3)}</div>
+          <div style={{ fontSize: 11, color: playER > 0.40 ? '#4ade80' : playER < 0.20 ? '#f87171' : '#94a3b8' }}>{playER > 0.40 ? 'directional' : playER < 0.20 ? 'choppy' : 'mixed'}</div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Chop</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Chop</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: chopColor }}>{choppinessIndex != null ? choppinessIndex.toFixed(1) : '—'}</div>
-          <div style={{ fontSize: 9, color: chopColor }}>{chopLabel}</div>
+          <div style={{ fontSize: 11, color: chopColor }}>{chopLabel}</div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Rev</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Rev</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: revColor }}>{revPct.toFixed(0)}%</div>
-          <div style={{ fontSize: 9, color: revColor }}>{revLabel}</div>
+          <div style={{ fontSize: 11, color: revColor }}>{revLabel}</div>
         </div>
         <div>
-          <div style={{ fontSize: 9, color: '#64748b' }}>Cont</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Cont</div>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>{(100 - revPct).toFixed(0)}%</div>
         </div>
       </div>
@@ -335,11 +386,24 @@ function TextureMetrics({ texture, etMin }) {
   );
 }
 
-function getPlaybook(regime, isHighEff, tier, contRate, revRate) {
+function getPlaybook(regime, isHighEff, tier, contRate, revRate, texture) {
   const exp = tier?.avgExpansion;
   const expStr = exp ? `~${exp} pts` : '—';
+  const isFlushThenBalance = texture && texture.morningEfficiency != null
+    && texture.morningEfficiency > 0.15 && texture.efficiencyRatio < 0.10
+    && texture.sessionRange > 400;
 
   if (regime === 'HIGH-VOL-DIRECTIONAL') {
+    if (isFlushThenBalance) return {
+      direction: 'Flush then balance',
+      dirColor: '#a78bfa',
+      rules: [
+        `Morning flush drove ${Math.round(texture.sessionRange)}pt range — the big move is done. 85% close in flush direction.`,
+        'STOP TRADING the balance zone. Reversal trades are negative EV on flush days.',
+        'Wait for balance resolution (~11:30-noon avg). Re-enter only in flush direction on breakout.',
+        'Counter-trade the retrace at R1/S1 levels only — target VWAP, not new extremes. Expires ~1:30 PM.',
+      ],
+    };
     if (isHighEff) return {
       direction: 'With morning drive',
       dirColor: '#4ade80',
@@ -430,30 +494,33 @@ function PredictiveStats({ data, btStats }) {
   const tierLabel = tierKey === 'low' ? 'Low-Vol' : tierKey === 'high' ? 'High-Vol' : 'Mid-Vol';
 
   const efficiencyRatio = data.texture?.efficiencyRatio;
+  const morningEfficiency = data.texture?.morningEfficiency;
   const cutoff = btStats.efficiencyCutoff;
-  const isHighEff = efficiencyRatio != null && cutoff != null && efficiencyRatio >= cutoff;
+  // Use morning ER for playbook decisions — full-session ER gets diluted by afternoon chop on flush days
+  const playER = morningEfficiency != null ? morningEfficiency : efficiencyRatio;
+  const isHighEff = playER != null && cutoff != null && playER >= cutoff;
   const textureStats = isHighEff ? btStats.texture?.highEff : btStats.texture?.lowEff;
   const contRate = textureStats?.continuationRate;
   const revRate  = textureStats?.reversalRate;
 
-  const playbook = getPlaybook(data.regime, isHighEff, tier, contRate, revRate);
+  const playbook = getPlaybook(data.regime, isHighEff, tier, contRate, revRate, data.texture);
 
   return (
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
-        {tier && <span style={{ fontSize: 11, color: '#64748b' }}>IB exp <strong style={{ color: '#a78bfa' }}>~{tier.avgExpansion}pt</strong></span>}
-        {tier && <span style={{ fontSize: 11, color: '#64748b' }}>Day range <strong style={{ color: '#94a3b8' }}>{tier.avgDayRange}pt</strong></span>}
-        {contRate != null && <span style={{ fontSize: 11, color: '#64748b' }}>Cont <strong style={{ color: contRate >= 80 ? '#4ade80' : '#94a3b8' }}>{contRate}%</strong></span>}
+        {tier && <span style={{ fontSize: 11, color: '#94a3b8' }}>IB exp <strong style={{ color: '#a78bfa' }}>~{tier.avgExpansion}pt</strong></span>}
+        {tier && <span style={{ fontSize: 11, color: '#94a3b8' }}>Day range <strong style={{ color: '#94a3b8' }}>{tier.avgDayRange}pt</strong></span>}
+        {contRate != null && <span style={{ fontSize: 11, color: '#94a3b8' }}>Cont <strong style={{ color: contRate >= 80 ? '#4ade80' : '#94a3b8' }}>{contRate}%</strong></span>}
       </div>
       <div style={{ background: 'rgba(167,139,250,0.04)', border: '1px solid rgba(167,139,250,0.12)', borderRadius: 5, padding: '6px 8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Play</span>
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Play</span>
           <span style={{ fontSize: 11, fontWeight: 700, color: playbook.dirColor }}>{playbook.direction}</span>
-          <span style={{ fontSize: 9, color: '#334155', marginLeft: 'auto' }}>N={btStats.sessionCount}</span>
+          <span style={{ fontSize: 11, color: '#334155', marginLeft: 'auto' }}>N={btStats.sessionCount}</span>
         </div>
         <ul style={{ margin: 0, padding: '0 0 0 12px', listStyle: 'disc' }}>
           {playbook.rules.map((r, i) => (
-            <li key={i} style={{ fontSize: 10, color: '#94a3b8', lineHeight: 1.45, marginBottom: 1 }}>{r}</li>
+            <li key={i} style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.45, marginBottom: 1 }}>{r}</li>
           ))}
         </ul>
       </div>
@@ -534,7 +601,7 @@ export default function VolatilityRegimeCard() {
                   animation: 'pulse-yellow 1.8s infinite ease-in-out',
                 }} />
               </span>
-              <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>
                 {progressPct.toFixed(0)}%
               </span>
             </div>
@@ -543,12 +610,12 @@ export default function VolatilityRegimeCard() {
               <div style={{ width: `${progressPct}%`, height: '100%', backgroundColor: '#f59e0b', borderRadius: 3, transition: 'width 0.4s ease-out' }} />
             </div>
 
-            <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.4 }}>
+            <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
               Accumulating regular trading hours (RTH) price bars. Needs 15 minutes of data to compute the first 5-minute standard deviation. Ready at 9:45 AM ET.
             </div>
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.4 }}>{data.reason}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4 }}>{data.reason}</div>
         )}
       </div>
     );
@@ -563,7 +630,7 @@ export default function VolatilityRegimeCard() {
   return (
     <div style={cardStyle}>
       <div style={{ ...titleStyle, display: 'flex', alignItems: 'center' }}>
-        <span>Volatility Regime (live){!data.morningComplete && <span style={{ color: '#64748b', fontWeight: 400 }}> — morning window in progress</span>}</span>
+        <span>Volatility Regime (live){!data.morningComplete && <span style={{ color: '#94a3b8', fontWeight: 400 }}> — morning window in progress</span>}</span>
         <InfoTooltip text={VOL_CARD_TOOLTIP} />
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -571,13 +638,13 @@ export default function VolatilityRegimeCard() {
           <div style={{ fontSize: 16, fontWeight: 800, color: regime.color, display: 'flex', alignItems: 'center', gap: 6 }}>
             {regime.label}
             {!data.morningComplete && (
-              <span style={{ fontSize: 8, fontWeight: 800, color: '#fb923c', background: 'rgba(251,146,60,0.15)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              <span style={{ fontSize: 11, fontWeight: 800, color: '#fb923c', background: 'rgba(251,146,60,0.15)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                 Developing
               </span>
             )}
             {trend.text && <span style={{ fontSize: 11, color: trend.color, fontWeight: 600 }}>{trend.text}</span>}
           </div>
-          <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>
             z={data.z?.toFixed(2)} · vol={data.morningVol != null ? data.morningVol.toFixed(5) : '—'}
             {data.dynamicHighThresh != null && <> · hi≥{data.dynamicHighThresh.toFixed(5)} lo≤{data.dynamicLowThresh.toFixed(5)}</>}
           </div>
@@ -585,18 +652,18 @@ export default function VolatilityRegimeCard() {
         <Sparkline history={data.history} zHigh={zHigh} zLow={zLow} regimeColor={regime.color} />
       </div>
       {regime.note && (
-        <div style={{ fontSize: 10, color: '#64748b', marginTop: 4, lineHeight: 1.3 }}>{regime.note}</div>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, lineHeight: 1.3 }}>{regime.note}</div>
       )}
       <TextureMetrics texture={data.texture} etMin={data.etMin} />
       {data.emaSnap && (
         <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
               VWAP Distance
             </span>
             {data.emaSnap.stretched && (
               <span style={{
-                fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase',
+                fontSize: 11, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase',
                 padding: '1px 6px', borderRadius: 3,
                 color: '#fbbf24', background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.3)',
               }}>
@@ -606,20 +673,20 @@ export default function VolatilityRegimeCard() {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '2px 6px' }}>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>VWAP</div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>VWAP</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', fontFamily: 'monospace' }}>
                 {data.emaSnap.vwap?.toLocaleString('en-US') || data.emaSnap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>Distance</div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Distance</div>
               <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
                 color: data.emaSnap.absDeviationATR >= 60 ? '#fbbf24' : data.emaSnap.absDeviationATR >= 40 ? '#fb923c' : '#94a3b8' }}>
                 {data.emaSnap.deviation > 0 ? '+' : ''}{Math.round(data.emaSnap.deviation)}pt
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 9, color: '#64748b' }}>Side</div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Side</div>
               <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace',
                 color: data.emaSnap.direction === 'ABOVE' ? '#4ade80' : '#f87171' }}>
                 {data.emaSnap.direction}

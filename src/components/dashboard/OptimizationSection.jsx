@@ -1,6 +1,7 @@
 const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React from 'react';
 import { formatNumber } from '../../utils/format.js';
+import { confidenceTier } from '../../utils/confidenceTier.js';
 import { SectionUpdateDot } from '../shared/UpdateDot.jsx';
 
 function Histogram({ data, color, title, subtitle, markerPct }) {
@@ -185,7 +186,7 @@ export default function OptimizationSection({ optData, tradeLocData }) {
                     <tr key={r.hour} style={{ borderBottom: '1px solid var(--border-color)', background: good ? 'rgba(16,185,129,0.05)' : bad ? 'rgba(239,68,68,0.05)' : 'transparent' }}>
                       <td style={{ padding: '10px 12px', fontWeight: 600 }}>{r.hour}:00 – {r.hour}:59</td>
                       <td style={{ padding: '10px 12px' }}>{r.count}</td>
-                      <td style={{ padding: '10px 12px', color: r.win_rate >= 50 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>{r.win_rate}%</td>
+                      <td style={{ padding: '10px 12px', fontWeight: 600 }} title={confidenceTier(r.count).title}><span style={{ color: r.win_rate >= 50 ? 'var(--accent-green)' : 'var(--accent-red)' }}>{r.win_rate}%</span> <span style={{ color: confidenceTier(r.count).color, fontSize: 11, fontWeight: 400 }}>({confidenceTier(r.count).label})</span></td>
                       <td style={{ padding: '10px 12px', color: r.avg_pnl >= 0 ? 'var(--accent-green)' : 'var(--accent-red)', fontWeight: 600 }}>${r.avg_pnl}</td>
                       <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{r.avg_mfe != null ? `${r.avg_mfe} pts` : '—'}</td>
                       <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>{r.avg_mae != null ? `${Math.abs(r.avg_mae)} pts` : '—'}</td>

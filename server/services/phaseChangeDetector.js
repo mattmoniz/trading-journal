@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { getPriorWeekRange } from './queries.js';
 
 const PROXIMITY_POINTS = 20;
 const VOLUME_LOOKBACK = 3;
@@ -65,6 +66,7 @@ export async function getStructuralLevels(tradeDate) {
   } catch (_) {}
 
   // ── Prior day VAL/VAH/POC ────────────────────────────────────────────────
+  let priorDate = null;
   try {
     const pdQ = await query(`
       SELECT ts::date::text as date FROM price_bars_primary
@@ -72,7 +74,8 @@ export async function getStructuralLevels(tradeDate) {
       ORDER BY ts::date DESC LIMIT 1
     `, [tradeDate]);
     if (pdQ.rows[0]) {
-      const pd = await getVolProfileForDate(pdQ.rows[0].date);
+      priorDate = pdQ.rows[0].date;
+      const pd = await getVolProfileForDate(priorDate);
       if (pd) {
         if (pd.vah) levels.push({ type: 'PRIOR_DAY_VAH', price: pd.vah });
         if (pd.val) levels.push({ type: 'PRIOR_DAY_VAL', price: pd.val });
@@ -80,6 +83,31 @@ export async function getStructuralLevels(tradeDate) {
       }
     }
   } catch (_) {}
+
+  // ── Prior week high/low — fully retrospective, no lookahead risk ────────
+  try {
+    const { pwHigh, pwLow } = await getPriorWeekRange(tradeDate);
+    if (pwHigh) levels.push({ type: 'PRIOR_WEEK_HIGH', price: pwHigh });
+    if (pwLow) levels.push({ type: 'PRIOR_WEEK_LOW', price: pwLow });
+  } catch (_) {}
+
+  // ── Overnight high/low (prior day 4PM ET -> today before 9AM ET) ────────
+  // Cutoff is hour<9 (not hour<10 like the live setups.js read) so this window
+  // unconditionally precedes the earliest bar any backtest evaluates against
+  // these levels (backtest bars start at hour>=9) — no lookahead.
+  if (priorDate) {
+    try {
+      const onQ = await query(`
+        SELECT MAX(high)::float as h, MIN(low)::float as l
+        FROM price_bars_primary WHERE symbol='NQ'
+          AND ((ts::date::text = $1 AND EXTRACT(HOUR FROM ts) >= 16)
+               OR (ts::date::text = $2 AND EXTRACT(HOUR FROM ts) < 9))
+      `, [priorDate, tradeDate]);
+      const { h, l } = onQ.rows[0] || {};
+      if (h) levels.push({ type: 'OVERNIGHT_HIGH', price: h });
+      if (l) levels.push({ type: 'OVERNIGHT_LOW', price: l });
+    } catch (_) {}
+  }
 
   // ── Bracket HIGH/LOW: max VAH / min VAL across last 5 sessions ───────────
   try {

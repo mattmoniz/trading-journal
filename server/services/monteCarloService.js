@@ -128,6 +128,12 @@ export async function loadAndTagTrades(config) {
   const barsByDate = {}; for (const b of barsQ.rows) (barsByDate[b.d] ??= []).push(b);
   const dates = Object.keys(barsByDate).sort();
 
+  // Compute OR width σ thresholds dynamically from the dataset (no static 91.5/47.5)
+  const allORWidths = tradesQ.rows.map(t => t.or_width).filter(w => w && w > 0);
+  const orMean = allORWidths.length >= 20 ? allORWidths.reduce((s,v) => s+v, 0) / allORWidths.length : 65;
+  const orStd = allORWidths.length >= 20 ? Math.sqrt(allORWidths.reduce((s,v) => s + (v - orMean)**2, 0) / allORWidths.length) : 20;
+  const wideORThreshold = orMean + orStd;   // +1σ
+
   function tagTrade(t) {
     const nl = nlMap[t.d] || 0;
     const ar = arMap[t.d] || {};
@@ -139,7 +145,7 @@ export async function loadAndTagTrades(config) {
     const pocCounter = migMap[t.d] && ((isLong && migMap[t.d] === 'LOWER') || (!isLong && migMap[t.d] === 'HIGHER'));
     const pd2 = pd2Map[t.d];
     const nearPD2 = pd2 && t.entry && (Math.abs(t.entry - pd2.vah) <= 25 || Math.abs(t.entry - pd2.val) <= 25);
-    const wideOR = t.or_width && t.or_width > 91.5;
+    const wideOR = t.or_width && t.or_width > wideORThreshold;
     const doubleHeadwind = nl30Counter && overnightCounter;
     const align = overnightAligned ? 'ALIGNED' : overnightCounter ? 'COUNTER' : 'NEUTRAL';
     const isTurbulent = t.dayType === 'TURBULENT' || t.day_type === 'TURBULENT';

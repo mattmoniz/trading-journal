@@ -18,7 +18,12 @@ const PROCESS_SCHEDULE = [
   { name: 'WEEKLY_ASSESSMENT',   label: 'Weekly Assessment',        schedule: '6:05 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'COMBO_BACKTEST',      label: 'Combo Level Backtest',     schedule: '6:30 PM ET Sunday',         expectedDays: ['Sun'],                         scheduledHour: 18, maxAgeHours: 170, critical: false },
   { name: 'MONTHLY_REPORT',      label: 'Monthly Report',           schedule: '7:00 PM ET First Sunday',   expectedDays: ['Sun'],                         scheduledHour: 19, maxAgeHours: 750, critical: false, firstSundayOnly: true },
-  { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Continuous during mkt hrs', expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
+  { name: 'DEVELOPING_VALUE',     label: 'Developing Value Tracker', schedule: '4:05 PM ET Mon-Fri',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], scheduledHour: 16, maxAgeHours: 25,  critical: true  },
+  { name: 'REGIME_LEVELS',       label: 'Regime-Adaptive Levels',   schedule: '5:30 PM ET Mon-Fri',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], scheduledHour: 17, maxAgeHours: 25,  critical: false },
+  { name: 'MAE_MFE_AUDIT',       label: 'MAE/MFE System Audit',     schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 750, critical: false, firstSundayOnly: true },
+  { name: 'LEVEL_FADE_AUDIT',    label: 'Level Fade Backtest',      schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 750, critical: false, firstSundayOnly: true },
+  { name: 'SYSTEM_BACKTEST',     label: 'Full System Backtest',     schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 750, critical: false, firstSundayOnly: true },
+  { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Every 60s during RTH',      expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
 ];
 
@@ -117,6 +122,18 @@ router.get('/settings/process-health', async (req, res) => {
     `, [processNames]);
     const logsByName = Object.fromEntries(logsQ.rows.map(r => [r.process_name, r]));
 
+    // Fallback: for manual-script processes (SYSTEM_BACKTEST, MAE_MFE_AUDIT, LEVEL_FADE_AUDIT),
+    // if process_log has no row, check performance_audit.run_date directly.
+    // Manual node script runs bypass logProcess() so they never write to process_log.
+    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT' };
+    const paFallbackQ = await query(`
+      SELECT signal_type, MAX(run_date)::text as last_run
+      FROM performance_audit
+      WHERE signal_type = ANY($1)
+      GROUP BY signal_type
+    `, [Object.values(manualScriptTypes)]).catch(() => ({ rows: [] }));
+    const paFallback = Object.fromEntries(paFallbackQ.rows.map(r => [r.signal_type, r.last_run]));
+
     // Fetch last 5 runs per process for detail view
     const detailQ = await query(`
       SELECT process_name,
@@ -159,6 +176,11 @@ router.get('/settings/process-health', async (req, res) => {
           lastDuration = fmtDuration(row.started_at, row.completed_at);
           recordsAffected = row.records_affected;
           errorMessage = row.error_message;
+        } else if (manualScriptTypes[proc.name] && paFallback[manualScriptTypes[proc.name]]) {
+          // Manual script ran but bypassed process_log — use performance_audit date as evidence of last run
+          lastRun = paFallback[manualScriptTypes[proc.name]] + 'T00:00:00';
+          lastStatus = 'SUCCESS';
+          errorMessage = null;
         }
       }
 

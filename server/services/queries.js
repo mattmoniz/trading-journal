@@ -196,17 +196,12 @@ export async function getConvictionData() {
     if (rate >= 0.38) return 1;
     return 0;
   };
-  const HARDCODED = {
-    IB_HIGH:        { rate: 0.445, stars: 2, n: 742,  avgMag: null },
-    IB_LOW:         { rate: 0.381, stars: 1, n: 239,  avgMag: null },
-    OVERNIGHT_HIGH: { rate: 0.416, stars: 2, n: 666,  avgMag: null },
-    PRIOR_WEEK_HIGH:{ rate: 0.759, stars: 2, n: 364,  avgMag: null },
-    PRIOR_WEEK_LOW: { rate: 0.648, stars: 2, n: 327,  avgMag: null },
-  };
+  // All level types below are now produced live by getStructuralLevels()
+  // (server/services/phaseChangeDetector.js) and backtested by runPhaseChangeBacktest()
+  // (server/services/phaseChangeBacktest.js) — no hardcoded fallback needed or used.
   const entry = (key) => {
-    if (raw[key]) return { rate: raw[key].reversalRate, stars: toStars(raw[key].reversalRate), n: raw[key].n, avgMag: raw[key].avgMag };
-    if (HARDCODED[key]) return HARDCODED[key];
-    return null;
+    if (!raw[key]) return null;
+    return { rate: raw[key].reversalRate, stars: toStars(raw[key].reversalRate), n: raw[key].n, avgMag: raw[key].avgMag };
   };
   return {
     composite_vah:   entry('COMPOSITE_VAH'),
@@ -220,6 +215,7 @@ export async function getConvictionData() {
     ib_high:         entry('IB_HIGH'),
     ib_low:          entry('IB_LOW'),
     overnight_high:  entry('OVERNIGHT_HIGH'),
+    overnight_low:   entry('OVERNIGHT_LOW'),
     prior_week_high: entry('PRIOR_WEEK_HIGH'),
     prior_week_low:  entry('PRIOR_WEEK_LOW'),
   };
@@ -280,4 +276,23 @@ export function nl30ToBucket(nl30) {
  */
 export function nl30ToTrend(nl30) {
   return nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
+}
+
+/**
+ * Rolling VWAP distance std — single source of truth for VWAP_MAGNET threshold.
+ * Returns { std, mean, n, threshold } where threshold = max(50, std * sigmaMult).
+ * Callers: acd.js (VWAP_MAGNET), morningBrief.js (scalp-recap + trade-alerts), antigravityEdges.js.
+ */
+export async function getTrailingVwapStd(date, days = 30, sigmaMult = 1.5) {
+  const res = await query(
+    `SELECT close_vs_vwap FROM session_analysis
+     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
+     AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`,
+    [date, days]
+  ).catch(() => ({ rows: [] }));
+  const vals = res.rows.map(r => r.close_vs_vwap);
+  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+  return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
 }

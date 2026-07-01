@@ -21,7 +21,7 @@
   --color-bullish:  #22c55e;
   --color-bearish:  #ef4444;
   --color-caution:  #fbbf24;
-  --color-neutral:  #64748b;
+  --color-neutral:  #94a3b8;
 
   /* ── Accent palette ── */
   --accent-purple: #8b5cf6;
@@ -31,10 +31,10 @@
 
   /* ── Typography ── */
   --text-primary:   #f1f5f9;
-  --text-secondary: #a0aec0;
-  --text-muted:     #64748b;  /* minimum brightness for informational text */
+  --text-secondary: #b0bec5;
+  --text-muted:     #94a3b8;  /* RAISED from #64748b — old gray was unreadable */
 
-  /* ── Font sizes — 13px minimum for any label carrying information ── */
+  /* ── Font sizes — 12px minimum for any text carrying information ── */
   --font-label:   13px;
   --font-body:    13px;
   --font-value:   15px;

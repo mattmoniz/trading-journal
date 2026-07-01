@@ -3,7 +3,35 @@
     "allow": [
       "Bash(*)",
       "Read(*)",
-      "Write(*)"
+      "Write(*)",
+      "Edit(*)",
+      "Glob(*)",
+      "Grep(*)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-docs-drift.sh 2>/dev/null || true",
+            "statusMessage": "Checking docs drift..."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/context-compaction-alert.sh 2>/dev/null || true",
+            "statusMessage": "Logging context compaction..."
+          }
+        ]
+      }
     ]
   }
 }

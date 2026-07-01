@@ -1,5 +1,6 @@
 const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React, { useState, useEffect } from 'react';
+import { confidenceTier } from '../../utils/confidenceTier.js';
 
 const API_URL = '/api';
 
@@ -28,7 +29,7 @@ function InfoTooltip({ text }) {
       onMouseEnter={handleMouseEnter} onMouseLeave={() => setVisible(false)}
       onClick={() => setVisible(v => !v)}>
       <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-        width: 14, height: 14, borderRadius: '50%', fontSize: 9, fontWeight: 700,
+        width: 14, height: 14, borderRadius: '50%', fontSize: 11, fontWeight: 700,
         background: 'rgba(100,116,139,0.2)', color: '#94a3b8',
         border: '1px solid rgba(100,116,139,0.35)', cursor: 'help', lineHeight: 1 }}>i</span>
       {visible && (
@@ -96,7 +97,7 @@ export default function AntigravityEdgesView() {
       <div style={errorStyle}>
         <div style={{ fontSize: 24, marginBottom: 10 }}>⚠️</div>
         <div style={{ fontSize: 16, fontWeight: 700, color: '#ef4444' }}>Error loading edges</div>
-        <div style={{ color: '#64748b', marginTop: 4 }}>{error}</div>
+        <div style={{ color: '#94a3b8', marginTop: 4 }}>{error}</div>
         <button style={retryButton} onClick={fetchContext}>Retry</button>
       </div>
     );
@@ -311,7 +312,7 @@ export default function AntigravityEdgesView() {
                   <span style={subtextStyle(liveStatus.or5Status)}>({liveStatus.or5Status})</span>
                   {liveStatus.coiling?.active && (
                     <span
-                      style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: liveStatus.coiling.popSurge ? '#f87171' : '#fb923c' }}
+                      style={{ marginLeft: 8, fontSize: 12, fontWeight: 700, color: liveStatus.coiling.popSurge ? '#f87171' : '#fb923c' }}
                       title={`Coiling ${liveStatus.coiling.durationBars}min: ${liveStatus.coiling.range}pt range, volume at ${liveStatus.coiling.volRatio}% of baseline`}
                     >
                       {liveStatus.coiling.popSurge ? 'POP ⚡' : `COILING ${liveStatus.coiling.durationBars}m ⚠`}
@@ -445,7 +446,7 @@ export default function AntigravityEdgesView() {
               </p>
               {pd.recs.length > 0 && (
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '10px', color: '#64748b', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Focus Setups:</span>
+                  <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Focus Setups:</span>
                   {pd.recs.map(r => (
                     <span key={r} style={{ fontSize: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', color: '#94a3b8', padding: '1px 6px', borderRadius: '4px', fontWeight: '600' }}>
                       {r}
@@ -737,7 +738,7 @@ export default function AntigravityEdgesView() {
                 else if (item.type === 'danger') { textCol = '#fca5a5'; timeCol = '#f87171'; bg = 'rgba(239, 68, 68, 0.03)'; borderCol = 'rgba(239, 68, 68, 0.08)'; }
                 else if (item.type === 'alert') { textCol = '#e0f2fe'; timeCol = '#38bdf8'; bg = 'rgba(56, 189, 248, 0.03)'; borderCol = 'rgba(56, 189, 248, 0.08)'; }
                 else if (item.type === 'warning') { textCol = '#fed7aa'; timeCol = '#fb923c'; bg = 'rgba(251, 146, 60, 0.04)'; borderCol = 'rgba(251, 146, 60, 0.12)'; }
-                else if (item.type === 'system') { textCol = '#94a3b8'; timeCol = '#64748b'; }
+                else if (item.type === 'system') { textCol = '#94a3b8'; timeCol = '#94a3b8'; }
 
                 return (
                   <div key={idx} style={{
@@ -804,7 +805,7 @@ export default function AntigravityEdgesView() {
                 <div style={{ ...cardItemValueStyle(activeBacktest.baselinePnl >= 0 ? 'TIGHT' : 'WIDE'), fontSize: '24px', marginTop: '6px' }}>
                   ${activeBacktest.baselinePnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
-                <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
                   Total historical net performance in this period.
                 </div>
               </div>
@@ -820,7 +821,7 @@ export default function AntigravityEdgesView() {
                 <div style={{ ...cardItemValueStyle(activeBacktest.combinedPnl >= 0 ? 'TIGHT' : 'WIDE'), fontSize: '24px', marginTop: '6px', color: activeBacktest.combinedPnl >= 0 ? '#10b981' : '#f87171' }}>
                   ${activeBacktest.combinedPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
-                <div style={{ fontSize: '10px', color: '#64748b', marginTop: '4px' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
                   P&L after applying Monday block, size decel, & trailing locks.
                 </div>
               </div>
@@ -966,7 +967,7 @@ export default function AntigravityEdgesView() {
                     <InfoTooltip text={confTooltip} />
                   </h2>
                   {nearCount > 0 && (
-                    <span style={{ fontSize: 10, fontWeight: 800, color: nearCount >= 3 ? '#10b981' : '#fbbf24',
+                    <span style={{ fontSize: 12, fontWeight: 800, color: nearCount >= 3 ? '#10b981' : '#fbbf24',
                       background: nearCount >= 3 ? 'rgba(16,185,129,0.15)' : 'rgba(251,191,36,0.15)',
                       border: `1px solid ${nearCount >= 3 ? 'rgba(16,185,129,0.3)' : 'rgba(251,191,36,0.3)'}`,
                       padding: '2px 8px', borderRadius: 4, letterSpacing: '0.04em' }}>
@@ -987,19 +988,19 @@ export default function AntigravityEdgesView() {
                       }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                           <span style={{ fontSize: 11, fontWeight: 700, color: '#e2e8f0' }}>{l.name}</span>
-                          {isNear && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
+                          {isNear && <span style={{ fontSize: 11, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 3 }}>ACTIVE</span>}
                         </div>
                         <div style={{ fontSize: 15, fontWeight: 800, color: l.color, fontFamily: 'monospace' }}>
                           {l.val.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                         </div>
-                        <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
                           {dist != null ? `${dist > 0 ? '+' : ''}${dist}pt away` : '—'}
                           {' · '}T: {l.target}pt ({l.hitRate}% hit) · ${l.exp}/ct
                         </div>
-                        <div style={{ fontSize: 9, color: l.ctrlDelta > 10 ? '#10b981' : '#94a3b8', marginTop: 1 }}>
+                        <div style={{ fontSize: 11, color: l.ctrlDelta > 10 ? '#10b981' : '#94a3b8', marginTop: 1 }}>
                           Controlled Δ: +{l.ctrlDelta.toFixed(1)}% independent edge
                         </div>
-                        {l.note && isNear && <div style={{ fontSize: 9, color: '#fbbf24', marginTop: 2, fontWeight: 600 }}>{l.note}</div>}
+                        {l.note && isNear && <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 2, fontWeight: 600 }}>{l.note}</div>}
                       </div>
                     );
                   })}
@@ -1029,7 +1030,7 @@ export default function AntigravityEdgesView() {
                     <div style={setupMetricsGrid}>
                       <div>
                         <div style={metricLabelStyle}>Baseline WR</div>
-                        <div style={metricValueStyle}>{(s.baselineWr * 100).toFixed(1)}% <span style={sampleLabel}>(N={s.sampleN})</span></div>
+                        <div style={metricValueStyle}>{(s.baselineWr * 100).toFixed(1)}% <span style={{ ...sampleLabel, color: confidenceTier(s.sampleN).color }} title={confidenceTier(s.sampleN).title}>({confidenceTier(s.sampleN).label})</span></div>
                       </div>
                       <div>
                         <div style={metricLabelStyle}>Heuristic WR *</div>
@@ -1051,7 +1052,7 @@ export default function AntigravityEdgesView() {
                       {s.recommendation}
                     </div>
 
-                    <div style={{ fontSize: '9px', color: '#64748b', marginTop: '8px', textAlign: 'right', fontStyle: 'italic' }}>
+                    <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '8px', textAlign: 'right', fontStyle: 'italic' }}>
                       * Heuristic WR uses qualitative coaching assumptions, not database measurements.
                     </div>
                   </div>
@@ -1099,7 +1100,7 @@ export default function AntigravityEdgesView() {
             </div>
           ) : (
             <div style={noLiveCardStyle}>
-              <div style={{ fontSize: 13, color: '#64748b' }}>
+              <div style={{ fontSize: 13, color: '#94a3b8' }}>
                 {liveStatus?.active 
                   ? 'No high-probability potential setups pending right now.' 
                   : 'RTH session not active. Watchlist will initialize at 9:30 AM ET.'}
@@ -1114,7 +1115,7 @@ export default function AntigravityEdgesView() {
             const snap = liveStatus?.emaSnap;
             if (!snap) return (
               <div style={noLiveCardStyle}>
-                <div style={{ fontSize: 13, color: '#64748b' }}>
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>
                   {liveStatus?.active ? 'Computing VWAP distance...' : 'RTH session not active.'}
                 </div>
               </div>
@@ -1133,7 +1134,7 @@ export default function AntigravityEdgesView() {
                     VWAP MAGNET
                     <InfoTooltip text={`VWAP MAGNET (Mean Reversion)\n\nWhen price extends 25% of the developing range from VWAP, fade back toward VWAP.\n\nBACKTEST (90 days, 1-min bars):\n• 62% WR (N=460)\n• BALANCE days: 79% WR\n• 20pt target, 30pt stop\n• Range-scaled threshold (min 50pt)\n• 30-bar cooldown between trades\n\nReplaces EMA Snap-Back (0% WR, removed).\n\nEXECUTION:\n1. Check VWAP distance vs threshold\n2. Fade toward VWAP\n3. 20pt target, 30pt stop\n4. Scalp — don't hold for continuation`} />
                   </span>
-                  <span style={setupBadgeStyle(isStretched ? '#3b82f6' : '#64748b', isStretched ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)')}>
+                  <span style={setupBadgeStyle(isStretched ? '#3b82f6' : '#94a3b8', isStretched ? 'rgba(59,130,246,0.1)' : 'rgba(100,116,139,0.1)')}>
                     {isStretched ? 'FADE ACTIVE' : 'MONITORING'}
                   </span>
                 </div>
@@ -1171,7 +1172,7 @@ export default function AntigravityEdgesView() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+                  <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 0' }}>
                     {Math.round(dist)}pt from VWAP — below threshold. No fade signal.
                   </div>
                 )}
@@ -1196,7 +1197,7 @@ export default function AntigravityEdgesView() {
                     <InfoTooltip text={absTooltip} />
                   </span>
                   <span style={setupBadgeStyle(
-                    isActive ? '#10b981' : isWatching ? '#fbbf24' : '#64748b',
+                    isActive ? '#10b981' : isWatching ? '#fbbf24' : '#94a3b8',
                     isActive ? 'rgba(16,185,129,0.1)' : isWatching ? 'rgba(251,191,36,0.1)' : 'rgba(100,116,139,0.1)'
                   )}>
                     {isActive ? '⚡ ABSORPTION CONFIRMED — FIRE' : isWatching ? '👀 WATCHING — Building' : 'MONITORING'}
@@ -1222,7 +1223,7 @@ export default function AntigravityEdgesView() {
                     </div>
                   </>
                 ) : (
-                  <div style={{ fontSize: 12, color: '#64748b', padding: '8px 0' }}>
+                  <div style={{ fontSize: 12, color: '#94a3b8', padding: '8px 0' }}>
                     No absorption pattern detected. Requires: 4+ bars clustering at support with RSI rising while price stays flat.
                   </div>
                 )}
@@ -1246,7 +1247,7 @@ export default function AntigravityEdgesView() {
 
             if (!cs?.detected) return (
               <div style={noLiveCardStyle}>
-                <div style={{ fontSize: 13, color: '#64748b' }}>
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>
                   {liveStatus?.active ? 'No coiling detected in current session.' : 'RTH session not active.'}
                 </div>
               </div>
@@ -1278,7 +1279,7 @@ export default function AntigravityEdgesView() {
                   </div>
                   <div>
                     <div style={metricLabelStyle}>Surge Ratio</div>
-                    <div style={{ ...metricValueStyle, color: isSurging ? '#10b981' : '#64748b', fontFamily: 'monospace' }}>
+                    <div style={{ ...metricValueStyle, color: isSurging ? '#10b981' : '#94a3b8', fontFamily: 'monospace' }}>
                       {cs.surgeRatio}x {isSurging ? '✅' : ''}
                     </div>
                   </div>
@@ -1609,7 +1610,7 @@ const cardItemStyle = {
 
 const cardItemLabelStyle = {
   fontSize: '10px',
-  color: '#64748b',
+  color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',
   letterSpacing: '0.04em',
@@ -1699,7 +1700,7 @@ const setupMetricsGrid = {
 
 const metricLabelStyle = {
   fontSize: '9px',
-  color: '#64748b',
+  color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',
 };
@@ -1713,7 +1714,7 @@ const metricValueStyle = {
 
 const sampleLabel = {
   fontSize: '10px',
-  color: '#475569',
+  color: '#64748b',
   fontWeight: '400',
 };
 
@@ -1786,7 +1787,7 @@ const tableColHeaderStyle = {
 
 const toolStyle = {
   fontSize: '10px',
-  color: '#64748b',
+  color: '#94a3b8',
   fontWeight: '400',
   marginTop: '2px',
 };
@@ -2035,7 +2036,7 @@ const ruleMetricsRow = {
 
 const ruleMetricLabel = {
   fontSize: '8px',
-  color: '#64748b',
+  color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',
   letterSpacing: '0.04em',

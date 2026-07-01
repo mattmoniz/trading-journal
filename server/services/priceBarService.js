@@ -248,6 +248,16 @@ export async function scanAndIngestNewBarFiles(dataDir) {
       results.push({ error: err.message, filename: path.basename(f) });
     }
   }
+
+  // Contract rollover detection: warn if a new NQ contract appeared with few bars
+  const nqResults = results.filter(r => !r.error && r.symbol === 'NQ');
+  for (const r of nqResults) {
+    if (!ingestedMap.has(r.filename) && r.bars_inserted < 100) {
+      console.warn(`⚠️  CONTRACT ROLLOVER DETECTED: ${r.contract} appeared with only ${r.bars_inserted} bars. Old contract may have stopped updating. Monitor for data gaps.`);
+      r.rolloverWarning = true;
+    }
+  }
+
   return results;
 }
 

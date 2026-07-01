@@ -89,7 +89,7 @@ export default function BehavioralGuideCard() {
     return (
       <div style={cardStyle}>
         <div style={titleStyle}>Behavioral Level Guide</div>
-        <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>Waiting for market print...</div>
+        <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>Waiting for market print...</div>
       </div>
     );
   }
@@ -209,7 +209,7 @@ export default function BehavioralGuideCard() {
         gridTemplateColumns: 'repeat(3, 1fr)', 
         gap: 6, 
         fontSize: '10px', 
-        color: '#64748b', 
+        color: '#94a3b8', 
         borderTop: '1px solid #1e293b', 
         paddingTop: 8 
       }}>

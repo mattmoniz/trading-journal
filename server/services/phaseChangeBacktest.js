@@ -96,8 +96,18 @@ export async function runPhaseChangeBacktest(params, onProgress) {
     const levels = await getStructuralLevels(date);
     if (!levels.length) continue;
 
+    // IB high/low only "exists" once the opening range closes at 10:30 ET — fetched
+    // per-session but only added to the candidate set for bars at/after that time
+    // (et_min >= 630) below, to avoid leaking the finalized IB into earlier bars.
+    const ibQ = await query(
+      `SELECT or_high::float as or_high, or_low::float as or_low FROM acd_daily_log WHERE trade_date = $1`, [date]
+    );
+    const ibHigh = ibQ.rows[0]?.or_high ?? null;
+    const ibLow = ibQ.rows[0]?.or_low ?? null;
+
     const barsQ = await query(`
-      SELECT ts, open::float, high::float, low::float, close::float,
+      SELECT ts, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+        open::float, high::float, low::float, close::float,
         volume, num_trades, bid_volume, ask_volume
       FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date=$1
@@ -116,9 +126,16 @@ export async function runPhaseChangeBacktest(params, onProgress) {
       // rolling window bars[0]=current, bars[1]=prev, etc.
       const window = allBars.slice(Math.max(0, i - BARSNEEDED + 1), i + 1).reverse();
 
+      // IB only enters the candidate set once it has actually closed (10:30 ET / et_min>=630)
+      const candidateLevels = current.et_min >= 630
+        ? [...levels,
+            ...(ibHigh != null ? [{ type: 'IB_HIGH', price: ibHigh }] : []),
+            ...(ibLow != null ? [{ type: 'IB_LOW', price: ibLow }] : [])]
+        : levels;
+
       // Proximity check
       let nearLevel = null, nearDist = Infinity;
-      for (const lv of levels) {
+      for (const lv of candidateLevels) {
         const d = Math.abs(price - lv.price);
         if (d < nearDist) { nearDist = d; nearLevel = lv; }
       }

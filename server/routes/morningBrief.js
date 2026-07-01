@@ -1,8 +1,150 @@
 import express from 'express';
 import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
+import { getTrailingVwapStd } from '../services/queries.js';
 
 const router = express.Router();
+
+// ── Rolling distribution helpers (σ-based, no static thresholds) ──────────
+function rollingStats(arr) {
+  if (!arr.length) return { mean: 0, std: 0 };
+  const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
+  const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
+  return { mean, std };
+}
+function zScore(val, arr) {
+  const { mean, std } = rollingStats(arr);
+  return std > 0 ? (val - mean) / std : 0;
+}
+const MIN_SAMPLES = 20;
+
+// Fetch trailing daily cumDeltas from price bars (30-day window)
+async function getTrailingCumDeltas(date, days = 30) {
+  const dailyBars = await query(`
+    SELECT ts::date::text as d, open::float, high::float, low::float, close::float, volume::bigint as vol
+    FROM price_bars_primary WHERE symbol='NQ'
+    AND ts::date >= $1::date - $2::int AND ts::date < $1
+    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts`, [date, days]).catch(() => ({ rows: [] }));
+  if (!dailyBars.rows.length) return [];
+  // Group by date, compute cumDelta per day
+  const byDate = {};
+  for (const b of dailyBars.rows) {
+    if (!byDate[b.d]) byDate[b.d] = [];
+    byDate[b.d].push(b);
+  }
+  return Object.values(byDate).map(bars => {
+    let cd = 0;
+    for (const b of bars) {
+      const bRange = b.high - b.low;
+      const bodyPct = bRange > 0 ? Math.abs(b.close - b.open) / bRange : 0;
+      const dir = b.close >= b.open ? 1 : -1;
+      cd += dir * Number(b.vol || 0) * Math.max(bodyPct, 0.3);
+    }
+    return cd;
+  });
+}
+
+// Fetch trailing 24hr VWAP distances (30-day window)
+async function getTrailing24hrVwapDists(date, days = 30) {
+  const result = await query(`
+    WITH day_list AS (
+      SELECT DISTINCT ts::date as d FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date >= $1::date - $2::int AND ts::date < $1
+      ORDER BY d
+    )
+    SELECT d::text, (array_agg(close ORDER BY ts DESC))[1]::float as close_price
+    FROM price_bars_primary pb
+    JOIN day_list dl ON pb.ts::date = dl.d
+    WHERE symbol='NQ' AND EXTRACT(hour FROM pb.ts)*60+EXTRACT(minute FROM pb.ts) BETWEEN 570 AND 959
+    GROUP BY d
+    ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
+  if (result.rows.length < 5) return [];
+
+  const dists = [];
+  for (const row of result.rows) {
+    // Compute 24hr VWAP for each day
+    const globex = await query(`
+      SELECT high::float, low::float, close::float, volume::bigint as vol
+      FROM price_bars_primary WHERE symbol='NQ' AND (
+        (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
+        (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
+      ) ORDER BY ts`, [row.d]).catch(() => ({ rows: [] }));
+    if (globex.rows.length > 50) {
+      let pv = 0, v = 0;
+      for (const b of globex.rows) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
+      const vwap24 = pv / v;
+      dists.push(row.close_price - vwap24);
+    }
+  }
+  return dists;
+}
+
+// Fetch trailing weekly VWAP distances
+async function getTrailingWeeklyVwapDists(date, weeks = 12) {
+  const dists = [];
+  const d = new Date(date + 'T12:00:00');
+  for (let w = 1; w <= weeks; w++) {
+    const targetDate = new Date(d.getTime() - w * 7 * 86400000);
+    const friday = new Date(targetDate.getTime());
+    // Find the Friday of that week
+    const dayOfWeek = friday.getDay();
+    const daysToFri = dayOfWeek <= 5 ? 5 - dayOfWeek : -2;
+    friday.setDate(friday.getDate() + daysToFri);
+    const friStr = friday.toISOString().slice(0, 10);
+    const monOffset = friday.getDay() === 0 ? 6 : friday.getDay() - 1;
+    const monday = new Date(friday.getTime() - monOffset * 86400000);
+    const monStr = monday.toISOString().slice(0, 10);
+
+    const wb = await query(`
+      SELECT high::float, low::float, close::float, volume::bigint as vol
+      FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date >= $1 AND ts::date <= $2
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      ORDER BY ts`, [monStr, friStr]).catch(() => ({ rows: [] }));
+    if (wb.rows.length < 50) continue;
+    let wPV = 0, wV = 0;
+    for (const b of wb.rows) { wPV += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); wV += Number(b.vol || 1); }
+    const wVwap = wPV / wV;
+    const lastClose = wb.rows[wb.rows.length - 1].close;
+    dists.push(lastClose - wVwap);
+  }
+  return dists;
+}
+
+// Fetch trailing rotation counts from session_analysis (90-day window)
+async function getTrailingRotations(date, days = 90) {
+  const res = await query(
+    `SELECT rotations_65pt FROM session_analysis
+     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
+     AND rotations_65pt IS NOT NULL
+     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
+  return res.rows.map(r => r.rotations_65pt);
+}
+
+// Fetch trailing OR widths from acd_daily_log (90-day window)
+async function getTrailingORWidths(date, days = 90) {
+  const res = await query(
+    `SELECT or_high::float - or_low::float as or_width
+     FROM acd_daily_log
+     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
+     AND or_high IS NOT NULL AND or_low IS NOT NULL
+     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
+  return res.rows.map(r => r.or_width).filter(w => w > 0);
+}
+
+// Fetch trailing ATR(20) for rotation threshold
+async function getTrailingATR(date, days = 20) {
+  const res = await query(`
+    SELECT (MAX(high) - MIN(low))::float as range
+    FROM price_bars_primary
+    WHERE symbol='NQ' AND ts::date >= $1::date - $2::int AND ts::date < $1
+    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    GROUP BY ts::date
+    ORDER BY ts::date DESC`, [date, days]).catch(() => ({ rows: [] }));
+  if (res.rows.length < 5) return 400; // reasonable NQ default
+  return res.rows.reduce((s, r) => s + r.range, 0) / res.rows.length;
+}
 
 router.get('/forecast/:date', async (req, res) => {
   try {
@@ -335,11 +477,34 @@ router.get('/scalp-recap/:date', async (req, res) => {
       let floorP = null, floorR1 = null, floorS1 = null;
       if (pd) { floorP = (pd.hi + pd.lo + pd.cl) / 3; floorR1 = 2 * floorP - pd.lo; floorS1 = 2 * floorP - pd.hi; }
 
+      // Rolling 10-day IB MID and 5-day OR MID (top performing composite levels)
+      let ib10Mid = null, or5Mid = null;
+      try {
+        const ib10Res = await query(`
+          SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
+            SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
+            FROM price_bars_primary WHERE symbol='NQ'
+            AND ts::date >= $1::date - 14 AND ts::date < $1
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+            GROUP BY ts::date ORDER BY d DESC LIMIT 10
+          ) t`, [date]);
+        if (ib10Res.rows[0]?.hi) ib10Mid = (ib10Res.rows[0].hi + ib10Res.rows[0].lo) / 2;
+
+        const or5Res = await query(`
+          SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
+            SELECT or_high::float as orh, or_low::float as orl
+            FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
+            ORDER BY trade_date DESC LIMIT 5
+          ) t`, [date]);
+        if (or5Res.rows[0]?.hi) or5Mid = (or5Res.rows[0].hi + or5Res.rows[0].lo) / 2;
+      } catch (_) {}
+
       const levels = [
         { name: 'PD_POC', price: pd?.poc }, { name: 'PD_VAH', price: pd?.vah }, { name: 'PD_VAL', price: pd?.val },
         { name: 'OR_HIGH', price: orH }, { name: 'OR_LOW', price: orL },
         { name: 'IB_HIGH', price: ibH }, { name: 'IB_LOW', price: ibL },
         { name: 'FLOOR_PIVOT', price: floorP }, { name: 'FLOOR_R1', price: floorR1 }, { name: 'FLOOR_S1', price: floorS1 },
+        { name: '10D_IB_MID', price: ib10Mid }, { name: '5D_OR_MID', price: or5Mid },
       ].filter(l => l.price);
 
       const cfg = { target: 20, stop: 25 };
@@ -375,21 +540,20 @@ router.get('/scalp-recap/:date', async (req, res) => {
       }
     }
 
-    // 3. VWAP magnet trades (range-scaled: 25% of developing range, 30-bar cooldown)
+    // 3. VWAP magnet trades — σ-based threshold matching live acd.js (1.5σ trigger)
     const vwapTrades = [];
     if (bars.length >= 60) {
+      const recapVwapStd = await getTrailingVwapStd(date, 30);
+      const recapThreshold = recapVwapStd.threshold;
+
       let cumPV = 0, cumV = 0;
       let lastVwapTrade = -30;
-      let sessHi = bars[0].high, sessLo = bars[0].low;
       for (let i = 0; i < bars.length; i++) {
         cumPV += (bars[i].high + bars[i].low + bars[i].close) / 3 * Number(bars[i].vol || 1);
         cumV += Number(bars[i].vol || 1);
-        sessHi = Math.max(sessHi, bars[i].high);
-        sessLo = Math.min(sessLo, bars[i].low);
         const vwap = cumPV / cumV;
         if (i - lastVwapTrade < 30 || i < 60) continue;
-        const devRange = sessHi - sessLo;
-        const threshold = Math.max(50, Math.round(devRange * 0.25));
+        const threshold = recapThreshold;
         const dist = bars[i].close - vwap;
         if (Math.abs(dist) >= threshold) {
           const fadeDir = dist > 0 ? 'SHORT' : 'LONG';
@@ -499,7 +663,9 @@ router.get('/live-session-context/:date', async (req, res) => {
     const ibRange = ibH && ibL ? Math.round(ibH - ibL) : null;
     const ibBroken = ibH && ibL ? (price > ibH ? 'ABOVE' : price < ibL ? 'BELOW' : 'INSIDE') : null;
 
-    // Rotations — 5-min close-to-close for meaningful swings
+    // Rotations — 5-min close-to-close, ATR-scaled threshold (no static 65pt)
+    const atr20 = await getTrailingATR(date, 20);
+    const rotThreshold = Math.round(atr20 * 0.15); // ~15% of ATR(20)
     const fiveMapRot = {};
     for (const b of bars) {
       const bk = Math.floor(b.et_min / 5) * 5;
@@ -509,8 +675,8 @@ router.get('/live-session-context/:date', async (req, res) => {
     const fbRot = Object.values(fiveMapRot);
     let rots = 0, lastExt = fbRot[0]?.close || 0, lastType = 'LOW';
     for (const b of fbRot) {
-      if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= 65) { rots++; lastExt = b.close; lastType = 'HIGH'; }
-      if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= 65) { rots++; lastExt = b.close; lastType = 'LOW'; }
+      if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= rotThreshold) { rots++; lastExt = b.close; lastType = 'HIGH'; }
+      if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= rotThreshold) { rots++; lastExt = b.close; lastType = 'LOW'; }
       if (b.close > lastExt && lastType === 'HIGH') lastExt = b.close;
       if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
     }
@@ -530,10 +696,17 @@ router.get('/live-session-context/:date', async (req, res) => {
     const vol2 = bars.slice(half).reduce((s, b) => s + Number(b.vol || 0), 0) / ((bars.length - half) || 1);
     const volTrend = vol2 > vol1 * 1.2 ? 'INCREASING' : vol2 < vol1 * 0.8 ? 'DECLINING' : 'STABLE';
 
-    // Session character assessment
+    // Session character assessment — σ-based CHOP thresholds from trailing rotation distribution
+    const trailingRots = await getTrailingRotations(date, 90);
+    const rotStats = trailingRots.length >= MIN_SAMPLES ? rollingStats(trailingRots) : { mean: 10, std: 5 };
+    const chopThreshold = Math.round(rotStats.mean + rotStats.std);       // +1σ = CHOP
+    const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std); // +2σ = EXTREME_CHOP
+    const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
+
     let sessionChar = 'DEVELOPING';
     if (etMin >= 630) {
-      if (rots >= 20) sessionChar = 'CHOP';
+      if (rots >= extremeChopThreshold) sessionChar = 'EXTREME_CHOP';
+      else if (rots >= chopThreshold) sessionChar = 'CHOP';
       else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct > 70) sessionChar = 'TREND_UP';
       else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct < 30) sessionChar = 'TREND_DOWN';
       else if (ibRange && ibRange < 50) sessionChar = 'TIGHT_IB';
@@ -581,16 +754,73 @@ router.get('/live-session-context/:date', async (req, res) => {
     const m1VA = await computeVAForDate('1 month');
     const m3VA = await computeVAForDate('3 months');
 
+    // Dynamic proximity bands — scale with rolling 10-session median IB range.
+    // Tight: intraday + session levels. Medium: prior-day midpoints. Wide: multi-week composites.
+    const ibRangeCtx = await query(`
+      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (ib_high - ib_low)) as median_ib
+      FROM (
+        SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
+        FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date < $1
+          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        GROUP BY ts::date ORDER BY ts::date DESC LIMIT 10
+      ) t
+    `, [date]).catch(() => ({ rows: [{}] }));
+    const medianIB = ibRangeCtx.rows[0]?.median_ib ?? 80;
+    const nearProxTight = Math.round(Math.max(20, Math.min(55, medianIB * 0.38)));
+    const nearProxMed   = Math.round(Math.max(25, Math.min(65, medianIB * 0.46)));
+    const nearProxWide  = Math.round(Math.max(30, Math.min(80, medianIB * 0.55)));
+
     const nearLevels = [];
-    if (pd?.poc && Math.abs(price - pd.poc) < 40) nearLevels.push({ name: '2D POC', price: Math.round(pd.poc), dist: Math.round(price - pd.poc) });
-    if (pd?.vah && Math.abs(price - pd.vah) < 40) nearLevels.push({ name: '2D VAH', price: Math.round(pd.vah), dist: Math.round(price - pd.vah) });
-    if (pd?.val && Math.abs(price - pd.val) < 40) nearLevels.push({ name: '2D VAL', price: Math.round(pd.val), dist: Math.round(price - pd.val) });
-    if (orH && Math.abs(price - orH) < 40) nearLevels.push({ name: 'OR High', price: Math.round(orH), dist: Math.round(price - orH) });
-    if (orL && Math.abs(price - orL) < 40) nearLevels.push({ name: 'OR Low', price: Math.round(orL), dist: Math.round(price - orL) });
-    if (m1VA.vah && Math.abs(price - m1VA.vah) < 60) nearLevels.push({ name: '1M VAH', price: Math.round(m1VA.vah), dist: Math.round(price - m1VA.vah) });
-    if (m1VA.val && Math.abs(price - m1VA.val) < 60) nearLevels.push({ name: '1M VAL', price: Math.round(m1VA.val), dist: Math.round(price - m1VA.val) });
-    if (m3VA.vah && Math.abs(price - m3VA.vah) < 60) nearLevels.push({ name: '3M VAH', price: Math.round(m3VA.vah), dist: Math.round(price - m3VA.vah) });
-    if (m3VA.val && Math.abs(price - m3VA.val) < 60) nearLevels.push({ name: '3M VAL', price: Math.round(m3VA.val), dist: Math.round(price - m3VA.val) });
+    if (pd?.poc && Math.abs(price - pd.poc) < nearProxTight) nearLevels.push({ name: '2D POC', price: Math.round(pd.poc), dist: Math.round(price - pd.poc) });
+    if (pd?.vah && Math.abs(price - pd.vah) < nearProxTight) nearLevels.push({ name: '2D VAH', price: Math.round(pd.vah), dist: Math.round(price - pd.vah) });
+    if (pd?.val && Math.abs(price - pd.val) < nearProxTight) nearLevels.push({ name: '2D VAL', price: Math.round(pd.val), dist: Math.round(price - pd.val) });
+    if (orH && Math.abs(price - orH) < nearProxTight) nearLevels.push({ name: 'OR High', price: Math.round(orH), dist: Math.round(price - orH) });
+    if (orL && Math.abs(price - orL) < nearProxTight) nearLevels.push({ name: 'OR Low', price: Math.round(orL), dist: Math.round(price - orL) });
+    // Today's midpoints (scalp levels)
+    const orMid = orH && orL ? Math.round((orH + orL) / 2) : null;
+    const ibMid = ibH && ibL ? Math.round((ibH + ibL) / 2) : null;
+    if (orMid && Math.abs(price - orMid) < nearProxTight) nearLevels.push({ name: 'OR MID', price: orMid, dist: Math.round(price - orMid), ev: 4 });
+    if (ibMid && Math.abs(price - ibMid) < nearProxTight) nearLevels.push({ name: 'IB MID', price: ibMid, dist: Math.round(price - ibMid), ev: 4 });
+    // Prior day midpoints (all positive EV from audit)
+    const pdIbRes = await query(`
+      SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (
+        SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+      ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({ rows: [{}] }));
+    const pdIbMid = pdIbRes.rows[0]?.ibh ? Math.round((pdIbRes.rows[0].ibh + pdIbRes.rows[0].ibl) / 2) : null;
+    const pdOrRes = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({ rows: [{}] }));
+    const pdOrMid = pdOrRes.rows[0]?.or_high ? Math.round((pdOrRes.rows[0].or_high + pdOrRes.rows[0].or_low) / 2) : null;
+    const pdSessMid = pd?.hi && pd?.lo ? Math.round((pd.hi + pd.lo) / 2) : null;
+    if (pdIbMid && Math.abs(price - pdIbMid) < nearProxMed) nearLevels.push({ name: 'PD IB MID', price: pdIbMid, dist: Math.round(price - pdIbMid), ev: 18 });
+    if (pdOrMid && Math.abs(price - pdOrMid) < nearProxMed) nearLevels.push({ name: 'PD OR MID', price: pdOrMid, dist: Math.round(price - pdOrMid), ev: 19 });
+    if (pdSessMid && Math.abs(price - pdSessMid) < nearProxMed) nearLevels.push({ name: 'PD SESSION MID', price: pdSessMid, dist: Math.round(price - pdSessMid), ev: 19 });
+    if (m1VA.vah && Math.abs(price - m1VA.vah) < nearProxWide) nearLevels.push({ name: '1M VAH', price: Math.round(m1VA.vah), dist: Math.round(price - m1VA.vah) });
+    if (m1VA.val && Math.abs(price - m1VA.val) < nearProxWide) nearLevels.push({ name: '1M VAL', price: Math.round(m1VA.val), dist: Math.round(price - m1VA.val) });
+    if (m3VA.vah && Math.abs(price - m3VA.vah) < nearProxWide) nearLevels.push({ name: '3M VAH', price: Math.round(m3VA.vah), dist: Math.round(price - m3VA.vah) });
+    if (m3VA.val && Math.abs(price - m3VA.val) < nearProxWide) nearLevels.push({ name: '3M VAL', price: Math.round(m3VA.val), dist: Math.round(price - m3VA.val) });
+
+    // Rolling composite levels (top performers from audit)
+    const ib10Ctx = await query(`
+      SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
+        SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND ts::date >= $1::date - 14 AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        GROUP BY ts::date ORDER BY d DESC LIMIT 10
+      ) t`, [date]).catch(() => ({ rows: [{}] }));
+    const ib10Mid = ib10Ctx.rows[0]?.hi ? Math.round((ib10Ctx.rows[0].hi + ib10Ctx.rows[0].lo) / 2) : null;
+    if (ib10Mid && Math.abs(price - ib10Mid) < nearProxWide) nearLevels.push({ name: '10D IB MID', price: ib10Mid, dist: Math.round(price - ib10Mid), ev: 26 });
+
+    const or5Ctx = await query(`
+      SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
+        SELECT or_high::float as orh, or_low::float as orl
+        FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
+        ORDER BY trade_date DESC LIMIT 5
+      ) t`, [date]).catch(() => ({ rows: [{}] }));
+    const or5Mid = or5Ctx.rows[0]?.hi ? Math.round((or5Ctx.rows[0].hi + or5Ctx.rows[0].lo) / 2) : null;
+    if (or5Mid && Math.abs(price - or5Mid) < nearProxWide) nearLevels.push({ name: '5D OR MID', price: or5Mid, dist: Math.round(price - or5Mid), ev: 22 });
 
     // 24hr VWAP (Globex session: 6 PM prior day → 5 PM today)
     const globexStart = `${date}T00:00:00`; // bars stored in ET, midnight is within session
@@ -606,8 +836,81 @@ router.get('/live-session-context/:date', async (req, res) => {
       for (const b of allDayBars.rows) { pv24 += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v24 += Number(b.vol || 1); }
       vwap24 = Math.round(pv24 / v24);
       vwap24Dist = Math.round(price - vwap24);
-      vwap24Sigma = Math.round((price - vwap24) / 130 * 10) / 10; // ~130pt StdDev estimate for 24hr
+      // Rolling 30-day std of close-vs-24hr-VWAP distances (no static 130pt)
+      const trailing24hrDists = await getTrailing24hrVwapDists(date, 30);
+      const vwap24Std = trailing24hrDists.length >= MIN_SAMPLES
+        ? rollingStats(trailing24hrDists).std
+        : 130; // fallback if insufficient data
+      vwap24Sigma = vwap24Std > 0 ? Math.round((price - vwap24) / vwap24Std * 10) / 10 : 0;
     }
+
+    // Cumulative delta — estimate buy/sell pressure from bar direction
+    let cumDelta = 0;
+    let buyVol = 0, sellVol = 0;
+    for (const b of bars) {
+      const bRange = b.high - b.low;
+      const bodyPct = bRange > 0 ? Math.abs(b.close - b.open) / bRange : 0;
+      const dir = b.close >= b.open ? 1 : -1;
+      const delta = dir * Number(b.vol || 0) * Math.max(bodyPct, 0.3);
+      cumDelta += delta;
+      if (dir > 0) buyVol += Number(b.vol || 0); else sellVol += Number(b.vol || 0);
+    }
+    const buySellRatio = sellVol > 0 ? Math.round(buyVol / sellVol * 100) / 100 : 1;
+    // Recent delta trend (last 15 bars vs prior 15)
+    const recentD = bars.slice(-15);
+    const priorD = bars.slice(-30, -15);
+    let recentDelta = 0, priorDelta = 0;
+    for (const b of recentD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; recentDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+    for (const b of priorD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; priorDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+    // Threshold from today's own non-overlapping 15-bar window-delta distribution (self-referential, no lookahead)
+    const sessionWindowDeltas = [];
+    for (let i = 0; i + 15 <= bars.length; i += 15) {
+      const w = bars.slice(i, i + 15);
+      let wd = 0;
+      for (const b of w) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; wd += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+      sessionWindowDeltas.push(wd);
+    }
+    const deltaWindowStd = sessionWindowDeltas.length >= 4 ? rollingStats(sessionWindowDeltas).std : null;
+    let deltaTrend = 'FLAT';
+    if (priorD.length >= 15 && deltaWindowStd > 0) {
+      if (recentDelta < -deltaWindowStd) deltaTrend = 'SELLING';
+      else if (recentDelta > deltaWindowStd) deltaTrend = 'BUYING';
+      else if (recentDelta < priorDelta - deltaWindowStd) deltaTrend = 'WEAKENING';
+      else if (recentDelta > priorDelta + deltaWindowStd) deltaTrend = 'STRENGTHENING';
+    }
+
+    // Relative volume — cumulative session volume vs time-of-day baseline
+    const cumSessionVol = bars.reduce((s, b) => s + Number(b.vol || 0), 0);
+    const volBaselineRes = await query(
+      `SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+              AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
+       FROM price_bars_primary WHERE symbol='NQ'
+       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $1
+       AND ts::date >= $2::date - 90 AND ts::date < $2
+       GROUP BY et_min`, [etMin, date]).catch(() => ({ rows: [] }));
+    const expectedCumVol = volBaselineRes.rows.reduce((s, r) => s + r.avg_vol, 0);
+    const expectedCumStd = Math.sqrt(volBaselineRes.rows.reduce((s, r) => s + (r.std_vol || 0) ** 2, 0));
+    const relVolRatio = expectedCumVol > 0 ? cumSessionVol / expectedCumVol : 1;
+    const relVolSigma = expectedCumStd > 0 ? (cumSessionVol - expectedCumVol) / expectedCumStd : 0;
+
+    // Last-bar volume spike (time-of-day adjusted)
+    const lastBarVol = Number(bars[bars.length - 1].vol || 0);
+    const lastBarBL = volBaselineRes.rows.find(r => r.et_min === etMin);
+    const lastBarSigma = lastBarBL && lastBarBL.std_vol > 0 ? (lastBarVol - lastBarBL.avg_vol) / lastBarBL.std_vol : null;
+    const lastBarDir = bars[bars.length - 1].close >= bars[bars.length - 1].open ? 'buying' : 'selling';
+
+    // Cumulative delta σ — from trailing 30-day daily cumDelta distribution
+    const trailingDeltas = await getTrailingCumDeltas(date, 30);
+    const deltaSigma = trailingDeltas.length >= MIN_SAMPLES
+      ? Math.round(zScore(cumDelta, trailingDeltas) * 10) / 10
+      : null;
+
+    // RVol label from σ (no static 1.6x/1.9x/0.8x thresholds)
+    const relVolLabel = relVolSigma >= 2 ? 'Extreme' : relVolSigma >= 1 ? 'Elevated' : relVolSigma <= -1 ? 'Low' : 'Normal';
+    // CumDelta label from σ
+    const deltaLabel = deltaSigma != null
+      ? (Math.abs(deltaSigma) >= 2 ? 'Strong' : Math.abs(deltaSigma) >= 1 ? 'Moderate' : 'Normal')
+      : 'Normal';
 
     res.json({
       price: Math.round(price), openPrice: Math.round(openPrice),
@@ -616,10 +919,32 @@ router.get('/live-session-context/:date', async (req, res) => {
       vwap: Math.round(vwap), vwapDist: Math.round(price - vwap),
       vwap24, vwap24Dist, vwap24Sigma,
       poc, pocDist: Math.round(price - poc),
+      // Relative volume context — σ from time-of-day baseline
+      relVol: { ratio: Math.round(relVolRatio * 100) / 100, sigma: Math.round(relVolSigma * 10) / 10, cumVol: cumSessionVol, expectedVol: Math.round(expectedCumVol), label: relVolLabel },
+      lastBarVol: { vol: lastBarVol, sigma: lastBarSigma != null ? Math.round(lastBarSigma * 10) / 10 : null, dir: lastBarDir },
+      // Cumulative delta context — σ from trailing 30-day daily distribution
+      delta: { cumDelta: Math.round(cumDelta), sigma: deltaSigma, buySellRatio, buyVol: Math.round(buyVol), sellVol: Math.round(sellVol), trend: deltaTrend, label: deltaLabel },
+      // Delta flow — 15-min phase breakdown for visual bar chart
+      deltaFlow: (() => {
+        const phases = [];
+        for (let s = 570; s < 960; s += 15) {
+          const pb = bars.filter(x => x.et_min >= s && x.et_min < s + 15);
+          if (!pb.length) continue;
+          let pd = 0;
+          for (const bar of pb) {
+            const r = bar.high - bar.low;
+            const bp = r > 0 ? Math.abs(bar.close - bar.open) / r : 0;
+            pd += (bar.close >= bar.open ? 1 : -1) * Number(bar.vol || 0) * Math.max(bp, 0.3);
+          }
+          const h = Math.floor(s / 60), m = s % 60;
+          phases.push({ time: `${h}:${String(m).padStart(2,'0')}`, delta: Math.round(pd), close: Math.round(pb[pb.length-1].close) });
+        }
+        return phases;
+      })(),
       orH: orH ? Math.round(orH) : null, orL: orL ? Math.round(orL) : null,
       ibH: ibH ? Math.round(ibH) : null, ibL: ibL ? Math.round(ibL) : null,
       ibRange, ibBroken,
-      rots, microTrend, volTrend, sessionChar, etMin,
+      rots, rotSigma, rotThreshold, microTrend, volTrend, sessionChar, etMin,
       aUp: acd.a_up_fired, aDown: acd.a_down_fired, cUp: acd.c_up_confirmed, cDown: acd.c_down_confirmed,
       activeSetups: activeSetups.map(s => s.setup_type),
       resolvedSetups: resolvedSetups.map(s => ({ type: s.setup_type, result: s.resolution, pnl: s.pnl })),
@@ -662,8 +987,16 @@ router.get('/live-session-context/:date', async (req, res) => {
         let wPV=0,wV=0;
         for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
         const wVwap = wPV/wV;
-        // Rolling 30-day weekly VWAP StdDev (fallback to fixed 251)
-        return Math.round((price - wVwap) / 251 * 10) / 10;
+        // Rolling weekly VWAP StdDev from trailing 12-week distribution (no static 251pt)
+        const trailingWkDists = await getTrailingWeeklyVwapDists(date, 12);
+        const wkStd = trailingWkDists.length >= 8
+          ? rollingStats(trailingWkDists).std
+          : 251; // fallback if insufficient data
+        return wkStd > 0 ? Math.round((price - wVwap) / wkStd * 10) / 10 : 0;
+      })(),
+      weeklyVwapStd: await (async () => {
+        const trailingWkDists = await getTrailingWeeklyVwapDists(date, 12);
+        return trailingWkDists.length >= 8 ? Math.round(rollingStats(trailingWkDists).std) : 251;
       })(),
     });
   } catch (err) {
@@ -693,7 +1026,8 @@ router.get('/trade-alerts/:date', async (req, res) => {
     for (const bar of b) { cumPV += (bar.high + bar.low + bar.close) / 3 * Number(bar.vol || 1); cumV += Number(bar.vol || 1); }
     const vwap = cumPV / cumV;
     const sessHi = Math.max(...b.map(x => x.high)), sessLo = Math.min(...b.map(x => x.low));
-    const vwapThreshold = Math.max(50, Math.round((sessHi - sessLo) * 0.25));
+    const alertsVwapStd = await getTrailingVwapStd(date, 30);
+    const vwapThreshold = alertsVwapStd.threshold;
 
     const onRes = await query(
       `SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
@@ -708,7 +1042,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
 
     if (pd?.poc && Math.abs(price - pd.poc) <= 10) {
       const dir = price > pd.poc ? 'SHORT' : 'LONG';
-      alerts.push({ id: 'poc', type: 'POC_MAGNET', msg: `POC MAGNET: ${Math.round(price)} at PD POC ${Math.round(pd.poc)}. Fade ${dir}. 64% WR, 20pt target, 25pt stop.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
+      alerts.push({ id: 'poc', type: 'POC_MAGNET', msg: `POC MAGNET: ${Math.round(price)} at PD POC ${Math.round(pd.poc)}. Fade ${dir}. 66% WR, 20pt target, 25pt stop. [Backtested N=402, 2022–2026, +10% vs baseline]`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
     }
 
     // Daily VWAP σ alert
@@ -726,11 +1060,24 @@ router.get('/trade-alerts/:date', async (req, res) => {
     }
 
     // 24hr VWAP σ alert (Globex session)
-    if (allDayBars.rows.length > 50 && vwap24) {
-      const sigma24 = (price - vwap24) / 130;
+    const globexBars = await query(
+      `SELECT high::float, low::float, close::float, volume::bigint as vol
+       FROM price_bars_primary WHERE symbol='NQ' AND (
+         (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
+         (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
+       ) ORDER BY ts`, [date]).catch(() => ({ rows: [] }));
+    if (globexBars.rows.length > 50) {
+      let pv24 = 0, v24 = 0;
+      for (const gb of globexBars.rows) { pv24 += (gb.high + gb.low + gb.close) / 3 * Number(gb.vol || 1); v24 += Number(gb.vol || 1); }
+      const vwap24hr = pv24 / v24;
+      // Rolling 30-day std of close-vs-24hr-VWAP distances (no static 130pt)
+      const trailing24hrDistsAlerts = await getTrailing24hrVwapDists(date, 30);
+      const vwap24StdAlerts = trailing24hrDistsAlerts.length >= MIN_SAMPLES
+        ? rollingStats(trailing24hrDistsAlerts).std : 130;
+      const sigma24 = vwap24StdAlerts > 0 ? (price - vwap24hr) / vwap24StdAlerts : 0;
       if (Math.abs(sigma24) >= 1.5) {
         const dir = sigma24 > 0 ? 'SHORT' : 'LONG';
-        alerts.push({ id: 'vwap24', type: '24HR_VWAP', msg: `24HR VWAP: ${sigma24 > 0 ? '+' : ''}${sigma24.toFixed(1)}σ (${Math.round(Math.abs(price - vwap24))}pt). Fade ${dir} toward ${vwap24}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
+        alerts.push({ id: 'vwap24', type: '24HR_VWAP', msg: `24HR VWAP: ${sigma24 > 0 ? '+' : ''}${sigma24.toFixed(1)}σ (${Math.round(Math.abs(price - vwap24hr))}pt). Fade ${dir} toward ${Math.round(vwap24hr)}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
       }
     }
 
@@ -743,10 +1090,14 @@ router.get('/trade-alerts/:date', async (req, res) => {
       let wPV = 0, wV = 0;
       for (const wb of weekBarsQ.rows) { wPV += (wb.high + wb.low + wb.close) / 3 * Number(wb.vol || 1); wV += Number(wb.vol || 1); }
       const weeklyVwap = wPV / wV;
-      const weeklySigma = (price - weeklyVwap) / 251;
+      // Rolling weekly VWAP StdDev from trailing 12-week distribution (no static 251pt)
+      const trailingWkDistsAlerts = await getTrailingWeeklyVwapDists(date, 12);
+      const wkStdAlerts = trailingWkDistsAlerts.length >= 8
+        ? rollingStats(trailingWkDistsAlerts).std : 251;
+      const weeklySigma = wkStdAlerts > 0 ? (price - weeklyVwap) / wkStdAlerts : 0;
       if (Math.abs(weeklySigma) >= 1.5) {
         const dir = weeklySigma > 0 ? 'SHORT' : 'LONG';
-        alerts.push({ id: 'vwapWeekly', type: 'WEEKLY_VWAP', msg: `WEEKLY VWAP: ${weeklySigma > 0 ? '+' : ''}${weeklySigma.toFixed(1)}σ (${Math.round(Math.abs(price - weeklyVwap))}pt). ${Math.abs(weeklySigma) >= 2 ? '91% next-day reversion at 2σ. ' : ''}Fade ${dir} toward ${Math.round(weeklyVwap)}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
+        alerts.push({ id: 'vwapWeekly', type: 'WEEKLY_VWAP', msg: `WEEKLY VWAP: ${weeklySigma > 0 ? '+' : ''}${weeklySigma.toFixed(1)}σ (${Math.round(Math.abs(price - weeklyVwap))}pt). ${Math.abs(weeklySigma) >= 2 ? 'Rare event (N<20 in 4yr history) — no verified WR. ' : ''}Structural context: extended from weekly VWAP. Fade ${dir} toward ${Math.round(weeklyVwap)}.`, time: timeStr, color: dir === 'LONG' ? '#4ade80' : '#ef4444' });
       }
     }
 
@@ -774,23 +1125,174 @@ router.get('/trade-alerts/:date', async (req, res) => {
       }
     }
 
-    // Volume spike detection at key levels
-    const last20 = b.slice(-20);
-    const avgVol = last20.reduce((s, bar) => s + Number(bar.vol || 0), 0) / last20.length;
-    const lastBar = b[b.length - 1];
-    const lastVol = Number(lastBar.vol || 0);
-    const volRatio = avgVol > 0 ? lastVol / avgVol : 0;
+    // Volume spike detection — time-of-day σ baseline
+    const orBars = b.filter(x => x.et_min >= 570 && x.et_min < 575);
+    const orH = orBars.length ? Math.max(...orBars.map(x => x.high)) : null;
+    const orL = orBars.length ? Math.min(...orBars.map(x => x.low)) : null;
+    const ibBarsA = b.filter(x => x.et_min >= 570 && x.et_min < 630);
+    const ibH = ibBarsA.length ? Math.max(...ibBarsA.map(x => x.high)) : null;
+    const ibL = ibBarsA.length ? Math.min(...ibBarsA.map(x => x.low)) : null;
 
-    if (volRatio >= 2.5) {
+    // Get time-of-day volume baseline for recent bars
+    const recentBars = b.slice(-5);
+    const todBaselineRes = await query(
+      `SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+              AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
+       FROM price_bars_primary WHERE symbol='NQ'
+       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN $1 AND $2
+       AND ts::date >= $3::date - 90 AND ts::date < $3
+       GROUP BY et_min`, [
+      Math.min(...recentBars.map(x => x.et_min)),
+      Math.max(...recentBars.map(x => x.et_min)),
+      date
+    ]).catch(() => ({ rows: [] }));
+    const volBaseline = {};
+    for (const r of todBaselineRes.rows) volBaseline[r.et_min] = { avg: r.avg_vol, std: r.std_vol };
+
+    // Check last 5 bars for volume spikes vs time-of-day baseline
+    let maxSigma = 0, spikeBar = null;
+    for (const bar of recentBars) {
+      const bl = volBaseline[bar.et_min];
+      if (!bl || bl.std <= 0) continue;
+      const sigma = (Number(bar.vol) - bl.avg) / bl.std;
+      if (sigma > maxSigma) { maxSigma = sigma; spikeBar = bar; }
+    }
+
+    if (maxSigma >= 1.0 && spikeBar) {
+      const bl = volBaseline[spikeBar.et_min];
+      const ratio = Number(spikeBar.vol) / bl.avg;
       const nearLevel = [pd?.poc, pd?.vah, pd?.val, orH, orL, ibH, ibL].filter(Boolean)
-        .find(l => Math.abs(price - l) <= 15);
-      if (nearLevel) {
+        .find(l => Math.abs(price - l) <= 20);
+      const levelNote = nearLevel ? ` at ${Math.round(nearLevel)}` : '';
+      const sigLabel = maxSigma >= 2.0 ? 'EXTREME' : 'ELEVATED';
+      const barDir = spikeBar.close > spikeBar.open ? 'buying' : 'selling';
+      alerts.push({
+        id: 'volSpike',
+        type: 'VOLUME_SPIKE',
+        msg: `VOL ${sigLabel}: +${maxSigma.toFixed(1)}σ above normal (${ratio.toFixed(1)}x avg for this time)${levelNote}. ${barDir.toUpperCase()} pressure.`,
+        time: timeStr,
+        color: barDir === 'buying' ? '#4ade80' : '#ef4444'
+      });
+    }
+
+    // Level exhaustion/absorption detection — delta divergence at key levels
+    // Dynamic proximity: use 5% of developing range (median distance to level ~46pt on 400pt range days)
+    // Compute rolling levels for exhaustion detection
+    const ib10Alert = await query(`
+      SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
+        SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND ts::date >= $1::date - 14 AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        GROUP BY ts::date ORDER BY d DESC LIMIT 10
+      ) t`, [date]).catch(() => ({ rows: [{}] }));
+    const ib10MidAlert = ib10Alert.rows[0]?.hi ? (ib10Alert.rows[0].hi + ib10Alert.rows[0].lo) / 2 : null;
+
+    // Midpoint levels (today's OR/IB mid + prior-day OR/IB/session mid)
+    const orMid = orH && orL ? (orH + orL) / 2 : null;
+    const ibMid = ibH && ibL ? (ibH + ibL) / 2 : null;
+    const pdIbResAlert = await query(`
+      SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (
+        SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+      ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({ rows: [{}] }));
+    const pdIbMid = pdIbResAlert.rows[0]?.ibh ? (pdIbResAlert.rows[0].ibh + pdIbResAlert.rows[0].ibl) / 2 : null;
+    const pdOrResAlert = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({ rows: [{}] }));
+    const pdOrMid = pdOrResAlert.rows[0]?.or_high ? (pdOrResAlert.rows[0].or_high + pdOrResAlert.rows[0].or_low) / 2 : null;
+    const pdSessMid = pd?.hi && pd?.lo ? (pd.hi + pd.lo) / 2 : null;
+
+    const levelDefs = [
+      { name: 'PD POC', val: pd?.poc, fadeDir: null },
+      { name: 'PD VAH', val: pd?.vah, fadeDir: 'SHORT' },
+      { name: 'PD VAL', val: pd?.val, fadeDir: 'LONG' },
+      { name: 'OR High', val: orH, fadeDir: 'SHORT' },
+      { name: 'OR Low', val: orL, fadeDir: 'LONG' },
+      { name: 'OR MID', val: orMid, fadeDir: null },
+      { name: 'IB High', val: ibH, fadeDir: 'SHORT' },
+      { name: 'IB Low', val: ibL, fadeDir: 'LONG' },
+      { name: 'IB MID', val: ibMid, fadeDir: null },
+      { name: 'PD IB MID', val: pdIbMid, fadeDir: null },
+      { name: 'PD OR MID', val: pdOrMid, fadeDir: null },
+      { name: 'PD SESSION MID', val: pdSessMid, fadeDir: null },
+      { name: '10D IB MID', val: ib10MidAlert, fadeDir: null },
+    ].filter(l => l.val != null);
+    const devRange = sessHi - sessLo;
+    const proximityThreshold = Math.max(30, Math.round(devRange * 0.12));
+
+    // Compute divergence stretch: 30-bar price move vs 30-bar delta move
+    if (b.length >= 30) {
+      const recent30 = b.slice(-30);
+      const priceMove30 = recent30[recent30.length-1].close - recent30[0].close;
+      let delta30 = 0;
+      for (const bar of recent30) {
+        const rng = bar.high - bar.low;
+        const bp = rng > 0 ? Math.abs(bar.close - bar.open) / rng : 0;
+        delta30 += (bar.close >= bar.open ? 1 : -1) * Number(bar.vol || 0) * Math.max(bp, 0.3);
+      }
+      const stretchPct = devRange > 0 ? Math.abs(priceMove30) / devRange * 100 : 0;
+      const priceFalling = priceMove30 < -10;
+      const priceRising = priceMove30 > 10;
+      const deltaBuying = delta30 > 500;
+      const deltaSelling = delta30 < -500;
+      const bullishDivergence = priceFalling && deltaBuying;
+      const bearishDivergence = priceRising && deltaSelling;
+
+      // Collect nearby levels with divergence, then emit ONE grouped alert
+      const nearBull = [], nearBear = [];
+      for (const lv of levelDefs) {
+        if (Math.abs(price - lv.val) > proximityThreshold) continue;
+        if (bullishDivergence && (lv.fadeDir === 'LONG' || lv.fadeDir === null)) nearBull.push(lv);
+        if (bearishDivergence && (lv.fadeDir === 'SHORT' || lv.fadeDir === null)) nearBear.push(lv);
+      }
+
+      if (nearBull.length > 0) {
+        const names = nearBull.map(l => `${l.name} (${Math.round(l.val)})`).join(' + ');
+        const isTriple = nearBull.length >= 3;
+        const isDouble = nearBull.length >= 2;
+        const prefix = isTriple ? 'TRIPLE CONFLUENCE' : isDouble ? 'DOUBLE CONFLUENCE' : (stretchPct >= 10 ? 'STRONG EXHAUSTION' : 'EXHAUSTION');
+        const wrNote = isTriple ? '65% WR at triple confluence (N=112)' : stretchPct >= 10 ? '62% WR at this stretch (N=437)' : '59% WR (N=907)';
         alerts.push({
-          id: 'volSpike',
-          type: 'VOLUME_SPIKE',
-          msg: `VOL SPIKE ${volRatio.toFixed(1)}x avg at ${Math.round(nearLevel)}. ${price > nearLevel ? 'Testing from above' : 'Testing from below'}. Watch for reversal or breakout confirmation.`,
+          id: 'exhaust-grouped',
+          type: isTriple ? 'TRIPLE_CONFLUENCE' : isDouble ? 'DOUBLE_CONFLUENCE' : 'LEVEL_EXHAUSTION',
+          msg: `${prefix}: Sellers exhausting at ${names}. Stretch ${stretchPct.toFixed(0)}% of range. FADE LONG. ${wrNote}.`,
           time: timeStr,
-          color: '#f59e0b'
+          color: isTriple ? '#22c55e' : '#4ade80',
+        });
+      }
+
+      if (nearBear.length > 0) {
+        const names = nearBear.map(l => `${l.name} (${Math.round(l.val)})`).join(' + ');
+        const isTriple = nearBear.length >= 3;
+        const isDouble = nearBear.length >= 2;
+        const prefix = isTriple ? 'TRIPLE CONFLUENCE' : isDouble ? 'DOUBLE CONFLUENCE' : (stretchPct >= 10 ? 'STRONG ABSORPTION' : 'ABSORPTION');
+        const wrNote = isTriple ? '65% WR at triple confluence (N=112)' : stretchPct >= 10 ? '62% WR at this stretch (N=437)' : '59% WR (N=907)';
+        alerts.push({
+          id: 'absorb-grouped',
+          type: isTriple ? 'TRIPLE_CONFLUENCE' : isDouble ? 'DOUBLE_CONFLUENCE' : 'LEVEL_ABSORPTION',
+          msg: `${prefix}: Buyers exhausting at ${names}. Stretch ${stretchPct.toFixed(0)}% of range. FADE SHORT. ${wrNote}.`,
+          time: timeStr,
+          color: isTriple ? '#dc2626' : '#ef4444',
+        });
+      }
+
+      // Standalone divergence alert — fires when stretch is significant, no level required
+      if (stretchPct >= 15 && bullishDivergence) {
+        alerts.push({
+          id: 'divBullish',
+          type: 'DELTA_DIVERGENCE',
+          msg: `BUYERS ABSORBING: Price down ${Math.abs(Math.round(priceMove30))}pt but delta rising. Stretch ${stretchPct.toFixed(0)}% of range. Rally losing steam — watch for reversal UP.`,
+          time: timeStr,
+          color: '#4ade80',
+        });
+      }
+      if (stretchPct >= 15 && bearishDivergence) {
+        alerts.push({
+          id: 'divBearish',
+          type: 'DELTA_DIVERGENCE',
+          msg: `SELLERS DISTRIBUTING: Price up ${Math.round(priceMove30)}pt but delta falling. Stretch ${stretchPct.toFixed(0)}% of range. Rally unsupported — watch for reversal DOWN.`,
+          time: timeStr,
+          color: '#ef4444',
         });
       }
     }
@@ -850,7 +1352,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
             const prIdx = rec.indexOf(prLo);
             const prF = fArr.slice(Math.max(0, ci - 15), ci);
             if (pp <= prLo * 1.015 && fArr[ci] > (prF[prIdx] || 0) + 0.1) {
-              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BULLISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 97% bounce 100pt+ within 14hr. Wait for intraday confirmation.`, time: timeStr, color: '#4ade80' });
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BULLISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 89% bounce 100pt+ (N=91, +10% vs baseline). Wait for intraday confirmation.`, time: timeStr, color: '#4ade80' });
               break;
             }
           }
@@ -859,7 +1361,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
             const prIdx = rec.indexOf(prHi);
             const prF = fArr.slice(Math.max(0, ci - 15), ci);
             if (pp >= prHi * 0.985 && fArr[ci] < (prF[prIdx] || 0) - 0.1) {
-              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BEARISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 74% drop 100pt+ within 22hr. Wait for intraday confirmation.`, time: timeStr, color: '#ef4444' });
+              alerts.push({ id: 'div4hr', type: '4HR_DIVERGENCE', msg: `4HR BEARISH DIVERGENCE: Fisher ${fArr[ci].toFixed(2)} diverging at ${Math.round(pp)}. 74.6% drop 100pt+ but baseline is 75% — no directional edge. Structural context only.`, time: timeStr, color: '#ef4444' });
               break;
             }
           }
@@ -867,7 +1369,205 @@ router.get('/trade-alerts/:date', async (req, res) => {
       }
     }
 
+    // Include fired setups — ACTIVE + recently resolved (within 5 min) so fast setups aren't invisible
+    // Consolidate sequential setups (OPEN_DRIVE + IB_BEARISH = confirmation, not separate alerts)
+    const setupsRes = await query(
+      `SELECT id, setup_type, fired_at, expires_at, status, resolution,
+              entry_zone_low::float, stop_level::float, t1_level::float, t1_label,
+              historical_win_rate::float, historical_sessions, updated_at
+       FROM active_setups WHERE trade_date=$1 AND (
+         status='ACTIVE' OR
+         (status='RESOLVED' AND updated_at >= NOW() - INTERVAL '5 minutes')
+       )
+       ORDER BY fired_at`, [date]).catch(() => ({ rows: [] }));
+    const activeTypes = setupsRes.rows.map(s => s.setup_type);
+    const shortChain = ['OPEN_DRIVE_SHORT', 'OPEN_TEST_DRIVE_SHORT', 'IB_BEARISH'];
+    const longChain = ['OPEN_DRIVE_LONG', 'OPEN_TEST_DRIVE_LONG', 'IB_BULLISH', 'TRT_LONG'];
+    const firedShorts = shortChain.filter(t => activeTypes.includes(t));
+    const firedLongs = longChain.filter(t => activeTypes.includes(t));
+    const confirmedSetups = new Set();
+    if (firedShorts.length > 1) for (const t of firedShorts.slice(1)) confirmedSetups.add(t);
+    if (firedLongs.length > 1) for (const t of firedLongs.slice(1)) confirmedSetups.add(t);
+
+    for (const s of setupsRes.rows) {
+      const isLong = s.setup_type.includes('LONG') || s.setup_type.includes('BULLISH');
+      const dir = isLong ? 'LONG' : 'SHORT';
+      const isConfirmation = confirmedSetups.has(s.setup_type);
+      const isResolved = s.status === 'RESOLVED';
+      const wr = s.historical_win_rate != null ? `${(s.historical_win_rate * 100).toFixed(0)}% WR` : '';
+      const n = s.historical_sessions != null ? `N=${s.historical_sessions}` : '';
+      const stats = [wr, n].filter(Boolean).join(', ');
+      const entry = s.entry_zone_low != null ? Math.round(s.entry_zone_low) : '?';
+      const stop = s.stop_level != null ? Math.round(s.stop_level) : null;
+      const t1 = s.t1_level != null ? Math.round(s.t1_level) : null;
+      const levels = [`Entry ${entry}`, stop && `Stop ${stop}`, t1 && `T1 ${t1}`].filter(Boolean).join(' · ');
+      const firedTime = s.fired_at ? new Date(s.fired_at).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : '';
+      const prefix = isConfirmation ? 'CONFIRMS: ' : isResolved ? `${s.resolution === 'TARGET_HIT' ? 'WON' : 'LOST'}: ` : '';
+      alerts.push({
+        id: `setup-${s.setup_type}`,
+        type: isResolved ? (s.resolution === 'TARGET_HIT' ? 'SETUP_WON' : 'SETUP_LOST') : isConfirmation ? 'SETUP_CONFIRMED' : 'SETUP_FIRED',
+        msg: `${prefix}${s.setup_type.replace(/_/g, ' ')}: ${dir}. ${levels}. ${stats}`,
+        time: firedTime,
+        color: isResolved ? (s.resolution === 'TARGET_HIT' ? '#4ade80' : '#f87171') : isLong ? '#4ade80' : '#ef4444',
+        isSetup: true,
+      });
+    }
+
+    // Flush risk alert (score >= 3)
+    try {
+      const flushRes = await fetch(`http://localhost:${process.env.PORT || 3002}/api/morning-brief/flush-risk/${date}`);
+      const flush = await flushRes.json();
+      if (flush.score >= 3) {
+        alerts.push({
+          id: 'flushRisk',
+          type: 'FLUSH_RISK',
+          msg: `FLUSH RISK ${flush.score}/${flush.maxScore} (${flush.label}): ${flush.probability}% chance of 400pt+ move within 48hr. ${flush.triggers.map(t => t.name).join(', ')}.`,
+          time: timeStr,
+          color: flush.color,
+        });
+      }
+    } catch (_) {}
+
     res.json({ alerts, price: Math.round(price), time: timeStr });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Flush Risk Score — ALL thresholds are dynamic σ from rolling means. No static numbers.
+router.get('/flush-risk/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const LOOKBACK = 90;
+
+    // Get trailing daily OHLC for rolling stats
+    const dailyBars = await query(`
+      SELECT d, open, high, low, close, range, vol FROM (
+        SELECT ts::date::text as d,
+               (array_agg(open ORDER BY ts))[1]::float as open,
+               MAX(high)::float as high, MIN(low)::float as low,
+               (array_agg(close ORDER BY ts DESC))[1]::float as close,
+               (MAX(high) - MIN(low))::float as range,
+               SUM(volume)::float as vol
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        AND ts::date <= $1::date
+        GROUP BY ts::date ORDER BY d DESC LIMIT $2
+      ) t ORDER BY d`, [date, LOOKBACK]);
+    const days = dailyBars.rows;
+    if (days.length < 20) return res.json({ error: 'Not enough data', score: 0, triggers: [] });
+
+    const mean = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+    const std = arr => { const m = mean(arr); return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length); };
+    const zScore = (val, arr) => { const s = std(arr); return s > 0 ? (val - mean(arr)) / s : 0; };
+
+    const today = days[days.length - 1];
+    const closes = days.map(d => d.close);
+    const ranges = days.map(d => d.range);
+
+    // 1. ATR ratio z-score — ATR5/ATR20 vs its own rolling distribution
+    const atrRatios = [];
+    for (let i = 19; i < days.length; i++) {
+      const r5 = days.slice(i - 4, i + 1).reduce((s, d) => s + d.range, 0) / 5;
+      const r20 = days.slice(i - 19, i + 1).reduce((s, d) => s + d.range, 0) / 20;
+      atrRatios.push(r20 > 0 ? r5 / r20 : 1);
+    }
+    const atrRatio = atrRatios[atrRatios.length - 1];
+    const atrZ = zScore(atrRatio, atrRatios);
+    const atrTriggered = atrZ >= 1.0;
+
+    // 2. Range z-score — today's range vs rolling distribution
+    const rangeZ = zScore(today.range, ranges);
+    const rangeTriggered = rangeZ >= 1.0;
+
+    // 3. NL30 z-score — current NL30 vs its own rolling distribution
+    const nlRes = await query(`
+      SELECT trade_date::text as d, daily_score FROM acd_daily_log
+      WHERE trade_date <= $1 ORDER BY trade_date DESC LIMIT $2`, [date, LOOKBACK]);
+    const nlScores = nlRes.rows.reverse();
+    const nl30Vals = [];
+    for (let i = 29; i < nlScores.length; i++) {
+      nl30Vals.push(nlScores.slice(i - 29, i + 1).reduce((s, r) => s + r.daily_score, 0));
+    }
+    const nl30 = nl30Vals.length ? nl30Vals[nl30Vals.length - 1] : 0;
+    const nlZ = nl30Vals.length > 5 ? zScore(Math.abs(nl30), nl30Vals.map(Math.abs)) : 0;
+    const nlTriggered = nlZ >= 1.0;
+
+    // 4. Consecutive directional days z-score
+    // Compute streak length for each day in the lookback
+    const streaks = [];
+    for (let i = 1; i < days.length; i++) {
+      let streak = 0;
+      const dir = days[i].close > days[i - 1].close ? 1 : -1;
+      for (let j = i; j >= 1; j--) {
+        const d = days[j].close > days[j - 1].close ? 1 : -1;
+        if (d === dir) streak++; else break;
+      }
+      streaks.push(streak);
+    }
+    const consec = streaks[streaks.length - 1] || 0;
+    const consecZ = streaks.length > 5 ? zScore(consec, streaks) : 0;
+    const consecTriggered = consecZ >= 1.0;
+
+    // 5. Gap instability z-score — 5-day gap count vs rolling distribution
+    const gapCounts = [];
+    for (let i = 5; i < days.length; i++) {
+      let gc = 0;
+      for (let j = i - 4; j <= i; j++) {
+        if (j > 0 && Math.abs(days[j].open - days[j - 1].close) > mean(ranges) * 0.1) gc++;
+      }
+      gapCounts.push(gc);
+    }
+    const gapCount = gapCounts.length ? gapCounts[gapCounts.length - 1] : 0;
+    const gapZ = gapCounts.length > 5 ? zScore(gapCount, gapCounts) : 0;
+    const gapTriggered = gapZ >= 1.0;
+
+    // Composite score — each trigger fires at +1σ above its own rolling mean
+    const triggers = [];
+    if (atrTriggered) triggers.push({ name: 'ATR Expansion', value: `${atrRatio.toFixed(2)} (+${atrZ.toFixed(1)}σ)`, sigma: atrZ, weight: 'PRIMARY' });
+    if (rangeTriggered) triggers.push({ name: 'Range Elevated', value: `${Math.round(today.range)}pt (+${rangeZ.toFixed(1)}σ)`, sigma: rangeZ });
+    if (nlTriggered) triggers.push({ name: 'NL30 Extended', value: `${nl30} (+${nlZ.toFixed(1)}σ)`, sigma: nlZ });
+    if (consecTriggered) triggers.push({ name: 'Directional Streak', value: `${consec}d (+${consecZ.toFixed(1)}σ)`, sigma: consecZ });
+    if (gapTriggered) triggers.push({ name: 'Gap Instability', value: `${gapCount}/5d (+${gapZ.toFixed(1)}σ)`, sigma: gapZ });
+
+    const score = triggers.length;
+
+    // Composite sigma — average of triggered sigmas for probability weighting
+    const avgSigma = triggers.length > 0 ? triggers.reduce((s, t) => s + t.sigma, 0) / triggers.length : 0;
+
+    // Dynamic probability: use composite sigma to estimate flush risk
+    // Base rate ~6%. Each σ of composite roughly doubles the risk.
+    const baseProbability = 6;
+    const probability = Math.min(95, Math.round(baseProbability * Math.pow(2, avgSigma * score / 3)));
+
+    const label = score >= 5 ? 'EXTREME' : score >= 4 ? 'HIGH' : score >= 3 ? 'MODERATE-HIGH' : score >= 2 ? 'MODERATE' : 'LOW';
+    const color = score >= 4 ? '#ef4444' : score >= 3 ? '#fb923c' : score >= 2 ? '#fbbf24' : '#4ade80';
+
+    const notes = [];
+    if (atrTriggered) notes.push(`Volatility expanding at +${atrZ.toFixed(1)}σ — recent ranges accelerating above rolling average.`);
+    if (gapTriggered) notes.push(`Gap instability at +${gapZ.toFixed(1)}σ — market can't hold value overnight.`);
+    if (consecTriggered) notes.push(`${consec}-day directional streak at +${consecZ.toFixed(1)}σ — momentum building toward exhaustion.`);
+    if (nlTriggered) notes.push(`NL30 at ${nl30} (+${nlZ.toFixed(1)}σ extended) — directional pressure elevated.`);
+    if (rangeTriggered) notes.push(`Today's range ${Math.round(today.range)}pt at +${rangeZ.toFixed(1)}σ — session was unusually wide.`);
+    if (score >= 3) notes.push('Multiple σ triggers active. Prepare for directional day — widen stops, don\'t fade the open.');
+    if (score < 2) notes.push('All metrics within 1σ of normal. Standard playbook applies.');
+
+    res.json({
+      score, maxScore: 5, label, color, probability,
+      triggers, notes,
+      metrics: {
+        atrRatio: Math.round(atrRatio * 100) / 100, atrZ: Math.round(atrZ * 10) / 10,
+        rangeZ: Math.round(rangeZ * 10) / 10,
+        nl30, nlZ: Math.round(nlZ * 10) / 10,
+        consecutiveDays: consec, consecZ: Math.round(consecZ * 10) / 10,
+        gapFrequency: gapCount, gapZ: Math.round(gapZ * 10) / 10,
+        todayRange: Math.round(today.range),
+        atr5: Math.round(ranges.slice(-5).reduce((s,v)=>s+v,0)/5),
+        atr20: Math.round(ranges.slice(-20).reduce((s,v)=>s+v,0)/20),
+        avgSigma: Math.round(avgSigma * 10) / 10,
+        lookback: LOOKBACK,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -988,7 +1688,7 @@ router.get('/divergence-4hr/:date', async (req, res) => {
           fisher: Math.round(fisher[last].ft * 100) / 100,
           rangePct: Math.round(pct * 100),
           nearLevels,
-          stats: '97% bounce 100pt+ within 14hr. Avg MFE 578pt. BUT median MAE 321pt — wait for intraday confirmation.',
+          stats: '89% bounce 100pt+ within 56hr (14×4hr bars). Control baseline: 79% — signal adds ~+10% edge. Avg MFE 369pt, Avg MAE 378pt. Wait for intraday confirmation. [Backtested N=91, 2022–2026]',
           confirmation: 'Look for: stop sweep + bounce, volume spike at level, micro trend shift to HIGHER_LOWS, or VWAP recapture attempt.',
         };
       }
@@ -1015,7 +1715,7 @@ router.get('/divergence-4hr/:date', async (req, res) => {
           fisher: Math.round(fisher[last].ft * 100) / 100,
           rangePct: Math.round(pct * 100),
           nearLevels,
-          stats: '74% drop 100pt+ within 22hr. Avg MFE 311pt. Median MAE 342pt — wait for intraday confirmation.',
+          stats: '74.6% drop 100pt+ within 88hr (22×4hr bars). Control baseline: 75% — NO edge over base rate. Bearish signal fires often but does not predict direction. Avg MFE 343pt, Avg MAE 404pt. Structural context only — do not trade directionally. [Backtested N=268, 2022–2026]',
           confirmation: 'Look for: failed breakout above level, volume climax at high, micro trend shift to LOWER_LOWS.',
         };
       }

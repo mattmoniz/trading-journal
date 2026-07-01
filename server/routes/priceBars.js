@@ -15,6 +15,23 @@ export default function createPriceBarsRouter(io, getBestACDParams, computeORLev
     try { await scanAndIngestNewBarFiles(SIERRA_DATA_DIR); } catch (e) { console.error('Auto-ingest error:', e.message); }
   }, 5000);
 
+  // Auto-sync bars every 60s during RTH (9:25 AM - 4:05 PM ET Mon-Fri)
+  setInterval(async () => {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const h = now.getHours(), m = now.getMinutes(), dow = now.getDay();
+    if (dow === 0 || dow === 6) return;
+    if (h < 9 || (h === 9 && m < 25) || h > 16 || (h === 16 && m > 5)) return;
+    try {
+      const results = await scanAndIngestNewBarFiles(SIERRA_DATA_DIR);
+      const updated = results.filter(r => !r.error && !r.skipped);
+      if (updated.length > 0) {
+        const totalBars = updated.reduce((s, r) => s + (r.bars_inserted || 0), 0);
+        io.emit('price-sync-progress', { status: 'success', message: `Auto-sync: ${totalBars} bars`, total: updated.length, done: updated.length });
+        if (updated.some(r => r.symbol === 'NQ')) setTimeout(autoComputeTodayACD, 1000);
+      }
+    } catch (e) { /* silent */ }
+  }, 60000);
+
   const router = express.Router();
 
   // GET /api/price-bars/status
@@ -46,7 +63,9 @@ export default function createPriceBarsRouter(io, getBestACDParams, computeORLev
       if (updated.length === 0) {
         io.emit('price-sync-progress', { status: 'success', message: 'Price data already up to date', total: 0, done: 0 });
       } else {
-        io.emit('price-sync-progress', { status: 'success', message: `${updated.length} file(s) updated · ${totalBars.toLocaleString()} bars ingested`, total: updated.length, done: updated.length });
+        const rolloverFiles = results.filter(r => r.rolloverWarning);
+        const rolloverMsg = rolloverFiles.length ? ` ⚠️ CONTRACT ROLLOVER: ${rolloverFiles.map(r => r.contract).join(', ')}` : '';
+        io.emit('price-sync-progress', { status: 'success', message: `${updated.length} file(s) updated · ${totalBars.toLocaleString()} bars ingested${rolloverMsg}`, total: updated.length, done: updated.length, rollover: rolloverFiles.length > 0 });
         if (updated.some(r => r.symbol === 'NQ')) setTimeout(autoComputeTodayACD, 1000);
         if (updated.some(r => r.symbol === 'NQ')) {
           const todayForDetect = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });

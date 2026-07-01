@@ -127,7 +127,7 @@ export default function PostLossCooldown() {
         )}
         <div style={{ ...intelLineStyle, opacity: 0.7 }}>
           15-min cooldown ≈ <span style={{ color: '#a78bfa' }}>+$225K</span> vs your actual history
-          <span style={{ display: 'block', fontSize: 10, color: '#475569', marginTop: 1 }}>
+          <span style={{ display: 'block', fontSize: 12, color: '#64748b', marginTop: 1 }}>
             from 2026 session-replay backtest
           </span>
         </div>
@@ -247,6 +247,6 @@ const intelWrapStyle = {
 
 const intelLineStyle = {
   fontSize: 12,
-  color: '#64748b',
+  color: '#94a3b8',
   lineHeight: 1.6,
 };

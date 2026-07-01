@@ -501,6 +501,40 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[vol_backtest] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // Weekly recalibration — every Sunday evening ET
+  // 7:30 PM: level fade audit (LEVEL_FADE_AUDIT rows — audit table CONTEXT entries)
+  // 8:00 PM: MAE/MFE audit (refreshes p75_mae, p50_mfe on all audit rows — powers live alert stops/targets)
+  // 9:00 PM: unified backtest (UNIFIED_BACKTEST rows — powers liveStats for live alerts)
+  cron.schedule('30 19 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('LEVEL_FADE_AUDIT', async () => {
+        execSync('node scripts/level_fade_audit.mjs', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[level_fade_audit] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  cron.schedule('0 20 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('MAE_MFE_AUDIT', async () => {
+        execSync('node scripts/audit_mae_mfe.mjs', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[mae_mfe_audit] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  cron.schedule('0 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('SYSTEM_BACKTEST', async () => {
+        execSync('node scripts/backtest_unified.js', { cwd: process.cwd(), timeout: 600000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[system_backtest] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Monthly Report — 7:00 PM ET first Sunday of month
   cron.schedule('0 19 * * 0', async () => {
     try {
@@ -659,7 +693,7 @@ httpServer.listen(PORT, () => {
     }
   }, { timezone: 'America/New_York' });
 
-  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM ET Sun | Catch-up every 30min');
+  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM ET Sun | Catch-up every 30min');
 
   // Hourly overdue process check (9 AM–5 PM ET Mon–Fri)
   setInterval(async () => {

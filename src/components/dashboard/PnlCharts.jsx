@@ -72,7 +72,7 @@ export default function PnlCharts({ cumulativePnl, dailyPerf, filters }) {
                 <ReferenceLine
                   key={year}
                   x={date}
-                  stroke="#64748b"
+                  stroke="#94a3b8"
                   strokeDasharray="3 3"
                   label={{ value: year, position: 'top', fill: '#94a3b8', fontSize: 13 }}
                 />

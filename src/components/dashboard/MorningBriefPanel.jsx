@@ -66,7 +66,7 @@ export default function MorningBriefPanel() {
           style={{ ...navBtn, fontSize: 13, opacity: date === todayET ? 0.35 : 1 }}>today</button>
         {loading && <span style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</span>}
         {!loading && !brief && <span style={{ fontSize: 12, color: '#94a3b8' }}>No brief for {date}</span>}
-        {!loading && brief && genTime && <span style={{ fontSize: 12, color: '#64748b' }}>generated {genTime} ET</span>}
+        {!loading && brief && genTime && <span style={{ fontSize: 12, color: '#94a3b8' }}>generated {genTime} ET</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           {brief && (
             <button onClick={() => setShowRaw(r => !r)}
@@ -94,7 +94,7 @@ export default function MorningBriefPanel() {
               {aiReadText}
             </div>
           ) : (
-            <div style={{ fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>No AI read available for this date.</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>No AI read available for this date.</div>
           )}
         </div>
       )}

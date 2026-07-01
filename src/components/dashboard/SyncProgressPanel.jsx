@@ -16,7 +16,7 @@ export default function SyncProgressPanel({ syncProgress, syncLog, onDismissSync
             {syncProgress?.status === 'error' ? '✕ Sync Failed' : syncProgress?.status === 'success' ? '✓ Sync Complete' : '⏳ Syncing with Sierra Chart…'}
           </span>
           {syncProgress?.status === 'running' && (
-            <span style={{ fontSize: 13, color: '#64748b' }}>Progress updates appear below in real time</span>
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>Progress updates appear below in real time</span>
           )}
         </div>
         {syncProgress?.status !== 'running' && (
@@ -33,12 +33,12 @@ export default function SyncProgressPanel({ syncProgress, syncLog, onDismissSync
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
         {syncLog.map((entry, i) => (
           <div key={i} style={{ display: 'flex', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
-            <span style={{ color: '#475569', flexShrink: 0, fontFamily: 'monospace', fontSize: 13 }}>{entry.ts}</span>
+            <span style={{ color: '#64748b', flexShrink: 0, fontFamily: 'monospace', fontSize: 13 }}>{entry.ts}</span>
             <span style={{ color: entry.status === 'error' ? '#ef4444' : entry.status === 'success' ? '#22c55e' : '#94a3b8' }}>{entry.msg}</span>
           </div>
         ))}
         {syncProgress?.status === 'running' && (
-          <div style={{ fontSize: 13, color: '#475569', marginTop: 4 }}>
+          <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
             {syncProgress.message}
           </div>
         )}
@@ -54,7 +54,7 @@ export default function SyncProgressPanel({ syncProgress, syncLog, onDismissSync
           </>) : (<>
             <strong style={{ color: '#ef4444' }}>Manual export: </strong>
             Sierra Chart → TAL → <strong style={{ color: '#e2e8f0' }}>File → Export</strong> → save to <code style={{ color: '#fbbf24', fontSize: 13 }}>C:\SierraChart\SavedTradeActivity\</code>
-            <br/><span style={{ fontSize: 13, color: '#64748b' }}>The watcher will auto-import it when the file appears.</span>
+            <br/><span style={{ fontSize: 13, color: '#94a3b8' }}>The watcher will auto-import it when the file appears.</span>
           </>)}
         </div>
       )}

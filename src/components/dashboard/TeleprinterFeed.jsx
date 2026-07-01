@@ -153,7 +153,7 @@ function FeedItem({ item }) {
   else if (item.type === 'danger') { textCol = '#fca5a5'; timeCol = '#f87171'; bg = 'rgba(239,68,68,0.03)'; borderCol = 'rgba(239,68,68,0.08)'; }
   else if (item.type === 'alert') { textCol = '#e0f2fe'; timeCol = '#38bdf8'; bg = 'rgba(56,189,248,0.03)'; borderCol = 'rgba(56,189,248,0.08)'; }
   else if (item.type === 'warning') { textCol = '#fed7aa'; timeCol = '#fb923c'; bg = 'rgba(251,146,60,0.04)'; borderCol = 'rgba(251,146,60,0.12)'; }
-  else if (item.type === 'system') { textCol = '#94a3b8'; timeCol = '#64748b'; }
+  else if (item.type === 'system') { textCol = '#94a3b8'; timeCol = '#94a3b8'; }
   return (
     <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '8px 12px', background: bg, border: `1px solid ${borderCol}`, borderRadius: 4, fontFamily: 'monospace', fontSize: 12 }}>
       <span style={{ color: timeCol, fontWeight: 700, whiteSpace: 'nowrap' }}>[{item.time}]</span>
@@ -171,7 +171,7 @@ function NewsItem({ item }) {
         <a href={item.link} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 600, fontSize: 13, textDecoration: 'none', transition: 'color 0.15s ease' }} onMouseEnter={e => e.currentTarget.style.color = '#93c5fd'} onMouseLeave={e => e.currentTarget.style.color = '#60a5fa'}>
           {item.title}
         </a>
-        <span style={{ fontSize: 11, color: '#64748b', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{dateText} {timeText}</span>
+        <span style={{ fontSize: 11, color: '#94a3b8', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{dateText} {timeText}</span>
       </div>
       {item.description && (
         <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{item.description}</div>
@@ -263,7 +263,7 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
     return (
       <div style={PANEL}>
         <div style={{ fontSize: 13, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>📻 Live Commentary</div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>Loading...</div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading...</div>
       </div>
     );
   }
@@ -284,12 +284,12 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: 9, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>LEVEL STATUS</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>LEVEL STATUS</span>
                 <span style={{ fontSize: 11, color: '#94a3b8' }}>{s.level} {s.levelPrice}</span>
               </div>
-              <span style={{ fontSize: 9, color: '#475569', fontFamily: 'monospace' }}>{s.timestamp}</span>
+              <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>{s.timestamp}</span>
             </div>
-            <div style={{ fontSize: 10, color: '#64748b', paddingLeft: 4 }}>
+            <div style={{ fontSize: 12, color: '#94a3b8', paddingLeft: 4 }}>
               {s.type === 'DEFENDED' ? 'Level holding — no exhaustion signs' : s.signs.length > 0 ? s.signs.join(' · ') : 'Approaching'}
               {' · '}
               <span style={{ color: s.type === 'DEFENDED' ? '#94a3b8' : '#94a3b8' }}>
@@ -300,7 +300,7 @@ export default function TeleprinterFeed({ maxHeight = 480 }) {
         ))}
         {/* Commentary feed */}
         {feed.length === 0 && (!exhaustion?.signals?.length)
-          ? <div style={{ fontSize: 12, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
+          ? <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', padding: '20px 0' }}>No events yet.</div>
           : feed.map((item, i) => <FeedItem key={i} item={item} />)
         }
       </div>

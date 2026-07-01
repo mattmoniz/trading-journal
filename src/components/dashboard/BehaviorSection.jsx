@@ -23,7 +23,7 @@ export default function BehaviorSection({ behaviorData }) {
       <div className="behavior-grid">
         {behaviorData.patterns.map(p => {
           const colorMap = { cleanGreen:'#10b981', comeback:'#f59e0b', partial:'#3b82f6', gaveBack:'#f97316', mixed:'#8b5cf6', straightDown:'#ef4444' };
-          const color = colorMap[p.key] || '#64748b';
+          const color = colorMap[p.key] || '#94a3b8';
           return (
             <div key={p.key} className="behavior-pattern-card" style={{ borderTop: `3px solid ${color}` }}>
               <div className="bp-label">{p.label}</div>
@@ -52,7 +52,7 @@ export default function BehaviorSection({ behaviorData }) {
               <Bar dataKey="avgPnl" radius={[0,4,4,0]}>
                 {behaviorData.patterns.map(p => {
                   const colorMap = { cleanGreen:'#10b981', comeback:'#f59e0b', partial:'#3b82f6', gaveBack:'#f97316', mixed:'#8b5cf6', straightDown:'#ef4444' };
-                  return <Cell key={p.key} fill={colorMap[p.key] || '#64748b'} />;
+                  return <Cell key={p.key} fill={colorMap[p.key] || '#94a3b8'} />;
                 })}
               </Bar>
             </BarChart>
@@ -224,7 +224,7 @@ export default function BehaviorSection({ behaviorData }) {
                   tickFormatter={v => `${v}%`}
                   width={38}
                 />
-                <ReferenceLine y={50} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" label={{ value: '50%', position: 'right', fill: '#64748b', fontSize: 11 }} />
+                <ReferenceLine y={50} stroke="rgba(255,255,255,0.2)" strokeDasharray="4 4" label={{ value: '50%', position: 'right', fill: '#94a3b8', fontSize: 11 }} />
                 <Tooltip
                   contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', fontSize: 12 }}
                   formatter={(v, name) => [`${v}%`, BUCKET_META[name]?.label || name]}

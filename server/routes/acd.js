@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction } from '../services/queries.js';
+import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -23,6 +23,29 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// ── Rolling distribution helpers (σ-based, no static thresholds) ──────────
+function rollingStats(arr) {
+  if (!arr.length) return { mean: 0, std: 0 };
+  const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
+  const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
+  return { mean, std };
+}
+const MIN_SAMPLES = 20;
+
+// Fetch trailing OR widths from acd_daily_log (90-day window)
+async function getTrailingORWidths(date, days = 90) {
+  const res = await query(
+    `SELECT or_high::float - or_low::float as or_width
+     FROM acd_daily_log
+     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
+     AND or_high IS NOT NULL AND or_low IS NOT NULL
+     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
+  return res.rows.map(r => r.or_width).filter(w => w > 0);
+}
+
+// Fetch trailing RTH close-vs-VWAP distances from session_analysis (30-day window)
+// Used for σ-based VWAP Magnet threshold — same data as trade-alerts dailyVwapSigma
 
 // In-memory backtest job state
 let acdJob = { status: 'idle', progress: null, result: null, error: null };
@@ -108,8 +131,15 @@ function isLongSetup(setupType) {
 // and the historical backfill). Runs BEFORE expireStaleSetups/structurallyInvalidateSetups
 // so a real T1/stop touch is never preempted by a timer or OR-break invalidation.
 export async function resolveSetupsByPrice(io) {
+  // fired_at is selected as ::text, not as a Date object: node-postgres serializes
+  // JS Date params for "timestamp without time zone" columns using the server
+  // process's LOCAL timezone, while these columns actually store raw ET wall-clock
+  // values (per db.js's 'Z'-suffix parser convention). Rebinding a Date object as
+  // the $1 param below silently shifted the bar-walk window by the ET/UTC offset
+  // (4hrs in EDT), pulling in pre-market bars and causing false STOP_HIT resolutions.
+  // Passing the raw text avoids the round-trip entirely. Found 2026-06-30.
   const active = await query(`
-    SELECT id, setup_type, trade_date, fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status
+    SELECT id, setup_type, trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
 
@@ -190,11 +220,11 @@ export async function resolveSetupsByPrice(io) {
       const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
       const stopHit = long ? bar.low <= stop : bar.high >= stop;
       if (t1Hit && stopHit) {
-        const towardT1 = long ? (bar.open > entry) : (bar.open < entry);
-        resolution = towardT1 ? 'TARGET_HIT' : 'STOP_HIT';
-        method = 'SAME_BAR_TIEBREAK';
+        // Conservative: assume stop hit first (worst case for the trader)
+        resolution = 'STOP_HIT';
+        method = 'SAME_BAR_STOP_FIRST';
         resolvedAt = bar.ts;
-        priceAtRes = towardT1 ? t1 : stop;
+        priceAtRes = stop;
         break;
       } else if (t1Hit) {
         resolution = 'TARGET_HIT';
@@ -275,9 +305,17 @@ export async function structurallyInvalidateSetups(io) {
   const isBearish = (t) => t.includes('SHORT') || t.includes('BEARISH') || t === 'C_STANDALONE_DOWN' || t.includes('A_DOWN');
   const isBullish = (t) => t.includes('LONG')  || t.includes('BULLISH') || t === 'C_STANDALONE_UP' || t.includes('A_UP');
 
-  // Need fired_at and stop_level to compute how long the setup was active when invalidated
+  // Need fired_at and stop_level to compute how long the setup was active when invalidated.
+  // minutes_active computed SQL-side (naive ET fired_at vs. naive-ET-converted NOW()) —
+  // doing this in JS via `Date.now() - new Date(row.fired_at).getTime()` mixed a real UTC
+  // instant with a fake-UTC Date (db.js's parser relabels raw ET wall-clock as UTC), which
+  // inflated minutesActive by the ET/UTC offset (4hrs in EDT) and made POST_ENTRY/PRE_ENTRY
+  // classification always resolve to POST_ENTRY. Same root cause as the resolveSetupsByPrice
+  // fix above. Found 2026-06-30.
   const activeWithTime = await query(`
-    SELECT id, setup_type, trade_date, fired_at, stop_level FROM active_setups
+    SELECT id, setup_type, trade_date, stop_level,
+      EXTRACT(epoch FROM ((NOW() AT TIME ZONE 'America/New_York') - fired_at)) / 60 as minutes_active
+    FROM active_setups
     WHERE trade_date=$1 AND status='ACTIVE'
   `, [todayET]);
 
@@ -299,8 +337,8 @@ export async function structurallyInvalidateSetups(io) {
 
     if (!shouldInvalidate) continue;
 
-    const minutesActive = row.fired_at
-      ? (Date.now() - new Date(row.fired_at).getTime()) / 60000
+    const minutesActive = row.minutes_active != null
+      ? row.minutes_active
       : 0;
     const invalidationTiming = minutesActive >= 2 ? 'POST_ENTRY' : 'PRE_ENTRY';
 
@@ -1805,6 +1843,20 @@ export default function createACDRouter(io) {
       const pmVAL = pmVaQ.rows[0]?.val || null;
       const pmPOC = pmVaQ.rows[0]?.poc || null;
 
+      // Monthly open: first RTH bar of current calendar month
+      let monthOpen = null;
+      try {
+        const moQ = await query(`
+          SELECT open::float as mo FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date = (
+            SELECT MIN(ts::date) FROM price_bars_primary
+            WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+          ) ORDER BY ts LIMIT 1
+        `);
+        monthOpen = moQ.rows[0]?.mo || null;
+      } catch (_) {}
+
       const { or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired } = logged.rows[0];
       const orH = parseFloat(or_high), orL = parseFloat(or_low);
       const aUp = parseFloat(a_up_level), aDown = parseFloat(a_down_level);
@@ -2292,7 +2344,7 @@ export default function createACDRouter(io) {
         setup: liveSetup, color: liveColor, description: liveDescription, currentPrice, barTime,
         orHigh: orH, orLow: orL, aUpLevel: aUp, aDownLevel: aDown,
         gLine, gLineDaysHeld, gLineStatus,
-        pwHigh, pwLow, pmVAH, pmVAL, pmPOC,
+        pwHigh, pwLow, pmVAH, pmVAL, pmPOC, monthOpen,
         sessionHigh, sessionLow,
         aUpFired: aUpFiredTimeline, aDownFired: aDownFiredTimeline,
         reachedAUp, reachedADown, failedAUp, failedADown, cUp, cDown,
@@ -2994,7 +3046,7 @@ export default function createACDRouter(io) {
             label: isBull ? 'OPEN DRIVE (LONG)' : 'OPEN DRIVE (SHORT)',
             direction: isBull ? 'LONG' : 'SHORT',
             entry: +currentPrice.toFixed(0),
-            stop: isBull ? +(orL - 2).toFixed(0) : +(orH + 2).toFixed(0),
+            stop: isBull ? +(orL - (orH - orL)).toFixed(0) : +(orH + 2).toFixed(0),
             target: isBull
               ? t1Guard('LONG',  currentPrice, orH + (orRange || 0), currentPrice + (orRange || 80))
               : t1Guard('SHORT', currentPrice, orL - (orRange || 0), currentPrice - (orRange || 80)),
@@ -3002,7 +3054,7 @@ export default function createACDRouter(io) {
             keyLevel: +(isBull ? orH : orL).toFixed(0),
             keyLevelLabel: isBull ? 'OR High (support)' : 'OR Low (resistance)',
             description: isBull
-              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG has +15.9% directional edge (66.7% WR at 10 bars, N=42). On TREND days: 83% WR (N=6). NL30 aligned: 60% WR. EXECUTION: Buy the pullback to OR High. Stop below OR Low -2pt (${+(orL - 2).toFixed(0)}). Target OR measured move. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG has +15.9% directional edge (66.7% WR at 10 bars, N=42). On TREND days: 83% WR (N=6). NL30 aligned: 60% WR. EXECUTION: Buy the pullback to OR High. Stop below OR Low −1× OR Range (${+(orL - (orH - orL)).toFixed(0)}). Target OR measured move. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
               : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT has +18.9% directional edge (68.2% WR at 10 bars, N=22). At VA level: 78% WR. NL30 aligned: 80% WR (N=10). EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target OR measured move or PD VAL.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
             history: await getHistory('TRENDING_UP'),
           };
@@ -3183,7 +3235,7 @@ export default function createACDRouter(io) {
             label: isFade ? 'VALUE AREA RESPONSIVE (SHORT)' : 'VALUE AREA RESPONSIVE (LONG)',
             direction: isFade ? 'SHORT' : 'LONG',
             entry: +currentPrice.toFixed(0),
-            stop: +(isFade ? (pdVAH + 8) : (pdVAL - 8)).toFixed(0),
+            stop: +(isFade ? (pdVAH + 18) : (pdVAL - 8)).toFixed(0),
             target: isFade
               ? t1Guard('SHORT', currentPrice, pdPOC, pdVAL, currentPrice - (orRange || 80) * 0.5)
               : t1Guard('LONG',  currentPrice, pdPOC, pdVAH, currentPrice + (orRange || 80) * 0.5),
@@ -3191,7 +3243,7 @@ export default function createACDRouter(io) {
             keyLevel: +(isFade ? pdVAH : pdVAL).toFixed(0),
             keyLevelLabel: isFade ? 'Prior Day VAH' : 'Prior Day VAL',
             description: isFade
-              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VA_RESP_SHORT is the #1 profitable setup — +17.4% directional edge (66.7% WR at 10 bars, N=60). On TURBULENT days: 90% WR (N=10). On BALANCE: 65% WR. NL30 aligned: 93% WR (N=14). EXECUTION: Tight stop just above VAH +8pt (${+(pdVAH + 8).toFixed(0)}). Target PD POC (${pdPOC?.toFixed(0)}) or PD VAL. The small stop (18pt avg) with large target is WHY this setup is profitable — one win covers 6-8 losses.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
+              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VA_RESP_SHORT is the #1 profitable setup — +17.4% directional edge (66.7% WR at 10 bars, N=60). On TURBULENT days: 90% WR (N=10). On BALANCE: 65% WR. NL30 aligned: 93% WR (N=14). EXECUTION: Stop above VAH +18pt (${+(pdVAH + 18).toFixed(0)}) — recalibrated from +8 (MAE sweep optimal: 27pt from entry, +$26 EV). Target PD POC (${pdPOC?.toFixed(0)}) or PD VAL. The tight stop with large target is WHY this setup is profitable — one win covers 6-8 losses.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
               : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}). NOTE: VA_RESP_LONG has -5.0% directional edge and is SUPPRESSED.`,
             history: await getHistory('BALANCE'),
           };
@@ -3214,7 +3266,7 @@ export default function createACDRouter(io) {
             description: `No A signal today. First C Up: price closing above OR High (${orH?.toFixed(0)}) with no prior A. Building data for standalone C setups.`,
             history: await getHistory('BALANCE'),
           };
-        } else if (currentPrice < orL) {
+        } else if (currentPrice < orL && nearPD2VA) {
           cStandalone = {
             type: 'C_STANDALONE_DOWN', label: 'C DOWN (STANDALONE)',
             direction: 'SHORT',
@@ -3318,6 +3370,10 @@ export default function createACDRouter(io) {
       // Day type classification for setup gating
       const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
       const dtClass = dtClassRow.rows[0]?.day_type || null;
+
+      // Morning volatility regime — used to gate C_STANDALONE in HIGH-VOL-CHOP (0% WR confirmed, regime backtest 2026-06-30)
+      const regimeResult = await computeLiveVolatilityRegime().catch(() => ({ regime: null }));
+      const morningRegime = regimeResult?.regime || null;
 
       // ── BULLISH ABSORPTION detection (support held + RSI rising + price flat) ──
       // Uses 2-min bars: 5-min was too coarse (16 fires/yr, 0 morning). 2-min
@@ -3526,6 +3582,11 @@ export default function createACDRouter(io) {
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
       let levelScalpSetup = null;
       let vwapMagnetSetup = null;
+      // Early-touch backfill: levels touched before the 60-bar/IB-close gate opened
+      // (or touched-and-already-moved-on between polls) but never got a live banner.
+      // Recorded SHADOW-only for stats integrity — never fires a live alert, since the
+      // entry window has already passed by the time we can detect it. Found 2026-06-30.
+      let backfilledTouches = [];
       if (currentPrice && allRthBarsRow.rows.length >= 60) {
         const etMinNow = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
         const last5 = allRthBarsRow.rows.slice(-6, -1);
@@ -3537,15 +3598,15 @@ export default function createACDRouter(io) {
           earlyVwap = tv > 0 ? pv / tv : null;
         }
 
-        // ── VWAP Magnet: 25% of developing range from VWAP → fade toward it ──
-        // Range-scaled threshold: 0.25 × developing range (min 50pt).
-        // 30-bar cooldown between fires. 62% WR, $11K/90d, 7.4 trades/day avg.
+        // ── VWAP Magnet: σ-based trigger — fires when price ≥1.5σ from RTH VWAP ──
+        // σ = rolling 30-session std of (session_close - RTH_VWAP) from session_analysis.
+        // Consistent with trade-alerts dailyVwapSigma (same source, same threshold).
+        // T1 = 20pt (half off), runner = min(vwapDist*0.5, 100pt). Stop = 30pt.
         if (earlyVwap) {
-          const sessHi = Math.max(...allRthBarsRow.rows.map(b => b.high));
-          const sessLo = Math.min(...allRthBarsRow.rows.map(b => b.low));
-          const devRange = sessHi - sessLo;
-          const vwapThreshold = Math.max(50, Math.round(devRange * 0.25));
+          const vwapStdData = await getTrailingVwapStd(todayET, 30);
+          const vwapThreshold = vwapStdData.threshold;
           const vwapDist = currentPrice - earlyVwap;
+          const vwapSigma = vwapStdData.std > 0 ? vwapDist / vwapStdData.std : 0;
           if (Math.abs(vwapDist) >= vwapThreshold) {
             const isLong = vwapDist < 0;
             const t2Dist = Math.min(Math.round(Math.abs(vwapDist) * 0.5), 100);
@@ -3556,83 +3617,236 @@ export default function createACDRouter(io) {
               stop: isLong ? currentPrice - 30 : currentPrice + 30,
               target: isLong ? currentPrice + 20 : currentPrice - 20,
               targetLabel: `T1: 20pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
-              description: `Price ${Math.round(Math.abs(vwapDist))}pt from VWAP (${Math.round(earlyVwap)}). Scale out: half at 20pt, runner to ${t2Dist}pt (50% of VWAP dist, max 100pt). Breakeven stop after T1. MFE median 50pt, 75th 106pt.`,
+              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at 20pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.`,
               history: { winRate: 0.62, occurrences: 460, avgPnl: 24, t1HitRate: 0.62 },
             };
           }
         }
 
-        // ── Level fades: PD_POC, Floor S1, OR High, IB High ──
-        // Only fire post-IB (after 10:30) and check approach direction from last 5 bars
-        if (etMinNow >= 630 && last5.length >= 3) {
+        // ── Unified Level Fade Setups ──
+        // All KEEP levels from the system backtest. 90pt stop, 40pt target.
+        // AM only (before noon). First touch only (tracked via active_setups dedup).
+        // Stats from 180-day system backtest.
+        // Monday-specific rules: start at 10:30, PD levels only, tighter stops
+        const isMonday = new Date(todayET + 'T12:00:00').getDay() === 1;
+        const mondayGate = isMonday ? etMinNow >= 630 : true; // Mondays: wait for IB close (10:30)
+        if (last5.length >= 3 && etMinNow < 720 && mondayGate) {
           const approachDir = last5[0].close < currentPrice ? 'FROM_BELOW' : 'FROM_ABOVE';
+          const STOP = isMonday ? 60 : 90;
+          const TARGET = isMonday ? 30 : 40;
 
-          // PD POC fade — 64% WR (N=76), $80/trade, best 12-2PM (70% WR)
-          if (pdPOC && Math.abs(currentPrice - pdPOC) <= 8) {
-            const isLong = approachDir === 'FROM_ABOVE';
-            const bestWindow = etMinNow >= 720 && etMinNow < 840;
-            const wr = bestWindow ? 0.70 : 0.64;
-            levelScalpSetup = {
-              type: isLong ? 'PD_POC_FADE_LONG' : 'PD_POC_FADE_SHORT',
-              direction: isLong ? 'LONG' : 'SHORT',
-              entry: currentPrice,
-              stop: isLong ? currentPrice - 25 : currentPrice + 25,
-              target: isLong ? currentPrice + 20 : currentPrice - 20,
-              targetLabel: 'T1: 20pt (half off) · Runner: 50pt',
-              description: `Price at prior day POC (${Math.round(pdPOC)}). Scale out: half at 20pt, runner to 50pt (breakeven stop after T1). ${Math.round(wr*100)}% WR${bestWindow ? ' (12-2PM sweet spot)' : ''}. MFE median 71pt, 75th 101pt.`,
-              history: { winRate: wr, occurrences: 76, avgPnl: 80, t1HitRate: wr },
-            };
+          // Compute rolling composite levels
+          let or5Mid = null;
+          try {
+            const or5Q = await query(`SELECT MAX(orh) as hi, MIN(orl) as lo FROM (SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5) t`, [todayET]);
+            if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
+          } catch(_) {}
+
+          let pdIbMid = null;
+          try {
+            const pdIbQ = await query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]);
+            if (pdIbQ.rows[0]?.ibh) pdIbMid = (pdIbQ.rows[0].ibh + pdIbQ.rows[0].ibl) / 2;
+          } catch(_) {}
+
+          let pdOrMid = null;
+          try {
+            const pdOrQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
+            if (pdOrQ.rows[0]?.or_high) pdOrMid = (pdOrQ.rows[0].or_high + pdOrQ.rows[0].or_low) / 2;
+          } catch(_) {}
+
+          // Today's IB high/low — only valid after IB closes at 10:30 (etMinNow >= 630)
+          let ibHighToday = null, ibLowToday = null;
+          if (etMinNow >= 630) {
+            try {
+              const ibTodayQ = await query(`
+                SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+                FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date = $1
+                  AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+              `, [todayET]);
+              if (ibTodayQ.rows[0]?.ibh) {
+                ibHighToday = ibTodayQ.rows[0].ibh;
+                ibLowToday  = ibTodayQ.rows[0].ibl;
+              }
+            } catch(_) {}
           }
 
-          // Floor S1 fade — 61% WR (N=57), best 12-2PM (75% WR), skip after 2PM (44%)
-          if (!levelScalpSetup && floorS1 && Math.abs(currentPrice - floorS1) <= 8 && etMinNow < 840) {
+          // Today's OR low (from ACD daily log — same source as orH used below)
+          // orL is pulled alongside orH from the acdRow query in the outer scope
+
+          // Monday: skip intraday levels that fail on Mondays
+          // IB_HIGH_FADE / IB_LOW_FADE also skip on Mondays (IB context different)
+          const mondaySkip = isMonday ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE'] : [];
+
+          // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
+          // Cached 60s — backtests run at most weekly so freshness is fine.
+          // Falls back to hardcoded defaults if DB is unavailable or level is missing.
+          const cachedLevelStats = getCached(todayET, 'levelFadeStats');
+          let liveStats = cachedLevelStats;
+          if (!liveStats) {
+            const [statsQ, monQ] = await Promise.all([
+              query(`
+                SELECT DISTINCT ON (signal_name) signal_name,
+                  sample_size, win_rate::float, ev_per_trade::float,
+                  p50_mae::float, p75_mae::float, p50_mfe::float, p75_mfe::float, notes
+                FROM performance_audit
+                WHERE signal_type = 'UNIFIED_BACKTEST'
+                  AND window_days = 9999
+                  AND signal_name IN (
+                    'PD_POC_LONG','PD_POC_SHORT',
+                    '5D_OR_MID_LONG','5D_OR_MID_SHORT',
+                    'PD_VAL_LONG','PD_VAL_SHORT',
+                    'PD_VAH_LONG','PD_VAH_SHORT',
+                    'PD_IB_MID_LONG','PD_IB_MID_SHORT',
+                    'FLOOR_PIVOT_LONG','FLOOR_PIVOT_SHORT',
+                    'OR_HIGH_LONG','OR_HIGH_SHORT',
+                    'OR_LOW_LONG','OR_LOW_SHORT',
+                    'FLOOR_R1_LONG','FLOOR_R1_SHORT',
+                    'IB_HIGH_LONG','IB_HIGH_SHORT',
+                    'IB_LOW_LONG','IB_LOW_SHORT',
+                    'PD_OR_MID_LONG','PD_OR_MID_SHORT',
+                    'MONTH_OPEN_LONG','MONTH_OPEN_SHORT',
+                    'PM_VAH_LONG','PM_VAH_SHORT'
+                  )
+                ORDER BY signal_name, run_date DESC
+              `).catch(() => ({ rows: [] })),
+              query(`
+                SELECT DISTINCT ON (signal_name) signal_name,
+                  sample_size, win_rate::float, ev_per_trade::float
+                FROM performance_audit
+                WHERE signal_type = 'MON_BACKTEST'
+                ORDER BY signal_name, run_date DESC
+              `).catch(() => ({ rows: [] })),
+            ]);
+            liveStats = { _mon: {} };
+            for (const r of statsQ.rows) {
+              const isLong = r.signal_name.endsWith('_LONG');
+              const base = r.signal_name.replace(/_(?:LONG|SHORT)$/, '');
+              if (!liveStats[base]) liveStats[base] = {};
+              const dir = isLong ? 'long' : 'short';
+              let parsedNotes = {};
+              try { parsedNotes = JSON.parse(r.notes || '{}'); } catch (_) {}
+              liveStats[base][dir] = {
+                wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size,
+                mae: r.p50_mae, mae_p75: r.p75_mae,
+                mfe: r.p50_mfe, mfe_p75: r.p75_mfe,
+                mae_p80w: parsedNotes.p80_mae_winners ?? null,
+                tier: parsedNotes.confidence_tier ?? 'THIN',
+              };
+              // Recompute combined N-weighted WR/EV for backward compat
+              const l = liveStats[base].long, s = liveStats[base].short;
+              if (l && s) {
+                const totalN = (l.n || 0) + (s.n || 0);
+                liveStats[base].wr      = totalN ? (l.wr * l.n + s.wr * s.n) / totalN : null;
+                liveStats[base].ev      = totalN ? (l.ev * l.n + s.ev * s.n) / totalN : null;
+                liveStats[base].n       = totalN;
+                liveStats[base].mae     = Math.min(l.mae ?? 999, s.mae ?? 999);
+                liveStats[base].mae_p75 = Math.max(l.mae_p75 ?? 0, s.mae_p75 ?? 0);
+                liveStats[base].mfe     = Math.max(l.mfe ?? 0, s.mfe ?? 0);
+                liveStats[base].mfe_p75 = Math.max(l.mfe_p75 ?? 0, s.mfe_p75 ?? 0);
+                liveStats[base].tier = (l.tier === 'CONFIDENT' && s.tier === 'CONFIDENT') ? 'CONFIDENT' : (l.tier === 'THIN' && s.tier === 'THIN') ? 'THIN' : 'MARGINAL';
+              } else {
+                const only = l || s;
+                if (only) {
+                  liveStats[base].wr      = only.wr;
+                  liveStats[base].ev      = only.ev;
+                  liveStats[base].n       = only.n;
+                  liveStats[base].mae     = only.mae;
+                  liveStats[base].mae_p75 = only.mae_p75;
+                  liveStats[base].mfe     = only.mfe;
+                  liveStats[base].mfe_p75 = only.mfe_p75;
+                  liveStats[base].tier    = only.tier;
+                }
+              }
+            }
+            for (const r of monQ.rows) {
+              // signal_name is e.g. 'PD_POC_MONDAY' — strip suffix to get base key
+              const base = r.signal_name.replace(/_MONDAY$/, '');
+              liveStats._mon[base] = { wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size };
+            }
+            setCached(todayET, 'levelFadeStats', liveStats);
+          }
+          const ls = (key) => liveStats[key] || null;
+          const lsMon = (key) => liveStats._mon?.[key] || null;
+
+          const monOverride = (key) => isMonday && lsMon(key) ? lsMon(key) : {};
+          const keepLevels = [
+            { name: 'PD_POC_FADE',    level: pdPOC,   ...(ls('PD_POC')     || {}), ...monOverride('PD_POC') },
+            { name: '5D_OR_MID_FADE', level: or5Mid,  ...(ls('5D_OR_MID')  || {}), ...monOverride('5D_OR_MID') },
+            { name: 'PD_VAL_FADE',    level: pdVAL,   ...(ls('PD_VAL')     || {}), ...monOverride('PD_VAL') },
+            { name: 'PD_VAH_FADE',    level: pdVAH,   ...(ls('PD_VAH')     || {}), ...monOverride('PD_VAH') },
+            { name: 'PD_IB_MID_FADE', level: pdIbMid, ...(ls('PD_IB_MID')  || {}), ...monOverride('PD_IB_MID') },
+            { name: 'FLOOR_PIVOT_FADE',level: floorP, ...(ls('FLOOR_PIVOT') || {}), ...monOverride('FLOOR_PIVOT') },
+            { name: 'OR_HIGH_FADE',   level: orH,     ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
+            { name: 'FLOOR_R1_FADE',  level: floorR1, ...(ls('FLOOR_R1')   || {}), ...monOverride('FLOOR_R1') },
+            { name: 'PD_OR_MID_FADE', level: pdOrMid, ...(ls('PD_OR_MID')  || {}), ...monOverride('PD_OR_MID') },
+            { name: 'OR_LOW_FADE',    level: orL,          ...(ls('OR_LOW')   || {}) },
+            { name: 'IB_HIGH_FADE',   level: ibHighToday,  ...(ls('IB_HIGH')  || {}) },
+            { name: 'IB_LOW_FADE',    level: ibLowToday,   ...(ls('IB_LOW')   || {}) },
+            { name: 'MONTH_OPEN',     level: monthOpen, ...(ls('MONTH_OPEN') || {}) },
+            { name: 'PM_VAH_FADE',    level: pmVAH,   ...(ls('PM_VAH')     || {}) },
+          ].filter(l => l.level != null && !mondaySkip.includes(l.name));
+
+          for (const lv of keepLevels) {
+            if (Math.abs(currentPrice - lv.level) > 10) continue;
             const isLong = approachDir === 'FROM_ABOVE';
-            const bestWindow = etMinNow >= 720 && etMinNow < 840;
-            const wr = bestWindow ? 0.75 : 0.61;
+            const dir = isLong ? 'LONG' : 'SHORT';
+            const type = `${lv.name}_${dir}`;
+            // Use data-derived stops/targets from liveStats MAE/MFE; fall back to Monday-aware constants only when data absent
+            const stopPts  = Math.round(lv.mae_p75 ?? STOP);
+            const targetPts = Math.round(lv.mfe    ?? TARGET);
             levelScalpSetup = {
-              type: isLong ? 'FLOOR_S1_FADE_LONG' : 'FLOOR_S1_FADE_SHORT',
-              direction: isLong ? 'LONG' : 'SHORT',
+              type,
+              direction: dir,
               entry: currentPrice,
-              stop: isLong ? currentPrice - 25 : currentPrice + 25,
-              target: isLong ? currentPrice + 20 : currentPrice - 20,
-              targetLabel: 'T1: 20pt (half off) · Runner: 50pt',
-              description: `Price at Floor S1 (${Math.round(floorS1)}). Scale out: half at 20pt, runner 50pt. ${Math.round(wr*100)}% WR${bestWindow ? ' (12-2PM = 75% WR)' : ''}. MFE median 40pt, 75th 74pt.`,
-              history: { winRate: wr, occurrences: 343, avgPnl: 53, t1HitRate: wr },
+              stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
+              target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
+              targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}`,
+              description: (() => {
+                const lvStats = ls(lv.name.replace(/_FADE$/, ''));
+                const lDir = lvStats?.long, sDir = lvStats?.short;
+                const dirStr = (lDir && sDir)
+                  ? ` (Long: ${Math.round(lDir.wr * 100)}% N=${lDir.n} / Short: ${Math.round(sDir.wr * 100)}% N=${sDir.n})`
+                  : '';
+                const dirMae = isLong ? (lDir?.mae_p80w ?? null) : (sDir?.mae_p80w ?? null);
+                const stopNote = dirMae != null ? ` Stop calibration: 80% of winners needed <${Math.round(dirMae)}pt of room.` : '';
+                return `${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round(lv.wr * 100)}% WR (N=${lv.n} combined${dirStr}). MAE P50: ${lv.mae}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${isMonday ? ' MONDAY: 60pt stop, 30pt target, post-IB only.' : ' AM first touch.'}`;
+              })(),
+              history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
+              sizeMultiplier: lv.ev >= 30 ? 1.0 : 0.75,
             };
+            break;
           }
 
-          // OR High fade — 57-66% WR (N=182), strong recent 30d (66%)
-          if (!levelScalpSetup && orH && Math.abs(currentPrice - orH) <= 8) {
-            const isLong = approachDir === 'FROM_ABOVE';
-            const bestWindow = etMinNow >= 720 && etMinNow < 840;
-            const wr = bestWindow ? 0.61 : 0.57;
-            levelScalpSetup = {
-              type: isLong ? 'OR_HIGH_FADE_LONG' : 'OR_HIGH_FADE_SHORT',
-              direction: isLong ? 'LONG' : 'SHORT',
-              entry: currentPrice,
-              stop: isLong ? currentPrice - 25 : currentPrice + 25,
-              target: isLong ? currentPrice + 20 : currentPrice - 20,
-              targetLabel: 'T1: 20pt (half off) · Runner: 40pt',
-              description: `Price at OR High (${Math.round(orH)}). Scale out: half at 20pt, runner 40pt. ${Math.round(wr*100)}% WR (N=938). MFE median 29pt, 75th 56pt.`,
-              history: { winRate: wr, occurrences: 938, avgPnl: 14, t1HitRate: wr },
-            };
-          }
-
-          // IB High fade — 58% WR (N=166), best 12-2PM (64%)
-          if (!levelScalpSetup && ibHigh && Math.abs(currentPrice - ibHigh) <= 8 && etMinNow >= 630) {
-            const isLong = approachDir === 'FROM_ABOVE';
-            const bestWindow = etMinNow >= 720 && etMinNow < 840;
-            const wr = bestWindow ? 0.64 : 0.58;
-            levelScalpSetup = {
-              type: isLong ? 'IB_HIGH_FADE_LONG' : 'IB_HIGH_FADE_SHORT',
-              direction: isLong ? 'LONG' : 'SHORT',
-              entry: currentPrice,
-              stop: isLong ? currentPrice - 25 : currentPrice + 25,
-              target: isLong ? currentPrice + 20 : currentPrice - 20,
-              targetLabel: 'T1: 20pt (half off) · Runner: 35pt',
-              description: `Price at IB High (${Math.round(ibHigh)}). Scale out: half at 20pt, runner 35pt. ${Math.round(wr*100)}% WR${bestWindow ? ' (12-2PM sweet spot)' : ''} (N=877). MFE median 27pt, 75th 48pt.`,
-              history: { winRate: wr, occurrences: 877, avgPnl: 26, t1HitRate: wr },
-            };
+          // ── Early-touch backfill ──────────────────────────────────────────
+          // For every KEEP level NOT currently near price (liveNear false this poll),
+          // scan all RTH bars collected so far (9:30→now, includes bars from before the
+          // 60-bar gate opened) for the earliest bar whose range came within 10pt of the
+          // level. If found, that's the day's real first touch — record it for stats even
+          // though the live banner path above already missed its window. Idempotent: the
+          // actual INSERT (later, near the shadowCandidates persist block) checks for an
+          // existing row first and is also ON CONFLICT DO NOTHING-protected.
+          for (const lv of keepLevels) {
+            if (Math.abs(currentPrice - lv.level) <= 10) continue; // live path already covers this
+            const touchIdx = allRthBarsRow.rows.findIndex(b => b.low <= lv.level + 10 && b.high >= lv.level - 10);
+            if (touchIdx === -1) continue;
+            const touchBar = allRthBarsRow.rows[touchIdx];
+            const priorBar = touchIdx > 0 ? allRthBarsRow.rows[touchIdx - 1] : null;
+            const touchApproachDir = priorBar
+              ? (priorBar.close < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE')
+              : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
+            const isLong = touchApproachDir === 'FROM_ABOVE';
+            const dir = isLong ? 'LONG' : 'SHORT';
+            backfilledTouches.push({
+              type: `${lv.name}_${dir}`,
+              direction: dir,
+              entry: touchBar.close,
+              stop: isLong ? touchBar.close - STOP : touchBar.close + STOP,
+              target: isLong ? touchBar.close + TARGET : touchBar.close - TARGET,
+              targetLabel: `T1: ${TARGET}pt · Stop: ${STOP}pt · EV: $${lv.ev.toFixed(0)} (backfilled early touch)`,
+              etMin: touchBar.et_min,
+              history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
+            });
           }
         }
       }
@@ -3767,8 +3981,13 @@ export default function createACDRouter(io) {
         (dir === 'LONG' && nl30State === 'BULLISH') || (dir === 'SHORT' && nl30State === 'BEARISH');
       const isNL30Counter = (dir) =>
         (dir === 'LONG' && nl30State === 'BEARISH') || (dir === 'SHORT' && nl30State === 'BULLISH');
-      const isTightOR = orRange != null && orRange < 47.5;
-      const isWideOR = orRange != null && orRange > 91.5;
+      // OR width σ-based classification from trailing 90-day OR width distribution (no static 47.5/91.5)
+      const trailingORW = await getTrailingORWidths(todayET, 90);
+      const orStats = trailingORW.length >= MIN_SAMPLES ? rollingStats(trailingORW) : { mean: 65, std: 20 };
+      const tightORThreshold = orStats.mean - orStats.std;  // -1σ = tight
+      const wideORThreshold = orStats.mean + orStats.std;    // +1σ = wide
+      const isTightOR = orRange != null && orRange < tightORThreshold;
+      const isWideOR = orRange != null && orRange > wideORThreshold;
       // nearPD2VA already computed above after pd2VA initialization
 
       // Compression confluence: VWAP within 15pt of PD-2 VA level
@@ -3801,19 +4020,6 @@ export default function createACDRouter(io) {
       // Suppress only on DOUBLE headwind: NL30 counter AND overnight counter (20% WR).
       // NL30 counter alone = 33% WR but IB_BEARISH is 52% and TURBULENT days are 67%.
       // Let the triple-stack conviction system handle sizing, not blanket suppression.
-      const suppressIfCounter = (setup) => {
-        if (!setup) return null;
-        if (isNL30Counter(setup.direction) && isOvernightCounter(setup.direction)) return null;
-        return setup;
-      };
-
-      // Gate to PD-2 VA only (negative baseline edge, but +20-30% at PD-2 VA)
-      const gateIfNoPD2 = (setup) => {
-        if (!setup) return null;
-        if (!nearPD2VA) return null;
-        return setup;
-      };
-
       // Sequential gate: if first setup of the day FAILED, suppress C_STANDALONE in same direction
       // Death sequences: OTD fails → C_STANDALONE = 9-14% WR. After prior win → next WR 52% vs 41.8% after loss.
       const priorSetupsQ = await query(`
@@ -3851,19 +4057,6 @@ export default function createACDRouter(io) {
         // If POC is migrating HIGHER but setup is SHORT (or vice versa) → counter, suppress
         const isCounter = (setup.direction === 'LONG' && pocDir === 'LOWER') || (setup.direction === 'SHORT' && pocDir === 'HIGHER');
         if (isCounter) return null;
-        return setup;
-      };
-
-      // OR width gating: tight ORs boost short setups, wide ORs boost breakouts
-      const suppressIfWideOR = (setup) => {
-        if (!setup) return null;
-        if (isWideOR && (setup.type === 'TRT_SHORT' || setup.type === 'TRT_LONG')) return null;
-        return setup;
-      };
-      const suppressIfTightOR = (setup) => {
-        if (!setup) return null;
-        if (isTightOR && setup.type === 'BRACKET_BREAKOUT_LONG') return null; // -27% on tight
-        if (isTightOR && setup.type === 'OPEN_TEST_DRIVE_LONG') return null; // -28% on tight
         return setup;
       };
 
@@ -3909,35 +4102,31 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ACTIVE candidates — ONLY the 9 KEEP level fades from system backtest.
+      // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
-        stopSweepSetup, // ONL/PDL/IB sweep and reverse
-        vwapMagnetSetup, // VWAP magnet fade (62% WR, range-scaled)
-        levelScalpSetup, // PD_POC / Floor S1 / OR High / IB High fades
-        absorptionSetup, // already context-gated (BALANCE only)
-        coilSurgeSetup, // already context-gated (TREND/NL30-aligned only)
-        zoneEdgeFade, // balance zone edge fade (ATR-scaled)
-        suppressIfPOCCounter(suppressIfCounter(suppressIfWideOR(trt?.type === 'TRT_LONG' ? trt : null))),
-        ibSetup?.type === 'IB_BEARISH' ? suppressIfPOCCounter(suppressIfCounter(ibSetup)) : null,
-        suppressIfPOCCounter(suppressIfCounter(openDrive)),
-        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_SHORT' ? suppressIfPOCCounter(suppressIfCounter(valueAreaResp)) : null,
-        suppressIfDeathSequence(gateIfNoPD2(cStandalone?.type === 'C_STANDALONE_DOWN' ? cStandalone : null)),
+        levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
       ];
-      // Shadow setups: removed from active candidates but still tracked for
-      // forward-testing. They persist to active_setups with status='SHADOW',
-      // resolve against price like normal, and build WR data over time.
-      // Removed dead code setups: C_REVERSAL_LONG/SHORT, A_UP_WEAK, A_DOWN_STRONG, GAP_FILL_LONG
-      // (never fired in 389 days — trigger conditions require same-day ACD contradictions that don't occur)
+      // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
+      // These persist to active_setups with status='SHADOW', resolve against price,
+      // and build WR data. Promoted to ACTIVE when positive EV over 30+ forward trades.
       const shadowCandidates = [
+        stopSweepSetup,
+        vwapMagnetSetup,
+        absorptionSetup,
+        coilSurgeSetup,
+        zoneEdgeFade,
+        trt?.type === 'TRT_LONG' ? trt : null,
+        trt?.type === 'TRT_SHORT' ? trt : null,
         trtMah,
         aDownWeak,
-        otdSetup?.type === 'OPEN_TEST_DRIVE_LONG' ? otdSetup : null,
-        otdSetup?.type === 'OPEN_TEST_DRIVE_SHORT' ? otdSetup : null,
-        ibSetup?.type === 'IB_BULLISH' ? ibSetup : null,
+        ibSetup, // IB_BEARISH and IB_BULLISH — directional context, not entries
+        openDrive,
+        valueAreaResp,
+        // C_STANDALONE: suppressed in HIGH-VOL-CHOP (0% WR), death sequences (9-14% WR), and POC counter direction (41.5% WR)
+        morningRegime !== 'HIGH-VOL-CHOP' ? suppressIfPOCCounter(suppressIfDeathSequence(cStandalone)) : null,
         cPairedLong, cPairedShort,
         failedAuction, bracketBreakout,
-        valueAreaResp?.type === 'VALUE_AREA_RESPONSIVE_LONG' ? valueAreaResp : null,
-        cStandalone?.type === 'C_STANDALONE_UP' ? cStandalone : null,
-        trt?.type === 'TRT_SHORT' ? trt : null,
       ].filter(Boolean);
       // Priority selection: candidates array is ordered by priority.
       // Take the first valid candidate, but check for directional conflicts
@@ -4272,6 +4461,39 @@ export default function createACDRouter(io) {
           active.paceProfile = prof.style;
           active.description = brief.join('\n\n') + (active.description ? '\n\n---\n\n' + active.description : '');
         }
+      }
+
+      // Persist early-touch backfills (fire-and-forget, runs regardless of whether an
+      // ACTIVE candidate also fired this poll — this must NOT be gated behind the
+      // `if (!active) return` below, since the whole point is to record touches on
+      // polls where nothing live fired). SHADOW status only — never an alert.
+      if (backfilledTouches.length > 0) {
+        const sessionEndStr = `${todayET} 13:00:00`;
+        (async () => {
+          for (const bt of backfilledTouches) {
+            try {
+              const existing = await query(
+                `SELECT 1 FROM active_setups WHERE trade_date=$1 AND setup_type=$2 LIMIT 1`,
+                [todayET, bt.type]
+              );
+              if (existing.rows.length) continue; // already recorded (ACTIVE or SHADOW) this day
+              const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
+              const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+              await query(`
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
+                  entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
+                  price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
+                  status, resolution_method)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','EARLY_TOUCH_BACKFILL')
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+              `, [
+                todayET, bt.type, firedAtBackfill, sessionEndStr,
+                bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
+                bt.entry, bt.history.winRate, bt.history.occurrences, bt.history.avgPnl, bt.history.t1HitRate,
+              ]);
+            } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
+          }
+        })();
       }
 
       if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries });
@@ -4933,6 +5155,594 @@ export default function createACDRouter(io) {
       if (!r.rows.length) return res.status(404).json({ error: 'not found' });
       res.json(r.rows[0]);
     } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Performance Audit — comprehensive setup/edge backtest results
+  router.get('/performance-audit', async (req, res) => {
+    try {
+      const latest = await query(`SELECT MAX(run_date)::text as d FROM performance_audit`);
+      const runDate = latest.rows[0]?.d;
+      if (!runDate) return res.json({ results: [], runDate: null });
+      const results = await query(`
+        SELECT signal_type, signal_name, window_days, sample_size,
+               win_rate::float, ev_per_trade::float, total_pnl::float,
+               avg_mfe::float, p50_mfe::float, p75_mfe::float,
+               avg_mae::float, p50_mae::float, p75_mae::float, p90_mae::float,
+               recommendation, notes
+        FROM performance_audit WHERE run_date = $1
+        ORDER BY signal_type, ev_per_trade DESC NULLS LAST
+      `, [runDate]);
+      res.json({ results: results.rows, runDate });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Regime-Adaptive Level Performance
+  router.get('/level-regime-performance', async (req, res) => {
+    try {
+      const { vol, dir, range } = req.query;
+      let where = 'WHERE sample_size >= 5';
+      const params = [];
+      if (vol) { params.push(vol); where += ` AND vol_regime = $${params.length}`; }
+      if (dir) { params.push(dir); where += ` AND dir_regime = $${params.length}`; }
+      if (range) { params.push(range); where += ` AND range_regime = $${params.length}`; }
+      const results = await query(`
+        SELECT level_name as level, vol_regime, dir_regime, range_regime,
+               sample_size, win_rate::float, ev_per_trade::float,
+               avg_mfe::float, avg_mae::float, vs_overall
+        FROM level_regime_performance ${where}
+        ORDER BY ev_per_trade DESC NULLS LAST
+      `, params);
+      res.json({ levels: results.rows });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Unified Setup/Edge Table — single source of truth for all tradeable signals
+  // ═══════════════════════════════════════════════════════════════════════
+  router.get('/performance-audit/unified', async (req, res) => {
+    try {
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+      // 1. Latest results per signal_type — each signal type has its own run cadence,
+      // so a single global MAX(run_date) hides older signal types whenever any
+      // fast-cycling type (e.g. ON_INVENTORY) runs and bumps the global max.
+      const latestRunQ = await query(`SELECT MAX(run_date)::text as d FROM performance_audit`);
+      const runDate = latestRunQ.rows[0]?.d;
+      if (!runDate) return res.json({ setups: [], runDate: null, currentPrice: null });
+
+      const auditQ = await query(`
+        WITH latest_per_type AS (
+          SELECT signal_type, MAX(run_date) as latest_date
+          FROM performance_audit GROUP BY signal_type
+        )
+        SELECT pa.signal_type, pa.signal_name, pa.sample_size,
+               pa.win_rate::float, pa.ev_per_trade::float, pa.total_pnl::float,
+               pa.avg_mfe::float, pa.p50_mfe::float, pa.p75_mfe::float,
+               pa.avg_mae::float, pa.p50_mae::float, pa.p75_mae::float, pa.p90_mae::float,
+               pa.current_stop::float, pa.current_target::float,
+               pa.optimal_stop::float, pa.optimal_target::float,
+               pa.recommendation, pa.notes
+        FROM performance_audit pa
+        JOIN latest_per_type l ON pa.signal_type = l.signal_type AND pa.run_date = l.latest_date
+        ORDER BY pa.signal_type, pa.ev_per_trade DESC NULLS LAST
+      `);
+
+      // 2. Current price
+      const priceQ = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const currentPrice = priceQ.rows[0]?.close || null;
+
+      // 3. ATR(20) from daily true ranges
+      let atr20 = null;
+      try {
+        const atrQ = await query(`
+          WITH daily AS (
+            SELECT ts::date as d, MAX(high)::float as hi, MIN(low)::float as lo
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY ts::date ORDER BY d DESC LIMIT 21
+          ),
+          trs AS (
+            SELECT hi - lo as tr FROM daily ORDER BY d DESC LIMIT 20
+          )
+          SELECT AVG(tr)::float as atr20 FROM trs
+        `);
+        atr20 = atrQ.rows[0]?.atr20 ? Math.round(atrQ.rows[0].atr20) : null;
+      } catch (_) {}
+
+      // 4. Compute level prices
+      // PD VA levels
+      let pdPOC = null, pdVAH = null, pdVAL = null;
+      const pdVaQ = await query(`
+        SELECT poc::float, vah::float, val::float FROM developing_value_log
+        WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
+      `, [todayET]);
+      if (pdVaQ.rows[0]) {
+        pdPOC = pdVaQ.rows[0].poc;
+        pdVAH = pdVaQ.rows[0].vah;
+        pdVAL = pdVaQ.rows[0].val;
+      }
+
+      // Floor pivots from prior day H/L/C
+      let floorP = null, floorR1 = null, floorS1 = null;
+      const pdDvQ = await query(`
+        SELECT session_high::float as hi, session_low::float as lo, session_close::float as cl
+        FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
+      `, [todayET]);
+      if (pdDvQ.rows[0]) {
+        const pdDv = pdDvQ.rows[0];
+        floorP = (pdDv.hi + pdDv.lo + pdDv.cl) / 3;
+        floorR1 = 2 * floorP - pdDv.lo;
+        floorS1 = 2 * floorP - pdDv.hi;
+      }
+
+      // OR High/Low from today's ACD log
+      let orH = null, orL = null;
+      const acdQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
+      if (acdQ.rows[0]) {
+        orH = acdQ.rows[0].or_high;
+        orL = acdQ.rows[0].or_low;
+      }
+
+      // IB High/Low from today's bars (9:30-10:30)
+      let ibHigh = null, ibLow = null;
+      const ibQ = await query(`
+        SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+      `, [todayET]);
+      if (ibQ.rows[0]) {
+        ibHigh = ibQ.rows[0].ib_high;
+        ibLow = ibQ.rows[0].ib_low;
+      }
+
+      // PD IB Mid (and individual PD IB High/Low)
+      let pdIbMid = null, pdIbHigh = null, pdIbLow = null;
+      try {
+        const pdIbQ = await query(`
+          SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+          FROM price_bars_primary WHERE symbol='NQ'
+            AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630)
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        `, [todayET]);
+        if (pdIbQ.rows[0]?.ibh) {
+          pdIbHigh = pdIbQ.rows[0].ibh;
+          pdIbLow  = pdIbQ.rows[0].ibl;
+          pdIbMid  = (pdIbHigh + pdIbLow) / 2;
+        }
+      } catch (_) {}
+
+      // PD OR Mid (and individual PD OR High/Low)
+      let pdOrMid = null, pdOrHigh = null, pdOrLow = null;
+      try {
+        const pdOrQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
+        if (pdOrQ.rows[0]?.or_high) {
+          pdOrHigh = pdOrQ.rows[0].or_high;
+          pdOrLow  = pdOrQ.rows[0].or_low;
+          pdOrMid  = (pdOrHigh + pdOrLow) / 2;
+        }
+      } catch (_) {}
+
+      // 5D OR Mid (rolling composite)
+      let or5Mid = null;
+      try {
+        const or5Q = await query(`
+          SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
+            SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log
+            WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5
+          ) t
+        `, [todayET]);
+        if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
+      } catch (_) {}
+
+      // IB Mid (today)
+      const ibMid = ibHigh && ibLow ? (ibHigh + ibLow) / 2 : null;
+      // OR Mid (today)
+      const orMid = orH && orL ? (orH + orL) / 2 : null;
+
+      // PD Session Mid
+      let pdSessMid = null;
+      try {
+        const pdSessQ = await query(`
+          SELECT session_high::float as hi, session_low::float as lo
+          FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
+        `, [todayET]);
+        if (pdSessQ.rows[0]?.hi) pdSessMid = (pdSessQ.rows[0].hi + pdSessQ.rows[0].lo) / 2;
+      } catch (_) {}
+
+      // 5. Current regime (vol/dir/range)
+      let currentRegime = { vol: 'NORMAL', dir: 'NEUTRAL', range: 'NORMAL' };
+      try {
+        // Use the same methodology as the backtest script
+        const trQ = await query(`
+          WITH daily AS (
+            SELECT ts::date as d,
+              MAX(high)::float as hi, MIN(low)::float as lo, MAX(close)::float as cl
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY ts::date ORDER BY d DESC LIMIT 25
+          )
+          SELECT d, hi - lo as tr, cl FROM daily ORDER BY d ASC
+        `);
+        const days = trQ.rows;
+        if (days.length >= 21) {
+          const trs = days.map(d => d.tr);
+          const closes = days.map(d => d.cl);
+          const atr20v = trs.slice(-20).reduce((s, v) => s + v, 0) / 20;
+          const atr5 = trs.slice(-5).reduce((s, v) => s + v, 0) / 5;
+          const volZ = atr20v > 0 ? (atr5 / atr20v - 1) * 3 : 0; // simplified z-score
+          currentRegime.vol = volZ > 0.5 ? 'EXPANDING' : volZ < -0.5 ? 'CONTRACTING' : 'NORMAL';
+
+          // Direction from close drift
+          const close5 = closes.slice(-5);
+          const close20 = closes.slice(-20);
+          const drift5 = close5.length >= 2 ? (close5[close5.length - 1] - close5[0]) / atr20v : 0;
+          currentRegime.dir = drift5 > 0.5 ? 'BULLISH' : drift5 < -0.5 ? 'BEARISH' : 'NEUTRAL';
+
+          // Range
+          const lastTR = trs[trs.length - 1];
+          const rangeRatio = atr20v > 0 ? lastTR / atr20v : 1;
+          currentRegime.range = rangeRatio > 1.3 ? 'WIDE' : rangeRatio < 0.7 ? 'NARROW' : 'NORMAL';
+        }
+      } catch (_) {}
+
+      // 6. Regime fit from level_regime_performance
+      const regimeQ = await query(`
+        SELECT level_name, vs_overall, sample_size, win_rate::float, ev_per_trade::float
+        FROM level_regime_performance
+        WHERE vol_regime = $1 AND dir_regime = $2 AND range_regime = $3
+          AND sample_size >= 5
+      `, [currentRegime.vol, currentRegime.dir, currentRegime.range]);
+      const regimeFitMap = {};
+      for (const r of regimeQ.rows) {
+        regimeFitMap[r.level_name] = r.vs_overall;
+      }
+
+      // 7. Recent 10-day and 30-day per-level performance (quick replay)
+      const recent10d = {}, recent30d = {};
+      try {
+        const last30Days = await query(`
+          SELECT DISTINCT ts::date::text as d FROM price_bars_primary
+          WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY d DESC LIMIT 30
+        `);
+        const all30Dates = last30Days.rows.map(r => r.d);
+        const recentDates = all30Dates.slice(0, 10);
+        if (recentDates.length >= 5) {
+          // Get all resolved setups from the last 10 days
+          const recentSetups = await query(`
+            SELECT setup_type, resolution FROM active_setups
+            WHERE trade_date = ANY($1::date[]) AND resolution IN ('TARGET_HIT','STOP_HIT')
+          `, [recentDates]);
+          // Group by setup_type
+          for (const r of recentSetups.rows) {
+            const name = r.setup_type.replace(/_FADE_(LONG|SHORT)$/, '').replace(/_FADE$/, '');
+            if (!recent10d[name]) recent10d[name] = { wins: 0, total: 0 };
+            recent10d[name].total++;
+            if (r.resolution === 'TARGET_HIT') recent10d[name].wins++;
+          }
+          // Replay ALL levels for each of the last 30 days (10d is a subset)
+          for (const date of all30Dates) {
+            const dvQ = await query(`SELECT poc::float, vah::float, val::float, session_high::float as hi, session_low::float as lo, session_close::float as cl FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]);
+            const dv = dvQ.rows[0];
+            if (!dv) continue;
+            const dayBars = await query(`
+              SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min, close::float, high::float, low::float FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 720
+              ORDER BY ts
+            `, [date]);
+            if (dayBars.rows.length < 30) continue;
+
+            // Compute all levels for this day
+            const fp = dv.hi && dv.lo && dv.cl ? (dv.hi + dv.lo + dv.cl) / 3 : null;
+            const fr1 = fp ? 2 * fp - dv.lo : null;
+            const fs1 = fp ? 2 * fp - dv.hi : null;
+            const orBars10 = dayBars.rows.filter(b => b.et_min < 575);
+            const orH10 = orBars10.length ? Math.max(...orBars10.map(b => b.high)) : null;
+            const ibBars10 = dayBars.rows.filter(b => b.et_min < 630);
+            const ibH10 = ibBars10.length ? Math.max(...ibBars10.map(b => b.high)) : null;
+            const ibL10 = ibBars10.length ? Math.min(...ibBars10.map(b => b.low)) : null;
+            const pdIbQ10 = await query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({rows:[{}]}));
+            const pdIbMid10 = pdIbQ10.rows[0]?.h ? (pdIbQ10.rows[0].h + pdIbQ10.rows[0].l) / 2 : null;
+            const pdOrQ10 = await query(`SELECT or_high::float as h, or_low::float as l FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({rows:[{}]}));
+            const pdOrMid10 = pdOrQ10.rows[0]?.h ? (pdOrQ10.rows[0].h + pdOrQ10.rows[0].l) / 2 : null;
+            const pdSessMid10 = dv.hi && dv.lo ? (dv.hi + dv.lo) / 2 : null;
+
+            const allLevels = {
+              PD_POC: dv.poc, PD_VAL: dv.val, PD_VAH: dv.vah,
+              FLOOR_PIVOT: fp, FLOOR_R1: fr1, FLOOR_S1: fs1,
+              OR_HIGH: orH10, IB_HIGH: ibH10, IB_LOW: ibL10,
+              PD_IB_MID: pdIbMid10, PD_OR_MID: pdOrMid10, PD_SESSION_MID: pdSessMid10,
+              PD_OR_HIGH: pdOrQ10.rows[0]?.h, PD_OR_LOW: pdOrQ10.rows[0]?.l,
+              PD_IB_HIGH: pdIbQ10.rows[0]?.h, PD_IB_LOW: pdIbQ10.rows[0]?.l,
+            };
+
+            const isIn10d = recentDates.includes(date);
+            for (const [name, price] of Object.entries(allLevels)) {
+              if (!price) continue;
+              let touched = false;
+              // Start at i=1 so we can always read the previous bar to determine approach direction
+              for (let i = 1; i < dayBars.rows.length && !touched; i++) {
+                if (Math.abs(dayBars.rows[i].close - price) <= 10) {
+                  touched = true;
+                  if (!recent30d[name]) recent30d[name] = { wins: 0, total: 0 };
+                  recent30d[name].total++;
+                  if (isIn10d) {
+                    if (!recent10d[name]) recent10d[name] = { wins: 0, total: 0 };
+                    recent10d[name].total++;
+                  }
+                  // Directional fade logic: determine approach direction from prior bar
+                  const fromAbove = dayBars.rows[i - 1].close > price;
+                  const horizon = Math.min(i + 30, dayBars.rows.length);
+                  let won = false;
+                  for (let j = i + 1; j < horizon; j++) {
+                    const cl = dayBars.rows[j].close;
+                    // Win: price bounces back in approach direction (20pt target)
+                    if (fromAbove && cl > price + 20) { won = true; break; }
+                    if (!fromAbove && cl < price - 20) { won = true; break; }
+                    // Loss: price breaks through (30pt stop)
+                    if (fromAbove && cl < price - 30) break;
+                    if (!fromAbove && cl > price + 30) break;
+                  }
+                  if (won) {
+                    recent30d[name].wins++;
+                    if (isIn10d) recent10d[name].wins++;
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      // Monthly levels
+      let monthOpen = null, pmVAHaudit = null, pmVALaudit = null;
+      let m1VAHaudit = null, m1VALaudit = null, m3VAHaudit = null, m3VALaudit = null;
+      try {
+        const moQ = await query(`
+          SELECT open::float as mo FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date = (
+            SELECT MIN(ts::date) FROM price_bars_primary
+            WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+          ) ORDER BY ts LIMIT 1
+        `);
+        monthOpen = moQ.rows[0]?.mo || null;
+      } catch (_) {}
+      try {
+        const pmVaFull = await query(`
+          WITH vp AS (
+            SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY 1
+          ), tot AS (SELECT SUM(vol)::float as t FROM vp),
+          cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
+          SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
+                 MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
+        `);
+        pmVAHaudit = pmVaFull.rows[0]?.vah || null;
+        pmVALaudit = pmVaFull.rows[0]?.val || null;
+      } catch (_) {}
+      try {
+        // Rolling 1M and 3M VA — using same volume-profile method
+        for (const [days, setter] of [[30, 'm1'], [90, 'm3']]) {
+          const vaQ = await query(`
+            WITH vp AS (
+              SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
+              FROM price_bars_primary WHERE symbol='NQ'
+                AND ts::date >= ($1::date - $2 * INTERVAL '1 day') AND ts::date < $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+              GROUP BY 1
+            ), tot AS (SELECT SUM(vol)::float as t FROM vp),
+            cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
+            SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
+                   MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
+          `, [todayET, days]);
+          if (setter === 'm1') { m1VAHaudit = vaQ.rows[0]?.vah || null; m1VALaudit = vaQ.rows[0]?.val || null; }
+          else                  { m3VAHaudit = vaQ.rows[0]?.vah || null; m3VALaudit = vaQ.rows[0]?.val || null; }
+        }
+      } catch (_) {}
+
+      // Map signal names to level prices and metadata
+      const levelMap = {
+        'PD_POC':       { price: pdPOC,    bestCtx: '$38/trade, system anchor (22% of P&L)', freq: '~1/day' },
+        '5D_OR_MID':    { price: or5Mid,   bestCtx: 'Rolling composite star — 94% WR', freq: '~0.5/day' },
+        'PD_VAL':       { price: pdVAL,    bestCtx: 'Consistent performer, support fade', freq: '~0.8/day' },
+        'PD_VAH':       { price: pdVAH,    bestCtx: 'High frequency, solid WR', freq: '~1.2/day' },
+        'PD_IB_MID':    { price: pdIbMid,  bestCtx: '83% WR, best PD midpoint', freq: '~0.5/day' },
+        'FLOOR_PIVOT':  { price: floorP,   bestCtx: 'Structural reference', freq: '~0.8/day' },
+        'OR_HIGH':      { price: orH,      bestCtx: 'AM session strong', freq: '~0.7/day' },
+        'FLOOR_R1':     { price: floorR1,  bestCtx: 'Thursday 1PM specialist', freq: '~0.5/day' },
+        'PD_OR_MID':    { price: pdOrMid,  bestCtx: 'Good midpoint fade', freq: '~0.5/day' },
+        'FLOOR_S1':     { price: floorS1,  bestCtx: 'Support level', freq: '~0.5/day' },
+        'IB_HIGH':      { price: ibHigh,   bestCtx: '90% WR level fade', freq: '~0.8/day' },
+        'IB_LOW':       { price: ibLow,    bestCtx: '88% WR level fade', freq: '~0.8/day' },
+        'IB_MID':       { price: ibMid,    bestCtx: 'Midpoint reference', freq: '~1/day' },
+        'ON_HIGH':      { price: null,     bestCtx: 'Overnight high', freq: '~0.5/day' },
+        'PD_IB_LOW':    { price: pdIbLow,  bestCtx: 'PD IB Low', freq: '~0.5/day' },
+        'PD_IB_HIGH':   { price: pdIbHigh, bestCtx: 'PD IB High', freq: '~0.5/day' },
+        'PD_OR_HIGH':   { price: pdOrHigh, bestCtx: 'PD OR High', freq: '~0.5/day' },
+        'PD_OR_LOW':    { price: pdOrLow,  bestCtx: 'PD OR Low', freq: '~0.5/day' },
+        'PD_SESSION_MID': { price: pdSessMid, bestCtx: 'PD session midpoint', freq: '~0.5/day' },
+        '10D_IB_MID':   { price: null,     bestCtx: '10-day IB composite', freq: '~0.3/day' },
+        'IB_MID_SCALP': { price: ibMid,    bestCtx: '82% WR, tight target', freq: '~1.5/day' },
+        'OR_MID_AFTER_IB': { price: orMid, bestCtx: 'Post-IB OR midpoint', freq: '~1/day' },
+        'TRT_LONG':     { price: null,     bestCtx: 'Trend resumption, high R:R', freq: '~0.3/day' },
+        'IB_BEARISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.4/day' },
+        'IB_BULLISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.5/day' },
+        'MONTH_OPEN':  { price: monthOpen,   bestCtx: '72% WR N=39, positive EV both sides', freq: '~1/month' },
+        'PM_VAH':      { price: pmVAHaudit,  bestCtx: '77% WR N=24, $28 EV long side', freq: '~monthly' },
+        'PM_VAL':      { price: pmVALaudit,  bestCtx: 'N=11 (thin)', freq: '~monthly' },
+        'M1_VAH':      { price: m1VAHaudit,  bestCtx: '68% WR N=66, marginal EV', freq: '~daily' },
+        'M1_VAL':      { price: m1VALaudit,  bestCtx: '58% WR N=35, EV negative', freq: '~daily' },
+        'M3_VAH':      { price: m3VAHaudit,  bestCtx: '64% WR N=54, EV negative', freq: '~daily' },
+        'M3_VAL':      { price: null,        bestCtx: 'N=18 (thin)', freq: '~daily' },
+      };
+
+      // Build unified setups array
+      const setups = [];
+      // Per-setup overrides for scalps and runner targets (T2 = P75 MFE)
+      const overrides = {
+        'IB_MID_SCALP':    { stop: 50, t1: 15, t2: 30, freq: '3/day' },
+        'OR_MID_AFTER_IB': { stop: 35, t1: 20, t2: 40, freq: '5/day' },
+        'PD_POC':          { t2: 65 },
+        '5D_OR_MID':       { t2: 80 },
+        'PD_VAL':          { t2: 60 },
+        'PD_VAH':          { t2: 60 },
+        'PD_IB_MID':       { t2: 38 },
+        'FLOOR_PIVOT':     { t2: 65 },
+        'OR_HIGH':         { t2: 55 },
+        'FLOOR_R1':        { t2: 65 },
+        'PD_OR_MID':       { t2: 65 },
+        'IB_HIGH':         { t2: 55 },
+        'IB_LOW':          { t2: 55 },
+        'TRT_LONG':        { stop: 143, t1: 60, t2: 120 },
+      };
+
+      // Priority order for dedup: LEVEL_FADE / PD_LEVEL / SCALP / ROLLING > LEVEL_FADE_AUDIT / MIDPOINT_FADE_AUDIT > SYSTEM_BACKTEST
+      // UNIFIED_BACKTEST and other analytical types are not displayed here (they feed keepLevels directly)
+      const displayPrimary = new Set(['LEVEL_FADE', 'PD_LEVEL', 'SCALP', 'ROLLING']);
+      const hasPrimary = (name) => auditQ.rows.some(r => r.signal_name === name && displayPrimary.has(r.signal_type));
+      const hasSystemBacktest = (name) => auditQ.rows.some(r => r.signal_name === name && r.signal_type === 'SYSTEM_BACKTEST');
+      for (const row of auditQ.rows) {
+        if (row.signal_type === 'SYSTEM_SUMMARY') continue;
+        if (row.signal_type === 'ROLLING_IB_AUDIT') continue;
+        // UNIFIED_BACKTEST feeds keepLevels directly — not for audit display
+        if (row.signal_type === 'UNIFIED_BACKTEST') continue;
+        // SYSTEM_BACKTEST is fallback only when no primary source (LEVEL_FADE etc.) exists
+        if (row.signal_type === 'SYSTEM_BACKTEST' && hasPrimary(row.signal_name)) continue;
+        // Audit types are suppressed when a primary source or SYSTEM_BACKTEST exists for the same signal
+        if ((row.signal_type === 'LEVEL_FADE_AUDIT' || row.signal_type === 'MIDPOINT_FADE_AUDIT' || row.signal_type === 'PD_IB_AUDIT') && (hasPrimary(row.signal_name) || hasSystemBacktest(row.signal_name))) continue;
+
+        // Normalize win_rate: PD_IB_AUDIT and some older audit scripts stored on 0-100 scale instead of 0-1
+        const winRate = row.win_rate > 1 && (row.signal_type === 'LEVEL_FADE_AUDIT' || row.signal_type === 'MIDPOINT_FADE_AUDIT' || row.signal_type === 'PD_IB_AUDIT')
+          ? row.win_rate / 100 : row.win_rate;
+
+        const meta = levelMap[row.signal_name] || {};
+        const levelPrice = meta.price != null ? Math.round(meta.price * 100) / 100 : null;
+        const dist = levelPrice != null && currentPrice != null ? Math.round(Math.abs(currentPrice - levelPrice)) : null;
+
+        // Determine status — skip rows with no deterministic status (e.g. SYSTEM_BACKTEST fallbacks, MON_BACKTEST, etc.)
+        let status;
+        if (row.recommendation === 'KEEP' || row.recommendation === 'ACTIVE') status = 'ACTIVE';
+        else if (row.recommendation === 'DIRECTIONAL' || row.recommendation === 'CONTEXT' || row.recommendation === 'DLL_TRADEABLE' || row.recommendation === 'THIN') status = 'CONTEXT';
+        else if (row.recommendation === 'CUT') status = 'REMOVED';
+        else continue; // skip analytical rows with no display status (null, non-standard)
+
+        // Determine type
+        let type;
+        if (row.signal_type === 'SCALP') type = 'SCALP';
+        else if (row.signal_type === 'CONTEXT') type = 'CONTEXT';
+        else if (row.signal_type === 'SETUP') type = 'SETUP';
+        else type = 'LEVEL_FADE';
+
+        // Next 2 day probability based on ATR distance
+        let next2DayProb = null;
+        if (dist != null && atr20 != null) {
+          if (dist <= atr20 * 0.5) next2DayProb = 'VERY_HIGH';
+          else if (dist <= atr20) next2DayProb = 'HIGH';
+          else if (dist <= atr20 * 1.5) next2DayProb = 'MEDIUM';
+          else next2DayProb = 'LOW';
+        }
+
+        // Regime fit
+        const regimeFit = regimeFitMap[row.signal_name] || null;
+
+        // Tests applied
+        const tests = [];
+        if (row.signal_type === 'SYSTEM_BACKTEST') tests.push(`180d system backtest (N=${row.sample_size})`);
+        else if (row.signal_type === 'LEVEL_FADE') tests.push(`Level fade audit (N=${row.sample_size})`);
+        else if (row.signal_type === 'SCALP') tests.push(`Scalp backtest (N=${row.sample_size})`);
+        else if (row.signal_type === 'CONTEXT') tests.push(`Context analysis (N=${row.sample_size})`);
+        else tests.push(`${row.signal_type} (N=${row.sample_size})`);
+        if (regimeFit) tests.push('regime analysis');
+        if (row.avg_mae != null) tests.push('MAE/MFE audit');
+
+        const ov = overrides[row.signal_name] || {};
+        setups.push({
+          name: row.signal_name.replace(/_/g, ' '),
+          rawName: row.signal_name,
+          type,
+          signalType: row.signal_type,
+          wr: winRate,
+          ev: row.ev_per_trade,
+          totalPnl: status === 'ACTIVE' ? row.total_pnl : null,
+          n: row.sample_size,
+          stop: ov.stop || row.current_stop || (row.p75_mae ? Math.round(row.p75_mae) : null),
+          t1: ov.t1 || row.current_target || (row.p50_mfe ? Math.round(row.p50_mfe) : null),
+          t2: ov.t2 || (row.p75_mfe ? Math.round(row.p75_mfe) : null),
+          runner: ov.t2 ? true : !!(row.p75_mfe && row.p50_mfe && row.p75_mfe > row.p50_mfe * 1.2),
+          mae: row.avg_mae,
+          mfe: row.avg_mfe,
+          p50mae: row.p50_mae,
+          p75mae: row.p75_mae,
+          p90mae: row.p90_mae,
+          p50mfe: row.p50_mfe,
+          bestContext: meta.bestCtx || row.notes || '',
+          regimeFit,
+          frequency: ov.freq || meta.freq || null,
+          levelPrice,
+          distFromPrice: dist,
+          next2DayProb,
+          wr10d: recent10d[row.signal_name]?.total >= 2 ? recent10d[row.signal_name].wins / recent10d[row.signal_name].total : null,
+          n10d: recent10d[row.signal_name]?.total || 0,
+          wr30d: recent30d[row.signal_name]?.total >= 3 ? recent30d[row.signal_name].wins / recent30d[row.signal_name].total : null,
+          n30d: recent30d[row.signal_name]?.total || 0,
+          trend10d: (() => {
+            const r10 = recent10d[row.signal_name];
+            if (!r10 || r10.total < 2) return null;
+            const wr10 = r10.wins / r10.total;
+            const diff = wr10 - (winRate || 0);
+            return diff > 0.05 ? 'UP' : diff < -0.05 ? 'DOWN' : 'FLAT';
+          })(),
+          testsApplied: tests.join(', '),
+          status,
+          recommendation: row.recommendation,
+          notes: row.notes,
+        });
+      }
+
+      // Sort: ACTIVE first (by EV desc), then CONTEXT, then REMOVED
+      const statusOrder = { ACTIVE: 0, CONTEXT: 1, REMOVED: 2 };
+      setups.sort((a, b) => {
+        const so = (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3);
+        if (so !== 0) return so;
+        return (b.ev || 0) - (a.ev || 0);
+      });
+
+      // Final-pass dedup by rawName — after sort so highest-status entry wins.
+      // Prevents duplicates when the same signal appears in multiple signal types
+      // (e.g. a level in LEVEL_FADE_AUDIT but not the current LEVEL_FADE run, plus SYSTEM_BACKTEST).
+      const seenNames = new Set();
+      const dedupedSetups = setups.filter(s => {
+        if (seenNames.has(s.rawName)) return false;
+        seenNames.add(s.rawName);
+        return true;
+      });
+
+      // Get SYSTEM_SUMMARY for the header
+      const summary = auditQ.rows.find(r => r.signal_type === 'SYSTEM_SUMMARY');
+
+      res.json({
+        currentPrice,
+        atr20,
+        currentRegime,
+        runDate,
+        systemSummary: summary ? {
+          totalPnl: summary.total_pnl,
+          totalTrades: summary.sample_size,
+          wr: summary.win_rate,
+          ev: summary.ev_per_trade,
+          notes: summary.notes,
+        } : null,
+        setups: dedupedSetups,
+      });
+    } catch (err) {
+      console.error('Unified audit error:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

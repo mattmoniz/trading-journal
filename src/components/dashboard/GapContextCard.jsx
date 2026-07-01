@@ -114,7 +114,7 @@ function GapRow({ gap, isLargest }) {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 3 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: dirColor }}>{dirLabel}</span>
         <span style={{ fontSize: 11, color: '#94a3b8' }}>{fmtDate(gap.fromDate)} → {fmtDate(gap.toDate)}</span>
-        <span style={{ fontSize: 10, color: '#64748b' }}>({gap.sessionAge} {gap.sessionAge === 1 ? 'session' : 'sessions'} ago)</span>
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>({gap.sessionAge} {gap.sessionAge === 1 ? 'session' : 'sessions'} ago)</span>
       </div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'baseline', flexWrap: 'wrap', marginBottom: 3 }}>
         <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>
@@ -127,7 +127,7 @@ function GapRow({ gap, isLargest }) {
       </div>
       <div style={{ fontSize: 11, color: statusColor, marginBottom: biasText ? 3 : 0 }}>{statusText}</div>
       {biasText && (
-        <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>{biasText}</div>
+        <div style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>{biasText}</div>
       )}
     </div>
   );
@@ -170,13 +170,13 @@ export default function GapContextCard() {
   return (
     <div style={cardStyle}>
       <div style={titleStyle}>
-        Open RTH Gaps <span style={{ fontWeight: 400, color: '#475569' }}>({sorted.length} unfilled)</span>
+        Open RTH Gaps <span style={{ fontWeight: 400, color: '#64748b' }}>({sorted.length} unfilled)</span>
       </div>
       {sorted.map((gap, i) => (
         <GapRow key={`${gap.fromDate}-${gap.toDate}`} gap={gap} isLargest={gap === largestGap} />
       ))}
       {data.currentPrice && (
-        <div style={{ fontSize: 10, color: '#475569', marginTop: 4, borderTop: '1px solid #1e293b', paddingTop: 6 }}>
+        <div style={{ fontSize: 12, color: '#64748b', marginTop: 4, borderTop: '1px solid #1e293b', paddingTop: 6 }}>
           Current price: {data.currentPrice.toLocaleString()}
         </div>
       )}

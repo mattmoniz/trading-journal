@@ -1,6 +1,8 @@
-# Trading Journal — Architecture Inventory
+# Trading Journal — Architecture Inventory (SUPERSEDED 2026-06-30)
 
-> Perpetual reference document. Describes what *actually exists* in the codebase as of 2026-06-07. Not a roadmap — aspirational/parked features are called out explicitly in §9.
+> **This document is stale and kept for historical reference only.** The current, maintained architecture doc is [/ARCHITECTURE.md](../ARCHITECTURE.md) at the repo root. Port numbers, table counts (this doc says 43; live DB has 122), and most of §9's known issues have moved — see [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for the re-verified, current tech-debt list.
+>
+> Describes what *actually existed* in the codebase as of 2026-06-07. Not a roadmap — aspirational/parked features were called out explicitly in §9.
 
 ---
 

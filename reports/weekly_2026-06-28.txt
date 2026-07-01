@@ -1,0 +1,112 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-06-28  (2026-06-22 – 2026-06-28)
+Generated   : 2026-06-28T22:00:08.964Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+⚠ BASELINE MISSING — re-import needed for accurate P&L
+  (First-day CumPL diff uses 0 as prior balance; days marked * are unreliable)
+
+Trading days  : 3
+Total P&L     : -$1515.50 (2/3 days reliable)
+Daily avg     : -$757.75
+Win days      : 0 / 2 (0%)
+Best day      : 2026-06-24  -$726.50
+Worst day     : 2026-06-22  -$789.00
+
+  2026-06-22  -$789.00
+  2026-06-24  -$726.50
+  2026-06-25  +$2839.00 *
+
+SETUP STATISTICS
+----------------------------------------
+A_DOWN_WEAK                    fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+C_PAIRED_LONG                  fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+C_PAIRED_SHORT                 fired: 3 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$1795.00
+C_STANDALONE_UP                fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+IB_BEARISH                     fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$1173.00
+IB_BULLISH                     fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+IB_HIGH_FADE_LONG              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$39.00
+IB_HIGH_FADE_SHORT             fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$51.00
+OPEN_TEST_DRIVE_SHORT          fired: 3 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$1805.00
+PD_POC_FADE_LONG               fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$51.00
+PD_POC_FADE_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$39.00
+STOP_SWEEP_LONG                fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$478.50
+STOP_SWEEP_SHORT               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$58.50
+VWAP_MAGNET_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$95.00
+VWAP_MAGNET_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$39.00
+
+DYNAMIC MINED EDGES (Statistical shifts)
+----------------------------------------
+  🚀 Active Boosters (Size Up / Confirm):
+    · TRT_SHORT                    | Thursday               | WR: 60.0% vs Base: 33.3% (+26.7%) (p=0.0404)
+    · VALUE_AREA_RESPONSIVE_SHORT  | Thursday               | WR: 50.0% vs Base: 27.1% (+22.9%) (p=0.0136)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · BRACKET_BREAKOUT_LONG        | Tight OR               | WR: 35.7% vs Base: 17.2% (+18.5%) (p=0.0376)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+
+  🛑 Active Drags (Size Down / Filter):
+    · TRT_SHORT                    | Monday                 | WR: 0.0% vs Base: 33.3% (-33.3%) (p=0.0104)
+    · C_STANDALONE_UP              | Wide OR                | WR: 23.8% vs Base: 37.1% (-13.3%) (p=0.0078)
+    · BRACKET_BREAKOUT_LONG        | Normal OR              | WR: 8.6% vs Base: 17.2% (-8.6%) (p=0.0447)
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : Unknown: 5
+
+  2026-06-22  score: +4  A↑ C↑  [?]
+  2026-06-23  score: +4  A↑ C↑  [?]
+  2026-06-24  score: -4  A↓ C↓  [?]
+  2026-06-25  score: -4  A↓ C↓  [?]
+  2026-06-26  score: +4  A↑ C↑  [?]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 84
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills:  84 | wr: 36% | avg fill pnl: +$15.76
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+No coaching data this week.
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$1515.50 on 3 trading day(s)
+Low win-day rate: 0/3 (0%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-06-28: Performance Interpretation
+
+The zero win-day rate across all three active trading days signals a systematic directional misalignment, not random variance — the trader was consistently on the wrong side of price action throughout the week. In ACD terms, this likely reflects either repeated failed A-up attempts being faded incorrectly, or a broader trend that invalidated opening range expectations day after day. The $1,515.50 loss over just three days suggests position sizing remained normal despite mounting evidence the week's bias reads were off, which compounded the damage.
+
+**Actionable Adjustment:** After two consecutive failed A-level attempts in the same direction on any given day next week, hard-stop all new directional trades for that session and move to observation-only mode — the market is telling you your bias is wrong, and the third attempt will not save the week but will deepen the drawdown.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+WEEK SUMMARY:
+Two trading days, zero annotated fills, -$1,515.50 total P&L. Best day was -$726.50, worst -$789.00. Signal accuracy was mixed: BIAS_LONG wrong on a 73% all-time signal (6/22), A_DOWN wrong in a context that hits 73% (6/24), and zero annotation coverage across 84 fills means none of the week's decisions are reviewable.
+
+STRONGEST MOMENT:
+Insufficient trade data. Zero of 84 fills were annotated, making it impossible to identify a best decision objectively.
+
+BIGGEST LEAK:
+Zero annotation coverage across 84 fills — five consecutive days. This is the dominant leak this week. Without entry/exit prices, MFE, or reasoning logged, give-back cannot be measured, missed setups cannot be tracked, and daily coaching themes (repeated across 6/22–6/26) cannot be validated against actual execution. The cost is not just this week's review — it compounds into every future assessment.
+
+PROCESS GRADE: D
+Zero annotation coverage on 84 fills makes any process evaluation impossible; the grade reflects absence of record-keeping, not P&L alone.
+
+FOCUS FOR NEXT WEEK:
+Annotate every fill with at minimum: entry price, exit price, and one sentence of reasoning. Target 100% coverage. If 84 fills is too many to annotate fully, flag which ones were discretionary versus automated — but zero is not acceptable when the REACTION setup carries a 74% all-time win rate and net +$594.50, and that edge cannot be confirmed without records.
+
+============================================================

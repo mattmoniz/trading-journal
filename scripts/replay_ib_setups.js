@@ -88,9 +88,10 @@ for (const sess of sessionsQ.rows) {
     if (vaQ.rows[0]) { pdVAH = vaQ.rows[0].vah; pdVAL = vaQ.rows[0].val; }
   }
 
-  // Trigger scan: first bar 10:00-11:59 where currentPrice is on the priceSide of ibMid
+  // Trigger scan: first bar 10:00-11:59 where currentPrice is on the priceSide of ibMid.
+  // Select ts::text to avoid JS Date round-trip through system timezone when rebound below.
   const triggerBarsR = await q(`
-    SELECT ts, close::float FROM price_bars WHERE symbol='NQ' AND ts::date=$1
+    SELECT ts::text as ts, close::float FROM price_bars WHERE symbol='NQ' AND ts::date=$1
       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN $2 AND $3
     ORDER BY ts
   `, [trade_date, ET_TRIGGER_START, ET_TRIGGER_END]);

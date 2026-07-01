@@ -32,6 +32,15 @@ import {
 const API_URL = '/api';
 const SOCKET_URL = window.location.origin;
 const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+// etMin = minutes since midnight ET of the most recent bar data was computed from —
+// reflects data freshness (last bar ingested), not browser render/fetch time.
+const fmtEtTime = (etMin) => {
+  if (etMin == null) return null;
+  const h24 = Math.floor(etMin / 60), m = etMin % 60;
+  const ampm = h24 >= 12 ? 'PM' : 'AM';
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm} ET`;
+};
 
 
 
@@ -66,7 +75,7 @@ function InfoTooltip({ text, tooltip, children }) {
       onClick={() => setVisible(v => !v)}>
       {children ? children : (
         <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          width: 14, height: 14, borderRadius: '50%', fontSize: 9, fontWeight: 700,
+          width: 14, height: 14, borderRadius: '50%', fontSize: 11, fontWeight: 700,
           background: 'rgba(100,116,139,0.2)', color: 'var(--text-muted)',
           border: '1px solid rgba(100,116,139,0.35)', cursor: 'help', lineHeight: 1 }}>i</span>
       )}
@@ -80,12 +89,12 @@ function InfoTooltip({ text, tooltip, children }) {
           zIndex: 99999, pointerEvents: 'none', lineHeight: 1.7, whiteSpace: 'pre-line' }}>
           <div style={{ color: '#cbd5e1' }}>{content.text}</div>
           {content.source && (
-            <div style={{ marginTop: 6, fontSize: 13, color: '#475569', borderTop: '1px solid rgba(100,116,139,0.2)', paddingTop: 5 }}>
+            <div style={{ marginTop: 6, fontSize: 13, color: '#64748b', borderTop: '1px solid rgba(100,116,139,0.2)', paddingTop: 5 }}>
               Source: {content.source}
             </div>
           )}
           {content.example && (
-            <div style={{ marginTop: 4, fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>
+            <div style={{ marginTop: 4, fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>
               Example: {content.example}
             </div>
           )}
@@ -124,15 +133,15 @@ function ProfitGivebackBanner({ status }) {
         </div>
         <div style={{ display: 'flex', gap: 12, marginBottom: 28 }}>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Peak Today</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Peak Today</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#22c55e' }}>{fmt$(peak)}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Now</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Now</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: cur >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(cur)}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Given Back</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Given Back</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>-${fmtP(gb)}</div>
           </div>
         </div>
@@ -140,7 +149,7 @@ function ProfitGivebackBanner({ status }) {
           <div style={{ fontSize: 16 }}>🔒</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 2 }}>Session locked</div>
-            <div style={{ fontSize: 12, color: '#64748b' }}>No override. You are done for today.</div>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>No override. You are done for today.</div>
           </div>
         </div>
       </div>
@@ -167,7 +176,7 @@ function OnePMReminderModal({ pnlAtReminder, onAck }) {
         </div>
         {pnlAtReminder != null && (
           <div style={{ background: '#111827', borderRadius: 8, padding: '14px 18px', marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, color: '#64748b' }}>P&L right now:</span>
+            <span style={{ fontSize: 13, color: '#94a3b8' }}>P&L right now:</span>
             <span style={{ fontSize: 20, fontWeight: 800, color: isGreen ? '#22c55e' : '#ef4444', fontFamily: 'monospace' }}>{fmt$(pnlAtReminder)}</span>
           </div>
         )}
@@ -180,7 +189,7 @@ function OnePMReminderModal({ pnlAtReminder, onAck }) {
           </button>
           <button
             onClick={() => onAck('CONTINUE')}
-            style={{ flex: 1, padding: '14px 0', borderRadius: 8, border: '1px solid rgba(100,116,139,0.4)', background: 'transparent', color: '#64748b', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+            style={{ flex: 1, padding: '14px 0', borderRadius: 8, border: '1px solid rgba(100,116,139,0.4)', background: 'transparent', color: '#94a3b8', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
           >
             Continue (logged)
           </button>
@@ -199,7 +208,7 @@ function UpAndDoneNudge({ status, onStop, onDismiss }) {
       <div style={{ background: '#0f1520', border: '1.5px solid rgba(34,197,94,0.5)', borderRadius: 12, padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: '#22c55e', textTransform: 'uppercase' }}>You're Up {fmt$(pnl)}</div>
-          <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 0 0 8px' }}>×</button>
+          <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 0 0 8px' }}>×</button>
         </div>
         <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginBottom: 14 }}>
           Your data: average give-back of <strong style={{ color: '#fde68a' }}>$485–663/day</strong>. Every day. Is today worth the risk?
@@ -213,7 +222,7 @@ function UpAndDoneNudge({ status, onStop, onDismiss }) {
           </button>
           <button
             onClick={onDismiss}
-            style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: '1px solid rgba(100,116,139,0.3)', background: 'transparent', color: '#64748b', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+            style={{ flex: 1, padding: '9px 0', borderRadius: 7, border: '1px solid rgba(100,116,139,0.3)', background: 'transparent', color: '#94a3b8', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
           >
             Keep going
           </button>
@@ -262,7 +271,7 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
           title="Close — review and journaling remain available while locked"
           style={{
             position: 'absolute', top: 14, right: 14,
-            background: 'transparent', border: 'none', color: '#64748b',
+            background: 'transparent', border: 'none', color: '#94a3b8',
             fontSize: 20, lineHeight: 1, cursor: 'pointer', padding: 4,
           }}
         >×</button>
@@ -314,20 +323,20 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
         {/* DLL stats */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 32 }}>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Today</div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Today</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#ef4444' }}>{pnlFmt(pnl)}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Limit</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#64748b' }}>-${dll}</div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Limit</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#94a3b8' }}>-${dll}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#475569', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Near-Limit Days (All-Time)</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: hitAccount.breach_days > 0 ? '#ef4444' : hitAccount.near_limit_days > 0 ? '#f59e0b' : '#64748b' }}>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Near-Limit Days (All-Time)</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: hitAccount.breach_days > 0 ? '#ef4444' : hitAccount.near_limit_days > 0 ? '#f59e0b' : '#94a3b8' }}>
               {hitAccount.near_limit_days || 0}
             </div>
             {hitAccount.breach_days > 0 && (
-              <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: '#ef4444', marginTop: 2 }}>
                 {hitAccount.breach_days} breach{hitAccount.breach_days === 1 ? '' : 'es'}
               </div>
             )}
@@ -344,7 +353,7 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
           <div style={{ fontSize: 16 }}>🔒</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444', marginBottom: 2 }}>Session ended for {accountTag}</div>
-            <div style={{ fontSize: 12, color: '#64748b' }}>No override on trading. Come back tomorrow.</div>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>No override on trading. Come back tomorrow.</div>
           </div>
         </div>
 
@@ -677,11 +686,11 @@ const SETUP_DISPLAY_LABELS = {
 const SETUP_RESOLUTION_TEXT = {
   TARGET_HIT:    { label: 'TARGET HIT',    color: '#22c55e', desc: 'Price reached T1 — target achieved. Nothing left to manage.' },
   STOP_HIT:      { label: 'STOP HIT',      color: '#ef4444', desc: 'Price hit the stop — setup is over. Nothing left to manage.' },
-  TIME_EXPIRED:  { label: 'EXPIRED',       color: '#64748b', desc: 'Setup window closed without resolution.' },
+  TIME_EXPIRED:  { label: 'EXPIRED',       color: '#94a3b8', desc: 'Setup window closed without resolution.' },
   INVALIDATED:   { label: 'INVALIDATED',   color: '#f59e0b', desc: 'Price structure invalidated this setup before/after it triggered.' },
-  SESSION_CLOSED:{ label: 'SESSION CLOSED',color: '#64748b', desc: 'Session ended with this setup unresolved.' },
+  SESSION_CLOSED:{ label: 'SESSION CLOSED',color: '#94a3b8', desc: 'Session ended with this setup unresolved.' },
   PREMISE_BROKEN:{ label: 'PREMISE BROKEN',color: '#ef4444', desc: 'Trade premise invalidated — price broke OR Low (for long) or OR High (for short).' },
-  JUICE_EXHAUSTED:{ label: 'JUICE EXHAUSTED',color: '#64748b', desc: 'Morning drive exhausted — remaining profit potential is too low.' },
+  JUICE_EXHAUSTED:{ label: 'JUICE EXHAUSTED',color: '#94a3b8', desc: 'Morning drive exhausted — remaining profit potential is too low.' },
 };
 
 const SETUP_EVENT_DESCRIPTIONS = {
@@ -781,7 +790,7 @@ function fmtFetchStamp(d) {
 function FetchStamp({ at }) {
   const s = fmtFetchStamp(at);
   if (!s) return null;
-  return <span style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', fontFamily: 'monospace' }}>updated · {s}</span>;
+  return <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic', fontFamily: 'monospace' }}>updated · {s}</span>;
 }
 
 // Dynamically returns detailed, highly articulate execution playbook guidelines for active setups
@@ -872,14 +881,14 @@ function SetupEventModal({ event, onClose }) {
   const playbook = getSetupPlaybookNuance(type, event);
 
   const WinChip = ({ label: l, stat }) => {
-    if (!stat || stat.winRate == null) return <div style={{ textAlign: 'center', minWidth: 56, opacity: 0.4 }}><div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>{l}</div><div style={{ fontSize: 14, color: '#475569' }}>—</div></div>;
+    if (!stat || stat.winRate == null) return <div style={{ textAlign: 'center', minWidth: 56, opacity: 0.4 }}><div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>{l}</div><div style={{ fontSize: 14, color: '#64748b' }}>—</div></div>;
     const wr = stat.winRate;
     const col = wr >= 0.65 ? '#22c55e' : wr >= 0.50 ? '#f59e0b' : '#ef4444';
     return (
       <div style={{ textAlign: 'center', minWidth: 56 }}>
-        <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>
+        <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>
         <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: col }}>{(wr * 100).toFixed(0)}%</div>
-        <div style={{ fontSize: 10, color: '#475569' }}>{stat.sessions != null ? `n=${stat.sessions}` : ''}</div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>{stat.sessions != null ? `n=${stat.sessions}` : ''}</div>
       </div>
     );
   };
@@ -894,7 +903,7 @@ function SetupEventModal({ event, onClose }) {
         style={{ background: '#0f172a', border: `1.5px solid ${borderColor}`, borderRadius: 12, padding: '20px 24px', width: '100%', maxWidth: 460, boxShadow: '0 20px 60px rgba(0,0,0,0.8)', position: 'relative' }}
       >
         {/* Close */}
-        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#475569', fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>✕</button>
+        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#64748b', fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>✕</button>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -951,7 +960,7 @@ function SetupEventModal({ event, onClose }) {
         {/* Win rate */}
         {stats && (stats.allTime || stats.d90 || stats.d30) && (
           <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 14 }}>
-            <div style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
+            <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
             <div style={{ display: 'flex', gap: 20, justifyContent: 'center' }}>
               <WinChip label="All time" stat={stats.allTime} />
               <WinChip label="90d" stat={stats.d90} />
@@ -960,8 +969,168 @@ function SetupEventModal({ event, onClose }) {
           </div>
         )}
         {stats && !stats.allTime && !stats.d90 && !stats.d30 && (
-          <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 12, fontSize: 12, color: '#475569', textAlign: 'center' }}>
+          <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 12, fontSize: 12, color: '#64748b', textAlign: 'center' }}>
             No trade history recorded for this setup type yet.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CaseSetupDetailModal({ setup, onClose }) {
+  const [stats, setStats] = React.useState(null);
+  const [dayType, setDayType] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!setup) return;
+    setStats(null);
+    fetch(`${API_URL}/setups/stats?type=${encodeURIComponent(setup.type || setup.setup_type)}`)
+      .then(r => r.json()).then(setStats).catch(() => {});
+    // Grab today's day type for contextual WR highlight
+    const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    fetch(`${API_URL}/acd/setup-detection?date=${d}`)
+      .then(r => r.json()).then(d => setDayType(d?.dayType || null)).catch(() => {});
+  }, [setup?.type, setup?.setup_type]);
+
+  if (!setup) return null;
+
+  const type = setup.type || setup.setup_type || '';
+  const tu = type.toUpperCase();
+  const isLong = tu.includes('LONG') || tu.includes('BULLISH');
+  const isShort = tu.includes('SHORT') || tu.includes('BEARISH');
+  const dirColor = isLong ? '#22c55e' : isShort ? '#ef4444' : '#94a3b8';
+  const borderColor = isLong ? 'rgba(34,197,94,0.4)' : isShort ? 'rgba(239,68,68,0.4)' : 'rgba(99,102,241,0.4)';
+  const bgColor = isLong ? 'rgba(34,197,94,0.06)' : isShort ? 'rgba(239,68,68,0.06)' : 'rgba(99,102,241,0.06)';
+  const label = SETUP_DISPLAY_LABELS[type] || type.replace(/_/g, ' ');
+  const description = SETUP_EVENT_DESCRIPTIONS[type] || null;
+  const playbook = getSetupPlaybookNuance(type, setup);
+
+  const entry  = setup.entry  != null ? parseFloat(setup.entry)  : null;
+  const stop   = setup.stop   != null ? parseFloat(setup.stop)   : null;
+  const target = (setup.target || setup._t1) != null ? parseFloat(setup.target || setup._t1) : null;
+  const riskPts   = entry != null && stop   != null ? Math.abs(entry - stop)   : null;
+  const rewardPts = entry != null && target != null ? Math.abs(target - entry) : null;
+  const rr = riskPts && rewardPts && riskPts > 0 ? (rewardPts / riskPts).toFixed(1) : null;
+  const riskDollar   = riskPts   != null ? Math.round(riskPts   * 5) : null;
+  const rewardDollar = rewardPts != null ? Math.round(rewardPts * 5) : null;
+
+  const resolution = setup.resolution || setup._resolution;
+  const resInfo = resolution ? SETUP_RESOLUTION_TEXT[resolution] : null;
+  const pnl = setup.pnl || setup._pnl;
+  const timeStr = setup.detectedAt || (setup.fired_time ? fmtEventTime(setup.fired_time) : null);
+
+  const WinChip = ({ label: l, stat, highlight }) => {
+    if (!stat || stat.winRate == null) return null;
+    const wr = stat.winRate;
+    const col = wr >= 0.65 ? '#22c55e' : wr >= 0.50 ? '#f59e0b' : '#ef4444';
+    const n = stat.sessions ?? stat.decidedN ?? stat.n;
+    return (
+      <div style={{ textAlign: 'center', minWidth: 60, padding: '6px 8px', borderRadius: 6, background: highlight ? 'rgba(99,102,241,0.12)' : 'rgba(30,41,59,0.4)', border: highlight ? '1px solid rgba(99,102,241,0.35)' : '1px solid rgba(51,65,85,0.4)' }}>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>{l}</div>
+        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: col }}>{(wr * 100).toFixed(0)}%</div>
+        {n != null && <div style={{ fontSize: 11, color: '#64748b' }}>n={n}{stat.limitedSample ? ' ⚠' : ''}</div>}
+      </div>
+    );
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#0f172a', border: `1.5px solid ${borderColor}`, borderRadius: 12, padding: '20px 24px', width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.85)', position: 'relative' }}>
+        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#64748b', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+          <span style={{ width: 9, height: 9, borderRadius: '50%', background: dirColor, flexShrink: 0 }} />
+          <span style={{ fontSize: 16, fontWeight: 800, color: dirColor, textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1 }}>{label}</span>
+          {(isLong || isShort) && <span style={{ fontSize: 13, fontWeight: 800, color: dirColor, background: `${dirColor}18`, border: `1px solid ${dirColor}40`, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.04em' }}>{isLong ? '↑ LONG' : '↓ SHORT'}</span>}
+        </div>
+        {timeStr && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10, fontFamily: 'monospace' }}>fired {timeStr}</div>}
+
+        {/* Resolution badge if already resolved */}
+        {resInfo && (
+          <div style={{ marginBottom: 12, padding: '6px 10px', background: `${resInfo.color}15`, border: `1px solid ${resInfo.color}40`, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: resInfo.color, letterSpacing: '0.06em' }}>{resInfo.label}</span>
+            {pnl != null && <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: pnl >= 0 ? '#22c55e' : '#ef4444', marginLeft: 'auto' }}>{pnl >= 0 ? '+' : ''}${Math.round(pnl)}</span>}
+          </div>
+        )}
+
+        {/* Entry / Stop / Target grid */}
+        {(entry != null || stop != null || target != null) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+            {entry != null && (
+              <div style={{ padding: '8px', background: 'rgba(30,41,59,0.5)', borderRadius: 6, border: '1px solid rgba(51,65,85,0.5)', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>ENTRY</div>
+                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#e2e8f0' }}>{Math.round(entry)}</div>
+              </div>
+            )}
+            {stop != null && (
+              <div style={{ padding: '8px', background: 'rgba(239,68,68,0.06)', borderRadius: 6, border: '1px solid rgba(239,68,68,0.25)', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>STOP</div>
+                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#ef4444' }}>{Math.round(stop)}</div>
+                {riskPts != null && <div style={{ fontSize: 11, color: '#ef4444', opacity: 0.7 }}>{Math.round(riskPts)}pt · ${riskDollar}</div>}
+              </div>
+            )}
+            {target != null && (
+              <div style={{ padding: '8px', background: 'rgba(34,197,94,0.06)', borderRadius: 6, border: '1px solid rgba(34,197,94,0.25)', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>T1</div>
+                <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: '#22c55e' }}>{Math.round(target)}</div>
+                {rewardPts != null && <div style={{ fontSize: 11, color: '#22c55e', opacity: 0.7 }}>{Math.round(rewardPts)}pt · ${rewardDollar}</div>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* R:R summary row */}
+        {rr != null && (
+          <div style={{ display: 'flex', gap: 12, marginBottom: 14, padding: '8px 12px', background: bgColor, borderRadius: 6, border: `1px solid ${borderColor}`, fontSize: 12 }}>
+            <span style={{ color: '#94a3b8' }}>R:R <strong style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{rr}</strong></span>
+            {riskDollar != null && <span style={{ color: '#94a3b8' }}>Risk <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>${riskDollar}</strong></span>}
+            {rewardDollar != null && <span style={{ color: '#94a3b8' }}>Reward <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>${rewardDollar}</strong></span>}
+          </div>
+        )}
+
+        {/* Description */}
+        {description && (
+          <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.65, marginBottom: 14, borderLeft: `2px solid ${borderColor}`, paddingLeft: 12 }}>
+            {description}
+          </div>
+        )}
+
+        {/* Win rates */}
+        {stats && (
+          <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <WinChip label="All time" stat={stats.allTime} />
+              <WinChip label="90d" stat={stats.d90} />
+              <WinChip label="30d" stat={stats.d30} />
+            </div>
+            {/* By day type — highlight current day type */}
+            {stats.byDayType && Object.keys(stats.byDayType).filter(k => k !== 'OVERALL').length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By day type {dayType && <span style={{ color: '#818cf8' }}>(today: {dayType})</span>}</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {['TREND','BALANCE','TURBULENT'].filter(k => stats.byDayType[k]).map(k => (
+                    <WinChip key={k} label={k} stat={stats.byDayType[k]} highlight={k === dayType} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Playbook notes */}
+        {playbook && (
+          <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, textTransform: 'uppercase', color: '#a78bfa', letterSpacing: '0.08em', marginBottom: 8 }}>{playbook.title}</div>
+            <ul style={{ paddingLeft: 18, margin: 0, fontSize: 12, color: '#cbd5e1', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {playbook.rules.map((rule, idx) => {
+                const parts = rule.split(':');
+                if (parts.length > 1) return <li key={idx} style={{ lineHeight: 1.5 }}><strong style={{ color: '#e2e8f0' }}>{parts[0]}:</strong>{parts.slice(1).join(':')}</li>;
+                return <li key={idx} style={{ lineHeight: 1.5 }}>{rule}</li>;
+              })}
+            </ul>
           </div>
         )}
       </div>
@@ -976,6 +1145,7 @@ function LiveSessionPanel() {
   const [activeSetups, setActiveSetups] = React.useState([]);
   const [evalProgress, setEvalProgress] = React.useState(null);
   const [selectedSignal, setSelectedSignal] = React.useState(null);
+  const [selectedCaseSetup, setSelectedCaseSetup] = React.useState(null);
   const [, forceRender]                 = React.useReducer(n => n + 1, 0);
 
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -1049,9 +1219,8 @@ function LiveSessionPanel() {
 
   const nowET  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etMin  = nowET.getHours() * 60 + nowET.getMinutes();
-  const isOpen = etMin >= 9 * 60 + 30 && etMin < 13 * 60;
-  const isClosed = etMin >= 13 * 60 || sessionClosed;
-  const isManageOnlyPanel = etMin >= 12 * 60 && etMin < 13 * 60;
+  const isOpen = etMin >= 9 * 60 + 30 && etMin < 16 * 60; // RTH 9:30 AM–4:00 PM ET
+  const isClosed = etMin >= 16 * 60 || sessionClosed;
 
   const active = setupCard && !setupCard.isExpired ? setupCard : null;
   const isLong = active
@@ -1069,13 +1238,9 @@ function LiveSessionPanel() {
   let sessionLabel, sessionColor;
   if (isClosed) {
     sessionLabel = 'SESSION CLOSED';
-    sessionColor = '#475569';
-  } else if (isManageOnlyPanel) {
-    const minsLeft = 13 * 60 - etMin;
-    sessionLabel = `MANAGE ONLY  ${minsLeft}m to close`;
-    sessionColor = '#d97706';
+    sessionColor = '#64748b';
   } else if (isOpen) {
-    const minsLeft = 13 * 60 - etMin;
+    const minsLeft = 16 * 60 - etMin;
     const hh = nowET.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
     sessionLabel = `LIVE  ${hh} ET  ${minsLeft}m left`;
     sessionColor = '#22c55e';
@@ -1083,14 +1248,18 @@ function LiveSessionPanel() {
     const minsToOpen = (9 * 60 + 30) - etMin;
     const h = Math.floor(minsToOpen / 60), m = minsToOpen % 60;
     sessionLabel = `Opens in ${h > 0 ? `${h}h ` : ''}${m}m`;
-    sessionColor = '#64748b';
+    sessionColor = '#94a3b8';
   }
 
   return (
     <div style={{ padding: '12px 10px 8px', display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid rgba(51,65,85,0.6)' }}>
 
       {/* Active Setup Card */}
-      <div style={{ border: `1.5px solid ${borderColor}`, borderRadius: 7, padding: '8px 10px', background: setupBg, minHeight: 52 }}>
+      <div
+        onClick={() => active && setSelectedCaseSetup(active)}
+        style={{ border: `1.5px solid ${borderColor}`, borderRadius: 7, padding: '8px 10px', background: setupBg, minHeight: 52, cursor: active ? 'pointer' : 'default', transition: 'border-color 0.15s' }}
+        title={active ? 'Click for details' : undefined}
+      >
         {active ? (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
@@ -1098,23 +1267,23 @@ function LiveSessionPanel() {
               <span style={{ fontWeight: 700, fontSize: 11, color: isLong ? '#22c55e' : '#ef4444', textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {SETUP_DISPLAY_LABELS[active.type] || active.type}
               </span>
-              <span style={{ fontSize: 10, color: '#475569', flexShrink: 0 }}>{active.detectedAt}</span>
+              <span style={{ fontSize: 12, color: '#64748b', flexShrink: 0 }}>{active.detectedAt}</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px 6px', fontSize: 12 }}>
-              {entry != null && <span style={{ color: '#64748b' }}>Entry <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{Math.round(entry)}</strong></span>}
-              {stop  != null && <span style={{ color: '#64748b' }}>Stop <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{Math.round(stop)}</strong></span>}
-              {target != null && <span style={{ color: '#64748b' }}>T1 <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{Math.round(target)}</strong></span>}
-              {rr != null && <span style={{ color: '#64748b' }}>R:R <strong style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{rr}</strong></span>}
+              {entry != null && <span style={{ color: '#94a3b8' }}>Entry <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{Math.round(entry)}</strong></span>}
+              {stop  != null && <span style={{ color: '#94a3b8' }}>Stop <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{Math.round(stop)}</strong></span>}
+              {target != null && <span style={{ color: '#94a3b8' }}>T1 <strong style={{ color: '#22c55e', fontFamily: 'monospace' }}>{Math.round(target)}</strong></span>}
+              {rr != null && <span style={{ color: '#94a3b8' }}>R:R <strong style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{rr}</strong></span>}
             </div>
             {active.minsRemaining != null && (
-              <div style={{ fontSize: 10, color: active.minsRemaining < 10 ? '#f59e0b' : '#475569', marginTop: 3 }}>
+              <div style={{ fontSize: 12, color: active.minsRemaining < 10 ? '#f59e0b' : '#64748b', marginTop: 3 }}>
                 {active.minsRemaining}m remaining
               </div>
             )}
             {active.firedEtHour === 10 && (
               <div
                 title="Backtested edge: setups firing in the 10 AM ET hour win at 38.9% vs 29.2% overall — statistically significant +9.7% lift (p=0.002)"
-                style={{ marginTop: 5, fontSize: 10, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.4)', borderRadius: 3, padding: '1px 6px', display: 'inline-block', cursor: 'help' }}
+                style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.4)', borderRadius: 3, padding: '1px 6px', display: 'inline-block', cursor: 'help' }}
               >
                 ⚡ 10 AM EDGE
               </div>
@@ -1122,14 +1291,14 @@ function LiveSessionPanel() {
             {active.firedEtHour === 9 && (
               <div
                 title="9 AM ET setups have below-average win rate in backtesting (29.2%). Be selective."
-                style={{ marginTop: 5, fontSize: 10, fontWeight: 700, color: '#94a3b8', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 3, padding: '1px 6px', display: 'inline-block', cursor: 'help' }}
+                style={{ marginTop: 5, fontSize: 12, fontWeight: 700, color: '#94a3b8', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 3, padding: '1px 6px', display: 'inline-block', cursor: 'help' }}
               >
                 ⏰ 9 AM
               </div>
             )}
           </>
         ) : (
-          <div style={{ fontSize: 12, color: '#475569', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 36 }}>
+          <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 36 }}>
             {isClosed ? 'Session closed' : isOpen ? 'Watching — no setup' : 'Market closed'}
           </div>
         )}
@@ -1143,7 +1312,7 @@ function LiveSessionPanel() {
           if (t.includes('FAILED') || t.includes('FAIL')) return '#f97316';
           if (t.includes('BULLISH') || t.includes('_LONG') || t === 'IB_BULLISH' || t.includes('C UP') || t.includes('BRACKET_BREAKOUT_LONG') || t.includes('OPEN_DRIVE_LONG') || t.includes('OPEN_TEST_DRIVE_LONG')) return '#4ade80';
           if (t.includes('BEARISH') || t.includes('_SHORT') || t === 'IB_BEARISH' || t.includes('C DOWN') || t.includes('BRACKET_BREAKOUT_SHORT') || t.includes('OPEN_DRIVE_SHORT') || t.includes('OPEN_TEST_DRIVE_SHORT')) return '#f87171';
-          if (t.includes('TESTED')) return '#64748b';
+          if (t.includes('TESTED')) return '#94a3b8';
           if (t.startsWith('A UP') || t.startsWith('A DOWN')) return '#fbbf24';
           if (t.includes('BROKEN') || t.includes('PM VAH') || t.includes('PW HIGH') || t.includes('PW LOW') || t.includes('PM VAL')) return '#a78bfa';
           return '#94a3b8';
@@ -1199,7 +1368,7 @@ function LiveSessionPanel() {
         const outcomeColor = (resolution, status) => {
           if (resolution === 'TARGET_HIT') return '#22c55e';
           if (resolution === 'STOP_HIT') return '#ef4444';
-          if (resolution === 'TIME_EXPIRED' || resolution === 'SESSION_CLOSED') return '#64748b';
+          if (resolution === 'TIME_EXPIRED' || resolution === 'SESSION_CLOSED') return '#94a3b8';
           if (resolution === 'INVALIDATED') return '#f59e0b';
           if (status === 'ACTIVE') return '#fbbf24'; // still live
           return null;
@@ -1215,9 +1384,9 @@ function LiveSessionPanel() {
 
         return (
           <div style={{ borderTop: '1px solid rgba(51,65,85,0.4)', paddingTop: 7 }}>
-            <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span>Session Timeline <span style={{ color: '#334155', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>({sigCount})</span></span>
-              <span style={{ fontSize: 9, color: '#334155', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
+              <span style={{ fontSize: 11, color: '#334155', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
             </div>
             <div style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'hidden' }}>
               {allEvents.map((ev, i) => {
@@ -1233,19 +1402,22 @@ function LiveSessionPanel() {
                 return (
                   <div
                     key={i}
-                    onClick={() => !isCaseEngine && setSelectedSignal(ev)}
+                    onClick={() => isCaseEngine
+                      ? setSelectedCaseSetup({ type: ev.setup_type, entry: ev._entry, stop: ev._stop, target: ev._t1, fired_time: ev.fired_time, resolution: ev._resolution, status: ev._status, pnl: ev._pnl })
+                      : setSelectedSignal(ev)
+                    }
                     style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 4px',
                       borderBottom: i < allEvents.length - 1 ? '1px solid rgba(30,41,59,0.5)' : 'none',
-                      cursor: isCaseEngine ? 'default' : 'pointer', borderRadius: 4, transition: 'background 0.1s',
+                      cursor: 'pointer', borderRadius: 4, transition: 'background 0.1s',
                       borderLeft: isCaseEngine ? `2px solid ${color}` : '2px solid transparent',
                       paddingLeft: isCaseEngine ? 7 : 4,
                     }}
-                    onMouseEnter={e => !isCaseEngine && (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
-                    onMouseLeave={e => !isCaseEngine && (e.currentTarget.style.background = 'transparent')}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                   >
                     <span style={{ fontSize: 11, color: '#7dd3fc', fontFamily: 'monospace', flexShrink: 0, minWidth: 38 }}>{timeDisp}</span>
                     {!isCaseEngine && (
-                      <span style={{ flexShrink: 0, fontSize: 9, letterSpacing: '-1px', minWidth: 24 }}>
+                      <span style={{ flexShrink: 0, fontSize: 11, letterSpacing: '-1px', minWidth: 24 }}>
                         {[1,2,3].map(n => <span key={n} style={{ color: n <= stars ? color : '#1e293b' }}>★</span>)}
                       </span>
                     )}
@@ -1253,12 +1425,12 @@ function LiveSessionPanel() {
                       {label}
                     </span>
                     {isCaseEngine && ev._entry && (
-                      <span style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace', flexShrink: 0 }}>
+                      <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', flexShrink: 0 }}>
                         {Math.round(parseFloat(ev._entry))}
                       </span>
                     )}
                     {resLabel && (
-                      <span style={{ fontSize: 10, fontWeight: 700, color: resColor, flexShrink: 0, background: `${resColor}15`, borderRadius: 3, padding: '1px 5px', border: `1px solid ${resColor}30` }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: resColor, flexShrink: 0, background: `${resColor}15`, borderRadius: 3, padding: '1px 5px', border: `1px solid ${resColor}30` }}>
                         {resLabel}
                       </span>
                     )}
@@ -1266,7 +1438,7 @@ function LiveSessionPanel() {
                 );
               })}
               {allEvents.length === 0 && (
-                <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '4px 0' }}>No signals yet today</div>
+                <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic', padding: '4px 0' }}>No signals yet today</div>
               )}
             </div>
           </div>
@@ -1275,11 +1447,12 @@ function LiveSessionPanel() {
 
       {/* Signal detail modal */}
       {selectedSignal && <SetupEventModal event={selectedSignal} onClose={() => setSelectedSignal(null)} />}
+      {selectedCaseSetup && <CaseSetupDetailModal setup={selectedCaseSetup} onClose={() => setSelectedCaseSetup(null)} />}
 
       {/* Eval Progress */}
       {evalProgress?.accounts?.length > 0 && (
         <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 8 }}>
-          <div style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Eval Progress</div>
+          <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Eval Progress</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {evalProgress.accounts.map(acct => {
               const isNeg = acct.current_pnl < 0;
@@ -1295,7 +1468,7 @@ function LiveSessionPanel() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', fontFamily: 'monospace', flex: '0 0 auto' }}>{acct.short_id}</span>
                     <span style={{ fontSize: 12, fontWeight: 800, color: accent, fontFamily: 'monospace', flex: '0 0 auto' }}>{pnlStr}</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 700, color: accent, background: tagBg, border: `1px solid ${tagBorder}`, borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+                    <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 700, color: accent, background: tagBg, border: `1px solid ${tagBorder}`, borderRadius: 3, padding: '1px 5px', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                       {acct.trajectory}
                     </span>
                   </div>
@@ -1305,8 +1478,8 @@ function LiveSessionPanel() {
                   </div>
                   {/* Row 3: needs · days */}
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 10, color: '#64748b' }}>${Math.round(acct.profit_needed).toLocaleString()} to pass</span>
-                    <span style={{ fontSize: 10, color: '#475569' }}>{acct.days_traded}d traded</span>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>${Math.round(acct.profit_needed).toLocaleString()} to pass</span>
+                    <span style={{ fontSize: 12, color: '#64748b' }}>{acct.days_traded}d traded</span>
                   </div>
                 </div>
               );
@@ -1331,9 +1504,9 @@ function LiveSessionPanel() {
 const LR_TEAL  = '#2dd4bf';
 const LR_CORAL = '#fb923c';
 const LR_AMBER = '#f59e0b';
-const LR_SLATE = '#64748b';
+const LR_SLATE = '#94a3b8';
 
-const dirClr = (dir) => dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : LR_SLATE;
+const dirClr = (dir) => dir === 'LONG' ? LR_TEAL : dir === 'SHORT' ? LR_CORAL : dir === 'NO ACD' ? '#fbbf24' : LR_SLATE;
 const DT_STYLE = {
   BALANCE:   { color: LR_AMBER,  bg: 'rgba(245,158,11,0.07)',    border: 'rgba(245,158,11,0.35)' },
   TREND:     { color: '#818cf8', bg: 'rgba(129,140,248,0.07)',   border: 'rgba(129,140,248,0.30)' },
@@ -1365,7 +1538,7 @@ function DayTypeReassessmentBanner({ reassessment, compact = false }) {
           )}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: compact ? 10 : 11, color: provisional ? LR_AMBER : '#64748b' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: compact ? 10 : 11, color: provisional ? LR_AMBER : '#94a3b8' }}>
         <span style={{
           fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase',
           padding: '1px 5px', borderRadius: 3,
@@ -1440,7 +1613,8 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
   const dts         = DT_STYLE[dtClass] || DT_STYLE.FORMING;
   const rawBias     = c?.read?.bias || 'NEUTRAL';
   const conviction  = c?.read?.conviction ?? 0;
-  const bias        = (conviction < 3.5) ? 'NO LEAN' : rawBias;
+  const acdMissing  = isPastOpen && conviction === 0 && !c?.caseFor?.length && !c?.caseAgainst?.length;
+  const bias        = acdMissing ? 'NO ACD' : (conviction < 3.5) ? 'NO LEAN' : rawBias;
   const meter       = c?.read?.meterPosition || 0;
   const biasClr     = dirClr(bias);
   const caseFor     = c?.caseFor || [];
@@ -1663,12 +1837,12 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
                     paddingLeft: 12,
                     flexShrink: 0
                   }}>
-                    <div><span style={{ color: '#64748b' }}>FIRED:</span> {c.breakoutWarning.firedTime} ET @ {fmtP(c.breakoutWarning.priceFired)}</div>
+                    <div><span style={{ color: '#94a3b8' }}>FIRED:</span> {c.breakoutWarning.firedTime} ET @ {fmtP(c.breakoutWarning.priceFired)}</div>
                     {c.breakoutWarning.targets?.map((t, idx) => (
-                      <div key={idx}><span style={{ color: '#64748b' }}>{t.label.toUpperCase()}:</span> <span style={{ color: '#86efac', fontWeight: 'bold' }}>{fmtP(t.price)}</span></div>
+                      <div key={idx}><span style={{ color: '#94a3b8' }}>{(t.label || '').toUpperCase()}:</span> <span style={{ color: '#86efac', fontWeight: 'bold' }}>{fmtP(t.price)}</span></div>
                     ))}
                     {c.breakoutWarning.stopPrice && (
-                      <div><span style={{ color: '#64748b' }}>STOP:</span> {isNaN(c.breakoutWarning.stopPrice) ? c.breakoutWarning.stopPrice : fmtP(c.breakoutWarning.stopPrice)}</div>
+                      <div><span style={{ color: '#94a3b8' }}>STOP:</span> {isNaN(c.breakoutWarning.stopPrice) ? c.breakoutWarning.stopPrice : fmtP(c.breakoutWarning.stopPrice)}</div>
                     )}
                   </div>
                 )}
@@ -1789,7 +1963,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
                 {caseFor.map((item, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.4, marginBottom: 4 }}>
                     {!item.confirmed && <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>〈</span>}
-                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#94a3b8' }}>{item.point}</span>
                     {item.value && <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>}
                   </div>
                 ))}
@@ -1799,7 +1973,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
                 {caseAgainst.map((item, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.4, marginBottom: 4 }}>
                     {!item.confirmed && <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>〈</span>}
-                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#94a3b8' }}>{item.point}</span>
                     {item.value && <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>}
                   </div>
                 ))}
@@ -1822,7 +1996,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
                   <span style={{ fontSize: 13, fontWeight: 800, color: ev.change === '↑' ? LR_TEAL : LR_CORAL, lineHeight: 1, flexShrink: 0 }}>{ev.change}</span>
                   <span style={{ flex: 1, fontSize: 13, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ev.reason}</span>
                   {ev.value != null && <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{ev.value}</span>}
-                  <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', flexShrink: 0 }}>{typeof ev.time === 'string' ? ev.time.slice(11,16) : ''}</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{typeof ev.time === 'string' ? ev.time.slice(11,16) : ''}</span>
                 </div>
               ))}
             </div>
@@ -1839,7 +2013,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
-                <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b' }}>WATCHING</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8' }}>WATCHING</span>
               </div>
               <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.55 }}>No actionable setup. Trigger activates when impact score ≥ 6 with delta alignment, NL30 aligned, validated setup type, and R:R ≥ 2.0.</div>
               {dtClass === 'BALANCE' && <div style={{ marginTop: 10, fontSize: 13, color: LR_AMBER, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)', borderRadius: 5, padding: '6px 10px' }}>BALANCE day — directional trigger suppressed.</div>}
@@ -1847,7 +2021,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
           )}
           {tState === 'RESOLVED' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#64748b', flexShrink: 0 }} />
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase' }}>{(c.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</div>
                 <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 2 }}>Setup resolved.</div>
@@ -1881,7 +2055,7 @@ function CaseReadDetailContent({ kind, c, isRTH = true, isPastOpen = true }) {
                     const pos = line.startsWith('+'), neg = line.startsWith('-');
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 13, color: '#cbd5e1', lineHeight: 1.35, marginBottom: 3 }}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: pos ? LR_TEAL : neg ? LR_CORAL : '#64748b', flexShrink: 0, minWidth: 22 }}>{pos ? '+' : neg ? '−' : ''}</span>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: pos ? LR_TEAL : neg ? LR_CORAL : '#94a3b8', flexShrink: 0, minWidth: 22 }}>{pos ? '+' : neg ? '−' : ''}</span>
                         <span style={{ color: '#94a3b8' }}>{line.replace(/^[+-]\d+\s*/, '')}</span>
                       </div>
                     );
@@ -1958,8 +2132,8 @@ function CaseReadDetailModal({ kind, c, isRTH = true, isPastOpen = true, title, 
 // day-type classification, coil status, bias, current RTH breakout state, and structural levels.
 function getNuancedExecutionEdge({ dtClass, coiled, bias, trigger, currentPrice, ibHigh, ibLow, levels }) {
   // Extract specific levels from the active levels array
-  const bracketHighLvl = levels?.find(l => l.label.toUpperCase() === 'BRACKET HIGH' || l.label.toUpperCase() === 'BRACKET_HIGH');
-  const bracketLowLvl  = levels?.find(l => l.label.toUpperCase() === 'BRACKET LOW' || l.label.toUpperCase() === 'BRACKET_LOW');
+  const bracketHighLvl = levels?.find(l => l.label?.toUpperCase() === 'BRACKET HIGH' || l.label?.toUpperCase() === 'BRACKET_HIGH');
+  const bracketLowLvl  = levels?.find(l => l.label?.toUpperCase() === 'BRACKET LOW' || l.label?.toUpperCase() === 'BRACKET_LOW');
   const bracketHighPrice = bracketHighLvl ? bracketHighLvl.price : null;
   const bracketLowPrice  = bracketLowLvl ? bracketLowLvl.price : null;
 
@@ -2132,6 +2306,7 @@ function LiveReadBanner({ forecast }) {
   const [lastSessionLoading, setLastSessionLoading] = React.useState(false);
   const [activeModal, setActiveModal] = React.useState(null);
   const closeModal = () => setActiveModal(null);
+  const isPastOpen = (() => { const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })); return now.getHours() * 60 + now.getMinutes() >= 570; })();
 
   React.useEffect(() => {
     if (c && !c.error) return; // live data exists
@@ -2371,6 +2546,10 @@ function LiveReadBanner({ forecast }) {
 
   const latestEv  = evidenceLog[evidenceLog.length - 1] || null;
   const asOfTime  = currentCase.asOf ? currentCase.asOf.slice(11, 16) : null;
+  // Data freshness: timestamp of the actual last bar this read was computed from
+  // (distinct from asOfTime above, which is just the request time and always reads "now"
+  // on a live poll — this is what tells you if ingestion has stalled).
+  const dataAsOf  = fmtEtTime(ctx2.lastBarEtMin);
 
   return (
     <div style={{ border: '1px solid rgba(51,65,85,0.55)', borderRadius: 10, padding: '16px 20px', marginBottom: 18, background: 'rgba(15,23,42,0.25)' }}>
@@ -2379,7 +2558,10 @@ function LiveReadBanner({ forecast }) {
           {isRTH ? 'Live Read' : 'Last Session Read (Offline)'}
         </span>
         {isRTH ? (
-          asOfTime && <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace' }}>{asOfTime} ET</span>
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
+            {asOfTime && <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>{asOfTime} ET</span>}
+            {dataAsOf && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>data thru {dataAsOf}</span>}
+          </span>
         ) : (
           currentCase.date && <span style={{ fontSize: 13, color: '#fb923c', fontFamily: 'monospace', fontWeight: 700 }}>Snapshot: {currentCase.date}</span>
         )}
@@ -2411,7 +2593,7 @@ function LiveReadBanner({ forecast }) {
       ) : (
         <div style={{
           fontSize: 10.5,
-          color: '#64748b',
+          color: '#94a3b8',
           marginBottom: 12,
           padding: '4px 10px',
           background: 'rgba(255, 255, 255, 0.01)',
@@ -2435,7 +2617,7 @@ function LiveReadBanner({ forecast }) {
         borderRadius: 8
       }}>
         {/* OR5 Level */}
-        <div title="Gray border = neutral/informational reference level" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #64748b' }}>
+        <div title="Gray border = neutral/informational reference level" style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: '3px solid #94a3b8' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>5-Min Opening Range</div>
             <InfoTooltip text={"5-MIN OPENING RANGE (OR5)\n\nThe high and low of the first 5 minutes of RTH (9:30–9:35 ET). This range sets the session's initial structure.\n\nTIGHT (<47.5 pts): Compression — breakout follow-through is statistically elevated. Look for expansion.\nNORMAL: Standard breakout probabilities. Wait for A signal confirmation.\nWIDE (>=91.5 pts): The expected extension already occurred at the open. Breakouts fail at a high rate. Fade early drives and seek pullbacks.\n\nThe A Up and A Down trigger levels are calculated from this range."} />
@@ -2446,7 +2628,7 @@ function LiveReadBanner({ forecast }) {
                 {fmtP(Math.round(orLow))} – {fmtP(Math.round(orHigh))}
                 {ctx2.barsLoaded < 5 && <span style={{ fontSize: 12, color: '#fb923c', fontWeight: 400, marginLeft: 4 }}>(Forming...)</span>}
               </div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
                 Width: <strong style={{ color: '#cbd5e1' }}>{fmtP(orWidth, 1)} pt</strong>
                 {ctx2.barsLoaded < 5 ? (
                   <span style={{ marginLeft: 6, color: '#fb923c', fontWeight: 800 }}>{ctx2.barsLoaded}/5m</span>
@@ -2460,7 +2642,7 @@ function LiveReadBanner({ forecast }) {
               </div>
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               {isPastOpen ? 'Loading…' : 'No data — activates 9:30 ET'}
             </span>
           )}
@@ -2477,7 +2659,7 @@ function LiveReadBanner({ forecast }) {
               &ge; {fmtP(Math.round(aUpLevel))}
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               {isPastOpen ? 'Loading…' : 'No data — activates 9:35 ET'}
             </span>
           )}
@@ -2494,14 +2676,14 @@ function LiveReadBanner({ forecast }) {
               &le; {fmtP(Math.round(aDownLevel))}
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               {isPastOpen ? 'Loading…' : 'No data — activates 9:35 ET'}
             </span>
           )}
         </div>
 
         {/* G-Line (Weekly Open) */}
-        <div title={currentPrice >= gLine ? 'Green border = price above G-Line (bullish)' : 'Red border = price below G-Line (bearish)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#ef4444') : '#64748b'}` }}>
+        <div title={currentPrice >= gLine ? 'Green border = price above G-Line (bullish)' : 'Red border = price below G-Line (bearish)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${currentPrice && gLine ? (currentPrice >= gLine ? '#34d399' : '#ef4444') : '#94a3b8'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>G-Line (Wk Open)</div>
             <InfoTooltip text={"G-LINE (WEEKLY OPEN)\n\nThe weekly opening price of NQ. Serves as the ultimate macro directional divider.\n\nABOVE G-LINE: Long setups have structural confirmation. Favor longs.\nBELOW G-LINE: Short setups have structural confirmation. Favor shorts."} />
@@ -2516,14 +2698,14 @@ function LiveReadBanner({ forecast }) {
               </div>
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               Loading…
             </span>
           )}
         </div>
 
         {/* 2-Day POC Streak/Shift since last close */}
-        <div title={poc2DayStreak === 'HIGHER' ? 'Green = POC migrating higher (bullish value shift)' : poc2DayStreak === 'LOWER' ? 'Red = POC migrating lower (bearish value shift)' : 'Gray = no clear POC direction'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#ef4444' : '#64748b')}` }}>
+        <div title={poc2DayStreak === 'HIGHER' ? 'Green = POC migrating higher (bullish value shift)' : poc2DayStreak === 'LOWER' ? 'Red = POC migrating lower (bearish value shift)' : 'Gray = no clear POC direction'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${poc2DayStreak === 'HIGHER' ? '#34d399' : (poc2DayStreak === 'LOWER' ? '#ef4444' : '#94a3b8')}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>2-Day POC Streak</div>
             <InfoTooltip text={"2-DAY HISTORICAL POC SHIFT & STREAK\n\nThe POC shift over the 2 completed sessions preceding today (T-1 vs T-3):\n\nStreak is HIGHER/LOWER if both preceding daily migrations are in the same direction.\n\nCombined with today's intraday ROC, a matching streak yields an 80%+ win rate on breakout setups."} />
@@ -2538,14 +2720,14 @@ function LiveReadBanner({ forecast }) {
               </div>
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               Loading…
             </span>
           )}
         </div>
 
         {/* POC ROC (Speed) */}
-        <div title={pocRoc >= 0 ? 'Green = value migrating higher (POC rising)' : 'Red = value migrating lower (POC falling)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#ef4444') : '#64748b'}` }}>
+        <div title={pocRoc >= 0 ? 'Green = value migrating higher (POC rising)' : 'Red = value migrating lower (POC falling)'} style={{ padding: '8px 10px', background: 'rgba(30, 41, 59, 0.2)', borderRadius: 6, borderLeft: `3px solid ${pocRoc ? (pocRoc >= 0 ? '#34d399' : '#ef4444') : '#94a3b8'}` }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>POC ROC (Speed)</div>
             <InfoTooltip text={"POC RATE OF CHANGE (SPEED)\n\nThe rate of change in today's developing POC relative to yesterday's final POC, in points per hour:\n\nPOC ROC = (POC_dev - POC_prior) / Hours since 9:30 AM ET.\n\nSTABLE (<=10 pts/hr): Consolidation/range mode favored.\nTRENDING (>15 pts/hr): Rapid value migration. Fades are highly dangerous, breakouts are favored."} />
@@ -2560,7 +2742,7 @@ function LiveReadBanner({ forecast }) {
               </div>
             </div>
           ) : (
-            <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
+            <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
               Loading…
             </span>
           )}
@@ -2573,7 +2755,7 @@ function LiveReadBanner({ forecast }) {
           {tState === 'WATCHING' ? (
             <div style={{ textAlign: 'center', padding: '10px 0' }}>
               <span style={{ fontSize: 13, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.08em', display: 'block', marginBottom: 4 }}>No Signal Fired Yet</span>
-              <span style={{ fontSize: 12, color: '#64748b' }}>Monitoring price action against A up/down levels</span>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>Monitoring price action against A up/down levels</span>
             </div>
           ) : (
             <>
@@ -2639,7 +2821,7 @@ function LiveReadBanner({ forecast }) {
             {compression?.coiled && (
               <span style={{ fontSize: 12, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.18)', border: '1px solid rgba(129,140,248,0.35)', borderRadius: 4, padding: '2px 7px', letterSpacing: '0.05em' }}>COILED</span>
             )}
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b' }}>{dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8' }}>{dayType?.source || 'LIT'}{dayType?.probability ? ` ${dayType.probability}%` : ''}</span>
           </div>
           {dtClass === 'BALANCE' && (
             <div style={{ fontSize: 14, color: LR_AMBER, fontWeight: 600, marginBottom: 4, lineHeight: 1.4 }}>
@@ -3864,7 +4046,7 @@ function IntradayChartSection({ dateStr }) {
           const price = yMax - (yMax - yMin) * pct;
           return <g key={pct}>
             <line x1={M.l} x2={SVG_W - M.r} y1={y} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
-            <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{fmtP(price)}</text>
+            <text x={SVG_W - M.r + 4} y={y + 4} fill="#64748b" fontSize={9}>{fmtP(price)}</text>
           </g>;
         })}
 
@@ -3935,7 +4117,7 @@ function IntradayChartSection({ dateStr }) {
         {bars.map((b, i) => {
           const t = new Date(b.ts).toISOString().slice(11, 16);
           if (!t.endsWith(':00') && !t.endsWith(':30')) return null;
-          return <text key={i} x={xScale(i)} y={SVG_H - 6} fill="#475569" fontSize={8} textAnchor="middle">{t}</text>;
+          return <text key={i} x={xScale(i)} y={SVG_H - 6} fill="#64748b" fontSize={8} textAnchor="middle">{t}</text>;
         })}
       </svg>
 
@@ -3947,11 +4129,11 @@ function IntradayChartSection({ dateStr }) {
             {hoveredSetup.stars > 0 && <span style={{ marginLeft: 6 }}>{'★'.repeat(hoveredSetup.stars)}</span>}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '3px 10px' }}>
-            <span style={{ color: '#64748b' }}>Fired</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fired_time} ET</span>
-            <span style={{ color: '#64748b' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fmtP(entryPx, 2)}</span>
-            {hoveredSetup.stop_level != null && <><span style={{ color: '#64748b' }}>Stop</span><span style={{ color: '#f87171', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.stop_level, 2)}</span></>}
-            {hoveredSetup.t1_level != null && <><span style={{ color: '#64748b' }}>{hoveredSetup.t1_label || 'T1'}</span><span style={{ color: '#4ade80', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.t1_level, 2)}</span></>}
-            <span style={{ color: '#64748b' }}>Result</span><span style={{ color: hoveredSetup.color }}>{hoveredSetup.resolution || hoveredSetup.status || '—'}</span>
+            <span style={{ color: '#94a3b8' }}>Fired</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fired_time} ET</span>
+            <span style={{ color: '#94a3b8' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fmtP(entryPx, 2)}</span>
+            {hoveredSetup.stop_level != null && <><span style={{ color: '#94a3b8' }}>Stop</span><span style={{ color: '#f87171', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.stop_level, 2)}</span></>}
+            {hoveredSetup.t1_level != null && <><span style={{ color: '#94a3b8' }}>{hoveredSetup.t1_label || 'T1'}</span><span style={{ color: '#4ade80', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.t1_level, 2)}</span></>}
+            <span style={{ color: '#94a3b8' }}>Result</span><span style={{ color: hoveredSetup.color }}>{hoveredSetup.resolution || hoveredSetup.status || '—'}</span>
           </div>
         </div>
       )}
@@ -3961,7 +4143,7 @@ function IntradayChartSection({ dateStr }) {
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', padding: '8px 12px', borderTop: '1px solid rgba(100,116,139,0.15)' }}>
           {setupsPlotted.map((s, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#94a3b8' }}>
-              <span style={{ fontSize: 9, color: s.color }}>{s.isLong ? '▲' : '▼'}</span>
+              <span style={{ fontSize: 11, color: s.color }}>{s.isLong ? '▲' : '▼'}</span>
               <span style={{ color: s.color }}>{CAL_SETUP_SHORT_LABELS[s.setup_type] || s.setup_type}</span>
               <span>{s.fired_time}</span>
               {s.stars > 0 && <span style={{ color: '#f59e0b' }}>{'★'.repeat(s.stars)}</span>}
@@ -3992,7 +4174,7 @@ function IntradayChartSection({ dateStr }) {
               }}>
                 <span style={{ fontSize: 13, color: isLong ? '#4ade80' : '#f87171', minWidth: 14 }}>{isLong ? '▲' : '▼'}</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0', minWidth: 160 }}>{label}</span>
-                <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#64748b' }}>
+                <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>
                   E {fmtPx(s.entry_zone_low ?? s.price_at_detection)}
                   {s.entry_zone_high != null && s.entry_zone_high !== s.entry_zone_low ? `–${fmtPx(s.entry_zone_high)}` : ''}
                   {' · '}<span style={{ color: '#f87171' }}>S {fmtPx(s.stop_level)}</span>
@@ -4009,9 +4191,9 @@ function IntradayChartSection({ dateStr }) {
                   ) : resInfo ? (
                     <span style={{ fontSize: 11, fontWeight: 700, color: resInfo.color, background: `${resInfo.color}1a`, border: `1px solid ${resInfo.color}66`, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em' }}>{resInfo.label}</span>
                   ) : (
-                    <span style={{ fontSize: 11, color: '#64748b' }}>—</span>
+                    <span style={{ fontSize: 11, color: '#94a3b8' }}>—</span>
                   )}
-                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#64748b' }}>{s.fired_time} ET</span>
+                  <span style={{ fontSize: 11, fontFamily: 'monospace', color: '#94a3b8' }}>{s.fired_time} ET</span>
                 </span>
               </div>
             );
@@ -4822,12 +5004,12 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <span style={{ fontWeight: 600, color: f.action === 'TAKEN' ? '#22c55e' : '#f59e0b' }}>{f.action}</span>
                   <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{f.setup_type}</span>
-                  <span style={{ color: '#64748b' }}>{f.direction}</span>
-                  {f.contracts > 1 && <span style={{ color: '#64748b' }}>{f.contracts}ct</span>}
-                  <span style={{ color: '#64748b' }}>{(f.tags || []).join(', ')}</span>
+                  <span style={{ color: '#94a3b8' }}>{f.direction}</span>
+                  {f.contracts > 1 && <span style={{ color: '#94a3b8' }}>{f.contracts}ct</span>}
+                  <span style={{ color: '#94a3b8' }}>{(f.tags || []).join(', ')}</span>
                   {f.pnl != null && <span style={{ color: f.pnl >= 0 ? '#22c55e' : '#ef4444', fontFamily: 'monospace', fontWeight: 700 }}>${f.pnl}</span>}
                 </div>
-                {f.note && <div style={{ fontSize: 10, color: '#94a3b8', fontStyle: 'italic', marginTop: 2 }}>{f.note}</div>}
+                {f.note && <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic', marginTop: 2 }}>{f.note}</div>}
               </div>
             ))}
           </div>
@@ -4874,13 +5056,13 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                 )}
               </div>
               {coachingLoading ? (
-                <div style={{ color: '#475569', fontSize: 14, fontStyle: 'italic' }}>Loading review...</div>
+                <div style={{ color: '#64748b', fontSize: 14, fontStyle: 'italic' }}>Loading review...</div>
               ) : !coachingData ? (
                 <div style={{
                   background: 'rgba(51,65,85,0.35)',
                   borderRadius: 7,
                   padding: '12px 16px',
-                  color: '#64748b',
+                  color: '#94a3b8',
                   fontSize: 14,
                   lineHeight: 1.7,
                 }}>
@@ -4908,7 +5090,7 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                       style={{
                         marginTop: 4,
                         fontSize: 12,
-                        color: '#64748b',
+                        color: '#94a3b8',
                         background: 'none',
                         border: '1px solid #334155',
                         borderRadius: 5,
@@ -5008,7 +5190,7 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                 <span className="day-stats-value" style={{
                   fontFamily: 'monospace',
                   fontSize: 13,
-                  color: hoveredAccount ? '#e2e8f0' : '#475569',
+                  color: hoveredAccount ? '#e2e8f0' : '#64748b',
                   fontWeight: hoveredAccount ? 700 : 400,
                 }}>
                   {hoveredAccount ? hoveredAccount.split('-').pop() : '—'}
@@ -5352,7 +5534,7 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                       ) : null;
                     })()}
                     {t.custom_fields?.account && (
-                      <span style={{ color: '#64748b', fontSize: 11, fontFamily: 'monospace', border: '1px solid var(--border-color)', borderRadius: 3, padding: '0 4px' }} title={t.custom_fields.account}>
+                      <span style={{ color: '#94a3b8', fontSize: 11, fontFamily: 'monospace', border: '1px solid var(--border-color)', borderRadius: 3, padding: '0 4px' }} title={t.custom_fields.account}>
                         {t.custom_fields.account.split('-').pop()}
                       </span>
                     )}
@@ -5441,7 +5623,7 @@ function RecapDatePicker({ value, onChange, dailyPerf }) {
           {/* Day headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2, marginBottom: 4 }}>
             {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
-              <div key={d} style={{ textAlign: 'center', fontSize: 9, color: 'var(--text-muted)', fontWeight: 600 }}>{d}</div>
+              <div key={d} style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>{d}</div>
             ))}
           </div>
           {/* Day cells */}
@@ -6231,13 +6413,13 @@ function ProcessHealthDashboard({ onNavigateToSettings }) {
   }, [load]);
 
   const dot = (color, size = 10) => {
-    const bg = color === 'green' ? '#22c55e' : color === 'amber' ? '#f59e0b' : color === 'red' ? '#ef4444' : '#475569';
+    const bg = color === 'green' ? '#22c55e' : color === 'amber' ? '#f59e0b' : color === 'red' ? '#ef4444' : '#64748b';
     const isGray = color === 'gray';
     return (
       <span style={{
         display: 'inline-block', width: size, height: size, borderRadius: '50%',
         background: isGray ? 'transparent' : bg,
-        border: isGray ? `2px solid #475569` : 'none',
+        border: isGray ? `2px solid #64748b` : 'none',
         flexShrink: 0,
       }} />
     );
@@ -6303,11 +6485,11 @@ function ProcessHealthDashboard({ onNavigateToSettings }) {
                     >
                       <td style={{ padding: '9px 14px', color: 'var(--text-primary)', fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
                         {proc.history?.length > 0 && (
-                          <span style={{ fontSize: 10, color: 'var(--text-muted)', width: 10 }}>{isExpanded ? '▼' : '▶'}</span>
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)', width: 10 }}>{isExpanded ? '▼' : '▶'}</span>
                         )}
                         {proc.label}
-                        {proc.isLive && <span style={{ fontSize: 10, background: '#1d4ed8', color: '#93c5fd', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
-                        {proc.critical && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>★</span>}
+                        {proc.isLive && <span style={{ fontSize: 12, background: '#1d4ed8', color: '#93c5fd', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>LIVE</span>}
+                        {proc.critical && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>★</span>}
                       </td>
                       <td style={{ padding: '9px 14px', color: 'var(--text-muted)' }}>{proc.schedule}</td>
                       <td style={{ padding: '9px 14px', color: proc.lastRun ? 'var(--text-primary)' : 'var(--text-muted)', fontFamily: 'monospace' }}>
@@ -6319,15 +6501,15 @@ function ProcessHealthDashboard({ onNavigateToSettings }) {
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             {dot(proc.statusColor)}
                             <span style={{
-                              color: proc.statusColor === 'green' ? '#22c55e' : proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'red' ? '#ef4444' : '#475569',
+                              color: proc.statusColor === 'green' ? '#22c55e' : proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'red' ? '#ef4444' : '#64748b',
                               fontWeight: 600, fontSize: 12,
                             }}>{statusLabel(proc)}</span>
                             {proc.errorMessage && !proc.statusNote && <span style={{ fontSize: 11, color: '#ef4444', marginLeft: 4 }}>({proc.errorMessage.slice(0, 40)})</span>}
                           </div>
                           {proc.statusNote && (
                             <span style={{
-                              fontSize: 10, marginLeft: 16,
-                              color: proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'gray' ? '#475569' : '#ef4444',
+                              fontSize: 12, marginLeft: 16,
+                              color: proc.statusColor === 'amber' ? '#f59e0b' : proc.statusColor === 'gray' ? '#64748b' : '#ef4444',
                             }}>{proc.statusNote}</span>
                           )}
                         </div>
@@ -6437,8 +6619,8 @@ function buildKlDateParams(tfId) {
 function KlSigBadge({ pValue }) {
   if (pValue == null) return null;
   const sig = pValue < 0.001 ? '★★★' : pValue < 0.01 ? '★★' : pValue < 0.05 ? '★' : 'ns';
-  const c = pValue < 0.001 ? '#10b981' : pValue < 0.01 ? '#34d399' : pValue < 0.05 ? '#f59e0b' : '#475569';
-  return <span style={{ fontSize: 9, color: c, marginLeft: 3, letterSpacing: '0.05em' }}>{sig}</span>;
+  const c = pValue < 0.001 ? '#10b981' : pValue < 0.01 ? '#34d399' : pValue < 0.05 ? '#f59e0b' : '#64748b';
+  return <span style={{ fontSize: 11, color: c, marginLeft: 3, letterSpacing: '0.05em' }}>{sig}</span>;
 }
 
 function KlMfeBar({ mfe, mae, tradeAvgPnl, tradeMfeAvailP50 }) {
@@ -6458,7 +6640,7 @@ function KlMfeBar({ mfe, mae, tradeAvgPnl, tradeMfeAvailP50 }) {
           <div style={{ position: 'absolute', top: 0, bottom: 0, width: 2, background: '#f59e0b', left: pctW(Math.max(0, tradeAvgPnl)) }} title={`Your avg exit: ${tradeAvgPnl}pt`} />
         )}
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: 'var(--text-muted)', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
         <span style={{ color: 'rgba(99,102,241,0.9)' }}>P25 <b style={{ color: 'var(--text-secondary)' }}>{mfe.p25}pt</b></span>
         <span>P50 <b style={{ color: '#a78bfa', fontSize: 13 }}>{mfe.p50}pt</b></span>
         <span>P75 <b style={{ color: 'var(--text-secondary)' }}>{mfe.p75}pt</b></span>
@@ -6494,17 +6676,17 @@ function KlHourBreakdown({ byHour }) {
         {byHour.map(h => {
           const barH = Math.max(4, (h.touches / maxTouches) * 44);
           const rr = h.respectRate;
-          const col = rr == null ? '#475569' : rr >= 65 ? 'var(--accent-green)' : rr >= 45 ? '#f59e0b' : 'var(--accent-red)';
+          const col = rr == null ? '#64748b' : rr >= 65 ? 'var(--accent-green)' : rr >= 45 ? '#f59e0b' : 'var(--accent-red)';
           return (
             <div key={h.hour} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
               title={`${h.label} — ${h.touches} touches, ${rr ?? '—'}% resp, MFE P50 ${h.mfe_p50 ?? '—'}pt`}>
               <div style={{ width: '100%', height: barH, background: col, opacity: 0.7, borderRadius: '2px 2px 0 0', minHeight: 4 }} />
-              <div style={{ fontSize: 8, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h.label.replace(':00','')}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{h.label.replace(':00','')}</div>
             </div>
           );
         })}
       </div>
-      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 4 }}>Bar height = touch count · color = respect rate</div>
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>Bar height = touch count · color = respect rate</div>
     </div>
   );
 }
@@ -6596,14 +6778,14 @@ function KlRateCell({ sideData, isFocus, onClickDetail }) {
           <span style={{ color: col, fontWeight: 700, fontSize: 13 }}>{respectRate}%</span>
           <KlSigBadge pValue={pValue} />
           {mfe?.p50 != null && (
-            <span style={{ display: 'block', fontSize: 9, color: '#a78bfa', marginTop: 1 }}>
+            <span style={{ display: 'block', fontSize: 11, color: '#a78bfa', marginTop: 1 }}>
               ↑{mfe.p50}pt med
             </span>
           )}
           <div
             onClick={onClickDetail}
             title="Click to see detail"
-            style={{ fontSize: 9, color: 'var(--accent-purple)', cursor: 'pointer', textDecoration: 'underline dotted', display: 'inline-block', marginTop: 1 }}>
+            style={{ fontSize: 11, color: 'var(--accent-purple)', cursor: 'pointer', textDecoration: 'underline dotted', display: 'inline-block', marginTop: 1 }}>
             {touches}t
           </div>
         </span>
@@ -6666,7 +6848,7 @@ function KlConditionMatrix({ byLevel }) {
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 13, color: '#475569', marginLeft: 4 }}>{dimConfig?.hint}</span>
+        <span style={{ fontSize: 13, color: '#64748b', marginLeft: 4 }}>{dimConfig?.hint}</span>
       </div>
 
       {/* Matrix table */}
@@ -6710,7 +6892,7 @@ function KlConditionMatrix({ byLevel }) {
                   return (
                     <td key={`${lv.key}-${lv.side}`} style={{ padding: '9px 8px', textAlign: 'center' }}>
                       <div style={{ fontWeight: 700, color: col, fontSize: 13 }}>{rr}%</div>
-                      <div style={{ fontSize: 13, color: limited ? '#fbbf24' : '#475569' }}>
+                      <div style={{ fontSize: 13, color: limited ? '#fbbf24' : '#64748b' }}>
                         n={v.touches}{sig ? ' ✓' : ''}{limited ? '*' : ''}
                       </div>
                     </td>
@@ -6750,7 +6932,7 @@ function KlCondBreakdown({ sideData, levelLabel, side }) {
           if (!entries.length) return null;
           return (
             <div key={key}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: '#64748b', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{title}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{title}</div>
               {entries.sort((a, b) => (b[1].respectRate ?? 0) - (a[1].respectRate ?? 0)).map(([cond, v]) => {
                 const rr = v.respectRate ?? 0;
                 return (
@@ -6758,7 +6940,7 @@ function KlCondBreakdown({ sideData, levelLabel, side }) {
                     <span style={{ color: '#94a3b8' }}>{cond.replace(/_/g, ' ').replace(/^(\w)/, c => c.toUpperCase())}</span>
                     <span>
                       <span style={{ fontWeight: 700, color: rateColor(rr), marginRight: 6 }}>{rr}%</span>
-                      <span style={{ color: v.touches < 20 ? '#fbbf24' : '#475569', fontSize: 13 }}>n={v.touches}</span>
+                      <span style={{ color: v.touches < 20 ? '#fbbf24' : '#64748b', fontSize: 13 }}>n={v.touches}</span>
                     </span>
                   </div>
                 );
@@ -6937,7 +7119,7 @@ function KeyLevelBT({ selectedAccounts, onJumpToChart }) {
               </button>
             )}
           </div>
-          <div style={{ marginTop: 8, fontSize: 13, color: '#64748b', fontStyle: 'italic' }}>
+          <div style={{ marginTop: 8, fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>
             Goal: find conditions where IB High resistance exceeds 60% (vs 44.5% unfiltered). Filtered sets will have fewer touches — flag shown when N &lt; 30.
           </div>
         </div>
@@ -6989,7 +7171,7 @@ function KeyLevelBT({ selectedAccounts, onJumpToChart }) {
                       <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap' }}>
                         {hasCond && (
                           <button onClick={() => setExpandedCond(isExpanded ? null : condKey)}
-                            style={{ marginRight: 6, background: 'none', border: 'none', cursor: 'pointer', color: isExpanded ? '#a78bfa' : '#475569', fontSize: 13, padding: '1px 3px', lineHeight: 1 }}
+                            style={{ marginRight: 6, background: 'none', border: 'none', cursor: 'pointer', color: isExpanded ? '#a78bfa' : '#64748b', fontSize: 13, padding: '1px 3px', lineHeight: 1 }}
                             title="Show condition breakdown">
                             {isExpanded ? '▼' : '▶'}
                           </button>
@@ -7005,7 +7187,7 @@ function KeyLevelBT({ selectedAccounts, onJumpToChart }) {
                         <KlSigBadge pValue={sd.pValue} />
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', color: sd.touches < 30 && (filterNL30||filterOpenCall||filterSessDir) ? '#fbbf24' : 'var(--text-secondary)' }}>
-                        {sd.touches}{sd.touches < 30 && (filterNL30||filterOpenCall||filterSessDir) && <span style={{ fontSize: 9, color: '#fbbf24', marginLeft: 3 }}>limited</span>}
+                        {sd.touches}{sd.touches < 30 && (filterNL30||filterOpenCall||filterSessDir) && <span style={{ fontSize: 11, color: '#fbbf24', marginLeft: 3 }}>limited</span>}
                       </td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', color: '#a78bfa', fontWeight: 600 }}>{sd.mfe?.p50 ?? '—'}</td>
                       <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text-secondary)' }}>{sd.mfe?.p75 ?? '—'}</td>
@@ -7056,13 +7238,13 @@ function KeyLevelBT({ selectedAccounts, onJumpToChart }) {
             style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'Arial, sans-serif' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Confluence Score Validation</span>
-              <span style={{ fontSize: 13, color: '#64748b' }}>— does higher confluence predict better level respect? (6 primary levels combined)</span>
+              <span style={{ fontSize: 13, color: '#94a3b8' }}>— does higher confluence predict better level respect? (6 primary levels combined)</span>
             </div>
-            <span style={{ color: '#64748b', fontSize: 13 }}>{showCombinedConf ? '▲' : '▼'}</span>
+            <span style={{ color: '#94a3b8', fontSize: 13 }}>{showCombinedConf ? '▲' : '▼'}</span>
           </button>
           {showCombinedConf && (
             <div style={{ padding: '0 14px 14px' }}>
-              <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 10, lineHeight: 1.5 }}>
                 Source: <code>daily_performance_log.confluence_score_pre</code> (0–3 scale) matched by session date.
                 If higher scores predict stronger level respect, the framework is validated. If flat, confluence needs recalibration.
                 Note: only sessions since Nov 2024 have scores — earlier touches show as no-data.
@@ -7526,13 +7708,13 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
               {yTicks.map(p => (
                 <g key={p}>
                   <line x1={0} x2={iW} y1={yScale(p)} y2={yScale(p)} stroke="#1e2a3a" strokeWidth={1} />
-                  <text x={-6} y={yScale(p) + 4} textAnchor="end" fill="#475569" fontSize={10}>{p}</text>
+                  <text x={-6} y={yScale(p) + 4} textAnchor="end" fill="#64748b" fontSize={10}>{p}</text>
                 </g>
               ))}
 
               {/* X axis labels */}
               {xLabels.map(({ x, label }, i) => (
-                <text key={i} x={x} y={iH + 22} textAnchor="middle" fill="#475569" fontSize={10}>{label}</text>
+                <text key={i} x={x} y={iH + 22} textAnchor="middle" fill="#64748b" fontSize={10}>{label}</text>
               ))}
 
               {/* Level reference lines */}
@@ -7563,7 +7745,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                   const isVa = vpStats && entry.price >= vpStats.val && entry.price <= vpStats.vah;
                   return (
                     <rect key={i} x={0} y={y} width={barW} height={bH}
-                      fill={isPoc ? '#f59e0b' : isVa ? '#6366f1' : '#64748b'}
+                      fill={isPoc ? '#f59e0b' : isVa ? '#6366f1' : '#94a3b8'}
                       opacity={isPoc ? 0.55 : isVa ? 0.3 : 0.2} />
                   );
                 });
@@ -7675,7 +7857,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
               {/* Hover crosshair */}
               {hoverBar && (
                 <line x1={xScale(chartHover)} x2={xScale(chartHover)} y1={0} y2={iH}
-                  stroke="#475569" strokeWidth={0.75} />
+                  stroke="#64748b" strokeWidth={0.75} />
               )}
 
               {/* Hover OHLCV info box */}
@@ -7690,7 +7872,7 @@ function ChartReviewSection({ selectedAccounts, initialDate, initialLevelKey }) 
                     <rect x={bx} y={4} width={182} height={58} fill="rgba(13,17,23,0.92)" rx={5} stroke="#1e2a3a" strokeWidth={1} />
                     <text x={bx+8} y={20} fill="#94a3b8" fontSize={11} fontWeight="600">{timeStr} EST</text>
                     <text x={bx+8} y={35} fill={col} fontSize={10}>O {fmtP(+hoverBar.open, 2)}  H {fmtP(+hoverBar.high, 2)}  L {fmtP(+hoverBar.low, 2)}  C {fmtP(+hoverBar.close, 2)}</text>
-                    <text x={bx+8} y={50} fill="#64748b" fontSize={9}>Vol {hoverBar.volume?.toLocaleString()}</text>
+                    <text x={bx+8} y={50} fill="#94a3b8" fontSize={9}>Vol {hoverBar.volume?.toLocaleString()}</text>
                   </g>
                 );
               })()}
@@ -7818,7 +8000,7 @@ function EdgePatternTable({ patterns }) {
               {rows.map((p, i) => {
                 const e = p.edge;
                 const ec = Math.abs(e) >= 20 ? (e > 0 ? 'var(--accent-green)' : 'var(--accent-red)') : Math.abs(e) >= 10 ? '#f59e0b' : 'var(--text-muted)';
-                const sb = p.pValue == null ? null : p.pValue < 0.001 ? ['★★★','#10b981'] : p.pValue < 0.01 ? ['★★','#34d399'] : p.pValue < 0.05 ? ['★','#f59e0b'] : ['ns','#475569'];
+                const sb = p.pValue == null ? null : p.pValue < 0.001 ? ['★★★','#10b981'] : p.pValue < 0.01 ? ['★★','#34d399'] : p.pValue < 0.05 ? ['★','#f59e0b'] : ['ns','#64748b'];
                 return (
                   <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: i%2===0?'transparent':'rgba(255,255,255,0.01)' }}>
                     <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--text-primary)' }}>{p.label}</td>
@@ -7901,7 +8083,7 @@ function EdgeAnalysisView() {
             <span><span style={{ color: '#10b981' }}>★★★</span> p&lt;0.001 (very strong)</span>
             <span><span style={{ color: '#34d399' }}>★★</span> p&lt;0.01 (strong)</span>
             <span><span style={{ color: '#f59e0b' }}>★</span> p&lt;0.05 (significant)</span>
-            <span><span style={{ color: '#475569' }}>ns</span> not significant</span>
+            <span><span style={{ color: '#64748b' }}>ns</span> not significant</span>
             <span style={{ marginLeft: 8 }}>Edge = actual rate minus 50% baseline. Green = bullish/confirmatory, Red = bearish/counter.</span>
           </div>
         </>
@@ -7926,8 +8108,8 @@ function ScenarioPatBar({ data, dataKey = 'avgPnl', nameKey = 'label', height = 
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
-        <XAxis dataKey={nameKey} tick={{ fontSize: 11, fill: '#475569' }} />
-        <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
+        <XAxis dataKey={nameKey} tick={{ fontSize: 11, fill: '#64748b' }} />
+        <YAxis tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
         <Tooltip
           contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
           formatter={(v) => [v != null ? `$${fmtP(parseFloat(v))}` : '—', 'Avg P&L']}
@@ -8135,14 +8317,14 @@ function ScenarioTesterView() {
   const deltaPos = sc && sc.delta >= 0;
 
   const CARD = { background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10, padding: '12px 16px' };
-  const LABEL = { fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 };
+  const LABEL = { fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 };
   const NUM = (clr) => ({ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: clr || '#e2e8f0' });
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1300, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#e2e8f0', margin: 0 }}>Scenario Tester</h1>
-        <span style={{ fontSize: 13, color: '#475569' }}>Filter your own trade history — instant P&L impact of any rule</span>
+        <span style={{ fontSize: 13, color: '#64748b' }}>Filter your own trade history — instant P&L impact of any rule</span>
       </div>
 
       {/* ── Presets ── */}
@@ -8166,7 +8348,7 @@ function ScenarioTesterView() {
 
         {/* ── Filters panel ── */}
         <div style={{ ...CARD, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Filters</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Filters</div>
 
           {/* Date range */}
           <div>
@@ -8177,7 +8359,7 @@ function ScenarioTesterView() {
                   style={{ flex: 1, padding: '5px 0', fontSize: 13, borderRadius: 5, cursor: 'pointer',
                     border: `1px solid ${dateRange === d && !startDate ? '#6366f1' : 'var(--border-color)'}`,
                     background: dateRange === d && !startDate ? 'rgba(99,102,241,0.15)' : 'transparent',
-                    color: dateRange === d && !startDate ? '#818cf8' : '#64748b', fontWeight: dateRange === d && !startDate ? 700 : 400 }}>
+                    color: dateRange === d && !startDate ? '#818cf8' : '#94a3b8', fontWeight: dateRange === d && !startDate ? 700 : 400 }}>
                   {d}d
                 </button>
               ))}
@@ -8196,11 +8378,11 @@ function ScenarioTesterView() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input type="time" value={timeFrom} onChange={e => setTimeFrom(e.target.value)}
                 style={{ flex: 1, padding: '4px 6px', fontSize: 13, background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 5, color: '#e2e8f0' }} />
-              <span style={{ color: '#475569', fontSize: 12 }}>to</span>
+              <span style={{ color: '#64748b', fontSize: 12 }}>to</span>
               <input type="time" value={timeTo} onChange={e => setTimeTo(e.target.value)}
                 style={{ flex: 1, padding: '4px 6px', fontSize: 13, background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 5, color: '#e2e8f0' }} />
             </div>
-            <div style={{ fontSize: 11, color: '#475569', marginTop: 3 }}>Leave blank = no time filter</div>
+            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>Leave blank = no time filter</div>
           </div>
 
           {/* Days of week */}
@@ -8212,7 +8394,7 @@ function ScenarioTesterView() {
                   style={{ flex: 1, padding: '4px 0', fontSize: 12, borderRadius: 4, cursor: 'pointer',
                     border: `1px solid ${daysOfWeek.includes(d) ? '#22c55e' : 'var(--border-color)'}`,
                     background: daysOfWeek.includes(d) ? 'rgba(34,197,94,0.12)' : 'transparent',
-                    color: daysOfWeek.includes(d) ? '#22c55e' : '#475569', fontWeight: 600 }}>
+                    color: daysOfWeek.includes(d) ? '#22c55e' : '#64748b', fontWeight: 600 }}>
                   {lbl}
                 </button>
               ))}
@@ -8228,7 +8410,7 @@ function ScenarioTesterView() {
                   style={{ flex: 1, padding: '4px 0', fontSize: 11, borderRadius: 4, cursor: 'pointer',
                     border: `1px solid ${dayTypes.includes(t) ? '#818cf8' : 'var(--border-color)'}`,
                     background: dayTypes.includes(t) ? 'rgba(129,140,248,0.12)' : 'transparent',
-                    color: dayTypes.includes(t) ? '#818cf8' : '#475569', fontWeight: 600 }}>
+                    color: dayTypes.includes(t) ? '#818cf8' : '#64748b', fontWeight: 600 }}>
                   {t === 'TURBULENT' ? 'TURB' : t}
                 </button>
               ))}
@@ -8245,7 +8427,7 @@ function ScenarioTesterView() {
                     style={{ padding: '4px 8px', fontSize: 11, borderRadius: 4, cursor: 'pointer', textAlign: 'left',
                       border: `1px solid ${accounts.includes(a) ? '#3b82f6' : 'var(--border-color)'}`,
                       background: accounts.includes(a) ? 'rgba(59,130,246,0.12)' : 'transparent',
-                      color: accounts.includes(a) ? '#7dd3fc' : '#475569', fontFamily: 'monospace' }}>
+                      color: accounts.includes(a) ? '#7dd3fc' : '#64748b', fontFamily: 'monospace' }}>
                     {a}
                   </button>
                 ))}
@@ -8264,7 +8446,7 @@ function ScenarioTesterView() {
                 { label: 'DLL ($)', val: dll, set: setDll, placeholder: 'e.g. 300', type: 'number' },
               ].map(({ label, val, set, placeholder }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 12, color: '#64748b', minWidth: 140 }}>{label}</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 140 }}>{label}</span>
                   <input value={val} onChange={e => set(e.target.value)} placeholder={placeholder}
                     style={{ width: 80, padding: '4px 8px', fontSize: 13, background: 'var(--input-bg)', border: `1px solid ${val ? '#6366f1' : 'var(--border-color)'}`, borderRadius: 5, color: '#e2e8f0', fontFamily: 'monospace' }} />
                 </div>
@@ -8275,7 +8457,7 @@ function ScenarioTesterView() {
           <button onClick={() => { setActivePreset(null); run(); }}
             disabled={loading}
             style={{ padding: '9px 0', fontSize: 14, fontWeight: 700, borderRadius: 7, border: 'none',
-              background: loading ? '#1e293b' : '#6366f1', color: loading ? '#475569' : '#fff', cursor: loading ? 'default' : 'pointer' }}>
+              background: loading ? '#1e293b' : '#6366f1', color: loading ? '#64748b' : '#fff', cursor: loading ? 'default' : 'pointer' }}>
             {loading ? 'Running…' : 'Run Scenario'}
           </button>
         </div>
@@ -8291,22 +8473,22 @@ function ScenarioTesterView() {
                 <div style={CARD}>
                   <div style={LABEL}>Scenario P&L</div>
                   <div style={NUM(sc.netPnl >= 0 ? '#22c55e' : '#ef4444')}>{fmt$(sc.netPnl)}</div>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>vs actual {fmt$(ac?.netPnl)}</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>vs actual {fmt$(ac?.netPnl)}</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Rule impact (delta)</div>
                   <div style={NUM(deltaPos ? '#22c55e' : '#ef4444')}>{fmt$(sc.delta)}</div>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{deltaPos ? 'better' : 'worse'} than actual</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{deltaPos ? 'better' : 'worse'} than actual</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Win rate</div>
                   <div style={NUM(sc.winRate >= 50 ? '#22c55e' : '#f59e0b')}>{sc.winRate}%</div>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{sc.winners}W / {sc.losers}L ({sc.tradeCount} fills)</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{sc.winners}W / {sc.losers}L ({sc.tradeCount} fills)</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Win-day rate</div>
                   <div style={NUM(sc.winDayRate >= 50 ? '#22c55e' : '#f59e0b')}>{sc.winDayRate}%</div>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>{sc.winDays}W / {sc.lossDays}L ({sc.dayCount} days)</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{sc.winDays}W / {sc.lossDays}L ({sc.dayCount} days)</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Avg per trade</div>
@@ -8319,34 +8501,34 @@ function ScenarioTesterView() {
                 <div style={CARD}>
                   <div style={LABEL}>Give-back</div>
                   <div style={NUM('#f59e0b')}>{fmt$(sc.giveBack, false)}</div>
-                  <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>peak–close cumulative</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>peak–close cumulative</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Date range</div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginTop: 4 }}>{result?.meta?.start}</div>
-                  <div style={{ fontSize: 13, color: '#475569' }}>→ {result?.meta?.end}</div>
+                  <div style={{ fontSize: 13, color: '#64748b' }}>→ {result?.meta?.end}</div>
                 </div>
               </div>
 
               {/* ── Equity curve ── */}
               <div style={CARD}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
                   Equity Curve — Scenario vs Actual
                 </div>
                 <ResponsiveContainer width="100%" height={220}>
                   <ComposedChart data={sc.equityCurve.map((pt, i) => ({ ...pt, actual: ac?.equityCurve?.[i]?.equity ?? null }))}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={d => d.slice(5)} interval={Math.floor(sc.equityCurve.length / 8)} />
-                    <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${v >= 0 ? '' : '-'}${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(1)+'k' : Math.abs(v).toFixed(0)}`} />
+                    <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={d => d.slice(5)} interval={Math.floor(sc.equityCurve.length / 8)} />
+                    <YAxis tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={v => `$${v >= 0 ? '' : '-'}${Math.abs(v) >= 1000 ? (Math.abs(v)/1000).toFixed(1)+'k' : Math.abs(v).toFixed(0)}`} />
                     <Tooltip formatter={(v, n) => [v != null ? `$${fmtP(v)}` : '—', n === 'equity' ? 'Scenario' : 'Actual']} labelFormatter={l => `Date: ${l}`} contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }} />
                     <ReferenceLine y={0} stroke="#334155" />
-                    <Line type="monotone" dataKey="actual" stroke="#475569" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="actual" />
+                    <Line type="monotone" dataKey="actual" stroke="#64748b" strokeWidth={1.5} dot={false} strokeDasharray="4 2" name="actual" />
                     <Line type="monotone" dataKey="equity" stroke="#6366f1" strokeWidth={2.5} dot={false} name="equity" />
                   </ComposedChart>
                 </ResponsiveContainer>
                 <div style={{ display: 'flex', gap: 20, justifyContent: 'center', marginTop: 6 }}>
                   <span style={{ fontSize: 11, color: '#6366f1' }}>— Scenario</span>
-                  <span style={{ fontSize: 11, color: '#475569' }}>- - Actual</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>- - Actual</span>
                 </div>
               </div>
             </>
@@ -8355,12 +8537,12 @@ function ScenarioTesterView() {
           {/* ── DLL Compare ── */}
           <div style={CARD}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 DLL Comparison — $200 / $300 / $400 / $500 / None
               </div>
               <button onClick={runDllCompare} disabled={dllLoading}
                 style={{ padding: '5px 14px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: '1px solid #6366f1',
-                  background: dllLoading ? 'transparent' : 'rgba(99,102,241,0.15)', color: dllLoading ? '#475569' : '#818cf8', cursor: dllLoading ? 'default' : 'pointer' }}>
+                  background: dllLoading ? 'transparent' : 'rgba(99,102,241,0.15)', color: dllLoading ? '#64748b' : '#818cf8', cursor: dllLoading ? 'default' : 'pointer' }}>
                 {dllLoading ? 'Running…' : 'Run DLL Compare'}
               </button>
             </div>
@@ -8371,7 +8553,7 @@ function ScenarioTesterView() {
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                       {['DLL','Net P&L','Delta vs None','Trades','Hit Days','Saved Days','Cut Early','Saved $','Lost by Cut $','Avg Hit Day P&L','Avg Hit Day Actual'].map(h => (
-                        <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: '#64748b', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
+                        <th key={h} style={{ padding: '6px 10px', textAlign: 'right', color: '#94a3b8', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -8382,7 +8564,7 @@ function ScenarioTesterView() {
                       const isBest = row.netPnl === bestPnl;
                       return (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(51,65,85,0.3)', background: isBest ? 'rgba(34,197,94,0.06)' : 'transparent' }}>
-                          <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700, color: isNone ? '#64748b' : '#fbbf24' }}>
+                          <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontWeight: 700, color: isNone ? '#94a3b8' : '#fbbf24' }}>
                             {isNone ? 'None' : `$${row.dll}`} {isBest ? '★' : ''}
                           </td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: row.netPnl >= 0 ? '#22c55e' : '#ef4444' }}>
@@ -8392,7 +8574,7 @@ function ScenarioTesterView() {
                             {isNone ? '—' : fmt$(row.delta)}
                           </td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', color: '#94a3b8' }}>{row.tradeCount}</td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right', color: row.dllHitDays > 0 ? '#fbbf24' : '#475569' }}>{row.dllHitDays}</td>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', color: row.dllHitDays > 0 ? '#fbbf24' : '#64748b' }}>{row.dllHitDays}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', color: '#22c55e' }}>{row.savedDays || '—'}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', color: '#ef4444' }}>{row.cutTooEarlyDays || '—'}</td>
                           <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: '#22c55e' }}>
@@ -8401,10 +8583,10 @@ function ScenarioTesterView() {
                           <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: '#ef4444' }}>
                             {row.cutTooEarlyTotal > 0 ? fmt$(row.cutTooEarlyTotal) : '—'}
                           </td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: row.avgDllDayPnl != null ? (row.avgDllDayPnl >= 0 ? '#22c55e' : '#ef4444') : '#475569' }}>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: row.avgDllDayPnl != null ? (row.avgDllDayPnl >= 0 ? '#22c55e' : '#ef4444') : '#64748b' }}>
                             {row.avgDllDayPnl != null ? fmt$(row.avgDllDayPnl) : '—'}
                           </td>
-                          <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: row.avgDllActualDayPnl != null ? (row.avgDllActualDayPnl >= 0 ? '#22c55e' : '#ef4444') : '#475569' }}>
+                          <td style={{ padding: '7px 10px', textAlign: 'right', fontFamily: 'monospace', color: row.avgDllActualDayPnl != null ? (row.avgDllActualDayPnl >= 0 ? '#22c55e' : '#ef4444') : '#64748b' }}>
                             {row.avgDllActualDayPnl != null ? fmt$(row.avgDllActualDayPnl) : '—'}
                           </td>
                         </tr>
@@ -8412,14 +8594,14 @@ function ScenarioTesterView() {
                     })}
                   </tbody>
                 </table>
-                <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.6 }}>
-                  <strong style={{ color: '#64748b' }}>Saved days:</strong> DLL fired and the actual day P&L was worse — the stop protected you.&nbsp;
-                  <strong style={{ color: '#64748b' }}>Cut early:</strong> DLL fired but the actual day recovered to better — the stop cost you.&nbsp;
+                <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.6 }}>
+                  <strong style={{ color: '#94a3b8' }}>Saved days:</strong> DLL fired and the actual day P&L was worse — the stop protected you.&nbsp;
+                  <strong style={{ color: '#94a3b8' }}>Cut early:</strong> DLL fired but the actual day recovered to better — the stop cost you.&nbsp;
                   ★ = highest net P&L across all DLL levels.
                 </div>
               </div>
             ) : (
-              <div style={{ fontSize: 13, color: '#475569', textAlign: 'center', padding: '20px 0' }}>
+              <div style={{ fontSize: 13, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>
                 Click "Run DLL Compare" to see the $200/$300/$400/$500/None comparison side-by-side.
               </div>
             )}
@@ -8433,9 +8615,9 @@ function ScenarioTesterView() {
 
         return (
           <div style={{ marginTop: 24 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 14 }}>
               Pattern Analysis
-              {patternsLoading && <span style={{ fontSize: 12, fontWeight: 400, color: '#475569', marginLeft: 10 }}>Loading…</span>}
+              {patternsLoading && <span style={{ fontSize: 12, fontWeight: 400, color: '#64748b', marginLeft: 10 }}>Loading…</span>}
               <span style={{ fontSize: 11, fontWeight: 400, color: '#334155', marginLeft: 12, textTransform: 'none', letterSpacing: 0 }}>
                 Date range + account filters apply · sequential rules excluded
               </span>
@@ -8446,13 +8628,13 @@ function ScenarioTesterView() {
 
                 {/* Hourly */}
                 <div style={PCOL}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
                     Avg P&L by Hour (ET)
                   </div>
                   <ScenarioPatBar data={patterns.hourly} />
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.hourly.map(h => (
-                      <span key={h.hour} style={{ fontSize: 11, color: '#475569' }}>
+                      <span key={h.hour} style={{ fontSize: 11, color: '#64748b' }}>
                         <b style={{ color: h.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{h.label}</b>: {h.winRate}% WR · {h.count}f
                       </span>
                     ))}
@@ -8461,14 +8643,14 @@ function ScenarioTesterView() {
 
                 {/* DOW */}
                 <div style={PCOL}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
                     Avg Day P&L by Weekday
                   </div>
                   <ResponsiveContainer width="100%" height={160}>
                     <BarChart data={patterns.dayOfWeek} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" />
-                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#475569' }} />
-                      <YAxis tick={{ fontSize: 10, fill: '#475569' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} />
+                      <YAxis tick={{ fontSize: 12, fill: '#64748b' }} tickFormatter={v => `$${Math.abs(v) >= 1000 ? (v/1000).toFixed(1)+'k' : v.toFixed(0)}`} width={48} />
                       <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
                         formatter={v => [`$${fmtP(parseFloat(v))}`, 'Avg P&L']}
                         labelFormatter={(l, payload) => { const d = payload?.[0]?.payload; return d ? `${l} — ${d.winRate}% WR · ${d.days} days` : l; }} />
@@ -8480,7 +8662,7 @@ function ScenarioTesterView() {
                   </ResponsiveContainer>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.dayOfWeek.map(d => (
-                      <span key={d.dow} style={{ fontSize: 11, color: '#475569' }}>
+                      <span key={d.dow} style={{ fontSize: 11, color: '#64748b' }}>
                         <b style={{ color: d.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{d.label}</b>: {d.winRate}% WR · {d.days}d
                       </span>
                     ))}
@@ -8489,14 +8671,14 @@ function ScenarioTesterView() {
 
                 {/* Fill sequence */}
                 <div style={PCOL}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                     Edge by Fill # of Day
                   </div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 10 }}>Does your edge degrade as you trade more? #1 = first fill of the day.</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>Does your edge degrade as you trade more? #1 = first fill of the day.</div>
                   <ScenarioPatBar data={patterns.sessionSequence} />
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.sessionSequence.map(s => (
-                      <span key={s.seq} style={{ fontSize: 11, color: '#475569' }}>
+                      <span key={s.seq} style={{ fontSize: 11, color: '#64748b' }}>
                         <b style={{ color: s.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{s.label}</b>: {s.winRate}% WR · {s.count}f · {fmt$(s.totalPnl)}
                       </span>
                     ))}
@@ -8505,10 +8687,10 @@ function ScenarioTesterView() {
 
                 {/* After win/loss */}
                 <div style={PCOL}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                     Next Fill: After Win vs After Loss
                   </div>
-                  <div style={{ fontSize: 11, color: '#475569', marginBottom: 14 }}>Make-it-back spiral, quantified. How do you trade after a loser?</div>
+                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 14 }}>Make-it-back spiral, quantified. How do you trade after a loser?</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     {[
                       { key: 'afterLoss', label: 'After a Loss', color: '#ef4444' },
@@ -8517,13 +8699,13 @@ function ScenarioTesterView() {
                       const s = patterns.afterWinLoss[key];
                       return (
                         <div key={key} style={{ border: `1px solid ${color}33`, borderRadius: 8, padding: '14px 16px', background: `${color}08` }}>
-                          <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>{label}</div>
+                          <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>{label}</div>
                           <div style={{ fontSize: 24, fontWeight: 800, fontFamily: 'monospace', color: s.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>
                             {fmt$(s.avgPnl)}
                           </div>
-                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>avg per fill</div>
+                          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>avg per fill</div>
                           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>{s.winRate}% win rate</div>
-                          <div style={{ fontSize: 12, color: '#475569' }}>{s.count} instances · {fmt$(s.totalPnl)} total</div>
+                          <div style={{ fontSize: 12, color: '#64748b' }}>{s.count} instances · {fmt$(s.totalPnl)} total</div>
                         </div>
                       );
                     })}
@@ -8540,8 +8722,8 @@ function ScenarioTesterView() {
       <div style={{ marginTop: 24, background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
         <button onClick={() => setOptExpanded(x => !x)}
           style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Parameter Optimizer (Grid Search)</span>
-          <span style={{ fontSize: 12, color: '#475569' }}>{optExpanded ? '▲' : '▼'}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Parameter Optimizer (Grid Search)</span>
+          <span style={{ fontSize: 12, color: '#64748b' }}>{optExpanded ? '▲' : '▼'}</span>
         </button>
         {optExpanded && (
           <div style={{ padding: '0 18px 18px' }}>
@@ -8553,7 +8735,7 @@ function ScenarioTesterView() {
             </div>
 
             {/* Param selection */}
-            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>Select parameters to optimize:</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>Select parameters to optimize:</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
               {[
                 ['dll', 'DLL ($100-600, $50/100 steps)'],
@@ -8566,7 +8748,7 @@ function ScenarioTesterView() {
                   style={{ padding: '5px 12px', fontSize: 12, borderRadius: 16, cursor: 'pointer',
                     border: `1px solid ${optGridParams[key] ? '#6366f1' : 'var(--border-color)'}`,
                     background: optGridParams[key] ? 'rgba(99,102,241,0.15)' : 'transparent',
-                    color: optGridParams[key] ? '#818cf8' : '#475569', fontWeight: optGridParams[key] ? 700 : 400 }}>
+                    color: optGridParams[key] ? '#818cf8' : '#64748b', fontWeight: optGridParams[key] ? 700 : 400 }}>
                   {label}
                 </button>
               ))}
@@ -8577,7 +8759,7 @@ function ScenarioTesterView() {
 
             <button onClick={runOptimizer} disabled={optLoading}
               style={{ padding: '8px 20px', fontSize: 13, fontWeight: 700, borderRadius: 7, border: 'none',
-                background: optLoading ? '#1e293b' : '#6366f1', color: optLoading ? '#475569' : '#fff', cursor: optLoading ? 'default' : 'pointer', marginBottom: 16 }}>
+                background: optLoading ? '#1e293b' : '#6366f1', color: optLoading ? '#64748b' : '#fff', cursor: optLoading ? 'default' : 'pointer', marginBottom: 16 }}>
               {optLoading ? 'Running grid search…' : 'Run Optimizer'}
             </button>
 
@@ -8587,7 +8769,7 @@ function ScenarioTesterView() {
               const { topCombos, totalCombos, meta } = optResult;
               return (
                 <div>
-                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
                     {totalCombos} combinations tested · In-sample: {meta.isSplit.start} → {meta.isSplit.end} ({meta.isSplit.days}d) · Out-of-sample: {meta.oosSplit.start} → {meta.oosSplit.end} ({meta.oosSplit.days}d)
                   </div>
                   <div style={{ overflowX: 'auto' }}>
@@ -8595,9 +8777,9 @@ function ScenarioTesterView() {
                       <thead>
                         <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
                           {['DLL','Cut','MaxT','StopL','ProfLk','IS Delta','IS WD%','OOS Delta','OOS WD%','Max DD','Plateau','Status'].map(h => (
-                            <th key={h} style={{ padding: '6px 8px', textAlign: 'right', color: '#64748b', fontSize: 11, whiteSpace: 'nowrap' }}>{h}</th>
+                            <th key={h} style={{ padding: '6px 8px', textAlign: 'right', color: '#94a3b8', fontSize: 11, whiteSpace: 'nowrap' }}>{h}</th>
                           ))}
-                          <th style={{ padding: '6px 8px', color: '#64748b', fontSize: 11 }}></th>
+                          <th style={{ padding: '6px 8px', color: '#94a3b8', fontSize: 11 }}></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -8620,7 +8802,7 @@ function ScenarioTesterView() {
                               <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: statusColor, whiteSpace: 'nowrap' }}>{c.label}</td>
                               <td style={{ padding: '6px 8px' }}>
                                 <button onClick={() => { setMcParams(c.params); runMonteCarlo(c.params); }}
-                                  style={{ padding: '3px 8px', fontSize: 11, borderRadius: 4, border: '1px solid #475569', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}>MC</button>
+                                  style={{ padding: '3px 8px', fontSize: 11, borderRadius: 4, border: '1px solid #64748b', background: 'transparent', color: '#94a3b8', cursor: 'pointer' }}>MC</button>
                               </td>
                             </tr>
                           );
@@ -8628,8 +8810,8 @@ function ScenarioTesterView() {
                       </tbody>
                     </table>
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
-                    <strong style={{ color: '#64748b' }}>Plateau %</strong> — % of ±1-step parameter neighbors that also beat actual P&L in-sample. ≥50% = robust plateau.&nbsp;
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.7 }}>
+                    <strong style={{ color: '#94a3b8' }}>Plateau %</strong> — % of ±1-step parameter neighbors that also beat actual P&L in-sample. ≥50% = robust plateau.&nbsp;
                     <strong style={{ color: '#22c55e' }}>ROBUST</strong> = OOS profitable + plateau ≥50%.&nbsp;
                     <strong style={{ color: '#f59e0b' }}>FRAGILE</strong> = OOS profitable but isolated spike.&nbsp;
                     <strong style={{ color: '#ef4444' }}>OVERFIT</strong> = failed OOS.
@@ -8646,19 +8828,19 @@ function ScenarioTesterView() {
       <div style={{ marginTop: 16, background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 10 }}>
         <button onClick={() => setMcExpanded(x => !x)}
           style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monte Carlo Robustness</span>
-          <span style={{ fontSize: 12, color: '#475569' }}>{mcExpanded ? '▲' : '▼'}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monte Carlo Robustness</span>
+          <span style={{ fontSize: 12, color: '#64748b' }}>{mcExpanded ? '▲' : '▼'}</span>
         </button>
         {mcExpanded && (
           <div style={{ padding: '0 18px 18px' }}>
-            <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12, lineHeight: 1.6 }}>
               Resamples the scenario's daily P&L array 5,000 times (with replacement) to show the distribution of possible outcomes.
               If the result is order-dependent/lucky, the distribution will be wide and the 5th percentile will be deeply negative.
               A robust strategy produces a tight distribution skewed to the right.
             </div>
 
             {mcParams && (
-              <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>
                 Testing: DLL={mcParams.dll != null ? `$${mcParams.dll}` : 'none'} · Cut={mcParams.timeTo || 'none'} · MaxT={mcParams.maxTradesPerDay ?? 'none'} · StopL={mcParams.stopAfterLosses ?? 'none'} · ProfLk={mcParams.profitLock != null ? `$${mcParams.profitLock}` : 'none'}
               </div>
             )}
@@ -8666,7 +8848,7 @@ function ScenarioTesterView() {
             <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
               <button onClick={() => { setMcParams(null); runMonteCarlo(null); }} disabled={mcLoading}
                 style={{ padding: '8px 16px', fontSize: 12, fontWeight: 700, borderRadius: 7, border: '1px solid #6366f1',
-                  background: mcLoading ? 'transparent' : 'rgba(99,102,241,0.15)', color: mcLoading ? '#475569' : '#818cf8', cursor: mcLoading ? 'default' : 'pointer' }}>
+                  background: mcLoading ? 'transparent' : 'rgba(99,102,241,0.15)', color: mcLoading ? '#64748b' : '#818cf8', cursor: mcLoading ? 'default' : 'pointer' }}>
                 {mcLoading ? 'Simulating 5000 paths…' : 'Run on Current Filters'}
               </button>
             </div>
@@ -8688,7 +8870,7 @@ function ScenarioTesterView() {
                       { label: '95th %ile', val: dist.p95, color: '#22c55e' },
                     ].map(({ label, val, color }) => (
                       <div key={label} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 12px' }}>
-                        <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{label}</div>
+                        <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{label}</div>
                         <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color }}>{fmt$(val)}</div>
                       </div>
                     ))}
@@ -8703,29 +8885,29 @@ function ScenarioTesterView() {
                       <span style={{ fontSize: 13, color: '#fbbf24' }}>Max drawdown p95: {fmt$(drawdown.p95, false)}</span>
                     </div>
                     <div style={{ padding: '8px 14px', borderRadius: 7, background: '#0f172a', border: '1px solid #1e293b' }}>
-                      <span style={{ fontSize: 13, color: '#475569' }}>Actual scenario P&L: </span>
+                      <span style={{ fontSize: 13, color: '#64748b' }}>Actual scenario P&L: </span>
                       <span style={{ fontSize: 13, fontWeight: 700, color: scenarioNetPnl >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(scenarioNetPnl)}</span>
                     </div>
                   </div>
 
                   {/* Histogram */}
-                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>Distribution of simulated 60-day P&L outcomes ({iterations.toLocaleString()} paths)</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 8 }}>Distribution of simulated 60-day P&L outcomes ({iterations.toLocaleString()} paths)</div>
                   <ResponsiveContainer width="100%" height={180}>
                     <BarChart data={dist.bins} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.4)" vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#475569' }} interval={Math.floor(dist.bins.length / 8)} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v <= -1000 ? '-'+(Math.abs(v)/1000).toFixed(0)+'k' : v}`} />
-                      <YAxis tick={{ fontSize: 10, fill: '#475569' }} />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} interval={Math.floor(dist.bins.length / 8)} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(0)+'k' : v <= -1000 ? '-'+(Math.abs(v)/1000).toFixed(0)+'k' : v}`} />
+                      <YAxis tick={{ fontSize: 12, fill: '#64748b' }} />
                       <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 6, fontSize: 12 }}
                         formatter={(v, n, props) => [`${v} paths (${(v/iterations*100).toFixed(1)}%)`, `$${props.payload.from} to $${props.payload.to}`]}
                         labelFormatter={() => ''} />
-                      <ReferenceLine x={0} stroke="#475569" />
+                      <ReferenceLine x={0} stroke="#64748b" />
                       <Bar dataKey="count" radius={[2, 2, 0, 0]}>
                         {dist.bins.map((b, i) => <Cell key={i} fill={b.from >= 0 ? '#22c55e' : '#ef4444'} fillOpacity={0.7} />)}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
 
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#475569', lineHeight: 1.7 }}>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.7 }}>
                     Method: bootstrap resampling — randomly draws {mcResult.dailyPnls.length} daily P&Ls with replacement, 5,000 times.
                     A left-skewed distribution with p5 deeply negative means the strategy is fragile to bad luck runs.
                     The actual result ({fmt$(scenarioNetPnl)}) should sit above the median to be meaningful.
@@ -8737,6 +8919,307 @@ function ScenarioTesterView() {
         )}
       </div>
 
+    </div>
+  );
+}
+
+function PerformanceAuditPanel() {
+  const [data, setData] = React.useState(null);
+  const [sortCol, setSortCol] = React.useState('ev');
+  const [sortDir, setSortDir] = React.useState('desc');
+  const [expandedRow, setExpandedRow] = React.useState(null);
+  const [colOrder, setColOrder] = React.useState(() => {
+    try { const saved = localStorage.getItem('perf-audit-col-order'); return saved ? JSON.parse(saved) : null; } catch (_) { return null; }
+  });
+  const [dragCol, setDragCol] = React.useState(null);
+  React.useEffect(() => { if (colOrder) try { localStorage.setItem('perf-audit-col-order', JSON.stringify(colOrder)); } catch(_) {} }, [colOrder]);
+
+  React.useEffect(() => {
+    fetch(`${API_URL}/performance-audit/unified`).then(r => r.json()).then(setData).catch(() => {});
+  }, []);
+
+  if (!data || !data.setups?.length) return <div style={{ padding: 20, color: '#94a3b8' }}>No audit data yet. Run the comprehensive backtest script first.</div>;
+
+  const handleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('desc'); }
+  };
+
+  const sorted = [...data.setups].sort((a, b) => {
+    // Status groups always take priority: ACTIVE first, CONTEXT second, REMOVED last
+    const statusOrder = { ACTIVE: 0, CONTEXT: 1, REMOVED: 2 };
+    const sA = statusOrder[a.status] ?? 3, sB = statusOrder[b.status] ?? 3;
+    if (sA !== sB) return sA - sB;
+    // Within same status group, sort by selected column
+    let vA = a[sortCol], vB = b[sortCol];
+    if (vA == null) vA = sortDir === 'desc' ? -Infinity : Infinity;
+    if (vB == null) vB = sortDir === 'desc' ? -Infinity : Infinity;
+    if (typeof vA === 'string') return sortDir === 'asc' ? vA.localeCompare(vB) : vB.localeCompare(vA);
+    return sortDir === 'asc' ? vA - vB : vB - vA;
+  });
+
+  const fmtPct = v => v != null ? (v * 100).toFixed(1) + '%' : '--';
+  const fmtN = v => v != null ? Math.round(v) : '--';
+  const fmtDollar = v => v != null ? '$' + Math.round(v).toLocaleString() : '--';
+
+  const statusColor = s => s === 'ACTIVE' ? '#4ade80' : s === 'CONTEXT' ? '#94a3b8' : '#f87171';
+  const statusBg = s => s === 'ACTIVE' ? 'rgba(74,222,128,0.1)' : s === 'CONTEXT' ? 'rgba(148,163,184,0.08)' : 'rgba(248,113,113,0.08)';
+  const wrColor = v => v != null ? (v >= 0.80 ? '#4ade80' : v >= 0.65 ? '#a3e635' : v >= 0.50 ? '#fbbf24' : '#f87171') : '#94a3b8';
+  const evColor = v => v != null ? (v > 20 ? '#4ade80' : v > 0 ? '#a3e635' : v > -10 ? '#fbbf24' : '#f87171') : '#94a3b8';
+  const regimeDot = v => v === 'OUTPERFORMING' ? '#4ade80' : v === 'DEGRADING' ? '#f87171' : '#94a3b8';
+  const probColor = v => v === 'VERY_HIGH' ? '#4ade80' : v === 'HIGH' ? '#a3e635' : v === 'MEDIUM' ? '#fbbf24' : v === 'LOW' ? '#94a3b8' : '#64748b';
+  const probLabel = v => v === 'VERY_HIGH' ? 'V.HIGH' : v || '--';
+
+  const defaultCols = [
+    // Identity
+    { key: 'name',         label: 'Signal',       w: 120, tip: 'Setup or level fade name. Click row to expand full trading guide.' },
+    { key: 'status',       label: 'Status',        w: 56,  tip: 'ACTIVE=backtested positive EV, tradeable. CONTEXT=use for directional lean only. REMOVED=negative EV, cut from system.' },
+    // Win rates (grouped: long → medium → short term)
+    { key: 'wr',           label: '180d WR',       w: 52,  tip: 'Win rate from 180-day bar-by-bar system backtest. The long-term baseline.' },
+    { key: 'wr30d',        label: '30d WR',        w: 52,  tip: 'Win rate over last 30 trading days. Shows if the edge is holding in the current month. Most reliable recent window.' },
+    { key: 'wr10d',        label: '10d WR',        w: 52,  tip: 'Win rate over last 10 trading days. Most recent snapshot — small sample, directional only.' },
+    { key: 'trend10d',     label: 'Trend',         w: 42,  tip: 'Is the recent 10d WR higher (↑), lower (↓), or flat (→) vs the 180d baseline? ↑ = edge strengthening, ↓ = degrading.' },
+    // EV
+    { key: 'ev',           label: 'EV/Tr',         w: 50,  tip: 'Expected value per trade. Includes $1 commission. Positive = profitable over many trades.' },
+    { key: 'totalPnl',     label: 'P&L',           w: 52,  tip: 'Total P&L contribution over 180 days. Shows which levels carry the system vs dead weight.' },
+    // Stops & Targets (grouped)
+    { key: 'stop',         label: 'Stop',          w: 42,  tip: 'Stop loss in points. Based on P75 MAE from backtest. Gives room for normal noise without exceeding DLL.' },
+    { key: 't1',           label: 'T1',            w: 36,  tip: 'First target. Scale half position here. Based on optimal EV sweep from backtest.' },
+    { key: 't2',           label: 'T2 Runner',     w: 52,  tip: 'Runner target = P75 MFE. After T1 hit, move stop to breakeven and hold to T2. Winners run past T1 by 6-25pt on average.' },
+    // Risk profile (grouped)
+    { key: 'mae',          label: 'MAE',           w: 42,  tip: 'Average Max Adverse Excursion. How far the trade typically goes against you before resolving. Lower = cleaner entry.' },
+    { key: 'mfe',          label: 'MFE',           w: 42,  tip: 'Average Max Favorable Excursion. How far the trade goes in your favor. Higher = more room for runners.' },
+    { key: 'p50mae',       label: 'P50 MAE',      w: 52,  tip: 'Median MAE. 50% of trades see less heat than this. If P50 < Stop, most trades never get close to stopping out.' },
+    { key: 'p75mae',       label: 'P75 MAE',      w: 52,  tip: 'P75 MAE. 75% of trades see less heat than this. This is roughly where your stop should be.' },
+    // Sample & regime
+    { key: 'n',            label: 'N',             w: 30,  tip: 'Sample size (180d). More trades = more confidence. N<20 = directional, N>50 = statistically robust.' },
+    { key: 'regimeFit',    label: 'Regime',         w: 52,  tip: 'How this level performs in the CURRENT market regime. OUT=outperforming baseline, DEG=degrading. Updated nightly.' },
+    // Live context
+    { key: 'frequency',    label: 'Freq',          w: 48,  tip: 'How often this setup fires per trading day on average.' },
+    { key: 'distFromPrice',label: 'Dist',          w: 44,  tip: 'How far current price is from this level in points. Green=close, yellow=medium, gray=far.' },
+    { key: 'next2DayProb', label: '2d Prob',       w: 48,  tip: 'Probability of touching this level in next 2 days. Based on distance vs ATR(20). V.HIGH=within 0.5 ATR.' },
+  ];
+  const effectiveColOrder = colOrder || defaultCols.map(c => c.key);
+  const columns = effectiveColOrder.map(k => defaultCols.find(c => c.key === k)).filter(Boolean);
+
+  const thStyle = (col) => ({
+    padding: '8px 8px', textAlign: 'left', color: sortCol === col ? '#e2e8f0' : '#94a3b8',
+    fontWeight: 700, fontSize: 13, cursor: 'pointer', userSelect: 'none',
+    borderBottom: '2px solid #334155', whiteSpace: 'nowrap', letterSpacing: '0.03em',
+    textTransform: 'uppercase',
+  });
+
+  // Count by status
+  const activeCt = data.setups.filter(s => s.status === 'ACTIVE').length;
+  const ctxCt = data.setups.filter(s => s.status === 'CONTEXT').length;
+  const cutCt = data.setups.filter(s => s.status === 'REMOVED').length;
+
+  return (
+    <div style={{ padding: '16px 0' }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: 18, color: '#e2e8f0', fontWeight: 800 }}>Unified Signal Table</h2>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>
+            Last run: {data.runDate} | {activeCt} active, {ctxCt} context, {cutCt} cut | Click headers to sort
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          {data.currentPrice && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>NQ Price</div>
+              <div style={{ fontSize: 16, fontWeight: 900, fontFamily: 'monospace', color: '#e2e8f0' }}>{Math.round(data.currentPrice).toLocaleString()}</div>
+            </div>
+          )}
+          {data.atr20 && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>ATR(20)</div>
+              <div style={{ fontSize: 16, fontWeight: 900, fontFamily: 'monospace', color: '#94a3b8' }}>{data.atr20}</div>
+            </div>
+          )}
+          {data.currentRegime && (
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', fontWeight: 700 }}>Regime</div>
+              <div style={{ fontSize: 11, fontWeight: 700, fontFamily: 'monospace', color: '#94a3b8' }}>
+                {data.currentRegime.vol} / {data.currentRegime.dir} / {data.currentRegime.range}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* System Summary Banner */}
+      {data.systemSummary && (
+        <div style={{ padding: '10px 14px', background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.15)', borderRadius: 6, marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: '#a78bfa', letterSpacing: '0.05em' }}>SYSTEM TOTAL</span>
+            <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{data.systemSummary.totalTrades} trades</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{fmtPct(data.systemSummary.wr)} WR</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{fmtDollar(data.systemSummary.ev)}/trade</span>
+              <span style={{ fontSize: 16, fontWeight: 900, fontFamily: 'monospace', color: '#4ade80' }}>{fmtDollar(data.systemSummary.totalPnl)}</span>
+            </div>
+          </div>
+          {data.systemSummary.notes && (
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>{data.systemSummary.notes}</div>
+          )}
+        </div>
+      )}
+
+      {/* Unified Table */}
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr>
+              {columns.map((c, ci) => (
+                <th key={c.key}
+                  draggable
+                  onDragStart={() => setDragCol(ci)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => {
+                    if (dragCol == null || dragCol === ci) return;
+                    const newOrder = [...effectiveColOrder];
+                    const [moved] = newOrder.splice(dragCol, 1);
+                    newOrder.splice(ci, 0, moved);
+                    setColOrder(newOrder);
+                    setDragCol(null);
+                  }}
+                  onClick={() => handleSort(c.key)}
+                  title={c.tip}
+                  style={{ ...thStyle(c.key), minWidth: c.w, cursor: 'grab', borderBottom: '1px dotted #64748b' }}>
+                  {c.label}{sortCol === c.key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((s, i) => {
+              const isRemoved = s.status === 'REMOVED';
+              const isContext = s.status === 'CONTEXT';
+              const rowOpacity = isRemoved ? 0.45 : isContext ? 0.7 : 1;
+              const prevStatus = i > 0 ? sorted[i - 1].status : null;
+              const showSep = prevStatus && prevStatus !== s.status;
+
+              return (
+                <React.Fragment key={s.rawName + '-' + s.signalType}>
+                  {showSep && (
+                    <tr><td colSpan={columns.length} style={{ padding: 0, height: 2, background: '#334155' }} /></tr>
+                  )}
+                  <tr
+                    onClick={() => setExpandedRow(expandedRow === s.rawName ? null : s.rawName)}
+                    style={{
+                      borderBottom: '1px solid #1e293b', opacity: rowOpacity,
+                      cursor: 'pointer', background: expandedRow === s.rawName ? 'rgba(148,163,184,0.04)' : 'transparent',
+                      transition: 'background 0.1s',
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = 'rgba(148,163,184,0.06)'}
+                    onMouseLeave={e => e.currentTarget.style.background = expandedRow === s.rawName ? 'rgba(148,163,184,0.04)' : 'transparent'}
+                  >
+                    {columns.map(c => {
+                      const cs = { padding: '8px 8px', fontFamily: 'monospace', fontSize: 14 };
+                      switch (c.key) {
+                        case 'name': return <td key={c.key} style={{ ...cs, fontWeight: 700, color: '#e2e8f0', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>{s.name}</td>;
+                        case 'wr': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: wrColor(s.wr) }}>{fmtPct(s.wr)}</td>;
+                        case 'wr30d': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: s.wr30d != null ? wrColor(s.wr30d) : '#64748b' }}>{s.wr30d != null ? fmtPct(s.wr30d) : '--'}</td>;
+                        case 'wr10d': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: s.wr10d != null ? wrColor(s.wr10d) : '#64748b' }}>{s.wr10d != null ? fmtPct(s.wr10d) : '--'}</td>;
+                        case 'trend10d': return <td key={c.key} style={{ ...cs, fontWeight: 800, fontSize: 16, color: s.trend10d === 'UP' ? '#4ade80' : s.trend10d === 'DOWN' ? '#f87171' : '#94a3b8' }}>{s.trend10d === 'UP' ? '↑' : s.trend10d === 'DOWN' ? '↓' : s.trend10d === 'FLAT' ? '→' : '--'}</td>;
+                        case 'ev': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: evColor(s.ev) }}>{s.ev != null ? '$' + Math.round(s.ev) : '--'}</td>;
+                        case 'stop': return <td key={c.key} style={{ ...cs, color: '#f87171' }}>{s.stop ? fmtN(s.stop) + 'pt' : '--'}</td>;
+                        case 't1': return <td key={c.key} style={{ ...cs, color: '#4ade80' }}>{s.t1 ? fmtN(s.t1) + 'pt' : '--'}</td>;
+                        case 't2': return <td key={c.key} style={{ ...cs, color: s.t2 ? '#22d3ee' : '#64748b' }}>{s.t2 ? fmtN(s.t2) + 'pt' : '--'}</td>;
+                        case 'mae': return <td key={c.key} style={{ ...cs, color: '#fb923c' }}>{s.mae != null ? fmtN(s.mae) + 'pt' : '--'}</td>;
+                        case 'mfe': return <td key={c.key} style={{ ...cs, color: '#34d399' }}>{s.mfe != null ? fmtN(s.mfe) + 'pt' : '--'}</td>;
+                        case 'p50mae': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.p50mae != null ? fmtN(s.p50mae) + 'pt' : '--'}</td>;
+                        case 'p75mae': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.p75mae != null ? fmtN(s.p75mae) + 'pt' : '--'}</td>;
+                        case 'n': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.n || '--'}</td>;
+                        case 'totalPnl': return <td key={c.key} style={{ ...cs, color: evColor(s.totalPnl) }}>{s.totalPnl != null ? '$' + Math.round(s.totalPnl).toLocaleString() : '--'}</td>;
+                        case 'regimeFit': return <td key={c.key} style={{ ...cs, whiteSpace: 'nowrap' }}>
+                          {s.regimeFit ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: '50%', background: regimeDot(s.regimeFit), display: 'inline-block' }} />
+                              <span style={{ fontSize: 11, color: regimeDot(s.regimeFit), fontWeight: 700 }}>
+                                {s.regimeFit === 'OUTPERFORMING' ? 'OUT' : s.regimeFit === 'DEGRADING' ? 'DEG' : 'NRM'}
+                              </span>
+                            </span>
+                          ) : <span style={{ color: '#64748b' }}>--</span>}
+                        </td>;
+                        case 'frequency': return <td key={c.key} style={{ ...cs, color: '#94a3b8', fontSize: 12 }}>{s.frequency || '--'}</td>;
+                        case 'distFromPrice': return <td key={c.key} style={{ ...cs,
+                          color: s.distFromPrice != null ? (s.distFromPrice <= 50 ? '#4ade80' : s.distFromPrice <= 200 ? '#fbbf24' : '#94a3b8') : '#64748b'
+                        }}>{s.distFromPrice != null ? s.distFromPrice + 'pt' : '--'}</td>;
+                        case 'next2DayProb': return <td key={c.key} style={{ ...cs }}>
+                          {s.next2DayProb ? (
+                            <span style={{ fontSize: 12, fontWeight: 800, padding: '2px 6px', borderRadius: 3,
+                              background: probColor(s.next2DayProb) + '20', color: probColor(s.next2DayProb),
+                            }}>{probLabel(s.next2DayProb)}</span>
+                          ) : <span style={{ color: '#64748b' }}>--</span>}
+                        </td>;
+                        case 'status': return <td key={c.key} style={{ ...cs }}>
+                      <span style={{
+                        fontSize: 12, fontWeight: 800, padding: '2px 6px', borderRadius: 3,
+                        background: statusBg(s.status), color: statusColor(s.status),
+                        letterSpacing: '0.03em',
+                      }}>
+                        {s.status}
+                      </span>
+                    </td>;
+                        default: return <td key={c.key} style={{ padding: '8px 6px', color: '#64748b', fontSize: 13 }}>--</td>;
+                      }
+                    })}
+                  </tr>
+                  {/* Expanded detail row — full trading context */}
+                  {expandedRow === s.rawName && (() => {
+                    const guides = {
+                      'PD_POC': { what: 'Fade at prior day Point of Control. The market\'s accepted value from yesterday — price gravitates here and often bounces.', how: 'AM session, first touch only. Enter on touch with 90pt stop, 40pt target. Scale half at T1, runner with breakeven stop. If delta shows exhaustion (sellers pushing but price holding), higher conviction.', best: 'TREND_UP days: 85%+ WR. Thursday: 71% WR (DOW pattern). 12-2 PM sweet spot historically. Post-flush days with absorption: 82% WR.', avoid: 'Only 44% WR on TREND_DOWN days — POC breaks when market is selling hard. Skip when IB_BEARISH fired and price is driving away.', risk: `Stop: 90pt ($181). Expected heat: P50 MAE ${fmtN(s.p50mae)}pt, P75 ${fmtN(s.p75mae)}pt. MFE: ${fmtN(s.mfe)}pt avg. MFE > MAE = trade works before it hurts.` },
+                      '5D_OR_MID': { what: '5-day rolling OR midpoint. Smooths outlier days — represents where the opening range has been centered over the past week. Most stable reference.', how: 'AM session, first touch. 90pt stop, 40pt target. This is the highest EV level in the system ($64/trade). When it fires, take it.', best: 'Works across most regimes. Rolling composite absorbs extreme days. 94% WR over system backtest.', avoid: 'Can be far from price in trending markets. If distance > ATR, unlikely to touch.', risk: `Stop: 90pt ($181). Tightest MAE of composites: P50 ${fmtN(s.p50mae)}pt. Clean level.` },
+                      'PD_VAL': { what: 'Fade at prior day Value Area Low. The bottom of yesterday\'s accepted range — institutional support. Buyers defended this yesterday.', how: 'AM session, first touch. 90pt stop, 40pt target. If price broke below and came back — that\'s a failed break, even higher conviction.', best: 'TURBULENT days: 92% WR. Balance days: 80% WR. When market tests yesterday\'s value and holds = strong.', avoid: 'TREND_DOWN days with strong selling — VAL becomes a breakout level, not support.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt. MFE: ${fmtN(s.mfe)}pt.` },
+                      'PD_VAH': { what: 'Fade at prior day Value Area High. The top of yesterday\'s accepted range — institutional resistance.', how: 'AM session, first touch. 90pt stop, 40pt target. Highest frequency KEEP level (~1.2/day). Short on approach from below.', best: 'Works well across most day types. High frequency means consistent small wins.', avoid: 'TREND_UP days with strong buying — VAH becomes breakout, not resistance.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt.` },
+                      'PD_IB_MID': { what: 'Prior day\'s Initial Balance midpoint. Where the first hour settled yesterday — key mean-reversion level.', how: 'AM session, first touch. 90pt stop, 40pt target. Tightest MAE of any level (20pt P50) — clean entries, minimal heat.', best: 'First touch AM: $44 EV. The cleanest level in the system. 83% WR.', avoid: 'Less reliable when market is far from yesterday\'s range.', risk: `Stop: 90pt ($181). P50 MAE only ${fmtN(s.p50mae)}pt — barely goes against you before working.` },
+                      'FLOOR_PIVOT': { what: 'Floor trader pivot point. Computed from prior day H+L+C/3. Structural reference used by institutions.', how: 'AM session, first touch. 90pt stop, 40pt target. 10 AM touch is the classic play (70% WR Thursday).', best: 'TURBULENT days: 100% WR. AM session: $41 EV. Structural level that institutions watch.', avoid: 'Less effective in PM session when volume dries up.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt.` },
+                      'OR_HIGH': { what: 'Today\'s Opening Range High. The first 5 minutes establish the range — price respects this level all session.', how: 'Post-OR (after 9:35), first touch. 90pt stop, 40pt target. If approaching from below and failing = short fade.', best: 'High vol expanding regime: +19pp boost. AM session. First touch critical.', avoid: 'TREND_UP open drive — OR High becomes a breakout continuation, not resistance.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt.` },
+                      'FLOOR_R1': { what: 'Floor trader R1 resistance. First resistance level above the pivot. Classic fade level.', how: 'AM session, first touch. 90pt stop, 40pt target. Thursday 1 PM is the specialist window (78% WR).', best: 'Thursday afternoon: 78% WR. R1 fades worked for you on Wednesday (the R1 short that banked).', avoid: 'Strong trend days where price drives through R1 with volume.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt.` },
+                      'PD_OR_MID': { what: 'Prior day\'s Opening Range midpoint. Where yesterday\'s first 5 minutes centered. Precise structural reference.', how: 'AM session, first touch. 90pt stop, 40pt target. 80% WR.', best: 'AM session: 84% WR. Outperforms when price is within ATR distance.', avoid: 'Can be far from price after big moves.', risk: `Stop: 90pt ($181). P50 MAE: ${fmtN(s.p50mae)}pt.` },
+                      'IB_MID_SCALP': { what: 'Today\'s IB midpoint scalp. Price rotates around the first hour\'s midpoint. Quick in-and-out.', how: 'After IB forms (10:30+), fade touches. 50pt stop, 15pt target. 3 trades/day possible. Quick resolution (2-3 min avg).', best: 'AM session: 82% WR. $12/day expected across 3 trades.', avoid: 'Strong trend days — IB mid gets run over.', risk: 'Stop: 50pt ($101). Small target but very high hit rate.' },
+                      'OR_MID_AFTER_IB': { what: 'OR midpoint retested after IB forms. The 5-min mid revisited — scalp the bounce.', how: 'After IB (10:30+), first touch of OR mid. 35pt stop, 20pt target. 5 trades/day possible. Your bread-and-butter scalp.', best: 'Highest frequency scalp in the system. $10/day expected.', avoid: 'Choppy days where OR mid is noise.', risk: 'Stop: 35pt ($71). 5 trades/day fits $400 DLL.' },
+                      'IB_BEARISH_DIRECTION': { what: 'IB broke to the downside. Not a trade entry — tells you the market\'s lean is SHORT.', how: 'When this fires, look for KEEP level fades in the SHORT direction. PD_POC fade short, Floor R1 fade short.', best: '54% directional accuracy. Combined with level fades = the framework.', avoid: 'Don\'t enter mechanically. 161pt MAE makes it untradeable as a scalp.', risk: 'No stop — this is context, not a trade. 161pt MAE if you tried to trade it.' },
+                      'IB_BULLISH_DIRECTION': { what: 'IB broke to the upside. Not a trade entry — tells you the market\'s lean is LONG.', how: 'When this fires, look for KEEP level fades in the LONG direction. PD_VAL fade long, PD_POC fade long.', best: '63% directional accuracy — best ACD signal. Strong LEAN.', avoid: 'Don\'t enter mechanically. 151pt MAE.', risk: 'No stop — context only.' },
+                    };
+                    const g = guides[s.rawName] || { what: s.bestContext || 'Level fade setup.', how: 'AM session, first touch. 90pt stop, 40pt target.', best: s.bestContext, avoid: 'Check regime fit.', risk: `MAE: ${fmtN(s.mae)}pt, MFE: ${fmtN(s.mfe)}pt.` };
+                    const secStyle = { marginBottom: 10 };
+                    const headStyle = { color: '#94a3b8', fontWeight: 700, fontSize: 13, textTransform: 'uppercase', marginBottom: 4, letterSpacing: '0.06em' };
+                    const bodyStyle = { color: '#cbd5e1', fontSize: 14, lineHeight: 1.7 };
+                    return (
+                      <tr>
+                        <td colSpan={columns.length} style={{ padding: '12px 16px 16px', background: 'rgba(148,163,184,0.03)', borderBottom: '1px solid #334155' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, fontSize: 11 }}>
+                            <div>
+                              <div style={secStyle}><div style={headStyle}>What Is This Trade?</div><div style={bodyStyle}>{g.what}</div></div>
+                              <div style={secStyle}><div style={headStyle}>How To Trade It</div><div style={bodyStyle}>{g.how}</div></div>
+                              <div style={secStyle}><div style={headStyle}>Risk Profile</div><div style={{ ...bodyStyle, fontFamily: 'monospace', color: '#94a3b8' }}>{g.risk}</div></div>
+                            </div>
+                            <div>
+                              <div style={secStyle}><div style={{ ...headStyle, color: '#4ade80' }}>Best Context (When It Works)</div><div style={bodyStyle}>{g.best}</div></div>
+                              <div style={secStyle}><div style={{ ...headStyle, color: '#f87171' }}>When To Avoid</div><div style={bodyStyle}>{g.avoid}</div></div>
+                              <div style={secStyle}>
+                                <div style={headStyle}>MAE / MFE Detail</div>
+                                <div style={{ ...bodyStyle, fontFamily: 'monospace', color: '#94a3b8' }}>
+                                  MAE — Avg: {fmtN(s.mae)}pt | P50: {fmtN(s.p50mae)}pt | P75: {fmtN(s.p75mae)}pt{s.p90mae != null ? ` | P90: ${fmtN(s.p90mae)}pt` : ''}<br/>
+                                  MFE — Avg: {fmtN(s.mfe)}pt | MFE/MAE: {s.mae > 0 ? (s.mfe / s.mae).toFixed(2) + 'x' : '—'}
+                                </div>
+                              </div>
+                              <div style={secStyle}><div style={headStyle}>Tests Applied</div><div style={{ ...bodyStyle, color: '#94a3b8' }}>{s.testsApplied}</div></div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })()}
+                </React.Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -8754,7 +9237,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
   const [effData, setEffData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
-  const [activeSection, setActiveSection] = useState('explanations'); // 'efficiency' | 'volume' | 'keylevels' | 'edge' | 'chartreview' | 'playbook'
+  const [activeSection, setActiveSection] = useState('audit'); // default to Performance Audit
   const [chartReviewDate, setChartReviewDate] = useState('');
   const [vpDate, setVpDate] = useState('');
   const [vpSession, setVpSession] = useState('rth');
@@ -9040,6 +9523,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       {/* Section Tabs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-color)', paddingBottom: 0 }}>
         {[
+          ['audit', 'Performance Audit'],
           ['explanations', 'Playbook & Weekly Patterns'],
           ['efficiency', 'Efficiency Analysis'],
           ['volume', 'Volume Profile'],
@@ -9067,6 +9551,8 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
           </span>
         )}
       </div>
+
+      {activeSection === 'audit' && <PerformanceAuditPanel />}
 
       {false && <div className="backtest-config-panel">
         {/* Account selector — RETIRED, kept for reference */}
@@ -9595,7 +10081,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                       <div style={{ display: 'flex', gap: 16, marginTop: 8, padding: '7px 12px', background: 'rgba(0,0,0,0.15)', borderRadius: 6, alignItems: 'center' }}>
                         {display ? (
                           <>
-                            <span style={{ fontSize: 13, color: '#475569', fontFamily: 'monospace', minWidth: 100 }}>
+                            <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace', minWidth: 100 }}>
                               {display.log_date ? new Date(display.log_date + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
                               {!hoveredEffPoint && <span style={{ color: '#334155', fontSize: 13 }}> (latest)</span>}
                             </span>
@@ -9605,7 +10091,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                               { label: 'Total', value: display.total_eff, color: '#8b5cf6' },
                             ].map(({ label, value, color }) => (
                               <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                <span style={{ fontSize: 13, color: '#64748b' }}>{label}</span>
+                                <span style={{ fontSize: 13, color: '#94a3b8' }}>{label}</span>
                                 <span style={{ fontSize: 15, fontWeight: 700, color, fontFamily: 'monospace' }}>
                                   {value != null ? `${value}%` : '—'}
                                 </span>
@@ -9627,7 +10113,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                   const toMnqPts = v => v != null ? +(Math.abs(v) / 2).toFixed(2) : null;
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ fontSize: 13, color: '#64748b', textAlign: 'right', marginBottom: 2 }}>
+                      <div style={{ fontSize: 13, color: '#94a3b8', textAlign: 'right', marginBottom: 2 }}>
                         {d === l14 ? `Last 14 days · ${(l14.winCount || 0) + (l14.lossCount || 0)} sessions` : `${(sp.winCount || 0) + (sp.lossCount || 0)} sessions`}
                       </div>
                       {[
@@ -9639,22 +10125,22 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                         const pts = toMnqPts(box.value);
                         return (
                           <div key={i} style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.15)', borderRadius: 8, border: `1px solid ${box.color}25` }}>
-                            <div style={{ fontSize: 13, color: '#64748b', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{box.label}</div>
+                            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{box.label}</div>
                             <div style={{ fontSize: 20, fontWeight: 800, color: box.color, fontFamily: 'monospace', lineHeight: 1.2 }}>
                               {box.neg ? '-' : ''}{pts ?? '—'} <span style={{ fontSize: 13, fontWeight: 600 }}>pts</span>
                             </div>
-                            <div style={{ fontSize: 13, color: '#475569', marginTop: 1 }}>{box.sub}</div>
+                            <div style={{ fontSize: 13, color: '#64748b', marginTop: 1 }}>{box.sub}</div>
                           </div>
                         );
                       })}
                       {d.p50Win != null && d.p50Loss != null && (
                         <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.1)', borderRadius: 6, textAlign: 'center' }}>
-                          <span style={{ fontSize: 13, color: '#64748b' }}>R:R (1 MNQ)  </span>
+                          <span style={{ fontSize: 13, color: '#94a3b8' }}>R:R (1 MNQ)  </span>
                           <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>
                             <span style={{ color: '#22c55e' }}>{toMnqPts(d.p50Win)}pts</span>
-                            <span style={{ color: '#475569', margin: '0 4px' }}>vs</span>
+                            <span style={{ color: '#64748b', margin: '0 4px' }}>vs</span>
                             <span style={{ color: '#ef4444' }}>{toMnqPts(d.p50Loss)}pts</span>
-                            <span style={{ color: '#64748b', marginLeft: 6 }}>
+                            <span style={{ color: '#94a3b8', marginLeft: 6 }}>
                               = {(d.p50Win / Math.abs(d.p50Loss || 1)).toFixed(2)}:1
                             </span>
                           </span>
@@ -9757,7 +10243,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                 <ComposedChart margin={{ top: 10, right: 20, left: 10, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                   <XAxis type="number" dataKey="x" stroke="#94a3b8" tick={{ fontSize: 13 }}
-                    label={{ value: 'Total Efficiency %', position: 'insideBottom', offset: -5, fill: '#64748b', fontSize: 13 }}
+                    label={{ value: 'Total Efficiency %', position: 'insideBottom', offset: -5, fill: '#94a3b8', fontSize: 13 }}
                     tickFormatter={v => `${v}%`} domain={[-100, 100]} />
                   <YAxis type="number" dataKey="y" stroke="#94a3b8" tick={{ fontSize: 13 }}
                     tickFormatter={v => `$${formatNumber(v, 0)}`} width={70} />
@@ -10534,7 +11020,7 @@ function ACDNumberLineWidget({ nl }) {
   }
   const mahExtWarning = (mahExtBull || mahExtBear) && mahConsecStreak >= 10;
 
-  const scoreColor = (s) => s > 0 ? '#22c55e' : s < 0 ? '#ef4444' : '#475569';
+  const scoreColor = (s) => s > 0 ? '#22c55e' : s < 0 ? '#ef4444' : '#64748b';
   const scoreLabel = (s) => { if (s === 4) return '+4'; if (s === 1) return '+1'; if (s === 0) return '0'; if (s === -1) return '-1'; return '-4'; };
 
   return (
@@ -10752,12 +11238,12 @@ function ACDSessionState({ todayData, nl, pivot }) {
                   </div>
                   <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, color }}>{price ? fmtP(parseFloat(price), 2) : '—'}</div>
                   {nqPrice && label === 'VAH' && price && (
-                    <div style={{ fontSize: 9, color: parseFloat(nqPrice) > parseFloat(price) ? '#22c55e' : '#94a3b8', marginTop: 1 }}>
+                    <div style={{ fontSize: 11, color: parseFloat(nqPrice) > parseFloat(price) ? '#22c55e' : '#94a3b8', marginTop: 1 }}>
                       {parseFloat(nqPrice) > parseFloat(price) ? 'NQ above ▲' : 'NQ below ▼'}
                     </div>
                   )}
                   {aUp && label === 'VAH' && price && (
-                    <div style={{ fontSize: 9, color: aUp > parseFloat(price) ? '#3b82f6' : '#fbbf24', marginTop: 1 }}>
+                    <div style={{ fontSize: 11, color: aUp > parseFloat(price) ? '#3b82f6' : '#fbbf24', marginTop: 1 }}>
                       {aUp > parseFloat(price) ? 'A Up above ✓' : 'A Up inside VA'}
                     </div>
                   )}
@@ -10917,7 +11403,7 @@ function ACDDailyInput({ onSaved, defaultDate }) {
 
 function ACDDailyLogTable({ logs }) {
   if (!logs?.length) return <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 16 }}>No ACD logs yet. Use the form above to start logging.</div>;
-  const scoreColor = s => s > 0 ? '#22c55e' : s < 0 ? '#ef4444' : '#475569';
+  const scoreColor = s => s > 0 ? '#22c55e' : s < 0 ? '#ef4444' : '#64748b';
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -10931,7 +11417,7 @@ function ACDDailyLogTable({ logs }) {
         <tbody>
           {logs.map(d => {
             const signal = d.a_up_fired && d.c_up_confirmed ? 'A Up + C' : d.a_up_fired ? 'A Up' : d.a_down_fired && d.c_down_confirmed ? 'A Dn + C' : d.a_down_fired ? 'A Down' : '—';
-            const sigColor = d.a_up_fired ? '#22c55e' : d.a_down_fired ? '#ef4444' : '#475569';
+            const sigColor = d.a_up_fired ? '#22c55e' : d.a_down_fired ? '#ef4444' : '#64748b';
             return (
               <tr key={d.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                 <td style={{ padding: '7px 10px', fontFamily: 'monospace', fontSize: 13 }}>{d.trade_date?.toString().slice(0, 10)}</td>
@@ -11154,15 +11640,15 @@ function ACDBacktestRunner() {
             {csvFile ? csvFile.name : 'Choose NQ_1min.csv…'}
           </label>
           <button onClick={() => handleRun(null)} disabled={job.status === 'running'}
-            style={{ padding: '8px 16px', background: job.status === 'running' ? '#475569' : '#3b82f6', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
+            style={{ padding: '8px 16px', background: job.status === 'running' ? '#64748b' : '#3b82f6', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
             {job.status === 'running' && !job.progress?.days ? 'Running…' : 'All History'}
           </button>
           <button onClick={() => handleRun(30)} disabled={job.status === 'running'}
-            style={{ padding: '8px 16px', background: job.status === 'running' ? '#475569' : '#8b5cf6', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
+            style={{ padding: '8px 16px', background: job.status === 'running' ? '#64748b' : '#8b5cf6', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
             {job.status === 'running' && job.progress?.days === 30 ? 'Running…' : 'Last 30 Days'}
           </button>
           <button onClick={() => handleRun(60)} disabled={job.status === 'running'}
-            style={{ padding: '8px 16px', background: job.status === 'running' ? '#475569' : '#06b6d4', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
+            style={{ padding: '8px 16px', background: job.status === 'running' ? '#64748b' : '#06b6d4', border: 'none', borderRadius: 7, color: '#fff', fontWeight: 600, fontSize: 13, cursor: job.status === 'running' ? 'not-allowed' : 'pointer' }}>
             {job.status === 'running' && job.progress?.days === 60 ? 'Running…' : 'Last 60 Days'}
           </button>
           {job.status === 'running' && job.progress && (
@@ -11433,7 +11919,7 @@ function AcdCorrelationInsights({ onComplete }) {
         {details.map(d => (
           <div key={d.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>{d.label}</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: d.state ? trendColor(d.state) : '#475569' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: d.state ? trendColor(d.state) : '#64748b' }}>
               {d.state ? trendLabel(d.state) : '—'}
               {d.aligned !== undefined && d.state && d.state !== 'ranging' && (
                 <span style={{ fontSize: 13, marginLeft: 5, color: d.aligned ? '#22c55e' : '#ef4444' }}>
@@ -11677,7 +12163,7 @@ function TradeTimelinePanel() {
           <button key={id} onClick={() => setFilter(id)}
             style={{ fontSize: 13, padding: '3px 10px', borderRadius: 6, border: `1px solid ${filter === id ? '#6366f1' : 'var(--border-color)'}`,
               background: filter === id ? 'rgba(99,102,241,0.15)' : 'transparent',
-              color: filter === id ? '#818cf8' : '#64748b', cursor: 'pointer', fontWeight: filter === id ? 700 : 400 }}>
+              color: filter === id ? '#818cf8' : '#94a3b8', cursor: 'pointer', fontWeight: filter === id ? 700 : 400 }}>
             {label}
           </button>
         ))}
@@ -11718,7 +12204,7 @@ function TradeTimelinePanel() {
                   </span>
                   {ev.conviction && ev.conviction.stars != null && (() => {
                     const cvn = ev.conviction;
-                    const sc = cvn.stars === 3 ? '#22c55e' : cvn.stars === 2 ? '#f59e0b' : '#64748b';
+                    const sc = cvn.stars === 3 ? '#22c55e' : cvn.stars === 2 ? '#f59e0b' : '#94a3b8';
                     const sl = cvn.stars === 3 ? 'STRONG' : cvn.stars === 2 ? 'MODERATE' : 'WEAK';
                     const rate = cvn.adjustedRate ?? cvn.baseRate;
                     return (
@@ -11941,7 +12427,7 @@ function ACDSessionTimeline() {
               </div>
               {/* Conviction stars */}
               {cvn && cvn.stars != null && (() => {
-                const sc = cvn.stars === 3 ? '#22c55e' : cvn.stars === 2 ? '#f59e0b' : '#64748b';
+                const sc = cvn.stars === 3 ? '#22c55e' : cvn.stars === 2 ? '#f59e0b' : '#94a3b8';
                 const sl = cvn.stars === 3 ? 'STRONG' : cvn.stars === 2 ? 'MODERATE' : 'WEAK';
                 const adjRate = cvn.adjustedRate ?? cvnEntry?.rate;
                 const baseRate = cvnEntry?.rate ?? cvn.baseRate;
@@ -12235,8 +12721,8 @@ function AuctionHistoryView() {
   const total   = correct + wrong;
   const acc     = total ? (correct / total * 100).toFixed(0) : 0;
 
-  const outcomeColor = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#64748b' };
-  const biasColor    = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#64748b' };
+  const outcomeColor = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#94a3b8' };
+  const biasColor    = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#94a3b8' };
   const profileShort = { TREND: 'T', NORMAL_VARIATION: 'NV', NORMAL: 'N', NEUTRAL: 'Nt', RUNNING_PROFILE_NEUTRAL: 'RN', NONTREND: 'NT', UNKNOWN: '?' };
 
   return (
@@ -12303,8 +12789,8 @@ function AuctionHistoryView() {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {history.map(day => {
           const isOpen = expanded === day.date;
-          const oc = outcomeColor[day.outcome] || '#64748b';
-          const bc = biasColor[day.biasDir] || '#64748b';
+          const oc = outcomeColor[day.outcome] || '#94a3b8';
+          const bc = biasColor[day.biasDir] || '#94a3b8';
 
           return (
             <div key={day.date}
@@ -12340,7 +12826,7 @@ function AuctionHistoryView() {
 
                 <div style={{ marginLeft: 'auto', display: 'flex', gap: 16, alignItems: 'center' }}>
                   <span style={{ fontSize: 13, color: '#94a3b8' }}>
-                    Score: <strong style={{ color: day.acdScore > 0 ? '#22c55e' : day.acdScore < 0 ? '#ef4444' : '#64748b', fontFamily: 'monospace' }}>{day.acdScore > 0 ? '+' : ''}{day.acdScore}</strong>
+                    Score: <strong style={{ color: day.acdScore > 0 ? '#22c55e' : day.acdScore < 0 ? '#ef4444' : '#94a3b8', fontFamily: 'monospace' }}>{day.acdScore > 0 ? '+' : ''}{day.acdScore}</strong>
                   </span>
                   {day.ptsVsOpen !== null && (
                     <span style={{ fontSize: 13, color: '#94a3b8' }}>
@@ -12526,7 +13012,7 @@ function AuctionDayChart({ day, fullSize = false }) {
             const price = yMax - (yMax - yMin) * pct;
             return <g key={pct}>
               <line x1={M.l + VP_W} x2={SVG_W - M.r} y1={y} y2={y} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-              <text x={SVG_W - M.r + 4} y={y + 4} fill="#475569" fontSize={9}>{fmtP(price)}</text>
+              <text x={SVG_W - M.r + 4} y={y + 4} fill="#64748b" fontSize={9}>{fmtP(price)}</text>
             </g>;
           })}
 
@@ -12623,7 +13109,7 @@ function AuctionDayChart({ day, fullSize = false }) {
             const t = new Date(b.ts).toISOString().slice(11, 16);
             if (!t.endsWith(':00') && !t.endsWith(':30')) return null;
             const x = xScale(i);
-            return <text key={i} x={x} y={SVG_H - 6} fill="#475569" fontSize={8} textAnchor="middle">{t.slice(0, 5)}</text>;
+            return <text key={i} x={x} y={SVG_H - 6} fill="#64748b" fontSize={8} textAnchor="middle">{t.slice(0, 5)}</text>;
           })}
 
           {/* IB range label */}
@@ -13083,7 +13569,7 @@ function NarrativeBlocks({ narrative, title }) {
   return (
     <div style={{ marginTop: 6 }}>
       <button onClick={() => setOpen(o => !o)}
-        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, color: '#64748b', padding: 0, fontFamily: 'Arial, sans-serif', display: 'flex', alignItems: 'center', gap: 4 }}>
+        style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 12, color: '#94a3b8', padding: 0, fontFamily: 'Arial, sans-serif', display: 'flex', alignItems: 'center', gap: 4 }}>
         {open ? '▲' : '▼'} {title || 'Guidance'}
       </button>
       {open && (
@@ -13125,7 +13611,7 @@ function AuctionReadDetailModal({ p1Direction, p1Bias, ltSentence, phase1Narrati
         </div>
 
         {p1Bias && (
-          <div style={{ padding: '10px 14px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.08)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}40`, borderRadius: 8, marginBottom: 6 }}>
+          <div style={{ padding: '10px 14px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.08)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#64748b'}40`, borderRadius: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8', marginBottom: 4 }}>
               PRE-MARKET BIAS: {p1Direction}
             </div>
@@ -13203,7 +13689,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
   const sessionBias = generateSessionBias(p1Direction, read.or_condition, openingCall, aSignal);
   const biasColor   = { GREEN: '#22c55e', AMBER: '#fbbf24', RED: '#ef4444' };
   const nlColor     = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
-  const pivotColor  = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
+  const pivotColor  = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#94a3b8';
   const orCond      = read.or_condition || autoDetected.or_condition;
   const ltSentence  = buildLtContextSentence(ltCtx);
 
@@ -13227,7 +13713,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
       note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish structural pressure'
           : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish structural pressure'
           : 'neutral — no inventory directional pressure',
-      clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b',
+      clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8',
     },
     read.open_vs_prior_value && {
       key: 'open_vs_prior_value',
@@ -13235,7 +13721,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
       note: read.open_vs_prior_value === 'ABOVE_VALUE'  ? 'accepted higher prices — initiative long territory'
           : read.open_vs_prior_value === 'BELOW_VALUE'  ? 'accepted lower prices — initiative short territory'
           : 'inside value — balanced, two-sided day expected',
-      clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b',
+      clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8',
     },
     orCond && {
       key: 'or_condition',
@@ -13248,7 +13734,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
         if (orCond === 'EMOTIONAL') return `extreme${pct ? ' (' + pct + '% avg)' : ''} — avoid A signals, fade exhaustion only`;
         return `${rng ? rng.toFixed(0) + 'pt' : 'normal'}${pct ? ' (' + pct + '% avg)' : ''} — standard sizing`;
       })(),
-      clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b',
+      clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#94a3b8',
     },
     openingCall && {
       key: 'opening_call',
@@ -13341,7 +13827,7 @@ function AuctionReadSummary({ nl, todayData, defaultOpen = false }) {
       {/* P1 Bias */}
       {p1Bias && (
         <div onClick={() => setDetailModalOpen(true)} title="Click for full morning guidance"
-          style={{ padding: '7px 12px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}35`, borderRadius: 7, marginBottom: 6, cursor: 'pointer' }}>
+          style={{ padding: '7px 12px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#64748b'}35`, borderRadius: 7, marginBottom: 6, cursor: 'pointer' }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8', marginBottom: 2 }}>
             PRE-MARKET BIAS: {p1Direction}
             {fieldDots.p1_bias?.unseen && <Dot title={`Changed from: ${fieldDots.p1_bias.prev || '(none)'} — click to dismiss`} onClick={(e) => { e.stopPropagation(); fieldDots.p1_bias.clear(); }} />}
@@ -13388,7 +13874,7 @@ function computeContractRec(tpRec, setupStats, setupCard, conf, isCounterTrend) 
   const highConvSetups = new Set(['IB_BEARISH','IB_BULLISH','OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT']);
   const isTrendingNow = ['TRENDING_UP','TRENDING_DOWN'].includes(tpRec?.structuralState);
 
-  let contracts = 1, convLabel = 'STANDARD', convColor = '#64748b', convReason = '';
+  let contracts = 1, convLabel = 'STANDARD', convColor = '#94a3b8', convReason = '';
   if (confScore >= 11 && highConvSetups.has(setupCard?.type) && winRateHighOk && isTrendingNow && !isCounterTrend) {
     contracts = 3; convLabel = 'HIGH CONVICTION'; convColor = '#22c55e';
     convReason = `IB/Open Drive · Confluence ${confScore} · Trending`;
@@ -13687,7 +14173,7 @@ function AuctionReadCard({ nl, todayData }) {
            : pivotBias === 'down' ? 'Price is below the monthly pivot — sellers have controlled the month. Rallies to pivot are selling opportunities. Structural edge favors shorts for the remainder of the month.'
            : 'Price is near the monthly pivot — neither buyers nor sellers have established monthly dominance. Two-sided structure, no macro bias.')}
           {p1Bias && (
-            <div style={{ marginTop: 10, padding: '10px 14px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.08)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#475569'}40`, borderRadius: 8 }}>
+            <div style={{ marginTop: 10, padding: '10px 14px', background: p1Direction === 'LONG' ? 'rgba(34,197,94,0.08)' : p1Direction === 'SHORT' ? 'rgba(239,68,68,0.08)' : 'rgba(100,116,139,0.08)', border: `1px solid ${p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#64748b'}40`, borderRadius: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: p1Direction === 'LONG' ? '#22c55e' : p1Direction === 'SHORT' ? '#ef4444' : '#94a3b8' }}>
                   PRE-MARKET BIAS: {p1Direction}
@@ -13989,11 +14475,11 @@ function MidDaySection({ hitRates, levelTouches }) {
                     const d = hitRates[biasKey]?.overall;
                     if (!d) return null;
                     const hrPct = d.hitRate != null ? Math.round(d.hitRate * 100) : null;
-                    const col = hrPct == null ? '#64748b' : hrPct >= 65 ? '#22c55e' : hrPct < 55 ? '#ef4444' : '#f59e0b';
+                    const col = hrPct == null ? '#94a3b8' : hrPct >= 65 ? '#22c55e' : hrPct < 55 ? '#ef4444' : '#f59e0b';
                     return d.confident ? (
                       <div style={{ fontSize: 11, fontWeight: 700, color: col, marginTop: 4 }}>{hrPct}% plays out (n={d.decisive})</div>
                     ) : (
-                      <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', marginTop: 4 }}>n={d.decisive} — limited sample</div>
+                      <div style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic', marginTop: 4 }}>n={d.decisive} — limited sample</div>
                     );
                   })()}
                 </div>
@@ -14030,7 +14516,7 @@ function MidDaySection({ hitRates, levelTouches }) {
                                 {hrPct}% plays out{isCtxSpec ? ` · bias ${biasDir}` : ' overall'} (n={display.decisive})
                               </span>
                             ) : (
-                              <span style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>n={display.decisive} — limited sample</span>
+                              <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>n={display.decisive} — limited sample</span>
                             )}
                             {conflict && <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b' }}>⚠ vs {biasDir} pre-mkt bias</span>}
                             {aligned && display.confident && hrPct >= 60 && <span style={{ fontSize: 11, color: '#22c55e' }}>✓ signal + bias aligned</span>}
@@ -14075,7 +14561,7 @@ function MidDaySection({ hitRates, levelTouches }) {
                   const biasDir = snap.preMktBias === 'LONG' ? 'LONG' : snap.preMktBias === 'SHORT' ? 'SHORT' : 'NEUTRAL';
                   const entry = levelTouches[levelKey]?.[biasDir];
                   if (!entry) return null;
-                  const col = !entry.confident ? '#64748b' : entry.hitRate >= 65 ? '#22c55e' : entry.hitRate < 55 ? '#ef4444' : '#f59e0b';
+                  const col = !entry.confident ? '#94a3b8' : entry.hitRate >= 65 ? '#22c55e' : entry.hitRate < 55 ? '#ef4444' : '#f59e0b';
                   return (
                     <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: 7, flex: 1, minWidth: 160 }}>
                       <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 3 }}>{levelKey === 'IBL' ? 'IB Low' : 'IB High'} broken</div>
@@ -14085,7 +14571,7 @@ function MidDaySection({ hitRates, levelTouches }) {
                           {entry.hitRate}% reversed/bounced ≥15pts within 30min (n={entry.decisive}{entry.avgPts ? `, avg ${entry.avgPts}pts` : ''})
                         </div>
                       ) : (
-                        <div style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic', marginTop: 4 }}>n={entry.decisive} — limited sample</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic', marginTop: 4 }}>n={entry.decisive} — limited sample</div>
                       )}
                     </div>
                   );
@@ -14167,7 +14653,7 @@ function EODReadSection() {
 
   const outcomeColor = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#94a3b8' };
   const outcomeIcon  = { CORRECT: '✓', WRONG: '✗', NEUTRAL: '—' };
-  const patternColor = { V_REVERSAL_UP: '#22c55e', V_REVERSAL_DOWN: '#ef4444', TREND_DAY: '#f97316', BALANCE_DAY: '#64748b', FAILED_A_UP: '#f97316', FAILED_A_DOWN: '#a78bfa', NEWS_DRIVEN: '#fbbf24' };
+  const patternColor = { V_REVERSAL_UP: '#22c55e', V_REVERSAL_DOWN: '#ef4444', TREND_DAY: '#f97316', BALANCE_DAY: '#94a3b8', FAILED_A_UP: '#f97316', FAILED_A_DOWN: '#a78bfa', NEWS_DRIVEN: '#fbbf24' };
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -14397,7 +14883,7 @@ const COND_TOOLTIPS = {
 
 function ConditionRow({ c }) {
   const mark   = !c.available ? '─' : c.met ? '✓' : '✗';
-  const mColor = !c.available ? '#64748b' : c.met ? '#22c55e' : '#ef4444';
+  const mColor = !c.available ? '#94a3b8' : c.met ? '#22c55e' : '#ef4444';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', borderBottom: '1px solid rgba(100,116,139,0.06)' }}>
       <span style={{ width: 14, textAlign: 'center', fontWeight: 700, color: mColor, fontSize: 13, flexShrink: 0 }}>{mark}</span>
@@ -14444,7 +14930,7 @@ function StructureInline({ defaultOpen = false }) {
           </span>
         )}
         {session && (
-          <span style={{ fontSize: 13, fontFamily: 'monospace', color: session.dir ? session.color : '#64748b', fontWeight: 600 }}>
+          <span style={{ fontSize: 13, fontFamily: 'monospace', color: session.dir ? session.color : '#94a3b8', fontWeight: 600 }}>
             Session {session.score}/5 {session.label}
           </span>
         )}
@@ -14560,7 +15046,7 @@ function ConfluenceScore() {
             {alignment === 'COUNTER_TREND' ? '⚡ COUNTER-TREND' : alignment === 'ALIGNED' ? '✓ ALIGNED' : '─ NEUTRAL'}
           </span>
           <InfoTooltip tooltip={TOOLTIPS.CONFLUENCE_SCORE} />
-          {isLocked && <span style={{ fontSize: 13, color: '#94a3b8', padding: '2px 6px', border: '1px solid #64748b', borderRadius: 3 }}>session closed</span>}
+          {isLocked && <span style={{ fontSize: 13, color: '#94a3b8', padding: '2px 6px', border: '1px solid #94a3b8', borderRadius: 3 }}>session closed</span>}
         </div>
         <div style={{ fontSize: 13, color: '#cbd5e1', textAlign: 'right' }}>{formatTimestamp(calculatedAt)}</div>
       </div>
@@ -14802,7 +15288,7 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
               </div>
             )}
             {bracketState && (
-              <div style={{ padding: '8px 14px', background: `${stateColor[bracketState.state] || '#475569'}10`, border: `1px solid ${stateColor[bracketState.state] || '#475569'}30`, borderRadius: 7, flex: 1, minWidth: 160 }}>
+              <div style={{ padding: '8px 14px', background: `${stateColor[bracketState.state] || '#64748b'}10`, border: `1px solid ${stateColor[bracketState.state] || '#64748b'}30`, borderRadius: 7, flex: 1, minWidth: 160 }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 3 }}>Market structure <InfoTooltip text="Based on 5-day value area overlap and migration direction.\n\nBRACKET: value areas overlapping — 75% of market time. Fade extremes, buy VAL, sell VAH, expect mean reversion. Breakouts fail most of the time.\n\nTRENDING: value migrating consistently one direction. Go with extensions, do not fade. Buy pullbacks to prior VAH (up) or sell rallies to prior VAL (down).\n\nTRANSITIONAL: 5-day and 10-day disagree. Most dangerous. Neither strategy works cleanly. Reduce size significantly — wait for confirmation." /></div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: stateColor[bracketState.state] || '#94a3b8' }}>
                   {bracketState.state === 'TRENDING_UP' ? '↑ Trending Up' : bracketState.state === 'TRENDING_DOWN' ? '↓ Trending Down' : bracketState.state === 'TRANSITIONAL' ? '⚡ Transitional' : '↔ Bracket'}
@@ -14825,7 +15311,7 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
             {wk?.weekType && (
               <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: 7, minWidth: 110 }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 3 }}>This week <InfoTooltip text="Steidlmayer: Monday's range = weekly IB. How far the week extends beyond it reveals OTF conviction.\n\nNORMAL: extends 50% beyond Monday's IB — moderate participation\nNORMAL VARIATION: doubles Monday's IB — meaningful OTF participation\nTREND: closes near extreme, directional throughout — strongest conviction\n\nWeek type can change day by day. A TREND week Monday can become NORMAL by Friday." /></div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: wk.weekType === 'TREND' ? '#f97316' : wk.weekType === 'NORMAL_VARIATION' ? '#fbbf24' : '#64748b' }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: wk.weekType === 'TREND' ? '#f97316' : wk.weekType === 'NORMAL_VARIATION' ? '#fbbf24' : '#94a3b8' }}>
                   {wk.weekType?.replace('_',' ')}
                 </div>
                 <div style={{ fontSize: 13, color: '#cbd5e1' }}>{wk.weekRange?.toFixed(0)}pt range</div>
@@ -14844,7 +15330,7 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
 
           {/* Row 2: plain-English implication */}
           {lt?.summary && (
-            <div style={{ padding: '8px 14px', background: `${stateColor[bracketState?.state] || '#475569'}08`, borderLeft: `3px solid ${stateColor[bracketState?.state] || '#475569'}`, borderRadius: '0 6px 6px 0', fontSize: 13, color: '#94a3b8', lineHeight: 1.7 }}>
+            <div style={{ padding: '8px 14px', background: `${stateColor[bracketState?.state] || '#64748b'}08`, borderLeft: `3px solid ${stateColor[bracketState?.state] || '#64748b'}`, borderRadius: '0 6px 6px 0', fontSize: 13, color: '#94a3b8', lineHeight: 1.7 }}>
               <span style={{ color: stateColor[bracketState?.state] || '#94a3b8', fontWeight: 700 }}>Structure says: </span>
               {lt.summary.text}
               {tpo?.priceContext && <><br /><span style={{ color: '#e879f9', fontWeight: 700 }}>Composite profile: </span>{tpo.priceContext}</>}
@@ -14966,7 +15452,7 @@ function CompositeProfileCard() {
             const isCur  = currentPrice && Math.abs(row.px - currentPrice) < 2;
             const inVA   = row.px >= val && row.px <= vah;
             const barW   = Math.round((row.tpo / maxTpo) * barMaxW);
-            const barColor = isPoc ? '#e879f9' : isHvn ? '#fbbf24' : inVA ? '#3b82f680' : '#47556960';
+            const barColor = isPoc ? '#e879f9' : isHvn ? '#fbbf24' : inVA ? '#3b82f680' : '#64748b60';
 
             return (
               <div key={row.px} style={{ display: 'flex', alignItems: 'center', gap: 4, height: 10, marginBottom: 1 }}>
@@ -15140,7 +15626,7 @@ function SetupPriorityReference() {
   const counterN     = ref?.aSignalCounter?.totalSignals;
 
   const toStarsEl = (n) => {
-    const sc = n === 3 ? '#22c55e' : n === 2 ? '#f59e0b' : '#64748b';
+    const sc = n === 3 ? '#22c55e' : n === 2 ? '#f59e0b' : '#94a3b8';
     return <span style={{ color: sc, fontWeight: 700, letterSpacing: '0.05em' }}>{'★'.repeat(n)}{'☆'.repeat(3-n)}</span>;
   };
 
@@ -15429,7 +15915,7 @@ function LevelConfluenceReference() {
   // Sample-size honesty guard — n=8 and n=128 must never look equally trustworthy.
   // VALIDATED: n>=100 · PROVISIONAL: 30<=n<100 · INSUFFICIENT: n<30
   const confidenceTier = (n) => (n == null ? 'PROVISIONAL' : n >= 100 ? 'VALIDATED' : n >= 30 ? 'PROVISIONAL' : 'INSUFFICIENT');
-  const TIER_COLOR = { VALIDATED: '#22c55e', PROVISIONAL: '#f59e0b', INSUFFICIENT: '#64748b' };
+  const TIER_COLOR = { VALIDATED: '#22c55e', PROVISIONAL: '#f59e0b', INSUFFICIENT: '#94a3b8' };
 
   const handleRerun = () => {
     setRerunning(true);
@@ -15458,7 +15944,7 @@ function LevelConfluenceReference() {
         <button onClick={handleRerun} disabled={rerunning}
           style={{ fontSize: 12, padding: '4px 10px', borderRadius: 5, cursor: rerunning ? 'default' : 'pointer',
             border: '1px solid rgba(139,92,246,0.4)', background: 'rgba(139,92,246,0.1)',
-            color: rerunning ? '#475569' : '#a78bfa', flexShrink: 0, whiteSpace: 'nowrap' }}>
+            color: rerunning ? '#64748b' : '#a78bfa', flexShrink: 0, whiteSpace: 'nowrap' }}>
           {rerunning ? '⏳ Re-running (~90s)…' : '↻ Re-run backtest'}
         </button>
       </div>
@@ -15483,7 +15969,7 @@ function LevelConfluenceReference() {
             <tr style={{ borderBottom: '1px solid var(--border-color)' }}>
               {['Combo', 'Cat', 'n', 'Win %', 'Avg P&L', 'Tier'].map(h => (
                 <th key={h} style={{ padding: '6px 12px', textAlign: h === 'Combo' ? 'left' : 'center',
-                  fontSize: 12, fontWeight: 700, color: '#64748b', letterSpacing: '0.05em',
+                  fontSize: 12, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.05em',
                   textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{h}</th>
               ))}
             </tr>
@@ -15508,24 +15994,24 @@ function LevelConfluenceReference() {
                       background: isExp ? 'rgba(51,65,85,0.3)' : 'transparent',
                       transition: 'background 0.1s' }}>
                     <td style={{ padding: '9px 12px' }}>
-                      <div style={{ fontWeight: 600, color: dimmed ? '#475569' : '#e2e8f0' }}>{c.label}</div>
-                      <div style={{ fontSize: 11, color: '#475569', marginTop: 1 }}>
+                      <div style={{ fontWeight: 600, color: dimmed ? '#64748b' : '#e2e8f0' }}>{c.label}</div>
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>
                         {c.levels.join(' · ')}
                         {STOP_TAG[c.stop] && <span style={{ marginLeft: 6, color: STOP_TAG[c.stop].color }}>{STOP_TAG[c.stop].label}</span>}
                       </div>
                     </td>
-                    <td style={{ padding: '9px 12px', textAlign: 'center', color: '#64748b', fontSize: 12 }}>
+                    <td style={{ padding: '9px 12px', textAlign: 'center', color: '#94a3b8', fontSize: 12 }}>
                       {CAT_LABELS[c.cat] || c.cat}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: 'monospace', color: '#94a3b8' }}>
                       {isLoading ? '…' : c.n ?? '—'}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: 'monospace',
-                      color: !dimmed && c.win != null ? (c.win >= 55 ? '#22c55e' : c.win >= 45 ? '#f59e0b' : '#ef4444') : '#475569' }}>
+                      color: !dimmed && c.win != null ? (c.win >= 55 ? '#22c55e' : c.win >= 45 ? '#f59e0b' : '#ef4444') : '#64748b' }}>
                       {!dimmed && c.win != null ? `${c.win}%` : '—'}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center', fontFamily: 'monospace', fontWeight: 700,
-                      color: !dimmed && c.avg != null ? avgColor(c.avg) : '#475569' }}>
+                      color: !dimmed && c.avg != null ? avgColor(c.avg) : '#64748b' }}>
                       {!dimmed && c.avg != null ? `${c.avg >= 0 ? '+' : ''}$${c.avg}` : '—'}
                     </td>
                     <td style={{ padding: '9px 12px', textAlign: 'center' }}>
@@ -15556,7 +16042,7 @@ function LevelConfluenceReference() {
       </div>
 
       {/* Tier legend */}
-      <div style={{ marginTop: 10, display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#64748b' }}>
+      <div style={{ marginTop: 10, display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 12, color: '#94a3b8' }}>
         <span><span style={{ color: TIER_COLOR.VALIDATED, fontWeight: 700 }}>●</span> validated n≥100</span>
         <span><span style={{ color: TIER_COLOR.PROVISIONAL, fontWeight: 700 }}>●</span> provisional n 30–99</span>
         <span><span style={{ color: TIER_COLOR.INSUFFICIENT, fontWeight: 700 }}>●</span> insufficient n&lt;30 — noise</span>
@@ -16124,12 +16610,12 @@ Risk: Position sizing and risk parameters are standard. Enter on candle close ou
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, minWidth: 260 }}>
         {columns.map(col => (
           <div key={col.label} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '6px 4px', borderRadius: 6, textAlign: 'center' }}>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
             <div style={{ fontSize: 12, fontWeight: 800, color: getStatColor(col.val) }}>
               {col.val != null ? `${Math.round(col.val * (isEdge ? 1 : 100))}%` : '—'}
             </div>
             {col.count != null && (
-              <div style={{ fontSize: 8, color: 'var(--text-muted)', marginTop: 1 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>
                 ({col.count}){col.isBaseline && <span title="Baseline win rate default" style={{ cursor: 'help' }}> (B)</span>}
               </div>
             )}
@@ -16161,12 +16647,12 @@ Risk: Position sizing and risk parameters are standard. Enter on candle close ou
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6, minWidth: 260 }}>
         {columns.map(col => (
           <div key={col.label} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)', padding: '6px 4px', borderRadius: 6, textAlign: 'center' }}>
-            <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600, marginBottom: 2 }}>{col.label}</div>
             <div style={{ fontSize: 12, fontWeight: 800, color: col.stats?.winRate != null ? getStatColor(col.stats.winRate / 100) : 'var(--text-muted)' }}>
               {col.stats?.winRate != null ? `${Math.round(col.stats.winRate)}%` : '—'}
             </div>
             {col.stats?.total != null && col.stats.total > 0 && (
-              <div style={{ fontSize: 8, color: 'var(--text-muted)', marginTop: 1 }} title={`Avg P&L: $${col.stats.avgPnl}`}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }} title={`Avg P&L: $${col.stats.avgPnl}`}>
                 ({col.stats.total}t)
               </div>
             )}
@@ -16483,7 +16969,7 @@ function PatternStatsPanel() {
       .catch(() => setLoading(false));
   }, [lookback]);
 
-  const trendColor = { IMPROVING: '#22c55e', STABLE: '#64748b', DEGRADING: '#ef4444' };
+  const trendColor = { IMPROVING: '#22c55e', STABLE: '#94a3b8', DEGRADING: '#ef4444' };
   const trendIcon  = { IMPROVING: '↑ IMPROVING', STABLE: '→ STABLE', DEGRADING: '↓ DEGRADING' };
   const stateLabel = { BRACKET: '↔ Bracket', BRACKET_TILTING_UP: '↔ Bracket ↑', BRACKET_TILTING_DOWN: '↔ Bracket ↓', TRENDING_UP: '↑ Trend Up', TRENDING_DOWN: '↓ Trend Down', TRANSITIONAL: '⚡ Transitional' };
 
@@ -16550,7 +17036,7 @@ function PatternStatsPanel() {
                   <td style={{ padding: '8px 10px', color: '#94a3b8', fontFamily: 'monospace' }}>
                     {s.t1_hit_rate != null ? (s.t1_hit_rate * 100).toFixed(0) + '%' : '—'}
                   </td>
-                  <td style={{ padding: '8px 10px', color: trendColor[s.win_rate_trend] || '#475569', fontWeight: s.win_rate_trend ? 700 : 400 }}>
+                  <td style={{ padding: '8px 10px', color: trendColor[s.win_rate_trend] || '#64748b', fontWeight: s.win_rate_trend ? 700 : 400 }}>
                     {s.win_rate_trend ? trendIcon[s.win_rate_trend] : '—'}
                   </td>
                 </tr>
@@ -16909,7 +17395,7 @@ function LongTermStructurePage({ setCurrentView }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {days.map((d, i) => {
             const prev = days[i - 1];
-            let color = '#475569';
+            let color = '#64748b';
             if (prev) {
               const overlap = Math.min(d.vah, prev.vah) - Math.max(d.val, prev.val);
               if (d.poc > prev.poc && overlap < (d.vah - d.val) * 0.5) color = '#22c55e';
@@ -16919,7 +17405,7 @@ function LongTermStructurePage({ setCurrentView }) {
             return (
               <div key={d.date} style={{ display: 'flex', alignItems: 'center', gap: 4, position: 'relative' }}
                 onMouseEnter={() => setHovered(d.date)} onMouseLeave={() => setHovered(null)}>
-                <div style={{ fontSize: 13, color: isHov ? '#94a3b8' : '#64748b', width: 40, textAlign: 'right', flexShrink: 0, fontFamily: 'Arial, sans-serif' }}>{d.date?.slice(5)}</div>
+                <div style={{ fontSize: 13, color: isHov ? '#94a3b8' : '#94a3b8', width: 40, textAlign: 'right', flexShrink: 0, fontFamily: 'Arial, sans-serif' }}>{d.date?.slice(5)}</div>
                 <div style={{ flex: 1, position: 'relative', height: 20, background: 'rgba(255,255,255,0.02)', borderRadius: 2, cursor: 'default' }}>
                   {/* VA bar */}
                   <div style={{ position: 'absolute', left: `${pct(d.val)}%`, width: `${((d.vah - d.val) / priceRange * 100).toFixed(2)}%`, height: '100%', background: `${color}35`, border: `1px solid ${color}70`, borderRadius: 2 }} />
@@ -17085,7 +17571,7 @@ function LongTermStructurePage({ setCurrentView }) {
           <div style={{ display: 'flex', flex: 1, gap: 3, alignItems: 'flex-end', height: 80 }}>
             {effortResult.sessions.map(s => {
               const h = Math.min(parseFloat(s.vol_ratio) * 30, 80);
-              const col = s.flag === 'ABSORPTION' ? '#fbbf24' : s.flag === 'EASE_OF_MOVEMENT' ? '#3b82f6' : '#475569';
+              const col = s.flag === 'ABSORPTION' ? '#fbbf24' : s.flag === 'EASE_OF_MOVEMENT' ? '#3b82f6' : '#64748b';
               return (
                 <div key={s.session_date || s.d} title={`${s.session_date || s.d}: vol ${s.vol_ratio}× range ${s.rng_ratio}× — ${s.flag}`}
                   style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
@@ -17113,7 +17599,7 @@ function LongTermStructurePage({ setCurrentView }) {
             <div style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'Arial, sans-serif', marginBottom: 8 }}>
               Confidence: {bracketState.confidence} · {bracketState.overlaps5 ?? bracketState.overlaps10}/4 of last 5 day-pairs overlapping
             </div>
-            <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, padding: '8px 10px', background: `${stateColor[bracketState.state] || '#475569'}10`, borderRadius: 6, borderLeft: `3px solid ${stateColor[bracketState.state] || '#475569'}` }}>
+            <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.6, padding: '8px 10px', background: `${stateColor[bracketState.state] || '#64748b'}10`, borderRadius: 6, borderLeft: `3px solid ${stateColor[bracketState.state] || '#64748b'}` }}>
               {bracketState.playbook}
             </div>
             {bracketState.transitionalNote && (
@@ -17153,7 +17639,7 @@ function LongTermStructurePage({ setCurrentView }) {
           {weeklyStructure.weekType ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                <div style={{ fontSize: 18, fontWeight: 800, color: weeklyStructure.weekType === 'TREND' ? '#f97316' : weeklyStructure.weekType === 'NORMAL_VARIATION' ? '#fbbf24' : '#64748b' }}>
+                <div style={{ fontSize: 18, fontWeight: 800, color: weeklyStructure.weekType === 'TREND' ? '#f97316' : weeklyStructure.weekType === 'NORMAL_VARIATION' ? '#fbbf24' : '#94a3b8' }}>
                   {weeklyStructure.weekType?.replace('_', ' ')}
                 </div>
                 <div style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'Arial, sans-serif' }}>week of {weeklyStructure.weekStart}</div>
@@ -17162,8 +17648,8 @@ function LongTermStructurePage({ setCurrentView }) {
                 {[
                   ['Mon IB High', weeklyStructure.monIBHigh?.toFixed(0)],
                   ['Mon IB Low', weeklyStructure.monIBLow?.toFixed(0)],
-                  ['Week High', weeklyStructure.fmtP(weekHigh)],
-                  ['Week Low', weeklyStructure.fmtP(weekLow)],
+                  ['Week High', weeklyStructure.weekHigh?.toFixed(0)],
+                  ['Week Low', weeklyStructure.weekLow?.toFixed(0)],
                   ['IB Range', weeklyStructure.monIBRange?.toFixed(0) + ' pts'],
                   ['Week Range', weeklyStructure.weekRange?.toFixed(0) + ' pts'],
                   ['NW ±50%', weeklyStructure.monIBHigh && weeklyStructure.monIBRange ? (weeklyStructure.monIBHigh + weeklyStructure.monIBRange * 0.5).toFixed(0) + ' / ' + (weeklyStructure.monIBLow - weeklyStructure.monIBRange * 0.5).toFixed(0) : '—'],
@@ -17187,8 +17673,8 @@ function LongTermStructurePage({ setCurrentView }) {
               <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                 {profileShapes.shapes.slice(-7).map(s => (
                   <div key={s.date} style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 20, color: shapeColor[s.profile_shape] || '#475569' }}>{shapeIcon[s.profile_shape] || '?'}</div>
-                    <div style={{ fontSize: 13, color: shapeColor[s.profile_shape] || '#475569', fontWeight: 700, fontFamily: 'Arial, sans-serif' }}>
+                    <div style={{ fontSize: 20, color: shapeColor[s.profile_shape] || '#64748b' }}>{shapeIcon[s.profile_shape] || '?'}</div>
+                    <div style={{ fontSize: 13, color: shapeColor[s.profile_shape] || '#64748b', fontWeight: 700, fontFamily: 'Arial, sans-serif' }}>
                       {s.profile_shape === 'NONSYMMETRIC_TOP' ? 'Top↑' : s.profile_shape === 'NONSYMMETRIC_BOTTOM' ? 'Bot↓' : s.profile_shape || '—'}
                     </div>
                     <div style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'Arial, sans-serif' }}>{s.date?.slice(5)}</div>
@@ -17573,14 +18059,14 @@ function PhaseChangeMonitor({ phaseState }) {
                         style={{ fontSize: 12, padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
                           background: active ? (v === 'yes' ? '#22c55e20' : '#ef444420') : 'transparent',
                           border: `1px solid ${active ? (v === 'yes' ? '#22c55e' : '#ef4444') : '#334155'}`,
-                          color: active ? (v === 'yes' ? '#22c55e' : '#ef4444') : '#64748b' }}>
+                          color: active ? (v === 'yes' ? '#22c55e' : '#ef4444') : '#94a3b8' }}>
                         {v}
                       </button>
                     );
                   })}
                 </div>
               )}
-              {(row.noOverride || (!alerts.length)) && <span style={{ fontSize: 13, color: '#64748b' }}>—</span>}
+              {(row.noOverride || (!alerts.length)) && <span style={{ fontSize: 13, color: '#94a3b8' }}>—</span>}
             </div>
           </div>
         ))}
@@ -17671,7 +18157,7 @@ function PhaseChangeMonitor({ phaseState }) {
                   style={{ fontSize: 13, padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
                     background: outcomeForm[a.id]?.reversed === v ? '#1e40af' : 'transparent',
                     border: `1px solid ${outcomeForm[a.id]?.reversed === v ? '#3b82f6' : '#334155'}`,
-                    color: outcomeForm[a.id]?.reversed === v ? '#fff' : '#64748b' }}>
+                    color: outcomeForm[a.id]?.reversed === v ? '#fff' : '#94a3b8' }}>
                   {v.toUpperCase()}
                 </button>
               ))}
@@ -17812,9 +18298,7 @@ function SessionStatusBar({ conf, onStateChange }) {
 
   const nowET  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etMin  = nowET.getHours() * 60 + nowET.getMinutes();
-  const isOpen      = etMin >= 9 * 60 + 30 && etMin < 13 * 60; // session 9:30–1:00 PM
-  const isManageOnly = etMin >= 12 * 60 && etMin < 13 * 60;   // noon–1 PM: manage only
-  const isClosed    = etMin >= 13 * 60;
+  const isOpen = etMin >= 9 * 60 + 30 && etMin < 16 * 60; // RTH 9:30 AM–4:00 PM ET
 
   // Determine state
   const aUpFired   = live?.aUpFired;
@@ -17827,7 +18311,7 @@ function SessionStatusBar({ conf, onStateChange }) {
   // P3 score (FIX 3): count confirmed p3 indicators
   const p3s = live?.p3Suggested;
   const p3Score = p3s ? [p3s.p3_vwap_holding, p3s.p3_value_migrating, p3s.p3_delta_confirming, p3s.p3_auction_accepted, p3s.p3_rotations_increasing].filter(Boolean).length : null;
-  const p3Color = p3Score == null ? '#475569' : p3Score >= 3 ? '#22c55e' : p3Score >= 2 ? '#f59e0b' : '#ef4444';
+  const p3Color = p3Score == null ? '#64748b' : p3Score >= 3 ? '#22c55e' : p3Score >= 2 ? '#f59e0b' : '#ef4444';
 
   const p3Tooltip = (() => {
     if (!p3s) return '';
@@ -17979,14 +18463,15 @@ function SessionStatusBar({ conf, onStateChange }) {
     (setupCardLong ? sessHigh >= setupCardT1 : sessLow <= setupCardT1);
   const setupCardResolved = !!setupCard && !setupCard.isExpired && (setupCardStopHit || setupCardT1Hit);
 
+  // Resolution is price-driven only (stop/T1 actually touched) — no clock-based
+  // cutoff. A signal or setup card stays live/manageable for the full RTH session.
   let state = 'NO_SETUP';
   if (setupResolved) state = 'RESOLVED';
   else if (trtResolved) state = 'RESOLVED';
-  else if (signalActive) state = isClosed ? 'RESOLVED' : isManageOnly ? 'MANAGE_ONLY' : 'SIGNAL_ACTIVE';
+  else if (signalActive) state = 'SIGNAL_ACTIVE';
   else if (isTRT) state = 'TRT';
   else if (setupCardResolved) state = 'RESOLVED';
-  else if (setupCard) state = isClosed ? 'RESOLVED' : isManageOnly ? 'MANAGE_ONLY' : 'SETUP_CARD';
-  else if (isClosed) state = 'CLOSED';
+  else if (setupCard) state = 'SETUP_CARD';
 
   React.useEffect(() => { onStateChange?.(state); }, [state, onStateChange]);
 
@@ -18012,16 +18497,16 @@ function SessionStatusBar({ conf, onStateChange }) {
 
   // Colors per state
   const stateColors = {
-    NO_SETUP:      { bg: 'rgba(30,41,59,0.8)', border: '#334155', label: '#64748b', accent: '#94a3b8' },
+    NO_SETUP:      { bg: 'rgba(30,41,59,0.8)', border: '#334155', label: '#94a3b8', accent: '#94a3b8' },
     SIGNAL_ACTIVE: { bg: signalDegrading ? 'rgba(249,115,22,0.07)' : isCounterTrend ? 'rgba(251,191,36,0.08)' : isLong ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
                      border: signalDegrading ? '#f97316' : isCounterTrend ? '#fbbf24' : isLong ? '#22c55e' : '#ef4444',
                      label: signalDegrading ? '#f97316' : isCounterTrend ? '#fbbf24' : isLong ? '#22c55e' : '#ef4444',
                      accent: signalDegrading ? '#f97316' : isCounterTrend ? '#fbbf24' : isLong ? '#22c55e' : '#ef4444' },
     MANAGE_ONLY:   { bg: 'rgba(245,158,11,0.05)', border: '#b45309', label: '#d97706', accent: '#f59e0b' },
-    RESOLVED:      { bg: 'rgba(15,23,42,0.6)', border: '#334155', label: '#64748b', accent: '#94a3b8' },
+    RESOLVED:      { bg: 'rgba(15,23,42,0.6)', border: '#334155', label: '#94a3b8', accent: '#94a3b8' },
     TRT:           { bg: 'rgba(245,158,11,0.06)', border: '#f59e0b', label: '#f59e0b', accent: '#f59e0b' },
     SETUP_CARD:    { bg: 'rgba(99,102,241,0.06)', border: '#6366f1', label: '#818cf8', accent: '#818cf8' },
-    CLOSED:        { bg: 'rgba(15,23,42,0.6)', border: '#334155', label: '#64748b', accent: '#94a3b8' },
+    CLOSED:        { bg: 'rgba(15,23,42,0.6)', border: '#334155', label: '#94a3b8', accent: '#94a3b8' },
   };
   const sc = stateColors[state] ?? stateColors.NO_SETUP;
 
@@ -18096,7 +18581,7 @@ function SessionStatusBar({ conf, onStateChange }) {
               {/* Key Levels: composite (5d) + prior day VA, color-coded by position vs current price */}
               {currentPx && (compVAH != null || compVAL != null || pdVAH || pdVAL) && (() => {
                 const cvn = live?.conviction;
-                const starColor = (s) => s >= 3 ? '#22c55e' : s >= 2 ? '#f59e0b' : s >= 1 ? '#f97316' : '#475569';
+                const starColor = (s) => s >= 3 ? '#22c55e' : s >= 2 ? '#f59e0b' : s >= 1 ? '#f97316' : '#64748b';
                 const starStr   = (s) => s >= 3 ? '★★★' : s >= 2 ? '★★' : s >= 1 ? '★' : null;
                 const Stars = ({ entry }) => {
                   if (!entry || entry.stars == null) return null;
@@ -18202,7 +18687,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                     ↓ {refShortT1.price} <span style={{ color: '#94a3b8', fontFamily: 'inherit' }}>{refShortT1.label}</span>
                   </span>
                 )}
-                <span style={{ fontSize: 13, color: '#64748b', marginLeft: 'auto', fontStyle: 'italic' }}>Reference levels — not a signal</span>
+                <span style={{ fontSize: 13, color: '#94a3b8', marginLeft: 'auto', fontStyle: 'italic' }}>Reference levels — not a signal</span>
               </div>
             )}
           </div>
@@ -18352,7 +18837,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                 <div style={{ fontSize: 16, fontWeight: 700, color: windowAmber ? '#f59e0b' : '#818cf8', fontFamily: 'monospace' }}>
                   {minsRemaining != null ? `${minsRemaining}m` : '—'}
                 </div>
-                <div style={{ fontSize: 13, color: windowAmber ? '#f59e0b' : '#64748b' }}>remaining</div>
+                <div style={{ fontSize: 13, color: windowAmber ? '#f59e0b' : '#94a3b8' }}>remaining</div>
               </div>
 
               {/* Three-timeframe probability display */}
@@ -18627,10 +19112,10 @@ function SessionStatusBar({ conf, onStateChange }) {
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
             {/* Direction */}
             <div style={{ minWidth: 120 }}>
-              <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{signalDegrading ? '⚠ SIGNAL DEGRADING' : isCounterTrend ? '⚡ COUNTER-TREND' : 'ACD SIGNAL DETECTED'}</div>
+              <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 2, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{signalDegrading ? '⚠ SIGNAL DEGRADING' : isCounterTrend ? '⚡ COUNTER-TREND' : 'ACD SIGNAL DETECTED'}</div>
               <div style={{ fontSize: 18, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em' }}>
                 {isLong ? '↑ A UP' : '↓ A DOWN'}
-                <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400, marginLeft: 8 }}>context — not a trade signal</span>
+                <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 400, marginLeft: 8 }}>context — not a trade signal</span>
               </div>
               {aFireEvent?.time && (
                 <div style={{ fontSize: 13, color: sc.accent, marginTop: 2, fontFamily: 'monospace' }}>fired {aFireEvent.time} ET</div>
@@ -18668,7 +19153,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                         {hrPct}% plays out{isCtxSpec ? ` · bias ${biasDir}` : ' overall'} (n={decisive})
                       </span>
                     ) : (
-                      <span style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>n={decisive} — limited sample</span>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>n={decisive} — limited sample</span>
                     )}
                     {conflict && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b' }}>⚠ vs {biasDir} pre-mkt bias</span>
@@ -18685,7 +19170,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                 const biasDir = conf?.structural?.dir === 'BULLISH' ? 'LONG' : conf?.structural?.dir === 'BEARISH' ? 'SHORT' : 'NEUTRAL';
                 const entry = levelTouches[levelKey]?.[biasDir];
                 if (!entry) return null;
-                const col = !entry.confident ? '#64748b' : entry.hitRate >= 65 ? '#22c55e' : entry.hitRate < 55 ? '#ef4444' : '#f59e0b';
+                const col = !entry.confident ? '#94a3b8' : entry.hitRate >= 65 ? '#22c55e' : entry.hitRate < 55 ? '#ef4444' : '#f59e0b';
                 return (
                   <div style={{ marginTop: 5, display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: '#94a3b8' }}>{levelKey === 'IBL' ? 'IB Low' : 'IB High'} broken, {biasDir} bias:</span>
@@ -18694,7 +19179,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                         {entry.hitRate}% reversed/bounced ≥15pts within 30min (n={entry.decisive}{entry.avgPts ? `, avg ${entry.avgPts}pts` : ''})
                       </span>
                     ) : (
-                      <span style={{ fontSize: 11, color: '#64748b', fontStyle: 'italic' }}>n={entry.decisive} — limited sample</span>
+                      <span style={{ fontSize: 11, color: '#94a3b8', fontStyle: 'italic' }}>n={entry.decisive} — limited sample</span>
                     )}
                   </div>
                 );
@@ -18794,8 +19279,8 @@ function SessionStatusBar({ conf, onStateChange }) {
       )}
 
       {state === 'RESOLVED' && (() => {
-        // Three sources of a RESOLVED display, in priority order matching the state ladder:
-        //  1. A signal (A UP / A DOWN) — both stop and T1 touched since entry (existing behavior)
+        // Two sources of a RESOLVED display, in priority order matching the state ladder:
+        //  1. A signal (A UP / A DOWN) — both stop and T1 touched since entry
         //  2. TRT — active_setups row for today's TRT setup is no longer ACTIVE
         //  3. Setup card — auto-detected setup whose stop or T1 has been touched by price
         let title, desc, resStop, resStopLabel, resT1, resT1Label;
@@ -18851,47 +19336,6 @@ function SessionStatusBar({ conf, onStateChange }) {
         );
       })()}
 
-      {state === 'MANAGE_ONLY' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ padding: '8px 14px', background: 'rgba(180,83,9,0.08)', border: '1px solid rgba(180,83,9,0.4)', borderRadius: 6 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#d97706', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              MANAGE ONLY — No new entries after noon
-            </div>
-            <div style={{ fontSize: 12, color: '#92400e' }}>
-              {signalActive
-                ? 'Active signal — manage your position only. No new entries. Session closes 1:00 PM ET.'
-                : setupCard
-                ? 'Setup visible for position management. No new entries. Session closes 1:00 PM ET.'
-                : 'Observation window only. No new entries. Session closes 1:00 PM ET.'}
-            </div>
-          </div>
-          {signalActive && (
-            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-              <div style={{ minWidth: 120 }}>
-                <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 2, fontWeight: 600 }}>MANAGING</div>
-                <div style={{ fontSize: 22, fontWeight: 900, color: '#d97706', letterSpacing: '0.04em' }}>
-                  {aUpFired ? '↑ A UP' : '↓ A DOWN'}
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 14 }}>
-                {stop && <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: '#cbd5e1' }}>Stop</div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{stop}</div>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{stopType}</div>
-                </div>}
-                {t1 && <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: '#cbd5e1' }}>T1</div>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: '#22c55e', fontFamily: 'monospace' }}>{t1}</div>
-                </div>}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {state === 'CLOSED' && (
-        <div style={{ fontSize: 13, color: '#64748b', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Session closed</div>
-      )}
     </div>
   );
 }
@@ -18913,13 +19357,16 @@ function OvernightContextStrip() {
   const aligned = (inv === 'SHORT_TRAPPED' && ovp === 'ABOVE_VALUE') || (inv === 'LONG_TRAPPED' && ovp === 'BELOW_VALUE');
   return (
     <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.06)', border: `1px solid ${aligned ? 'rgba(34,197,94,0.3)' : 'rgba(139,92,246,0.2)'}`, borderLeft: `3px solid ${aligned ? '#22c55e' : '#a78bfa'}` }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Overnight Structural Context</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Overnight Structure</span>
+        <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET</span>
+      </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
         {inv && <span>Inventory: <strong style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>{inv.replace(/_/g, ' ')}</strong></span>}
         {ovp && <span>Open: <strong style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>{ovp.replace(/_/g, ' ')}</strong></span>}
         {pdp && <span>Prior Day: <strong style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>{pdp}</strong></span>}
       </div>
-      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
+      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
         {inv === 'LONG_TRAPPED' && 'Yesterday\'s buyers underwater — bearish fuel. '}
         {inv === 'SHORT_TRAPPED' && 'Yesterday\'s sellers squeezed — bullish fuel. '}
         {inv === 'NEUTRAL' && 'No trapped participants. '}
@@ -18929,7 +19376,7 @@ function OvernightContextStrip() {
         {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is high conviction (61% WR).'}
         {pdp === 'TREND' && 'Yesterday trended — continuation or reversal, wait for OR to confirm.'}
       </div>
-      {aligned && <div style={{ fontSize: 10, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+      {aligned && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
     </div>
   );
 }
@@ -18946,17 +19393,19 @@ function BacktestedEdgeStatsCard() {
   const isNear = (val) => price && val && Math.abs(price - val) <= PROX;
 
   const setups = [
-    { name: 'VWAP Magnet', wr: '62%', delta: 'NEW', color: '#10b981', status: 'ACTIVE', tip: 'Price 25% of range from VWAP → fade toward VWAP. 62% WR (N=460). Self-scaling threshold. Best on BALANCE days (79% WR). 20pt target, 30pt stop.' },
-    { name: 'PD_POC Fade', wr: '64%', delta: 'NEW', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day POC. 64% WR (N=76), $80/trade. Best 12-2PM (70% WR). Coils: 3.6x win after 6+ losses.' },
-    { name: 'Floor S1 Fade', wr: '61%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at Floor Pivot S1. 61% WR (N=57). Best 12-2PM (75% WR). Skip after 2PM (44%). On BALANCE days: 77% WR.' },
-    { name: 'OR High Fade', wr: '57%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at OR High. 57% WR (N=182). Recent 30d: 66% WR. On Tuesdays: 71% WR. Coils after 3+ losses (79% WR).' },
-    { name: 'IB High Fade', wr: '58%', delta: 'NEW', color: '#34d399', status: 'ACTIVE', tip: 'Fade at IB High (post-IB only). 58% WR (N=166). Best 12-2PM (64%). On Wednesdays: 70% WR.' },
-    { name: 'OPEN_DRIVE_SHORT', wr: '68.2%', delta: '+18.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR Low after opening drive. 68.2% WR (N=22). @VA: 78%. NL30 aligned: 80%. Tight OR: 91%.' },
-    { name: 'VA_RESP_SHORT', wr: '66.7%', delta: '+17.4%', color: '#34d399', status: 'ACTIVE', tip: 'At PD VAH, non-drive open. 66.7% WR (N=60). TURB: 90%. NL30 aligned: 93%. Coils 3.6x after drought.' },
-    { name: 'OPEN_DRIVE_LONG', wr: '66.7%', delta: '+15.9%', color: '#34d399', status: 'ACTIVE', tip: 'Pullback to OR High after opening drive. 66.7% WR (N=42). TREND: 83%. Tight OR: 78%.' },
-    { name: 'TRT_LONG', wr: '75.0%', delta: '+24%', color: '#f59e0b', status: 'ACTIVE', tip: 'A+C failed, price through OR. Edge at 20 bars (75%), not 10. 120 min expiry. Suppressed on wide OR.' },
-    { name: 'IB_BEARISH', wr: '55.0%', delta: '+1.3%', color: '#94a3b8', status: 'ACTIVE', tip: 'IB range break short. 45% filtered WR (backtest). Best on TURBULENT + POC aligned. Workhorse setup.' },
-    { name: 'C_STANDALONE_DOWN', wr: '57.0%', delta: '-12%→+63%', color: '#f59e0b', status: 'GATED', tip: '-12% raw. GATED to PD-2 VA proximity where WR=63%. Death sequence gate also active.' },
+    { name: 'VWAP Magnet', wr: '62%', delta: '+12% edge', color: '#94a3b8', status: 'CONTEXT', tip: 'Price 25% of range from VWAP → fade toward VWAP. 62% WR (N=460). Shadow-tracked only (not a primary entry). Self-scaling threshold. Best on BALANCE days (79% WR). 20pt target, 30pt stop.' },
+    { name: 'PD_POC Fade', wr: '85%', delta: '$38/trade', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day POC. 85% WR (N=40). 90pt stop, 40pt target. System anchor — 22% of total P&L. AM first touch.' },
+    { name: '5D OR MID Fade', wr: '94%', delta: '$64/trade', color: '#10b981', status: 'ACTIVE', tip: 'Fade at 5-day rolling OR midpoint. 94% WR (N=17). Best level by EV. Rolling composite smooths outlier days.' },
+    { name: 'PD VAL Fade', wr: '82%', delta: '$31/trade', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day VAL. 82% WR (N=27). 90pt stop, 40pt target. AM session.' },
+    { name: 'PD IB MID Fade', wr: '83%', delta: '$36/trade', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day IB midpoint. 83% WR (N=18). Tightest MAE (20pt). Clean level.' },
+    { name: 'PD VAH Fade', wr: '77%', delta: '$17/trade', color: '#34d399', status: 'ACTIVE', tip: 'Fade at prior day VAH. 77% WR (N=47). High frequency. AM session.' },
+    { name: 'Floor Pivot Fade', wr: '80%', delta: '$16/trade', color: '#34d399', status: 'ACTIVE', tip: 'Fade at Floor Pivot. 80% WR (N=35). Structural reference level.' },
+    { name: 'OR High Fade', wr: '77%', delta: '$14/trade', color: '#34d399', status: 'ACTIVE', tip: 'Fade at OR High. 77% WR (N=30). 90pt stop, 40pt target. AM only.' },
+    { name: 'Floor R1 Fade', wr: '77%', delta: '$17/trade', color: '#34d399', status: 'ACTIVE', tip: 'Fade at Floor R1. 77% WR (N=22). Thursday 1PM specialist.' },
+    { name: 'PD OR MID Fade', wr: '80%', delta: '$15/trade', color: '#34d399', status: 'ACTIVE', tip: 'Fade at prior day OR midpoint. 80% WR (N=20). AM session.' },
+    { name: 'OPEN_DRIVE', wr: '40-52%', delta: 'CONTEXT', color: '#94a3b8', status: 'CONTEXT', tip: 'Directional context only. Negative EV as mechanical entry (-$25 to -$44/trade). Use for lean.' },
+    { name: 'IB_BEARISH', wr: '54%', delta: 'CONTEXT', color: '#94a3b8', status: 'CONTEXT', tip: 'Directional context only — 54% directional accuracy. Not a trade entry. Use to lean short, then enter at KEEP levels.' },
+    { name: 'TRT_LONG', wr: '75%@20bar', delta: '+24% edge', color: '#94a3b8', status: 'CONTEXT', tip: 'A+C failed, price through OR. 75% WR at 20 bars (not 10) — slow burn reversal. Shadow-tracked only. 120 min expiry. High MAE (143pt). Suppressed on wide OR.' },
   ];
 
   const confLevels = [
@@ -18968,8 +19417,8 @@ function BacktestedEdgeStatsCard() {
     { name: '2D POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
     { name: 'OR Mid', delta: '+18.0%', color: '#60a5fa', val: cl?.orMid, tip: 'OR midpoint. With absorption: 60% WR, +$16 exp. 15pt target/15pt stop. Log via Quick Trade Log.' },
     { name: 'PW High', delta: '+5.1%', color: '#fb923c', val: cl?.pw?.high, tip: 'Prior week high resistance. +5.1% edge. Target: 15pt (72% hit).' },
-    { name: '2D VAL', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.val, tip: 'Prior day VAL. 64% fade WR (N=76). Best 12-2PM.' },
-    { name: 'PP', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.pp, tip: 'Floor Pivot Point. 55% fade WR. Best at 10AM (68%).' },
+    { name: '2D VAL', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.val, tip: 'Prior day VAL. 82% fade WR (system backtest). 90pt stop, 40pt target.' },
+    { name: 'PP', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.pp, tip: 'Floor Pivot. 80% fade WR (system backtest). 90pt stop, 40pt target.' },
     { name: 'S1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.s1, tip: 'Floor S1. 61% fade WR. Best 12-2PM (75%). BALANCE days 77%.' },
     { name: 'R1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.r1, tip: 'Floor R1. 53% fade WR. Coils after 3+ losses (100% WR N=4).' },
   ];
@@ -18995,7 +19444,7 @@ function BacktestedEdgeStatsCard() {
 
   return (
     <div style={{ padding: '8px 16px' }}>
-      <div style={{ fontSize: 10, color: '#64748b', marginBottom: 10 }}>Controlled tests, 12mo NQ (2025-2026). Confluence levels highlight when price is within 25pt.</div>
+      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>Controlled tests, 12mo NQ (2025-2026). Confluence levels highlight when price is within 25pt.</div>
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 240px', minWidth: 220 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>RANKED ACTIVE SETUPS</div>
@@ -19004,11 +19453,11 @@ function BacktestedEdgeStatsCard() {
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0' }} title={s.tip}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   {s.name}
-                  <span style={{ fontSize: 8, fontWeight: 800, color: s.status === 'ACTIVE' ? '#10b981' : '#f59e0b', background: s.status === 'ACTIVE' ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)', padding: '0 4px', borderRadius: 2 }}>{s.status}</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: s.status === 'ACTIVE' ? '#10b981' : '#f59e0b', background: s.status === 'ACTIVE' ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)', padding: '0 4px', borderRadius: 2 }}>{s.status}</span>
                 </span>
                 <span style={{ display: 'flex', gap: 6 }}>
                   <span style={{ color: s.color, fontWeight: 700 }}>{s.wr}</span>
-                  <span style={{ color: '#64748b', fontSize: 10 }}>{s.delta}</span>
+                  <span style={{ color: '#94a3b8', fontSize: 10 }}>{s.delta}</span>
                 </span>
               </div>
             ))}
@@ -19025,18 +19474,18 @@ function BacktestedEdgeStatsCard() {
                 <div key={i} style={rowSt(active)} title={l.tip}>
                   <span style={{ color: active ? '#e2e8f0' : '#94a3b8', fontWeight: active ? 700 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>
                     {l.name}
-                    {l.val != null && <span style={{ fontSize: 9, color: '#64748b', fontFamily: 'monospace' }}>{fmtP(l.val, 0)}</span>}
-                    {active && <span style={{ fontSize: 8, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '0 4px', borderRadius: 2 }}>ACTIVE</span>}
+                    {l.val != null && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{fmtP(l.val, 0)}</span>}
+                    {active && <span style={{ fontSize: 11, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '0 4px', borderRadius: 2 }}>ACTIVE</span>}
                   </span>
                   <span style={{ display: 'flex', gap: 4 }}>
                     <span style={{ color: l.color, fontWeight: 700 }}>{l.delta}</span>
-                    {dist != null && <span style={{ fontSize: 9, color: '#64748b' }}>{dist > 0 ? '+' : ''}{dist}pt</span>}
+                    {dist != null && <span style={{ fontSize: 11, color: '#94a3b8' }}>{dist > 0 ? '+' : ''}{dist}pt</span>}
                   </span>
                 </div>
               );
             })}
           </div>
-          <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 10, color: '#64748b' }}>ANTI-CONFLUENCE (avoid):</div>
+          <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 12, color: '#94a3b8' }}>ANTI-CONFLUENCE (avoid):</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#f87171', marginTop: 2 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB High</span><span>-23.9%</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB Low</span><span>-28.1%</span></div>
@@ -19047,7 +19496,7 @@ function BacktestedEdgeStatsCard() {
           <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>REMOVED / SHADOW TRACKED</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
             {removed.map((s, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1px 0', color: '#64748b' }}>
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1px 0', color: '#94a3b8' }}>
                 <span>{s.name}</span>
                 <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                   <span style={{ color: '#ef4444', fontWeight: 600, fontSize: 10 }}>{s.edge}</span>
@@ -19057,9 +19506,9 @@ function BacktestedEdgeStatsCard() {
             ))}
           </div>
           <div style={{ marginTop: 8, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>CONFLUENCE COUNT EFFECT</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10, color: '#94a3b8' }}>
-              <div>0 levels: <span style={{ color: '#64748b' }}>48.2% WR</span></div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', marginBottom: 4 }}>CONFLUENCE COUNT EFFECT</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12, color: '#94a3b8' }}>
+              <div>0 levels: <span style={{ color: '#94a3b8' }}>48.2% WR</span></div>
               <div>2+ levels: <span style={{ color: '#94a3b8' }}>45.0% WR, better MAE</span></div>
               <div>4+ levels: <span style={{ color: '#34d399', fontWeight: 700 }}>57.9% WR</span></div>
             </div>
@@ -19079,7 +19528,7 @@ function EdgeSectionsPanel() {
     return () => clearInterval(iv);
   }, []);
   if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
-  if (!data) return <div style={{ fontSize: 12, color: '#64748b' }}>Loading edge data...</div>;
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
   const { liveStatus, setups, confluenceLevels, windows, overnightContext } = data;
   const price = liveStatus?.currentPrice;
@@ -19103,10 +19552,10 @@ function EdgeSectionsPanel() {
     { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, ctrlDelta: 18.0, color: '#60a5fa', role: 'pivot' },
     { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, ctrlDelta: 5.1, color: '#fb923c', role: 'resistance' },
     { name: 'Floor PP', val: confluenceLevels.floorPivots?.pp, target: 20, hitRate: 99, ctrlDelta: 0, color: '#94a3b8', role: 'pivot' },
-    { name: 'Floor S1', val: confluenceLevels.floorPivots?.s1, target: 20, hitRate: 40, ctrlDelta: 0, color: '#64748b', role: 'support' },
-    { name: 'Floor R1', val: confluenceLevels.floorPivots?.r1, target: 20, hitRate: 45, ctrlDelta: 0, color: '#64748b', role: 'resistance' },
-    { name: 'Floor S2', val: confluenceLevels.floorPivots?.s2, target: 20, hitRate: 41, ctrlDelta: 0, color: '#475569', role: 'support' },
-    { name: 'Floor S3', val: confluenceLevels.floorPivots?.s3, target: 20, hitRate: 37, ctrlDelta: 0, color: '#475569', role: 'support' },
+    { name: 'Floor S1', val: confluenceLevels.floorPivots?.s1, target: 20, hitRate: 40, ctrlDelta: 0, color: '#94a3b8', role: 'support' },
+    { name: 'Floor R1', val: confluenceLevels.floorPivots?.r1, target: 20, hitRate: 45, ctrlDelta: 0, color: '#94a3b8', role: 'resistance' },
+    { name: 'Floor S2', val: confluenceLevels.floorPivots?.s2, target: 20, hitRate: 41, ctrlDelta: 0, color: '#64748b', role: 'support' },
+    { name: 'Floor S3', val: confluenceLevels.floorPivots?.s3, target: 20, hitRate: 37, ctrlDelta: 0, color: '#64748b', role: 'support' },
     { name: '2D High', val: confluenceLevels.pd1?.high, target: 20, hitRate: 0, ctrlDelta: 0, color: '#fb923c', role: 'resistance' },
     { name: '2D Low', val: confluenceLevels.pd1?.low, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
   ].filter(l => l.val != null) : [];
@@ -19151,7 +19600,7 @@ function EdgeSectionsPanel() {
         if (!firedTypes.has('IB_BULLISH')) potentials.push({ id: 'ib-bull', type: 'IB BREAKOUT LONG', cond: `Tight OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'Break+hold above IB High → 100%/200% expansion' });
         if (!firedTypes.has('IB_BEARISH')) potentials.push({ id: 'ib-bear', type: 'IB BREAKOUT SHORT', cond: `Tight OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'Break+hold below IB Low → 100%/200% expansion' });
       }
-      if (liveStatus.or5Status === 'WIDE') {
+      if (liveStatus.or5Status === 'WIDE' && (liveStatus.range || 0) < (liveStatus.or5Range || 0) * 4) {
         potentials.push({ id: 'trt-l', type: 'TRAPPED SHORTS (TRT LONG)', cond: `Wide OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'A Down rejects → reclaim OR High' });
         potentials.push({ id: 'trt-s', type: 'TRAPPED LONGS (TRT SHORT)', cond: `Wide OR (${liveStatus.or5Range?.toFixed(0)}pts)`, dir: 'A Up rejects → reclaim OR Low' });
       }
@@ -19185,7 +19634,7 @@ function EdgeSectionsPanel() {
                 <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderLeft: `3px solid ${cc}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                     <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{s.setup_type}</span>
-                    <span style={{ fontSize: 9, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
                   </div>
                   <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
                     <span>WR: <strong style={{ color: cc }}>{(s.adjustedWr * 100).toFixed(0)}%</strong> (N={s.sampleN})</span>
@@ -19196,13 +19645,13 @@ function EdgeSectionsPanel() {
                     <span style={{ color: '#f87171' }}>Stop: {fmtP(s.stop_level, 0)}</span>
                     <span style={{ color: '#34d399' }}>T1: {fmtP(s.t1_level, 0)}</span>
                   </div>
-                  <div style={{ fontSize: 10, color: '#a78bfa', marginTop: 4, lineHeight: 1.4, fontStyle: 'italic' }}>{edgeCtx}</div>
-                  {s.recommendation && s.recommendation !== 'Execute standard risk parameters.' && <div style={{ fontSize: 10, color: '#cbd5e1', marginTop: 2, lineHeight: 1.4 }}>{s.recommendation}</div>}
+                  <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4, lineHeight: 1.4, fontStyle: 'italic' }}>{edgeCtx}</div>
+                  {s.recommendation && s.recommendation !== 'Execute standard risk parameters.' && <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2, lineHeight: 1.4 }}>{s.recommendation}</div>}
                 </div>
               );
             })}
           </div>
-        ) : <div style={{ fontSize: 11, color: '#64748b' }}>No setups active or detected.</div>}
+        ) : <div style={{ fontSize: 11, color: '#94a3b8' }}>No setups active or detected.</div>}
       </div>
 
       {/* Potential Watchlist */}
@@ -19213,7 +19662,7 @@ function EdgeSectionsPanel() {
             {potentials.map(p => (
               <div key={p.id} style={{ padding: '8px 10px', borderRadius: 6, background: 'rgba(15,23,42,0.3)', border: '1px solid rgba(139,92,246,0.15)', borderLeft: '3px solid #8b5cf6' }}>
                 <div style={{ fontWeight: 700, color: '#cbd5e1', marginBottom: 2 }}>{p.type}</div>
-                <div style={{ fontSize: 10, color: '#94a3b8' }}>{p.cond} — {p.dir}</div>
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>{p.cond} — {p.dir}</div>
               </div>
             ))}
           </div>
@@ -19246,7 +19695,7 @@ function TradeLogRow({ log, onUpdate }) {
   };
 
   const linkSt = { color: '#a5b4fc', cursor: 'pointer', textDecoration: 'underline', fontSize: 11, fontWeight: 600 };
-  const inputSt = { padding: '4px 8px', borderRadius: 4, border: '1px solid #475569', background: '#1e293b', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' };
+  const inputSt = { padding: '4px 8px', borderRadius: 4, border: '1px solid #64748b', background: '#1e293b', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' };
   const pnlColor = log.pnl >= 0 ? '#4ade80' : '#f87171';
 
   return (
@@ -19263,7 +19712,7 @@ function TradeLogRow({ log, onUpdate }) {
           {mode === null && <span onClick={() => setMode('delete')} style={{ ...linkSt, color: '#f87171' }}>delete</span>}
         </span>
       </div>
-      {log.note && mode !== 'note' && <div style={{ fontSize: 12, color: '#cbd5e1', fontStyle: 'italic', marginTop: 4, paddingLeft: 4, borderLeft: '2px solid #475569', lineHeight: 1.4 }}>{log.note}</div>}
+      {log.note && mode !== 'note' && <div style={{ fontSize: 12, color: '#cbd5e1', fontStyle: 'italic', marginTop: 4, paddingLeft: 4, borderLeft: '2px solid #64748b', lineHeight: 1.4 }}>{log.note}</div>}
       {mode === 'close' && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
           <input type="number" value={pnlVal} onChange={e => setPnlVal(e.target.value)} placeholder="P&L e.g. -78" style={{ ...inputSt, width: 90 }} onKeyDown={e => e.key === 'Enter' && closeTrade()} autoFocus />
@@ -19346,7 +19795,7 @@ function QuickTradeLog() {
   const chip = (active) => ({
     padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid',
     background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
-    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#64748b',
+    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#94a3b8',
   });
 
   const selStyle = { padding: '6px 10px', borderRadius: 4, border: '1px solid #334155', background: '#0f172a', color: '#e2e8f0', fontSize: 12, fontFamily: 'monospace' };
@@ -19426,7 +19875,7 @@ function QuickTradeLog() {
                 style={{ 
                   background: 'transparent', 
                   border: 'none', 
-                  color: '#64748b', 
+                  color: '#94a3b8', 
                   cursor: 'pointer', 
                   fontSize: 18,
                   padding: '4px 8px',
@@ -19434,7 +19883,7 @@ function QuickTradeLog() {
                   transition: 'all 0.15s ease'
                 }}
                 onMouseEnter={e => e.currentTarget.style.color = '#e2e8f0'}
-                onMouseLeave={e => e.currentTarget.style.color = '#64748b'}
+                onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}
               >
                 ✕
               </button>
@@ -19444,7 +19893,7 @@ function QuickTradeLog() {
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '30px 0', textAlign: 'center' }}>
                 <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(34, 197, 94, 0.15)', border: '2px solid #22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#22c55e' }}>✓</div>
                 <div style={{ fontSize: 16, color: '#f8fafc', fontWeight: 700 }}>Trade Logged Successfully</div>
-                <div style={{ fontSize: 13, color: '#64748b' }}>Updating feedback cache...</div>
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>Updating feedback cache...</div>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -19501,7 +19950,7 @@ function QuickTradeLog() {
                 </div>
 
                 <div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tags / Confluences</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Tags / Confluences</div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {ALL_TAGS.map(t => <span key={t} onClick={() => toggleTag(t)} style={chip(tags.includes(t))}>{t.replace(/_/g, ' ')}</span>)}
                   </div>
@@ -19562,7 +20011,7 @@ function QuickTradeLog() {
 
                 {recentLogs.length > 0 && (
                   <div style={{ borderTop: '1px solid #1e293b', paddingTop: 10, marginTop: 4 }}>
-                    <div style={{ fontSize: 11, color: '#64748b', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Today's logs:</div>
+                    <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Today's logs:</div>
                     <div style={{ maxHeight: 150, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
                       {recentLogs.map(l => (
                         <TradeLogRow key={l.id} log={l} onUpdate={loadRecent} />
@@ -19632,7 +20081,7 @@ function TradeFeedbackBar({ setupCard }) {
   const chipStyle = (active) => ({
     padding: '3px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid',
     background: active ? 'rgba(99,102,241,0.15)' : 'transparent',
-    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#64748b',
+    borderColor: active ? '#6366f1' : '#334155', color: active ? '#a5b4fc' : '#94a3b8',
   });
 
   const btnStyle = (color) => ({
@@ -19644,7 +20093,7 @@ function TradeFeedbackBar({ setupCard }) {
     <div style={{ borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 8, marginTop: 4 }}>
       {!sent && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Trade Log:</span>
+          <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Trade Log:</span>
           <button onClick={() => submit('TAKEN')} style={btnStyle('#22c55e')}>Taking It</button>
           <button onClick={() => submit('PASSED')} style={btnStyle('#f59e0b')}>Passing</button>
         </div>
@@ -19714,7 +20163,7 @@ function CollapsibleSection({ title, defaultOpen = false, children, badge, updat
           borderRadius: open ? '8px 8px 0 0' : 8,
           cursor: 'pointer', fontFamily: 'Arial, sans-serif' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: open ? '#94a3b8' : '#64748b', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{title}{!open && updateId && updateUnseen && <Dot />}</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: open ? '#94a3b8' : '#94a3b8', letterSpacing: '0.05em', textTransform: 'uppercase' }}>{title}{!open && updateId && updateUnseen && <Dot />}</span>
           {fetchedAt && <FetchStamp at={fetchedAt} />}
           {badge && <span style={{ fontSize: 13, padding: '1px 7px', borderRadius: 4, background: badge.bg, color: badge.color, fontWeight: 700 }}>{badge.text}</span>}
           {showUpdated && (
@@ -19834,7 +20283,7 @@ function SystemHealthSummary({ onNavigate }) {
   }, []);
 
   const redCount = data?.redCount || 0;
-  const dotColor = !data ? '#475569' : redCount > 0 ? '#ef4444' : '#22c55e';
+  const dotColor = !data ? '#64748b' : redCount > 0 ? '#ef4444' : '#22c55e';
   const label = !data ? 'Checking...' : redCount > 0 ? `⚠ ${redCount} process${redCount > 1 ? 'es' : ''} need attention` : 'All processes running';
 
   return (
@@ -20021,7 +20470,7 @@ function PhaseChangeBacktestPanel() {
               <div style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.8 }}>
                 Your logged alerts: <strong>{fwdTest.liveAlerts} events</strong>, <strong>{pct(fwdTest.liveReversalRate)}</strong> reversal rate<br />
                 vs backtest prediction: <strong>{pct(fwdTest.btPredictedRate)}</strong> at {fwdTest.modalConditionCount} conditions<br />
-                <span style={{ color: fwdTest.status === 'within_variance' ? '#22c55e' : fwdTest.status === 'outside_variance' ? '#ef4444' : '#64748b', fontWeight: 700 }}>
+                <span style={{ color: fwdTest.status === 'within_variance' ? '#22c55e' : fwdTest.status === 'outside_variance' ? '#ef4444' : '#94a3b8', fontWeight: 700 }}>
                   Status: {fwdTest.status === 'within_variance' ? 'Within expected variance'
                     : fwdTest.status === 'outside_variance' ? 'Outside expected variance — review conditions'
                     : 'No backtest to compare against'}
@@ -20103,7 +20552,7 @@ function EodOutcomePrompt() {
                 style={{ fontSize: 13, padding: '2px 10px', borderRadius: 4, cursor: 'pointer',
                   background: forms[a.id]?.reversed === v ? '#1e40af' : 'transparent',
                   border: `1px solid ${forms[a.id]?.reversed === v ? '#3b82f6' : '#334155'}`,
-                  color: forms[a.id]?.reversed === v ? '#fff' : '#64748b' }}>
+                  color: forms[a.id]?.reversed === v ? '#fff' : '#94a3b8' }}>
                 {v.toUpperCase()}
               </button>
             ))}
@@ -20161,7 +20610,7 @@ function AuctionReadModalContent({ nl, todayData }) {
   const nlNum      = nl?.sum30 ?? nl?.nl30 ?? 0;
   const nlColor    = nlTrend === 'TRENDING_UP' ? '#22c55e' : nlTrend === 'TRENDING_DOWN' ? '#ef4444' : '#fbbf24';
   const pivotBias  = nqLive?.pivotBias?.includes('ABOVE') ? 'up' : nqLive?.pivotBias?.includes('BELOW') ? 'down' : null;
-  const pivotColor = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#64748b';
+  const pivotColor = pivotBias === 'up' ? '#22c55e' : pivotBias === 'down' ? '#ef4444' : '#94a3b8';
   const orCond     = read.or_condition || autoDetected.or_condition;
   const autoASig   = todayData?.today?.a_up_fired ? 'A_UP' : todayData?.today?.a_down_fired ? 'A_DOWN'
     : liveCtx?.aUpFired ? 'A_UP' : liveCtx?.aDownFired ? 'A_DOWN' : null;
@@ -20255,7 +20704,7 @@ function AuctionReadModalContent({ nl, todayData }) {
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {[
             { label: 'Pre-mkt bias', val: midSnap.preMktBias || 'NEUTRAL', clr: biasClr[midSnap.preMktBias] || '#94a3b8', sub: 'inventory + value' },
-            { label: 'Session signal', val: midSnap.sessionSignal || 'No signal', clr: biasClr[midSnap.sessionSignal] || '#64748b', sub: midSnap.aDownFired ? 'A Down fired' : midSnap.aUpFired ? 'A Up fired' : 'no A signal' },
+            { label: 'Session signal', val: midSnap.sessionSignal || 'No signal', clr: biasClr[midSnap.sessionSignal] || '#94a3b8', sub: midSnap.aDownFired ? 'A Down fired' : midSnap.aUpFired ? 'A Up fired' : 'no A signal' },
             { label: `vs open (${midSnap.cutoffTime || ''})`, val: `${midSnap.ptsVsOpen > 0 ? '+' : ''}${midSnap.ptsVsOpen}pts`, clr: dirColor[midSnap.dir] || '#94a3b8', sub: midSnap.dir },
             { label: 'Bias outcome', val: midSnap.biasPlaying ? '✓ Playing out' : midSnap.biasReversed ? '✗ Not playing out' : '— Neutral', clr: midSnap.biasPlaying ? '#22c55e' : midSnap.biasReversed ? '#ef4444' : '#94a3b8', sub: '' },
             { label: 'Session range', val: `${midSnap.sessRange}pts`, clr: '#e2e8f0', sub: `H ${midSnap.sessHigh} · L ${midSnap.sessLow} (${midSnap.rangeVsAvg}% avg)` },
@@ -20316,7 +20765,7 @@ function AuctionReadModalContent({ nl, todayData }) {
     if (!eod.available) return <div style={{ color: '#cbd5e1', fontSize: 13, padding: '8px 0' }}>{eod.reason || 'Not yet available.'}</div>;
     const outClr = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#94a3b8' };
     const outIcon = { CORRECT: '✓', WRONG: '✗', NEUTRAL: '—' };
-    const patClr = { V_REVERSAL_UP: '#22c55e', V_REVERSAL_DOWN: '#ef4444', TREND_DAY: '#f97316', BALANCE_DAY: '#64748b', FAILED_A_UP: '#f97316', FAILED_A_DOWN: '#a78bfa', NEWS_DRIVEN: '#fbbf24' };
+    const patClr = { V_REVERSAL_UP: '#22c55e', V_REVERSAL_DOWN: '#ef4444', TREND_DAY: '#f97316', BALANCE_DAY: '#94a3b8', FAILED_A_UP: '#f97316', FAILED_A_DOWN: '#a78bfa', NEWS_DRIVEN: '#fbbf24' };
     const genTime = eod.calculatedAt ? formatTimestamp(new Date(eod.calculatedAt)) : null;
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -20327,7 +20776,7 @@ function AuctionReadModalContent({ nl, todayData }) {
             <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Pre-market call</div>
             <div style={{ fontSize: 15, fontWeight: 800, color: eod.mornBias === 'LONG' ? '#22c55e' : eod.mornBias === 'SHORT' ? '#ef4444' : '#94a3b8' }}>{eod.mornBias}</div>
             <div style={{ fontSize: 13, color: '#cbd5e1', marginTop: 3 }}>{eod.inv?.replace(/_/g,' ')} · {eod.val?.replace(/_/g,' ')}</div>
-            <div style={{ fontSize: 13, color: eod.aUpFired ? '#22c55e' : eod.aDownFired ? '#ef4444' : '#475569', marginTop: 2 }}>{eod.aUpFired ? 'A Up fired' : eod.aDownFired ? 'A Down fired' : 'No A signal'}</div>
+            <div style={{ fontSize: 13, color: eod.aUpFired ? '#22c55e' : eod.aDownFired ? '#ef4444' : '#64748b', marginTop: 2 }}>{eod.aUpFired ? 'A Up fired' : eod.aDownFired ? 'A Down fired' : 'No A signal'}</div>
           </div>
           <div style={{ flex: '1 1 160px', padding: '10px 14px', background: `${outClr[eod.outcome] || '#94a3b8'}10`, border: `1px solid ${outClr[eod.outcome] || '#94a3b8'}40`, borderRadius: 7 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 5, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Session result</div>
@@ -20389,12 +20838,12 @@ function AuctionReadModalContent({ nl, todayData }) {
             note: read.overnight_inventory === 'SHORT_TRAPPED' ? 'short sellers trapped — bullish pressure'
                 : read.overnight_inventory === 'LONG_TRAPPED'  ? 'long buyers trapped — bearish pressure'
                 : 'neutral — no inventory edge',
-            clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#64748b' },
+            clr: read.overnight_inventory === 'SHORT_TRAPPED' ? '#22c55e' : read.overnight_inventory === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' },
           { label: 'Open vs prior value', val: read.open_vs_prior_value?.replace(/_/g,' '),
             note: read.open_vs_prior_value === 'ABOVE_VALUE' ? 'initiative long territory'
                 : read.open_vs_prior_value === 'BELOW_VALUE' ? 'initiative short territory'
                 : 'inside value — balanced day expected',
-            clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#64748b' },
+            clr: read.open_vs_prior_value === 'ABOVE_VALUE' ? '#22c55e' : read.open_vs_prior_value === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' },
           { label: 'Prior day profile', val: read.prior_day_profile?.replace(/_/g,' '), note: '', clr: '#94a3b8' },
           { label: 'NL30', val: `${nlNum > 0 ? '+' : ''}${nlNum} ${nlTrend === 'TRENDING_UP' ? 'UP' : nlTrend === 'TRENDING_DOWN' ? 'DOWN' : 'RANGING'}`,
             note: nlTrend === 'TRENDING_UP' ? 'confirmed uptrend — A Up has full structural backing'
@@ -20416,19 +20865,19 @@ function AuctionReadModalContent({ nl, todayData }) {
           const orL = todayData?.today?.or_low  || liveCtx?.orLow  || autoDetected.ib_low;
           const levels = [
             nqNow  && { label: 'NQ Now', val: fmt(nqNow), clr: '#e2e8f0' },
-            autoDetected.latest_close && { label: 'Last Close', val: fmt(autoDetected.latest_close), clr: '#64748b' },
+            autoDetected.latest_close && { label: 'Last Close', val: fmt(autoDetected.latest_close), clr: '#94a3b8' },
             autoDetected.prior_day_vah && { label: 'PD VAH', val: fmt(autoDetected.prior_day_vah) + dist(autoDetected.prior_day_vah), clr: '#94a3b8' },
             autoDetected.prior_day_poc && { label: 'PD POC', val: fmt(autoDetected.prior_day_poc) + dist(autoDetected.prior_day_poc), clr: '#94a3b8' },
             autoDetected.prior_day_val && { label: 'PD VAL', val: fmt(autoDetected.prior_day_val) + dist(autoDetected.prior_day_val), clr: '#94a3b8' },
             autoDetected.g_line       && { label: 'G-Line',  val: fmt(autoDetected.g_line) + dist(autoDetected.g_line), clr: '#f59e0b' },
             aUp    && { label: 'A Up',   val: fmt(aUp) + dist(aUp),   clr: '#22c55e' },
             aDown  && { label: 'A Down', val: fmt(aDown) + dist(aDown), clr: '#ef4444' },
-            orH    && { label: 'OR Hi',  val: fmt(orH) + dist(orH),  clr: '#64748b' },
-            orL    && { label: 'OR Lo',  val: fmt(orL) + dist(orL),  clr: '#64748b' },
-            autoDetected.ovn_high && { label: 'ONH', val: fmt(autoDetected.ovn_high) + dist(autoDetected.ovn_high), clr: '#64748b' },
-            autoDetected.ovn_low  && { label: 'ONL', val: fmt(autoDetected.ovn_low)  + dist(autoDetected.ovn_low),  clr: '#64748b' },
-            autoDetected.pw_high  && { label: 'PW Hi', val: fmt(autoDetected.pw_high) + dist(autoDetected.pw_high), clr: '#475569' },
-            autoDetected.pw_low   && { label: 'PW Lo', val: fmt(autoDetected.pw_low)  + dist(autoDetected.pw_low),  clr: '#475569' },
+            orH    && { label: 'OR Hi',  val: fmt(orH) + dist(orH),  clr: '#94a3b8' },
+            orL    && { label: 'OR Lo',  val: fmt(orL) + dist(orL),  clr: '#94a3b8' },
+            autoDetected.ovn_high && { label: 'ONH', val: fmt(autoDetected.ovn_high) + dist(autoDetected.ovn_high), clr: '#94a3b8' },
+            autoDetected.ovn_low  && { label: 'ONL', val: fmt(autoDetected.ovn_low)  + dist(autoDetected.ovn_low),  clr: '#94a3b8' },
+            autoDetected.pw_high  && { label: 'PW Hi', val: fmt(autoDetected.pw_high) + dist(autoDetected.pw_high), clr: '#64748b' },
+            autoDetected.pw_low   && { label: 'PW Lo', val: fmt(autoDetected.pw_low)  + dist(autoDetected.pw_low),  clr: '#64748b' },
           ].filter(Boolean);
           return (
             <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(51,65,85,0.4)', borderRadius: 6 }}>
@@ -20446,7 +20895,7 @@ function AuctionReadModalContent({ nl, todayData }) {
         })()}
 
         {p1Bias && (
-          <div style={{ marginTop: 10, padding: '10px 14px', background: p1Dir === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Dir === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${biasClr[p1Dir] || '#475569'}40`, borderRadius: 7 }}>
+          <div style={{ marginTop: 10, padding: '10px 14px', background: p1Dir === 'LONG' ? 'rgba(34,197,94,0.07)' : p1Dir === 'SHORT' ? 'rgba(239,68,68,0.07)' : 'rgba(100,116,139,0.07)', border: `1px solid ${biasClr[p1Dir] || '#64748b'}40`, borderRadius: 7 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: biasClr[p1Dir] || '#94a3b8', marginBottom: 4 }}>PRE-MARKET BIAS: {p1Dir}</div>
             <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>{p1Bias.text}</div>
           </div>
@@ -20471,14 +20920,14 @@ function AuctionReadModalContent({ nl, todayData }) {
           const dist = v => v != null && nqNow != null ? ` (${nqNow > v ? '+' : ''}${Math.round(nqNow - v)})` : '';
           const chips = [
             orH    && { label: 'OR Hi',  val: fmt(orH) + dist(orH),   clr: '#94a3b8' },
-            or5mid && { label: 'OR Mid', val: fmt(or5mid) + dist(or5mid), clr: '#64748b' },
+            or5mid && { label: 'OR Mid', val: fmt(or5mid) + dist(or5mid), clr: '#94a3b8' },
             orL    && { label: 'OR Lo',  val: fmt(orL) + dist(orL),   clr: '#94a3b8' },
             aUp    && { label: 'A Up',   val: fmt(aUp) + dist(aUp),   clr: '#22c55e' },
             aDown  && { label: 'A Down', val: fmt(aDown) + dist(aDown), clr: '#ef4444' },
             autoDetected.today_or_range && autoDetected.avg_or_range && {
               label: 'OR Range',
               val: autoDetected.today_or_range.toFixed(0) + 'pts (' + Math.round(autoDetected.today_or_range / autoDetected.avg_or_range * 100) + '% avg)',
-              clr: autoDetected.today_or_range > autoDetected.avg_or_range * 1.5 ? '#ef4444' : autoDetected.today_or_range < autoDetected.avg_or_range * 0.6 ? '#fbbf24' : '#64748b',
+              clr: autoDetected.today_or_range > autoDetected.avg_or_range * 1.5 ? '#ef4444' : autoDetected.today_or_range < autoDetected.avg_or_range * 0.6 ? '#fbbf24' : '#94a3b8',
             },
           ].filter(Boolean);
           if (!chips.length) return null;
@@ -20501,7 +20950,7 @@ function AuctionReadModalContent({ nl, todayData }) {
                 : orCond === 'WIDE'   ? `wide (${autoDetected.today_or_range ? autoDetected.today_or_range.toFixed(0) + 'pts' : ''}) — reduce size 50%, wait 5-min sustain`
                 : orCond === 'EMOTIONAL' ? 'extreme — avoid A signals, fade exhaustion only'
                 : 'normal — standard sizing',
-            clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#64748b' },
+            clr: orCond === 'EMOTIONAL' ? '#ef4444' : (orCond === 'WIDE' || orCond === 'NARROW') ? '#fbbf24' : '#94a3b8' },
           { label: 'Opening call', val: openingCall?.replace(/_/g,' '),
             note: (openingCall?.includes('DRIVE') && !openingCall?.includes('TEST') && !openingCall?.includes('AUCTION')) ? 'strong directional intent — go with'
                 : openingCall?.includes('TEST_DRIVE') ? 'tested then drove — confirms direction'
@@ -20519,7 +20968,7 @@ function AuctionReadModalContent({ nl, todayData }) {
             clr: (aSignal?.includes('UP') && !aSignal?.includes('FAILED')) ? '#22c55e'
                : (aSignal?.includes('DOWN') && !aSignal?.includes('FAILED')) ? '#ef4444'
                : aSignal?.includes('FAILED') ? '#fbbf24'
-               : liveCtx?.cDown ? '#fda4af' : liveCtx?.cUp ? '#86efac' : '#475569' },
+               : liveCtx?.cDown ? '#fda4af' : liveCtx?.cUp ? '#86efac' : '#64748b' },
         ].map((f, i) => <FieldRow key={i} {...f} />)}
 
         {/* Live timeline events */}
@@ -20551,7 +21000,7 @@ function AuctionReadModalContent({ nl, todayData }) {
 
         {/* Session bias */}
         {sessionBias ? (
-          <div style={{ marginTop: 10, padding: '10px 14px', background: `${lvlClr[sessionBias.level] || '#475569'}10`, border: `2px solid ${lvlClr[sessionBias.level] || '#475569'}`, borderRadius: 7 }}>
+          <div style={{ marginTop: 10, padding: '10px 14px', background: `${lvlClr[sessionBias.level] || '#64748b'}10`, border: `2px solid ${lvlClr[sessionBias.level] || '#64748b'}`, borderRadius: 7 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: lvlClr[sessionBias.level] || '#94a3b8', marginBottom: 4 }}>SESSION BIAS: {sessionBias.level}</div>
             <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>{sessionBias.text}</div>
           </div>
@@ -20568,7 +21017,7 @@ function AuctionReadModalContent({ nl, todayData }) {
 
       {/* ── END OF DAY READ ───────────────────────────────────────────── */}
       <div style={sectionStyle}>
-        <PhaseHdr num={4} title="End of Day" timeNote={isAfter4pm ? null : "after 4:00 PM ET"} accent="#64748b" />
+        <PhaseHdr num={4} title="End of Day" timeNote={isAfter4pm ? null : "after 4:00 PM ET"} accent="#94a3b8" />
         <EODContent />
       </div>
 
@@ -20737,7 +21186,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
       <div>
         <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.12em' }}>{title}</span>
-        {sub && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 6, fontFamily: 'monospace' }}>{sub}</span>}
+        {sub && <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 6, fontFamily: 'monospace' }}>{sub}</span>}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
         {updatedAt[id] && <span style={{ fontSize: 13, color: '#cbd5e1', fontFamily: 'monospace' }}>↻ {updatedAt[id]}</span>}
@@ -20771,7 +21220,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
           <div>
             <div style={{ fontSize: 15, fontWeight: 900, color: dts2.color, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{dtc.replace(/_/g,' ')}</div>
             {ls.dayType?.playbook && <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.45 }}>{ls.dayType.playbook.slice(0,80)}</div>}
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
           </div>
         );
       }
@@ -20793,7 +21242,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
           <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.5 }}>
             {invNote} · {valLabel}{ovnRange ? ` · ${ovnRange}pt range` : ''}
           </div>
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4, fontStyle: 'italic' }}>confirms at 9:30 ET</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, fontStyle: 'italic' }}>confirms at 9:30 ET</div>
         </div>
       );
     }
@@ -20835,7 +21284,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
           </div>
           {lsFor[0] && <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3 }}><span style={{ color: LR_TEAL, fontWeight: 700 }}>↑</span> {lsFor[0].point}</div>}
           {lsAgainst[0] && <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.3, marginTop: 2 }}><span style={{ color: LR_CORAL, fontWeight: 700 }}>↓</span> {lsAgainst[0].point}</div>}
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
         </div>
       );
     }
@@ -20885,7 +21334,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <span style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>{lsState === 'RESOLVED' ? 'No trigger' : 'Watching'}</span>
             </div>
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
           </>
         );
       }
@@ -20904,7 +21353,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
               <span style={{ fontSize: 14, fontWeight: 800, color: lsClr, textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'help' }}>{(lsSetup.type||'').replace(/_/g,' ')}</span>
             </InfoTooltip>
             {lsFiredAtDisplay && (
-              <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', marginLeft: 4 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', marginLeft: 4 }}>
                 ({lsFiredAtDisplay})
               </span>
             )}
@@ -20918,7 +21367,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
               </div>
             ))}
           </div>
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {ls.date}</div>
         </>
       );
     }
@@ -20930,13 +21379,13 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
     );
     if (tState === 'RESOLVED') return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#64748b', flexShrink: 0 }} />
         <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase' }}>{(c?.trigger?.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}</span>
       </div>
     );
     if (!tSetup) return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#64748b', flexShrink: 0 }} />
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#94a3b8', flexShrink: 0 }} />
         <span style={{ fontSize: 13, color: '#94a3b8', fontStyle: 'italic' }}>Watching for session setups...</span>
       </div>
     );
@@ -20949,7 +21398,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
             <span style={{ fontSize: 14, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'help' }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
           </InfoTooltip>
           {firedAtDisplay && (
-            <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace', marginLeft: 4 }}>
+            <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', marginLeft: 4 }}>
               ({firedAtDisplay})
             </span>
           )}
@@ -20991,7 +21440,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
         if (!lsLevels.length) return (
           <>
             <span style={{ fontSize: 12, color: '#cbd5e1', fontStyle: 'italic' }}>No levels</span>
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {lastSession.date}</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {lastSession.date}</div>
           </>
         );
         return (
@@ -21005,13 +21454,13 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
                 </div>
               ))}
             </div>
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6, fontStyle: 'italic' }}>last session · {lastSession.date}</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6, fontStyle: 'italic' }}>last session · {lastSession.date}</div>
           </div>
         );
       }
       return (
         <div>
-          {latest && <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 5, fontFamily: 'monospace' }}>NQ {latest} <span style={{ color: '#64748b' }}>overnight</span></div>}
+          {latest && <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 5, fontFamily: 'monospace' }}>NQ {latest} <span style={{ color: '#94a3b8' }}>overnight</span></div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {sorted.map((lv, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -21129,13 +21578,13 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
         {nqNow && (
           <div style={{ display: 'flex', gap: 10, fontSize: 13, fontFamily: 'monospace', flexWrap: 'wrap' }}>
             {aUp && (
-              <span style={{ color: nqNow >= aUp ? '#22c55e' : '#64748b' }}>
-                A↑ {Math.round(aUp)} <span style={{ color: nqNow >= aUp ? '#22c55e' : '#475569' }}>({dist(aUp)})</span>
+              <span style={{ color: nqNow >= aUp ? '#22c55e' : '#94a3b8' }}>
+                A↑ {Math.round(aUp)} <span style={{ color: nqNow >= aUp ? '#22c55e' : '#64748b' }}>({dist(aUp)})</span>
               </span>
             )}
             {aDown && (
-              <span style={{ color: nqNow <= aDown ? '#ef4444' : '#64748b' }}>
-                A↓ {Math.round(aDown)} <span style={{ color: nqNow <= aDown ? '#ef4444' : '#475569' }}>({dist(aDown)})</span>
+              <span style={{ color: nqNow <= aDown ? '#ef4444' : '#94a3b8' }}>
+                A↓ {Math.round(aDown)} <span style={{ color: nqNow <= aDown ? '#ef4444' : '#64748b' }}>({dist(aDown)})</span>
               </span>
             )}
             {gLine && (
@@ -21291,7 +21740,7 @@ function SetupsPanel({ dayType, bias, autoASignal, onOpenSetup }) {
         Today's Setups
       </div>
       {setups.length === 0 && (
-        <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.6, textAlign: 'center', padding: '20px 0' }}>
+        <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, textAlign: 'center', padding: '20px 0' }}>
           No setups have fired yet today.
         </div>
       )}
@@ -21409,7 +21858,7 @@ function SetupCard({ s, dtClass, bias, autoASignal, hitRatesData, onOpenSetup })
               ● LIVE
             </span>
           ) : (
-            <span style={{ fontSize: 11, fontWeight: 700, color: resInfo?.color || '#64748b', background: `${resInfo?.color || '#64748b'}1a`, border: `1px solid ${resInfo?.color || '#64748b'}55`, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: resInfo?.color || '#94a3b8', background: `${resInfo?.color || '#94a3b8'}1a`, border: `1px solid ${resInfo?.color || '#94a3b8'}55`, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.06em' }}>
               {resInfo?.label || s.status || 'RESOLVED'}
             </span>
           )}
@@ -21417,9 +21866,9 @@ function SetupCard({ s, dtClass, bias, autoASignal, hitRatesData, onOpenSetup })
       </div>
 
       <div style={{ display: 'flex', gap: 16, fontSize: 13, fontFamily: 'monospace', marginBottom: 8, color: '#cbd5e1' }}>
-        <div><span style={{ color: '#64748b' }}>Entry </span>{fmtPx(s.entry_zone_low)}{(s.entry_zone_high != null && s.entry_zone_high !== s.entry_zone_low) ? `–${fmtPx(s.entry_zone_high)}` : ''}</div>
-        <div><span style={{ color: '#64748b' }}>Stop </span><span style={{ color: '#ef4444' }}>{fmtPx(s.stop_level)}</span></div>
-        <div><span style={{ color: '#64748b' }}>T1 </span><span style={{ color: '#22c55e' }}>{fmtPx(s.t1_level)}</span>{s.t1_label ? ` (${s.t1_label})` : ''}</div>
+        <div><span style={{ color: '#94a3b8' }}>Entry </span>{fmtPx(s.entry_zone_low)}{(s.entry_zone_high != null && s.entry_zone_high !== s.entry_zone_low) ? `–${fmtPx(s.entry_zone_high)}` : ''}</div>
+        <div><span style={{ color: '#94a3b8' }}>Stop </span><span style={{ color: '#ef4444' }}>{fmtPx(s.stop_level)}</span></div>
+        <div><span style={{ color: '#94a3b8' }}>T1 </span><span style={{ color: '#22c55e' }}>{fmtPx(s.t1_level)}</span>{s.t1_label ? ` (${s.t1_label})` : ''}</div>
       </div>
 
       <div style={{ fontSize: 14, marginBottom: (flags.length || convictionNote) ? 4 : 0 }}>
@@ -21697,7 +22146,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
                 {caseFor.map((item, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.35 }}>
                     {!item.confirmed && <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>〈</span>}
-                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#94a3b8' }}>{item.point}</span>
                     {item.value && (
                       <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>
                     )}
@@ -21715,7 +22164,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
                 {caseAgainst.map((item, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 5, lineHeight: 1.35 }}>
                     {!item.confirmed && <span style={{ fontSize: 11, color: '#94a3b8', flexShrink: 0 }}>〈</span>}
-                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#64748b' }}>{item.point}</span>
+                    <span style={{ fontSize: 13, color: item.confirmed ? '#cbd5e1' : '#94a3b8' }}>{item.point}</span>
                     {item.value && (
                       <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>{item.value}</span>
                     )}
@@ -21764,7 +22213,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
                       {ev.value}
                     </span>
                   )}
-                  <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', flexShrink: 0 }}>
+                  <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>
                     {typeof ev.time === 'string' ? ev.time.slice(11, 16) : ''}
                   </span>
                 </div>
@@ -21782,7 +22231,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#1e293b', border: '2px solid #334155', flexShrink: 0 }} />
-              <span style={{ fontSize: 14, fontWeight: 700, color: '#64748b', letterSpacing: '0.04em' }}>WATCHING</span>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em' }}>WATCHING</span>
             </div>
             <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.55 }}>
               No actionable setup. Trigger activates when impact score ≥ 6 with delta alignment, NL30 aligned, validated setup type, and R:R ≥ 2.0.
@@ -21797,7 +22246,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
 
         {tState === 'RESOLVED' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#475569', flexShrink: 0 }} />
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#64748b', flexShrink: 0 }} />
             <div>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                 {(trigger.resolvedReason || 'RESOLVED').replace(/_/g, ' ')}
@@ -21856,7 +22305,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
                     const negative = line.startsWith('-');
                     return (
                       <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 13, color: '#cbd5e1', lineHeight: 1.35 }}>
-                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: positive ? LR_TEAL : negative ? LR_CORAL : '#64748b', flexShrink: 0, minWidth: 22 }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: positive ? LR_TEAL : negative ? LR_CORAL : '#94a3b8', flexShrink: 0, minWidth: 22 }}>
                           {positive ? '+' : negative ? '−' : ''}
                         </span>
                         <span style={{ color: '#94a3b8' }}>{line.replace(/^[+-]\d+\s*/, '')}</span>
@@ -22135,7 +22584,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                   ].map((t, i) => (
                     <div key={i} style={{ padding: '8px 10px', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 6 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', marginBottom: 3 }}>{t.name}</div>
-                      <div style={{ fontSize: 10, color: '#64748b', lineHeight: 1.4 }}>{t.desc}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.4 }}>{t.desc}</div>
                     </div>
                   ))}
                 </div>
@@ -22152,22 +22601,24 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                     </thead>
                     <tbody>
                       {[
-                        { name: 'VWAP Magnet', edge: '62% WR', freq: '7.4/day', ctx: 'BALANCE 79%, range-scaled threshold', tests: '90d bar backtest, range-scaled, 30bar cooldown', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'PD_POC Fade', edge: '64% WR', freq: '1.2/day', ctx: 'Best 12-2PM (70%), TREND days 83%', tests: '90d bar backtest, 14 dimensions cross-cut', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'Floor S1 Fade', edge: '61% WR', freq: '0.9/day', ctx: 'BALANCE 77%, 12-2PM 75%', tests: '90d bar backtest, coil analysis', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'OR High Fade', edge: '57% WR', freq: '2.8/day', ctx: 'Tue 71%, coils 79% after 3+L', tests: '90d bar backtest, DOW analysis', status: 'ACTIVE', color: '#34d399' },
-                        { name: 'IB High Fade', edge: '58% WR', freq: '2.6/day', ctx: 'Wed 70%, 12-2PM 64%', tests: '90d bar backtest, DOW analysis', status: 'ACTIVE', color: '#34d399' },
-                        { name: 'Absorption Long', edge: '+18.4%', freq: '10% days', ctx: 'BALANCE 73.9%, @PD1-VA 90.9%', tests: 'Full history (2.5yr), Day type, NL30, OR width, Confluence, Target cal', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'VA_RESP_SHORT', edge: '+17.4%', freq: '0.25/day', ctx: 'TURB 90%, NL30-aligned 93%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'OPEN_DRIVE_LONG', edge: '+15.9%', freq: '0.17/day', ctx: 'TREND 83%, tight OR +14%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'OPEN_DRIVE_SHORT', edge: '+18.9%', freq: '0.09/day', ctx: '@VA 78%, tight OR +45%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#10b981' },
-                        { name: 'IB_BEARISH', edge: '+1.3%', freq: '0.37/day', ctx: 'TREND 73%, tight OR +15%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#34d399' },
-                        { name: 'BRACKET_BK_LONG', edge: '+4.4%', freq: '0.20/day', ctx: '@PD1-VA 73%, wide OR +11%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'ACTIVE', color: '#34d399' },
-                        { name: 'TRT_LONG', edge: '+24% @20bar', freq: '0.12/day', ctx: 'TREND 100%, 120min expiry', tests: 'Fwd WR, Bracket, OR Width', status: 'ACTIVE', color: '#f59e0b' },
-                        { name: 'OTD_LONG', edge: '+0.6%', freq: '0.31/day', ctx: 'Marginal edge', tests: 'Fwd WR, Bracket, OR Width', status: 'ACTIVE', color: '#64748b' },
-                        { name: 'C_STANDALONE_DOWN', edge: '-12% / +32% @PD2', freq: '0.49/day', ctx: 'PD-2 VA only (81%)', tests: 'Fwd WR, Bracket, Confluence', status: 'GATED', color: '#f59e0b' },
-                        { name: 'OTD_SHORT', edge: '-5.6% / +23% @PD2', freq: '0.29/day', ctx: 'PD-2 VA only, tight OR +32%', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'GATED', color: '#f59e0b' },
-                        { name: 'IB_BULLISH', edge: '-7.5%', freq: '0.34/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence, OR Width', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'PD_POC Fade', edge: '85% WR', freq: '~1/day', ctx: '$38/trade, system anchor (22% of P&L)', tests: '180d system backtest, MAE/MFE audit, regime analysis', status: 'ACTIVE', color: '#10b981' },
+                        { name: '5D OR MID Fade', edge: '94% WR', freq: '~0.5/day', ctx: '$64/trade, rolling composite star', tests: '180d system backtest, rolling composite audit', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'PD VAL Fade', edge: '82% WR', freq: '~0.8/day', ctx: '$31/trade, consistent performer', tests: '180d system backtest, MAE/MFE audit', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'PD IB MID Fade', edge: '83% WR', freq: '~0.5/day', ctx: '$36/trade, tightest MAE (20pt)', tests: '180d system backtest, PD IB/OR audit', status: 'ACTIVE', color: '#10b981' },
+                        { name: 'PD VAH Fade', edge: '77% WR', freq: '~1.2/day', ctx: '$17/trade, high frequency', tests: '180d system backtest, MAE/MFE audit', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'Floor Pivot Fade', edge: '80% WR', freq: '~0.9/day', ctx: '$16/trade, structural level', tests: '180d system backtest, MAE/MFE audit', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'OR High Fade', edge: '77% WR', freq: '~0.8/day', ctx: '$14/trade, AM session', tests: '180d system backtest, MAE/MFE audit', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'Floor R1 Fade', edge: '77% WR', freq: '~0.6/day', ctx: '$17/trade, Thu 1PM specialist', tests: '180d system backtest, DOW analysis', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'PD OR MID Fade', edge: '80% WR', freq: '~0.5/day', ctx: '$15/trade, AM session', tests: '180d system backtest, PD IB/OR audit', status: 'ACTIVE', color: '#34d399' },
+                        { name: 'VWAP Magnet', edge: '62% WR', freq: '7.4/day', ctx: 'NOT a scalp (negative EV at tight stops). Wide fade only.', tests: '180d MAE/MFE audit', status: 'CONTEXT', color: '#94a3b8' },
+                        { name: 'IB_BEARISH', edge: '54% dir', freq: '0.37/day', ctx: 'Directional context — lean short. Not a trade entry.', tests: '180d MAE audit: 161pt MAE, negative EV as scalp', status: 'CONTEXT', color: '#94a3b8' },
+                        { name: 'IB_BULLISH', edge: '63% dir', freq: '0.34/day', ctx: 'Directional context — lean long. Best ACD signal.', tests: '180d MAE audit: 151pt MAE, negative EV as scalp', status: 'CONTEXT', color: '#94a3b8' },
+                        { name: 'TRT_LONG', edge: '69% WR', freq: '0.12/day', ctx: 'Only +EV mechanical setup ($6/trade). High MAE (128pt).', tests: '180d system backtest, MAE/MFE audit', status: 'CONTEXT', color: '#f59e0b' },
+                        { name: 'OPEN_DRIVE', edge: '40-52%', freq: '0.15/day', ctx: 'Directional context. Negative EV as entry. Use for lean.', tests: '180d MAE audit: -$25 to -$44/trade', status: 'CONTEXT', color: '#94a3b8' },
+                        { name: 'VA_RESP', edge: '12-25%', freq: '0.25/day', ctx: '17pt stop vs 152pt MAE. Signal is right, stop kills it.', tests: '180d MAE audit: BROKEN as mechanical entry', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'TRT_SHORT', edge: '0% WR', freq: '0.07/day', ctx: 'Zero wins in 180 days.', tests: '180d system backtest', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'OTD_SHORT', edge: '23% WR', freq: '0.29/day', ctx: 'Negative EV across all contexts.', tests: '180d MAE/entry audit', status: 'REMOVED', color: '#ef4444' },
+                        { name: 'BRACKET_BK_LONG', edge: '25% WR', freq: '0.20/day', ctx: 'Negative EV. 139pt MAE.', tests: '180d MAE audit', status: 'REMOVED', color: '#ef4444' },
                         { name: 'C_STANDALONE_UP', edge: '-6.5%', freq: '0.51/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence', status: 'REMOVED', color: '#ef4444' },
                         { name: 'VA_RESP_LONG', edge: '-5.0%', freq: '0.14/day', ctx: 'Negative all contexts', tests: 'Fwd WR, Bracket, Confluence', status: 'REMOVED', color: '#ef4444' },
                         { name: 'TRT_SHORT', edge: '-10.1%', freq: '0.10/day', ctx: 'Tight OR 100% N=6 only', tests: 'Fwd WR, Bracket, OR Width', status: 'REMOVED', color: '#ef4444' },
@@ -22177,8 +22628,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                           <td style={{ padding: '5px 8px', color: s.color, fontWeight: 700 }}>{s.edge}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.ctx}</td>
-                          <td style={{ padding: '5px 8px', color: '#64748b', fontSize: 10 }}>{s.tests}</td>
-                          <td style={{ padding: '5px 8px' }}><span style={{ fontSize: 9, fontWeight: 800, color: s.color, background: `${s.color}20`, padding: '1px 5px', borderRadius: 3 }}>{s.status}</span></td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px' }}><span style={{ fontSize: 11, fontWeight: 800, color: s.color, background: `${s.color}20`, padding: '1px 5px', borderRadius: 3 }}>{s.status}</span></td>
                         </tr>
                       ))}
                     </tbody>
@@ -22207,7 +22658,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                           <td style={{ padding: '5px 8px', color: '#10b981', fontWeight: 700 }}>{s.wr}</td>
                           <td style={{ padding: '5px 8px', color: '#34d399' }}>{s.edge}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
-                          <td style={{ padding: '5px 8px', color: '#64748b', fontSize: 10 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.tests}</td>
                           <td style={{ padding: '5px 8px', color: '#f59e0b', fontSize: 10 }}>{s.why}</td>
                         </tr>
                       ))}
@@ -22259,12 +22710,12 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                   ].map((a, i) => (
                     <div key={i} style={{ flex: 1, padding: '6px 10px', background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 6 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: '#f87171' }}>{a.name}: {a.delta}</div>
-                      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>{a.note}</div>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{a.note}</div>
                     </div>
                   ))}
                 </div>
 
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Not Yet Fully Tested</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Not Yet Fully Tested</div>
                 <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
                   • <strong>Coiling/Vol Expansion</strong> — FULLY TESTED this session. Now active as COIL_SURGE setup. Directional pop is a coin flip, but VWAP fade on TREND days = 65.3% WR. Gated to TREND/NL30-aligned.<br />
                   • <strong>RSI Divergence</strong> — tested with forward-bar WR and confirmation filter, but NOT controlled test (no confound isolation). Edge is directional, not structurally validated.<br />
@@ -22735,8 +23186,8 @@ function SessionRiskGate({ settings }) {
 
   const barColor = pctUsed < 50 ? '#22c55e' : pctUsed < 75 ? '#fbbf24' : '#ef4444';
 
-  const phaseColors = { pre: '#64748b', active: '#22c55e', limit_hit: '#ef4444', closed: '#64748b' };
-  const borderColor = phaseColors[phase] || '#64748b';
+  const phaseColors = { pre: '#94a3b8', active: '#22c55e', limit_hit: '#ef4444', closed: '#94a3b8' };
+  const borderColor = phaseColors[phase] || '#94a3b8';
 
   return (
     <div style={{ background: 'var(--card-bg)', border: `2px solid ${borderColor}`, borderRadius: 10, padding: '12px 20px', marginBottom: 16 }}>

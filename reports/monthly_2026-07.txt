@@ -1,0 +1,38 @@
+TRADING JOURNAL — MONTHLY REPORT
+Month         : 2026-07  (2026-07-01 – 2026-07-31)
+Generated     : 2026-07-01T04:00:09.368Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 0
+Total P&L     : +$0.00
+Daily avg     : +$0.00
+Daily σ       : $0.00
+Win days      : 0 / 0 (N/A)
+
+SETUP STATISTICS
+----------------------------------------
+No setups this month.
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+No ACD data this month.
+
+EDGE VALIDATION (confluence buckets)
+----------------------------------------
+No resolved setups for edge validation.
+
+BACKTEST DRIFT
+----------------------------------------
+Insufficient resolved setups (min 5) for drift analysis this month.
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this month.
+
+INTERPRETATION (AI)
+----------------------------------------
+(Anthropic API error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-4-20250514"},"request_id":"req_011CcafnD9WfpkVyEaJWhry3"})
+
+============================================================

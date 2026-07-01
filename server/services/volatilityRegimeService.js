@@ -14,6 +14,8 @@
 
 import { query } from '../db.js';
 
+const baselineCache = new Map();
+
 const N_BASELINE = 60;
 const MORNING_END_MIN = 630; // 10:30 ET
 const RTH_START_MIN = 570;   // 9:30 ET
@@ -108,6 +110,10 @@ function computeTextureMetrics(bars) {
 
 // Trailing-20-session baseline of morning vol AND avg 1-min bar range, ending before `todayET`.
 async function getMorningVolBaseline(todayET) {
+  if (baselineCache.has(todayET)) {
+    return baselineCache.get(todayET);
+  }
+
   const barsQ = await query(`
     SELECT DISTINCT ON (ts) ts::date::text as d,
       (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
@@ -158,7 +164,14 @@ async function getMorningVolBaseline(todayET) {
   const avgSessionRangeMean = sessionRanges.length > 0
     ? sessionRanges.reduce((s, x) => s + x, 0) / sessionRanges.length
     : null;
-  return { mean, sd, pct80, pct20, n: vols.length, avgBarRangeMean, avgSessionRangeMean };
+  const result = { mean, sd, pct80, pct20, n: vols.length, avgBarRangeMean, avgSessionRangeMean };
+  baselineCache.set(todayET, result);
+  
+  if (baselineCache.size > 5) {
+    const firstKey = baselineCache.keys().next().value;
+    baselineCache.delete(firstKey);
+  }
+  return result;
 }
 
 export async function computeLiveVolatilityRegime() {
@@ -242,10 +255,13 @@ export async function computeLiveVolatilityRegime() {
   const morningLow = oneMin.length > 0 ? Math.min(...oneMin.map(b => b.low)) : null;
   const morningRange = morningHigh != null && morningLow != null ? morningHigh - morningLow : null;
 
-  // Texture metrics on full RTH session (9:30 to now, not capped at morning)
+  // Texture metrics on full RTH session AND first-hour separately
   const textureRaw = computeTextureMetrics(allRTHBars);
+  const morningBarsForTexture = allRTHBars.filter(b => b.et_min < 630);
+  const morningTexture = computeTextureMetrics(morningBarsForTexture);
   const texture = textureRaw ? {
     ...textureRaw,
+    morningEfficiency: morningTexture?.efficiencyRatio ?? null,
     baselineAvgBarRange: baseline.avgBarRangeMean,
     barRangePct: baseline.avgBarRangeMean && textureRaw.avgBarRange
       ? (textureRaw.avgBarRange / baseline.avgBarRangeMean - 1) * 100

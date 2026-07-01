@@ -86,8 +86,32 @@ function levelHolding(bars, levelPrice, role, proximityPts = 10, n = 2) {
   return false;
 }
 
-// Opening type from first 5 bars
-export function classifyOpeningType(bars) {
+// Compute dynamic opening thresholds from recent session first-5-bar data.
+// recentFirst5: array of { drift, range5 } objects from prior sessions.
+// Falls back to hardcoded values derived from 405-session NQ baseline if sample too small.
+export function computeOpeningThresholds(recentFirst5 = []) {
+  if (recentFirst5.length < 20) {
+    return { driveDrift: 20, auctionDrift: 12, auctionRange: 35, testRange: 18, testReturn: 8, retracePts: 3 };
+  }
+  const drifts = recentFirst5.map(s => s.drift);
+  const ranges = recentFirst5.map(s => s.range5);
+  const driftMean = drifts.reduce((a,b)=>a+b,0) / drifts.length;
+  const driftStd  = Math.sqrt(drifts.map(d=>(d-driftMean)**2).reduce((a,b)=>a+b,0) / drifts.length);
+  const rangeMean = ranges.reduce((a,b)=>a+b,0) / ranges.length;
+  const rangeStd  = Math.sqrt(ranges.map(r=>(r-rangeMean)**2).reduce((a,b)=>a+b,0) / ranges.length);
+  return {
+    driveDrift:   Math.round(Math.abs(driftMean) + driftStd),      // 1σ above mean |drift|
+    auctionDrift: Math.round(driftStd * 0.55),                     // within ~0.5σ
+    auctionRange: Math.round(rangeMean - rangeStd * 0.4),          // below ~35th pct
+    testRange:    Math.round(rangeMean * 0.38),                    // ~40% of mean range
+    testReturn:   Math.round(driftStd * 0.38),
+    retracePts:   Math.max(2, Math.round(rangeStd * 0.12)),
+  };
+}
+
+// Opening type from first 5 bars.
+// thresholds: optional result of computeOpeningThresholds(); falls back to NQ baseline values.
+export function classifyOpeningType(bars, thresholds = null) {
   if (bars.length < 5) return 'FORMING';
   const first5  = bars.slice(0, 5);
   const open    = Number(first5[0].open);
@@ -97,22 +121,52 @@ export function classifyOpeningType(bars) {
   const range5  = high5 - low5;
   const drift   = close5 - open;
 
+  const t = thresholds || { driveDrift: 20, auctionDrift: 12, auctionRange: 35, testRange: 18, testReturn: 8, retracePts: 3 };
+
   // Open Drive: every bar extends same direction, no meaningful retracement
-  const driveLong  = drift >  20 && first5.every((b,i) => i === 0 || Number(b.low)  >= Number(first5[i-1].low)  - 3);
-  const driveShort = drift < -20 && first5.every((b,i) => i === 0 || Number(b.high) <= Number(first5[i-1].high) + 3);
+  const driveLong  = drift >  t.driveDrift  && first5.every((b,i) => i === 0 || Number(b.low)  >= Number(first5[i-1].low)  - t.retracePts);
+  const driveShort = drift < -t.driveDrift  && first5.every((b,i) => i === 0 || Number(b.high) <= Number(first5[i-1].high) + t.retracePts);
   if (driveLong)  return 'OPEN_DRIVE_LONG';
   if (driveShort) return 'OPEN_DRIVE_SHORT';
 
   // Open Auction: closes near open, range tight
-  if (Math.abs(drift) < 12 && range5 < 35) return 'OPEN_AUCTION';
+  if (Math.abs(drift) < t.auctionDrift && range5 < t.auctionRange) return 'OPEN_AUCTION';
 
   // Open Test Drive: initial probe one way, then reversed
-  if (range5 > 18) {
-    if (low5 < open - 8  && close5 > open + 8)  return 'OPEN_TEST_DRIVE_LONG';
-    if (high5 > open + 8 && close5 < open - 8)  return 'OPEN_TEST_DRIVE_SHORT';
+  if (range5 > t.testRange) {
+    if (low5 < open - t.testReturn  && close5 > open + t.testReturn)  return 'OPEN_TEST_DRIVE_LONG';
+    if (high5 > open + t.testReturn && close5 < open - t.testReturn)  return 'OPEN_TEST_DRIVE_SHORT';
   }
 
   return 'OPEN_BALANCED';
+}
+
+// Rolling opening-bar thresholds — cached per trade date.
+// Loaded once per session from last-30-sessions first-5-bar data; cheap query (150 rows max).
+let _openingThresholdsCache = null;
+let _openingThresholdsCachedDate = null;
+
+async function getOpeningThresholds(tradeDate) {
+  if (_openingThresholdsCachedDate === tradeDate && _openingThresholdsCache) return _openingThresholdsCache;
+  const r = await query(`
+    WITH first5 AS (
+      SELECT ts::date::text as d,
+        (ARRAY_AGG(open ORDER BY ts))[1]::float  as open0,
+        (ARRAY_AGG(close ORDER BY ts))[5]::float as close5,
+        MAX(high)::float as high5, MIN(low)::float as low5
+      FROM price_bars_primary
+      WHERE symbol = 'NQ'
+        AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 574
+      GROUP BY ts::date HAVING COUNT(*) >= 5
+      ORDER BY ts::date DESC LIMIT 30
+    )
+    SELECT (close5 - open0)::float as drift, (high5 - low5)::float as range5 FROM first5
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  const t = computeOpeningThresholds(r.rows);
+  _openingThresholdsCache = t;
+  _openingThresholdsCachedDate = tradeDate;
+  return t;
 }
 
 // Live day-type classifier accuracy — computed from daytype_accuracy_log
@@ -193,7 +247,13 @@ export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accur
   // Use ACD signals to override opening type when available
   const effectiveLong = aUpFired ? true : aDownFired ? false : longDrive;
   const effectiveShort = aDownFired ? true : aUpFired ? false : shortDrive;
-  const alignedTrend = (isDrive || aUpFired || aDownFired) && wideOR && ((effectiveLong && nlBull) || (effectiveShort && nlBear));
+  // ACD C confirmation overrides NL for trend alignment — today's price action is stronger than 30-day score
+  const cConfirmedLong = cUpConfirmed && !cDownConfirmed;
+  const cConfirmedShort = cDownConfirmed && !cUpConfirmed;
+  const alignedTrend = (isDrive || aUpFired || aDownFired) && wideOR && (
+    (effectiveLong && (nlBull || cConfirmedLong)) ||
+    (effectiveShort && (nlBear || cConfirmedShort))
+  );
 
   if (alignedTrend) {
     const long = effectiveLong;
@@ -552,7 +612,8 @@ export async function computeCase(tradeDate, asOf) {
 
   // 1. Bars up to asOf (RTH only, no lookahead)
   const barsQ = await query(`
-    SELECT ts, open::float, high::float, low::float, close::float,
+    SELECT ts, (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
+           open::float, high::float, low::float, close::float,
            volume::int, bid_volume::int, ask_volume::int
     FROM price_bars_primary
     WHERE symbol = 'NQ' AND ts::date = $1
@@ -563,8 +624,14 @@ export async function computeCase(tradeDate, asOf) {
   const bars = barsQ.rows;
 
   if (!bars.length) {
-    return { error: 'No RTH bar data for this date/time', asOf: asOfFull, tradeDate };
+    const dow = new Date(tradeDate + 'T12:00:00').getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    return { noData: true, isWeekend, asOf: asOfFull, tradeDate };
   }
+
+  // Minutes-since-midnight ET of the most recent ingested bar — reflects data
+  // freshness (last bar loaded), distinct from `asOf` which is just the requested time.
+  const lastBarEtMin = bars[bars.length - 1].et_min;
 
   const sessionOpen = bars.length ? Number(bars[0].open) : null;
   const devProfile = computeProfile(bars);
@@ -902,7 +969,10 @@ export async function computeCase(tradeDate, asOf) {
     pwHigh   && { price: pwHigh,   label: 'Prior Week High',   timeframes: ['WEEKLY'],   role: 'RESISTANCE' },
     pwLow    && { price: pwLow,    label: 'Prior Week Low',    timeframes: ['WEEKLY'],   role: 'SUPPORT'    },
     gLine    && { price: gLine,    label: 'G-Line (WK Open)',  timeframes: ['WEEKLY'],   role: currentPrice >= gLine ? 'SUPPORT' : 'RESISTANCE' },
-    ...structLevels.map(sl => ({
+    // PRIOR_WEEK_*/OVERNIGHT_* excluded here — already added explicitly above
+    // (pwHigh/pwLow/onHigh/onLow use their own dedicated live queries with
+    // different windows; including both would duplicate the same levels under two labels).
+    ...structLevels.filter(sl => !sl.type.startsWith('PRIOR_WEEK_') && !sl.type.startsWith('OVERNIGHT_')).map(sl => ({
       price: sl.price,
       label: sl.type.replace(/_/g, ' '),
       timeframes: ['DAILY'],
@@ -920,10 +990,11 @@ export async function computeCase(tradeDate, asOf) {
     const absDist  = Math.abs(dist);
     // Match label to conviction key
     const cvKeyMap = {
-      'IB High': 'ib_high', 'IB Low': 'ib_low',
-      'OVERNIGHT HIGH': 'overnight_high',
+      'IB HIGH': 'ib_high', 'IB LOW': 'ib_low',
+      'OVERNIGHT HIGH': 'overnight_high', 'OVERNIGHT LOW': 'overnight_low',
       'PRIOR WEEK HIGH': 'prior_week_high', 'PRIOR WEEK LOW': 'prior_week_low',
-      'COMPOSITE VAH': 'composite_vah', 'COMPOSITE VAL': 'composite_val',
+      'COMPOSITE VAH': 'composite_vah', 'COMPOSITE VAL': 'composite_val', 'COMPOSITE POC': 'composite_poc',
+      'PRIOR DAY VAH': 'prior_day_vah', 'PRIOR DAY VAL': 'prior_day_val', 'PRIOR DAY POC': 'prior_day_poc',
       'BRACKET HIGH': 'bracket_high', 'BRACKET LOW': 'bracket_low',
     };
     const cvKey = cvKeyMap[lv.label.toUpperCase()];
@@ -942,7 +1013,8 @@ export async function computeCase(tradeDate, asOf) {
   const failedAuctions = detectFailedAuctions(bars, resistancePx, supportPx);
 
   // 7. Opening type & day type
-  const openingType   = classifyOpeningType(bars);
+  const openingThresholds = await getOpeningThresholds(tradeDate);
+  const openingType   = classifyOpeningType(bars, openingThresholds);
   const accuracyStats = await getDayTypeAccuracyStats();
   const dayType       = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats, aUpFired: !!acd?.a_up_fired, aDownFired: !!acd?.a_down_fired, cUpConfirmed: !!acd?.c_up_confirmed, cDownConfirmed: !!acd?.c_down_confirmed });
 
@@ -1404,6 +1476,7 @@ export async function computeCase(tradeDate, asOf) {
     } else if (acd?.a_up_fired || acd?.a_down_fired) {
       // ACD signal fired but no qualifying setup — still show directional bias
       triggerState = 'ACTIVE';
+      const aEntryLvl = acd.a_up_fired ? parseFloat(acd.a_up_level) : parseFloat(acd.a_down_level);
       trigger = {
         active: true,
         state: 'ACTIVE',
@@ -1412,9 +1485,10 @@ export async function computeCase(tradeDate, asOf) {
         setup: {
           type: acd.a_up_fired ? 'A_UP_SIGNAL' : 'A_DOWN_SIGNAL',
           direction: acd.a_up_fired ? 'LONG' : 'SHORT',
-          entry: currentPrice, stop: null, t1: null, rr: null,
+          entry: aEntryLvl || currentPrice, stop: null, t1: null, rr: null,
           stars: null, impactScore: 6, impactStack: [],
-          firedAt: null, rationale: [acd.a_up_fired ? 'A Up fired — bullish bias' : 'A Down fired — bearish bias'],
+          firedAt: acd.a_up_fired ? acd.a_up_time : acd.a_down_time,
+          rationale: [acd.a_up_fired ? 'A Up fired — bullish bias' : 'A Down fired — bearish bias'],
         },
       };
     }
@@ -1449,6 +1523,7 @@ export async function computeCase(tradeDate, asOf) {
   // ACD signal override: when A fires but no qualifying setup, still show direction
   if (trigger.state === 'WATCHING' && (acd?.a_up_fired || acd?.a_down_fired)) {
     const aDir = acd.a_up_fired ? 'LONG' : 'SHORT';
+    const aEntry = acd.a_up_fired ? parseFloat(acd.a_up_level) : parseFloat(acd.a_down_level);
     trigger = {
       active: true,
       state: 'ACTIVE',
@@ -1457,9 +1532,10 @@ export async function computeCase(tradeDate, asOf) {
       setup: {
         type: acd.a_up_fired ? 'A_UP_SIGNAL' : 'A_DOWN_SIGNAL',
         direction: aDir,
-        entry: currentPrice, stop: null, t1: null, rr: null,
+        entry: aEntry || currentPrice, stop: null, t1: null, rr: null,
         stars: null, impactScore: 6, impactStack: [],
-        firedAt: null, rationale: [acd.a_up_fired ? 'A Up fired' : 'A Down fired'],
+        firedAt: acd.a_up_fired ? acd.a_up_time : acd.a_down_time,
+        rationale: [acd.a_up_fired ? 'A Up fired' : 'A Down fired'],
       },
     };
   }
@@ -1516,7 +1592,7 @@ export async function computeCase(tradeDate, asOf) {
       avgVol: Math.round(avgVol), cumDelta, barsLoaded: bars.length,
       deltaConfirmed: !!deltaConf, volConfirmed: volConf.confirmed,
       sessionOpen, devPoc, priorPoc, pocChange, pocRoc,
-      poc2DayShift, poc2DayStreak,
+      poc2DayShift, poc2DayStreak, lastBarEtMin,
     },
   };
 }

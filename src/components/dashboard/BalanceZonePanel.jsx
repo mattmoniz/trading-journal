@@ -81,13 +81,13 @@ export default function BalanceZonePanel() {
     <div style={{ padding: '8px 14px', background: 'rgba(15,23,42,0.5)', border: `1px solid ${statusColor}30`, borderLeft: `3px solid ${statusColor}`, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 9, fontWeight: 800, color: statusColor, background: `${statusColor}18`, padding: '2px 6px', borderRadius: 3, letterSpacing: '0.04em' }}>{statusText}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: statusColor, background: `${statusColor}18`, padding: '2px 6px', borderRadius: 3, letterSpacing: '0.04em' }}>{statusText}</span>
           {hasZone && <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#cbd5e1' }}>{fmtP(bz.low)} — {fmtP(bz.high)}</span>}
-          {hasZone && <span style={{ color: '#64748b', fontSize: 11 }}>{bz.age}d · {Math.round(bz.high - bz.low)}pt</span>}
+          {hasZone && <span style={{ color: '#94a3b8', fontSize: 11 }}>{bz.age}d · {Math.round(bz.high - bz.low)}pt</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ color: '#94a3b8', fontSize: 11 }}>NQ: <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{fmtP(price)}</strong></span>
-          {nearest && <span style={{ color: '#64748b', fontSize: 10 }}>→ {nearest.name} {fmtP(nearest.price)} ({Math.round(nearest.dist)}pt)</span>}
+          {nearest && <span style={{ color: '#94a3b8', fontSize: 10 }}>→ {nearest.name} {fmtP(nearest.price)} ({Math.round(nearest.dist)}pt)</span>}
         </div>
       </div>
       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{contextText}</div>

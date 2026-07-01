@@ -184,7 +184,7 @@ export default function PreMarketWalkthrough() {
         A guided pre-market walkthrough — work through each layer in order, then commit a plan while calm.
         You fill in your own read at every step; the app only reflects it back. The goal is discipline:
         force the reasoning, ask whether the timeframes agree, and write the plan down before the bell.
-        {savedAt && <span style={{ marginLeft: 8, color: '#64748b', fontStyle: 'italic' }}>· last saved {savedAt} ET{saving ? ' · saving…' : ''}</span>}
+        {savedAt && <span style={{ marginLeft: 8, color: '#94a3b8', fontStyle: 'italic' }}>· last saved {savedAt} ET{saving ? ' · saving…' : ''}</span>}
       </div>
 
       {/* INITIAL BALANCE & VOLATILITY GUIDE */}
@@ -218,7 +218,7 @@ export default function PreMarketWalkthrough() {
                 When price approaches <strong>IB High</strong> or <strong>IB Low</strong>, monitor the Phase Change score. An alert score of <strong>3/5 to 5/5</strong> (combining declining volume, cumulative delta divergence, range compression, and profile stops) forecasts a failed breakout/reversal. Prepare to fade the test back to POC/Value Area.
               </p>
             </div>
-            <div style={{ gridColumn: '1 / -1', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 8, fontSize: '10px', color: '#64748b', fontStyle: 'italic', textAlign: 'right' }}>
+            <div style={{ gridColumn: '1 / -1', borderTop: '1px solid rgba(99,102,241,0.15)', paddingTop: 8, fontSize: '10px', color: '#94a3b8', fontStyle: 'italic', textAlign: 'right' }}>
               * Volatility stats, win rates, and targets are historical benchmarks and qualitative coaching heuristics, not live-measured account statistics.
             </div>
           </div>
@@ -325,7 +325,7 @@ export default function PreMarketWalkthrough() {
           </div>
         )}
         {!verdict && (
-          <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic', marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic', marginTop: 6 }}>
             Mark at least two layers to see whether your reasoning stacks or conflicts.
           </div>
         )}

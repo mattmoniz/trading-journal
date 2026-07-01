@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { confidenceTier } from '../../utils/confidenceTier.js';
 
 const API_URL = '/api';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -19,8 +20,8 @@ function DailyRecap({ date }) {
   return (
     <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.04)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 6, marginTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Daily Recap</span>
-        <span style={{ fontSize: 9, color: '#475569' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Daily Recap</span>
+        <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'monospace', color: pnlColor }}>${sc.totalPnl.toLocaleString()}</span>
       </div>
       {recap.session && (
@@ -35,7 +36,7 @@ function DailyRecap({ date }) {
           { label: 'Pipeline', ...sc.pipeline },
         ].map((cat, i) => (
           <div key={i} style={{ padding: '4px 6px', background: 'rgba(255,255,255,0.03)', borderRadius: 4 }}>
-            <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600 }}>{cat.label}</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600 }}>{cat.label}</div>
             <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: cat.pnl > 0 ? '#4ade80' : cat.pnl < 0 ? '#f87171' : '#94a3b8' }}>
               {cat.trades > 0 ? `${cat.wins}W/${cat.losses}L · $${cat.pnl.toLocaleString()}` : 'No trades'}
             </div>
@@ -44,13 +45,13 @@ function DailyRecap({ date }) {
       </div>
       {recap.levelScalps?.length > 0 && (
         <>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: 2 }}>Level Trades</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 2 }}>Level Trades</div>
           {recap.levelScalps.map((s, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{s.time} {s.level} ({fmtP(s.levelPrice)})</span>
               <span>
                 <span style={{ color: s.result === 'WIN' ? '#4ade80' : '#f87171', fontWeight: 700 }}>{s.result} ${s.result === 'WIN' ? (s.pnl * 2 - 1) : (-Math.abs(s.pnl) * 2 - 1)}</span>
-                <span style={{ color: '#64748b' }}> MFE {s.mfe}pt</span>
+                <span style={{ color: '#94a3b8' }}> MFE {s.mfe}pt</span>
               </span>
             </div>
           ))}
@@ -58,7 +59,7 @@ function DailyRecap({ date }) {
       )}
       {recap.vwapTrades?.length > 0 && (
         <>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginTop: 6, marginBottom: 2 }}>VWAP Magnet Trades</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginTop: 6, marginBottom: 2 }}>VWAP Magnet Trades</div>
           {recap.vwapTrades.map((t, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{t.time} {t.direction} ({t.vwapDist}pt ext)</span>
@@ -69,7 +70,7 @@ function DailyRecap({ date }) {
       )}
       {recap.pipelineSetups?.length > 0 && (
         <>
-          <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginTop: 6, marginBottom: 2 }}>Pipeline Setups</div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginTop: 6, marginBottom: 2 }}>Pipeline Setups</div>
           {recap.pipelineSetups.map((s, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
               <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{s.setup.replace(/_/g, ' ')}</span>
@@ -119,8 +120,8 @@ export default function SessionForecastPanel({ date }) {
     return () => clearInterval(interval);
   }, [date]);
 
-  if (loading) return <div style={{ fontSize: 12, color: '#64748b', padding: '10px 0' }}>Loading forecast...</div>;
-  if (!forecast && !edgeData) return <div style={{ fontSize: 12, color: '#64748b' }}>No forecast data available.</div>;
+  if (loading) return <div style={{ fontSize: 12, color: '#94a3b8', padding: '10px 0' }}>Loading forecast...</div>;
+  if (!forecast && !edgeData) return <div style={{ fontSize: 12, color: '#94a3b8' }}>No forecast data available.</div>;
 
   const oc = edgeData?.overnightContext || {};
   const cl = edgeData?.confluenceLevels || {};
@@ -151,9 +152,9 @@ export default function SessionForecastPanel({ date }) {
   if (cl.floorPivots) {
     const fp = cl.floorPivots;
     if (fp.pp) keyLevels.push({ price: fp.pp, name: 'Floor PP', behavior: 'Directional pivot. Bias shifts above/below.', color: '#94a3b8' });
-    if (fp.s1) keyLevels.push({ price: fp.s1, name: 'Floor S1', behavior: 'First support.', color: '#64748b' });
-    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. 12% of days. Strong reaction.', color: '#475569' });
-    if (fp.r1) keyLevels.push({ price: fp.r1, name: 'Floor R1', behavior: 'First resistance.', color: '#64748b' });
+    if (fp.s1) keyLevels.push({ price: fp.s1, name: 'Floor S1', behavior: 'First support.', color: '#94a3b8' });
+    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. 12% of days. Strong reaction.', color: '#64748b' });
+    if (fp.r1) keyLevels.push({ price: fp.r1, name: 'Floor R1', behavior: 'First resistance.', color: '#94a3b8' });
   }
 
   // Sort by price descending
@@ -203,7 +204,7 @@ export default function SessionForecastPanel({ date }) {
           <div style={labelSt}>Balance Zone</div>
           {bz?.active ? (
             <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-              <div><strong style={{ color: '#10b981', fontFamily: 'monospace' }}>{fmtP(bz.low)} — {fmtP(bz.high)}</strong> <span style={{ color: '#64748b' }}>({Math.round(bz.high - bz.low)}pt, {bz.age} days)</span></div>
+              <div><strong style={{ color: '#10b981', fontFamily: 'monospace' }}>{fmtP(bz.low)} — {fmtP(bz.high)}</strong> <span style={{ color: '#94a3b8' }}>({Math.round(bz.high - bz.low)}pt, {bz.age} days)</span></div>
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>80% close inside. Fade edges. Excursions snap back within 3 bars (65%).</div>
             </div>
           ) : (
@@ -218,7 +219,7 @@ export default function SessionForecastPanel({ date }) {
             ) : (
               <div style={{ color: '#94a3b8' }}>Standard session. Responsive at VA edges, breakout on strong A signal.</div>
             )}
-            {atr && <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>ATR(14): {Math.round(atr)}pt avg daily range</div>}
+            {atr && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>ATR(14): {Math.round(atr)}pt avg daily range</div>}
           </div>
         </div>
       </div>
@@ -228,7 +229,7 @@ export default function SessionForecastPanel({ date }) {
         <div style={cardSt}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={labelSt}>Range Position (Multi-Timeframe)</div>
-            {bracketAge > 0 && <span style={{ fontSize: 10, color: '#f59e0b', fontWeight: 700 }}>Bracket age: {bracketAge} days inside 20d range</span>}
+            {bracketAge > 0 && <span style={{ fontSize: 12, color: '#f59e0b', fontWeight: 700 }}>Bracket age: {bracketAge} days inside 20d range</span>}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 8 }}>
             {[['5-Day', rps.d5], ['10-Day', rps.d10], ['20-Day', rps.d20]].map(([label, r]) => {
@@ -236,10 +237,10 @@ export default function SessionForecastPanel({ date }) {
               const qColor = r.quintile === 'BOTTOM' ? '#4ade80' : r.quintile === 'LOWER' ? '#f87171' : r.quintile === 'TOP' ? '#f59e0b' : '#cbd5e1';
               return (
                 <div key={label} style={{ padding: '6px 8px', background: 'rgba(15,23,42,0.5)', borderRadius: 4, border: `1px solid ${qColor}20` }}>
-                  <div style={{ fontSize: 10, color: '#64748b', marginBottom: 2 }}>{label}</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>{label}</div>
                   <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#94a3b8' }}>{fmtP(r.lo)} — {fmtP(r.hi)}</div>
                   <div style={{ fontSize: 13, fontWeight: 800, color: qColor }}>{r.pct}% — {r.quintile}</div>
-                  <div style={{ fontSize: 10, color: '#64748b' }}>{Math.round(r.range)}pt range</div>
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{Math.round(r.range)}pt range</div>
                 </div>
               );
             })}
@@ -301,7 +302,7 @@ export default function SessionForecastPanel({ date }) {
                         {levelName}
                       </span>
                       <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> WR · N={p.n} · ${p.pnl?.toLocaleString()}
+                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> WR · <span style={{ color: confidenceTier(p.n).color }} title={confidenceTier(p.n).title}>{confidenceTier(p.n).label}</span> · ${p.pnl?.toLocaleString()}
                       </span>
                     </div>
                   );
@@ -322,7 +323,7 @@ export default function SessionForecastPanel({ date }) {
                         {parts[0]} @ {parts[1]}
                       </span>
                       <span style={{ fontSize: 11 }}>
-                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> WR · N={p.n}
+                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> WR · <span style={{ color: confidenceTier(p.n).color }} title={confidenceTier(p.n).title}>{confidenceTier(p.n).label}</span>
                       </span>
                     </div>
                   );
@@ -341,7 +342,7 @@ export default function SessionForecastPanel({ date }) {
                     <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                       <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#cbd5e1' }}>{label}</span>
                       <span style={{ fontSize: 11 }}>
-                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> · N={p.n}
+                        <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> · <span style={{ color: confidenceTier(p.n).color }} title={confidenceTier(p.n).title}>{confidenceTier(p.n).label}</span>
                       </span>
                     </div>
                   );
@@ -373,10 +374,10 @@ export default function SessionForecastPanel({ date }) {
                 ))}
                 {scalpPlaybook.setupContextCombos?.filter(c => c.wr >= 60).length > 0 && (
                   <div style={{ marginTop: 4 }}>
-                    <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600 }}>HIGH-CONVICTION COMBOS:</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>HIGH-CONVICTION COMBOS:</div>
                     {scalpPlaybook.setupContextCombos.filter(c => c.wr >= 60).slice(0, 4).map((c, i) => (
                       <div key={i} style={{ fontSize: 11, color: '#e2e8f0', marginTop: 1 }}>
-                        {c.setup.replace(/_/g, ' ')} × {c.context} — <span style={{ color: '#4ade80', fontWeight: 700 }}>{c.wr}%</span> (N={c.n})
+                        {c.setup.replace(/_/g, ' ')} × {c.context} — <span style={{ color: '#4ade80', fontWeight: 700 }}>{c.wr}%</span> (<span style={{ color: confidenceTier(c.n).color }} title={confidenceTier(c.n).title}>{confidenceTier(c.n).label}</span>)
                       </div>
                     ))}
                   </div>
@@ -400,12 +401,12 @@ export default function SessionForecastPanel({ date }) {
                       </span>
                     </div>
                     {c.coiled && c.coilRatio && (
-                      <div style={{ fontSize: 10, color: '#f97316', marginTop: 1 }}>
+                      <div style={{ fontSize: 12, color: '#f97316', marginTop: 1 }}>
                         COILED — next win avg ${c.avgDroughtWin} ({c.coilRatio}x normal ${c.avgWin}). Hold for runner.
                       </div>
                     )}
                     {!c.coiled && (
-                      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1 }}>
+                      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 1 }}>
                         Avg win: ${c.avgWin} · {c.totalFires} total fires
                       </div>
                     )}
@@ -427,7 +428,7 @@ export default function SessionForecastPanel({ date }) {
                     { label: 'Close %', value: `${scalpPlaybook.overnightProfile.closePosition}%`, color: '#cbd5e1' },
                   ].map((item, i) => (
                     <div key={i}>
-                      <div style={{ fontSize: 9, color: '#64748b' }}>{item.label}</div>
+                      <div style={{ fontSize: 11, color: '#94a3b8' }}>{item.label}</div>
                       <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: item.color }}>{item.value}</div>
                     </div>
                   ))}
@@ -458,7 +459,7 @@ export default function SessionForecastPanel({ date }) {
 
             {scalpPlaybook.newDiscoveries?.length > 0 && (
               <div style={{ marginTop: 8, padding: '4px 8px', background: 'rgba(251,191,36,0.1)', borderRadius: 4, border: '1px solid rgba(251,191,36,0.2)' }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase' }}>New Patterns Detected</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase' }}>New Patterns Detected</div>
                 {scalpPlaybook.newDiscoveries.map((p, i) => (
                   <div key={i} style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>
                     {p.pattern.split(':').pop()} — {p.wr}% WR (N={p.n})
@@ -474,7 +475,7 @@ export default function SessionForecastPanel({ date }) {
       <div style={{ padding: '10px 12px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Morning Script (Open — 12:00 PM)</div>
-          <span style={{ fontSize: 9, color: '#475569' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#818cf8' }}>Overnight positioning.</strong> {oc.overnight_inventory ? `${invLabel}. ${oc.overnight_inventory === 'SHORT_TRAPPED' ? 'Shorts squeezed — buying fuel early. Expect upward drift into first level test.' : oc.overnight_inventory === 'LONG_TRAPPED' ? 'Longs trapped — selling pressure builds. Expect downward drift. Watch for capitulation volume.' : 'Neutral — no trapped participants. Wait for OR to establish direction.'}` : 'Check overnight close vs today\'s VA before the bell.'}</div>
@@ -494,7 +495,7 @@ export default function SessionForecastPanel({ date }) {
       <div style={{ padding: '10px 12px', background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 6, marginTop: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Afternoon Script (1:00 PM — Close)</div>
-          <span style={{ fontSize: 9, color: '#475569' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#f59e0b' }}>Developing POC is today's magnet.</strong> Afternoon volume drops — price mean-reverts toward wherever today's volume concentrated. Watch where your chart shows the thickest profile.</div>
@@ -528,7 +529,7 @@ export default function SessionForecastPanel({ date }) {
       <div style={{ padding: '10px 12px', background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.12)', borderRadius: 6, marginTop: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Evening Read (Closing the Loop → Tomorrow)</div>
-          <span style={{ fontSize: 9, color: '#475569' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#a78bfa' }}>Today's session character.</strong> {bz?.active

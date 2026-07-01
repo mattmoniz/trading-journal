@@ -1,6 +1,7 @@
 import express from 'express';
 import https from 'https';
 import { query } from '../db.js';
+import { getTrailingVwapStd } from '../services/queries.js';
 
 const edgesHistoryCache = new Map();
 let tradeBacktestCache = null;
@@ -794,10 +795,8 @@ async function getLiveEdgesContext() {
     const vwapVal = cumVol > 0 ? cumPV / cumVol : null;
     if (vwapVal && currentPrice) {
       const vwapDist = currentPrice - vwapVal;
-      const sessHiAgy = bars.length > 0 ? Math.max(...bars.map(b => b.high)) : 0;
-      const sessLoAgy = bars.length > 0 ? Math.min(...bars.map(b => b.low)) : 0;
-      const devRangeAgy = sessHiAgy - sessLoAgy;
-      const vwapThreshold = Math.max(50, Math.round(devRangeAgy * 0.25));
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const { threshold: vwapThreshold } = await getTrailingVwapStd(todayStr, 30);
       const extended = Math.abs(vwapDist) >= vwapThreshold;
       emaSnap = {
         ema9: Math.round(vwapVal * 100) / 100,
@@ -1233,6 +1232,8 @@ router.get('/antigravity/edges-context', async (req, res) => {
   }
 });
 
+/* REMOVED: dead endpoints — never referenced by frontend
+
 // GET /api/antigravity/news
 router.get('/antigravity/news', async (req, res) => {
   try {
@@ -1271,6 +1272,7 @@ router.get('/antigravity/news', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+*/
 
 // ─── LIVE EXHAUSTION DETECTOR ────────────────────────────────────────
 router.get('/antigravity/exhaustion', async (req, res) => {

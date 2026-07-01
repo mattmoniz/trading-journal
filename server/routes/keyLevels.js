@@ -1014,4 +1014,74 @@ router.get('/chart/live-day', async (req, res) => {
   }
 });
 
+// ────────────────────────────────────────────────────────────
+//  /api/level-regime-performance
+//  Query: ?regime=EXPANDING,BEARISH,WIDE  (vol,dir,range — any subset)
+//  Returns ranked levels for the requested regime from stored backtest data.
+// ────────────────────────────────────────────────────────────
+router.get('/level-regime-performance', async (req, res) => {
+  try {
+    const parts = (req.query.regime || '').split(',').map(s => s.trim().toUpperCase());
+    const vol = parts[0] || null;
+    const dir = parts[1] || null;
+    const rng = parts[2] || null;
+
+    // Build dynamic WHERE
+    const conditions = [];
+    const params = [];
+    if (vol) { params.push(vol); conditions.push(`vol_regime = $${params.length}`); }
+    if (dir) { params.push(dir); conditions.push(`dir_regime = $${params.length}`); }
+    if (rng) { params.push(rng); conditions.push(`range_regime = $${params.length}`); }
+
+    // If no regime specified, aggregate across all regimes per level
+    let sql;
+    if (conditions.length === 0) {
+      sql = `
+        SELECT level_name, vol_regime, dir_regime, range_regime,
+               sample_size, win_rate, ev_per_trade, avg_mfe, avg_mae, vs_overall, last_computed
+        FROM level_regime_performance
+        WHERE sample_size >= 5
+        ORDER BY ev_per_trade DESC
+      `;
+    } else {
+      sql = `
+        SELECT level_name, vol_regime, dir_regime, range_regime,
+               sample_size, win_rate, ev_per_trade, avg_mfe, avg_mae, vs_overall, last_computed
+        FROM level_regime_performance
+        WHERE ${conditions.join(' AND ')} AND sample_size >= 5
+        ORDER BY ev_per_trade DESC
+      `;
+    }
+
+    const result = await query(sql, params);
+
+    // Compute current regime from most recent data
+    // (simplified: just read what the nightly job stored)
+    const metaRes = await query(`SELECT MAX(last_computed) as lc, COUNT(*) as total FROM level_regime_performance`);
+
+    res.json({
+      regime: { volatility: vol, direction: dir, range: rng },
+      levels: result.rows.map(r => ({
+        level: r.level_name,
+        vol_regime: r.vol_regime,
+        dir_regime: r.dir_regime,
+        range_regime: r.range_regime,
+        sample_size: r.sample_size,
+        win_rate: parseFloat(r.win_rate),
+        ev_per_trade: parseFloat(r.ev_per_trade),
+        avg_mfe: parseFloat(r.avg_mfe),
+        avg_mae: parseFloat(r.avg_mae),
+        vs_overall: r.vs_overall,
+      })),
+      meta: {
+        last_computed: metaRes.rows[0]?.lc,
+        total_combos: metaRes.rows[0]?.total,
+      },
+    });
+  } catch (err) {
+    console.error('Level regime performance error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

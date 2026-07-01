@@ -63,7 +63,7 @@ export default function RecapDatePicker({ value, onChange, dailyPerf }) {
           {/* Day headers */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2, marginBottom: 4 }}>
             {['Su','Mo','Tu','We','Th','Fr','Sa'].map(d => (
-              <div key={d} style={{ textAlign: 'center', fontSize: 9, color: 'var(--text-muted)', fontWeight: 600 }}>{d}</div>
+              <div key={d} style={{ textAlign: 'center', fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>{d}</div>
             ))}
           </div>
           {/* Day cells */}
