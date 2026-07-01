@@ -406,15 +406,19 @@ router.get('/auction-read/auto', async (req, res) => {
     // Latest price for pre-market display
     const latestClose = latestBar.rows[0]?.close || null;
 
-    // Auto-persist reads so they accumulate for backtesting
+    // Auto-persist reads.
+    // overnight_inventory + open_vs_prior_value are fully computed from price data (98%/90%
+    // accuracy validated 2026-07-01) — always overwrite so the value stays current.
+    // prior_day_profile is ACD-specific (TREND/NORMAL/etc.) read from Sierra Chart — COALESCE
+    // keeps the manually entered value; never overwrite with the flawed auto-detect formula.
     if (overnight_inventory || open_vs_prior_value || prior_day_profile) {
       query(`
         INSERT INTO auction_reads (trade_date, overnight_inventory, open_vs_prior_value, prior_day_profile)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (trade_date) DO UPDATE SET
-          overnight_inventory = COALESCE(auction_reads.overnight_inventory, EXCLUDED.overnight_inventory),
-          open_vs_prior_value = COALESCE(auction_reads.open_vs_prior_value, EXCLUDED.open_vs_prior_value),
-          prior_day_profile = COALESCE(auction_reads.prior_day_profile, EXCLUDED.prior_day_profile),
+          overnight_inventory = COALESCE(EXCLUDED.overnight_inventory, auction_reads.overnight_inventory),
+          open_vs_prior_value = COALESCE(EXCLUDED.open_vs_prior_value, auction_reads.open_vs_prior_value),
+          prior_day_profile   = COALESCE(auction_reads.prior_day_profile, EXCLUDED.prior_day_profile),
           updated_at = NOW()
       `, [todayET, overnight_inventory, open_vs_prior_value, prior_day_profile]).catch(() => {});
     }

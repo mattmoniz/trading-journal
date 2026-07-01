@@ -421,6 +421,11 @@ httpServer.listen(PORT, () => {
       checkAndEmitProfitLock(io).catch(() => {});
       // Recompute MGI levels for today after import so level_proximity tags are current
       import('./services/levelProximityService.js').then(({ tagTradesForDate }) => tagTradesForDate(todayET)).catch(() => {});
+      // Recompute open_vs_prior_value + overnight_inventory for today (price-data-derived, no manual entry needed)
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`node scripts/backfill_auction_reads.js ${todayET}`, { cwd: process.cwd(), timeout: 30000 });
+      } catch (auErr) { console.warn('[auto-import] auction_reads update failed:', auErr.message); }
     } catch (e) { console.error('[auto-import 4PM] Error:', e.message); }
   }, { timezone: 'America/New_York' });
 
