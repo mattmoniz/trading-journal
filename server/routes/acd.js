@@ -3025,8 +3025,8 @@ export default function createACDRouter(io) {
                   ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Half conviction only: smaller size, wider stop tolerance.`
                   : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH has +1.3% directional edge at baseline (N=89). On TREND days: 73% WR. On TURBULENT: 62% WR (+13%). At PD-2 VA: 69% WR (+20%). EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop above IB High + 2pt. Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — 69% WR zone.' : ''}`)
                 : (isBull
-                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating. NOTE: IB_BULLISH has -7.5% directional edge and is SUPPRESSED. This should not fire.`
-                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH has +1.3% directional edge at baseline (N=89). Best contexts: TREND days 73% WR, TURBULENT 62% WR (+13%), at PD-2 VA 69% WR (+20%). NL30 aligned: 63% WR. NL30 counter: 49% WR (suppressed). EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop above IB High + 2pt (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — 69% WR, high-conviction zone.' : ''}`),
+                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH 64.2% WR overall (N=106). TREND days: 76.2% (N=42 decided). TURBULENT: 69.2% (N=39). BALANCE suppressed (51.9%). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop below IB Low - 2pt (${stop}). Target PD VAH or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH 54.5% WR overall (N=99). TREND days: 71.7% combined WR. TURBULENT: 70.0%. BALANCE suppressed (51.9%). EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop above IB High + 2pt (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
             };
           }
@@ -3370,6 +3370,11 @@ export default function createACDRouter(io) {
       // Day type classification for setup gating
       const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
       const dtClass = dtClassRow.rows[0]?.day_type || null;
+
+      // IB setup BALANCE suppression — replay_ib_setups.js 2026-07-01 (N=397 sessions):
+      // TREND 71.7% WR (N=46), TURBULENT 70.0% (N=40) → keep.
+      // BALANCE 51.9% (N=106) → below breakeven after commission → suppress.
+      if (dtClass === 'BALANCE' && ibSetup) ibSetup = null;
 
       // Morning volatility regime — used to gate C_STANDALONE in HIGH-VOL-CHOP (0% WR confirmed, regime backtest 2026-06-30)
       const regimeResult = await computeLiveVolatilityRegime().catch(() => ({ regime: null }));
@@ -4106,6 +4111,7 @@ export default function createACDRouter(io) {
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
         levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
+        ibSetup,         // IB_BULLISH / IB_BEARISH — TREND 71.7% WR, TURBULENT 70.0%. BALANCE suppressed (51.9% < breakeven).
       ];
       // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
       // These persist to active_setups with status='SHADOW', resolve against price,
@@ -4120,7 +4126,7 @@ export default function createACDRouter(io) {
         trt?.type === 'TRT_SHORT' ? trt : null,
         trtMah,
         aDownWeak,
-        ibSetup, // IB_BEARISH and IB_BULLISH — directional context, not entries
+        // ibSetup moved to candidates 2026-07-01 — BALANCE suppressed, TREND/TURBULENT promoted
         openDrive,
         valueAreaResp,
         // C_STANDALONE: suppressed in HIGH-VOL-CHOP (0% WR), death sequences (9-14% WR), and POC counter direction (41.5% WR)

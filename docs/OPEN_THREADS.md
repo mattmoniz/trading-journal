@@ -4,11 +4,9 @@ Living continuity tracker — distinct from [KNOWN_ISSUES.md](KNOWN_ISSUES.md) (
 
 When an item is finished, delete it (don't mark it done — git history is the record of what was fixed and when, same convention as KNOWN_ISSUES.md). When a session confirms a decision, proposes a follow-up, or finds a stats/data-freshness gap and doesn't finish it in the same session, add it here before the session ends.
 
-## Proposed, awaiting user confirmation
-
-6. **IB setup replay — BALANCE/WEAK filter pending promotion to active candidates.** TREND day 71.7% WR, TURBULENT 70.0%, BALANCE 51.9% (N=106 — likely below breakeven after commission). WEAK signal (A-level tested in IB, didn't fire) 33.3% WR (N=9 — too small to confirm). IB setups are shadow-only currently (not active banners), so the filter only matters when/if they move to `candidates`. Shadow tracking continues on all days to build forward-test WR. When IB setups are promoted: apply BALANCE filter (suppress) and WEAK filter (suppress when signal is WEAK). WEAK filter needs N≥20 before it's decisive.
-
 ## Recently completed (kept briefly for handoff continuity, then delete)
+
+- **IB setups promoted to active candidates with BALANCE suppression (2026-07-01).** `replay_ib_setups.js` re-run confirmed original numbers: TREND 71.7% WR (N=46), TURBULENT 70.0% (N=40), BALANCE 51.9% (N=106 — below breakeven). `ibSetup` moved from `shadowCandidates` to `candidates` in `acd.js`. BALANCE suppression wired: `if (dtClass === 'BALANCE' && ibSetup) ibSetup = null` (runs after the `dtClass` query at line ~3372). IB_BULLISH description updated — was stale "-7.5% edge SUPPRESSED" from prior session. WEAK signal (33.3% WR, N=9 decided) still below N≥20 — not suppressed in code yet, just tracked. Revisit when forward data builds to 20 decided trades.
 
 - **OPEN_THREADS items 7+8+9 resolved (2026-07-01).** All null-t1/stale-data issues in the Unified Signal Table fixed. Stale LEVEL_FADE rows (2026-06-27) and PD_LEVEL/ROLLING rows deleted — had null p50_mfe/p75_mfe and inflated WRs from fixed 20pt/20pt test. Replaced by: SYSTEM_BACKTEST rows from fresh `backtest_unified.js` (now includes 10D_IB_MID) for OR/IB/PD_IB_MID/PD_OR_MID/floor signals; PD_IB_AUDIT rows from fresh `pd_ib_or_fade_audit.mjs` for PD_IB_HIGH/LOW, PD_OR_HIGH/LOW, PD_SESSION_MID (DLL_TRADEABLE→CONTEXT, all with stop/t1/t2). Win-rate normalization fixed for PD_IB_AUDIT (0-100 scale → divide by 100). PD_IB_AUDIT removed from the exclusion filter in acd.js and added to WR normalization and hasSYS suppression. **Final state: 33 setups, 13 ACTIVE (all with stop/t1/t2), 20 CONTEXT. Only null t1 entries: IB_BULLISH/BEARISH_DIRECTION (known data bug, low urgency).**
 
