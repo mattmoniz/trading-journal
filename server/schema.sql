@@ -1,22 +1,4 @@
 --
--- server/schema.sql — full schema dump of the live `trading_journal` database.
---
--- This is a generated `pg_dump --schema-only` snapshot, not hand-maintained DDL.
--- There is no tracked migration history for this app — every table beyond the
--- original 5 (daily_logs, trades, trade_screenshots, custom_field_definitions,
--- setup_types) was created ad hoc directly against the live DB. This file exists
--- so `npm run db:setup` can bootstrap an empty database to the current state.
---
--- To regenerate after schema changes:
---   PGPASSWORD=$DB_PASSWORD pg_dump --schema-only --no-owner --no-privileges \
---     --no-comments -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME \
---     | sed '/^\\restrict /d; /^\\unrestrict /d' > server/schema.sql
---
--- This file is NOT idempotent — it expects an empty database (no IF NOT EXISTS).
--- Running it against a database that already has these tables will error out.
---
-
---
 -- PostgreSQL database dump
 --
 
@@ -730,6 +712,7 @@ CREATE TABLE public.trades (
     spring_volume_type character varying(10),
     support_resistance_level numeric,
     follow_through boolean,
+    level_proximity jsonb,
     CONSTRAINT trades_direction_check CHECK (((direction)::text = ANY ((ARRAY['LONG'::character varying, 'SHORT'::character varying])::text[])))
 );
 
@@ -1035,6 +1018,19 @@ CREATE SEQUENCE public.import_log_id_seq
 --
 
 ALTER SEQUENCE public.import_log_id_seq OWNED BY public.import_log.id;
+
+
+--
+-- Name: level_prices; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices (
+    trade_date date NOT NULL,
+    level_name text NOT NULL,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone DEFAULT now()
+);
 
 
 --
@@ -4812,6 +4808,14 @@ ALTER TABLE ONLY public.import_log
 
 
 --
+-- Name: level_prices level_prices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.level_prices
+    ADD CONSTRAINT level_prices_pkey PRIMARY KEY (trade_date, level_name);
+
+
+--
 -- Name: level_regime_performance level_regime_performance_level_name_vol_regime_dir_regime_r_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6073,6 +6077,20 @@ CREATE INDEX idx_tte_trade_date ON public.trade_timeline_events USING btree (tra
 --
 
 CREATE INDEX idx_wa_week_start ON public.weekly_assessments USING btree (week_start);
+
+
+--
+-- Name: level_prices_date_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX level_prices_date_idx ON public.level_prices USING btree (trade_date DESC);
+
+
+--
+-- Name: level_prices_name_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX level_prices_name_idx ON public.level_prices USING btree (level_name);
 
 
 --
@@ -7795,6 +7813,13 @@ CREATE INDEX trade_annotations_date_idx ON public.trade_annotations USING btree 
 --
 
 CREATE INDEX trade_annotations_trade_ids_idx ON public.trade_annotations USING gin (trade_ids);
+
+
+--
+-- Name: trades_level_proximity_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX trades_level_proximity_idx ON public.trades USING gin (level_proximity) WHERE (level_proximity IS NOT NULL);
 
 
 --

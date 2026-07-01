@@ -1084,4 +1084,37 @@ router.get('/level-regime-performance', async (req, res) => {
   }
 });
 
+// ─── Level Prices (MGI level monitor) ────────────────────────────────────────
+// Returns all computed MGI levels for a given date from the level_prices table.
+// Used by the LevelMonitorPanel and trade auto-tagger display.
+router.get('/level-prices/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const levels = await query(
+      `SELECT level_name, price::float, category, computed_at
+       FROM level_prices
+       WHERE trade_date = $1 AND price IS NOT NULL
+       ORDER BY category, price DESC`,
+      [date]
+    );
+    res.json({ date, levels: levels.rows });
+  } catch (err) {
+    console.error('level-prices error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Trade Level Proximity ────────────────────────────────────────────────────
+// Backfill or retag level proximity for all BP fills on a given date.
+router.post('/level-prices/tag/:date', async (req, res) => {
+  try {
+    const { tagTradesForDate } = await import('../services/levelProximityService.js');
+    const tagged = await tagTradesForDate(req.params.date);
+    res.json({ tagged });
+  } catch (err) {
+    console.error('level-proximity tag error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

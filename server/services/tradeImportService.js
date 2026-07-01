@@ -1,4 +1,5 @@
 import pool from '../db.js';
+import { tagTradeProximity } from './levelProximityService.js';
 
 export async function importSierraTrades(trades) {
   const client = await pool.connect();
@@ -78,7 +79,13 @@ export async function importSierraTrades(trades) {
 
         console.log(`✅ Imported: ${trade.symbol} ${trade.direction} @ ${trade.entry_price}`);
         imported++;
-        dbCountCache[key]++; // reflect the new row so next identical fill is correctly evaluated
+        dbCountCache[key]++;
+
+        // Auto-tag BP fills with nearby MGI levels (best-effort, non-blocking)
+        const isBP = String(trade.custom_fields?.sierra_data?.['Entry DateTime'] || '').endsWith(' BP');
+        if (isBP && result.rows[0]?.id && trade.entry_price != null) {
+          tagTradeProximity(result.rows[0].id, trade.log_date, trade.entry_price).catch(() => {});
+        }
 
       } catch (error) {
         console.error(`❌ Error importing trade:`, error.message);

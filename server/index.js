@@ -419,6 +419,8 @@ httpServer.listen(PORT, () => {
       if (io) io.emit('auto-import-complete', { trigger: 'AUTO_4PM', file: `TradeActivityLogExport_${todayET}.txt`, imported: result?.imported, skipped: result?.skipped, time: new Date().toISOString() });
       checkAndEmitDLL(io).catch(() => {});
       checkAndEmitProfitLock(io).catch(() => {});
+      // Recompute MGI levels for today after import so level_proximity tags are current
+      import('./services/levelProximityService.js').then(({ tagTradesForDate }) => tagTradesForDate(todayET)).catch(() => {});
     } catch (e) { console.error('[auto-import 4PM] Error:', e.message); }
   }, { timezone: 'America/New_York' });
 
@@ -533,6 +535,20 @@ httpServer.listen(PORT, () => {
         return { count: 1 };
       });
     } catch (err) { console.error('[system_backtest] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:30 PM Sunday: compute MGI levels for today and tag any new BP fills
+  cron.schedule('30 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('COMPUTE_LEVELS', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        const { tagTradesForDate } = await import('./services/levelProximityService.js');
+        const tagged = await tagTradesForDate(today);
+        return { count: tagged };
+      });
+    } catch (err) { console.error('[compute_levels] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Monthly Report — 7:00 PM ET first Sunday of month
@@ -693,7 +709,7 @@ httpServer.listen(PORT, () => {
     }
   }, { timezone: 'America/New_York' });
 
-  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM ET Sun | Catch-up every 30min');
+  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM, ComputeLevels 9:30PM ET Sun | Catch-up every 30min');
 
   // Hourly overdue process check (9 AM–5 PM ET Mon–Fri)
   setInterval(async () => {

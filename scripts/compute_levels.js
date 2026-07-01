@@ -1,0 +1,367 @@
+// compute_levels.js
+// Computes all MGI (Market Generated Information) levels for one or more trading dates
+// and writes them to the level_prices table.
+//
+// Levels computed per session:
+//   PRIOR_DAY  : PD_VAH, PD_VAL, PD_POC, PD_HIGH, PD_LOW, PD_CLOSE, PD_IB_HIGH, PD_IB_LOW, PD_IB_MID
+//   OVERNIGHT  : ONH, ONL  (Globex 18:00 prior ET → 09:29 current ET)
+//   CURRENT    : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID
+//   OPENS      : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
+//   VWAP       : RTH_VWAP, WEEKLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
+//   PIVOT      : FLOOR_PIVOT, R1, R2, R3, S1, S2, S3
+//   WEEKLY     : PW_HIGH, PW_LOW, PW_VAH, PW_VAL, PW_POC
+//   MONTHLY    : PM_HIGH, PM_LOW, PM_VAH, PM_VAL, PM_POC
+//   3-MONTH    : 3M_VAH, 3M_VAL, 3M_POC
+//
+// Usage:
+//   node scripts/compute_levels.js                  → compute today only
+//   node scripts/compute_levels.js 2026-06-30       → compute specific date
+//   node scripts/compute_levels.js --backfill       → compute all dates in developing_value_log
+//   node scripts/compute_levels.js --backfill --from 2024-01-01  → backfill from date
+
+import pg from 'pg';
+import dotenv from 'dotenv';
+dotenv.config();
+
+const pool = new pg.Pool({
+  host: process.env.DB_HOST || 'localhost',
+  database: process.env.DB_NAME || 'trading_journal',
+  user: process.env.DB_USER || 'trader',
+  password: process.env.DB_PASSWORD || 'trader123',
+  port: parseInt(process.env.DB_PORT || '5432'),
+});
+const q = (sql, params) => pool.query(sql, params);
+
+// ─── Volume Profile: 35% value area (same logic as acd.js / replay scripts) ──
+async function computeValueArea(startDate, endDate) {
+  const r = await q(`
+    WITH bars AS (
+      SELECT ROUND(low::numeric / 0.25) * 0.25 AS px,
+             SUM(volume)::numeric AS vol
+      FROM price_bars_primary
+      WHERE symbol = 'NQ'
+        AND ts::date BETWEEN $1 AND $2
+        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      GROUP BY ROUND(low::numeric / 0.25) * 0.25
+    ),
+    total AS (SELECT SUM(vol) AS t FROM bars),
+    poc_row AS (SELECT px AS poc_px FROM bars ORDER BY vol DESC LIMIT 1)
+    SELECT
+      poc_row.poc_px::float                                                    AS poc,
+      (SELECT MAX(px) FROM (
+         SELECT px, SUM(vol) OVER (ORDER BY px DESC) AS cv FROM bars WHERE px >= poc_row.poc_px
+       ) x WHERE cv <= (SELECT t * 0.35 FROM total))::float                   AS vah,
+      (SELECT MIN(px) FROM (
+         SELECT px, SUM(vol) OVER (ORDER BY px ASC) AS cv FROM bars WHERE px <= poc_row.poc_px
+       ) x WHERE cv <= (SELECT t * 0.35 FROM total))::float                   AS val
+    FROM poc_row, total
+    LIMIT 1
+  `, [startDate, endDate]);
+  return r.rows[0] || null;
+}
+
+// ─── Get prior business day ────────────────────────────────────────────────
+async function priorBusinessDay(date) {
+  const r = await q(`
+    SELECT MAX(ts::date)::text AS d
+    FROM price_bars_primary
+    WHERE symbol = 'NQ'
+      AND ts::date < $1
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [date]);
+  return r.rows[0]?.d || null;
+}
+
+// ─── Week boundaries (Mon–Fri) containing a date ──────────────────────────
+function weekBounds(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const dow = d.getUTCDay(); // 0=Sun, 1=Mon ... 6=Sat
+  const daysToMon = dow === 0 ? 6 : dow - 1;
+  const mon = new Date(d); mon.setUTCDate(d.getUTCDate() - daysToMon);
+  const fri = new Date(mon); fri.setUTCDate(mon.getUTCDate() + 4);
+  return {
+    mon: mon.toISOString().slice(0, 10),
+    fri: fri.toISOString().slice(0, 10),
+  };
+}
+
+// ─── Month boundaries ─────────────────────────────────────────────────────
+function monthBounds(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  const first = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  const last  = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+  return {
+    first: first.toISOString().slice(0, 10),
+    last:  last.toISOString().slice(0, 10),
+  };
+}
+
+// ─── 3-month start (approx 63 trading days back) ─────────────────────────
+function threeMonthStart(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCMonth(d.getUTCMonth() - 3);
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── Core: compute all levels for one trading date ────────────────────────
+async function computeLevelsForDate(date) {
+  const levels = []; // { level_name, price, category }
+  const add = (name, price, category) => {
+    if (price != null && !isNaN(price)) levels.push({ name, price: +price, category });
+  };
+
+  // ── 1. Prior day value area + session stats ──────────────────────────────
+  const pdRow = await q(`
+    SELECT poc::float, vah::float, val::float,
+           session_high::float, session_low::float, session_close::float
+    FROM developing_value_log
+    WHERE trade_date < $1
+    ORDER BY trade_date DESC LIMIT 1
+  `, [date]);
+  const pd = pdRow.rows[0];
+  if (pd) {
+    add('PD_VAH',   pd.vah,           'PRIOR_DAY');
+    add('PD_VAL',   pd.val,           'PRIOR_DAY');
+    add('PD_POC',   pd.poc,           'PRIOR_DAY');
+    add('PD_HIGH',  pd.session_high,  'PRIOR_DAY');
+    add('PD_LOW',   pd.session_low,   'PRIOR_DAY');
+    add('PD_CLOSE', pd.session_close, 'PRIOR_DAY');
+
+    // Floor pivots from PD H/L/C
+    const h = pd.session_high, l = pd.session_low, c = pd.session_close;
+    if (h && l && c) {
+      const pivot = (h + l + c) / 3;
+      const range = h - l;
+      add('FLOOR_PIVOT', Math.round(pivot * 4) / 4, 'PIVOT');
+      add('FLOOR_R1', Math.round((2 * pivot - l) * 4) / 4,    'PIVOT');
+      add('FLOOR_R2', Math.round((pivot + range) * 4) / 4,    'PIVOT');
+      add('FLOOR_R3', Math.round((h + 2 * (pivot - l)) * 4) / 4, 'PIVOT');
+      add('FLOOR_S1', Math.round((2 * pivot - h) * 4) / 4,    'PIVOT');
+      add('FLOOR_S2', Math.round((pivot - range) * 4) / 4,    'PIVOT');
+      add('FLOOR_S3', Math.round((l - 2 * (h - pivot)) * 4) / 4, 'PIVOT');
+    }
+  }
+
+  // ── 2. Prior day IB ──────────────────────────────────────────────────────
+  const priorDay = await priorBusinessDay(date);
+  if (priorDay) {
+    const pdIbR = await q(`
+      SELECT MAX(high)::float AS h, MIN(low)::float AS l
+      FROM price_bars_primary
+      WHERE symbol = 'NQ' AND ts::date = $1
+        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+    `, [priorDay]);
+    const pib = pdIbR.rows[0];
+    if (pib?.h && pib?.l) {
+      add('PD_IB_HIGH', pib.h,                  'PRIOR_DAY');
+      add('PD_IB_LOW',  pib.l,                   'PRIOR_DAY');
+      add('PD_IB_MID',  (pib.h + pib.l) / 2,    'PRIOR_DAY');
+    }
+  }
+
+  // ── 3. Overnight high/low (ONH/ONL) ─────────────────────────────────────
+  // Globex: 18:00 ET prior day through 09:29 ET current day
+  const onR = await q(`
+    SELECT MAX(high)::float AS onh, MIN(low)::float AS onl
+    FROM price_bars_primary
+    WHERE symbol = 'NQ'
+      AND (
+        -- prior evening: 18:00-23:59
+        (ts::date = $2 AND EXTRACT(hour FROM ts) >= 18)
+        OR
+        -- overnight into current morning: 00:00-09:29
+        (ts::date = $1 AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) < 570)
+      )
+  `, [date, priorDay || date]);
+  const on = onR.rows[0];
+  add('ONH', on?.onh, 'OVERNIGHT');
+  add('ONL', on?.onl, 'OVERNIGHT');
+
+  // ── 4. OR high/low/mid from acd_daily_log ───────────────────────────────
+  const orR = await q(`
+    SELECT or_high::float AS orh, or_low::float AS orl
+    FROM acd_daily_log WHERE trade_date = $1
+  `, [date]);
+  const or_ = orR.rows[0];
+  if (or_?.orh && or_?.orl) {
+    add('OR_HIGH', or_.orh,                    'CURRENT');
+    add('OR_LOW',  or_.orl,                    'CURRENT');
+    add('OR_MID',  (or_.orh + or_.orl) / 2,   'CURRENT');
+  }
+
+  // ── 5. IB high/low/mid (9:30–10:00 current day) ─────────────────────────
+  const ibR = await q(`
+    SELECT MAX(high)::float AS h, MIN(low)::float AS l
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date = $1
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+  `, [date]);
+  const ib = ibR.rows[0];
+  if (ib?.h && ib?.l) {
+    add('IB_HIGH', ib.h,               'CURRENT');
+    add('IB_LOW',  ib.l,               'CURRENT');
+    add('IB_MID',  (ib.h + ib.l) / 2, 'CURRENT');
+  }
+
+  // ── 6. Session opens ─────────────────────────────────────────────────────
+  // Daily open (first RTH bar)
+  const dailyOpenR = await q(`
+    SELECT open::float AS o FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date = $1
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) = 570
+    ORDER BY ts LIMIT 1
+  `, [date]);
+  add('DAILY_OPEN', dailyOpenR.rows[0]?.o, 'OPENS');
+
+  // Weekly open (first RTH bar of the Mon–Fri week)
+  const wb = weekBounds(date);
+  const weekOpenR = await q(`
+    SELECT open::float AS o FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) = 570
+    ORDER BY ts LIMIT 1
+  `, [wb.mon, wb.fri]);
+  add('WEEKLY_OPEN', weekOpenR.rows[0]?.o, 'OPENS');
+
+  // Monthly open (first RTH bar of the calendar month)
+  const mb = monthBounds(date);
+  const monthOpenR = await q(`
+    SELECT open::float AS o FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) = 570
+    ORDER BY ts LIMIT 1
+  `, [mb.first, mb.last]);
+  add('MONTHLY_OPEN', monthOpenR.rows[0]?.o, 'OPENS');
+
+  // ── 7. RTH VWAP (9:30 AM → end of RTH, cumulative for the day) ──────────
+  const rthVwapR = await q(`
+    SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date = $1
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      AND volume > 0
+  `, [date]);
+  add('RTH_VWAP', rthVwapR.rows[0]?.vwap ? parseFloat(rthVwapR.rows[0].vwap) : null, 'VWAP');
+
+  // Weekly VWAP (Mon open → Friday close for the week containing date)
+  const weekVwapR = await q(`
+    SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      AND volume > 0
+  `, [wb.mon, wb.fri]);
+  add('WEEKLY_VWAP', weekVwapR.rows[0]?.vwap ? parseFloat(weekVwapR.rows[0].vwap) : null, 'VWAP');
+
+  // ── 8. Prior week H/L/VA ─────────────────────────────────────────────────
+  // Prior week = the Mon–Fri week before the current week
+  const pwMon = new Date(wb.mon + 'T12:00:00Z');
+  pwMon.setUTCDate(pwMon.getUTCDate() - 7);
+  const pwFri = new Date(wb.fri + 'T12:00:00Z');
+  pwFri.setUTCDate(pwFri.getUTCDate() - 7);
+  const pwMonStr = pwMon.toISOString().slice(0, 10);
+  const pwFriStr = pwFri.toISOString().slice(0, 10);
+
+  const pwHlR = await q(`
+    SELECT MAX(high)::float AS h, MIN(low)::float AS l
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [pwMonStr, pwFriStr]);
+  add('PW_HIGH', pwHlR.rows[0]?.h, 'WEEKLY');
+  add('PW_LOW',  pwHlR.rows[0]?.l, 'WEEKLY');
+
+  const pwVA = await computeValueArea(pwMonStr, pwFriStr);
+  if (pwVA) {
+    add('PW_VAH', pwVA.vah, 'WEEKLY');
+    add('PW_VAL', pwVA.val, 'WEEKLY');
+    add('PW_POC', pwVA.poc, 'WEEKLY');
+  }
+
+  // ── 9. Prior month H/L/VA ────────────────────────────────────────────────
+  const pmD = new Date(date + 'T12:00:00Z');
+  pmD.setUTCMonth(pmD.getUTCMonth() - 1);
+  const pmBounds = monthBounds(pmD.toISOString().slice(0, 10));
+
+  const pmHlR = await q(`
+    SELECT MAX(high)::float AS h, MIN(low)::float AS l
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [pmBounds.first, pmBounds.last]);
+  add('PM_HIGH', pmHlR.rows[0]?.h, 'MONTHLY');
+  add('PM_LOW',  pmHlR.rows[0]?.l, 'MONTHLY');
+
+  const pmVA = await computeValueArea(pmBounds.first, pmBounds.last);
+  if (pmVA) {
+    add('PM_VAH', pmVA.vah, 'MONTHLY');
+    add('PM_VAL', pmVA.val, 'MONTHLY');
+    add('PM_POC', pmVA.poc, 'MONTHLY');
+  }
+
+  // ── 10. 3-month VA ───────────────────────────────────────────────────────
+  const m3Start = threeMonthStart(date);
+  const m3VA = await computeValueArea(m3Start, date);
+  if (m3VA) {
+    add('3M_VAH', m3VA.vah, 'QUARTERLY');
+    add('3M_VAL', m3VA.val, 'QUARTERLY');
+    add('3M_POC', m3VA.poc, 'QUARTERLY');
+  }
+
+  return levels;
+}
+
+// ─── Write levels to DB ────────────────────────────────────────────────────
+async function writeLevels(date, levels) {
+  if (!levels.length) return;
+  const values = levels.map((l, i) =>
+    `($1, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4}, NOW())`
+  ).join(', ');
+  const params = [date, ...levels.flatMap(l => [l.name, l.price, l.category])];
+  await q(`
+    INSERT INTO level_prices (trade_date, level_name, price, category, computed_at)
+    VALUES ${values}
+    ON CONFLICT (trade_date, level_name) DO UPDATE
+      SET price = EXCLUDED.price, category = EXCLUDED.category, computed_at = NOW()
+  `, params);
+}
+
+// ─── Main ──────────────────────────────────────────────────────────────────
+const args = process.argv.slice(2);
+const isBackfill = args.includes('--backfill');
+const fromIdx = args.indexOf('--from');
+const fromDate = fromIdx >= 0 ? args[fromIdx + 1] : null;
+
+if (isBackfill) {
+  // Get all trading dates from developing_value_log
+  const datesR = await q(`
+    SELECT trade_date::text AS d FROM developing_value_log
+    WHERE ($1::date IS NULL OR trade_date >= $1::date)
+    ORDER BY trade_date
+  `, [fromDate]);
+  const dates = datesR.rows.map(r => r.d.slice(0, 10));
+  console.log(`Backfilling ${dates.length} dates from ${dates[0]} to ${dates[dates.length - 1]}`);
+
+  let done = 0;
+  for (const date of dates) {
+    try {
+      const levels = await computeLevelsForDate(date);
+      await writeLevels(date, levels);
+      done++;
+      if (done % 50 === 0) console.log(`  ${done}/${dates.length} (${date})`);
+    } catch (e) {
+      console.error(`  ERROR ${date}: ${e.message}`);
+    }
+  }
+  console.log(`Done. ${done} dates processed.`);
+} else {
+  // Single date
+  const date = args[0] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  console.log(`Computing levels for ${date}...`);
+  const levels = await computeLevelsForDate(date);
+  await writeLevels(date, levels);
+  console.log(`Wrote ${levels.length} levels:`);
+  levels.forEach(l => console.log(`  ${l.name.padEnd(16)} ${l.price}  [${l.category}]`));
+}
+
+await pool.end();
