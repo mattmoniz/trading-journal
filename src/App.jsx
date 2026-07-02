@@ -19595,6 +19595,10 @@ function EdgeSectionsPanel() {
     return () => clearInterval(iv);
   }, []);
   React.useEffect(() => { loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET]);
+
+  // Must be before early returns — hook call count must be constant across renders
+  const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
+
   if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
@@ -19674,8 +19678,6 @@ function EdgeSectionsPanel() {
       }
     }
   }
-
-  const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
