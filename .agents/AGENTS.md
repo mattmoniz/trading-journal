@@ -37,10 +37,11 @@ This project has two persistent watcher systems. At session start, verify their 
 ## Communication Protocol (Claude ↔ Gemini)
 
 1. **Claude writes** a task to `scratch/claude_request.md` (always includes the AUTONOMOUS header)
-2. **Gemini reads** it, executes, writes ALL output to `scratch/antigravity_response.md`
-3. **Claude reads** and validates the response
+2. **Claude invokes Gemini directly** via `./scripts/invoke_gemini.sh` (runs `agy --print < scratch/claude_request.md`)
+3. **Gemini executes**, writes ALL output to `scratch/antigravity_response.md`
+4. **Claude reads** and validates the response
 
-The `check_watcher.mjs` cron detects when `claude_request.md` changes — Gemini should check for `[CHANGED]` output from that script to know a new task is waiting.
+The `check_watcher.mjs` / cron approach is a fallback — Claude now wakes Gemini directly via the `agy` CLI.
 
 ---
 
