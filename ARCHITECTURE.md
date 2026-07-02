@@ -188,7 +188,7 @@ server/
 | Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
 | Prep & review | `morningBrief.js`, `premarketWalkthrough.js`, `calendar.js`, `annotations.js`, `longterm.js` | Pre-open forecast/scalp playbook, structured pre-market prep, coaching notes, trade annotations, multi-session structural state |
 | Config | `settings.js` | Health check, setup types, custom fields, settings/todos |
-| Volatility / error | `index.js` (direct) | `/api/vol-alert` (GET) — overnight range σ vs rolling 20-day stats, used by `VolatilityAlertBanner`; `/api/client-error` (POST) — receives React `ErrorBoundary` crash reports and logs them to server log |
+| Volatility / error | `index.js` (direct) | `/api/vol-alert` (GET) — overnight range σ + OR-width σ, double-alert flag, used by `VolatilityAlertBanner`; `/api/client-error` (POST) — receives React `ErrorBoundary` crashes, stores in in-memory ring buffer; `/api/errors/recent` (GET, `?since=ISO`) — new errors since timestamp, polled by Gemini error watcher every 60s |
 
 ### Services (`server/services/`)
 
@@ -233,12 +233,27 @@ Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `sc
 | Group | Components |
 |---|---|
 | Pre-market context | `MorningBriefPanel`, `PreSessionChecklist`, `PreMarketWalkthrough`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard`, `GapContextCard` |
-| Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView`, `BehavioralGuideCard`, `PostLossCooldown` |
+| Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `BehavioralGuideCard`, `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard`, `LevelMonitorPanel` |
 | Performance viz | `PerformanceVisuals`, `PnlCharts`, `StatsGrid`, `SymbolsTable`, `SetupsTable` |
 | Utility | `SyncProgressPanel`, `RecapDatePicker`, `OptimizationSection`, `DashboardFilters`, `DashboardQuickNav`, `DashboardView` |
 
 Key logic in `App.jsx`: `computeNetTrades()` (second-pass CumPL diff per account for the intraday chart), shared account state, day modal with BP→EP fill grouping.
+
+---
+
+## Systemd User Services (auto-start on boot, restart on crash)
+
+Managed via `systemctl --user [start|stop|restart|status] <name>`. Both enabled and lingering (`loginctl enable-linger mmoniz`) so they start at WSL2 boot without login.
+
+| Service | File | What it runs |
+|---|---|---|
+| `trading-journal-server` | `~/.config/systemd/user/trading-journal-server.service` | `node server/index.js` on port 3002 |
+| `trading-journal-watcher` | `~/.config/systemd/user/trading-journal-watcher.service` | `scratch/gemini_error_watcher.mjs` — polls health + errors, writes `scratch/gemini_alerts.txt` |
+
+**PostgreSQL** is managed by system-level systemd (not user-level) — `pg_isready` to check.
+
+**Vite frontend** (port 5173) is NOT a service — start manually with `npm run client` or `./start.sh`.
 
 ---
 
