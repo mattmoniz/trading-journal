@@ -252,10 +252,26 @@ app.use('/api', developingValueRouter);
 app.use('/api', antigravityEdgesRouter);
 
 // Client-side error reporting — catches React render crashes via ErrorBoundary
+// In-memory ring buffer for errors visible to the Gemini watcher
+const recentErrors = [];
+const MAX_ERRORS = 50;
+function recordError(type, message, detail) {
+  recentErrors.unshift({ ts: new Date().toISOString(), type, message, detail: detail?.slice?.(0, 500) });
+  if (recentErrors.length > MAX_ERRORS) recentErrors.pop();
+}
+
 app.post('/api/client-error', (req, res) => {
   const { component, message, stack } = req.body || {};
   console.error(`[CLIENT ERROR] ${component}: ${message}\n${stack || ''}`);
+  recordError('CLIENT_ERROR', `${component}: ${message}`, stack);
   res.json({ ok: true });
+});
+
+// Gemini watcher polls this to detect errors without log scraping
+app.get('/api/errors/recent', (req, res) => {
+  const since = req.query.since ? new Date(req.query.since) : null;
+  const errors = since ? recentErrors.filter(e => new Date(e.ts) > since) : recentErrors.slice(0, 20);
+  res.json({ errors, serverTime: new Date().toISOString() });
 });
 
 // Overnight volatility alert — used by pre-session banner
@@ -476,6 +492,15 @@ app.get('/api/health/data', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Global Express error middleware — catches any thrown errors from route handlers
+// and records them to the in-memory buffer so the Gemini watcher can detect them
+app.use((err, req, res, next) => {
+  const msg = `${req.method} ${req.path} — ${err.message}`;
+  console.error('[SERVER ERROR]', msg, err.stack || '');
+  recordError('SERVER_ERROR', msg, err.stack);
+  if (!res.headersSent) res.status(500).json({ error: err.message });
 });
 
 // Socket.IO
