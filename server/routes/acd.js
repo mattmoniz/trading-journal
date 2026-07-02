@@ -4950,18 +4950,51 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Setup types currently in shadowCandidates — tracked but not live-traded.
+  // Used by /api/setups/history to let the user filter "shadow type" rows even
+  // when those historical rows pre-date the demotion and still have status='RESOLVED'.
+  const SHADOW_SETUP_TYPES = new Set([
+    'TRT_LONG','TRT_SHORT','TRT_LONG_V2','TRT_SHORT_V2','TRT_MAH_SHORT','TRT_MAH_LONG',
+    'STOP_SWEEP_LONG','STOP_SWEEP_SHORT',
+    'VWAP_MAGNET_LONG','VWAP_MAGNET_SHORT',
+    'ZONE_EDGE_FADE',
+    'A_DOWN_WEAK','A_UP_WEAK','A_UP_STRONG','A_DOWN_STRONG',
+    'OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT',
+    'OPEN_TEST_DRIVE_LONG','OPEN_TEST_DRIVE_SHORT',
+    'VALUE_AREA_RESPONSIVE_LONG','VALUE_AREA_RESPONSIVE_SHORT',
+    'C_STANDALONE_UP','C_STANDALONE_DOWN',
+    'C_PAIRED_LONG','C_PAIRED_SHORT',
+    'FAILED_AUCTION_LONG','FAILED_AUCTION_SHORT',
+    'BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
+    'GAP_FILL_LONG','GAP_FILL_SHORT',
+    // Context/directional signals — not mechanical scalps, huge MAE vs target
+    'IB_BULLISH','IB_BEARISH',
+  ]);
+
   // ── GET /api/setups/history ───────────────────────────────────────────────
   router.get('/setups/history', async (req, res) => {
     try {
-      const { from, to, type, resolution, limit = 500, offset = 0 } = req.query;
-      const conditions = ["status != 'SHADOW'"];
-      const params = [];
+      const { from, to, type, resolution, shadow = 'hide', limit = 2000, offset = 0 } = req.query;
+      const shadowTypes = [...SHADOW_SETUP_TYPES];
+      // $1 = shadowTypes only when actually used (not for shadow=show)
+      const params = shadow === 'show' ? [] : [shadowTypes];
+      const shadowRef = shadow === 'show' ? null : `$1`;
+      let conditions;
+      if (shadow === 'only') {
+        conditions = [`setup_type = ANY(${shadowRef})`];
+      } else if (shadow === 'show') {
+        conditions = ["status != 'SHADOW'"];
+      } else {
+        conditions = ["status != 'SHADOW'", `setup_type != ALL(${shadowRef})`];
+      }
       if (from) { params.push(from); conditions.push(`trade_date >= $${params.length}`); }
       if (to)   { params.push(to);   conditions.push(`trade_date <= $${params.length}`); }
       if (type) { params.push(type); conditions.push(`setup_type = $${params.length}`); }
       if (resolution) { params.push(resolution); conditions.push(`resolution = $${params.length}`); }
-      params.push(parseInt(limit)); params.push(parseInt(offset));
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const totalR = await query(`SELECT COUNT(*)::int as total FROM active_setups ${where}`, params);
+      const total = totalR.rows[0]?.total || 0;
+      params.push(parseInt(limit)); params.push(parseInt(offset));
       const r = await query(`
         SELECT id, trade_date::text, setup_type, fired_at::text as fired_at_str,
           entry_zone_low, stop_level, t1_level, t1_label, status, resolution, actual_pnl,
@@ -4971,7 +5004,9 @@ export default function createACDRouter(io) {
         ORDER BY trade_date DESC, fired_at DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}
       `, params);
-      res.json({ setups: r.rows, count: r.rows.length });
+      const shadowSet = new Set(shadowTypes);
+      const rows = r.rows.map(row => ({ ...row, is_shadow_type: shadowSet.has(row.setup_type) }));
+      res.json({ setups: rows, count: rows.length, total });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
