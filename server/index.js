@@ -251,6 +251,65 @@ app.use('/api', annotationsRouter);
 app.use('/api', developingValueRouter);
 app.use('/api', antigravityEdgesRouter);
 
+// Client-side error reporting — catches React render crashes via ErrorBoundary
+app.post('/api/client-error', (req, res) => {
+  const { component, message, stack } = req.body || {};
+  console.error(`[CLIENT ERROR] ${component}: ${message}\n${stack || ''}`);
+  res.json({ ok: true });
+});
+
+// Overnight volatility alert — used by pre-session banner
+// Returns overnight range, rolling 20-day avg/std, σ level, and alert flag
+app.get('/api/vol-alert', async (req, res) => {
+  try {
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    const r = await query(`
+      WITH today_on AS (
+        SELECT
+          MIN(low)::float as on_low, MAX(high)::float as on_high,
+          (MAX(high)-MIN(low))::float as on_range
+        FROM price_bars_primary
+        WHERE ts::date = $1 AND symbol='NQ'
+          AND (ts AT TIME ZONE 'America/New_York')::time < '09:30:00'
+      ),
+      prior_on AS (
+        SELECT ts::date, (MAX(high)-MIN(low))::float as rng
+        FROM price_bars_primary
+        WHERE symbol='NQ'
+          AND ts::date IN (
+            SELECT DISTINCT ts::date FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date < $1
+            ORDER BY ts::date DESC LIMIT 20
+          )
+          AND (ts AT TIME ZONE 'America/New_York')::time < '09:30:00'
+        GROUP BY ts::date
+      ),
+      stats AS (
+        SELECT AVG(rng) as avg_rng, STDDEV(rng) as std_rng FROM prior_on
+      )
+      SELECT
+        t.on_low, t.on_high, t.on_range,
+        ROUND(s.avg_rng::numeric, 1) as avg_20d,
+        ROUND(s.std_rng::numeric, 1) as std_20d,
+        ROUND(((t.on_range - s.avg_rng) / NULLIF(s.std_rng, 0))::numeric, 2) as sigma
+      FROM today_on t, stats s
+    `, [todayET]);
+    const row = r.rows[0];
+    if (!row) return res.json({ alert: false });
+    const sigma = parseFloat(row.sigma) || 0;
+    res.json({
+      alert: sigma >= 1.0,
+      sigma: parseFloat(sigma.toFixed(2)),
+      on_range: Math.round(row.on_range),
+      on_low: row.on_low,
+      on_high: row.on_high,
+      avg_20d: parseFloat(row.avg_20d),
+      std_20d: parseFloat(row.std_20d),
+      threshold: Math.round(parseFloat(row.avg_20d) + parseFloat(row.std_20d)),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Admin trigger endpoints
 app.post('/api/admin/run-coaching', async (req, res) => {
   try {

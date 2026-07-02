@@ -12,6 +12,16 @@ export default class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, info) {
     console.error('[ErrorBoundary]', this.props.name || 'unknown', error, info.componentStack);
+    fetch('/api/client-error', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        component: this.props.name || 'unknown',
+        message: error.message,
+        stack: error.stack,
+        componentStack: info.componentStack,
+      }),
+    }).catch(() => {});
   }
 
   render() {

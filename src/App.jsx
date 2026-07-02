@@ -21,6 +21,7 @@ import BehavioralGuideCard from './components/dashboard/BehavioralGuideCard.jsx'
 import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
 import LiveScriptsCard from './components/dashboard/LiveScriptsCard.jsx';
 import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
+import VolatilityAlertBanner from './components/dashboard/VolatilityAlertBanner.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import {
@@ -22426,6 +22427,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
 
+            <VolatilityAlertBanner />
             <TradeAlertBanner />
 
             {/* Split Grid for Daily Execution Info */}
