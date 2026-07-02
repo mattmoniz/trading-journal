@@ -268,8 +268,13 @@ export async function getSessionForecast(targetDate) {
       SELECT MAX(h) as hi, MIN(l) as lo FROM (
         SELECT MAX(high)::float as h, MIN(low)::float as l
         FROM price_bars_primary WHERE symbol='NQ'
-        AND ts::date BETWEEN ($1::date - ${n}) AND ($1::date - 1)
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        AND ts::date IN (
+          SELECT DISTINCT ts::date FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1::date
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY ts::date DESC LIMIT ${n}
+        )
         GROUP BY ts::date
       ) x
     `, [targetDate]).catch(() => ({ rows: [] }));

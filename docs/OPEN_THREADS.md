@@ -4,7 +4,19 @@ Living continuity tracker — distinct from [KNOWN_ISSUES.md](KNOWN_ISSUES.md) (
 
 When an item is finished, delete it (don't mark it done — git history is the record of what was fixed and when, same convention as KNOWN_ISSUES.md). When a session confirms a decision, proposes a follow-up, or finds a stats/data-freshness gap and doesn't finish it in the same session, add it here before the session ends.
 
+## Active bugs / pending fixes
+
+- **`expireStaleSetups` doesn't clean up SHADOW rows from prior days lacking `expires_at`** — On 2026-07-02 startup, 3 June 24 SHADOW rows conflicted with existing RESOLVED/EXPIRED rows (unique constraint `idx_as_unique_setup`), causing mass 500s across all acd/morning-brief endpoints during the trading session. **Immediate fix applied**: deleted 3 conflicting rows (ids 16085/16086/16087), expired 16 other stale shadows from past dates. **Permanent fix needed**: add to `expireStaleSetups()` in `acd.js`: delete SHADOW rows from prior trade dates that have a conflicting RESOLVED/EXPIRED row, and expire the rest. Without this, the bug will recur on any day where shadow setups accumulate.
+
+- **Monte Carlo optimizer ran on stale 718-trade dataset (2026-07-02)** — `scratch/mc_results.md` shows all p50 equities negative (21% survival), because Gemini's `pull_mc_dataset.mjs` re-fetched PRO-only trades and overwrote the 14K file. The 14K all-account dataset (`scratch/mc_trades.json`) needs to be re-pulled (query in prior session: remove `LIKE '%-PRO%'` filter from the pull script), then `node scripts/monte_carlo_optimizer.js` re-run. Do NOT let Gemini touch `mc_trades.json` directly — it will overwrite with the PRO-only subset again.
+
 ## Recently completed (kept briefly for handoff continuity, then delete)
+
+- **Session forecast range fix deployed (2026-07-02).** `sessionForecastService.js` range position was using `$1::date - N` (calendar days) instead of actual trading days. Fixed to subquery `SELECT DISTINCT ts::date FROM price_bars_primary ... ORDER BY DESC LIMIT N`. 5/10/20-day windows now use actual trading sessions. 20-day range was previously truncated (28,227 low was invisible); now shows correctly.
+
+- **LevelMonitorPanel.jsx render crash fixed (2026-07-02).** `bars[last].close` is a DB string, not a number — calling `.toFixed()` on it threw "not a function". Fixed: `setCurrentPrice(parseFloat(...))` at line 49.
+
+- **level_prices computed for 2026-07-02.** PD_VAH=30,265 / PD_POC=30,194 / PD_VAL=30,122 / FLOOR_S1=29,971 / FLOOR_S2=29,861. Confirmed "2D" labels in Sierra Chart = our "PD" (Prior Day) levels — exact match.
 
 - **Level monitoring system built and wired (2026-07-01).** `scripts/compute_levels.js` computes 42 MGI levels (PD VA, overnight high/low, OR, VWAP, floor pivots, weekly/monthly/quarterly VA) from price_bars_primary + developing_value_log + acd_daily_log. `level_prices` table: `(trade_date, level_name, price, category)` — backfilled 16,578 rows (404 trading days, Nov 2023–Jul 2026). `server/services/levelProximityService.js` tags BP fills as AT_LEVEL (≤5pt) / LATE (5-15pt) / CHASING (>15pt) and writes top-3 nearest levels to `trades.level_proximity` JSONB — historical backfill: 10,860 trades. `LevelMonitorPanel.jsx` added to DashboardView — shows all 42 levels grouped by category with color-coded distance. `/api/level-prices/:date` and `/api/level-prices/tag/:date` added to `keyLevels.js`. 4 PM auto-import cron now runs `tagTradesForDate`. Compute-levels cron fires 9:30 PM ET Sunday.
 

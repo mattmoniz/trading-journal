@@ -46,7 +46,7 @@ export default function LevelMonitorPanel({ date }) {
       .then(r => r.json())
       .then(j => {
         const bars = j.bars || [];
-        if (bars.length) setCurrentPrice(bars[bars.length - 1].close);
+        if (bars.length) setCurrentPrice(parseFloat(bars[bars.length - 1].close));
       })
       .catch(() => {});
   }, [targetDate]);
