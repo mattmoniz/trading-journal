@@ -368,6 +368,53 @@ function buildRollingVAs(dates, barsByDate) {
   return { m1VAByDate, m3VAByDate };
 }
 
+// ── Prior calendar-week high/low ──────────────────────────────────────────────
+function buildPriorWeekLevels(dates, barsByDate) {
+  const pwByDate = new Map();
+  for (let i = 0; i < dates.length; i++) {
+    const d = dates[i];
+    const dt = new Date(d + 'T12:00:00');
+    const dow = dt.getDay(); // 0=Sun,1=Mon,...,5=Fri
+    // Monday of current week
+    const thisMon = new Date(dt);
+    thisMon.setDate(dt.getDate() - (dow === 0 ? 6 : dow - 1));
+    // Last Friday = thisMon - 3 days; last Monday = lastFri - 4 days
+    const lastFri = new Date(thisMon); lastFri.setDate(thisMon.getDate() - 3);
+    const lastMon = new Date(lastFri);  lastMon.setDate(lastFri.getDate() - 4);
+    const fromStr = lastMon.toISOString().slice(0, 10);
+    const toStr   = lastFri.toISOString().slice(0, 10);
+    let hi = null, lo = null;
+    for (let j = i - 1; j >= 0 && dates[j] >= fromStr; j--) {
+      if (dates[j] > toStr) continue;
+      for (const b of (barsByDate.get(dates[j]) || [])) {
+        if (hi === null || b.high > hi) hi = b.high;
+        if (lo === null || b.low  < lo) lo = b.low;
+      }
+    }
+    if (hi != null && lo != null) pwByDate.set(d, { high: hi, low: lo });
+  }
+  console.log(`  Prior-week levels: ${pwByDate.size} dates`);
+  return pwByDate;
+}
+
+// ── 2-session composite POC ───────────────────────────────────────────────────
+function buildTwoDayPOC(dates, barsByDate) {
+  const pocByDate = new Map();
+  for (let i = 2; i < dates.length; i++) {
+    const bars = [...(barsByDate.get(dates[i-1]) || []), ...(barsByDate.get(dates[i-2]) || [])];
+    if (!bars.length) continue;
+    const vbk = {};
+    for (const b of bars) {
+      const bk = Math.round(b.close / 25) * 25;
+      vbk[bk] = (vbk[bk] || 0) + b.vol;
+    }
+    const sorted = Object.entries(vbk).sort((a, b) => b[1] - a[1]);
+    if (sorted.length) pocByDate.set(dates[i], parseFloat(sorted[0][0]));
+  }
+  console.log(`  2D POC: ${pocByDate.size} dates`);
+  return pocByDate;
+}
+
 // ── Per-session PD IB mid ─────────────────────────────────────────────────────
 function pdIbMid(prevBars) {
   if (!prevBars) return null;
@@ -393,7 +440,11 @@ function detectLevelFades(bars, levels, isMonday) {
     const b = bars[i], prev = bars[i-1];
     if (b.tod < IB_CLOSE) continue; // wait for IB to close
     if (b.tod >= AM_CUT) break;
-    for (const [name, lvl] of Object.entries(levels)) {
+    for (const [name, entry] of Object.entries(levels)) {
+      // Level entry can be a plain price or { price, stop, target } for custom params
+      const lvl    = (entry !== null && typeof entry === 'object') ? entry.price  : entry;
+      const stopPt = (entry !== null && typeof entry === 'object') ? (entry.stop   ?? STOP)   : STOP;
+      const tgtPt  = (entry !== null && typeof entry === 'object') ? (entry.target ?? TARGET) : TARGET;
       if (lvl == null || fired.has(name)) continue;
       const nearNow  = Math.abs(b.close - lvl) <= 10;
       if (!nearNow) continue;
@@ -401,8 +452,8 @@ function detectLevelFades(bars, levels, isMonday) {
       const dir = fromAbove ? 'SHORT' : 'LONG';
       fires.push({ type: `${name}_${dir}`, direction: dir,
         entryIdx: i, entry: b.close,
-        stop: dir === 'LONG' ? b.close - STOP : b.close + STOP,
-        target: dir === 'LONG' ? b.close + TARGET : b.close - TARGET });
+        stop:   dir === 'LONG' ? b.close - stopPt : b.close + stopPt,
+        target: dir === 'LONG' ? b.close + tgtPt  : b.close - tgtPt });
       fired.add(name);
     }
   }
@@ -823,6 +874,8 @@ async function main() {
   const monthOpenByDate = buildMonthlyOpens(dates, barsByDate);
   const pmVAByDate      = buildPriorMonthVAs(dates, barsByDate);
   const { m1VAByDate, m3VAByDate } = buildRollingVAs(dates, barsByDate);
+  const pwByDate        = buildPriorWeekLevels(dates, barsByDate);
+  const twoDayPOCByDate = buildTwoDayPOC(dates, barsByDate);
 
   // All trades keyed by setup_type: array of resolved trade objects with .date
   const allTrades = new Map();
@@ -898,6 +951,15 @@ async function main() {
       M1_VAL:      m1VA?.val ?? null,
       M3_VAH:      m3VA?.vah ?? null,
       M3_VAL:      m3VA?.val ?? null,
+      // New levels — PD-2 VA, prior week H/L, 2D composite POC, IB/OR mids
+      PD2_VAH:     dvlByDate.get(dates[di-2])?.vah ?? null,
+      PD2_VAL:     dvlByDate.get(dates[di-2])?.val ?? null,
+      PW_HIGH:     pwByDate.get(date)?.high ?? null,
+      PW_LOW:      pwByDate.get(date)?.low  ?? null,
+      '2D_POC':    twoDayPOCByDate.get(date) ?? null,
+      // Custom stop/target overrides: IB mid scalp (50/15) and OR mid after IB (35/20)
+      IB_MID_SCALP:    (ibH && ibL) ? { price: (ibH + ibL) / 2, stop: 50, target: 15 } : null,
+      OR_MID_AFTER_IB: (orH && orL) ? { price: (orH + orL) / 2, stop: 35, target: 20 } : null,
     };
 
     const nl30    = parseInt(acd.nl30) || 0;
@@ -1007,8 +1069,15 @@ async function main() {
     'PM_VAL':      ['PM_VAL_LONG',      'PM_VAL_SHORT'],
     'M1_VAH':      ['M1_VAH_LONG',      'M1_VAH_SHORT'],
     'M1_VAL':      ['M1_VAL_LONG',      'M1_VAL_SHORT'],
-    'M3_VAH':      ['M3_VAH_LONG',      'M3_VAH_SHORT'],
-    'M3_VAL':      ['M3_VAL_LONG',      'M3_VAL_SHORT'],
+    'M3_VAH':         ['M3_VAH_LONG',         'M3_VAH_SHORT'],
+    'M3_VAL':         ['M3_VAL_LONG',         'M3_VAL_SHORT'],
+    'PD2_VAH':        ['PD2_VAH_LONG',        'PD2_VAH_SHORT'],
+    'PD2_VAL':        ['PD2_VAL_LONG',        'PD2_VAL_SHORT'],
+    'PW_HIGH':        ['PW_HIGH_LONG',        'PW_HIGH_SHORT'],
+    'PW_LOW':         ['PW_LOW_LONG',         'PW_LOW_SHORT'],
+    '2D_POC':         ['2D_POC_LONG',         '2D_POC_SHORT'],
+    'IB_MID_SCALP':   ['IB_MID_SCALP_LONG',   'IB_MID_SCALP_SHORT'],
+    'OR_MID_AFTER_IB':['OR_MID_AFTER_IB_LONG','OR_MID_AFTER_IB_SHORT'],
   };
 
   const sysBacktestPromises = [];
