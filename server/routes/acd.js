@@ -2579,6 +2579,43 @@ export default function createACDRouter(io) {
         setCached(todayET, 'pd2VA', { pd2VAH, pd2VAL });
       }
 
+      // Prior-month VA + month open — cached (changes only between months)
+      let pmVAH = null, pmVAL = null, pmPOC = null, monthOpen = null;
+      const cachedPmVA = getCached(todayET, 'pmVA');
+      if (cachedPmVA) {
+        ({ pmVAH, pmVAL, pmPOC, monthOpen } = cachedPmVA);
+      } else {
+        try {
+          const pmVaQ = await query(`
+            WITH vp AS (
+              SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
+              FROM price_bars_primary
+              WHERE symbol='NQ'
+                AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+                AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
+              GROUP BY ROUND(low/0.25)*0.25
+            ),
+            total AS (SELECT SUM(vol) as t FROM vp),
+            poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
+            SELECT p.poc_px::float as poc,
+              (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
+              (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
+            FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
+          `);
+          if (pmVaQ.rows[0]) { pmVAH = pmVaQ.rows[0].vah; pmVAL = pmVaQ.rows[0].val; pmPOC = pmVaQ.rows[0].poc; }
+          const moQ = await query(`
+            SELECT open::float as mo FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date = (
+              SELECT MIN(ts::date) FROM price_bars_primary
+              WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+            ) ORDER BY ts LIMIT 1
+          `);
+          monthOpen = moQ.rows[0]?.mo || null;
+        } catch (_) {}
+        setCached(todayET, 'pmVA', { pmVAH, pmVAL, pmPOC, monthOpen });
+      }
+
       // NL30 state — cached
       let nl30, nl30State, isMahBull, isMahBear;
       const cachedNL = getCached(todayET, 'nl30');
