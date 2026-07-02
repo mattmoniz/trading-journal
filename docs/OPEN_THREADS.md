@@ -6,6 +6,10 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 ## Active bugs / pending fixes
 
+- **Setup Log P&L is wrong (2026-07-02)** — `actual_pnl` for old-style setups (IB_BULLISH/BEARISH, C_STANDALONE, OPEN_TEST_DRIVE, TRT, VA_RESP, BRACKET) was computed with PT=$5/pt. Level-fade setups correctly use PT=$2/pt. The mismatch dominates the total P&L display (shows -$7,441 at 61% WR). Fix: recompute all `actual_pnl` for resolved rows with `ABS(t1-entry)*2-1` for wins, `-(ABS(entry-stop)*2)-1` for losses. Also fix resolution code in `server/routes/setups.js` to write PT=2 going forward.
+
+- **Setup Log times inconsistent (2026-07-02)** — `fired_at_str` / `resolved_at_str` stored inconsistently (some rows UTC, some ET). UI does `slice(11,16)` on the string — UTC values display wrong times. Fix: in `/api/setups/history` query, always use `TO_CHAR(s.fired_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York', 'YYYY-MM-DD HH24:MI:SS') as fired_at_str`. Also check that `resolved_at` column exists and is populated correctly.
+
 - **IB_MID_SCALP negative EV needs targeted backtest (2026-07-02)** — WR=73.6% but EV=-$5.2 because stop=50pt and T1=17pt requires 74.6% WR to break even (1pt short). Two paths: tighten stop from 50→30pt (reduces MAE requirement) or raise T1 from 17→22pt (p75_mfe). Need a dedicated targeted backtest with varied stop/target combinations to find the optimal configuration before changing live params. Don't touch the live stop/target without the backtest.
 
 - **Camarilla + Weekly/Monthly Pivot results (2026-07-02)** — 18 new levels backtested. ACTIVE: WS1 (85.7% WR, N=30, +$35.7 EV), MPP (77.8%, N=27, +$22.7 EV), MR1 (78.9%, N=23, +$20.9 EV), WR1 (77.5%, N=48, +$17.1 EV), CAM_R2/S2/R1 (+EV ACTIVE). CONTEXT (negative EV from wide stops): CAM_R3/R4/S3/S4 — the outer Camarilla levels have 88-91pt stops that eat the WR edge. WR2/MS2 are thin (N<20) but 80-100% WR — worth watching. All levels wired: `compute_levels.js` → `level_prices` → `backtest_unified.js` + `acd.js` (keepLevels). **Next**: run Gemini task to get proximity windows + confirm which ACTIVE levels to prioritize in live banners.
