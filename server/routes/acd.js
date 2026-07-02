@@ -3791,6 +3791,24 @@ export default function createACDRouter(io) {
             if (pdOrQ.rows[0]?.or_high) pdOrMid = (pdOrQ.rows[0].or_high + pdOrQ.rows[0].or_low) / 2;
           } catch(_) {}
 
+          let ib10Mid = null;
+          try {
+            const ib10Q = await query(`
+              SELECT AVG((ibh + ibl) / 2.0)::float as mid FROM (
+                SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+                FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date IN (
+                  SELECT DISTINCT ts::date FROM price_bars_primary
+                  WHERE symbol='NQ' AND ts::date < $1
+                    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+                  ORDER BY ts::date DESC LIMIT 10
+                ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+                GROUP BY ts::date
+              ) t
+            `, [todayET]);
+            if (ib10Q.rows[0]?.mid) ib10Mid = ib10Q.rows[0].mid;
+          } catch(_) {}
+
           // Today's IB high/low — only valid after IB closes at 10:30 (etMinNow >= 630)
           let ibHighToday = null, ibLowToday = null;
           if (etMinNow >= 630) {
@@ -3812,24 +3830,24 @@ export default function createACDRouter(io) {
           const ibMid = (ibHighToday && ibLowToday) ? (ibHighToday + ibLowToday) / 2 : null;
           const orMid = (orH && orL) ? (orH + orL) / 2 : null;
 
-          // Prior-week high/low from level_prices (cached daily)
-          let pwHigh = null, pwLow = null;
-          const cachedPW = getCached(todayET, 'pwHL');
-          if (cachedPW) {
-            ({ pwHigh, pwLow } = cachedPW);
-          } else {
+          // All static levels from level_prices — single batch query, cached daily.
+          // Replaces individual PW_HIGH/PW_LOW, PM_VAH, etc. queries.
+          // OR_HIGH/OR_LOW/IB_HIGH/IB_LOW/IB_MID/OR_MID stay as real-time bar values
+          // because compute_levels.js may not have run yet during the live session.
+          const cachedLP = getCached(todayET, 'lpAll');
+          let lp = cachedLP || {};
+          if (!cachedLP) {
             try {
-              const pwQ = await query(
-                `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND level_name IN ('PW_HIGH','PW_LOW')`,
+              const lpQ = await query(
+                `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1`,
                 [todayET]
               );
-              for (const r of pwQ.rows) {
-                if (r.level_name === 'PW_HIGH') pwHigh = r.price;
-                else pwLow = r.price;
-              }
+              for (const r of lpQ.rows) lp[r.level_name] = r.price;
             } catch(_) {}
-            setCached(todayET, 'pwHL', { pwHigh, pwLow });
+            setCached(todayET, 'lpAll', lp);
           }
+          const pwHigh = lp.PW_HIGH ?? null;
+          const pwLow  = lp.PW_LOW  ?? null;
 
           // 2-day composite POC (POC of combined last-2-session RTH volume profile)
           let twoDayPOC = null;
@@ -3877,29 +3895,6 @@ export default function createACDRouter(io) {
                 FROM performance_audit
                 WHERE signal_type = 'UNIFIED_BACKTEST'
                   AND window_days = 9999
-                  AND signal_name IN (
-                    'PD_POC_LONG','PD_POC_SHORT',
-                    '5D_OR_MID_LONG','5D_OR_MID_SHORT',
-                    'PD_VAL_LONG','PD_VAL_SHORT',
-                    'PD_VAH_LONG','PD_VAH_SHORT',
-                    'PD_IB_MID_LONG','PD_IB_MID_SHORT',
-                    'FLOOR_PIVOT_LONG','FLOOR_PIVOT_SHORT',
-                    'OR_HIGH_LONG','OR_HIGH_SHORT',
-                    'OR_LOW_LONG','OR_LOW_SHORT',
-                    'FLOOR_R1_LONG','FLOOR_R1_SHORT',
-                    'IB_HIGH_LONG','IB_HIGH_SHORT',
-                    'IB_LOW_LONG','IB_LOW_SHORT',
-                    'PD_OR_MID_LONG','PD_OR_MID_SHORT',
-                    'MONTH_OPEN_LONG','MONTH_OPEN_SHORT',
-                    'PM_VAH_LONG','PM_VAH_SHORT',
-                    'PD2_VAH_LONG','PD2_VAH_SHORT',
-                    'PD2_VAL_LONG','PD2_VAL_SHORT',
-                    'PW_HIGH_LONG','PW_HIGH_SHORT',
-                    'PW_LOW_LONG','PW_LOW_SHORT',
-                    '2D_POC_LONG','2D_POC_SHORT',
-                    'IB_MID_SCALP_LONG','IB_MID_SCALP_SHORT',
-                    'OR_MID_AFTER_IB_LONG','OR_MID_AFTER_IB_SHORT'
-                  )
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
               query(`
@@ -3963,46 +3958,115 @@ export default function createACDRouter(io) {
 
           const monOverride = (key) => isMonday && lsMon(key) ? lsMon(key) : {};
           const keepLevels = [
-            { name: 'PD_POC_FADE',    level: pdPOC,   ...(ls('PD_POC')     || {}), ...monOverride('PD_POC') },
-            { name: '5D_OR_MID_FADE', level: or5Mid,  ...(ls('5D_OR_MID')  || {}), ...monOverride('5D_OR_MID') },
-            { name: 'PD_VAL_FADE',    level: pdVAL,   ...(ls('PD_VAL')     || {}), ...monOverride('PD_VAL') },
-            { name: 'PD_VAH_FADE',    level: pdVAH,   ...(ls('PD_VAH')     || {}), ...monOverride('PD_VAH') },
-            { name: 'PD_IB_MID_FADE', level: pdIbMid, ...(ls('PD_IB_MID')  || {}), ...monOverride('PD_IB_MID') },
-            { name: 'FLOOR_PIVOT_FADE',level: floorP, ...(ls('FLOOR_PIVOT') || {}), ...monOverride('FLOOR_PIVOT') },
-            { name: 'OR_HIGH_FADE',   level: orH,     ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
-            { name: 'FLOOR_R1_FADE',  level: floorR1, ...(ls('FLOOR_R1')   || {}), ...monOverride('FLOOR_R1') },
-            { name: 'PD_OR_MID_FADE', level: pdOrMid, ...(ls('PD_OR_MID')  || {}), ...monOverride('PD_OR_MID') },
-            { name: 'OR_LOW_FADE',    level: orL,          ...(ls('OR_LOW')   || {}) },
-            { name: 'IB_HIGH_FADE',   level: ibHighToday,  ...(ls('IB_HIGH')  || {}) },
-            { name: 'IB_LOW_FADE',    level: ibLowToday,   ...(ls('IB_LOW')   || {}) },
-            { name: 'MONTH_OPEN',     level: monthOpen, ...(ls('MONTH_OPEN') || {}) },
-            { name: 'PM_VAH_FADE',    level: pmVAH,   ...(ls('PM_VAH')     || {}) },
-            // Levels that are always computed but weren't in the detection loop before
-            { name: 'PD2_VAH_FADE',   level: pd2VAH,  ...(ls('PD2_VAH')    || {}) },
-            { name: 'PD2_VAL_FADE',   level: pd2VAL,  ...(ls('PD2_VAL')    || {}) },
-            { name: 'PW_HIGH_FADE',   level: pwHigh,  ...(ls('PW_HIGH')    || {}) },
-            { name: 'PW_LOW_FADE',    level: pwLow,   ...(ls('PW_LOW')     || {}) },
-            { name: '2D_POC_FADE',    level: twoDayPOC, ...(ls('2D_POC')   || {}) },
+            // Prior-day value area (POC, VAH, VAL — all three)
+            { name: 'PD_POC_FADE',    level: lp.PD_POC ?? pdPOC,   ...(ls('PD_POC')     || {}), ...monOverride('PD_POC') },
+            { name: 'PD_VAH_FADE',    level: lp.PD_VAH ?? pdVAH,   ...(ls('PD_VAH')     || {}), ...monOverride('PD_VAH') },
+            { name: 'PD_VAL_FADE',    level: lp.PD_VAL ?? pdVAL,   ...(ls('PD_VAL')     || {}), ...monOverride('PD_VAL') },
+            // Prior-day IB mid
+            { name: 'PD_IB_MID_FADE', level: lp.PD_IB_MID ?? pdIbMid, ...(ls('PD_IB_MID') || {}), ...monOverride('PD_IB_MID') },
+            // Floor pivots (all 7: Pivot, R1, R2, R3, S1, S2, S3)
+            { name: 'FLOOR_PIVOT_FADE', level: lp.FLOOR_PIVOT ?? floorP, ...(ls('FLOOR_PIVOT') || {}), ...monOverride('FLOOR_PIVOT') },
+            { name: 'FLOOR_R1_FADE',   level: lp.FLOOR_R1 ?? floorR1,   ...(ls('FLOOR_R1')    || {}), ...monOverride('FLOOR_R1') },
+            { name: 'FLOOR_S1_FADE',   level: lp.FLOOR_S1 ?? null,       ...(ls('FLOOR_S1')    || {}) },
+            // Today's OR/IB (real-time bar values — not from level_prices which may lag)
+            { name: 'OR_HIGH_FADE',   level: orH,         ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
+            { name: 'OR_LOW_FADE',    level: orL,         ...(ls('OR_LOW')     || {}) },
+            { name: 'IB_HIGH_FADE',   level: ibHighToday, ...(ls('IB_HIGH')    || {}) },
+            { name: 'IB_LOW_FADE',    level: ibLowToday,  ...(ls('IB_LOW')     || {}) },
+            // Computed meta-levels
+            { name: '5D_OR_MID_FADE',  level: or5Mid,  ...(ls('5D_OR_MID')  || {}), ...monOverride('5D_OR_MID') },
+            { name: '10D_IB_MID_FADE', level: ib10Mid, ...(ls('10D_IB_MID') || {}) },
+            { name: 'PD_OR_MID_FADE',  level: pdOrMid, ...(ls('PD_OR_MID')  || {}), ...monOverride('PD_OR_MID') },
+            // Prior-day range and IB boundaries
+            { name: 'PD_HIGH_FADE',      level: lp.PD_HIGH      ?? null, ...(ls('PD_HIGH')      || {}) },
+            { name: 'PD_LOW_FADE',       level: lp.PD_LOW       ?? null, ...(ls('PD_LOW')       || {}) },
+            { name: 'PD_CLOSE_FADE',     level: lp.PD_CLOSE     ?? null, ...(ls('PD_CLOSE')     || {}) },
+            { name: 'PD_IB_HIGH_FADE',   level: lp.PD_IB_HIGH   ?? null, ...(ls('PD_IB_HIGH')   || {}) },
+            { name: 'PD_IB_LOW_FADE',    level: lp.PD_IB_LOW    ?? null, ...(ls('PD_IB_LOW')    || {}) },
+            // Extended floor pivots
+            { name: 'FLOOR_R2_FADE',     level: lp.FLOOR_R2     ?? null, ...(ls('FLOOR_R2')     || {}) },
+            { name: 'FLOOR_R3_FADE',     level: lp.FLOOR_R3     ?? null, ...(ls('FLOOR_R3')     || {}) },
+            { name: 'FLOOR_S2_FADE',     level: lp.FLOOR_S2     ?? null, ...(ls('FLOOR_S2')     || {}) },
+            { name: 'FLOOR_S3_FADE',     level: lp.FLOOR_S3     ?? null, ...(ls('FLOOR_S3')     || {}) },
+            // Overnight range
+            { name: 'ONH_FADE',          level: lp.ONH          ?? null, ...(ls('ONH')          || {}) },
+            { name: 'ONL_FADE',          level: lp.ONL          ?? null, ...(ls('ONL')          || {}) },
+            // Opens
+            { name: 'DAILY_OPEN_FADE',   level: lp.DAILY_OPEN   ?? null, ...(ls('DAILY_OPEN')   || {}) },
+            { name: 'WEEKLY_OPEN_FADE',  level: lp.WEEKLY_OPEN  ?? null, ...(ls('WEEKLY_OPEN')  || {}) },
+            { name: 'MONTHLY_OPEN_FADE', level: lp.MONTHLY_OPEN ?? null, ...(ls('MONTHLY_OPEN') || {}) },
+            // Weekly VWAP
+            { name: 'WEEKLY_VWAP_FADE',  level: lp.WEEKLY_VWAP  ?? null, ...(ls('WEEKLY_VWAP')  || {}) },
+            // Prior-week value area
+            { name: 'PW_VAH_FADE',       level: lp.PW_VAH       ?? null, ...(ls('PW_VAH')       || {}) },
+            { name: 'PW_VAL_FADE',       level: lp.PW_VAL       ?? null, ...(ls('PW_VAL')       || {}) },
+            { name: 'PW_POC_FADE',       level: lp.PW_POC       ?? null, ...(ls('PW_POC')       || {}) },
+            // Prior-month value area (VAH, VAL, POC) + range
+            { name: 'PM_VAH_FADE',       level: lp.PM_VAH       ?? null, ...(ls('PM_VAH')       || {}) },
+            { name: 'PM_VAL_FADE',       level: lp.PM_VAL       ?? null, ...(ls('PM_VAL')       || {}) },
+            // PM_POC omitted — WR=44.4%, stop=93pt, EV=-$54.9 (negative EV at any stop)
+            { name: 'PM_HIGH_FADE',      level: lp.PM_HIGH      ?? null, ...(ls('PM_HIGH')      || {}) },
+            { name: 'PM_LOW_FADE',       level: lp.PM_LOW       ?? null, ...(ls('PM_LOW')       || {}) },
+            // Quarterly value area
+            // 3M_VAH omitted — WR=7.1% (structural bull market makes this a breakout level, not fade)
+            { name: '3M_VAL_FADE',       level: lp['3M_VAL']    ?? null, ...(ls('3M_VAL')       || {}) },
+            { name: '3M_POC_FADE',       level: lp['3M_POC']    ?? null, ...(ls('3M_POC')       || {}) },
+            // Camarilla pivots (R3/S3 = reversal zones, R4/S4 = breakout levels)
+            { name: 'CAM_R1_FADE',       level: lp.CAM_R1       ?? null, ...(ls('CAM_R1')       || {}) },
+            { name: 'CAM_R2_FADE',       level: lp.CAM_R2       ?? null, ...(ls('CAM_R2')       || {}) },
+            { name: 'CAM_R3_FADE',       level: lp.CAM_R3       ?? null, ...(ls('CAM_R3')       || {}) },
+            { name: 'CAM_R4_FADE',       level: lp.CAM_R4       ?? null, ...(ls('CAM_R4')       || {}) },
+            { name: 'CAM_S1_FADE',       level: lp.CAM_S1       ?? null, ...(ls('CAM_S1')       || {}) },
+            { name: 'CAM_S2_FADE',       level: lp.CAM_S2       ?? null, ...(ls('CAM_S2')       || {}) },
+            { name: 'CAM_S3_FADE',       level: lp.CAM_S3       ?? null, ...(ls('CAM_S3')       || {}) },
+            { name: 'CAM_S4_FADE',       level: lp.CAM_S4       ?? null, ...(ls('CAM_S4')       || {}) },
+            // Weekly floor pivots
+            { name: 'WPP_FADE',          level: lp.WPP          ?? null, ...(ls('WPP')          || {}) },
+            { name: 'WR1_FADE',          level: lp.WR1          ?? null, ...(ls('WR1')          || {}) },
+            { name: 'WR2_FADE',          level: lp.WR2          ?? null, ...(ls('WR2')          || {}) },
+            { name: 'WS1_FADE',          level: lp.WS1          ?? null, ...(ls('WS1')          || {}) },
+            { name: 'WS2_FADE',          level: lp.WS2          ?? null, ...(ls('WS2')          || {}) },
+            // Monthly floor pivots
+            { name: 'MPP_FADE',          level: lp.MPP          ?? null, ...(ls('MPP')          || {}) },
+            { name: 'MR1_FADE',          level: lp.MR1          ?? null, ...(ls('MR1')          || {}) },
+            { name: 'MR2_FADE',          level: lp.MR2          ?? null, ...(ls('MR2')          || {}) },
+            { name: 'MS1_FADE',          level: lp.MS1          ?? null, ...(ls('MS1')          || {}) },
+            { name: 'MS2_FADE',          level: lp.MS2          ?? null, ...(ls('MS2')          || {}) },
+            // PD-2 value area and prior week H/L
+            { name: 'PD2_VAH_FADE',      level: pd2VAH,                  ...(ls('PD2_VAH')      || {}) },
+            { name: 'PD2_VAL_FADE',      level: pd2VAL,                  ...(ls('PD2_VAL')      || {}) },
+            { name: 'PW_HIGH_FADE',      level: pwHigh,                  ...(ls('PW_HIGH')      || {}) },
+            { name: 'PW_LOW_FADE',       level: pwLow,                   ...(ls('PW_LOW')       || {}) },
+            { name: '2D_POC_FADE',       level: twoDayPOC,               ...(ls('2D_POC')       || {}) },
             // IB mid and OR mid — only valid after IB closes at 10:30
             { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
             { name: 'OR_MID_AFTER_IB_FADE', level: etMinNow >= 630 ? orMid : null, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
           ].filter(l => l.level != null && !mondaySkip.includes(l.name));
 
-          for (const lv of keepLevels) {
-            if (Math.abs(currentPrice - lv.level) > 10) continue;
+          // Collect ALL levels within 15pt — wider than the old 10pt window to catch
+          // approaches that reverse before piercing deeply. Pick the highest-EV level
+          // as the primary setup; annotate description with confluence when 2+ stack.
+          const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
+          if (nearLevels.length > 0) {
+            const primary = nearLevels.reduce((best, lv) =>
+              (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
+            const lv = primary;
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const type = `${lv.name}_${dir}`;
-            // Use data-derived stops/targets from liveStats MAE/MFE; fall back to Monday-aware constants only when data absent
             const stopPts  = Math.round(lv.mae_p75 ?? STOP);
             const targetPts = Math.round(lv.mfe    ?? TARGET);
+            const confluenceCount = nearLevels.length;
+            const confluenceNote = confluenceCount >= 2
+              ? ` ⚡ ${confluenceCount}× confluence: ${nearLevels.map(l => l.name.replace(/_FADE$/, '')).join(' + ')}`
+              : '';
             levelScalpSetup = {
               type,
               direction: dir,
               entry: currentPrice,
               stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
               target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
-              targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}`,
+              targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}${confluenceCount >= 2 ? ` · ${confluenceCount}× confluence` : ''}`,
               description: (() => {
                 const lvStats = ls(lv.name.replace(/_FADE$/, ''));
                 const lDir = lvStats?.long, sDir = lvStats?.short;
@@ -4011,25 +4075,26 @@ export default function createACDRouter(io) {
                   : '';
                 const dirMae = isLong ? (lDir?.mae_p80w ?? null) : (sDir?.mae_p80w ?? null);
                 const stopNote = dirMae != null ? ` Stop calibration: 80% of winners needed <${Math.round(dirMae)}pt of room.` : '';
-                return `${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round(lv.wr * 100)}% WR (N=${lv.n} combined${dirStr}). MAE P50: ${lv.mae}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${isMonday ? ' MONDAY: 60pt stop, 30pt target, post-IB only.' : ' AM first touch.'}`;
+                return `${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${isMonday ? ' MONDAY: 60pt stop, 30pt target, post-IB only.' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
-              sizeMultiplier: lv.ev >= 30 ? 1.0 : 0.75,
+              sizeMultiplier: confluenceCount >= 2 ? 1.0 : (lv.ev >= 30 ? 1.0 : 0.75),
+              confluenceCount,
+              confluenceLevels: nearLevels.map(l => l.name.replace(/_FADE$/, '')),
             };
-            break;
           }
 
           // ── Early-touch backfill ──────────────────────────────────────────
           // For every KEEP level NOT currently near price (liveNear false this poll),
           // scan all RTH bars collected so far (9:30→now, includes bars from before the
-          // 60-bar gate opened) for the earliest bar whose range came within 10pt of the
+          // 60-bar gate opened) for the earliest bar whose range came within 15pt of the
           // level. If found, that's the day's real first touch — record it for stats even
           // though the live banner path above already missed its window. Idempotent: the
           // actual INSERT (later, near the shadowCandidates persist block) checks for an
           // existing row first and is also ON CONFLICT DO NOTHING-protected.
           for (const lv of keepLevels) {
-            if (Math.abs(currentPrice - lv.level) <= 10) continue; // live path already covers this
-            const touchIdx = allRthBarsRow.rows.findIndex(b => b.low <= lv.level + 10 && b.high >= lv.level - 10);
+            if (Math.abs(currentPrice - lv.level) <= 15) continue; // live path already covers this
+            const touchIdx = allRthBarsRow.rows.findIndex(b => b.low <= lv.level + 15 && b.high >= lv.level - 15);
             if (touchIdx === -1) continue;
             const touchBar = allRthBarsRow.rows[touchIdx];
             const priorBar = touchIdx > 0 ? allRthBarsRow.rows[touchIdx - 1] : null;

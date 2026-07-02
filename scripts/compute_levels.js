@@ -3,15 +3,21 @@
 // and writes them to the level_prices table.
 //
 // Levels computed per session:
-//   PRIOR_DAY  : PD_VAH, PD_VAL, PD_POC, PD_HIGH, PD_LOW, PD_CLOSE, PD_IB_HIGH, PD_IB_LOW, PD_IB_MID
-//   OVERNIGHT  : ONH, ONL  (Globex 18:00 prior ET → 09:29 current ET)
-//   CURRENT    : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID
-//   OPENS      : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
-//   VWAP       : RTH_VWAP, WEEKLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
-//   PIVOT      : FLOOR_PIVOT, R1, R2, R3, S1, S2, S3
-//   WEEKLY     : PW_HIGH, PW_LOW, PW_VAH, PW_VAL, PW_POC
-//   MONTHLY    : PM_HIGH, PM_LOW, PM_VAH, PM_VAL, PM_POC
-//   3-MONTH    : 3M_VAH, 3M_VAL, 3M_POC
+//   PRIOR_DAY     : PD_VAH, PD_VAL, PD_POC, PD_HIGH, PD_LOW, PD_CLOSE, PD_IB_HIGH, PD_IB_LOW, PD_IB_MID
+//   OVERNIGHT     : ONH, ONL  (Globex 18:00 prior ET → 09:29 current ET)
+//   CURRENT       : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID
+//   OPENS         : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
+//   VWAP          : RTH_VWAP, WEEKLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
+//   PIVOT         : FLOOR_PIVOT, R1, R2, R3, S1, S2, S3
+//   CAMARILLA     : CAM_R1, CAM_R2, CAM_R3, CAM_R4, CAM_S1, CAM_S2, CAM_S3, CAM_S4 (from PD H/L/C)
+//   WEEKLY        : PW_HIGH, PW_LOW, PW_VAH, PW_VAL, PW_POC
+//   WEEKLY_PIVOT  : WPP, WR1, WR2, WS1, WS2 (prior-week floor pivots)
+//   MONTHLY       : PM_HIGH, PM_LOW, PM_VAH, PM_VAL, PM_POC
+//   MONTHLY_PIVOT : MPP, MR1, MR2, MS1, MS2 (prior-month floor pivots)
+//   3-MONTH       : 3M_VAH, 3M_VAL, 3M_POC
+//
+// CANONICAL DATA FLOW: compute_levels.js → level_prices table → backtest_unified.js + acd.js
+// Adding a new level here is all that's needed to make it fully symmetric across backtest and live detection.
 //
 // Usage:
 //   node scripts/compute_levels.js                  → compute today only
@@ -139,6 +145,18 @@ async function computeLevelsForDate(date) {
       add('FLOOR_S1', Math.round((2 * pivot - h) * 4) / 4,    'PIVOT');
       add('FLOOR_S2', Math.round((pivot - range) * 4) / 4,    'PIVOT');
       add('FLOOR_S3', Math.round((l - 2 * (h - pivot)) * 4) / 4, 'PIVOT');
+
+      // Camarilla pivots from PD H/L/C
+      // R3/S3 = primary reversal zones, R4/S4 = breakout levels
+      const camRange = (h - l) * 1.1;
+      add('CAM_R1', Math.round((c + camRange / 12) * 4) / 4, 'CAMARILLA');
+      add('CAM_R2', Math.round((c + camRange / 6)  * 4) / 4, 'CAMARILLA');
+      add('CAM_R3', Math.round((c + camRange / 4)  * 4) / 4, 'CAMARILLA');
+      add('CAM_R4', Math.round((c + camRange / 2)  * 4) / 4, 'CAMARILLA');
+      add('CAM_S1', Math.round((c - camRange / 12) * 4) / 4, 'CAMARILLA');
+      add('CAM_S2', Math.round((c - camRange / 6)  * 4) / 4, 'CAMARILLA');
+      add('CAM_S3', Math.round((c - camRange / 4)  * 4) / 4, 'CAMARILLA');
+      add('CAM_S4', Math.round((c - camRange / 2)  * 4) / 4, 'CAMARILLA');
     }
   }
 
@@ -268,14 +286,34 @@ async function computeLevelsForDate(date) {
     WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
       AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
   `, [pwMonStr, pwFriStr]);
-  add('PW_HIGH', pwHlR.rows[0]?.h, 'WEEKLY');
-  add('PW_LOW',  pwHlR.rows[0]?.l, 'WEEKLY');
+  const pwH = pwHlR.rows[0]?.h;
+  const pwL = pwHlR.rows[0]?.l;
+  add('PW_HIGH', pwH, 'WEEKLY');
+  add('PW_LOW',  pwL, 'WEEKLY');
 
   const pwVA = await computeValueArea(pwMonStr, pwFriStr);
   if (pwVA) {
     add('PW_VAH', pwVA.vah, 'WEEKLY');
     add('PW_VAL', pwVA.val, 'WEEKLY');
     add('PW_POC', pwVA.poc, 'WEEKLY');
+  }
+
+  // Weekly floor pivots (PP/R1/R2/S1/S2 using prior-week H/L/close)
+  const pwCloseR = await q(`
+    SELECT close::float AS c FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts DESC LIMIT 1
+  `, [pwMonStr, pwFriStr]);
+  const pwC = pwCloseR.rows[0]?.c;
+  if (pwH && pwL && pwC) {
+    const wPP = (pwH + pwL + pwC) / 3;
+    const wRange = pwH - pwL;
+    add('WPP', Math.round(wPP * 4) / 4,                    'WEEKLY_PIVOT');
+    add('WR1', Math.round((2 * wPP - pwL) * 4) / 4,        'WEEKLY_PIVOT');
+    add('WR2', Math.round((wPP + wRange) * 4) / 4,         'WEEKLY_PIVOT');
+    add('WS1', Math.round((2 * wPP - pwH) * 4) / 4,        'WEEKLY_PIVOT');
+    add('WS2', Math.round((wPP - wRange) * 4) / 4,         'WEEKLY_PIVOT');
   }
 
   // ── 9. Prior month H/L/VA ────────────────────────────────────────────────
@@ -289,14 +327,34 @@ async function computeLevelsForDate(date) {
     WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
       AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
   `, [pmBounds.first, pmBounds.last]);
-  add('PM_HIGH', pmHlR.rows[0]?.h, 'MONTHLY');
-  add('PM_LOW',  pmHlR.rows[0]?.l, 'MONTHLY');
+  const pmH = pmHlR.rows[0]?.h;
+  const pmL = pmHlR.rows[0]?.l;
+  add('PM_HIGH', pmH, 'MONTHLY');
+  add('PM_LOW',  pmL, 'MONTHLY');
 
   const pmVA = await computeValueArea(pmBounds.first, pmBounds.last);
   if (pmVA) {
     add('PM_VAH', pmVA.vah, 'MONTHLY');
     add('PM_VAL', pmVA.val, 'MONTHLY');
     add('PM_POC', pmVA.poc, 'MONTHLY');
+  }
+
+  // Monthly floor pivots (PP/R1/R2/S1/S2 using prior-month H/L/close)
+  const pmCloseR = await q(`
+    SELECT close::float AS c FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts DESC LIMIT 1
+  `, [pmBounds.first, pmBounds.last]);
+  const pmC = pmCloseR.rows[0]?.c;
+  if (pmH && pmL && pmC) {
+    const mPP = (pmH + pmL + pmC) / 3;
+    const mRange = pmH - pmL;
+    add('MPP', Math.round(mPP * 4) / 4,                    'MONTHLY_PIVOT');
+    add('MR1', Math.round((2 * mPP - pmL) * 4) / 4,        'MONTHLY_PIVOT');
+    add('MR2', Math.round((mPP + mRange) * 4) / 4,         'MONTHLY_PIVOT');
+    add('MS1', Math.round((2 * mPP - pmH) * 4) / 4,        'MONTHLY_PIVOT');
+    add('MS2', Math.round((mPP - mRange) * 4) / 4,         'MONTHLY_PIVOT');
   }
 
   // ── 10. 3-month VA ───────────────────────────────────────────────────────

@@ -430,6 +430,9 @@ function pdIbMid(prevBars) {
 // entryIdx is the bars[] index of the detection bar (resolution starts at entryIdx+1).
 
 // 1. Level Fades — IB-close gate: no touches before 10:30 AM (matching live system's 60-bar minimum)
+// Proximity widened to 15pt (was 10pt) to match live detection and catch approaches that
+// reverse before piercing deeply. confluenceCount tags how many OTHER levels fired within
+// the same bar — feeds CONFLUENCE_AUDIT in performance_audit.
 function detectLevelFades(bars, levels, isMonday) {
   const STOP = isMonday ? 60 : 90, TARGET = isMonday ? 30 : 40;
   const IB_CLOSE = 630; // 10:30 AM ET = 570 + 60 min
@@ -446,7 +449,7 @@ function detectLevelFades(bars, levels, isMonday) {
       const stopPt = (entry !== null && typeof entry === 'object') ? (entry.stop   ?? STOP)   : STOP;
       const tgtPt  = (entry !== null && typeof entry === 'object') ? (entry.target ?? TARGET) : TARGET;
       if (lvl == null || fired.has(name)) continue;
-      const nearNow  = Math.abs(b.close - lvl) <= 10;
+      const nearNow  = Math.abs(b.close - lvl) <= 15;
       if (!nearNow) continue;
       const fromAbove = prev.close > lvl;
       const dir = fromAbove ? 'SHORT' : 'LONG';
@@ -456,6 +459,10 @@ function detectLevelFades(bars, levels, isMonday) {
         target: dir === 'LONG' ? b.close + tgtPt  : b.close - tgtPt });
       fired.add(name);
     }
+  }
+  // Tag each fire with how many other levels fired on the same bar (confluence)
+  for (const fire of fires) {
+    fire.confluenceCount = fires.filter(f => f.entryIdx === fire.entryIdx).length;
   }
   return fires;
 }
@@ -877,6 +884,19 @@ async function main() {
   const pwByDate        = buildPriorWeekLevels(dates, barsByDate);
   const twoDayPOCByDate = buildTwoDayPOC(dates, barsByDate);
 
+  // Batch load all level_prices for the full date range — single query.
+  // These are the canonical static levels; inline-computed values are used as fallback.
+  const lpResult = await query(
+    `SELECT trade_date::text, level_name, price::float FROM level_prices WHERE trade_date >= $1 AND trade_date <= $2`,
+    [dates[0], dates[dates.length - 1]]
+  );
+  const levelPricesByDate = new Map();
+  for (const row of lpResult.rows) {
+    if (!levelPricesByDate.has(row.trade_date)) levelPricesByDate.set(row.trade_date, {});
+    levelPricesByDate.get(row.trade_date)[row.level_name] = row.price;
+  }
+  console.log(`  Level prices loaded: ${levelPricesByDate.size} dates`);
+
   // All trades keyed by setup_type: array of resolved trade objects with .date
   const allTrades = new Map();
 
@@ -929,35 +949,90 @@ async function main() {
     const ibH = ibBarsToday.length >= 3 ? Math.max(...ibBarsToday.map(b => b.high)) : null;
     const ibL = ibBarsToday.length >= 3 ? Math.min(...ibBarsToday.map(b => b.low)) : null;
 
+    // level_prices is the canonical source — inline computation as fallback
+    const lp = levelPricesByDate.get(date) || {};
+
     const fadeLevels = {
-      PD_POC:       pdPOC,
-      '5D_OR_MID':  or5Mid,
-      '10D_IB_MID': ib10Mid,
-      PD_VAL:      pdVAL,
-      PD_VAH:      pdVAH,
-      PD_IB_MID:   pdIb,
-      FLOOR_PIVOT: fpLevels.FLOOR_PIVOT ?? null,
+      // Prior-day levels
+      PD_POC:      lp.PD_POC      ?? pdPOC,
+      PD_VAH:      lp.PD_VAH      ?? pdVAH,
+      PD_VAL:      lp.PD_VAL      ?? pdVAL,
+      PD_HIGH:     lp.PD_HIGH     ?? null,
+      PD_LOW:      lp.PD_LOW      ?? null,
+      PD_CLOSE:    lp.PD_CLOSE    ?? null,
+      PD_IB_HIGH:  lp.PD_IB_HIGH  ?? null,
+      PD_IB_LOW:   lp.PD_IB_LOW   ?? null,
+      PD_IB_MID:   lp.PD_IB_MID   ?? pdIb,
+      PD_OR_MID:   pdOrMid,
+      // Floor pivots (all 7)
+      FLOOR_PIVOT: lp.FLOOR_PIVOT ?? fpLevels.FLOOR_PIVOT ?? null,
+      FLOOR_R1:    lp.FLOOR_R1    ?? fpLevels.FLOOR_R1    ?? null,
+      FLOOR_R2:    lp.FLOOR_R2    ?? null,
+      FLOOR_R3:    lp.FLOOR_R3    ?? null,
+      FLOOR_S1:    lp.FLOOR_S1    ?? fpLevels.FLOOR_S1    ?? null,
+      FLOOR_S2:    lp.FLOOR_S2    ?? null,
+      FLOOR_S3:    lp.FLOOR_S3    ?? null,
+      // Today's OR/IB (from live bar data — lp values may be stale during session)
       OR_HIGH:     orH,
       OR_LOW:      orL,
-      FLOOR_R1:    fpLevels.FLOOR_R1 ?? null,
-      FLOOR_S1:    fpLevels.FLOOR_S1 ?? null,
-      IB_HIGH:     ibH,
-      IB_LOW:      ibL,
-      PD_OR_MID:   pdOrMid,
-      MONTH_OPEN:  monthOpenByDate.get(date) ?? null,
-      PM_VAH:      pmVA?.vah ?? null,
-      PM_VAL:      pmVA?.val ?? null,
-      M1_VAH:      m1VA?.vah ?? null,
-      M1_VAL:      m1VA?.val ?? null,
-      M3_VAH:      m3VA?.vah ?? null,
-      M3_VAL:      m3VA?.val ?? null,
-      // New levels — PD-2 VA, prior week H/L, 2D composite POC, IB/OR mids
+      IB_HIGH:     lp.IB_HIGH     ?? ibH,
+      IB_LOW:      lp.IB_LOW      ?? ibL,
+      // Overnight
+      ONH:         lp.ONH         ?? null,
+      ONL:         lp.ONL         ?? null,
+      // Opens
+      DAILY_OPEN:    lp.DAILY_OPEN    ?? null,
+      WEEKLY_OPEN:   lp.WEEKLY_OPEN   ?? null,
+      MONTHLY_OPEN:  lp.MONTHLY_OPEN  ?? monthOpenByDate.get(date) ?? null,
+      WEEKLY_VWAP:   lp.WEEKLY_VWAP   ?? null,
+      // Prior-week
+      PW_HIGH:     lp.PW_HIGH     ?? pwByDate.get(date)?.high ?? null,
+      PW_LOW:      lp.PW_LOW      ?? pwByDate.get(date)?.low  ?? null,
+      PW_VAH:      lp.PW_VAH      ?? null,
+      PW_VAL:      lp.PW_VAL      ?? null,
+      PW_POC:      lp.PW_POC      ?? null,
+      // Prior-month
+      PM_VAH:      lp.PM_VAH      ?? pmVA?.vah ?? null,
+      PM_VAL:      lp.PM_VAL      ?? pmVA?.val ?? null,
+      PM_HIGH:     lp.PM_HIGH     ?? null,
+      PM_LOW:      lp.PM_LOW      ?? null,
+      PM_POC:      lp.PM_POC      ?? null,
+      // Quarterly (3M from level_prices, M1/M3 from rolling inline computation)
+      '3M_VAH':    lp['3M_VAH']   ?? m3VA?.vah ?? null,
+      '3M_VAL':    lp['3M_VAL']   ?? m3VA?.val ?? null,
+      '3M_POC':    lp['3M_POC']   ?? null,
+      M1_VAH:      m1VA?.vah      ?? null,
+      M1_VAL:      m1VA?.val      ?? null,
+      M3_VAH:      m3VA?.vah      ?? null,
+      M3_VAL:      m3VA?.val      ?? null,
+      // Camarilla pivots (from prior-day H/L/C via level_prices)
+      CAM_R1:      lp.CAM_R1      ?? null,
+      CAM_R2:      lp.CAM_R2      ?? null,
+      CAM_R3:      lp.CAM_R3      ?? null,
+      CAM_R4:      lp.CAM_R4      ?? null,
+      CAM_S1:      lp.CAM_S1      ?? null,
+      CAM_S2:      lp.CAM_S2      ?? null,
+      CAM_S3:      lp.CAM_S3      ?? null,
+      CAM_S4:      lp.CAM_S4      ?? null,
+      // Weekly floor pivots
+      WPP:         lp.WPP         ?? null,
+      WR1:         lp.WR1         ?? null,
+      WR2:         lp.WR2         ?? null,
+      WS1:         lp.WS1         ?? null,
+      WS2:         lp.WS2         ?? null,
+      // Monthly floor pivots
+      MPP:         lp.MPP         ?? null,
+      MR1:         lp.MR1         ?? null,
+      MR2:         lp.MR2         ?? null,
+      MS1:         lp.MS1         ?? null,
+      MS2:         lp.MS2         ?? null,
+      // Computed meta-levels (not in level_prices)
+      '5D_OR_MID':  or5Mid,
+      '10D_IB_MID': ib10Mid,
+      '2D_POC':    twoDayPOCByDate.get(date) ?? null,
       PD2_VAH:     dvlByDate.get(dates[di-2])?.vah ?? null,
       PD2_VAL:     dvlByDate.get(dates[di-2])?.val ?? null,
-      PW_HIGH:     pwByDate.get(date)?.high ?? null,
-      PW_LOW:      pwByDate.get(date)?.low  ?? null,
-      '2D_POC':    twoDayPOCByDate.get(date) ?? null,
-      // Custom stop/target overrides: IB mid scalp (50/15) and OR mid after IB (35/20)
+      // Custom stop/target overrides
       IB_MID_SCALP:    (ibH && ibL) ? { price: (ibH + ibL) / 2, stop: 50, target: 15 } : null,
       OR_MID_AFTER_IB: (orH && orL) ? { price: (orH + orL) / 2, stop: 35, target: 20 } : null,
     };
@@ -1012,6 +1087,7 @@ async function main() {
   console.log(`${'SETUP'.padEnd(35)} ${'N'.padStart(4)} ${'WR'.padStart(7)} ${'EV/trade'.padStart(10)} ${'P50 MAE'.padStart(9)} ${'P50 MFE'.padStart(9)}`);
   console.log('─'.repeat(80));
 
+  const SESSION_WINDOWS = [10, 30, 90, 180]; // trading sessions
   const writePromises = [];
 
   for (const setupType of allSetupTypes) {
@@ -1021,7 +1097,6 @@ async function main() {
 
     // Session-based windows: last N trading sessions (not calendar days).
     // Much more meaningful than calendar-day cutoffs for infrequent setups.
-    const SESSION_WINDOWS = [10, 30, 90, 180]; // trading sessions
     const windowStats = {};
     for (const sw of SESSION_WINDOWS) {
       const cutoffDate = dates.length > sw ? dates[dates.length - sw - 1] : '';
@@ -1049,35 +1124,91 @@ async function main() {
   // ── SYSTEM_BACKTEST: direction-aggregated rows (all-time only) ────────────────
   // Combines LONG+SHORT for each level pair into a single non-directional row.
   // Directional rows (UNIFIED_BACKTEST) already have all windows — only write 9999 here.
+  // Single canonical list — every entry here fires in live detection AND gets backtested.
+  // Adding a level to level_prices + here is all that's needed to make it fully symmetric.
   const SYSTEM_BACKTEST_PAIRS = {
-    'PD_POC':      ['PD_POC_LONG',      'PD_POC_SHORT'],
-    '5D_OR_MID':   ['5D_OR_MID_LONG',   '5D_OR_MID_SHORT'],
-    '10D_IB_MID':  ['10D_IB_MID_LONG',  '10D_IB_MID_SHORT'],
-    'PD_VAL':      ['PD_VAL_LONG',      'PD_VAL_SHORT'],
-    'PD_VAH':      ['PD_VAH_LONG',      'PD_VAH_SHORT'],
-    'PD_IB_MID':   ['PD_IB_MID_LONG',   'PD_IB_MID_SHORT'],
-    'FLOOR_PIVOT':  ['FLOOR_PIVOT_LONG', 'FLOOR_PIVOT_SHORT'],
-    'OR_HIGH':     ['OR_HIGH_LONG',     'OR_HIGH_SHORT'],
-    'OR_LOW':      ['OR_LOW_LONG',      'OR_LOW_SHORT'],
-    'FLOOR_R1':    ['FLOOR_R1_LONG',    'FLOOR_R1_SHORT'],
-    'FLOOR_S1':    ['FLOOR_S1_LONG',    'FLOOR_S1_SHORT'],
-    'IB_HIGH':     ['IB_HIGH_LONG',     'IB_HIGH_SHORT'],
-    'IB_LOW':      ['IB_LOW_LONG',      'IB_LOW_SHORT'],
-    'PD_OR_MID':   ['PD_OR_MID_LONG',   'PD_OR_MID_SHORT'],
-    'MONTH_OPEN':  ['MONTH_OPEN_LONG',  'MONTH_OPEN_SHORT'],
-    'PM_VAH':      ['PM_VAH_LONG',      'PM_VAH_SHORT'],
-    'PM_VAL':      ['PM_VAL_LONG',      'PM_VAL_SHORT'],
-    'M1_VAH':      ['M1_VAH_LONG',      'M1_VAH_SHORT'],
-    'M1_VAL':      ['M1_VAL_LONG',      'M1_VAL_SHORT'],
-    'M3_VAH':         ['M3_VAH_LONG',         'M3_VAH_SHORT'],
-    'M3_VAL':         ['M3_VAL_LONG',         'M3_VAL_SHORT'],
-    'PD2_VAH':        ['PD2_VAH_LONG',        'PD2_VAH_SHORT'],
-    'PD2_VAL':        ['PD2_VAL_LONG',        'PD2_VAL_SHORT'],
-    'PW_HIGH':        ['PW_HIGH_LONG',        'PW_HIGH_SHORT'],
-    'PW_LOW':         ['PW_LOW_LONG',         'PW_LOW_SHORT'],
-    '2D_POC':         ['2D_POC_LONG',         '2D_POC_SHORT'],
-    'IB_MID_SCALP':   ['IB_MID_SCALP_LONG',   'IB_MID_SCALP_SHORT'],
-    'OR_MID_AFTER_IB':['OR_MID_AFTER_IB_LONG','OR_MID_AFTER_IB_SHORT'],
+    // Prior-day
+    'PD_POC':        ['PD_POC_LONG',        'PD_POC_SHORT'],
+    'PD_VAH':        ['PD_VAH_LONG',        'PD_VAH_SHORT'],
+    'PD_VAL':        ['PD_VAL_LONG',        'PD_VAL_SHORT'],
+    'PD_HIGH':       ['PD_HIGH_LONG',       'PD_HIGH_SHORT'],
+    'PD_LOW':        ['PD_LOW_LONG',        'PD_LOW_SHORT'],
+    'PD_CLOSE':      ['PD_CLOSE_LONG',      'PD_CLOSE_SHORT'],
+    'PD_IB_HIGH':    ['PD_IB_HIGH_LONG',    'PD_IB_HIGH_SHORT'],
+    'PD_IB_LOW':     ['PD_IB_LOW_LONG',     'PD_IB_LOW_SHORT'],
+    'PD_IB_MID':     ['PD_IB_MID_LONG',     'PD_IB_MID_SHORT'],
+    'PD_OR_MID':     ['PD_OR_MID_LONG',     'PD_OR_MID_SHORT'],
+    // Floor pivots
+    'FLOOR_PIVOT':   ['FLOOR_PIVOT_LONG',   'FLOOR_PIVOT_SHORT'],
+    'FLOOR_R1':      ['FLOOR_R1_LONG',      'FLOOR_R1_SHORT'],
+    'FLOOR_R2':      ['FLOOR_R2_LONG',      'FLOOR_R2_SHORT'],
+    'FLOOR_R3':      ['FLOOR_R3_LONG',      'FLOOR_R3_SHORT'],
+    'FLOOR_S1':      ['FLOOR_S1_LONG',      'FLOOR_S1_SHORT'],
+    'FLOOR_S2':      ['FLOOR_S2_LONG',      'FLOOR_S2_SHORT'],
+    'FLOOR_S3':      ['FLOOR_S3_LONG',      'FLOOR_S3_SHORT'],
+    // Today's OR/IB
+    'OR_HIGH':       ['OR_HIGH_LONG',       'OR_HIGH_SHORT'],
+    'OR_LOW':        ['OR_LOW_LONG',        'OR_LOW_SHORT'],
+    'IB_HIGH':       ['IB_HIGH_LONG',       'IB_HIGH_SHORT'],
+    'IB_LOW':        ['IB_LOW_LONG',        'IB_LOW_SHORT'],
+    // Overnight
+    'ONH':           ['ONH_LONG',           'ONH_SHORT'],
+    'ONL':           ['ONL_LONG',           'ONL_SHORT'],
+    // Opens
+    'DAILY_OPEN':    ['DAILY_OPEN_LONG',    'DAILY_OPEN_SHORT'],
+    'WEEKLY_OPEN':   ['WEEKLY_OPEN_LONG',   'WEEKLY_OPEN_SHORT'],
+    'MONTHLY_OPEN':  ['MONTHLY_OPEN_LONG',  'MONTHLY_OPEN_SHORT'],
+    'WEEKLY_VWAP':   ['WEEKLY_VWAP_LONG',   'WEEKLY_VWAP_SHORT'],
+    // Prior-week
+    'PW_HIGH':       ['PW_HIGH_LONG',       'PW_HIGH_SHORT'],
+    'PW_LOW':        ['PW_LOW_LONG',        'PW_LOW_SHORT'],
+    'PW_VAH':        ['PW_VAH_LONG',        'PW_VAH_SHORT'],
+    'PW_VAL':        ['PW_VAL_LONG',        'PW_VAL_SHORT'],
+    'PW_POC':        ['PW_POC_LONG',        'PW_POC_SHORT'],
+    // Prior-month
+    'PM_VAH':        ['PM_VAH_LONG',        'PM_VAH_SHORT'],
+    'PM_VAL':        ['PM_VAL_LONG',        'PM_VAL_SHORT'],
+    'PM_HIGH':       ['PM_HIGH_LONG',       'PM_HIGH_SHORT'],
+    'PM_LOW':        ['PM_LOW_LONG',        'PM_LOW_SHORT'],
+    'PM_POC':        ['PM_POC_LONG',        'PM_POC_SHORT'],
+    // Quarterly + rolling
+    '3M_VAH':        ['3M_VAH_LONG',        '3M_VAH_SHORT'],
+    '3M_VAL':        ['3M_VAL_LONG',        '3M_VAL_SHORT'],
+    '3M_POC':        ['3M_POC_LONG',        '3M_POC_SHORT'],
+    'M1_VAH':        ['M1_VAH_LONG',        'M1_VAH_SHORT'],
+    'M1_VAL':        ['M1_VAL_LONG',        'M1_VAL_SHORT'],
+    'M3_VAH':        ['M3_VAH_LONG',        'M3_VAH_SHORT'],
+    'M3_VAL':        ['M3_VAL_LONG',        'M3_VAL_SHORT'],
+    // Computed meta-levels
+    '5D_OR_MID':     ['5D_OR_MID_LONG',     '5D_OR_MID_SHORT'],
+    '10D_IB_MID':    ['10D_IB_MID_LONG',    '10D_IB_MID_SHORT'],
+    'PD2_VAH':       ['PD2_VAH_LONG',       'PD2_VAH_SHORT'],
+    'PD2_VAL':       ['PD2_VAL_LONG',       'PD2_VAL_SHORT'],
+    '2D_POC':        ['2D_POC_LONG',        '2D_POC_SHORT'],
+    // Custom-stop scalps
+    'IB_MID_SCALP':    ['IB_MID_SCALP_LONG',   'IB_MID_SCALP_SHORT'],
+    'OR_MID_AFTER_IB': ['OR_MID_AFTER_IB_LONG', 'OR_MID_AFTER_IB_SHORT'],
+    // Camarilla pivots (R3/S3 = reversal zones, R4/S4 = breakout levels)
+    'CAM_R1':    ['CAM_R1_LONG',    'CAM_R1_SHORT'],
+    'CAM_R2':    ['CAM_R2_LONG',    'CAM_R2_SHORT'],
+    'CAM_R3':    ['CAM_R3_LONG',    'CAM_R3_SHORT'],
+    'CAM_R4':    ['CAM_R4_LONG',    'CAM_R4_SHORT'],
+    'CAM_S1':    ['CAM_S1_LONG',    'CAM_S1_SHORT'],
+    'CAM_S2':    ['CAM_S2_LONG',    'CAM_S2_SHORT'],
+    'CAM_S3':    ['CAM_S3_LONG',    'CAM_S3_SHORT'],
+    'CAM_S4':    ['CAM_S4_LONG',    'CAM_S4_SHORT'],
+    // Weekly floor pivots
+    'WPP':       ['WPP_LONG',       'WPP_SHORT'],
+    'WR1':       ['WR1_LONG',       'WR1_SHORT'],
+    'WR2':       ['WR2_LONG',       'WR2_SHORT'],
+    'WS1':       ['WS1_LONG',       'WS1_SHORT'],
+    'WS2':       ['WS2_LONG',       'WS2_SHORT'],
+    // Monthly floor pivots
+    'MPP':       ['MPP_LONG',       'MPP_SHORT'],
+    'MR1':       ['MR1_LONG',       'MR1_SHORT'],
+    'MR2':       ['MR2_LONG',       'MR2_SHORT'],
+    'MS1':       ['MS1_LONG',       'MS1_SHORT'],
+    'MS2':       ['MS2_LONG',       'MS2_SHORT'],
   };
 
   const sysBacktestPromises = [];
@@ -1096,7 +1227,14 @@ async function main() {
                   : statsAll.n >= 20 && statsAll.wr >= 0.55 ? 'CONTEXT'
                   : null;
         console.log(`  ${baseName.padEnd(15)} N=${statsAll.n} WR=${wrStr}${rec ? ` [${rec}]` : ' [THIN]'}`);
+        // Write all-time + all session windows for SYSTEM_BACKTEST (so multi-window trend queries work)
         sysBacktestPromises.push(writeResults(baseName, statsAll, 9999, 'SYSTEM_BACKTEST', rec));
+        for (const sw of SESSION_WINDOWS) {
+          const cutoffDate = dates.length > sw ? dates[dates.length - sw - 1] : '';
+          const recent = cutoffDate ? combined.filter(t => t.date > cutoffDate) : combined;
+          const statsWin = aggregate(recent);
+          if (statsWin) sysBacktestPromises.push(writeResults(baseName, statsWin, sw, 'SYSTEM_BACKTEST'));
+        }
       }
     }
   }

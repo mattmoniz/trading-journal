@@ -1,7 +1,84 @@
 # Trading Journal — Backtesting Playbook
 
 > Complete reference for backtesting methodology, scripts, results, and edge-finding strategies.  
-> Last updated: June 2026. Instrument: NQ (Nasdaq 100 E-mini futures).
+> Last updated: 2026-07-02. Instrument: NQ (Nasdaq 100 E-mini futures).
+
+---
+
+## 0. Canonical Data Flow (read this first for consistency)
+
+**Everything runs off the same data.** This is the invariant that keeps the backtest, live detection, and setup log symmetric.
+
+```
+compute_levels.js
+      ↓ (writes)
+level_prices table (trade_date × level_name → price)
+      ↓                          ↓
+backtest_unified.js       server/routes/acd.js
+(bar-by-bar replay)       (live keepLevels detection)
+      ↓                          ↓
+performance_audit table   active_setups table
+(signal stats per window) (fired setups + outcomes)
+```
+
+**Rule:** Adding a level to `compute_levels.js` is ALL that's needed to make it fully symmetric. The backtest, live detection, and setup log will all pick it up automatically on the next run.
+
+### When to run the full chain
+
+After any level change, or weekly to keep stats fresh:
+```bash
+node scripts/compute_levels.js                      # compute today's levels
+node scripts/compute_levels.js --backfill           # backfill all historical dates
+node scripts/backtest_unified.js                    # regenerate all stats → performance_audit
+node scripts/level_fade_audit.mjs                   # optional: audit active_setups coverage
+node scripts/audit_mae_mfe.mjs                      # optional: verify MAE/MFE distributions
+```
+
+### Level coverage (as of 2026-07-02)
+
+| Category | Levels | Source |
+|---|---|---|
+| Prior-day | PD_VAH/VAL/POC/HIGH/LOW/CLOSE/IB_HIGH/IB_LOW/IB_MID | developing_value_log |
+| Floor pivots | FLOOR_PIVOT/R1/R2/R3/S1/S2/S3 | PD H/L/C formula |
+| Camarilla | CAM_R1/R2/R3/R4/S1/S2/S3/S4 | PD H/L/C × 1.1 factor |
+| Overnight | ONH, ONL | price_bars_primary Globex bars |
+| Current session | OR_HIGH/LOW/MID, IB_HIGH/LOW/MID | acd_daily_log + bars |
+| Opens | DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN | first RTH bar of period |
+| VWAP | RTH_VWAP, WEEKLY_VWAP | volume-weighted bars |
+| Prior week | PW_HIGH/LOW/VAH/VAL/POC | prior Mon–Fri bars |
+| Weekly pivots | WPP/WR1/WR2/WS1/WS2 | prior-week H/L/close formula |
+| Prior month | PM_HIGH/LOW/VAH/VAL/POC | prior calendar month bars |
+| Monthly pivots | MPP/MR1/MR2/MS1/MS2 | prior-month H/L/close formula |
+| 3-month | 3M_VAH/VAL/POC | 63-session rolling value area |
+
+### Session window model
+
+`backtest_unified.js` writes stats for EVERY level at 5 time windows (trading sessions, not calendar days):
+
+| window_days | Meaning | Use |
+|---|---|---|
+| 10 | Last 10 sessions | Very recent momentum |
+| 30 | Last 30 sessions | ~6 weeks, regime-specific |
+| 90 | Last 90 sessions | ~4 months |
+| 180 | Last 180 sessions | ~9 months |
+| 9999 | All-time (406+ sessions) | Base rate, the authoritative number |
+
+Live detection (`acd.js`) reads from `performance_audit` via `ls(levelName)` which returns the all-time (9999) stats as stop/target/WR for each level's keepLevels entry.
+
+### Signal type conventions in performance_audit
+
+| signal_type | What it is |
+|---|---|
+| `UNIFIED_BACKTEST` | Per-direction row: `PD_POC_LONG`, `PD_POC_SHORT` etc. All 5 windows. |
+| `SYSTEM_BACKTEST` | Direction-aggregated (LONG+SHORT combined): `PD_POC`, window_days=9999 only. Used by live detection. |
+
+### Confidence tiers
+
+| Tier | Criteria | Action |
+|---|---|---|
+| ACTIVE | N≥20, WR≥65%, positive EV | Fire in live detection, display in setup log |
+| CONTEXT | N≥20, WR≥55% | Display in setup log, weight lower |
+| THIN | N<20 | Show with explicit N<20 warning, no EV claim |
 
 ---
 

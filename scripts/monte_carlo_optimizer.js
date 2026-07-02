@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 // Load trade dataset
-const TRADES_FILE = '/home/mmoniz/trading-journal/scratch/mc_trades.json';
+const TRADES_FILE = '/home/mmoniz/trading-journal/scratch/mc_trades_all_accounts.json';
 if (!fs.existsSync(TRADES_FILE)) {
   console.error(`Error: trades dataset file not found at ${TRADES_FILE}`);
   process.exit(1);

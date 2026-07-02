@@ -68,9 +68,11 @@ If a script throws a SQL error, node error, or DB connection error: write the ex
 ## Communication Protocol
 
 1. Claude writes a task to `scratch/claude_request.md`
-2. User pastes that file into Antigravity and triggers execution
-3. Antigravity executes and writes ALL output to `scratch/antigravity_response.md`
-4. Claude reads and validates the response
+2. Claude immediately runs `./scripts/invoke_gemini.sh [timeout]` to wake you up — **Claude is always the explicit trigger**
+3. You execute the task and write ALL output to `scratch/antigravity_response.md`
+4. Claude reads the file update notification and validates the response
+
+**There is no file watcher cron that you should rely on.** A periodic `check_watcher.mjs` cron exists as a backup only — it fires at most every 5 minutes. The correct and expected flow is that Claude invokes the CLI directly after writing the task. If Claude wrote `claude_request.md` but did NOT invoke the CLI, that is Claude's mistake, not a reason for you to add or maintain a watcher. Report in your output if you believe you were triggered by cron rather than direct invocation.
 
 **Always use this header** to prevent pausing mid-task:
 ```
