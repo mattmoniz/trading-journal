@@ -188,6 +188,7 @@ server/
 | Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
 | Prep & review | `morningBrief.js`, `premarketWalkthrough.js`, `calendar.js`, `annotations.js`, `longterm.js` | Pre-open forecast/scalp playbook, structured pre-market prep, coaching notes, trade annotations, multi-session structural state |
 | Config | `settings.js` | Health check, setup types, custom fields, settings/todos |
+| Volatility / error | `index.js` (direct) | `/api/vol-alert` (GET) — overnight range σ vs rolling 20-day stats, used by `VolatilityAlertBanner`; `/api/client-error` (POST) — receives React `ErrorBoundary` crash reports and logs them to server log |
 
 ### Services (`server/services/`)
 
@@ -232,7 +233,7 @@ Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `sc
 | Group | Components |
 |---|---|
 | Pre-market context | `MorningBriefPanel`, `PreSessionChecklist`, `PreMarketWalkthrough`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard`, `GapContextCard` |
-| Live session | `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView`, `BehavioralGuideCard`, `PostLossCooldown` |
+| Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView`, `BehavioralGuideCard`, `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard`, `LevelMonitorPanel` |
 | Performance viz | `PerformanceVisuals`, `PnlCharts`, `StatsGrid`, `SymbolsTable`, `SetupsTable` |
 | Utility | `SyncProgressPanel`, `RecapDatePicker`, `OptimizationSection`, `DashboardFilters`, `DashboardQuickNav`, `DashboardView` |

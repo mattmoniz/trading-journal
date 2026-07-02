@@ -268,6 +268,11 @@ export async function resolveSetupsByPrice(io) {
 
 // Expires any ACTIVE setups past their expires_at; emits socket events.
 export async function expireStaleSetups(io) {
+  // SHADOW rows from prior dates have no expires_at and accumulate forever, eventually
+  // causing unique-constraint conflicts when the same setup fires again. Purge them.
+  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  await query(`DELETE FROM active_setups WHERE status = 'SHADOW' AND trade_date < $1`, [todayET]);
+
   const expired = await query(`
     UPDATE active_setups
     SET status = 'EXPIRED', resolution = 'TIME_EXPIRED', resolved_at = NOW(), updated_at = NOW()
