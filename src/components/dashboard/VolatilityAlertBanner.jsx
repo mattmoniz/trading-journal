@@ -50,8 +50,8 @@ export default function VolatilityAlertBanner() {
             <strong style={{ color }}>{sigma.toFixed(1)}σ</strong> above normal
             (avg {avg_20d}pt · 1σ threshold {threshold}pt).{' '}
             {isExtreme
-              ? 'EXTREME: Consider standing aside or limit to 1 contract until OR confirms direction.'
-              : '50% size or fade-only. Wait for OR to confirm before directional entries.'}
+              ? 'EXTREME: Reduce to 1 contract minimum until OR confirms direction. High whipsaw risk.'
+              : '50% size — wider moves mean bigger damage when stopped. Setups still fire; wait for OR direction first.'}
           </div>
         </div>
       </div>
