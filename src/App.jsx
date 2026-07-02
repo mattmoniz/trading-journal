@@ -1360,9 +1360,9 @@ function LiveSessionPanel() {
           _pnl: s.actual_pnl,
           _isCaseEngine: true,
         }));
-        // Merge and sort by time
-        const allEvents = [...regularEvents, ...caseEvents]
-          .filter(e => e.fired_time)
+        // Session Timeline = fired setups only (active_setups), not ACD narrative events
+        const allEvents = caseEvents
+          .filter(e => e.fired_time && e._status !== 'SHADOW')
           .sort((a, b) => a.fired_time.localeCompare(b.fired_time));
         const sigCount = allEvents.length;
 
