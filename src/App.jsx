@@ -19520,14 +19520,81 @@ function BacktestedEdgeStatsCard() {
   );
 }
 
+function SetupFeedbackForm({ setup, existingFeedback, onSaved }) {
+  const [open, setOpen] = React.useState(false);
+  const [action, setAction] = React.useState(existingFeedback?.action || '');
+  const [tags, setTags] = React.useState(existingFeedback?.tags || []);
+  const [note, setNote] = React.useState(existingFeedback?.note || '');
+  const [saving, setSaving] = React.useState(false);
+
+  const MGMT_TAGS = ['Good entry', 'Premature exit', 'Held too long', 'Over-sized', 'Under-sized', 'Correct management', 'Missed entry', 'Wrong direction'];
+  const toggleTag = t => setTags(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+
+  const save = async () => {
+    if (!action) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_URL}/acd/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ setupId: setup.id, setupType: setup.setup_type, action, tags, note }),
+      });
+      onSaved?.();
+      setOpen(false);
+    } catch (_) {}
+    setSaving(false);
+  };
+
+  const btnBase = { fontSize: 10, padding: '2px 7px', borderRadius: 3, border: '1px solid', cursor: 'pointer', fontWeight: 700 };
+  if (!open) return (
+    <button onClick={() => setOpen(true)} style={{ ...btnBase, marginTop: 6, background: 'transparent', borderColor: existingFeedback ? '#6366f1' : 'rgba(100,116,139,0.4)', color: existingFeedback ? '#818cf8' : '#64748b' }}>
+      {existingFeedback ? `✓ ${existingFeedback.action}${existingFeedback.tags?.length ? ' · ' + existingFeedback.tags.slice(0,2).join(', ') : ''}` : '+ Feedback'}
+    </button>
+  );
+  return (
+    <div style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 5 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+        {['TAKEN','PASSED'].map(a => (
+          <button key={a} onClick={() => setAction(a)} style={{ ...btnBase, background: action === a ? '#6366f1' : 'transparent', borderColor: action === a ? '#6366f1' : 'rgba(100,116,139,0.4)', color: action === a ? '#fff' : '#94a3b8' }}>{a}</button>
+        ))}
+        <button onClick={() => setOpen(false)} style={{ ...btnBase, marginLeft: 'auto', background: 'transparent', borderColor: 'transparent', color: '#64748b' }}>✕</button>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+        {MGMT_TAGS.map(t => (
+          <button key={t} onClick={() => toggleTag(t)} style={{ ...btnBase, fontSize: 10, background: tags.includes(t) ? 'rgba(99,102,241,0.2)' : 'transparent', borderColor: tags.includes(t) ? '#6366f1' : 'rgba(100,116,139,0.3)', color: tags.includes(t) ? '#a5b4fc' : '#64748b' }}>{t}</button>
+        ))}
+      </div>
+      <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note..." style={{ width: '100%', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 4, color: '#cbd5e1', fontSize: 11, padding: '4px 7px', boxSizing: 'border-box', marginBottom: 6 }} />
+      <button onClick={save} disabled={!action || saving} style={{ ...btnBase, background: '#6366f1', borderColor: '#6366f1', color: '#fff', opacity: (!action || saving) ? 0.5 : 1 }}>{saving ? 'Saving…' : 'Save'}</button>
+    </div>
+  );
+}
+
 function EdgeSectionsPanel() {
   const [data, setData] = React.useState(null);
   const [err, setErr] = React.useState(null);
+  const [resolvedSetups, setResolvedSetups] = React.useState([]);
+  const [feedback, setFeedback] = React.useState([]);
+  const [showClosed, setShowClosed] = React.useState(false);
+  const todayET = React.useMemo(() => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }), []);
+
+  const loadResolved = () => {
+    fetch(`${API_URL}/setups/today`).then(r => r.json()).then(d => {
+      if (Array.isArray(d.setups)) setResolvedSetups(d.setups.filter(s => ['RESOLVED','EXPIRED'].includes(s.status)));
+    }).catch(() => {});
+  };
+  const loadFeedback = () => {
+    fetch(`${API_URL}/acd/feedback?days=1`).then(r => r.json()).then(d => {
+      if (d.feedback) setFeedback(d.feedback);
+    }).catch(() => {});
+  };
+
   React.useEffect(() => {
     fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(e => setErr(e.message));
     const iv = setInterval(() => { fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(() => {}); }, 30000);
     return () => clearInterval(iv);
   }, []);
+  React.useEffect(() => { loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET]);
   if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
@@ -19608,6 +19675,8 @@ function EdgeSectionsPanel() {
     }
   }
 
+  const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
       {/* Overnight Structural Context — moved to right column top */}
@@ -19631,6 +19700,7 @@ function EdgeSectionsPanel() {
                 'COIL_SURGE_LONG': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
                 'COIL_SURGE_SHORT': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
               }[s.setup_type] || s.recommendation || '';
+              const fb = feedbackBySetupId[s.id];
               return (
                 <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderLeft: `3px solid ${cc}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -19648,12 +19718,64 @@ function EdgeSectionsPanel() {
                   </div>
                   <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4, lineHeight: 1.4, fontStyle: 'italic' }}>{edgeCtx}</div>
                   {s.recommendation && s.recommendation !== 'Execute standard risk parameters.' && <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2, lineHeight: 1.4 }}>{s.recommendation}</div>}
+                  <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={loadFeedback} />
                 </div>
               );
             })}
           </div>
         ) : <div style={{ fontSize: 11, color: '#94a3b8' }}>No setups active or detected.</div>}
       </div>
+
+      {/* Closed / Resolved Setups */}
+      {resolvedSetups.length > 0 && (
+        <div>
+          <div
+            onClick={() => setShowClosed(v => !v)}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: showClosed ? 8 : 0, userSelect: 'none' }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8' }}>
+              📋 Closed Today ({resolvedSetups.length})
+              {' · '}
+              <span style={{ color: '#10b981' }}>{resolvedSetups.filter(s => s.resolution === 'TARGET_HIT').length}W</span>
+              {' '}
+              <span style={{ color: '#f87171' }}>{resolvedSetups.filter(s => s.resolution === 'STOP_HIT').length}L</span>
+              {' · '}
+              <span style={{ color: '#a78bfa' }}>${resolvedSetups.reduce((sum, s) => sum + (parseFloat(s.actual_pnl) || 0), 0).toFixed(0)} simulated</span>
+            </span>
+            <span style={{ fontSize: 10, color: '#64748b' }}>{showClosed ? '▲' : '▼'}</span>
+          </div>
+          {showClosed && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
+              {resolvedSetups.map(s => {
+                const hit = s.resolution === 'TARGET_HIT';
+                const exp = s.resolution === 'TIME_EXPIRED';
+                const bc = hit ? '#10b981' : exp ? '#64748b' : '#ef4444';
+                const pnl = parseFloat(s.actual_pnl) || 0;
+                const firedTime = s.fired_at_str?.slice(11, 16) || '—';
+                const resolvedTime = s.resolved_at_str?.slice(11, 16) || '—';
+                const fb = feedbackBySetupId[s.id];
+                return (
+                  <div key={s.id} style={{ padding: '8px 11px', borderRadius: 6, background: 'rgba(15,23,42,0.35)', border: `1px solid ${bc}30`, borderLeft: `3px solid ${bc}` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontWeight: 700, color: '#cbd5e1', fontSize: 11 }}>{s.setup_type}</span>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, fontWeight: 800, color: bc }}>{exp ? 'EXPIRED' : hit ? 'HIT ✓' : 'STOPPED ✗'}</span>
+                        {pnl !== 0 && <span style={{ fontSize: 11, color: pnl > 0 ? '#10b981' : '#f87171', fontFamily: 'monospace' }}>{pnl > 0 ? '+' : ''}{pnl.toFixed(0)} pts</span>}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, fontSize: 10, color: '#64748b', marginBottom: 3 }}>
+                      <span>Fired {firedTime} → Closed {resolvedTime}</span>
+                      <span style={{ color: '#ef4444' }}>Stop {fmtP(s.stop_level, 0)}</span>
+                      <span style={{ color: '#34d399' }}>T1 {fmtP(s.t1_level, 0)}</span>
+                    </div>
+                    <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={loadFeedback} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Potential Watchlist */}
       {potentials.length > 0 && (
