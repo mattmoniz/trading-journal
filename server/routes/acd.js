@@ -3808,8 +3808,56 @@ export default function createACDRouter(io) {
             } catch(_) {}
           }
 
-          // Today's OR low (from ACD daily log — same source as orH used below)
-          // orL is pulled alongside orH from the acdRow query in the outer scope
+          // Today's IB mid and OR mid (usable after IB closes at 10:30)
+          const ibMid = (ibHighToday && ibLowToday) ? (ibHighToday + ibLowToday) / 2 : null;
+          const orMid = (orH && orL) ? (orH + orL) / 2 : null;
+
+          // Prior-week high/low from level_prices (cached daily)
+          let pwHigh = null, pwLow = null;
+          const cachedPW = getCached(todayET, 'pwHL');
+          if (cachedPW) {
+            ({ pwHigh, pwLow } = cachedPW);
+          } else {
+            try {
+              const pwQ = await query(
+                `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND level_name IN ('PW_HIGH','PW_LOW')`,
+                [todayET]
+              );
+              for (const r of pwQ.rows) {
+                if (r.level_name === 'PW_HIGH') pwHigh = r.price;
+                else pwLow = r.price;
+              }
+            } catch(_) {}
+            setCached(todayET, 'pwHL', { pwHigh, pwLow });
+          }
+
+          // 2-day composite POC (POC of combined last-2-session RTH volume profile)
+          let twoDayPOC = null;
+          const cached2DPOC = getCached(todayET, '2dPOC');
+          if (cached2DPOC !== undefined) {
+            twoDayPOC = cached2DPOC;
+          } else {
+            try {
+              const poc2Q = await query(`
+                WITH last2 AS (
+                  SELECT DISTINCT ts::date as d FROM price_bars_primary
+                  WHERE symbol='NQ' AND ts::date < $1
+                    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                  ORDER BY d DESC LIMIT 2
+                ),
+                vp AS (
+                  SELECT ROUND(low::numeric/0.25)*0.25 as px, SUM(volume::numeric) as vol
+                  FROM price_bars_primary
+                  WHERE symbol='NQ' AND ts::date IN (SELECT d FROM last2)
+                    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                  GROUP BY ROUND(low::numeric/0.25)*0.25
+                )
+                SELECT px::float as poc FROM vp ORDER BY vol DESC LIMIT 1
+              `, [todayET]);
+              if (poc2Q.rows[0]) twoDayPOC = poc2Q.rows[0].poc;
+            } catch(_) {}
+            setCached(todayET, '2dPOC', twoDayPOC ?? null);
+          }
 
           // Monday: skip intraday levels that fail on Mondays
           // IB_HIGH_FADE / IB_LOW_FADE also skip on Mondays (IB context different)
@@ -3843,7 +3891,14 @@ export default function createACDRouter(io) {
                     'IB_LOW_LONG','IB_LOW_SHORT',
                     'PD_OR_MID_LONG','PD_OR_MID_SHORT',
                     'MONTH_OPEN_LONG','MONTH_OPEN_SHORT',
-                    'PM_VAH_LONG','PM_VAH_SHORT'
+                    'PM_VAH_LONG','PM_VAH_SHORT',
+                    'PD2_VAH_LONG','PD2_VAH_SHORT',
+                    'PD2_VAL_LONG','PD2_VAL_SHORT',
+                    'PW_HIGH_LONG','PW_HIGH_SHORT',
+                    'PW_LOW_LONG','PW_LOW_SHORT',
+                    '2D_POC_LONG','2D_POC_SHORT',
+                    'IB_MID_SCALP_LONG','IB_MID_SCALP_SHORT',
+                    'OR_MID_AFTER_IB_LONG','OR_MID_AFTER_IB_SHORT'
                   )
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
@@ -3922,6 +3977,15 @@ export default function createACDRouter(io) {
             { name: 'IB_LOW_FADE',    level: ibLowToday,   ...(ls('IB_LOW')   || {}) },
             { name: 'MONTH_OPEN',     level: monthOpen, ...(ls('MONTH_OPEN') || {}) },
             { name: 'PM_VAH_FADE',    level: pmVAH,   ...(ls('PM_VAH')     || {}) },
+            // Levels that are always computed but weren't in the detection loop before
+            { name: 'PD2_VAH_FADE',   level: pd2VAH,  ...(ls('PD2_VAH')    || {}) },
+            { name: 'PD2_VAL_FADE',   level: pd2VAL,  ...(ls('PD2_VAL')    || {}) },
+            { name: 'PW_HIGH_FADE',   level: pwHigh,  ...(ls('PW_HIGH')    || {}) },
+            { name: 'PW_LOW_FADE',    level: pwLow,   ...(ls('PW_LOW')     || {}) },
+            { name: '2D_POC_FADE',    level: twoDayPOC, ...(ls('2D_POC')   || {}) },
+            // IB mid and OR mid — only valid after IB closes at 10:30
+            { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
+            { name: 'OR_MID_AFTER_IB_FADE', level: etMinNow >= 630 ? orMid : null, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
           ].filter(l => l.level != null && !mondaySkip.includes(l.name));
 
           for (const lv of keepLevels) {
