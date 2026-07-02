@@ -4967,8 +4967,6 @@ export default function createACDRouter(io) {
     'FAILED_AUCTION_LONG','FAILED_AUCTION_SHORT',
     'BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
     'GAP_FILL_LONG','GAP_FILL_SHORT',
-    // Context/directional signals — not mechanical scalps, huge MAE vs target
-    'IB_BULLISH','IB_BEARISH',
   ]);
 
   // ── GET /api/setups/history ───────────────────────────────────────────────
