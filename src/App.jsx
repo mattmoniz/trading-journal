@@ -1366,6 +1366,18 @@ function LiveSessionPanel() {
           .sort((a, b) => a.fired_time.localeCompare(b.fired_time));
         const sigCount = allEvents.length;
 
+        // Calculate running tally stats for case engine setups
+        let wins = 0;
+        let losses = 0;
+        let totalPnl = 0;
+        allEvents.forEach(ev => {
+          if (ev._isCaseEngine) {
+            if (ev._resolution === 'TARGET_HIT') wins++;
+            if (ev._resolution === 'STOP_HIT') losses++;
+            if (ev._pnl) totalPnl += ev._pnl;
+          }
+        });
+
         const outcomeColor = (resolution, status) => {
           if (resolution === 'TARGET_HIT') return '#22c55e';
           if (resolution === 'STOP_HIT') return '#ef4444';
@@ -1384,12 +1396,32 @@ function LiveSessionPanel() {
         };
 
         return (
-          <div style={{ borderTop: '1px solid rgba(51,65,85,0.4)', paddingTop: 7 }}>
-            <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>Session Timeline <span style={{ color: '#334155', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>({sigCount})</span></span>
-              <span style={{ fontSize: 11, color: '#334155', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
+          <div style={{ borderTop: '1px solid rgba(51,65,85,0.4)', paddingTop: 10 }}>
+            <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>Session Timeline <span style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>({sigCount})</span></span>
+              <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
             </div>
-            <div style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'hidden' }}>
+
+            {/* Session Stats Running Tally */}
+            {sigCount > 0 && (
+              <div style={{ 
+                display: 'flex', 
+                gap: 8, 
+                marginBottom: 10, 
+                padding: '6px 10px', 
+                background: 'rgba(15,23,42,0.6)', 
+                border: '1px solid rgba(51,65,85,0.25)', 
+                borderRadius: 6, 
+                justifyContent: 'space-between', 
+                alignItems: 'center' 
+              }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>Wins: <span style={{ color: '#22c55e', fontWeight: 700 }}>{wins}</span></div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>Losses: <span style={{ color: '#ef4444', fontWeight: 700 }}>{losses}</span></div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>PnL: <span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
+              </div>
+            )}
+
+            <div style={{ maxHeight: 320, overflowY: 'auto', overflowX: 'hidden', paddingRight: 4 }}>
               {allEvents.map((ev, i) => {
                 const isCaseEngine = ev._isCaseEngine;
                 const color = isCaseEngine
@@ -1398,43 +1430,120 @@ function LiveSessionPanel() {
                 const stars = sigStars(ev.setup_type);
                 const label = SETUP_DISPLAY_LABELS[ev.setup_type] || ev.setup_type.replace(/_/g, ' ');
                 const timeDisp = fmtEventTime(ev.fired_time);
-                const resColor = isCaseEngine ? outcomeColor(ev._resolution, ev._status) : null;
+                const resColor = isCaseEngine ? outcomeColor(ev._resolution, ev._status) : '#3b82f6';
                 const resLabel = isCaseEngine ? outcomeLabel(ev._resolution, ev._status) : null;
+
+                const isWin = ev._resolution === 'TARGET_HIT';
+                const isLoss = ev._resolution === 'STOP_HIT';
+                const isExpired = ev._resolution === 'TIME_EXPIRED' || ev._resolution === 'SESSION_CLOSED';
+                
+                const dotColor = isCaseEngine 
+                  ? (isWin ? '#22c55e' : isLoss ? '#ef4444' : isExpired ? '#64748b' : '#fbbf24')
+                  : color;
+
+                const badgeBg = isWin ? 'rgba(34,197,94,0.12)' : isLoss ? 'rgba(239,68,68,0.12)' : isExpired ? 'rgba(100,116,139,0.12)' : 'rgba(251,191,36,0.12)';
+                const badgeBorder = isWin ? 'rgba(34,197,94,0.25)' : isLoss ? 'rgba(239,68,68,0.25)' : isExpired ? 'rgba(100,116,139,0.25)' : 'rgba(251,191,36,0.25)';
+
                 return (
-                  <div
-                    key={i}
-                    onClick={() => isCaseEngine
-                      ? setSelectedCaseSetup({ type: ev.setup_type, entry: ev._entry, stop: ev._stop, target: ev._t1, fired_time: ev.fired_time, resolution: ev._resolution, status: ev._status, pnl: ev._pnl })
-                      : setSelectedSignal(ev)
-                    }
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 4px',
-                      borderBottom: i < allEvents.length - 1 ? '1px solid rgba(30,41,59,0.5)' : 'none',
-                      cursor: 'pointer', borderRadius: 4, transition: 'background 0.1s',
-                      borderLeft: isCaseEngine ? `2px solid ${color}` : '2px solid transparent',
-                      paddingLeft: isCaseEngine ? 7 : 4,
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = 'rgba(99,102,241,0.08)')}
-                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-                  >
-                    <span style={{ fontSize: 11, color: '#7dd3fc', fontFamily: 'monospace', flexShrink: 0, minWidth: 38 }}>{timeDisp}</span>
-                    {!isCaseEngine && (
-                      <span style={{ flexShrink: 0, fontSize: 11, letterSpacing: '-1px', minWidth: 24 }}>
-                        {[1,2,3].map(n => <span key={n} style={{ color: n <= stars ? color : '#1e293b' }}>★</span>)}
-                      </span>
+                  <div key={i} style={{ 
+                    position: 'relative', 
+                    paddingLeft: 18, 
+                    paddingBottom: i < allEvents.length - 1 ? 14 : 4,
+                  }}>
+                    {/* Vertical Track Line */}
+                    {i < allEvents.length - 1 && (
+                      <div style={{
+                        position: 'absolute',
+                        left: 4,
+                        top: 14,
+                        bottom: 0,
+                        width: 2,
+                        background: 'rgba(51,65,85,0.3)',
+                      }} />
                     )}
-                    <span style={{ fontSize: 12, fontWeight: isCaseEngine ? 700 : 600, color, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {label}
-                    </span>
-                    {isCaseEngine && ev._entry && (
-                      <span style={{ fontSize: 12, color: '#64748b', fontFamily: 'monospace', flexShrink: 0 }}>
-                        {Math.round(parseFloat(ev._entry))}
-                      </span>
-                    )}
-                    {resLabel && (
-                      <span style={{ fontSize: 12, fontWeight: 700, color: resColor, flexShrink: 0, background: `${resColor}15`, borderRadius: 3, padding: '1px 5px', border: `1px solid ${resColor}30` }}>
-                        {resLabel}
-                      </span>
-                    )}
+
+                    {/* Timeline Dot */}
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 4,
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: dotColor,
+                      boxShadow: `0 0 6px ${dotColor}40`,
+                      border: '2px solid #0f172a',
+                      zIndex: 2,
+                    }} />
+
+                    {/* Card Container */}
+                    <div 
+                      onClick={() => isCaseEngine
+                        ? setSelectedCaseSetup({ type: ev.setup_type, entry: ev._entry, stop: ev._stop, target: ev._t1, fired_time: ev.fired_time, resolution: ev._resolution, status: ev._status, pnl: ev._pnl })
+                        : setSelectedSignal(ev)
+                      }
+                      style={{ 
+                        display: 'flex', 
+                        flexDirection: 'column', 
+                        gap: 3,
+                        background: 'rgba(15,23,42,0.4)',
+                        border: '1px solid rgba(51,65,85,0.25)',
+                        borderRadius: 6,
+                        padding: '6px 8px 7px 8px',
+                        cursor: 'pointer',
+                        transition: 'border-color 0.15s, background 0.15s',
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.borderColor = 'rgba(99,102,241,0.35)';
+                        e.currentTarget.style.background = 'rgba(15,23,42,0.6)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.borderColor = 'rgba(51,65,85,0.25)';
+                        e.currentTarget.style.background = 'rgba(15,23,42,0.4)';
+                      }}
+                    >
+                      {/* Time & Badges */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                            {timeDisp}
+                          </span>
+                          {!isCaseEngine && (
+                            <span style={{ fontSize: 9, letterSpacing: '-1px', color: '#cbd5e1' }}>
+                              {[1,2,3].map(n => (
+                                <span key={n} style={{ color: n <= stars ? color : '#1e293b' }}>★</span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                        {resLabel && (
+                          <span style={{ 
+                            fontSize: 9, 
+                            fontWeight: 700, 
+                            color: resColor, 
+                            background: badgeBg, 
+                            border: `1px solid ${badgeBorder}`, 
+                            borderRadius: 4, 
+                            padding: '1px 4px',
+                            letterSpacing: '0.02em'
+                          }}>
+                            {resLabel}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Setup Details */}
+                      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 5 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: color, letterSpacing: '0.01em' }}>
+                          {label}
+                        </span>
+                        {isCaseEngine && ev._entry && (
+                          <span style={{ fontSize: 12, color: '#cbd5e1', fontFamily: 'monospace' }}>
+                            @ {Math.round(parseFloat(ev._entry)).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 );
               })}
@@ -21098,17 +21207,127 @@ function AuctionReadModalContent({ nl, todayData }) {
 
         {/* Live timeline events */}
         {liveCtx?.timeline?.length > 0 && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginBottom: 6, letterSpacing: '0.06em', textTransform: 'uppercase' }}>Session Timeline</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {liveCtx.timeline.map((ev, i) => (
-                <div key={i} style={{ display: 'flex', gap: 10, padding: '6px 10px', background: 'rgba(0,0,0,0.15)', border: `1px solid ${ev.color || '#334155'}30`, borderLeft: `3px solid ${ev.color || '#334155'}`, borderRadius: '0 5px 5px 0' }}>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: '#cbd5e1', fontFamily: 'monospace', flexShrink: 0 }}>{ev.time}</span>
-                  <span style={{ fontSize: 12, fontWeight: 700, color: ev.color || '#94a3b8', flexShrink: 0 }}>{ev.event}</span>
-                  {ev.price && <span style={{ fontSize: 12, color: '#cbd5e1', fontFamily: 'monospace' }}>{Math.round(ev.price).toLocaleString()}</span>}
-                  {ev.note && <span style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.4 }}>{ev.note}</span>}
-                </div>
-              ))}
+          <div style={{ marginTop: 14 }}>
+            <div style={{ 
+              fontSize: 12, 
+              fontWeight: 700, 
+              color: '#94a3b8', 
+              marginBottom: 10, 
+              letterSpacing: '0.08em', 
+              textTransform: 'uppercase',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <span>Session Timeline</span>
+              <span style={{ color: '#64748b', fontSize: 11, fontWeight: 500 }}>({liveCtx.timeline.length})</span>
+            </div>
+            <div style={{ 
+              display: 'flex', 
+              flexDirection: 'column', 
+              maxHeight: 400, 
+              overflowY: 'auto', 
+              paddingRight: 4,
+              overflowX: 'hidden'
+            }}>
+              {liveCtx.timeline.map((ev, i) => {
+                // Parse outcome node to determine colors
+                const isWin = ev.note?.includes('✓') || ev.note?.toLowerCase().includes('hit') || ev.note?.toLowerCase().includes('target');
+                const isLoss = ev.note?.includes('✗') || ev.note?.toLowerCase().includes('stop');
+                const isExpired = ev.note?.toLowerCase().includes('expired');
+                
+                const dotColor = isWin ? '#22c55e' : isLoss ? '#ef4444' : isExpired ? '#64748b' : '#3b82f6';
+                const badgeBg = isWin ? 'rgba(34,197,94,0.12)' : isLoss ? 'rgba(239,68,68,0.12)' : isExpired ? 'rgba(100,116,139,0.12)' : 'rgba(59,130,246,0.12)';
+                const badgeBorder = isWin ? 'rgba(34,197,94,0.25)' : isLoss ? 'rgba(239,68,68,0.25)' : isExpired ? 'rgba(100,116,139,0.25)' : 'rgba(59,130,246,0.25)';
+
+                return (
+                  <div key={i} style={{ 
+                    position: 'relative', 
+                    paddingLeft: 18, 
+                    paddingBottom: i < liveCtx.timeline.length - 1 ? 14 : 4,
+                  }}>
+                    {/* Vertical Track Line */}
+                    {i < liveCtx.timeline.length - 1 && (
+                      <div style={{
+                        position: 'absolute',
+                        left: 4,
+                        top: 14,
+                        bottom: 0,
+                        width: 2,
+                        background: 'rgba(51,65,85,0.3)',
+                      }} />
+                    )}
+
+                    {/* Timeline Dot Indicator */}
+                    <div style={{
+                      position: 'absolute',
+                      left: 0,
+                      top: 4,
+                      width: 10,
+                      height: 10,
+                      borderRadius: '50%',
+                      background: dotColor,
+                      boxShadow: `0 0 6px ${dotColor}40`,
+                      border: '2px solid #0f172a',
+                      zIndex: 2,
+                    }} />
+
+                    {/* Card Container */}
+                    <div style={{ 
+                      display: 'flex', 
+                      flexDirection: 'column', 
+                      gap: 3,
+                      background: 'rgba(15,23,42,0.4)',
+                      border: '1px solid rgba(51,65,85,0.25)',
+                      borderRadius: 6,
+                      padding: '6px 8px 7px 8px',
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.borderColor = 'rgba(99,102,241,0.35)';
+                      e.currentTarget.style.background = 'rgba(15,23,42,0.6)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.borderColor = 'rgba(51,65,85,0.25)';
+                      e.currentTarget.style.background = 'rgba(15,23,42,0.4)';
+                    }}
+                    >
+                      {/* Time & Badge */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b', fontFamily: 'monospace' }}>
+                          {ev.time}
+                        </span>
+                        {ev.note && (
+                          <span style={{ 
+                            fontSize: 9, 
+                            fontWeight: 700, 
+                            color: dotColor, 
+                            background: badgeBg, 
+                            border: `1px solid ${badgeBorder}`, 
+                            borderRadius: 4, 
+                            padding: '1px 4px',
+                            letterSpacing: '0.02em'
+                          }}>
+                            {ev.note}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Setup Details */}
+                      <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 5 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: ev.color || '#e2e8f0', letterSpacing: '0.01em' }}>
+                          {ev.event}
+                        </span>
+                        {ev.price && (
+                          <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>
+                            @ {Math.round(ev.price).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

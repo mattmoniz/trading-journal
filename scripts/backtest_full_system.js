@@ -8,15 +8,29 @@
 import { query } from '../server/db.js';
 
 // ── Constants ──
-const PNL_PER_POINT = 2;   // NQ micro: $2/pt
-const COMMISSION    = 1;    // $1 round-trip
-const DLL           = 400;  // daily loss limit
-const WINDOW_DAYS   = 180;
-const FADE_STOP     = 90;   // 90pt stop
-const FADE_TARGET   = 40;   // 40pt target
-const PROXIMITY     = 10;   // touch = within 10pt
-const MAX_TRADES    = 3;    // DLL constraint
-const AM_CUTOFF_TOD = 720;  // noon ET = 12:00 = 720 min
+const DLL              = 400;   // daily loss limit (prop firm, fixed)
+const WINDOW_DAYS      = 252;   // ~1 trading year
+const FADE_STOP_BASE   = 39;    // base stop in points (DLL-capped at 5 MNQ)
+const FADE_TARGET      = 40;    // 40pt target
+const PROXIMITY        = 10;    // touch = within 10pt
+const MAX_TRADES       = 3;     // max trades/day
+const AM_CUTOFF_TOD    = 720;   // noon ET = 12:00 = 720 min
+const STARTING_ACCOUNT = 2000;  // prop firm starting margin
+const RISK_PCT         = parseFloat(process.env.RISK_PCT || '0.01'); // 1% default, override via env
+const RISK_PER_CONTRACT = FADE_STOP_BASE * 2 + 1; // $79 per contract (39pt * $2 + $1 commission)
+const MAX_CONTRACTS    = Math.floor(DLL / RISK_PER_CONTRACT); // DLL ceiling (~5)
+const MIN_CONTRACTS    = parseInt(process.env.MIN_CONTRACTS || '3'); // floor (3 = start at operating size)
+
+// Dynamic per-day sizing (computed in main loop, defaults for standalone use)
+let CONTRACTS     = MIN_CONTRACTS;
+let PNL_PER_POINT = 2 * CONTRACTS;
+let COMMISSION    = 1 * CONTRACTS;
+let FADE_STOP     = FADE_STOP_BASE;
+
+function computeContracts(account) {
+  const targetRisk = account * RISK_PCT;
+  return Math.max(MIN_CONTRACTS, Math.min(MAX_CONTRACTS, Math.floor(targetRisk / RISK_PER_CONTRACT)));
+}
 
 // Regime lookback
 const ATR_SHORT     = 5;
@@ -644,9 +658,10 @@ async function run() {
   console.log('═══════════════════════════════════════════════════════════════');
   console.log('   FULL SYSTEM BACKTEST: Regime-Adaptive Level Fade System');
   console.log('═══════════════════════════════════════════════════════════════');
-  console.log(`Parameters: ${FADE_TARGET}pt target, ${FADE_STOP}pt stop, ${PROXIMITY}pt proximity`);
-  console.log(`PNL/pt: $${PNL_PER_POINT}, Commission: $${COMMISSION}, DLL: $${DLL}`);
-  console.log(`Max trades/day: ${MAX_TRADES}, AM session only (before noon)`);
+  console.log(`Parameters: ${FADE_TARGET}pt target, ${FADE_STOP_BASE}pt stop, ${PROXIMITY}pt proximity`);
+  console.log(`Risk model: ${RISK_PCT*100}% of account per trade, starting at $${STARTING_ACCOUNT}`);
+  console.log(`Risk model: ${RISK_PCT*100}% of account per trade, starting at $${STARTING_ACCOUNT}`);
+  console.log(`Contract range: ${MIN_CONTRACTS}–${MAX_CONTRACTS} MNQ ($${RISK_PER_CONTRACT}/contract risk), DLL: $${DLL}`);
   console.log();
 
   const { allDays, testDays, dvlByDate, acdByDate, barsByDate, overnightByDate } = await loadAllData();
@@ -666,6 +681,7 @@ async function run() {
   let maxDD = 0;
   let maxDDNoFilter = 0;
   let skippedDays = 0;
+  let account = STARTING_ACCOUNT; // tracks total account for sizing
 
   // Historical trades for regime ranking (no look-ahead)
   const tradeHistory = [];
@@ -716,6 +732,13 @@ async function run() {
 
     // Step 3: Rank levels by regime performance (using only historical trades)
     const rankings = rankLevels(regime, tradeHistory);
+
+    // Dynamic position sizing: 1% of account, capped by DLL
+    account = STARTING_ACCOUNT + cumPnL;
+    CONTRACTS = computeContracts(account);
+    PNL_PER_POINT = 2 * CONTRACTS;
+    COMMISSION = 1 * CONTRACTS;
+    FADE_STOP = FADE_STOP_BASE;
 
     // Step 4a: Execute trades WITH regime filter
     const levelsWithFilter = { ...levels };
