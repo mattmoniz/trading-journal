@@ -83,10 +83,33 @@ If a script throws a SQL error, node error, or DB connection error: write the ex
 
 A persistent error monitoring process runs as a systemd user service. You do NOT need to start it — it's always running. But you need to know about it.
 
-### What it does
-- Polls `http://localhost:3002/api/health` every 60s — detects server down/up
-- Polls `http://localhost:3002/api/errors/recent?since=<ISO>` — catches React ErrorBoundary crashes and server 500s
-- Writes timestamped alerts to `scratch/gemini_alerts.txt`
+### Three-layer detection (every 60 seconds)
+1. **In-memory ring buffer** — `GET /api/errors/recent?since=<ISO>` — catches 500s and React ErrorBoundary crashes in real-time. Clears on server restart.
+2. **Persistent file** — `scratch/server_errors.jsonl` (one JSON per line) — written by `recordError()` in `server/index.js`. Survives server restarts. Watcher reads new entries each poll cycle.
+3. **Proactive endpoint polling** — watcher directly fetches 6 critical endpoints every 60s (market hours only, 6 AM–6 PM ET). Fires `ENDPOINT_500` alert if any return HTTP 500 without waiting for the ring buffer.
+
+### Auto-restart
+If the server is unreachable OR ≥3 key endpoints return 500 in the same poll cycle, the watcher runs:
+```bash
+systemctl --user restart trading-journal-server.service
+```
+Then re-checks after 5s and alerts `SERVER_RESTARTED` or `SERVER_DOWN_PERSISTENT`. Cooldown: max one restart per 5 minutes.
+
+### Alert types
+| Type | Meaning |
+|---|---|
+| `SERVER_DOWN` | Server unreachable |
+| `SERVER_RESTARTED` | Was down, restarted successfully |
+| `SERVER_DOWN_PERSISTENT` | Still down after restart attempt |
+| `SERVER_DEGRADED` | ≥3/6 key endpoints returning 500 — restart triggered |
+| `SERVER_ERROR` | A route returned HTTP 500 (caught by interceptor) |
+| `CLIENT_ERROR` | React ErrorBoundary posted a crash to `/api/client-error` |
+| `ENDPOINT_500` | Proactive probe found a specific endpoint returning 500 |
+| `HEALTH_FAIL` | `/api/health` returned non-200 |
+
+### When you see an alert
+- `ENDPOINT_500` or `SERVER_ERROR`: investigate the route — read the relevant route file, check recent error logs, document findings in `scratch/antigravity_response.md`. Do NOT modify route code.
+- `SERVER_DOWN` / `SERVER_DEGRADED`: watcher already attempted restart — report status.
 
 ### Check watcher status
 ```bash
@@ -110,6 +133,10 @@ If it's NOT active, start it via systemd only:
 systemctl --user start trading-journal-watcher.service
 ```
 Never use `nohup node scratch/gemini_error_watcher.mjs &` — that bypasses systemd and creates duplicates.
+
+### Browser/Extension Warnings & Vite Proxy Notes
+*   **Ignore `contentscript.js` errors:** Any stack traces on `contentscript.js` containing `ObjectMultiplex`, `app-init-liveness`, `background-liveness`, or `MaxListenersExceededWarning` are injected by browser extensions (e.g. MetaMask) and are **not** application bugs. Do not try to debug or fix them in the source code.
+*   **Vite Proxy Wedging:** If the backend port 3002 is temporarily restarted/offline, the Vite dev server's proxy (port 3000) can become wedged and continuously return 500 errors to the browser even after the backend is online. Solve this by killing the port 3000 process tree (`lsof -t -i :3000 | xargs kill -9`) and restarting Vite via `npm run client`.
 
 ---
 

@@ -83,7 +83,8 @@ export default function TradeAlertBanner() {
       {apiErrors.map((err, i) => (
         <div key={`err-${i}`} style={{
           padding: '8px 12px', background: 'rgba(239,68,68,0.15)',
-          border: '1px solid rgba(239,68,68,0.4)', borderLeft: '4px solid #ef4444',
+          borderTop: '1px solid rgba(239,68,68,0.4)', borderRight: '1px solid rgba(239,68,68,0.4)',
+          borderBottom: '1px solid rgba(239,68,68,0.4)', borderLeft: '4px solid #ef4444',
           borderRadius: 6, fontSize: 12, color: '#fca5a5', fontWeight: 600,
         }}>
           SYSTEM ERROR: {err}
@@ -93,7 +94,9 @@ export default function TradeAlertBanner() {
         <div key={a.id} style={{
           padding: '8px 12px',
           background: a.expired ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.4)',
-          border: `1px solid ${a.expired ? '#64748b40' : a.color + '40'}`,
+          borderTop: `1px solid ${a.expired ? '#64748b40' : a.color + '40'}`,
+          borderRight: `1px solid ${a.expired ? '#64748b40' : a.color + '40'}`,
+          borderBottom: `1px solid ${a.expired ? '#64748b40' : a.color + '40'}`,
           borderLeft: `4px solid ${a.expired ? '#ef4444' : a.color}`,
           opacity: a.expired ? 0.7 : 1,
           borderRadius: 6,

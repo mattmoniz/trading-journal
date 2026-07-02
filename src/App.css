@@ -80,10 +80,10 @@ body {
 
 /* ==================== SIDEBAR ==================== */
 .sidebar {
-  width: 280px;
+  width: 340px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
-  padding: 24px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 24px;

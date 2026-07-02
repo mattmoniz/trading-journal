@@ -637,6 +637,11 @@ function App() {
             <PlaybookPage />
           </ErrorBoundary>
         )}
+        {currentView === 'setup-log' && (
+          <ErrorBoundary name="Setup Log">
+            <SetupHistoryView />
+          </ErrorBoundary>
+        )}
       </main>
     </div>
     </CaseProvider>
@@ -1220,8 +1225,12 @@ function LiveSessionPanel() {
 
   const nowET  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etMin  = nowET.getHours() * 60 + nowET.getMinutes();
-  const isOpen = etMin >= 9 * 60 + 30 && etMin < 16 * 60; // RTH 9:30 AM–4:00 PM ET
-  const isClosed = etMin >= 16 * 60 || sessionClosed;
+  const etHour = nowET.getHours();
+  const inGlobex = etHour >= 18 || etMin < 8 * 60 + 30;
+  const inRTH = etMin >= 9 * 60 + 30 && etMin < 16 * 60;
+  const isOpen = inGlobex || inRTH;
+  const inResetGap = etMin >= 17 * 60 && etMin < 18 * 60; // 5–6 PM dead zone
+  const isClosed = inResetGap || sessionClosed;
 
   const active = setupCard && !setupCard.isExpired ? setupCard : null;
   const isLong = active
@@ -1238,9 +1247,17 @@ function LiveSessionPanel() {
   // Session status line
   let sessionLabel, sessionColor;
   if (isClosed) {
-    sessionLabel = 'SESSION CLOSED';
+    sessionLabel = inResetGap ? 'RESETTING — Globex opens 6 PM ET' : 'SESSION CLOSED';
     sessionColor = '#64748b';
-  } else if (isOpen) {
+  } else if (inGlobex) {
+    const hh = nowET.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
+    const minsToRTH = etHour >= 18
+      ? (24 * 60 - etMin) + (9 * 60 + 30)  // minutes until 9:30 AM next day
+      : (9 * 60 + 30) - etMin;
+    const gh = Math.floor(minsToRTH / 60), gm = minsToRTH % 60;
+    sessionLabel = `GLOBEX  ${hh} ET  RTH in ${gh > 0 ? `${gh}h ` : ''}${gm}m`;
+    sessionColor = '#a78bfa';
+  } else if (inRTH) {
     const minsLeft = 16 * 60 - etMin;
     const hh = nowET.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
     sessionLabel = `LIVE  ${hh} ET  ${minsLeft}m left`;
@@ -1346,9 +1363,9 @@ function LiveSessionPanel() {
           if (timeKey) caseSetupMap[s.setup_type + '_' + timeKey] = s;
         }
         // Events: regular level signals (skip tested) + inject case-engine setups in time order
-        const regularEvents = events.filter(e => !SKIP_TYPES.has(e.setup_type) && !CASE_ENGINE_TYPES.has(e.setup_type));
+        const regularEvents = events.filter(e => e && !SKIP_TYPES.has(e.setup_type) && !CASE_ENGINE_TYPES.has(e.setup_type));
         // Case-engine setups from active_setups (not in events list)
-        const caseEvents = activeSetups.map(s => ({
+        const caseEvents = activeSetups.filter(Boolean).map(s => ({
           setup_type: s.setup_type,
           fired_time: s.fired_at_str ? s.fired_at_str.slice(11, 16) : null,
           fired_price: s.entry_zone_low,
@@ -1358,13 +1375,19 @@ function LiveSessionPanel() {
           _stop: s.stop_level,
           _entry: s.entry_zone_low,
           _pnl: s.actual_pnl,
+          _winRate: s.historical_win_rate,
+          _sessions: s.historical_sessions,
           _isCaseEngine: true,
         }));
-        // Session Timeline = fired setups only (active_setups), not ACD narrative events
+        // Session Timeline: resolved/expired setups only — ACTIVE ones show in the top card above
         const allEvents = caseEvents
-          .filter(e => e.fired_time && e._status !== 'SHADOW')
-          .sort((a, b) => a.fired_time.localeCompare(b.fired_time));
-        const sigCount = allEvents.length;
+          .filter(e => e.fired_time && e._status !== 'SHADOW' && e._status !== 'ACTIVE')
+          .sort((a, b) => {
+            if (!a.fired_time) return 1;
+            if (!b.fired_time) return -1;
+            return b.fired_time.localeCompare(a.fired_time); // most recent first
+          });
+        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW').length;
 
         // Calculate running tally stats for case engine setups
         let wins = 0;
@@ -1374,7 +1397,17 @@ function LiveSessionPanel() {
           if (ev._isCaseEngine) {
             if (ev._resolution === 'TARGET_HIT') wins++;
             if (ev._resolution === 'STOP_HIT') losses++;
-            if (ev._pnl) totalPnl += ev._pnl;
+            
+            let pval = ev._pnl;
+            if (pval !== null && pval !== undefined) {
+              if (typeof pval === 'string') {
+                pval = pval.replace(/[^0-9.-]/g, '');
+              }
+              const parsedVal = parseFloat(pval);
+              if (!isNaN(parsedVal)) {
+                totalPnl += parsedVal;
+              }
+            }
           }
         });
 
@@ -1425,10 +1458,10 @@ function LiveSessionPanel() {
               {allEvents.map((ev, i) => {
                 const isCaseEngine = ev._isCaseEngine;
                 const color = isCaseEngine
-                  ? (ev.setup_type.includes('LONG') || ev.setup_type.includes('BULLISH') ? '#4ade80' : '#f87171')
+                  ? (ev.setup_type?.includes('LONG') || ev.setup_type?.includes('BULLISH') ? '#4ade80' : '#f87171')
                   : sigColor(ev.setup_type);
                 const stars = sigStars(ev.setup_type);
-                const label = SETUP_DISPLAY_LABELS[ev.setup_type] || ev.setup_type.replace(/_/g, ' ');
+                const label = SETUP_DISPLAY_LABELS[ev.setup_type] || ev.setup_type?.replace(/_/g, ' ') || '';
                 const timeDisp = fmtEventTime(ev.fired_time);
                 const resColor = isCaseEngine ? outcomeColor(ev._resolution, ev._status) : '#3b82f6';
                 const resLabel = isCaseEngine ? outcomeLabel(ev._resolution, ev._status) : null;
@@ -1448,14 +1481,14 @@ function LiveSessionPanel() {
                   <div key={i} style={{ 
                     position: 'relative', 
                     paddingLeft: 18, 
-                    paddingBottom: i < allEvents.length - 1 ? 14 : 4,
+                    paddingBottom: i < allEvents.length - 1 ? 10 : 4,
                   }}>
                     {/* Vertical Track Line */}
                     {i < allEvents.length - 1 && (
                       <div style={{
                         position: 'absolute',
                         left: 4,
-                        top: 14,
+                        top: 12,
                         bottom: 0,
                         width: 2,
                         background: 'rgba(51,65,85,0.3)',
@@ -1485,11 +1518,11 @@ function LiveSessionPanel() {
                       style={{ 
                         display: 'flex', 
                         flexDirection: 'column', 
-                        gap: 3,
+                        gap: 2,
                         background: 'rgba(15,23,42,0.4)',
                         border: '1px solid rgba(51,65,85,0.25)',
                         borderRadius: 6,
-                        padding: '6px 8px 7px 8px',
+                        padding: '4px 8px',
                         cursor: 'pointer',
                         transition: 'border-color 0.15s, background 0.15s',
                       }}
@@ -1513,6 +1546,11 @@ function LiveSessionPanel() {
                               {[1,2,3].map(n => (
                                 <span key={n} style={{ color: n <= stars ? color : '#1e293b' }}>★</span>
                               ))}
+                            </span>
+                          )}
+                          {isCaseEngine && ev._winRate != null && ev._sessions >= 20 && (
+                            <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
+                              · {Math.round(ev._winRate * 100)}% <span style={{ fontWeight: 400, color: '#64748b' }}>N={ev._sessions}</span>
                             </span>
                           )}
                         </div>
@@ -1565,9 +1603,12 @@ function LiveSessionPanel() {
           <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Eval Progress</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {evalProgress.accounts.map(acct => {
-              const isNeg = acct.current_pnl < 0;
-              const pnlStr = isNeg ? `-$${Math.abs(Math.round(acct.current_pnl))}` : `+$${Math.round(acct.current_pnl)}`;
-              const pctDone = Math.max(0, Math.min(100, (acct.current_pnl / 3000) * 100));
+              const currentPnl = acct.current_pnl ?? 0;
+              const profitNeeded = acct.profit_needed ?? 0;
+              const daysTraded = acct.days_traded ?? 0;
+              const isNeg = currentPnl < 0;
+              const pnlStr = isNeg ? `-$${Math.abs(Math.round(currentPnl))}` : `+$${Math.round(currentPnl)}`;
+              const pctDone = Math.max(0, Math.min(100, (currentPnl / 3000) * 100));
               const accent = acct.dll_risk ? '#ef4444' : isNeg ? '#f87171' : acct.on_track ? '#22c55e' : '#f59e0b';
               const cardBg = acct.dll_risk ? 'rgba(239,68,68,0.06)' : 'rgba(30,41,59,0.5)';
               const tagBg  = acct.dll_risk ? 'rgba(239,68,68,0.18)' : isNeg ? 'rgba(248,113,113,0.12)' : 'rgba(245,158,11,0.12)';
@@ -1588,8 +1629,8 @@ function LiveSessionPanel() {
                   </div>
                   {/* Row 3: needs · days */}
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 12, color: '#94a3b8' }}>${Math.round(acct.profit_needed).toLocaleString()} to pass</span>
-                    <span style={{ fontSize: 12, color: '#64748b' }}>{acct.days_traded}d traded</span>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>${Math.round(profitNeeded).toLocaleString()} to pass</span>
+                    <span style={{ fontSize: 12, color: '#64748b' }}>{daysTraded}d traded</span>
                   </div>
                 </div>
               );
@@ -3049,6 +3090,14 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
         </button>
 
         <button
+          className={`nav-item ${currentView === 'setup-log' ? 'active' : ''}`}
+          onClick={() => setCurrentView('setup-log')}
+        >
+          <span className="nav-icon">📊</span>
+          <span>Setup Log</span>
+        </button>
+
+        <button
           className={`nav-item ${currentView === 'settings' ? 'active' : ''}`}
           onClick={() => setCurrentView('settings')}
         >
@@ -3062,7 +3111,9 @@ function Sidebar({ currentView, setCurrentView, processAlertCount = 0 }) {
         </button>
       </nav>
 
-      <LiveSessionPanel />
+      <ErrorBoundary name="Live Session">
+        <LiveSessionPanel />
+      </ErrorBoundary>
     </aside>
   );
 }
@@ -22728,7 +22779,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   const [logs, setLogs] = React.useState([]);
   const [pivot, setPivot] = React.useState(null);
   const [loadedAt, setLoadedAt] = React.useState(null);
-  const [cardState, setCardState] = React.useState(null);
+
   const [forecast, setForecast] = React.useState(null);
 
   React.useEffect(() => {
@@ -22761,7 +22812,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       </div>
 
       <div style={{ display: 'flex', gap: 2, marginBottom: 0, borderBottom: '1px solid var(--border-color)' }}>
-        {[['morning', 'Daily Prep'], ['dashboard', 'Dashboard'], ['edges', 'Antigravity Edges'], ['history', 'History'], ['walkthrough', 'Pre-Market Walkthrough'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
+        {[['morning', 'Daily Prep'], ['dashboard', 'Dashboard'], ['edges', 'Antigravity Edges'], ['history', 'History'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{label}</button>
         ))}
       </div>
@@ -22817,14 +22868,6 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
               </ErrorBoundary>
             </CollapsibleSection>
 
-            {/* Bottom Section: Active Trade Entry / Monitoring Cards */}
-            <CollapsibleSection title="Trade Plan Cards" defaultOpen fetchedAt={loadedAt}
-              updateId="acd-dash-trade-plan" updateView="acd"
-              dataSignature={JSON.stringify({ todayData, nl, cardState })}>
-              <ErrorBoundary name="Dashboard Cards">
-                <DashboardCardGrid setCurrentView={setCurrentView} nl={nl} todayData={todayData} onComplete={loadAll} onStateChange={setCardState} />
-              </ErrorBoundary>
-            </CollapsibleSection>
 
           </div>
         )}
@@ -22879,7 +22922,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
             <AntigravityEdgesView />
           </ErrorBoundary>
         )}
-        {tab === 'walkthrough' && <PreMarketWalkthrough />}
+
         {tab === 'chart' && (
           <div>
             <CollapsibleSection title="30-Day Number Line History" defaultOpen>
@@ -23670,6 +23713,153 @@ function AccountSelector({ accounts, selectedAccounts, setSelectedAccounts }) {
           {acct.slice(-8)}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ==================== SETUP LOG VIEW ====================
+function SetupHistoryView() {
+  const [setups, setSetups] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [filters, setFilters] = React.useState({ type: '', resolution: '', from: '', to: '' });
+  const [sort, setSort] = React.useState({ col: 'trade_date', dir: 'desc' });
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    const p = new URLSearchParams();
+    if (filters.type) p.set('type', filters.type);
+    if (filters.resolution) p.set('resolution', filters.resolution);
+    if (filters.from) p.set('from', filters.from);
+    if (filters.to) p.set('to', filters.to);
+    p.set('limit', '500');
+    fetch(`${API_URL}/setups/history?${p}`)
+      .then(r => r.json())
+      .then(d => { setSetups(d.setups || []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [filters]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const sorted = React.useMemo(() => {
+    const arr = [...setups];
+    arr.sort((a, b) => {
+      let av = a[sort.col] ?? '', bv = b[sort.col] ?? '';
+      if (sort.col === 'actual_pnl') { av = parseFloat(av) || 0; bv = parseFloat(bv) || 0; }
+      if (av < bv) return sort.dir === 'asc' ? -1 : 1;
+      if (av > bv) return sort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return arr;
+  }, [setups, sort]);
+
+  const toggleSort = (col) => setSort(s => ({ col, dir: s.col === col && s.dir === 'desc' ? 'asc' : 'desc' }));
+  const SortIcon = ({ col }) => sort.col === col ? (sort.dir === 'desc' ? ' ▼' : ' ▲') : ' ·';
+
+  const resolved = setups.filter(s => s.resolution === 'TARGET_HIT' || s.resolution === 'STOP_HIT');
+  const wins = resolved.filter(s => s.resolution === 'TARGET_HIT').length;
+  const totalPnl = setups.reduce((sum, s) => sum + (parseFloat(s.actual_pnl) || 0), 0);
+  const setupTypes = [...new Set(setups.map(s => s.setup_type))].sort();
+
+  const resColor = (r) => r === 'TARGET_HIT' ? '#22c55e' : r === 'STOP_HIT' ? '#ef4444' : r === 'ACTIVE' ? '#fbbf24' : '#64748b';
+  const resLabel = (r) => r === 'TARGET_HIT' ? 'T1 ✓' : r === 'STOP_HIT' ? 'Stop ✗' : r === 'TIME_EXPIRED' ? 'Expired' : r === 'SESSION_CLOSED' ? 'Closed' : r === 'INVALIDATED' ? 'Inv.' : r === 'ACTIVE' ? 'Active' : r || '—';
+
+  const inputStyle = { background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6, color: '#cbd5e1', fontSize: 12, padding: '5px 9px' };
+  const thStyle = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid rgba(51,65,85,0.4)', cursor: 'pointer', whiteSpace: 'nowrap' };
+  const tdStyle = { padding: '7px 10px', fontSize: 12, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.15)', verticalAlign: 'middle' };
+
+  return (
+    <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto', color: '#94a3b8' }}>
+      <div style={{ marginBottom: 20, display: 'flex', alignItems: 'baseline', gap: 16 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#e2e8f0', margin: 0 }}>Setup Log</h2>
+        <span style={{ fontSize: 13, color: '#64748b' }}>{setups.length} setups</span>
+      </div>
+
+      {/* Summary bar */}
+      {resolved.length > 0 && (
+        <div style={{ display: 'flex', gap: 24, marginBottom: 20, padding: '12px 16px', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 8 }}>
+          <div><span style={{ color: '#64748b', fontSize: 12 }}>Win Rate </span><span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 16 }}>{Math.round(wins / resolved.length * 100)}%</span><span style={{ color: '#64748b', fontSize: 11 }}> · N={resolved.length}</span></div>
+          <div><span style={{ color: '#64748b', fontSize: 12 }}>Wins </span><span style={{ color: '#22c55e', fontWeight: 700, fontSize: 16 }}>{wins}</span></div>
+          <div><span style={{ color: '#64748b', fontSize: 12 }}>Losses </span><span style={{ color: '#ef4444', fontWeight: 700, fontSize: 16 }}>{resolved.length - wins}</span></div>
+          <div><span style={{ color: '#64748b', fontSize: 12 }}>Total P&L </span><span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select style={inputStyle} value={filters.type} onChange={e => setFilters(f => ({ ...f, type: e.target.value }))}>
+          <option value="">All Setup Types</option>
+          {setupTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+        </select>
+        <select style={inputStyle} value={filters.resolution} onChange={e => setFilters(f => ({ ...f, resolution: e.target.value }))}>
+          <option value="">All Outcomes</option>
+          <option value="TARGET_HIT">T1 Hit ✓</option>
+          <option value="STOP_HIT">Stop Hit ✗</option>
+          <option value="TIME_EXPIRED">Expired</option>
+          <option value="SESSION_CLOSED">Closed</option>
+          <option value="ACTIVE">Active</option>
+        </select>
+        <input type="date" style={inputStyle} value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
+        <input type="date" style={inputStyle} value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
+        {(filters.type || filters.resolution || filters.from || filters.to) && (
+          <button onClick={() => setFilters({ type: '', resolution: '', from: '', to: '' })} style={{ ...inputStyle, color: '#94a3b8', cursor: 'pointer' }}>Clear</button>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ color: '#64748b', padding: 40, textAlign: 'center' }}>Loading…</div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: 'rgba(15,23,42,0.6)' }}>
+                <th style={thStyle} onClick={() => toggleSort('trade_date')}>Date<SortIcon col="trade_date" /></th>
+                <th style={thStyle} onClick={() => toggleSort('setup_type')}>Setup<SortIcon col="setup_type" /></th>
+                <th style={thStyle}>Time</th>
+                <th style={thStyle}>Entry</th>
+                <th style={thStyle}>Stop</th>
+                <th style={thStyle}>T1</th>
+                <th style={thStyle} onClick={() => toggleSort('resolution')}>Outcome<SortIcon col="resolution" /></th>
+                <th style={{ ...thStyle, textAlign: 'right' }} onClick={() => toggleSort('actual_pnl')}>P&L<SortIcon col="actual_pnl" /></th>
+                <th style={thStyle}>WR at Fire</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((s, i) => {
+                const pnl = parseFloat(s.actual_pnl);
+                const hasPnl = !isNaN(pnl) && s.actual_pnl != null;
+                const isLong = s.setup_type?.includes('LONG') || s.setup_type?.includes('BULLISH');
+                const isShort = s.setup_type?.includes('SHORT') || s.setup_type?.includes('BEARISH');
+                const dirColor = isLong ? '#4ade80' : isShort ? '#f87171' : '#94a3b8';
+                const rowBg = i % 2 === 0 ? 'rgba(15,23,42,0.3)' : 'transparent';
+                return (
+                  <tr key={s.id} style={{ background: rowBg }}>
+                    <td style={tdStyle}>{s.trade_date}</td>
+                    <td style={{ ...tdStyle, color: dirColor, fontWeight: 600 }}>{s.setup_type?.replace(/_/g, ' ')}</td>
+                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.fired_at_str?.slice(11, 16)}</td>
+                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{s.entry_zone_low != null ? Math.round(parseFloat(s.entry_zone_low)).toLocaleString() : '—'}</td>
+                    <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#f87171' }}>{s.stop_level != null ? Math.round(parseFloat(s.stop_level)).toLocaleString() : '—'}</td>
+                    <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#22c55e' }}>{s.t1_level != null ? Math.round(parseFloat(s.t1_level)).toLocaleString() : '—'}</td>
+                    <td style={tdStyle}>
+                      <span style={{ color: resColor(s.resolution), fontWeight: 600 }}>{resLabel(s.resolution)}</span>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', color: hasPnl ? (pnl >= 0 ? '#22c55e' : '#ef4444') : '#64748b', fontWeight: hasPnl ? 700 : 400 }}>
+                      {hasPnl ? `${pnl >= 0 ? '+' : ''}$${Math.round(pnl).toLocaleString()}` : '—'}
+                    </td>
+                    <td style={{ ...tdStyle, color: '#94a3b8' }}>
+                      {s.historical_win_rate != null && s.historical_sessions >= 20
+                        ? `${Math.round(s.historical_win_rate * 100)}% · N=${s.historical_sessions}`
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+              {sorted.length === 0 && (
+                <tr><td colSpan={9} style={{ ...tdStyle, textAlign: 'center', color: '#64748b', padding: 40 }}>No setups found</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

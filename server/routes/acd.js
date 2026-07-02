@@ -266,6 +266,90 @@ export async function resolveSetupsByPrice(io) {
   return count;
 }
 
+// ── Globex helpers ────────────────────────────────────────────────────────────
+
+function nextTradingDay(etDate) {
+  const d = new Date(etDate);
+  d.setDate(d.getDate() + 1);
+  if (d.getDay() === 0) d.setDate(d.getDate() + 1); // Sun → Mon
+  if (d.getDay() === 6) d.setDate(d.getDate() + 2); // Sat → Mon
+  return d.toLocaleDateString('en-CA');
+}
+
+// Detect a Globex-session level fade. Checks current price against PD VAH/VAL/POC.
+// Returns a setup descriptor (same shape as RTH active) or null.
+async function detectGlobexSetup(sessionDate, io) {
+  try {
+    const [priceRow, pdRow] = await Promise.all([
+      query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+      query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
+    ]);
+    if (!priceRow.rows[0] || !pdRow.rows[0]) return null;
+    const px = priceRow.rows[0].price;
+    const { vah, val, poc } = pdRow.rows[0];
+
+    const TOUCH = 15; // points
+    const STOP  = 60;
+    const T1    = 35;
+
+    const candidates = [
+      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT' },
+      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG'  },
+      { level: poc, name: 'PD POC', type: px >= poc ? 'PD_POC_FADE_SHORT' : 'PD_POC_FADE_LONG', dir: px >= poc ? 'SHORT' : 'LONG' },
+    ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH);
+
+    for (const c of candidates) {
+      const existing = await query(
+        `SELECT 1 FROM active_setups WHERE trade_date=$1 AND setup_type=$2 LIMIT 1`,
+        [sessionDate, c.type]
+      );
+      if (existing.rows.length) continue;
+
+      const isLong = c.dir === 'LONG';
+      const entry  = px;
+      const stop   = isLong ? px - STOP  : px + STOP;
+      const target = isLong ? px + T1    : px - T1;
+
+      // Globex setups expire at next RTH open (9:30 AM ET, next calendar day)
+      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const expDate = new Date(etNow);
+      if (etNow.getHours() >= 18) expDate.setDate(expDate.getDate() + 1);
+      expDate.setHours(9, 30, 0, 0);
+      const expiresAt = `${expDate.getFullYear()}-${String(expDate.getMonth()+1).padStart(2,'0')}-${String(expDate.getDate()).padStart(2,'0')} 09:30:00`;
+
+      const ins = await query(`
+        INSERT INTO active_setups (
+          trade_date, setup_type, fired_at, expires_at, status,
+          entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
+          price_at_detection, historical_win_rate, historical_sessions
+        ) VALUES ($1,$2,NOW(),$3,'ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
+        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+        RETURNING id, entry_zone_low, stop_level, t1_level
+      `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${T1}pt (${c.name})`, entry]);
+
+      if (!ins.rows[0]) continue; // ON CONFLICT — already exists
+
+      const rr = (Math.abs(target - entry) / Math.abs(entry - stop)).toFixed(1);
+      if (io) io.emit('setup-detected', {
+        type: c.type, direction: c.dir, entry, stop, target, rr,
+        targetLabel: `T1: ${T1}pt (${c.name})`, globexMode: true,
+        detectedAt: etNow.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true }),
+      });
+
+      return {
+        type: c.type, direction: c.dir, entry, stop, target, rr,
+        targetLabel: `T1: ${T1}pt (${c.name})`, globexMode: true,
+        detectedAt: new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+          .toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      };
+    }
+    return null;
+  } catch (e) {
+    console.error('[detectGlobexSetup]', e.message);
+    return null;
+  }
+}
+
 // Expires any ACTIVE setups past their expires_at; emits socket events.
 export async function expireStaleSetups(io) {
   // SHADOW rows from prior dates have no expires_at and accumulate forever, eventually
@@ -2431,16 +2515,15 @@ export default function createACDRouter(io) {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const etMin   = nowET.getHours() * 60 + nowET.getMinutes();
+      const etHour  = nowET.getHours();
 
-      // Resolve setups by price FIRST (TARGET_HIT/STOP_HIT) — a real T1/stop touch must
-      // never be preempted by a timer or OR-break invalidation. Only setups still ACTIVE
-      // after this (i.e. neither level touched) fall through to expiry/invalidation below.
+      // Resolve/expire existing setups on every poll regardless of window
       await resolveSetupsByPrice(io).catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 
-      // Session close at 4:00 PM ET: expire all remaining active setups
-      if (etMin >= 16 * 60) {
+      // 5–6 PM ET: hard close / reset gap — expire RTH setups, dark until Globex opens
+      if (etMin >= 17 * 60 && etMin < 18 * 60) {
         await query(`
           UPDATE active_setups SET status='EXPIRED', resolution='SESSION_CLOSED',
             resolved_at=NOW(), updated_at=NOW()
@@ -2448,14 +2531,19 @@ export default function createACDRouter(io) {
         `, [todayET]).catch(() => {});
         return res.json({ setup: null, sessionClosed: true });
       }
+
+      // Globex window: 6 PM–8:30 AM ET — fire level fades against PD VAH/VAL/POC only
+      const inGlobex = etHour >= 18 || etMin < 8 * 60 + 30;
+      if (inGlobex) {
+        const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
+        const globexSetup = await detectGlobexSetup(sessionDate, io);
+        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true });
+      }
+
       const noNewEntries = false; // setups fire throughout RTH session
 
-      // Setup detection itself depends on today's OR/A-levels, which aren't
-      // computed until 9:35 ET — opening this gate at 8:30 just stops the
-      // endpoint hard-blocking pre-market; it'll still return setup:null
-      // until the OR/A-levels exist.
-      const isRTH = etMin >= 8 * 60 + 30;
-      if (!isRTH) return res.json({ setup: null, reason: 'market closed' });
+      // RTH detection — same as before (8:30 AM–5 PM ET)
+      const isRTH = true; // already gated above
 
       // ── Fetch all data sources in parallel ────────────────────────────────────
       const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
@@ -4829,12 +4917,16 @@ export default function createACDRouter(io) {
   // ── GET /api/setups/today ──────────────────────────────────────────────────
   router.get('/setups/today', async (req, res) => {
     try {
-      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const todayET = nowET.toLocaleDateString('en-CA');
+      // After 6 PM ET Globex starts — include both today's RTH setups AND next day's Globex setups
+      const dates = [todayET];
+      if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
       const r = await query(`
         SELECT *, fired_at::text as fired_at_str, expires_at::text as expires_at_str,
           resolved_at::text as resolved_at_str
-        FROM active_setups WHERE trade_date=$1 ORDER BY fired_at
-      `, [todayET]);
+        FROM active_setups WHERE trade_date = ANY($1) ORDER BY fired_at
+      `, [dates]);
       res.json({ setups: r.rows });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -4855,6 +4947,31 @@ export default function createACDRouter(io) {
       await dropToTimeline(r.rows[0]);
       io.emit('setup-resolved', { setupId: parseInt(id), resolution, setupType: r.rows[0].setup_type });
       res.json({ ok: true, setup: r.rows[0] });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── GET /api/setups/history ───────────────────────────────────────────────
+  router.get('/setups/history', async (req, res) => {
+    try {
+      const { from, to, type, resolution, limit = 500, offset = 0 } = req.query;
+      const conditions = ["status != 'SHADOW'"];
+      const params = [];
+      if (from) { params.push(from); conditions.push(`trade_date >= $${params.length}`); }
+      if (to)   { params.push(to);   conditions.push(`trade_date <= $${params.length}`); }
+      if (type) { params.push(type); conditions.push(`setup_type = $${params.length}`); }
+      if (resolution) { params.push(resolution); conditions.push(`resolution = $${params.length}`); }
+      params.push(parseInt(limit)); params.push(parseInt(offset));
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const r = await query(`
+        SELECT id, trade_date::text, setup_type, fired_at::text as fired_at_str,
+          entry_zone_low, stop_level, t1_level, t1_label, status, resolution, actual_pnl,
+          historical_win_rate, historical_sessions, price_at_detection,
+          resolved_at::text as resolved_at_str
+        FROM active_setups ${where}
+        ORDER BY trade_date DESC, fired_at DESC
+        LIMIT $${params.length - 1} OFFSET $${params.length}
+      `, params);
+      res.json({ setups: r.rows, count: r.rows.length });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

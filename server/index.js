@@ -65,9 +65,47 @@ const io = new SocketIO(httpServer, { cors: { origin: '*', methods: ['GET', 'POS
 
 app.set('io', io); // makes io available in route handlers via req.app.get('io')
 
+// In-memory ring buffer for errors visible to the Gemini watcher
+const recentErrors = [];
+const MAX_ERRORS = 50;
+function recordError(type, message, detail) {
+  recentErrors.unshift({ ts: new Date().toISOString(), type, message, detail: detail?.slice?.(0, 500) });
+  if (recentErrors.length > MAX_ERRORS) recentErrors.pop();
+
+  try {
+    const filePath = path.join(__dirname, '../scratch/server_errors.jsonl');
+    fs.appendFileSync(
+      filePath,
+      JSON.stringify({ ts: new Date().toISOString(), type, message, detail: detail?.slice?.(0, 300) }) + '\n'
+    );
+    
+    // Trim to 500 lines to avoid infinite growth
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, 'utf8');
+      const lines = data.trim().split('\n');
+      if (lines.length > 500) {
+        fs.writeFileSync(filePath, lines.slice(lines.length - 500).join('\n') + '\n');
+      }
+    }
+  } catch (_) {}
+}
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Centralized response interceptor middleware to log all status 500 responses
+app.use((req, res, next) => {
+  const originalJson = res.json;
+  res.json = function (body) {
+    if (res.statusCode === 500) {
+      const msg = `${req.method} ${req.originalUrl || req.path} — ${body?.error || 'Unknown Error'}`;
+      recordError('SERVER_ERROR', msg, new Error().stack);
+    }
+    return originalJson.apply(this, arguments);
+  };
+  next();
+});
 
 // Static files for uploaded screenshots
 const __filename = fileURLToPath(import.meta.url);
@@ -252,13 +290,6 @@ app.use('/api', developingValueRouter);
 app.use('/api', antigravityEdgesRouter);
 
 // Client-side error reporting — catches React render crashes via ErrorBoundary
-// In-memory ring buffer for errors visible to the Gemini watcher
-const recentErrors = [];
-const MAX_ERRORS = 50;
-function recordError(type, message, detail) {
-  recentErrors.unshift({ ts: new Date().toISOString(), type, message, detail: detail?.slice?.(0, 500) });
-  if (recentErrors.length > MAX_ERRORS) recentErrors.pop();
-}
 
 app.post('/api/client-error', (req, res) => {
   const { component, message, stack } = req.body || {};
