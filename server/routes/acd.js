@@ -3092,8 +3092,8 @@ export default function createACDRouter(io) {
             entry: +currentPrice.toFixed(0),
             stop: isBull ? +(orL - (orH - orL)).toFixed(0) : +(orH + 2).toFixed(0),
             target: isBull
-              ? t1Guard('LONG',  currentPrice, orH + (orRange || 0), currentPrice + (orRange || 80))
-              : t1Guard('SHORT', currentPrice, orL - (orRange || 0), currentPrice - (orRange || 80)),
+              ? t1Guard('LONG',  currentPrice, orH + (orRange || 0), currentPrice + Math.max(60, orRange || 60))
+              : t1Guard('SHORT', currentPrice, orL - (orRange || 0), currentPrice - Math.max(60, orRange || 60)),
             targetLabel: isBull ? 'T1: OR Measured Move (half off) · Runner: 70pt' : 'T1: OR Measured Move (half off) · Runner: 65pt',
             keyLevel: +(isBull ? orH : orL).toFixed(0),
             keyLevelLabel: isBull ? 'OR High (support)' : 'OR Low (resistance)',
@@ -3281,8 +3281,8 @@ export default function createACDRouter(io) {
             entry: +currentPrice.toFixed(0),
             stop: +(isFade ? (pdVAH + 18) : (pdVAL - 8)).toFixed(0),
             target: isFade
-              ? t1Guard('SHORT', currentPrice, pdPOC, pdVAL, currentPrice - (orRange || 80) * 0.5)
-              : t1Guard('LONG',  currentPrice, pdPOC, pdVAH, currentPrice + (orRange || 80) * 0.5),
+              ? t1Guard('SHORT', currentPrice, pdPOC, pdVAL, currentPrice - Math.max(60, (orRange || 80) * 0.5))
+              : t1Guard('LONG',  currentPrice, pdPOC, pdVAH, currentPrice + Math.max(60, (orRange || 80) * 0.5)),
             targetLabel: isFade ? 'T1: PD POC (half off) · Runner: 95pt' : 'T1: PD POC (half off) · Runner: 100pt',
             keyLevel: +(isFade ? pdVAH : pdVAL).toFixed(0),
             keyLevelLabel: isFade ? 'Prior Day VAH' : 'Prior Day VAL',

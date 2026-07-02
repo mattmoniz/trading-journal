@@ -284,28 +284,66 @@ app.get('/api/vol-alert', async (req, res) => {
           AND (ts AT TIME ZONE 'America/New_York')::time < '09:30:00'
         GROUP BY ts::date
       ),
-      stats AS (
+      on_stats AS (
         SELECT AVG(rng) as avg_rng, STDDEV(rng) as std_rng FROM prior_on
+      ),
+      today_or AS (
+        SELECT (MAX(high)-MIN(low))::float as or_range, COUNT(*) as bar_count
+        FROM price_bars_primary
+        WHERE ts::date = $1 AND symbol='NQ'
+          AND (ts AT TIME ZONE 'America/New_York')::time BETWEEN '09:30:00' AND '10:00:00'
+      ),
+      prior_or AS (
+        SELECT ts::date, (MAX(high)-MIN(low))::float as rng
+        FROM price_bars_primary
+        WHERE symbol='NQ'
+          AND ts::date IN (
+            SELECT DISTINCT ts::date FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date < $1
+            ORDER BY ts::date DESC LIMIT 20
+          )
+          AND (ts AT TIME ZONE 'America/New_York')::time BETWEEN '09:30:00' AND '10:00:00'
+        GROUP BY ts::date
+      ),
+      or_stats AS (
+        SELECT AVG(rng) as avg_rng, STDDEV(rng) as std_rng FROM prior_or
       )
       SELECT
         t.on_low, t.on_high, t.on_range,
-        ROUND(s.avg_rng::numeric, 1) as avg_20d,
-        ROUND(s.std_rng::numeric, 1) as std_20d,
-        ROUND(((t.on_range - s.avg_rng) / NULLIF(s.std_rng, 0))::numeric, 2) as sigma
-      FROM today_on t, stats s
+        ROUND(s.avg_rng::numeric, 1) as on_avg_20d,
+        ROUND(s.std_rng::numeric, 1) as on_std_20d,
+        ROUND(((t.on_range - s.avg_rng) / NULLIF(s.std_rng, 0))::numeric, 2) as on_sigma,
+        tor.or_range, tor.bar_count as or_bar_count,
+        ROUND(os.avg_rng::numeric, 1) as or_avg_20d,
+        ROUND(os.std_rng::numeric, 1) as or_std_20d,
+        ROUND(((tor.or_range - os.avg_rng) / NULLIF(os.std_rng, 0))::numeric, 2) as or_sigma
+      FROM today_on t, on_stats s, today_or tor, or_stats os
     `, [todayET]);
     const row = r.rows[0];
     if (!row) return res.json({ alert: false });
-    const sigma = parseFloat(row.sigma) || 0;
+    const onSigma = parseFloat(row.on_sigma) || 0;
+    const orSigma = row.or_bar_count > 0 ? (parseFloat(row.or_sigma) || 0) : null;
+    const orAlert = orSigma !== null && orSigma >= 1.0;
+    const both = onSigma >= 1.0 && orAlert;
     res.json({
-      alert: sigma >= 1.0,
-      sigma: parseFloat(sigma.toFixed(2)),
+      alert: onSigma >= 1.0 || orAlert,
+      // Overnight
+      sigma: parseFloat(onSigma.toFixed(2)),
       on_range: Math.round(row.on_range),
       on_low: row.on_low,
       on_high: row.on_high,
-      avg_20d: parseFloat(row.avg_20d),
-      std_20d: parseFloat(row.std_20d),
-      threshold: Math.round(parseFloat(row.avg_20d) + parseFloat(row.std_20d)),
+      avg_20d: parseFloat(row.on_avg_20d),
+      std_20d: parseFloat(row.on_std_20d),
+      threshold: Math.round(parseFloat(row.on_avg_20d) + parseFloat(row.on_std_20d)),
+      // Opening range (null before 9:35 ET)
+      or_alert: orAlert,
+      or_sigma: orSigma !== null ? parseFloat(orSigma.toFixed(2)) : null,
+      or_range: row.or_bar_count > 0 ? Math.round(row.or_range) : null,
+      or_avg_20d: parseFloat(row.or_avg_20d),
+      or_std_20d: parseFloat(row.or_std_20d),
+      or_threshold: Math.round(parseFloat(row.or_avg_20d) + parseFloat(row.or_std_20d)),
+      // Combined flag
+      double_alert: both,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
