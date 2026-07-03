@@ -228,15 +228,21 @@ src/
 └── components/dashboard/  # 31 components
 ```
 
-Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `scenario`, `backtest`, `tearsheet`, `settings`, `risk`, `longterm`, `playbook`.
+**Sidebar nav (5 items):** Morning Prep → `acd`, Dashboard → `dashboard`, Edge → `backtest`, Trades → `calendar`, Settings → `settings`. Removed 2026-07-03: Structure (`longterm`), Tearsheet, Scenarios, Risk, Setup Log — all absorbed into Edge sub-tabs or Dashboard content.
+
+Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `backtest`, `settings`, `longterm`, `playbook` (still renderable, just not in sidebar nav; `scenario`, `risk`, `setup-log`, `tearsheet` render as Edge sub-tabs or via direct URL).
+
+**BacktestView ("Edge") sub-tabs:** Setup Log (default), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
+
+**DashboardView extras (added 2026-07-03):** fetches `tearsheet-overview`, `rolling`, `pnl-distribution` alongside existing stats. Renders: Sharpe/Sortino/Kelly chip card, Rolling 20-trade expectancy chart, Trade P&L Distribution chart — all below BehaviorSection.
 
 | Group | Components |
 |---|---|
 | Pre-market context | `MorningBriefPanel`, `PreSessionChecklist`, `PreMarketWalkthrough`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard`, `GapContextCard` |
 | Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `BehavioralGuideCard`, `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard`, `LevelMonitorPanel` |
-| Performance viz | `PerformanceVisuals`, `PnlCharts`, `StatsGrid`, `SymbolsTable`, `SetupsTable` |
-| Utility | `SyncProgressPanel`, `RecapDatePicker`, `OptimizationSection`, `DashboardFilters`, `DashboardQuickNav`, `DashboardView` |
+| Performance viz | `PerformanceVisuals`, `PnlCharts`, `StatsGrid`, `SetupsTable` |
+| Utility | `SyncProgressPanel`, `RecapDatePicker`, `OptimizationSection`, `DashboardFilters`, `DashboardView` |
 
 Key logic in `App.jsx`: `computeNetTrades()` (second-pass CumPL diff per account for the intraday chart), shared account state, day modal with BP→EP fill grouping.
 

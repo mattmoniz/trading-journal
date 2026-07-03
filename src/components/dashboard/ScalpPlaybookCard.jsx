@@ -6,30 +6,21 @@ const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maxi
 
 export default function ScalpPlaybookCard({ date }) {
   const [data, setData] = useState(null);
-  const [recap, setRecap] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     fetch(`${API_URL}/morning-brief/scalp-playbook/${d}`).then(r => r.json()).then(setData).catch(() => {});
-    fetch(`${API_URL}/morning-brief/scalp-recap/${d}`).then(r => r.json()).then(setRecap).catch(() => {});
   }, [date]);
 
   if (!data) return null;
   const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const sc = recap?.scorecard;
-  const pnlColor = sc?.totalPnl > 0 ? '#4ade80' : sc?.totalPnl < 0 ? '#f87171' : '#94a3b8';
 
   return (
     <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '12px 16px', marginBottom: 12 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setCollapsed(!collapsed)}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: '#4ade80' }}>Scalp Playbook — {data.dayOfWeek}</span>
-          {sc && sc.scalps.trades + sc.vwapMagnet.trades > 0 && (
-            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'monospace', color: pnlColor }}>
-              Today: ${sc.totalPnl}
-            </span>
-          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 11, color: '#64748b' }}>{ts}</span>
@@ -120,30 +111,6 @@ export default function ScalpPlaybookCard({ date }) {
             </div>
           )}
 
-          {data.overnightProfile && (
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#06b6d4', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
-                Overnight Structure
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '2px 6px' }}>
-                {[
-                  { label: 'Range', value: `${data.overnightProfile.range}pt` },
-                  { label: 'Dir', value: data.overnightProfile.direction, color: data.overnightProfile.direction === 'UP' ? '#4ade80' : '#f87171' },
-                  { label: 'ON POC', value: fmtP(data.overnightProfile.poc), color: '#a78bfa' },
-                  { label: 'Close %', value: `${data.overnightProfile.closePosition}%` },
-                ].map((item, i) => (
-                  <div key={i}>
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>{item.label}</div>
-                    <div style={{ fontSize: 11, fontWeight: 700, fontFamily: 'monospace', color: item.color || '#cbd5e1' }}>{item.value}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
-                ON VA: {fmtP(data.overnightProfile.val)} — {fmtP(data.overnightProfile.vah)}
-              </div>
-            </div>
-          )}
-
           {data.balanceZones?.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
@@ -169,26 +136,6 @@ export default function ScalpPlaybookCard({ date }) {
             </div>
           )}
 
-          {/* Daily Recap (after 4 PM) */}
-          {sc && sc.scalps.trades + sc.vwapMagnet.trades + sc.pipeline.trades > 0 && (
-            <div style={{ padding: '8px', background: 'rgba(255,255,255,0.03)', borderRadius: 4, border: '1px solid rgba(255,255,255,0.06)' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', marginBottom: 4 }}>Today's Results</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                {[
-                  { label: 'Level Scalps', ...sc.scalps },
-                  { label: 'VWAP Magnet', ...sc.vwapMagnet },
-                  { label: 'Pipeline', ...sc.pipeline },
-                ].map((cat, i) => (
-                  <div key={i}>
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>{cat.label}</div>
-                    <div style={{ fontSize: 11, fontWeight: 700, fontFamily: 'monospace', color: cat.pnl > 0 ? '#4ade80' : cat.pnl < 0 ? '#f87171' : '#94a3b8' }}>
-                      {cat.trades > 0 ? `${cat.wins}W/${cat.losses}L $${cat.pnl}` : '—'}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

@@ -24,6 +24,8 @@ const PROCESS_SCHEDULE = [
   { name: 'MAE_MFE_AUDIT',       label: 'MAE/MFE System Audit',     schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 750, critical: false, firstSundayOnly: true },
   { name: 'LEVEL_FADE_AUDIT',    label: 'Level Fade Backtest',      schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 750, critical: false, firstSundayOnly: true },
   { name: 'SYSTEM_BACKTEST',     label: 'Full System Backtest',     schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 750, critical: false, firstSundayOnly: true },
+  { name: 'CONTEXT_ANALYSIS',    label: 'Context Edge Analysis',    schedule: 'Weekly (Sunday 6am)',       expectedDays: ['Sun'],                         scheduledHour: 6,  maxAgeHours: 170, critical: false },
+  { name: 'CONFLUENCE_AUDIT',    label: 'Confluence Pair Backtest', schedule: 'Weekly (Sunday 6:30am)',    expectedDays: ['Sun'],                         scheduledHour: 7,  maxAgeHours: 170, critical: false },
   { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Every 60s during RTH',      expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
 ];
@@ -126,7 +128,7 @@ router.get('/settings/process-health', async (req, res) => {
     // Fallback: for manual-script processes (SYSTEM_BACKTEST, MAE_MFE_AUDIT, LEVEL_FADE_AUDIT),
     // if process_log has no row, check performance_audit.run_date directly.
     // Manual node script runs bypass logProcess() so they never write to process_log.
-    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT' };
+    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT', CONTEXT_ANALYSIS: 'CONTEXT_ANALYSIS', CONFLUENCE_AUDIT: 'CONFLUENCE_AUDIT' };
     const paFallbackQ = await query(`
       SELECT signal_type, MAX(run_date)::text as last_run
       FROM performance_audit
@@ -166,6 +168,7 @@ router.get('/settings/process-health', async (req, res) => {
 
     const processes = PROCESS_SCHEDULE.map(proc => {
       let lastRun = null, lastStatus = null, lastDuration = null, recordsAffected = null, errorMessage = null;
+      let lastRunFormatted = null;
       if (proc.isLive) {
         const ld = liveData[proc.name] || {};
         lastRun = ld.lastRun; lastStatus = ld.lastStatus;
@@ -178,10 +181,14 @@ router.get('/settings/process-health', async (req, res) => {
           recordsAffected = row.records_affected;
           errorMessage = row.error_message;
         } else if (manualScriptTypes[proc.name] && paFallback[manualScriptTypes[proc.name]]) {
-          // Manual script ran but bypassed process_log — use performance_audit date as evidence of last run
-          lastRun = paFallback[manualScriptTypes[proc.name]] + 'T00:00:00';
+          // Manual script ran but bypassed process_log — date-only from performance_audit.
+          // Format as a short date string directly to avoid fake time display.
+          const dateStr = paFallback[manualScriptTypes[proc.name]];
+          lastRun = dateStr + 'T00:00:00';
           lastStatus = 'SUCCESS';
           errorMessage = null;
+          const d = new Date(dateStr + 'T12:00:00');
+          lastRunFormatted = d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
         }
       }
 
@@ -191,7 +198,7 @@ router.get('/settings/process-health', async (req, res) => {
         schedule: proc.schedule,
         critical: proc.critical,
         isLive: proc.isLive || false,
-        lastRun: lastRun ? fmtTime(lastRun, nowET) : null,
+        lastRun: lastRunFormatted || (lastRun ? fmtTime(lastRun, nowET) : null),
         lastRunRaw: lastRun,
         lastStatus,
         lastDuration,

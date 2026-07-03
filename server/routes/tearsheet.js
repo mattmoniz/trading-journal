@@ -195,9 +195,9 @@ router.get('/stats/tearsheet-overview', async (req, res) => {
 router.get('/stats/pnl-distribution', async (req, res) => {
   try {
     const { where, params } = buildWhere(req.query);
-    const result = await query(`SELECT pnl FROM trades WHERE ${where} ORDER BY pnl`, params);
-    const pnls = result.rows.map(r => parseFloat(r.pnl));
-    if (!pnls.length) return res.json([]);
+    const result = await query(`SELECT pnl FROM trades WHERE ${where} AND pnl IS NOT NULL ORDER BY pnl`, params);
+    const pnls = result.rows.map(r => parseFloat(r.pnl)).filter(v => isFinite(v));
+    if (!pnls.length) return res.json({ buckets: [], mean: null, median: null });
     const min = Math.floor(Math.min(...pnls) / 50) * 50;
     const max = Math.ceil(Math.max(...pnls) / 50) * 50;
     const bucketSize = Math.max(50, Math.round((max - min) / 30 / 50) * 50);

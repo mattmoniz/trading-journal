@@ -3967,7 +3967,7 @@ export default function createACDRouter(io) {
             // Floor pivots (all 7: Pivot, R1, R2, R3, S1, S2, S3)
             { name: 'FLOOR_PIVOT_FADE', level: lp.FLOOR_PIVOT ?? floorP, ...(ls('FLOOR_PIVOT') || {}), ...monOverride('FLOOR_PIVOT') },
             { name: 'FLOOR_R1_FADE',   level: lp.FLOOR_R1 ?? floorR1,   ...(ls('FLOOR_R1')    || {}), ...monOverride('FLOOR_R1') },
-            { name: 'FLOOR_S1_FADE',   level: lp.FLOOR_S1 ?? null,       ...(ls('FLOOR_S1')    || {}) },
+            // FLOOR_S1 removed 2026-07-03: negative EV across 12+ backtests (SYSTEM/UNIFIED all negative, -$9 to -$101). LEVEL_FADE_AUDIT +$20.79 is selection bias — wide stop (p75_mae=90+pt) kills edge.
             // Today's OR/IB (real-time bar values — not from level_prices which may lag)
             { name: 'OR_HIGH_FADE',   level: orH,         ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
             { name: 'OR_LOW_FADE',    level: orL,         ...(ls('OR_LOW')     || {}) },
@@ -5052,8 +5052,10 @@ export default function createACDRouter(io) {
       const dates = [todayET];
       if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
       const r = await query(`
-        SELECT *, fired_at::text as fired_at_str, expires_at::text as expires_at_str,
-          resolved_at::text as resolved_at_str
+        SELECT *,
+          TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
+          TO_CHAR(expires_at, 'YYYY-MM-DD HH24:MI:SS') as expires_at_str,
+          TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
         FROM active_setups WHERE trade_date = ANY($1) ORDER BY fired_at
       `, [dates]);
       res.json({ setups: r.rows });
@@ -5123,10 +5125,11 @@ export default function createACDRouter(io) {
       const total = totalR.rows[0]?.total || 0;
       params.push(parseInt(limit)); params.push(parseInt(offset));
       const r = await query(`
-        SELECT id, trade_date::text, setup_type, fired_at::text as fired_at_str,
+        SELECT id, trade_date::text, setup_type,
+          TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
           entry_zone_low, stop_level, t1_level, t1_label, status, resolution, actual_pnl,
           historical_win_rate, historical_sessions, price_at_detection,
-          resolved_at::text as resolved_at_str
+          TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
         FROM active_setups ${where}
         ORDER BY trade_date DESC, fired_at DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}
@@ -5885,7 +5888,8 @@ export default function createACDRouter(io) {
         'OR_HIGH':      { price: orH,      bestCtx: 'AM session strong', freq: '~0.7/day' },
         'FLOOR_R1':     { price: floorR1,  bestCtx: 'Thursday 1PM specialist', freq: '~0.5/day' },
         'PD_OR_MID':    { price: pdOrMid,  bestCtx: 'Good midpoint fade', freq: '~0.5/day' },
-        'FLOOR_S1':     { price: floorS1,  bestCtx: 'Support level', freq: '~0.5/day' },
+        // FLOOR_S1 removed from keepLevels 2026-07-03 (12+ backtest runs all negative EV)
+        // 'FLOOR_S1':  { price: floorS1,  bestCtx: 'Support level', freq: '~0.5/day' },
         'IB_HIGH':      { price: ibHigh,   bestCtx: '90% WR level fade', freq: '~0.8/day' },
         'IB_LOW':       { price: ibLow,    bestCtx: '88% WR level fade', freq: '~0.8/day' },
         'IB_MID':       { price: ibMid,    bestCtx: 'Midpoint reference', freq: '~1/day' },
@@ -6051,6 +6055,107 @@ export default function createACDRouter(io) {
         return true;
       });
 
+      // ── Confluence pairs ──────────────────────────────────────────────
+      // Base pairs (all-time, N≥10, distinct_dates≥5)
+      const pairsBaseQ = await query(`
+        SELECT signal_name, sample_size,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev,
+          recommendation
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND signal_name LIKE 'PAIR_%'
+          AND window_days = 9999
+          AND signal_name NOT LIKE '%_DOW_%'
+          AND signal_name NOT LIKE '%_TOD_%'
+          AND signal_name NOT LIKE '%_DT_%'
+        ORDER BY ev_per_trade DESC NULLS LAST
+      `);
+
+      // Best DOW/TOD/DT per pair (highest EV sub-condition)
+      const pairsSubQ = await query(`
+        SELECT signal_name,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev,
+          sample_size, recommendation
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND window_days = 9999
+          AND (signal_name LIKE 'PAIR_%_DOW_%'
+            OR signal_name LIKE 'PAIR_%_TOD_%'
+            OR signal_name LIKE 'PAIR_%_DT_%')
+        ORDER BY signal_name, ev_per_trade DESC NULLS LAST
+      `);
+
+      // Index sub-conditions: pick best and worst per category per pair
+      const subBest = {}, subWorst = {};
+      pairsSubQ.rows.forEach(r => {
+        const isDOW = /_DOW_\w+$/.test(r.signal_name);
+        const isTOD = /_TOD_\w+$/.test(r.signal_name);
+        const isDT  = /_DT_\w+$/.test(r.signal_name);
+        const cat = isDOW ? 'DOW' : isTOD ? 'TOD' : isDT ? 'DT' : null;
+        if (!cat) return;
+        const base = r.signal_name.replace(/_DOW_\w+$/, '').replace(/_TOD_\w+$/, '').replace(/_DT_\w+$/, '');
+        const key = base + '_' + cat;
+        const suffix = isDOW ? r.signal_name.match(/_DOW_(\w+)$/)?.[1]
+                     : isTOD ? r.signal_name.match(/_TOD_(\w+)$/)?.[1]
+                     : r.signal_name.match(/_DT_(\w+)$/)?.[1];
+        const entry = { label: suffix, n: r.sample_size, wr: r.wr_pct, ev: r.ev, rec: r.recommendation };
+        if (!subBest[key])  subBest[key]  = entry;
+        if (!subWorst[key]) subWorst[key] = entry;
+        else if (r.ev < subWorst[key].ev) subWorst[key] = entry;
+      });
+
+      // Build rolling windows index
+      const pairsWinQ = await query(`
+        SELECT signal_name, window_days,
+          sample_size,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND signal_name LIKE 'PAIR_%'
+          AND window_days IN (365, 182, 20)
+          AND signal_name NOT LIKE '%_DOW_%'
+          AND signal_name NOT LIKE '%_TOD_%'
+          AND signal_name NOT LIKE '%_DT_%'
+        ORDER BY signal_name, window_days
+      `);
+      const pairWins = {};
+      pairsWinQ.rows.forEach(r => {
+        if (!pairWins[r.signal_name]) pairWins[r.signal_name] = {};
+        pairWins[r.signal_name][r.window_days] = { n: r.sample_size, wr: r.wr_pct, ev: r.ev };
+      });
+
+      const pairs = pairsBaseQ.rows.map(r => {
+        const base = r.signal_name;
+        const pairKey = base.replace(/^PAIR_/, '');
+        const wins = pairWins[base] || {};
+        const wr20  = wins[20]?.wr,  ev20  = wins[20]?.ev,  n20  = wins[20]?.n;
+        const trend = (wr20 != null && r.wr_pct != null)
+          ? (wr20 > r.wr_pct + 5 ? 'UP' : wr20 < r.wr_pct - 5 ? 'DOWN' : 'FLAT') : null;
+        return {
+          pair: pairKey,
+          n: r.sample_size,
+          wr: r.wr_pct,
+          ev: r.ev,
+          recommendation: r.recommendation,
+          status: r.recommendation === 'TRADE' ? 'ACTIVE'
+                : r.recommendation === 'CUT'   ? 'REMOVED'
+                : 'CONTEXT',
+          trend,
+          wr20, ev20, n20,
+          wr6m: wins[182]?.wr, ev6m: wins[182]?.ev,
+          wr1y: wins[365]?.wr, ev1y: wins[365]?.ev,
+          best_dow:  subBest[base + '_DOW']  || null,
+          worst_dow: subWorst[base + '_DOW'] || null,
+          best_tod:  subBest[base + '_TOD']  || null,
+          worst_tod: subWorst[base + '_TOD'] || null,
+          best_dt:   subBest[base + '_DT']   || null,
+          worst_dt:  subWorst[base + '_DT']  || null,
+        };
+      });
+
       // Get SYSTEM_SUMMARY for the header
       const summary = auditQ.rows.find(r => r.signal_type === 'SYSTEM_SUMMARY');
 
@@ -6067,6 +6172,7 @@ export default function createACDRouter(io) {
           notes: summary.notes,
         } : null,
         setups: dedupedSetups,
+        pairs,
       });
     } catch (err) {
       console.error('Unified audit error:', err);

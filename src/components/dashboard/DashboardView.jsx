@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BarChart, Bar, ComposedChart, Line, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import SyncProgressPanel from './SyncProgressPanel.jsx';
 import DashboardFilters from './DashboardFilters.jsx';
-import MarketRecapPanel from './MarketRecapPanel.jsx';
 import PerformanceVisuals from './PerformanceVisuals.jsx';
 import PnlCharts from './PnlCharts.jsx';
 import SetupsTable from './SetupsTable.jsx';
 import OptimizationSection from './OptimizationSection.jsx';
 import BehaviorSection from './BehaviorSection.jsx';
 import DevelopingValueCard from './DevelopingValueCard.jsx';
-import ScalpPlaybookCard from './ScalpPlaybookCard.jsx';
 import LevelMonitorPanel from './LevelMonitorPanel.jsx';
 
 const API_URL = '/api';
@@ -23,7 +22,6 @@ export default function DashboardView({
   syncLog = [],
   onSyncTrades,
   onDismissSync,
-  ChartReviewComponent,
 }) {
   const [dailyPerf, setDailyPerf] = useState([]);
   const [setupStats, setSetupStats] = useState([]);
@@ -35,11 +33,12 @@ export default function DashboardView({
   const [keyLevelsData, setKeyLevelsData] = useState(null);
   const [klProximity, setKlProximity] = useState(2.5);
   const [klTimeframe, setKlTimeframe] = useState('all');
+  const [riskStats, setRiskStats] = useState(null);     // Sharpe/Sortino/Kelly from tearsheet-overview
+  const [rolling, setRolling] = useState([]);            // rolling 20-trade expectancy
+  const [pnlDist, setPnlDist] = useState(null);          // trade P&L distribution
 
   const todayStr = new Date().toLocaleDateString('en-CA');
   const [recapDate, setRecapDate] = useState(todayStr);
-  const [recapData, setRecapData] = useState(null);
-  const [recapLoading, setRecapLoading] = useState(false);
 
   const [filters, setFilters] = useState({
     dateRange: 'today',
@@ -64,17 +63,6 @@ export default function DashboardView({
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (!recapDate) return;
-    setRecapLoading(true);
-    setRecapData(null);
-    const accts = selectedAccounts.length ? `&account=${selectedAccounts.join(',')}` : '';
-    fetch(`${API_URL}/chart/live-day?date=${recapDate}${accts}`)
-      .then(r => r.json())
-      .then(j => setRecapData(j.error ? null : j))
-      .catch(() => {})
-      .finally(() => setRecapLoading(false));
-  }, [recapDate, selectedAccounts]);
 
   const fetchKeyLevels = useCallback(async (baseParams) => {
     try {
@@ -153,7 +141,7 @@ export default function DashboardView({
         ? `?account=${selectedAccounts.join(',')}`
         : '';
 
-      const [dailyRes, setupRes, cumulativeRes, durationRes, behaviorRes, optRes, locRes] = await Promise.all([
+      const [dailyRes, setupRes, cumulativeRes, durationRes, behaviorRes, optRes, locRes, riskRes, rollingRes, distRes] = await Promise.all([
         fetch(`${API_URL}/stats/daily${baseQuery}`),
         fetch(`${API_URL}/stats/by-setup${baseQuery}`),
         fetch(`${API_URL}/stats/cumulative-pnl${baseQuery}`),
@@ -161,6 +149,9 @@ export default function DashboardView({
         fetch(`${API_URL}/stats/behavior${accountOnlyQuery}`),
         fetch(`${API_URL}/stats/optimization${baseQuery}`),
         fetch(`${API_URL}/stats/trade-location${baseQuery}`),
+        fetch(`${API_URL}/stats/tearsheet-overview${accountOnlyQuery}`),
+        fetch(`${API_URL}/stats/rolling${accountOnlyQuery}`),
+        fetch(`${API_URL}/stats/pnl-distribution${accountOnlyQuery}`),
       ]);
 
       setDailyPerf(await dailyRes.json());
@@ -171,6 +162,12 @@ export default function DashboardView({
       setOptData(await optRes.json());
       const locJson = await locRes.json();
       setTradeLocData(locJson.error ? null : locJson);
+      const riskJson = await riskRes.json();
+      setRiskStats(riskJson.sharpe != null ? riskJson : null);
+      const rollingJson = await rollingRes.json();
+      setRolling(Array.isArray(rollingJson) ? rollingJson : []);
+      const distJson = await distRes.json();
+      setPnlDist(distJson?.buckets ? distJson : null);
       fetchKeyLevels(queryString);
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -214,21 +211,10 @@ export default function DashboardView({
         onCustomDateChange={handleCustomDateChange}
       />
 
-      <ScalpPlaybookCard date={recapDate} />
-
       <LevelMonitorPanel date={recapDate} />
 
       <DevelopingValueCard date={recapDate} title="Developing Value — Today's Session" windows={[5, 10, 20]} />
 
-      <MarketRecapPanel
-        recapDate={recapDate}
-        setRecapDate={setRecapDate}
-        dailyPerf={dailyPerf}
-        selectedAccounts={selectedAccounts}
-        recapData={recapData}
-        recapLoading={recapLoading}
-        ChartReviewComponent={ChartReviewComponent}
-      />
 
       <PerformanceVisuals durationStats={durationStats} />
 
@@ -243,6 +229,82 @@ export default function DashboardView({
       <OptimizationSection optData={optData} tradeLocData={tradeLocData} />
 
       <BehaviorSection behaviorData={behaviorData} />
+
+      {/* ── Risk-Adjusted Performance ── */}
+      {riskStats && (
+        <div className="dashboard-card" style={{ padding: '16px 20px' }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
+            Risk-Adjusted Performance
+          </h3>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+            {[
+              { label: 'Sharpe Ratio',  value: riskStats.sharpe },
+              { label: 'Sortino Ratio', value: riskStats.sortino },
+              { label: 'Expectancy',    value: riskStats.expectancy != null ? `$${parseFloat(riskStats.expectancy).toFixed(2)}` : null },
+              { label: 'Kelly %',       value: riskStats.kelly != null ? `${riskStats.kelly}%` : null },
+            ].map(({ label, value }) => value != null && (
+              <div key={label} style={{ textAlign: 'center', minWidth: 90 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>{label}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-primary)' }}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Rolling 20-Trade Expectancy ── */}
+      {rolling.length > 0 && (
+        <div className="dashboard-card" style={{ padding: '16px 20px' }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 12 }}>
+            Rolling 20-Trade Expectancy &amp; Win Rate
+          </h3>
+          <ResponsiveContainer width="100%" height={180}>
+            <ComposedChart data={rolling} margin={{ top: 4, right: 40, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <XAxis dataKey="index" tick={{ fontSize: 12, fill: 'var(--text-muted)' }} tickFormatter={v => `T${v}`} />
+              <YAxis yAxisId="exp" tick={{ fontSize: 12, fill: 'var(--text-muted)' }} tickFormatter={v => `$${v}`} width={52} />
+              <YAxis yAxisId="wr" orientation="right" tick={{ fontSize: 12, fill: 'var(--text-muted)' }} tickFormatter={v => `${v}%`} width={38} domain={[0, 100]} />
+              <Tooltip
+                contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', fontSize: 12 }}
+                formatter={(v, n) => n === 'win_rate' ? [`${v}%`, 'Win Rate'] : [`$${parseFloat(v).toFixed(2)}`, 'Expectancy']}
+              />
+              <ReferenceLine yAxisId="exp" y={0} stroke="rgba(255,255,255,0.2)" />
+              <Bar yAxisId="exp" dataKey="expectancy" radius={[1, 1, 0, 0]}>
+                {rolling.map((e, i) => <Cell key={i} fill={e.expectancy >= 0 ? 'rgba(99,102,241,0.6)' : 'rgba(239,68,68,0.6)'} />)}
+              </Bar>
+              <Line yAxisId="wr" type="monotone" dataKey="win_rate" stroke="#f59e0b" strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* ── Trade P&L Distribution ── */}
+      {pnlDist && (
+        <div className="dashboard-card" style={{ padding: '16px 20px' }}>
+          <h3 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+            Trade P&amp;L Distribution
+          </h3>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 8 }}>
+            Mean: <span style={{ color: parseFloat(pnlDist.mean) >= 0 ? '#10b981' : '#ef4444' }}>${parseFloat(pnlDist.mean).toFixed(2)}</span>
+            &nbsp;&nbsp;Median: <span style={{ color: parseFloat(pnlDist.median) >= 0 ? '#10b981' : '#ef4444' }}>${parseFloat(pnlDist.median).toFixed(2)}</span>
+          </div>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={pnlDist.buckets} margin={{ top: 4, right: 16, bottom: 0, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <XAxis dataKey="range" tick={{ fontSize: 12, fill: 'var(--text-muted)' }} tickFormatter={v => `$${v}`} />
+              <YAxis tick={{ fontSize: 12, fill: 'var(--text-muted)' }} allowDecimals={false} width={32} />
+              <Tooltip
+                contentStyle={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', fontSize: 12 }}
+                formatter={(v) => [v, 'Trades']}
+                labelFormatter={v => `$${v} to $${+v + 50}`}
+              />
+              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
+                {pnlDist.buckets.map((e, i) => <Cell key={i} fill={e.range >= 0 ? '#10b981' : '#ef4444'} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

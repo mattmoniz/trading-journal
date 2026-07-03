@@ -191,28 +191,28 @@ router.get('/scalp-playbook/:date', async (req, res) => {
     const dayTypeRes = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [date]);
     const dayType = dayTypeRes.rows[0]?.day_type;
 
-    // Build playbook: top 5 level × time combos for this day
+    // Build playbook: top DOW combos — N≥20 hard floor, sort by EV (not WR)
     const topDowCombos = dowPatterns
-      .filter(p => p.dimension.includes('dow'))
-      .sort((a, b) => b.win_rate - a.win_rate)
+      .filter(p => p.dimension.includes('dow') && p.sample_size >= 20)
+      .sort((a, b) => b.net_pnl_dollars - a.net_pnl_dollars)
       .slice(0, 8);
 
-    // Best hours for today
+    // Best hours for today — N≥20 hard floor, sort by EV
     const hourPatterns = generalPatterns
-      .filter(p => p.dimension === 'level_x_hour')
-      .sort((a, b) => b.win_rate - a.win_rate)
+      .filter(p => p.dimension === 'level_x_hour' && p.sample_size >= 20)
+      .sort((a, b) => b.net_pnl_dollars - a.net_pnl_dollars)
       .slice(0, 8);
 
-    // Context-specific (overnight, day type, range)
+    // Context-specific (overnight, day type, range) — N≥20 floor
     const contextPatterns = [];
     if (overnight?.overnight_inventory) {
       const overnightMatches = generalPatterns.filter(p =>
-        p.pattern_key.includes(`×${overnight.overnight_inventory}`));
+        p.pattern_key.includes(`×${overnight.overnight_inventory}`) && p.sample_size >= 20);
       contextPatterns.push(...overnightMatches.slice(0, 5));
     }
     if (dayType) {
       const dtMatches = generalPatterns.filter(p =>
-        p.pattern_key.includes(`×${dayType}`));
+        p.pattern_key.includes(`×${dayType}`) && p.sample_size >= 20);
       contextPatterns.push(...dtMatches.slice(0, 5));
     }
 
@@ -1401,7 +1401,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
       const stop = s.stop_level != null ? Math.round(s.stop_level) : null;
       const t1 = s.t1_level != null ? Math.round(s.t1_level) : null;
       const levels = [`Entry ${entry}`, stop && `Stop ${stop}`, t1 && `T1 ${t1}`].filter(Boolean).join(' · ');
-      const firedTime = s.fired_at ? new Date(s.fired_at).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit' }) : '';
+      const firedTime = s.fired_at ? new Date(s.fired_at).toLocaleTimeString('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' }) : '';
       const prefix = isConfirmation ? 'CONFIRMS: ' : isResolved ? `${s.resolution === 'TARGET_HIT' ? 'WON' : 'LOST'}: ` : '';
       alerts.push({
         id: `setup-${s.setup_type}`,

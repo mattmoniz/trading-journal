@@ -1,14 +1,46 @@
 import fs from 'fs';
 import path from 'path';
 
-// Load trade dataset
-const TRADES_FILE = '/home/mmoniz/trading-journal/scratch/mc_trades_all_accounts.json';
+// Simulation Constants
+const STOPS = [20, 30, 39, 50];
+const TARGETS = [20, 30, 40, 50, 60];
+const MIN_CONTRACTS = [1, 3, 5];
+const RISK_PCTS = [0.005, 0.01, 0.02];
+const N_PATHS = parseInt(process.env.N_PATHS || '5000', 10);
+const STARTING_ACCOUNT = 2000;
+const DLL = 400;
+const PNL_PER_PT_PER_CONTRACT = 2;
+const COMMISSION_PER_CONTRACT = 1;
+
+// Confluence-based sizing multipliers (from CONFLUENCE_AUDIT — DOUBLE=88.9% WR, QUAD_PLUS=AVOID)
+const CONFLUENCE_MULTIPLIER = { 0: 0.75, 1: 1.0, 2: 1.5, 3: 1.0 }; // 4+ = skip
+const SKIP_QUAD_PLUS = true;
+
+// Filter mode — set via env var FILTER=all|at_level|double_only
+const FILTER_MODE = process.env.FILTER || 'all';
+
+// Load trade dataset — prefer enriched file (has level_tag + confluence_count) if present
+const ENRICHED_FILE = '/home/mmoniz/trading-journal/scratch/mc_trades_enriched.json';
+const BASELINE_FILE = '/home/mmoniz/trading-journal/scratch/mc_trades_all_accounts.json';
+const TRADES_FILE = fs.existsSync(ENRICHED_FILE) ? ENRICHED_FILE : BASELINE_FILE;
 if (!fs.existsSync(TRADES_FILE)) {
   console.error(`Error: trades dataset file not found at ${TRADES_FILE}`);
   process.exit(1);
 }
+const IS_ENRICHED = TRADES_FILE === ENRICHED_FILE;
 
-const trades = JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8'));
+let trades = JSON.parse(fs.readFileSync(TRADES_FILE, 'utf8'));
+
+// Apply filter mode when enriched dataset is available
+if (IS_ENRICHED && FILTER_MODE !== 'all') {
+  const before = trades.length;
+  if (FILTER_MODE === 'at_level') {
+    trades = trades.filter(t => t.level_tag === 'AT_LEVEL' || t.level_tag === 'LATE');
+  } else if (FILTER_MODE === 'double_only') {
+    trades = trades.filter(t => (t.confluence_count || 0) >= 2 && (t.confluence_count || 0) < 4);
+  }
+  console.log(`[filter=${FILTER_MODE}] ${before} → ${trades.length} trades`);
+}
 
 // Group trades by date to preserve intraday correlations and chronological order
 const tradesByDay = new Map();
@@ -19,17 +51,6 @@ for (const t of trades) {
   tradesByDay.get(t.date).push(t);
 }
 const uniqueDates = Array.from(tradesByDay.keys());
-
-// Simulation Constants
-const STOPS = [20, 30, 39, 50];        // stop distance in points
-const TARGETS = [20, 30, 40, 50, 60];   // target distance in points
-const MIN_CONTRACTS = [1, 3, 5];          // contract floor
-const RISK_PCTS = [0.005, 0.01, 0.02];   // % of account to risk per trade
-const N_PATHS = parseInt(process.env.N_PATHS || '5000', 10);
-const STARTING_ACCOUNT = 2000;
-const DLL = 400;
-const PNL_PER_PT_PER_CONTRACT = 2;       // MNQ = $2/pt
-const COMMISSION_PER_CONTRACT = 1;        // $1 round-trip per contract
 
 function getPercentile(arr, p) {
   if (!arr.length) return 0;
@@ -66,6 +87,8 @@ function simulateTrade(trade, stopPts, targetPts, contracts) {
 
 async function run() {
   console.log(`=== STARTING MONTE CARLO OPTIMIZER ===`);
+  console.log(`Dataset: ${TRADES_FILE.split('/').pop()} (${IS_ENRICHED ? 'ENRICHED' : 'BASELINE'})`);
+  console.log(`Filter: ${FILTER_MODE} | Confluence sizing: ${IS_ENRICHED ? 'ON' : 'OFF'}`);
   console.log(`Loaded ${trades.length} trades over ${uniqueDates.length} trading days.`);
   console.log(`Running with N_PATHS = ${N_PATHS}`);
 
@@ -120,9 +143,19 @@ async function run() {
 
           const trade = dayTrades[i];
 
+          // Skip QUAD_PLUS confluence trades (negative EV confirmed)
+          if (IS_ENRICHED && SKIP_QUAD_PLUS && (trade.confluence_count || 0) >= 4) continue;
+
           // Size dynamically, bounded by contracts floor (minC) and DLL cap (maxContractsDll)
           const sizeEstimate = Math.floor(account * risk / riskPerContract);
-          const contracts = Math.max(minC, Math.min(maxContractsDll, sizeEstimate));
+          let contracts = Math.max(minC, Math.min(maxContractsDll, sizeEstimate));
+
+          // Apply confluence-based sizing multiplier when enriched data available
+          if (IS_ENRICHED && trade.confluence_count != null) {
+            const conf = trade.confluence_count;
+            const mult = conf >= 4 ? 0 : (CONFLUENCE_MULTIPLIER[Math.min(conf, 3)] ?? 1.0);
+            contracts = Math.max(minC, Math.min(maxContractsDll, Math.round(contracts * mult)));
+          }
 
           const tradePnl = simulateTrade(trade, stop, target, contracts);
           account += tradePnl;
@@ -209,6 +242,7 @@ async function run() {
   const lines = [];
   lines.push(`# Monte Carlo Simulation Results`);
   lines.push(`**Generated:** ${new Date().toISOString()}`);
+  lines.push(`**Dataset:** ${IS_ENRICHED ? 'ENRICHED (level_tag + confluence_count)' : 'BASELINE'} | Filter: ${FILTER_MODE}`);
   lines.push(`**Paths per combo:** ${N_PATHS}`);
   lines.push(`**Historical dataset size:** ${trades.length} trades across ${uniqueDates.length} days`);
   lines.push('');
@@ -240,7 +274,8 @@ async function run() {
     lines.push(`| ${c.stop} | ${c.target} | ${c.minC} | ${(c.risk*100).toFixed(1)}% | $${c.p5_equity.toFixed(2)} | $${c.p50_equity.toFixed(2)} | $${c.p95_equity.toFixed(2)} | $${c.p50_max_dd.toFixed(2)} | $${c.p95_max_dd.toFixed(2)} | ${c.pct_paths_dll_hit.toFixed(1)}% | ${c.pct_paths_survived.toFixed(1)}% |`);
   }
 
-  const resultsPath = '/home/mmoniz/trading-journal/scratch/mc_results.md';
+  const suffix = IS_ENRICHED ? `_${FILTER_MODE}` : '';
+  const resultsPath = `/home/mmoniz/trading-journal/scratch/mc_results${suffix}.md`;
   fs.writeFileSync(resultsPath, lines.join('\n'), 'utf8');
   console.log(`\nMarkdown report saved to ${resultsPath}`);
 }

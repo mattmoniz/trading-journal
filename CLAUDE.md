@@ -17,6 +17,7 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 - **Never fabricate a stat.** Any win-rate/hit-rate claim needs N≥20 in the sample before it's reported as decisive (see `engineReadHitRates.js` convention). Below that, say so explicitly rather than rounding to a confident-sounding number.
 - **No lookahead in backtests/replays.** Case engine, day-type reassessment, and all backtest scripts must only use information that would have been available at that point in time. This is a frequent source of subtle bugs — when writing a new backtest script, explicitly check that no future bar/level data leaks into a decision made earlier in the session.
 - **Do not guess on third-party tool behavior** (especially Sierra Chart specifics) — fetch documentation or ask before asserting how an external tool behaves.
+- **Audit all Gemini output before acting on it.** Gemini produces plausible-looking but sometimes wrong analysis. After reading `scratch/antigravity_response.md`, verify 3–5 key claims by re-querying the DB directly before promoting any finding to `performance_audit` or changing live parameters. Specific checks: (1) 100%/0% WR with N≥10 → always check `COUNT(DISTINCT log_date)` for single-session clustering; (2) grid output → compare "current params" cell to existing `performance_audit` baseline; (3) N counts → verify with a direct `COUNT(*)`; (4) any TRADE recommendation → re-run the WR/EV query yourself. User delegated this explicitly: "I want Claude to audit anything and everything Gemini does. It lies sometimes."
 
 ## Conventions
 
@@ -28,6 +29,7 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 
 - **Standing permission to run commands in this repo without asking first.** This covers all normal tool use — Bash commands, file edits/writes, running scripts/backtests, git commits, schema/doc regeneration, dropping confirmed-dead tables after backup, etc. Don't pause to confirm routine actions; just do the work. This was restated explicitly on 2026-06-30 because re-asking was burning the user's time/limits unnecessarily.
 - The one carve-out: genuinely high-blast-radius or hard-to-reverse actions outside normal project workflow still warrant a heads-up — force-push, `git reset --hard`, dropping data without a backup, anything touching production secrets, or actions visible outside this repo (sending messages, posting externally). This carve-out is narrow on purpose; don't expand it to cover ordinary commands.
+- **Gemini timeout/fallback:** After invoking Gemini and waiting: (1) 5 min with no `scratch/antigravity_response.md` update → nudge by re-invoking with the same task; (2) another 5 min still nothing (10 min total) → Gemini's context ran out, Claude does the task directly. Don't block on Gemini indefinitely. Check elapsed time with `stat --format='%Y' scratch/antigravity_response.md` vs invocation time.
 
 ## Where to look
 

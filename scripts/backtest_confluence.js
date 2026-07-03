@@ -294,8 +294,8 @@ async function run() {
       // But we can still test PD/OR/ON/PW levels in the first 60 min
       const pastIB = bar.tod >= 630; // after 10:30
 
-      // Dynamic proximity = 5% of developing range (min 5pt, max 30pt)
-      const proximity = Math.max(5, Math.min(30, devRange * 0.05));
+      // Fixed 15pt proximity window as instructed
+      const proximity = 15;
 
       // Build the set of levels available at this bar
       const availableLevels = { ...staticLevels };

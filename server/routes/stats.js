@@ -11,33 +11,67 @@ router.get('/stats/overview', async (req, res) => {
     const { dateFrom, dateTo, account } = req.query;
 
     let whereConditions = ['exit_time IS NOT NULL'];
+    let epConditions = [];
     const queryParams = [];
     let paramCounter = 1;
 
     if (dateFrom) {
       whereConditions.push(`log_date >= $${paramCounter}`);
+      epConditions.push(`log_date >= $${paramCounter}`);
       queryParams.push(dateFrom);
       paramCounter++;
     }
     if (dateTo) {
       whereConditions.push(`log_date <= $${paramCounter}`);
+      epConditions.push(`log_date <= $${paramCounter}`);
       queryParams.push(dateTo);
       paramCounter++;
     }
     if (account) {
       whereConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
+      epConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
       queryParams.push(account.split(",").filter(Boolean));
       paramCounter++;
     }
 
     const whereClause = whereConditions.join(' AND ');
+    const epExtraWhere = epConditions.length > 0 ? epConditions.map(c => 'AND ' + c).join('\n          ') : '';
 
     const result = await query(`
+      WITH ep_fills AS (
+        SELECT
+          log_date,
+          custom_fields->>'account' as account,
+          exit_time,
+          CASE
+            WHEN custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+            THEN (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric
+            ELSE NULL
+          END as cum_pl
+        FROM trades
+        WHERE custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+          AND exit_time IS NOT NULL
+          ${epExtraWhere}
+      ),
+      last_ep_per_day AS (
+        SELECT DISTINCT ON (log_date, account) log_date, account, cum_pl
+        FROM ep_fills
+        ORDER BY log_date, account, exit_time DESC
+      ),
+      daily_pnl_per_account AS (
+        SELECT log_date,
+          cum_pl - COALESCE(LAG(cum_pl) OVER (PARTITION BY account ORDER BY log_date), 0) as session_pnl
+        FROM last_ep_per_day
+        WHERE cum_pl IS NOT NULL
+      ),
+      cumpl_total AS (
+        SELECT SUM(session_pnl) as total FROM daily_pnl_per_account
+      )
       SELECT
         COUNT(*) as total_trades,
         SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as winning_trades,
         SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losing_trades,
-        ROUND(SUM(pnl)::numeric, 2) as total_pnl,
+        COALESCE(ROUND((SELECT total FROM cumpl_total)::numeric, 2), ROUND(SUM(pnl)::numeric, 2)) as total_pnl,
         ROUND(AVG(pnl)::numeric, 2) as avg_pnl,
         ROUND(MAX(pnl)::numeric, 2) as best_trade,
         ROUND(MIN(pnl)::numeric, 2) as worst_trade,
@@ -160,48 +194,70 @@ router.get('/stats/top-symbols', async (req, res) => {
   }
 });
 
-// Get cumulative P&L data for equity curve (aggregated by day)
+// Get cumulative P&L data for equity curve (aggregated by day, CumPL diff method)
 router.get('/stats/cumulative-pnl', async (req, res) => {
   try {
     const { dateFrom, dateTo, account } = req.query;
 
-    let whereConditions = ['exit_time IS NOT NULL'];
     const queryParams = [];
     let paramCounter = 1;
+    let epConditions = [];
 
     if (dateFrom) {
-      whereConditions.push(`log_date >= $${paramCounter}`);
+      epConditions.push(`log_date >= $${paramCounter}`);
       queryParams.push(dateFrom);
       paramCounter++;
     }
     if (dateTo) {
-      whereConditions.push(`log_date <= $${paramCounter}`);
+      epConditions.push(`log_date <= $${paramCounter}`);
       queryParams.push(dateTo);
       paramCounter++;
     }
     if (account) {
-      whereConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
+      epConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
       queryParams.push(account.split(",").filter(Boolean));
       paramCounter++;
     }
 
-    const whereClause = whereConditions.join(' AND ');
+    const epExtraWhere = epConditions.length > 0 ? epConditions.map(c => 'AND ' + c).join('\n          ') : '';
 
     const result = await query(`
-      WITH daily_pnl AS (
+      WITH ep_fills AS (
         SELECT
           log_date,
-          SUM(pnl) as daily_pnl
+          custom_fields->>'account' as account,
+          exit_time,
+          CASE
+            WHEN custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
+            THEN (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric
+            ELSE NULL
+          END as cum_pl
         FROM trades
-        WHERE ${whereClause}
+        WHERE custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+          AND exit_time IS NOT NULL
+          ${epExtraWhere}
+      ),
+      last_ep_per_day AS (
+        SELECT DISTINCT ON (log_date, account) log_date, account, cum_pl
+        FROM ep_fills
+        ORDER BY log_date, account, exit_time DESC
+      ),
+      daily_pnl_per_account AS (
+        SELECT log_date,
+          cum_pl - COALESCE(LAG(cum_pl) OVER (PARTITION BY account ORDER BY log_date), 0) as session_pnl
+        FROM last_ep_per_day
+        WHERE cum_pl IS NOT NULL
+      ),
+      daily_totals AS (
+        SELECT log_date, SUM(session_pnl) as daily_pnl
+        FROM daily_pnl_per_account
         GROUP BY log_date
-        ORDER BY log_date ASC
       )
       SELECT
         log_date,
-        daily_pnl,
-        SUM(daily_pnl) OVER (ORDER BY log_date) as cumulative_pnl
-      FROM daily_pnl
+        ROUND(daily_pnl::numeric, 2) as daily_pnl,
+        ROUND(SUM(daily_pnl) OVER (ORDER BY log_date)::numeric, 2) as cumulative_pnl
+      FROM daily_totals
       ORDER BY log_date ASC
     `, queryParams);
 
