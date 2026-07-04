@@ -18586,8 +18586,17 @@ function SessionStatusBar({ conf, onStateChange }) {
           );
         };
 
+        const isFadeSetup = sc2.type?.includes('FADE');
+        const isTrendDay  = dayType?.label === 'TREND DAY';
+
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {isFadeSetup && isTrendDay && (
+              <div style={{ padding: '6px 12px', background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.5)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: '#f97316', letterSpacing: '0.06em' }}>⚠ TREND DAY</span>
+                <span style={{ fontSize: 12, color: '#fb923c' }}>Fades underperform on trend days — 37% WR Jul 1. Consider skipping or waiting for extreme exhaustion.</span>
+              </div>
+            )}
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
               {/* Direction + label + stable fire time from DB */}
               <div style={{ minWidth: 160 }}>
