@@ -1118,9 +1118,10 @@ router.post('/level-prices/tag/:date', async (req, res) => {
 });
 
 // GET /api/level-approach/today
-// Returns ranked list of levels by (touch_rate × EV) for today's day_type and DOW.
-// Sourced from performance_audit signal_type='LEVEL_APPROACH' rows computed by
-// scripts/backtest_level_approach.js. Includes BALANCE|ALL and ALL|ALL fallbacks.
+// Returns ranked list of setups by (fire_rate × avg_pnl) for today's day_type and DOW.
+// fire_rate = P(setup fires today | day_type, DOW), sourced from active_setups history.
+// Sourced from performance_audit signal_type='SETUP_ANTICIPATION' rows computed by
+// scripts/backtest_level_approach.js. Prioritises specific context (BALANCE|TUE) over rollups.
 router.get('/level-approach/today', async (req, res) => {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -1132,50 +1133,53 @@ router.get('/level-approach/today', async (req, res) => {
     );
     const dayType = dtRes.rows[0]?.day_type ?? null;
 
-    // Pull LEVEL_APPROACH rows matching today's context.
-    // signal_name format: LEVEL_NAME|DAY_TYPE|DOW  or  LEVEL_NAME|DAY_TYPE|ALL  etc.
+    // Pull SETUP_ANTICIPATION rows — signal_name = 'SETUP_TYPE|DAY_TYPE|DOW'
     const paRes = await query(`
       SELECT signal_name, sample_size, win_rate::float, ev_per_trade::float, notes
       FROM performance_audit
-      WHERE signal_type = 'LEVEL_APPROACH'
+      WHERE signal_type = 'SETUP_ANTICIPATION'
+        AND window_days = 0
         AND run_date = (
-          SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'LEVEL_APPROACH'
+          SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'SETUP_ANTICIPATION' AND window_days = 0
         )
     `);
 
-    // Parse rows and filter to relevant contexts
+    // Parse and filter to today's context
     const rows = [];
     for (const r of paRes.rows) {
       const parts = r.signal_name.split('|');
       if (parts.length !== 3) continue;
-      const [levelName, rowDt, rowDow] = parts;
+      const [setupType, rowDt, rowDow] = parts;
 
       const dtMatch  = dayType ? rowDt === dayType : rowDt === 'ALL';
       const dowMatch = rowDow === todayDow || rowDow === 'ALL';
       if (!dtMatch || !dowMatch) continue;
 
-      const touchRate = r.win_rate;   // win_rate column stores touch_rate here
-      const condEV    = r.ev_per_trade;
-      const expectedEV = (touchRate != null && condEV != null) ? touchRate * condEV : null;
+      const notes      = r.notes ? JSON.parse(r.notes) : {};
+      const fire_rate  = notes.fire_rate  ?? null;
+      const expected_ev = notes.expected_ev ?? null;
+      const total_days = notes.total_days  ?? null;
 
       rows.push({
-        level:      levelName,
-        day_type:   rowDt,
-        dow:        rowDow,
-        touch_rate: touchRate,
-        cond_ev:    condEV,
-        expected_ev: expectedEV,
-        n:          r.sample_size,
+        setup:       setupType,
+        day_type:    rowDt,
+        dow:         rowDow,
+        fire_rate,
+        cond_wr:     r.win_rate,
+        avg_pnl:     r.ev_per_trade,
+        expected_ev,
+        n:           r.sample_size,
+        total_days,
         context_specificity: (rowDt !== 'ALL' ? 1 : 0) + (rowDow !== 'ALL' ? 1 : 0),
       });
     }
 
-    // Deduplicate: keep most specific context per level (specific day_type + specific dow > day_type+ALL > ALL+ALL)
+    // Deduplicate: per setup keep most specific context
     const best = new Map();
     for (const r of rows) {
-      const existing = best.get(r.level);
+      const existing = best.get(r.setup);
       if (!existing || r.context_specificity > existing.context_specificity) {
-        best.set(r.level, r);
+        best.set(r.setup, r);
       }
     }
 
@@ -1186,7 +1190,7 @@ router.get('/level-approach/today', async (req, res) => {
       date: today,
       day_type: dayType,
       dow: todayDow,
-      levels: ranked,
+      setups: ranked,
     });
   } catch (err) {
     console.error('level-approach/today error:', err);

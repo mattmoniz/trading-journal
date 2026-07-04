@@ -80,25 +80,34 @@ export default function ScalpPlaybookCard({ date }) {
             </div>
           )}
 
-          {approachData?.levels?.length > 0 && (
+          {approachData?.setups?.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
-                Level Anticipation — {approachData.day_type ?? 'ALL'} {approachData.dow}
-                <span style={{ fontSize: 10, fontWeight: 400, color: '#64748b', marginLeft: 6 }}>touch% × EV</span>
+                Setup Anticipation — {approachData.day_type ?? 'ALL'} {approachData.dow}
+                <span style={{ fontSize: 10, fontWeight: 400, color: '#64748b', marginLeft: 6 }}>fire% · WR · exp$/session</span>
               </div>
-              {approachData.levels.slice(0, 8).map((r, i) => (
-                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#e2e8f0' }}>{r.level}</span>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                    <span style={{ color: r.touch_rate >= 0.8 ? '#4ade80' : r.touch_rate >= 0.5 ? '#fbbf24' : '#94a3b8', fontWeight: 700 }}>
-                      {(r.touch_rate * 100).toFixed(0)}%
+              {approachData.setups.slice(0, 10).map((r, i) => {
+                const label = r.setup.replace(/_FADE_?(LONG|SHORT)?$/, '').replace(/_/g, ' ') +
+                  (r.setup.endsWith('_LONG') || r.setup.includes('_FADE_LONG') ? ' ↑' :
+                   r.setup.endsWith('_SHORT') || r.setup.includes('_FADE_SHORT') ? ' ↓' : '');
+                const fr = r.fire_rate != null ? (r.fire_rate * 100).toFixed(0) + '%' : '?';
+                const wr = r.cond_wr  != null ? (r.cond_wr  * 100).toFixed(0) + '%' : '?';
+                const ev = r.expected_ev != null ? '$' + r.expected_ev.toFixed(0) : '';
+                const frColor = r.fire_rate >= 0.25 ? '#4ade80' : r.fire_rate >= 0.12 ? '#fbbf24' : '#94a3b8';
+                const wrColor = r.cond_wr  >= 0.75 ? '#4ade80' : r.cond_wr  >= 0.60 ? '#fbbf24' : '#f87171';
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#e2e8f0' }}>{label}</span>
+                    <span style={{ fontSize: 11 }}>
+                      <span style={{ color: frColor, fontWeight: 700 }}>{fr}</span>
+                      <span style={{ color: '#475569' }}> · </span>
+                      <span style={{ color: wrColor }}>{wr}</span>
+                      {ev && <><span style={{ color: '#475569' }}> · </span><span style={{ color: '#a78bfa', fontWeight: 700 }}>{ev}</span></>}
+                      <span style={{ color: '#334155', fontSize: 10, marginLeft: 4 }}>N={r.n}</span>
                     </span>
-                    {r.cond_ev != null && <> · <span style={{ color: '#38bdf8' }}>EV ${r.cond_ev.toFixed(0)}</span></>}
-                    {r.expected_ev != null && <> · <span style={{ color: '#a78bfa', fontSize: 10 }}>exp ${r.expected_ev.toFixed(0)}</span></>}
-                    <span style={{ color: '#475569', fontSize: 10, marginLeft: 4 }}>N={r.n}</span>
-                  </span>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
 
