@@ -184,7 +184,7 @@ server/
 | ACD / opening range | `acd.js` (largest route file, ~4000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest |
 | Price data | `priceBars.js` | Bar ingest, partition-aware queries, volume profile |
 | Phase detection | `phaseChange.js` | Compression→expansion phase detection + backtest |
-| Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification (`open_vs_prior_value` + `overnight_inventory` auto-computed from price data; `prior_day_profile` is manual Sierra Chart read), weekly VA migration, key-level regime stats. `keyLevels.js` also hosts `/api/level-prices/:date` (64 level types) and `/api/level-prices/tag/:date` (re-tag BP fills). |
+| Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification (`open_vs_prior_value` + `overnight_inventory` auto-computed from price data; `prior_day_profile` is manual Sierra Chart read), weekly VA migration, key-level regime stats. `keyLevels.js` also hosts `/api/level-prices/:date` (64 level types), `/api/level-prices/tag/:date` (re-tag BP fills), and `/api/level-approach/today` (ranked level anticipation list for today's day_type+DOW, sourced from `performance_audit` LEVEL_APPROACH rows). |
 | Setups | `setups.js`, `pattern.js`, `confluence.js`, `antigravityEdges.js` | Setup detection/backtest, pattern mining endpoints, level confluence score, fade/reversal edges |
 | Risk & behavior guardrails | `cooldown.js`, `profitLock.js`, `dll.js`, `ruleOverrides.js` | Post-loss cooldown, 1PM profit-lock guard, daily loss limit tracking, rule override testing |
 | Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
@@ -287,6 +287,8 @@ A few scripts ARE wired in as scheduled jobs from `server/index.js` (morning bri
 Notable scripts that are scheduled or run after auto-import:
 - `scripts/compute_levels.js` — computes all 64 MGI levels for a session date, writes to `level_prices`; supports single date or `--backfill [--from DATE]`; runs via cron 9:30 PM ET Sunday
 - `scripts/backfill_auction_reads.js` — computes `open_vs_prior_value` and `overnight_inventory` from price bars and writes to `auction_reads`; runs after 4 PM auto-import for today's date; supports single date, `--nulls` (keep existing), or all-dates overwrite
+- `scripts/backtest_level_approach.js` — for each of 64 levels, computes historical touch rate (price within 15pt during RTH) broken down by (day_type, DOW); writes 1260 rows to `performance_audit` with `signal_type='LEVEL_APPROACH'`; signal_name encoded as `LEVEL|DAY_TYPE|DOW` (e.g. `IB_MID|BALANCE|TUE`). Run manually after major level changes or ~monthly. **Recalibrate weekly** via `node scripts/backtest_level_approach.js`.
+- `scripts/context_analysis.js` — mines 520 confluence pairs and contextual filters (DOW/day-type/direction); writes `performance_audit` rows with `signal_type='CONTEXT_ANALYSIS'`; cron fires Sunday 6 AM ET
 
 ---
 

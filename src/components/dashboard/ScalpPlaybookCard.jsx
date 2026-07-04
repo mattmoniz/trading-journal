@@ -6,12 +6,17 @@ const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maxi
 
 export default function ScalpPlaybookCard({ date }) {
   const [data, setData] = useState(null);
+  const [approachData, setApproachData] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     fetch(`${API_URL}/morning-brief/scalp-playbook/${d}`).then(r => r.json()).then(setData).catch(() => {});
   }, [date]);
+
+  useEffect(() => {
+    fetch(`${API_URL}/level-approach/today`).then(r => r.json()).then(setApproachData).catch(() => {});
+  }, []);
 
   if (!data) return null;
   const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -72,6 +77,28 @@ export default function ScalpPlaybookCard({ date }) {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {approachData?.levels?.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
+                Level Anticipation — {approachData.day_type ?? 'ALL'} {approachData.dow}
+                <span style={{ fontSize: 10, fontWeight: 400, color: '#64748b', marginLeft: 6 }}>touch% × EV</span>
+              </div>
+              {approachData.levels.slice(0, 8).map((r, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#e2e8f0' }}>{r.level}</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                    <span style={{ color: r.touch_rate >= 0.8 ? '#4ade80' : r.touch_rate >= 0.5 ? '#fbbf24' : '#94a3b8', fontWeight: 700 }}>
+                      {(r.touch_rate * 100).toFixed(0)}%
+                    </span>
+                    {r.cond_ev != null && <> · <span style={{ color: '#38bdf8' }}>EV ${r.cond_ev.toFixed(0)}</span></>}
+                    {r.expected_ev != null && <> · <span style={{ color: '#a78bfa', fontSize: 10 }}>exp ${r.expected_ev.toFixed(0)}</span></>}
+                    <span style={{ color: '#475569', fontSize: 10, marginLeft: 4 }}>N={r.n}</span>
+                  </span>
+                </div>
+              ))}
             </div>
           )}
 

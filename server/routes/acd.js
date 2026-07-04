@@ -4085,7 +4085,7 @@ export default function createACDRouter(io) {
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const type = `${lv.name}_${dir}`;
-            if (!suppressedFades.has(type)) {
+            if (!suppressedFades.has(type) && !isS2DoubleCounter(dir)) {
             const stopPts  = Math.round(lv.mae_p75 ?? STOP);
             const targetPts = Math.round(lv.mfe    ?? TARGET);
             const confluenceCount = nearLevels.length;
@@ -4136,7 +4136,7 @@ export default function createACDRouter(io) {
               : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
             const isLong = touchApproachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
-            if (suppressedFades.has(`${lv.name}_${dir}`)) continue;
+            if (suppressedFades.has(`${lv.name}_${dir}`) || isS2DoubleCounter(dir)) continue;
             backfilledTouches.push({
               type: `${lv.name}_${dir}`,
               direction: dir,
@@ -4316,6 +4316,11 @@ export default function createACDRouter(io) {
       const isOvernightCounter = (dir) =>
         (dir === 'LONG' && (overnightInv === 'LONG_TRAPPED' || openVsValue === 'BELOW_VALUE')) ||
         (dir === 'SHORT' && (overnightInv === 'SHORT_TRAPPED' || openVsValue === 'ABOVE_VALUE'));
+      // S2 double-counter: BOTH overnight inventory AND open-vs-value disagree with fade direction.
+      // Backtest: baseline 72.2% WR $7,393 → S2 $8,225 (+$833, N=897→678 kept). Only suppress when both agree.
+      const isS2DoubleCounter = (dir) =>
+        (dir === 'LONG'  && overnightInv === 'LONG_TRAPPED'  && openVsValue === 'BELOW_VALUE') ||
+        (dir === 'SHORT' && overnightInv === 'SHORT_TRAPPED' && openVsValue === 'ABOVE_VALUE');
 
       // Suppress only on DOUBLE headwind: NL30 counter AND overnight counter (20% WR).
       // NL30 counter alone = 33% WR but IB_BEARISH is 52% and TURBULENT days are 67%.
