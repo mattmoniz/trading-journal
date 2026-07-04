@@ -3881,6 +3881,10 @@ export default function createACDRouter(io) {
           // IB_HIGH_FADE / IB_LOW_FADE also skip on Mondays (IB context different)
           const mondaySkip = isMonday ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE'] : [];
 
+          // Direction-suppressed setups: 54.3% WR N=56, -$2,445 across 406-day backfill (2026-07-03)
+          // Format: SET_TYPE_DIR strings — checked against the constructed `type` after direction resolves
+          const suppressedFades = new Set(['PD_POC_FADE_SHORT']);
+
           // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
           // Cached 60s — backtests run at most weekly so freshness is fine.
           // Falls back to hardcoded defaults if DB is unavailable or level is missing.
@@ -4054,6 +4058,7 @@ export default function createACDRouter(io) {
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const type = `${lv.name}_${dir}`;
+            if (!suppressedFades.has(type)) {
             const stopPts  = Math.round(lv.mae_p75 ?? STOP);
             const targetPts = Math.round(lv.mfe    ?? TARGET);
             const confluenceCount = nearLevels.length;
@@ -4082,6 +4087,7 @@ export default function createACDRouter(io) {
               confluenceCount,
               confluenceLevels: nearLevels.map(l => l.name.replace(/_FADE$/, '')),
             };
+            } // end !suppressedFades check
           }
 
           // ── Early-touch backfill ──────────────────────────────────────────
@@ -4103,6 +4109,7 @@ export default function createACDRouter(io) {
               : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
             const isLong = touchApproachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
+            if (suppressedFades.has(`${lv.name}_${dir}`)) continue;
             backfilledTouches.push({
               type: `${lv.name}_${dir}`,
               direction: dir,

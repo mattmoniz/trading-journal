@@ -71,8 +71,9 @@ function detectLevelFades(bars, levels) {
       if (lvl == null || fired.has(levelName)) continue;
       if (Math.abs(b.close - lvl) > 15) continue;
 
+      // Direction matches acd.js convention: FROM_ABOVE (price fell to level) → LONG (fade the fall)
       const fromAbove = prev.close > lvl;
-      const dir = fromAbove ? 'SHORT' : 'LONG';
+      const dir = fromAbove ? 'LONG' : 'SHORT';
       fires.push({ levelName, dir, barIdx: i, barTs: b.ts, entryPx: b.close, levelPx: lvl });
       fired.add(levelName);
     }
