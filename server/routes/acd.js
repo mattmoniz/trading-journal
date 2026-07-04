@@ -3906,7 +3906,9 @@ export default function createACDRouter(io) {
           const suppressedFades = new Set([
             'PD_POC_FADE_SHORT',       // 54.3% WR N=56, EV=-$2,445 (direction-inverted loser confirmed 2026-07-03)
             'IB_MID_SCALP_FADE_SHORT', // 66% WR but EV=-$5.34 N=106: stop width kills edge on SHORT side (2026-07-04)
-            'IB_MID_SCALP_FADE_LONG',  // +$0.58 EV — noise; below N≥20 decisiveness floor (2026-07-04)
+            // IB_MID_SCALP_FADE_LONG: suppressed on BALANCE/TURBULENT ($0.58 EV — noise),
+            // but active on TREND (23% fire rate, 82% WR, $15 expected EV per session — 2026-07-04)
+            ...(dtClass !== 'TREND' ? ['IB_MID_SCALP_FADE_LONG'] : []),
           ]);
 
           // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
