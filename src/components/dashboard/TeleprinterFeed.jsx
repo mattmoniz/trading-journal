@@ -1,5 +1,6 @@
-const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 import React, { useState, useEffect, useRef } from 'react';
+import { usePollData } from '../../utils/usePollData.js';
+const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
 const API_URL = '/api';
 
@@ -181,26 +182,13 @@ function NewsItem({ item }) {
 }
 
 export default function TeleprinterFeed({ maxHeight = 480 }) {
-  const [data, setData] = useState(null);
+  const data = usePollData(`${API_URL}/antigravity/edges-context`, 30000);
   const [activeTab, setActiveTab] = useState('exhaustion');
   const [news, setNews] = useState([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [exhaustion, setExhaustion] = useState(null);
   const [exhaustionHistory, setExhaustionHistory] = useState([]);
   const scrollRef = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      fetch(`${API_URL}/antigravity/edges-context`)
-        .then(r => r.json())
-        .then(d => { if (!cancelled) setData(d); })
-        .catch(() => {});
-    };
-    load();
-    const id = setInterval(load, 30000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
 
   useEffect(() => {
     if (activeTab !== 'news') return;

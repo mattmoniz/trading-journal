@@ -21,6 +21,8 @@ import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
 import VolatilityAlertBanner from './components/dashboard/VolatilityAlertBanner.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
+import { useAcdLive } from './utils/useAcdLive.js';
+import WinChip from './components/shared/WinChip.jsx';
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
@@ -883,18 +885,6 @@ function SetupEventModal({ event, onClose }) {
   const price = event.fired_price ? fmtP(parseFloat(event.fired_price), 2) : null;
   const playbook = getSetupPlaybookNuance(type, event);
 
-  const WinChip = ({ label: l, stat }) => {
-    if (!stat || stat.winRate == null) return <div style={{ textAlign: 'center', minWidth: 56, opacity: 0.4 }}><div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 2 }}>{l}</div><div style={{ fontSize: 14, color: '#64748b' }}>—</div></div>;
-    const wr = stat.winRate;
-    const col = wr >= 0.65 ? '#22c55e' : wr >= 0.50 ? '#f59e0b' : '#ef4444';
-    return (
-      <div style={{ textAlign: 'center', minWidth: 56 }}>
-        <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>
-        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: col }}>{(wr * 100).toFixed(0)}%</div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>{stat.sessions != null ? `n=${stat.sessions}` : ''}</div>
-      </div>
-    );
-  };
 
   return (
     <div
@@ -1023,19 +1013,6 @@ function CaseSetupDetailModal({ setup, onClose }) {
   const pnl = setup.pnl || setup._pnl;
   const timeStr = setup.detectedAt || (setup.fired_time ? fmtEventTime(setup.fired_time) : null);
 
-  const WinChip = ({ label: l, stat, highlight }) => {
-    if (!stat || stat.winRate == null) return null;
-    const wr = stat.winRate;
-    const col = wr >= 0.65 ? '#22c55e' : wr >= 0.50 ? '#f59e0b' : '#ef4444';
-    const n = stat.sessions ?? stat.decidedN ?? stat.n;
-    return (
-      <div style={{ textAlign: 'center', minWidth: 60, padding: '6px 8px', borderRadius: 6, background: highlight ? 'rgba(99,102,241,0.12)' : 'rgba(30,41,59,0.4)', border: highlight ? '1px solid rgba(99,102,241,0.35)' : '1px solid rgba(51,65,85,0.4)' }}>
-        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>{l}</div>
-        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color: col }}>{(wr * 100).toFixed(0)}%</div>
-        {n != null && <div style={{ fontSize: 11, color: '#64748b' }}>n={n}{stat.limitedSample ? ' ⚠' : ''}</div>}
-      </div>
-    );
-  };
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
@@ -10897,7 +10874,7 @@ function ACDSessionState({ todayData, nl, pivot }) {
   const [orLow, setOrLow] = React.useState('');
   const [nqLive, setNqLive] = React.useState(null);
   const [context, setContext] = React.useState(null);
-  const [liveSetup, setLiveSetup] = React.useState(null);
+  const liveSetup = useAcdLive(30000);
 
   React.useEffect(() => {
     if (todayData?.today?.or_high) setOrHigh(String(todayData.today.or_high));
@@ -10916,16 +10893,6 @@ function ACDSessionState({ todayData, nl, pivot }) {
       .then(r => r.json())
       .then(d => { if (d && d.vah) setContext(d); })
       .catch(() => {});
-  }, []);
-
-  React.useEffect(() => {
-    const load = () => fetch(`${API_URL}/acd/live`)
-      .then(r => r.json())
-      .then(d => { if (d && !d.error) setLiveSetup(d); })
-      .catch(() => {});
-    load();
-    const iv = setInterval(load, 30000); // refresh every 30 seconds
-    return () => clearInterval(iv);
   }, []);
 
   if (!todayData) return null;
@@ -12078,17 +12045,7 @@ function TradeTimelinePanel() {
 }
 
 function ACDSessionTimeline() {
-  const [live, setLive] = React.useState(null);
-
-  React.useEffect(() => {
-    const load = () => fetch(`${API_URL}/acd/live`)
-      .then(r => r.json())
-      .then(d => { if (d && !d.error) setLive(d); })
-      .catch(() => {});
-    load();
-    const iv = setInterval(load, 30000);
-    return () => clearInterval(iv);
-  }, []);
+  const live = useAcdLive(30000);
 
   const SETUP_DEFINITIONS = {
     'A Up fired':          'Price touched the A Up level (OR High + range × multiplier) AND held above OR High for 5 consecutive minutes without pulling back inside the OR.\n\nThis is the primary long signal. Entry at A Up level, stop at OR Low.\n\nRequires: price ≥ A Up level AND close above OR High for 5 min.',
@@ -18562,25 +18519,8 @@ function SessionStatusBar({ conf, onStateChange }) {
           return null;
         })();
 
-        // Helper: render a single timeframe stat chip
-        const StatChip = ({ label, stat, isBaseline }) => {
-          if (!stat || stat.winRate == null) return null;
-          const wr = stat.winRate;
-          const col = wr >= 0.65 ? '#22c55e' : wr >= 0.50 ? '#f59e0b' : '#ef4444';
-          return (
-            <div style={{ textAlign: 'center', minWidth: 58 }}>
-              <div style={{ fontSize: 13, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>
-                {label}{isBaseline ? ' *' : ''}
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 700, fontFamily: 'monospace', color: col }}>
-                {(wr * 100).toFixed(0)}%
-              </div>
-              <div style={{ fontSize: 13, color: '#94a3b8' }}>
-                {stat.sessions != null ? `n=${stat.sessions}` : ''}
-              </div>
-            </div>
-          );
-        };
+        // StatChip — use shared WinChip (imported at top of file)
+        const StatChip = (props) => <WinChip {...props} />;
 
         const isFadeSetup = sc2.type?.includes('FADE');
         const isTrendDay  = dayType?.label === 'TREND DAY';
