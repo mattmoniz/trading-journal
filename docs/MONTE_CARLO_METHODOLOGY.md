@@ -48,21 +48,20 @@ Each path simulates one full year:
 - Track: daily DLL hit? Running max drawdown? Final equity after 252 days
 
 ### 4. Confluence sizing multipliers
-From `CONFLUENCE_AUDIT` in `performance_audit` table. **STALE AS OF 2026-07-04 — see OPEN_THREADS.**
+From `CONFLUENCE_AUDIT` in `performance_audit` table.
 
-The 88.9% DOUBLE stat was computed with a 15-level set (2026-07-02). After expanding to 62 levels
-(all of level_prices), DOUBLE WR drops to ~51% because nearly every bar qualifies as DOUBLE at 15pt
-proximity. The multiplier table below needs revisiting before the next MC re-run.
+The 88.9% DOUBLE stat was computed with a 15-level set (2026-07-02). After expanding to 64 levels,
+DOUBLE WR drops to ~51% because nearly every bar qualifies as DOUBLE at 15pt proximity — the tier
+signal is meaningless. **DOUBLE multiplier dropped (2026-07-04).** Future path: pair-specific
+multipliers once the top pairs are wired into the optimizer.
 
-| Confluence count | WR (62-level audit) | EV | Size multiplier (CURRENT — STALE) |
+| Confluence count | WR (64-level audit) | EV | Size multiplier |
 |---|---|---|---|
 | 0 (no nearby level) | baseline | baseline | **0.75x** |
 | 1 (single level) | 50.6% | -$2.75 | **1.0x** |
-| 2 (double) | 50.9% | +$0.82 | **1.5x ← stale** |
+| 2 (double) | 50.9% | +$0.82 | **1.0x** (was 1.5x — dropped) |
 | 3 (triple) | 51.5% | +$6.35 | **1.0x** |
 | 4+ (quad plus) | 42.9% | +$2.15 | **SKIP** |
-
-Options under review: (a) drop multiplier entirely, (b) threshold TRIPLE for the 1.5x, (c) specific pairs.
 
 ### 5. Output per combo
 - `p5_equity` — worst 5% of paths ended here (catastrophic tail)
