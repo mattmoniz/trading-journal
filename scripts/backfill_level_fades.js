@@ -52,6 +52,33 @@ const LEVEL_PARAMS = {
   OR_MID:         { stopDist: 62.00, t1Dist: 30.25, auditName: 'OR_MID_AFTER_IB',setupSuffix: 'OR_MID_AFTER_IB_FADE' },
   PD_IB_MID:      { stopDist: 56.25, t1Dist: 29.00, auditName: 'IB_MID',         setupSuffix: 'PD_IB_MID_FADE' },  // proxy: IB_MID params
   PD_OR_MID:      { stopDist: 77.88, t1Dist: 45.00, auditName: 'PD_MID',         setupSuffix: 'PD_OR_MID_FADE' },
+  // Added 2026-07-04 — confirmed in level_prices, params from UNIFIED_BACKTEST window_days=9999
+  PD_IB_HIGH:     { stopDist: 81.10, t1Dist: 40.10, auditName: 'PD_IB_HIGH',     setupSuffix: 'PD_IB_HIGH_FADE' },
+  PD_IB_LOW:      { stopDist: 67.30, t1Dist: 41.30, auditName: 'PD_IB_LOW',      setupSuffix: 'PD_IB_LOW_FADE' },
+  WEEKLY_VWAP:    { stopDist: 67.30, t1Dist: 41.00, auditName: 'WEEKLY_VWAP',    setupSuffix: 'WEEKLY_VWAP_FADE' },
+  // Added 2026-07-04; 5D_OR_MID marginal EV (kept for reference); PD_SESSION_MID params from PD_IB_AUDIT p75_mae/p50_mfe
+  '5D_OR_MID':    { stopDist: 62.00, t1Dist: 30.25, auditName: '5D_OR_MID',      setupSuffix: '5D_OR_MID_FADE' },
+  PD_SESSION_MID: { stopDist: 82.25, t1Dist: 48.50, auditName: 'PD_SESSION_MID', setupSuffix: 'PD_SESSION_MID_FADE' },
+  // Weekly/monthly floor pivots + Camarilla — added 2026-07-04 for confluence backtest coverage
+  // Params from SYSTEM_BACKTEST p75_mae/p50_mfe (window_days=9999)
+  WS1:      { stopDist: 62.81, t1Dist: 41.88, auditName: 'WS1',    setupSuffix: 'WS1_FADE' },
+  WS2:      { stopDist: 76.50, t1Dist: 44.25, auditName: 'WS2',    setupSuffix: 'WS2_FADE' },
+  WR1:      { stopDist: 61.63, t1Dist: 38.50, auditName: 'WR1',    setupSuffix: 'WR1_FADE' },
+  WR2:      { stopDist: 80.50, t1Dist: 41.00, auditName: 'WR2',    setupSuffix: 'WR2_FADE' },
+  WPP:      { stopDist: 78.63, t1Dist: 33.25, auditName: 'WPP',    setupSuffix: 'WPP_FADE' },
+  MPP:      { stopDist: 74.25, t1Dist: 41.00, auditName: 'MPP',    setupSuffix: 'MPP_FADE' },
+  MR1:      { stopDist: 56.13, t1Dist: 40.63, auditName: 'MR1',    setupSuffix: 'MR1_FADE' },
+  MR2:      { stopDist: 63.50, t1Dist: 17.00, auditName: 'MR2',    setupSuffix: 'MR2_FADE' },
+  MS1:      { stopDist: 87.31, t1Dist: 41.00, auditName: 'MS1',    setupSuffix: 'MS1_FADE' },
+  MS2:      { stopDist: 47.69, t1Dist: 47.13, auditName: 'MS2',    setupSuffix: 'MS2_FADE' },
+  CAM_R1:   { stopDist: 65.88, t1Dist: 37.13, auditName: 'CAM_R1', setupSuffix: 'CAM_R1_FADE' },
+  CAM_R2:   { stopDist: 69.50, t1Dist: 37.50, auditName: 'CAM_R2', setupSuffix: 'CAM_R2_FADE' },
+  CAM_R3:   { stopDist: 78.13, t1Dist: 39.25, auditName: 'CAM_R3', setupSuffix: 'CAM_R3_FADE' },
+  CAM_R4:   { stopDist: 85.44, t1Dist: 40.38, auditName: 'CAM_R4', setupSuffix: 'CAM_R4_FADE' },
+  CAM_S1:   { stopDist: 76.44, t1Dist: 40.63, auditName: 'CAM_S1', setupSuffix: 'CAM_S1_FADE' },
+  CAM_S2:   { stopDist: 71.50, t1Dist: 41.75, auditName: 'CAM_S2', setupSuffix: 'CAM_S2_FADE' },
+  CAM_S3:   { stopDist: 92.44, t1Dist: 40.25, auditName: 'CAM_S3', setupSuffix: 'CAM_S3_FADE' },
+  CAM_S4:   { stopDist: 87.25, t1Dist: 40.63, auditName: 'CAM_S4', setupSuffix: 'CAM_S4_FADE' },
 };
 
 // Enriched with win_rate and sessions from performance_audit at runtime

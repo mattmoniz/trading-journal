@@ -12,7 +12,7 @@ const DLL = 400;
 const PNL_PER_PT_PER_CONTRACT = 2;
 const COMMISSION_PER_CONTRACT = 1;
 
-// Confluence-based sizing multipliers (from CONFLUENCE_AUDIT — DOUBLE=88.9% WR, QUAD_PLUS=AVOID)
+// Confluence-based sizing multipliers (from CONFLUENCE_AUDIT — DOUBLE=88.9% WR per 2026-07-03 run, QUAD_PLUS=AVOID)
 const CONFLUENCE_MULTIPLIER = { 0: 0.75, 1: 1.0, 2: 1.5, 3: 1.0 }; // 4+ = skip
 const SKIP_QUAD_PLUS = true;
 

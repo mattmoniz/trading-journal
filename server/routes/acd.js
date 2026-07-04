@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd } from '../services/queries.js';
 import {
   computeACDFromBars,
@@ -280,22 +281,32 @@ function nextTradingDay(etDate) {
 // Returns a setup descriptor (same shape as RTH active) or null.
 async function detectGlobexSetup(sessionDate, io) {
   try {
-    const [priceRow, pdRow] = await Promise.all([
+    const [priceRow, pdRow, auditRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
+      query(`SELECT signal_name, p75_mae, p50_mfe FROM performance_audit
+             WHERE signal_type='UNIFIED_BACKTEST' AND window_days=9999
+               AND signal_name IN ('PD_VAH_SHORT','PD_VAL_LONG','PD_POC_SHORT','PD_POC_LONG')
+             ORDER BY sample_size DESC`),
     ]);
     if (!priceRow.rows[0] || !pdRow.rows[0]) return null;
     const px = priceRow.rows[0].price;
     const { vah, val, poc } = pdRow.rows[0];
 
-    const TOUCH = 15; // points
-    const STOP  = 60;
-    const T1    = 35;
+    const auditMap = {};
+    for (const r of auditRow.rows) if (!auditMap[r.signal_name]) auditMap[r.signal_name] = r;
+    const globexParams = (key) => ({
+      stop: parseFloat(auditMap[key]?.p75_mae ?? 65),
+      t1:   parseFloat(auditMap[key]?.p50_mfe ?? 40),
+    });
 
+    const TOUCH = 15; // proximity window — consistent with RTH level detection system-wide
+
+    const pocDir = px >= poc ? 'SHORT' : 'LONG';
     const candidates = [
-      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT' },
-      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG'  },
-      { level: poc, name: 'PD POC', type: px >= poc ? 'PD_POC_FADE_SHORT' : 'PD_POC_FADE_LONG', dir: px >= poc ? 'SHORT' : 'LONG' },
+      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT' },
+      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG'  },
+      { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}` },
     ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH);
 
     for (const c of candidates) {
@@ -305,6 +316,7 @@ async function detectGlobexSetup(sessionDate, io) {
       );
       if (existing.rows.length) continue;
 
+      const { stop: STOP, t1: T1 } = globexParams(c.auditKey);
       const isLong = c.dir === 'LONG';
       const entry  = px;
       const stop   = isLong ? px - STOP  : px + STOP;
@@ -325,20 +337,20 @@ async function detectGlobexSetup(sessionDate, io) {
         ) VALUES ($1,$2,NOW(),$3,'ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
         ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
         RETURNING id, entry_zone_low, stop_level, t1_level
-      `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${T1}pt (${c.name})`, entry]);
+      `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
       const rr = (Math.abs(target - entry) / Math.abs(entry - stop)).toFixed(1);
       if (io) io.emit('setup-detected', {
         type: c.type, direction: c.dir, entry, stop, target, rr,
-        targetLabel: `T1: ${T1}pt (${c.name})`, globexMode: true,
+        targetLabel: `T1: ${Math.round(T1)}pt (${c.name})`, globexMode: true,
         detectedAt: etNow.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true }),
       });
 
       return {
         type: c.type, direction: c.dir, entry, stop, target, rr,
-        targetLabel: `T1: ${T1}pt (${c.name})`, globexMode: true,
+        targetLabel: `T1: ${Math.round(T1)}pt (${c.name})`, globexMode: true,
         detectedAt: new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
           .toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }),
       };
@@ -1876,6 +1888,12 @@ export default function createACDRouter(io) {
     try {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
+      // Check market calendar before DB queries
+      const mktStatus = getMarketStatus(todayET);
+      if (mktStatus?.type === 'HOLIDAY') {
+        return res.json({ setup: null, reason: `Market Holiday — ${mktStatus.name}`, marketHoliday: true });
+      }
+
       // Get today's logged OR and A levels
       const logged = await query(`SELECT or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
       if (!logged.rows.length || !logged.rows[0].or_high) return res.json({ setup: null, reason: 'No OR data for today' });
@@ -2443,6 +2461,8 @@ export default function createACDRouter(io) {
         nl30: liveNL30,
         conviction,
         dayType,
+        dayOfWeek: new Date(todayET + 'T12:00:00').getDay(), // 1=Mon … 5=Fri
+        earlyClose: getEarlyCloseMinute(todayET) ? { rthCloseEtMin: getEarlyCloseMinute(todayET), label: getMarketStatus(todayET)?.name } : null,
       });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -3879,11 +3899,14 @@ export default function createACDRouter(io) {
 
           // Monday: skip intraday levels that fail on Mondays
           // IB_HIGH_FADE / IB_LOW_FADE also skip on Mondays (IB context different)
-          const mondaySkip = isMonday ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE'] : [];
+          const mondaySkip = isMonday ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE', 'PD_SESSION_MID_FADE'] : [];
 
           // Direction-suppressed setups: 54.3% WR N=56, -$2,445 across 406-day backfill (2026-07-03)
           // Format: SET_TYPE_DIR strings — checked against the constructed `type` after direction resolves
-          const suppressedFades = new Set(['PD_POC_FADE_SHORT']);
+          const suppressedFades = new Set([
+            'PD_POC_FADE_SHORT',      // 54.3% WR N=56, EV=-$2,445 (direction-inverted loser confirmed 2026-07-03)
+            'IB_MID_SCALP_FADE_SHORT', // 66% WR but EV=-$5.34 N=106: stop width kills edge on SHORT side (2026-07-04)
+          ]);
 
           // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
           // Cached 60s — backtests run at most weekly so freshness is fine.
@@ -3971,7 +3994,8 @@ export default function createACDRouter(io) {
             // Floor pivots (all 7: Pivot, R1, R2, R3, S1, S2, S3)
             { name: 'FLOOR_PIVOT_FADE', level: lp.FLOOR_PIVOT ?? floorP, ...(ls('FLOOR_PIVOT') || {}), ...monOverride('FLOOR_PIVOT') },
             { name: 'FLOOR_R1_FADE',   level: lp.FLOOR_R1 ?? floorR1,   ...(ls('FLOOR_R1')    || {}), ...monOverride('FLOOR_R1') },
-            // FLOOR_S1 removed 2026-07-03: negative EV across 12+ backtests (SYSTEM/UNIFIED all negative, -$9 to -$101). LEVEL_FADE_AUDIT +$20.79 is selection bias — wide stop (p75_mae=90+pt) kills edge.
+            // FLOOR_S1 restored 2026-07-04: backfill (corrected direction) shows LONG 80% WR N=55 EV=+$98, SHORT 66.7% N=21 EV=+$18. Prior removal was based on inverted-direction backtest data.
+            { name: 'FLOOR_S1_FADE',   level: lp.FLOOR_S1   ?? null, ...(ls('FLOOR_S1')    || {}), ...monOverride('FLOOR_S1') },
             // Today's OR/IB (real-time bar values — not from level_prices which may lag)
             { name: 'OR_HIGH_FADE',   level: orH,         ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
             { name: 'OR_LOW_FADE',    level: orL,         ...(ls('OR_LOW')     || {}) },
@@ -3980,7 +4004,9 @@ export default function createACDRouter(io) {
             // Computed meta-levels
             { name: '5D_OR_MID_FADE',  level: or5Mid,  ...(ls('5D_OR_MID')  || {}), ...monOverride('5D_OR_MID') },
             { name: '10D_IB_MID_FADE', level: ib10Mid, ...(ls('10D_IB_MID') || {}) },
-            { name: 'PD_OR_MID_FADE',  level: pdOrMid, ...(ls('PD_OR_MID')  || {}), ...monOverride('PD_OR_MID') },
+            { name: 'PD_OR_MID_FADE',     level: pdOrMid,              ...(ls('PD_OR_MID')     || {}), ...monOverride('PD_OR_MID') },
+            // PD_SESSION_MID: (prior day high + low) / 2 — 78.8% WR N=255 EV=+$37 (PD_IB_AUDIT), Monday-suppressed
+            { name: 'PD_SESSION_MID_FADE', level: lp.PD_SESSION_MID ?? null, ...(ls('PD_SESSION_MID') || {}), ...monOverride('PD_SESSION_MID') },
             // Prior-day range and IB boundaries
             { name: 'PD_HIGH_FADE',      level: lp.PD_HIGH      ?? null, ...(ls('PD_HIGH')      || {}) },
             { name: 'PD_LOW_FADE',       level: lp.PD_LOW       ?? null, ...(ls('PD_LOW')       || {}) },

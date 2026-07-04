@@ -5,7 +5,8 @@
 // Levels computed per session:
 //   PRIOR_DAY     : PD_VAH, PD_VAL, PD_POC, PD_HIGH, PD_LOW, PD_CLOSE, PD_IB_HIGH, PD_IB_LOW, PD_IB_MID
 //   OVERNIGHT     : ONH, ONL  (Globex 18:00 prior ET → 09:29 current ET)
-//   CURRENT       : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID
+//   CURRENT       : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID, 5D_OR_MID
+//   PRIOR_DAY     : ... PD_SESSION_MID (added 2026-07-04)
 //   OPENS         : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
 //   VWAP          : RTH_VWAP, WEEKLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
 //   PIVOT         : FLOOR_PIVOT, R1, R2, R3, S1, S2, S3
@@ -129,9 +130,11 @@ async function computeLevelsForDate(date) {
     add('PD_VAH',   pd.vah,           'PRIOR_DAY');
     add('PD_VAL',   pd.val,           'PRIOR_DAY');
     add('PD_POC',   pd.poc,           'PRIOR_DAY');
-    add('PD_HIGH',  pd.session_high,  'PRIOR_DAY');
-    add('PD_LOW',   pd.session_low,   'PRIOR_DAY');
-    add('PD_CLOSE', pd.session_close, 'PRIOR_DAY');
+    add('PD_HIGH',        pd.session_high,  'PRIOR_DAY');
+    add('PD_LOW',         pd.session_low,   'PRIOR_DAY');
+    add('PD_CLOSE',       pd.session_close, 'PRIOR_DAY');
+    if (pd.session_high && pd.session_low)
+      add('PD_SESSION_MID', (pd.session_high + pd.session_low) / 2, 'PRIOR_DAY');
 
     // Floor pivots from PD H/L/C
     const h = pd.session_high, l = pd.session_low, c = pd.session_close;
@@ -207,6 +210,17 @@ async function computeLevelsForDate(date) {
     add('OR_MID',  (or_.orh + or_.orl) / 2,   'CURRENT');
   }
 
+  // 5-session composite OR: MAX(or_high) / MIN(or_low) across prior 5 sessions
+  const or5R = await q(`
+    SELECT MAX(orh) AS hi, MIN(orl) AS lo FROM (
+      SELECT or_high::float AS orh, or_low::float AS orl
+      FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
+      ORDER BY trade_date DESC LIMIT 5
+    ) t
+  `, [date]);
+  const or5 = or5R.rows[0];
+  if (or5?.hi && or5?.lo) add('5D_OR_MID', (or5.hi + or5.lo) / 2, 'CURRENT');
+
   // ── 5. IB high/low/mid (9:30–10:00 current day) ─────────────────────────
   const ibR = await q(`
     SELECT MAX(high)::float AS h, MIN(low)::float AS l
@@ -220,6 +234,31 @@ async function computeLevelsForDate(date) {
     add('IB_LOW',  ib.l,               'CURRENT');
     add('IB_MID',  (ib.h + ib.l) / 2, 'CURRENT');
   }
+
+  // 10-session composite IB midpoint
+  const ib10R = await q(`
+    SELECT AVG((h + l) / 2) AS mid FROM (
+      SELECT MAX(high)::float AS h, MIN(low)::float AS l
+      FROM price_bars_primary
+      WHERE symbol = 'NQ' AND ts::date IN (
+        SELECT DISTINCT ts::date FROM price_bars_primary
+        WHERE symbol = 'NQ' AND ts::date < $1
+          AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+        ORDER BY ts::date DESC LIMIT 10
+      )
+        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+      GROUP BY ts::date
+    ) t HAVING COUNT(*) >= 5
+  `, [date]);
+  if (ib10R.rows[0]?.mid) add('10D_IB_MID', parseFloat(ib10R.rows[0].mid), 'CURRENT');
+
+  // Prior day OR midpoint (from acd_daily_log of prior session)
+  const pdOrR = await q(`
+    SELECT (or_high::float + or_low::float) / 2 AS mid
+    FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
+    ORDER BY trade_date DESC LIMIT 1
+  `, [date]);
+  if (pdOrR.rows[0]?.mid) add('PD_OR_MID', pdOrR.rows[0].mid, 'PRIOR');
 
   // ── 6. Session opens ─────────────────────────────────────────────────────
   // Daily open (first RTH bar)

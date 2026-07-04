@@ -379,79 +379,6 @@ router.get('/stats/by-day-of-week', async (req, res) => {
   }
 });
 
-// Get performance by trade duration
-router.get('/stats/by-duration', async (req, res) => {
-  try {
-    const { dateFrom, dateTo, account } = req.query;
-
-    let whereConditions = ['exit_time IS NOT NULL', 'exit_time > entry_time', 'pnl IS NOT NULL'];
-    const queryParams = [];
-    let paramCounter = 1;
-
-    if (dateFrom) {
-      whereConditions.push(`log_date >= $${paramCounter}`);
-      queryParams.push(dateFrom);
-      paramCounter++;
-    }
-    if (dateTo) {
-      whereConditions.push(`log_date <= $${paramCounter}`);
-      queryParams.push(dateTo);
-      paramCounter++;
-    }
-    if (account) {
-      whereConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
-      queryParams.push(account.split(",").filter(Boolean));
-      paramCounter++;
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    const result = await query(`
-      WITH bucketed AS (
-        SELECT
-          pnl,
-          CASE
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 30 THEN 1
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 60 THEN 2
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 300 THEN 3
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 900 THEN 4
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 1800 THEN 5
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 3600 THEN 6
-            ELSE 7
-          END as bucket_order,
-          CASE
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 30 THEN '< 30s'
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 60 THEN '30s-1m'
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 300 THEN '1-5m'
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 900 THEN '5-15m'
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 1800 THEN '15-30m'
-            WHEN EXTRACT(EPOCH FROM (exit_time - entry_time)) < 3600 THEN '30m-1h'
-            ELSE '> 1h'
-          END as duration_bucket
-        FROM trades
-        WHERE ${whereClause}
-      )
-      SELECT
-        bucket_order,
-        duration_bucket,
-        COUNT(*) as trade_count,
-        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
-        SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
-        ROUND(SUM(pnl)::numeric, 2) as total_pnl,
-        ROUND(AVG(pnl)::numeric, 2) as avg_pnl,
-        ROUND((SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::decimal / COUNT(*) * 100)::numeric, 2) as win_rate
-      FROM bucketed
-      GROUP BY bucket_order, duration_bucket
-      ORDER BY bucket_order ASC
-    `, queryParams);
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching duration stats:', error);
-    res.status(500).json({ error: 'Failed to fetch duration statistics' });
-  }
-});
-
 // Get daily performance (from view)
 router.get('/stats/daily', async (req, res) => {
   try {
@@ -542,55 +469,6 @@ router.get('/stats/daily', async (req, res) => {
   } catch (error) {
     console.error('Error fetching daily performance:', error);
     res.status(500).json({ error: 'Failed to fetch daily performance' });
-  }
-});
-
-// Get performance by setup type
-router.get('/stats/by-setup', async (req, res) => {
-  try {
-    const { dateFrom, dateTo, account } = req.query;
-
-    let whereConditions = ['exit_time IS NOT NULL', 'setup_type IS NOT NULL'];
-    const queryParams = [];
-    let paramCounter = 1;
-
-    if (dateFrom) {
-      whereConditions.push(`log_date >= $${paramCounter}`);
-      queryParams.push(dateFrom);
-      paramCounter++;
-    }
-    if (dateTo) {
-      whereConditions.push(`log_date <= $${paramCounter}`);
-      queryParams.push(dateTo);
-      paramCounter++;
-    }
-    if (account) {
-      whereConditions.push(`custom_fields->>'account' = ANY($${paramCounter}::text[])`);
-      queryParams.push(account.split(",").filter(Boolean));
-      paramCounter++;
-    }
-
-    const whereClause = whereConditions.join(' AND ');
-
-    const result = await query(`
-      SELECT
-        setup_type,
-        COUNT(*) as trade_count,
-        SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins,
-        SUM(CASE WHEN pnl < 0 THEN 1 ELSE 0 END) as losses,
-        ROUND(SUM(pnl)::numeric, 2) as total_pnl,
-        ROUND(AVG(pnl)::numeric, 2) as avg_pnl,
-        ROUND((SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END)::decimal / COUNT(*) * 100)::numeric, 2) as win_rate
-      FROM trades
-      WHERE ${whereClause}
-      GROUP BY setup_type
-      ORDER BY total_pnl DESC
-    `, queryParams);
-
-    res.json(result.rows);
-  } catch (error) {
-    console.error('Error fetching setup stats:', error);
-    res.status(500).json({ error: 'Failed to fetch setup statistics' });
   }
 });
 

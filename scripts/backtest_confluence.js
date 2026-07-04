@@ -2,7 +2,11 @@
 // Comprehensive confluence audit: does clustering of key levels improve
 // fade WR, tighten MAE, increase MFE compared to single-level fades?
 //
-// Tests 20+ levels per day, confluence tiers (SINGLE/DOUBLE/TRIPLE+),
+// Levels are read from the `level_prices` table (canonical source — written by
+// compute_levels.js). Adding a new level to compute_levels.js makes it appear
+// here automatically with no changes to this script.
+//
+// Tests all levels in level_prices per day, confluence tiers (SINGLE/DOUBLE/TRIPLE+),
 // specific level pairs, AM/PM, first-touch vs retest, delta exhaustion.
 
 import { query } from '../server/db.js';
@@ -53,44 +57,35 @@ function proportionZTest(a, b) {
 // ─────────────────────────────────────────────────────────────────
 
 async function getTradingDays() {
-  // Get the last WINDOW_DAYS trading days that have all 3 data sources
+  // Days that have level_prices data AND RTH bar data
   const r = await query(`
-    SELECT d.trade_date::text as trade_date
-    FROM developing_value_log d
-    JOIN acd_daily_log a ON a.trade_date = d.trade_date
-    WHERE d.trade_date <= CURRENT_DATE
+    SELECT lp.trade_date::text as trade_date
+    FROM level_prices lp
+    WHERE lp.trade_date <= CURRENT_DATE
       AND EXISTS (
         SELECT 1 FROM price_bars_primary p
-        WHERE p.ts::date = d.trade_date
+        WHERE p.ts::date = lp.trade_date
           AND EXTRACT(hour FROM p.ts)*60+EXTRACT(minute FROM p.ts) BETWEEN 570 AND 959
       )
-    GROUP BY d.trade_date
-    ORDER BY d.trade_date DESC
+    GROUP BY lp.trade_date
+    HAVING COUNT(DISTINCT lp.level_name) >= 5
+    ORDER BY lp.trade_date DESC
     LIMIT $1
   `, [WINDOW_DAYS]);
   return r.rows.map(r => r.trade_date).sort();
 }
 
-async function getPriorDayData(tradeDate) {
+async function getLevelPrices(tradeDate) {
+  // Returns { LEVEL_NAME: price, ... } for all levels on this date.
+  // Written by compute_levels.js — adding a new level there makes it
+  // appear here automatically.
   const r = await query(`
-    SELECT
-      poc::float, vah::float, val::float,
-      session_high::float as pd_high, session_low::float as pd_low,
-      session_close::float as pd_close
-    FROM developing_value_log
-    WHERE trade_date < $1
-    ORDER BY trade_date DESC LIMIT 1
+    SELECT level_name, price::float FROM level_prices
+    WHERE trade_date = $1 AND price IS NOT NULL
   `, [tradeDate]);
-  return r.rows[0] || null;
-}
-
-async function getACDData(tradeDate) {
-  const r = await query(`
-    SELECT or_high::float, or_low::float
-    FROM acd_daily_log
-    WHERE trade_date = $1
-  `, [tradeDate]);
-  return r.rows[0] || null;
+  const map = {};
+  for (const row of r.rows) map[row.level_name] = row.price;
+  return map;
 }
 
 async function getRTHBars(tradeDate) {
@@ -106,47 +101,6 @@ async function getRTHBars(tradeDate) {
     ORDER BY ts
   `, [tradeDate]);
   return r.rows;
-}
-
-async function getOvernightHighLow(tradeDate) {
-  // Overnight = prior day 18:00 through current day 09:29
-  const r = await query(`
-    SELECT MAX(high::float) as on_high, MIN(low::float) as on_low
-    FROM price_bars_primary
-    WHERE (
-      (ts::date = ($1::date - interval '1 day')::date AND EXTRACT(hour FROM ts) >= 18)
-      OR
-      (ts::date = $1::date AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) < 570)
-    )
-  `, [tradeDate]);
-  return r.rows[0] || null;
-}
-
-async function getPriorWeekHighLow(tradeDate) {
-  // Prior week = the calendar week before the week containing tradeDate
-  // Get all RTH bars from the prior Monday through Friday
-  const r = await query(`
-    SELECT MAX(high::float) as pw_high, MIN(low::float) as pw_low
-    FROM price_bars_primary
-    WHERE ts::date >= ($1::date - (EXTRACT(DOW FROM $1::date)::int + 6) * interval '1 day')::date
-      AND ts::date <  ($1::date - (EXTRACT(DOW FROM $1::date)::int - 1) * interval '1 day')::date
-      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-  `, [tradeDate]);
-  return r.rows[0] || null;
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Floor pivots from prior day H/L/C
-// ─────────────────────────────────────────────────────────────────
-function floorPivots(h, l, c) {
-  const pivot = (h + l + c) / 3;
-  return {
-    FLOOR_PIVOT: pivot,
-    FLOOR_R1: 2 * pivot - l,
-    FLOOR_R2: pivot + (h - l),
-    FLOOR_S1: 2 * pivot - h,
-    FLOOR_S2: pivot - (h - l),
-  };
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -209,68 +163,21 @@ async function run() {
     const date = tradingDays[di];
     if (di % 30 === 0) console.log(`Processing day ${di + 1}/${tradingDays.length}: ${date}`);
 
-    // Load all data for this day
-    const [priorDay, acdData, bars, overnight, priorWeek] = await Promise.all([
-      getPriorDayData(date),
-      getACDData(date),
+    // Load all data for this day — levels come from level_prices (canonical)
+    const [levelPrices, bars] = await Promise.all([
+      getLevelPrices(date),
       getRTHBars(date),
-      getOvernightHighLow(date),
-      getPriorWeekHighLow(date),
     ]);
 
-    if (!priorDay || !acdData || bars.length < 60) {
+    if (Object.keys(levelPrices).length < 5 || bars.length < 60) {
       skippedDays++;
       continue;
     }
 
-    // ── Build static levels (known at open) ──
-    const staticLevels = {};
-
-    // Prior day levels
-    staticLevels.PD_POC  = priorDay.poc;
-    staticLevels.PD_VAH  = priorDay.vah;
-    staticLevels.PD_VAL  = priorDay.val;
-    staticLevels.PD_HIGH = priorDay.pd_high;
-    staticLevels.PD_LOW  = priorDay.pd_low;
-    staticLevels.PD_MID  = (priorDay.pd_high + priorDay.pd_low) / 2;
-
-    // Floor pivots
-    const pivots = floorPivots(priorDay.pd_high, priorDay.pd_low, priorDay.pd_close);
-    Object.assign(staticLevels, pivots);
-
-    // Overnight
-    if (overnight && overnight.on_high && overnight.on_low) {
-      staticLevels.ON_HIGH = overnight.on_high;
-      staticLevels.ON_LOW  = overnight.on_low;
-    }
-
-    // Prior week
-    if (priorWeek && priorWeek.pw_high && priorWeek.pw_low) {
-      staticLevels.PW_HIGH = priorWeek.pw_high;
-      staticLevels.PW_LOW  = priorWeek.pw_low;
-    }
-
-    // ── Compute IB and OR levels (from bars) ──
-    // OR = first 30 min (9:30-9:59), OR from acd_daily_log
-    staticLevels.OR_HIGH = acdData.or_high;
-    staticLevels.OR_LOW  = acdData.or_low;
-    staticLevels.OR_MID  = (acdData.or_high + acdData.or_low) / 2;
-
-    // IB = first 60 min (9:30-10:29) = bars with tod 570..629
-    let ibHigh = -Infinity, ibLow = Infinity;
-    let ibBarCount = 0;
-    for (const b of bars) {
-      if (b.tod >= 570 && b.tod <= 629) {
-        ibHigh = Math.max(ibHigh, b.high);
-        ibLow  = Math.min(ibLow, b.low);
-        ibBarCount++;
-      }
-    }
-    if (ibBarCount > 0) {
-      staticLevels.IB_HIGH = ibHigh;
-      staticLevels.IB_LOW  = ibLow;
-      staticLevels.IB_MID  = (ibHigh + ibLow) / 2;
-    }
+    // All levels from level_prices; IB levels will be gated until after 10:30 below.
+    // Exclude RTH_VWAP — it's computed end-of-session (lookahead in bar sim).
+    // Dynamic VWAP is computed per-bar below and added to availableLevels instead.
+    const { RTH_VWAP: _excluded, ...staticLevels } = levelPrices;
 
     // ── Process each RTH bar ──
     // Track which levels have been touched (for first-touch detection)

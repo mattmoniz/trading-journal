@@ -52,16 +52,6 @@ function zscore(val, arr) {
 function fmt(v, d = 1) { return typeof v === 'number' ? v.toFixed(d) : String(v); }
 function pctStr(n, d) { return d > 0 ? (n / d * 100).toFixed(1) + '%' : 'N/A'; }
 
-// ── Floor pivots ──
-function floorPivots(h, l, c) {
-  const pivot = (h + l + c) / 3;
-  return {
-    FLOOR_PIVOT: pivot,
-    FLOOR_R1: 2 * pivot - l,
-    FLOOR_S1: 2 * pivot - h,
-  };
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // DATA LOADING (bulk pre-fetch for performance)
 // ═══════════════════════════════════════════════════════════════════════
@@ -69,25 +59,23 @@ function floorPivots(h, l, c) {
 async function loadAllData() {
   console.log('Loading data...');
 
-  // 1. Get trading days with all 3 data sources
+  // 1. Get trading days from level_prices (single source of truth)
   const daysRes = await query(`
-    SELECT d.trade_date::text as trade_date
-    FROM developing_value_log d
-    JOIN acd_daily_log a ON a.trade_date = d.trade_date
-    WHERE d.trade_date <= CURRENT_DATE
+    SELECT lp.trade_date::text as trade_date
+    FROM level_prices lp
+    WHERE lp.trade_date <= CURRENT_DATE
       AND EXISTS (
         SELECT 1 FROM price_bars_primary p
-        WHERE p.ts::date = d.trade_date
+        WHERE p.ts::date = lp.trade_date
           AND EXTRACT(hour FROM p.ts)*60+EXTRACT(minute FROM p.ts) BETWEEN 570 AND 959
-        LIMIT 1
       )
-    ORDER BY d.trade_date
+    GROUP BY lp.trade_date
+    HAVING COUNT(DISTINCT lp.level_name) >= 5
+    ORDER BY lp.trade_date
   `);
   const allDays = daysRes.rows.map(r => r.trade_date);
   console.log(`  Total trading days with complete data: ${allDays.length}`);
 
-  // Take the last WINDOW_DAYS + enough lookback for regime (60 days ATR + 20 ATR_LONG)
-  // We need ~80 extra days of lookback before our test window
   const LOOKBACK_EXTRA = 80;
   const totalNeeded = WINDOW_DAYS + LOOKBACK_EXTRA;
   const relevantDays = allDays.slice(-totalNeeded);
@@ -98,33 +86,21 @@ async function loadAllData() {
   console.log(`  Test window: ${testDays[0]} to ${testDays[testDays.length - 1]} (${testDays.length} days)`);
   console.log(`  Lookback from: ${firstRelevantDate}`);
 
-  // 2. Bulk load developing_value_log
-  const dvlRes = await query(`
-    SELECT trade_date::text as trade_date,
-           poc::float, vah::float, val::float,
-           session_high::float, session_low::float, session_close::float
-    FROM developing_value_log
-    WHERE trade_date >= $1 AND trade_date <= $2
+  // 2. Bulk load all level_prices rows (single query replaces 4 separate data queries)
+  const lpRes = await query(`
+    SELECT trade_date::text as trade_date, level_name, price::float
+    FROM level_prices
+    WHERE trade_date >= $1 AND trade_date <= $2 AND price IS NOT NULL
     ORDER BY trade_date
   `, [firstRelevantDate, lastDate]);
-  const dvlByDate = new Map();
-  for (const r of dvlRes.rows) dvlByDate.set(r.trade_date, r);
-  console.log(`  Loaded ${dvlRes.rows.length} developing_value_log rows`);
+  const levelsByDate = new Map();
+  for (const r of lpRes.rows) {
+    if (!levelsByDate.has(r.trade_date)) levelsByDate.set(r.trade_date, {});
+    levelsByDate.get(r.trade_date)[r.level_name] = r.price;
+  }
+  console.log(`  Loaded level_prices for ${levelsByDate.size} days`);
 
-  // 3. Bulk load acd_daily_log
-  const acdRes = await query(`
-    SELECT trade_date::text as trade_date,
-           or_high::float, or_low::float
-    FROM acd_daily_log
-    WHERE trade_date >= $1 AND trade_date <= $2
-    ORDER BY trade_date
-  `, [firstRelevantDate, lastDate]);
-  const acdByDate = new Map();
-  for (const r of acdRes.rows) acdByDate.set(r.trade_date, r);
-  console.log(`  Loaded ${acdRes.rows.length} acd_daily_log rows`);
-
-  // 4. Bulk load RTH bars (the big one - only for test days + a bit of lookback for IB)
-  const barsStartDate = relevantDays[0];
+  // 3. Bulk load RTH bars (needed for bar simulation and session H/L/C for regime)
   const barsRes = await query(`
     SELECT ts::date::text as trade_date,
            EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
@@ -134,8 +110,7 @@ async function loadAllData() {
     WHERE ts::date >= $1 AND ts::date <= $2
       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     ORDER BY ts
-  `, [barsStartDate, lastDate]);
-
+  `, [firstRelevantDate, lastDate]);
   const barsByDate = new Map();
   for (const r of barsRes.rows) {
     if (!barsByDate.has(r.trade_date)) barsByDate.set(r.trade_date, []);
@@ -143,109 +118,44 @@ async function loadAllData() {
   }
   console.log(`  Loaded ${barsRes.rows.length} RTH bars across ${barsByDate.size} days`);
 
-  // 5. Bulk load overnight bars
-  const onRes = await query(`
-    SELECT ts::date::text as bar_date,
-           EXTRACT(hour FROM ts) as hr,
-           high::float, low::float
-    FROM price_bars_primary
-    WHERE ts::date >= $1 AND ts::date <= $2
-      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) < 570
-    ORDER BY ts
-  `, [barsStartDate, lastDate]);
-  // Also load prior-day evening bars
-  const onEveRes = await query(`
-    SELECT ts::date::text as bar_date,
-           EXTRACT(hour FROM ts) as hr,
-           high::float, low::float
-    FROM price_bars_primary
-    WHERE ts::date >= ($1::date - interval '3 day')::date AND ts::date <= $2
-      AND EXTRACT(hour FROM ts) >= 18
-    ORDER BY ts
-  `, [barsStartDate, lastDate]);
-
-  // Build overnight H/L per trade date
-  // Overnight = prior calendar day 18:00+ through current calendar day <9:30
-  const overnightByDate = new Map();
-
-  // Index evening bars by their calendar date
-  const eveningBars = new Map(); // date -> [{high, low}]
-  for (const r of onEveRes.rows) {
-    if (!eveningBars.has(r.bar_date)) eveningBars.set(r.bar_date, []);
-    eveningBars.get(r.bar_date).push(r);
-  }
-  // Index pre-open bars by their calendar date
-  const preOpenBars = new Map();
-  for (const r of onRes.rows) {
-    if (!preOpenBars.has(r.bar_date)) preOpenBars.set(r.bar_date, []);
-    preOpenBars.get(r.bar_date).push(r);
+  // Derive session H/L/C from bars (for regime computation — no separate dvl query needed)
+  const sessionByDate = new Map();
+  for (const [date, bars] of barsByDate) {
+    sessionByDate.set(date, {
+      session_high:  Math.max(...bars.map(b => b.high)),
+      session_low:   Math.min(...bars.map(b => b.low)),
+      session_close: bars[bars.length - 1].close,
+    });
   }
 
-  // For each test day, find prior calendar day's evening + same day's pre-open
-  for (const day of relevantDays) {
-    const dt = new Date(day + 'T00:00:00');
-    // Try up to 3 days back for prior evening (weekends)
-    let onHigh = -Infinity, onLow = Infinity, found = false;
-    for (let offset = 1; offset <= 3; offset++) {
-      const priorDt = new Date(dt.getTime() - offset * 86400000);
-      const priorDateStr = priorDt.toISOString().slice(0, 10);
-      const eBars = eveningBars.get(priorDateStr);
-      if (eBars && eBars.length > 0) {
-        for (const b of eBars) {
-          onHigh = Math.max(onHigh, b.high);
-          onLow = Math.min(onLow, b.low);
-          found = true;
-        }
-        break;
-      }
-    }
-    // Same day pre-open
-    const poBars = preOpenBars.get(day);
-    if (poBars) {
-      for (const b of poBars) {
-        onHigh = Math.max(onHigh, b.high);
-        onLow = Math.min(onLow, b.low);
-        found = true;
-      }
-    }
-    if (found) {
-      overnightByDate.set(day, { on_high: onHigh, on_low: onLow });
-    }
-  }
-  console.log(`  Computed overnight H/L for ${overnightByDate.size} days`);
-
-  return { allDays: relevantDays, testDays, dvlByDate, acdByDate, barsByDate, overnightByDate };
+  return { allDays: relevantDays, testDays, levelsByDate, barsByDate, sessionByDate };
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // REGIME CLASSIFICATION
 // ═══════════════════════════════════════════════════════════════════════
 
-function computeDailyATR(allDays, dvlByDate) {
-  // True Range per day = session_high - session_low (intraday range as proxy)
-  // For proper ATR we'd use max(H-L, |H-prevC|, |L-prevC|) but session H/L suffices
+function computeDailyATR(allDays, sessionByDate) {
   const trByDate = new Map();
   let prevClose = null;
   for (const day of allDays) {
-    const dvl = dvlByDate.get(day);
-    if (!dvl) continue;
-    const hl = dvl.session_high - dvl.session_low;
+    const s = sessionByDate.get(day);
+    if (!s) continue;
+    const hl = s.session_high - s.session_low;
     let tr = hl;
     if (prevClose != null) {
-      tr = Math.max(hl, Math.abs(dvl.session_high - prevClose), Math.abs(dvl.session_low - prevClose));
+      tr = Math.max(hl, Math.abs(s.session_high - prevClose), Math.abs(s.session_low - prevClose));
     }
     trByDate.set(day, tr);
-    prevClose = dvl.session_close;
+    prevClose = s.session_close;
   }
   return trByDate;
 }
 
-function classifyRegime(dayIdx, allDays, trByDate, dvlByDate) {
+function classifyRegime(dayIdx, allDays, trByDate, sessionByDate) {
   // Volatility: ATR(5)/ATR(20) z-scored over trailing 60 days
   // Direction: Net Liquidation proxy = close z-scored over 10 days → NL(10) z-scored
   // Range: prior day range / ATR(20) z-scored
-
-  const day = allDays[dayIdx];
 
   // Gather trailing TR values
   const trailingTRs = [];
@@ -272,8 +182,8 @@ function classifyRegime(dayIdx, allDays, trByDate, dvlByDate) {
   // Direction: close price net change over NL_PERIOD days, z-scored
   const closes = [];
   for (let i = dayIdx - 1; i >= 0 && closes.length < ZSCORE_WINDOW + NL_PERIOD; i--) {
-    const dvl = dvlByDate.get(allDays[i]);
-    if (dvl && dvl.session_close) closes.push(dvl.session_close);
+    const s = sessionByDate.get(allDays[i]);
+    if (s?.session_close) closes.push(s.session_close);
   }
   let dirZ = 0;
   if (closes.length >= NL_PERIOD + ZSCORE_WINDOW) {
@@ -304,110 +214,19 @@ function classifyRegime(dayIdx, allDays, trByDate, dvlByDate) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// LEVEL COMPUTATION
+// LEVEL LOOKUP (reads from level_prices via levelsByDate)
 // ═══════════════════════════════════════════════════════════════════════
 
-function computeLevels(dayIdx, allDays, dvlByDate, acdByDate, barsByDate, overnightByDate) {
-  const day = allDays[dayIdx];
-  const levels = {};
-
-  // ── Prior day levels (from developing_value_log of prior day) ──
-  let priorDvl = null;
-  for (let i = dayIdx - 1; i >= 0; i--) {
-    priorDvl = dvlByDate.get(allDays[i]);
-    if (priorDvl) break;
-  }
-  if (!priorDvl) return null;
-
-  levels.PD_POC = priorDvl.poc;
-  levels.PD_VAH = priorDvl.vah;
-  levels.PD_VAL = priorDvl.val;
-
-  // Floor pivots from prior day H/L/C
-  const pivots = floorPivots(priorDvl.session_high, priorDvl.session_low, priorDvl.session_close);
-  levels.FLOOR_PIVOT = pivots.FLOOR_PIVOT;
-  levels.FLOOR_R1 = pivots.FLOOR_R1;
-  levels.FLOOR_S1 = pivots.FLOOR_S1;
-
-  // Prior day IB (from prior day's bars, tod 570-629)
-  let priorBars = null;
-  for (let i = dayIdx - 1; i >= 0; i--) {
-    priorBars = barsByDate.get(allDays[i]);
-    if (priorBars && priorBars.length > 0) break;
-  }
-  if (priorBars) {
-    let pdIBHigh = -Infinity, pdIBLow = Infinity;
-    for (const b of priorBars) {
-      if (b.tod >= 570 && b.tod <= 629) {
-        pdIBHigh = Math.max(pdIBHigh, b.high);
-        pdIBLow = Math.min(pdIBLow, b.low);
-      }
-    }
-    if (pdIBHigh > -Infinity) {
-      levels.PD_IB_HIGH = pdIBHigh;
-      levels.PD_IB_LOW = pdIBLow;
-      levels.PD_IB_MID = (pdIBHigh + pdIBLow) / 2;
-    }
-  }
-
-  // Overnight H/L
-  const overnight = overnightByDate.get(day);
-  if (overnight) {
-    levels.ON_HIGH = overnight.on_high;
-    levels.ON_LOW = overnight.on_low;
-  }
-
-  // Prior day midpoints
-  levels.PD_SESSION_MID = (priorDvl.session_high + priorDvl.session_low) / 2;
-
-  // Prior day OR midpoint (from acd_daily_log of prior day)
-  let priorAcd = null;
-  for (let i = dayIdx - 1; i >= 0; i--) {
-    priorAcd = acdByDate.get(allDays[i]);
-    if (priorAcd) break;
-  }
-  if (priorAcd) {
-    levels.PD_OR_MID = (priorAcd.or_high + priorAcd.or_low) / 2;
-  }
-
-  // Today's OR from acd_daily_log (known after first 30 min)
-  const todayAcd = acdByDate.get(day);
-  if (todayAcd) {
-    levels.OR_MID = (todayAcd.or_high + todayAcd.or_low) / 2;
-  }
-
-  // Today's IB will be computed inline during bar processing
-
-  // ── Rolling composites ──
-  // 10D_IB_MID: rolling 10-day IB composite midpoint
-  const ibMids = [];
-  for (let i = dayIdx - 1; i >= 0 && ibMids.length < 10; i--) {
-    const bars = barsByDate.get(allDays[i]);
-    if (!bars) continue;
-    let ibH = -Infinity, ibL = Infinity;
-    for (const b of bars) {
-      if (b.tod >= 570 && b.tod <= 629) {
-        ibH = Math.max(ibH, b.high);
-        ibL = Math.min(ibL, b.low);
-      }
-    }
-    if (ibH > -Infinity) ibMids.push((ibH + ibL) / 2);
-  }
-  if (ibMids.length >= 5) {
-    levels['10D_IB_MID'] = mean(ibMids);
-  }
-
-  // 5D_OR_MID: rolling 5-day OR composite midpoint
-  const orMids = [];
-  for (let i = dayIdx - 1; i >= 0 && orMids.length < 5; i--) {
-    const acd = acdByDate.get(allDays[i]);
-    if (acd) orMids.push((acd.or_high + acd.or_low) / 2);
-  }
-  if (orMids.length >= 3) {
-    levels['5D_OR_MID'] = mean(orMids);
-  }
-
-  return levels;
+function computeLevels(date, levelsByDate) {
+  const lp = levelsByDate.get(date);
+  if (!lp || Object.keys(lp).length < 5) return null;
+  // Exclude RTH_VWAP (end-of-session, lookahead in bar simulation)
+  // Exclude today's IB levels — gated inline in executeTrades after tod 630
+  const { RTH_VWAP: _v, IB_HIGH: _ih, IB_LOW: _il, IB_MID: _im, ...staticLevels } = lp;
+  // Normalize overnight names
+  if (staticLevels.ONH != null) { staticLevels.ON_HIGH = staticLevels.ONH; delete staticLevels.ONH; }
+  if (staticLevels.ONL != null) { staticLevels.ON_LOW = staticLevels.ONL; delete staticLevels.ONL; }
+  return staticLevels;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -481,23 +300,14 @@ function rankLevels(regime, tradeHistory) {
 // TRADE EXECUTION ENGINE
 // ═══════════════════════════════════════════════════════════════════════
 
-function executeTrades(bars, levels, rankings, regime, day, maxTrades) {
+function executeTrades(bars, levels, rankings, regime, day, maxTrades, levelsByDate) {
   const trades = [];
   const touchedLevels = new Set(); // first touch only per level
   let dayPnL = 0;
 
-  // Determine which bars represent the IB (first 60 min)
-  let ibHigh = -Infinity, ibLow = Infinity;
-  for (const b of bars) {
-    if (b.tod >= 570 && b.tod <= 629) {
-      ibHigh = Math.max(ibHigh, b.high);
-      ibLow = Math.min(ibLow, b.low);
-    }
-  }
-  // Add today's IB_MID as a level (available after IB close at tod 630)
-  if (ibHigh > -Infinity) {
-    levels.IB_MID = (ibHigh + ibLow) / 2;
-  }
+  // Today's IB levels from level_prices are injected after IB close (tod >= 630)
+  const lp = levelsByDate.get(day) || {};
+  const todayIB = { IB_HIGH: lp.IB_HIGH, IB_LOW: lp.IB_LOW, IB_MID: lp.IB_MID };
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
@@ -511,16 +321,17 @@ function executeTrades(bars, levels, rankings, regime, day, maxTrades) {
     // Max trades check
     if (trades.length >= maxTrades) break;
 
-    // IB_MID only available after IB close
     const pastIB = bar.tod >= 630;
+    // Merge today's IB levels once IB has closed
+    const activeIB = pastIB ? todayIB : {};
+    const allLevels = pastIB ? { ...levels, ...activeIB } : levels;
 
     // Check each level for first touch
-    for (const [levelName, levelPrice] of Object.entries(levels)) {
+    for (const [levelName, levelPrice] of Object.entries(allLevels)) {
       if (levelPrice == null || !isFinite(levelPrice)) continue;
 
-      // Skip IB_MID before IB close, skip OR_MID before OR close
-      if (levelName === 'IB_MID' && !pastIB) continue;
-      if (levelName === 'OR_MID' && bar.tod < 600) continue; // OR forms by 10:00
+      // OR levels only available after OR close at 10:00 (tod >= 600)
+      if ((levelName === 'OR_HIGH' || levelName === 'OR_LOW' || levelName === 'OR_MID') && bar.tod < 600) continue;
 
       // Already touched?
       if (touchedLevels.has(levelName)) continue;
@@ -664,10 +475,10 @@ async function run() {
   console.log(`Contract range: ${MIN_CONTRACTS}–${MAX_CONTRACTS} MNQ ($${RISK_PER_CONTRACT}/contract risk), DLL: $${DLL}`);
   console.log();
 
-  const { allDays, testDays, dvlByDate, acdByDate, barsByDate, overnightByDate } = await loadAllData();
+  const { allDays, testDays, levelsByDate, barsByDate, sessionByDate } = await loadAllData();
 
   // Pre-compute ATR data
-  const trByDate = computeDailyATR(allDays, dvlByDate);
+  const trByDate = computeDailyATR(allDays, sessionByDate);
 
   // ── DAY-BY-DAY SIMULATION ──
   const allTrades = [];       // with regime filter
@@ -697,7 +508,7 @@ async function run() {
     if (ti % 30 === 0) console.log(`  Simulating day ${ti + 1}/${testDays.length}: ${day}`);
 
     // Step 1: Classify regime
-    const regime = classifyRegime(dayIdx, allDays, trByDate, dvlByDate);
+    const regime = classifyRegime(dayIdx, allDays, trByDate, sessionByDate);
     if (!regime) {
       skippedDays++;
       dailyResults.push({ date: day, pnl: 0, trades: 0, regime: null, isTransition: false });
@@ -713,7 +524,7 @@ async function run() {
     prevRegime = { ...regime };
 
     // Step 2: Compute levels
-    const levels = computeLevels(dayIdx, allDays, dvlByDate, acdByDate, barsByDate, overnightByDate);
+    const levels = computeLevels(day, levelsByDate);
     if (!levels) {
       skippedDays++;
       dailyResults.push({ date: day, pnl: 0, trades: 0, regime, isTransition });
@@ -741,16 +552,14 @@ async function run() {
     FADE_STOP = FADE_STOP_BASE;
 
     // Step 4a: Execute trades WITH regime filter
-    const levelsWithFilter = { ...levels };
     const { trades: dayTrades, dayPnL } = executeTrades(
-      bars, levelsWithFilter, rankings, regime, day, MAX_TRADES
+      bars, { ...levels }, rankings, regime, day, MAX_TRADES, levelsByDate
     );
 
     // Step 4b: Execute trades WITHOUT regime filter (comparison)
-    const levelsNoFilter = { ...levels };
-    const noFilterRankings = new Map(); // all STANDARD = no filtering
+    const noFilterRankings = new Map();
     const { trades: dayTradesNoFilter, dayPnL: dayPnLNoFilter } = executeTrades(
-      bars, levelsNoFilter, noFilterRankings, regime, day, MAX_TRADES
+      bars, { ...levels }, noFilterRankings, regime, day, MAX_TRADES, levelsByDate
     );
 
     // Record trades

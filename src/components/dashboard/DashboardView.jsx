@@ -2,11 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, ComposedChart, Line, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import SyncProgressPanel from './SyncProgressPanel.jsx';
 import DashboardFilters from './DashboardFilters.jsx';
-import PerformanceVisuals from './PerformanceVisuals.jsx';
 import PnlCharts from './PnlCharts.jsx';
-import SetupsTable from './SetupsTable.jsx';
-import OptimizationSection from './OptimizationSection.jsx';
-import BehaviorSection from './BehaviorSection.jsx';
 import DevelopingValueCard from './DevelopingValueCard.jsx';
 import LevelMonitorPanel from './LevelMonitorPanel.jsx';
 
@@ -24,12 +20,7 @@ export default function DashboardView({
   onDismissSync,
 }) {
   const [dailyPerf, setDailyPerf] = useState([]);
-  const [setupStats, setSetupStats] = useState([]);
   const [cumulativePnl, setCumulativePnl] = useState([]);
-  const [durationStats, setDurationStats] = useState([]);
-  const [behaviorData, setBehaviorData] = useState(null);
-  const [optData, setOptData] = useState(null);
-  const [tradeLocData, setTradeLocData] = useState(null);
   const [keyLevelsData, setKeyLevelsData] = useState(null);
   const [klProximity, setKlProximity] = useState(2.5);
   const [klTimeframe, setKlTimeframe] = useState('all');
@@ -141,27 +132,16 @@ export default function DashboardView({
         ? `?account=${selectedAccounts.join(',')}`
         : '';
 
-      const [dailyRes, setupRes, cumulativeRes, durationRes, behaviorRes, optRes, locRes, riskRes, rollingRes, distRes] = await Promise.all([
+      const [dailyRes, cumulativeRes, riskRes, rollingRes, distRes] = await Promise.all([
         fetch(`${API_URL}/stats/daily${baseQuery}`),
-        fetch(`${API_URL}/stats/by-setup${baseQuery}`),
         fetch(`${API_URL}/stats/cumulative-pnl${baseQuery}`),
-        fetch(`${API_URL}/stats/by-duration${baseQuery}`),
-        fetch(`${API_URL}/stats/behavior${accountOnlyQuery}`),
-        fetch(`${API_URL}/stats/optimization${baseQuery}`),
-        fetch(`${API_URL}/stats/trade-location${baseQuery}`),
         fetch(`${API_URL}/stats/tearsheet-overview${accountOnlyQuery}`),
         fetch(`${API_URL}/stats/rolling${accountOnlyQuery}`),
         fetch(`${API_URL}/stats/pnl-distribution${accountOnlyQuery}`),
       ]);
 
       setDailyPerf(await dailyRes.json());
-      setSetupStats(await setupRes.json());
       setCumulativePnl(await cumulativeRes.json());
-      setDurationStats(await durationRes.json());
-      setBehaviorData(await behaviorRes.json());
-      setOptData(await optRes.json());
-      const locJson = await locRes.json();
-      setTradeLocData(locJson.error ? null : locJson);
       const riskJson = await riskRes.json();
       setRiskStats(riskJson.sharpe != null ? riskJson : null);
       const rollingJson = await rollingRes.json();
@@ -216,19 +196,12 @@ export default function DashboardView({
       <DevelopingValueCard date={recapDate} title="Developing Value — Today's Session" windows={[5, 10, 20]} />
 
 
-      <PerformanceVisuals durationStats={durationStats} />
-
       <PnlCharts
         cumulativePnl={cumulativePnl}
         dailyPerf={dailyPerf}
         filters={filters}
       />
 
-      <SetupsTable setupStats={setupStats} />
-
-      <OptimizationSection optData={optData} tradeLocData={tradeLocData} />
-
-      <BehaviorSection behaviorData={behaviorData} />
 
       {/* ── Risk-Adjusted Performance ── */}
       {riskStats && (

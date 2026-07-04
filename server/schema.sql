@@ -2,6 +2,7 @@
 -- PostgreSQL database dump
 --
 
+\restrict x8qb7me0l5ByYRG5OubrsmHCHrpgvyB0Z3qHqrGJmyYJbywtkyqocpvWSWWrmcB
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -3448,14 +3449,14 @@ CREATE TABLE public.trade_timeline_events (
     trade_date date DEFAULT CURRENT_DATE NOT NULL,
     event_time timestamp without time zone NOT NULL,
     event_type character varying(20) NOT NULL,
-    setup_type character varying(30),
+    setup_type character varying(60),
     setup_id integer,
     direction character varying(5),
     entry_zone numeric,
     stop_level numeric,
     t1_level numeric,
-    t1_label character varying(30),
-    structural_level character varying(30),
+    t1_label character varying(100),
+    structural_level character varying(60),
     resolution character varying(20),
     price_at_resolution numeric,
     historical_win_rate numeric,
@@ -3464,7 +3465,7 @@ CREATE TABLE public.trade_timeline_events (
     signal_type character varying(20),
     signal_price numeric,
     signal_quality character varying(10),
-    alert_type character varying(30),
+    alert_type character varying(60),
     conditions_met integer,
     notes text,
     created_at timestamp without time zone DEFAULT now(),
@@ -3670,47 +3671,6 @@ CREATE SEQUENCE public.weekly_ib_structure_id_seq
 --
 
 ALTER SEQUENCE public.weekly_ib_structure_id_seq OWNED BY public.weekly_ib_structure.id;
-
-
---
--- Name: wyckoff_levels; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.wyckoff_levels (
-    id integer NOT NULL,
-    level_date date NOT NULL,
-    price_level numeric NOT NULL,
-    level_type character varying(20) NOT NULL,
-    origin_description text,
-    status character varying(20) DEFAULT 'ACTIVE'::character varying,
-    spring_occurred boolean DEFAULT false,
-    spring_date date,
-    spring_volume_type character varying(10),
-    upthrust_occurred boolean DEFAULT false,
-    upthrust_date date,
-    notes text,
-    created_at timestamp without time zone DEFAULT now()
-);
-
-
---
--- Name: wyckoff_levels_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.wyckoff_levels_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: wyckoff_levels_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.wyckoff_levels_id_seq OWNED BY public.wyckoff_levels.id;
 
 
 --
@@ -4502,13 +4462,6 @@ ALTER TABLE ONLY public.weekly_assessments ALTER COLUMN id SET DEFAULT nextval('
 --
 
 ALTER TABLE ONLY public.weekly_ib_structure ALTER COLUMN id SET DEFAULT nextval('public.weekly_ib_structure_id_seq'::regclass);
-
-
---
--- Name: wyckoff_levels id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.wyckoff_levels ALTER COLUMN id SET DEFAULT nextval('public.wyckoff_levels_id_seq'::regclass);
 
 
 --
@@ -5733,14 +5686,6 @@ ALTER TABLE ONLY public.weekly_ib_structure
 
 ALTER TABLE ONLY public.weekly_ib_structure
     ADD CONSTRAINT weekly_ib_structure_week_start_key UNIQUE (week_start);
-
-
---
--- Name: wyckoff_levels wyckoff_levels_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.wyckoff_levels
-    ADD CONSTRAINT wyckoff_levels_pkey PRIMARY KEY (id);
 
 
 --
@@ -10015,4 +9960,5 @@ ALTER TABLE ONLY public.trades
 -- PostgreSQL database dump complete
 --
 
+\unrestrict x8qb7me0l5ByYRG5OubrsmHCHrpgvyB0Z3qHqrGJmyYJbywtkyqocpvWSWWrmcB
 

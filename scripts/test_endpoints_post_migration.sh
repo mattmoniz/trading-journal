@@ -1,7 +1,7 @@
 #!/bin/bash
 # Tests all endpoints that query price_bars after partitioning migration
 
-BASE="http://localhost:3001"
+BASE="http://localhost:3002"
 PASS=0
 FAIL=0
 LOG="/home/mmoniz/trading-journal/scripts/endpoint_test_$(date +%Y%m%d_%H%M%S).log"
@@ -66,9 +66,6 @@ check "Auction read" "$BASE/api/auction-read/today" ""
 
 # Setups
 check "Setups active" "$BASE/api/setups/active" ""
-
-# Wyckoff
-check "Wyckoff analysis" "$BASE/api/wyckoff/latest" ""
 
 echo "" | tee -a "$LOG"
 echo "=== Results: $PASS passed, $FAIL failed ===" | tee -a "$LOG"

@@ -10932,6 +10932,23 @@ function ACDSessionState({ todayData, nl, pivot }) {
         <InfoTooltip text="This is your pre-session preparation card — Sierra Chart is your execution tool.&#10;&#10;Night before / pre-market: Check the NL bias and pivot position to frame the session mentally.&#10;&#10;9:30–9:35: OR levels auto-fill from your bar data. Write down the A Up and A Down levels — these are the only two prices that matter for the next 90 minutes.&#10;&#10;9:35–10:15: Watch Sierra Chart, not this card. Wait for price to touch and sustain the A level for 5 minutes. That is your entry signal.&#10;&#10;After 11 AM: The confluence banner confirms whether today's signal had full conviction or was counter-trend.&#10;&#10;System failure warning: If an A signal from 2–3 days ago never got C confirmation, exit immediately regardless of your stop." />
       </div>
 
+      {/* Holiday / early-close notice */}
+      {liveSetup?.marketHoliday && (
+        <div style={{ marginBottom: 12, padding: '8px 14px', background: 'rgba(100,116,139,0.12)', border: '1px solid rgba(100,116,139,0.3)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 16 }}>🗓</span>
+          <div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>Market Holiday</span>
+            <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{liveSetup.reason?.replace('Market Holiday — ', '')}</span>
+          </div>
+        </div>
+      )}
+      {liveSetup?.earlyClose && !liveSetup.marketHoliday && (
+        <div style={{ marginBottom: 12, padding: '8px 14px', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.4)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24' }}>⏰ EARLY CLOSE</span>
+          <span style={{ fontSize: 12, color: '#fcd34d', marginLeft: 4 }}>{liveSetup.earlyClose.label} — RTH ends at 1:00 PM ET.</span>
+        </div>
+      )}
+
       {/* Live setup banner — refreshes every 30 seconds */}
       {liveSetup && liveSetup.setup && (
         <div style={{ marginBottom: 12, padding: '10px 14px', background: `${liveSetup.color}18`, border: `2px solid ${liveSetup.color}`, borderRadius: 9 }}>
@@ -12071,12 +12088,32 @@ function ACDSessionTimeline() {
     'PW Low broken':       'A bar closed below the prior week low — price accepted below last week\'s entire range.\n\nBearish structural shift. Dalton: new value being established lower. Prior week low flips to resistance. A Down signals below this level have higher conviction.',
   };
 
-  if (!live || !live.timeline) return null;
+  if (!live) return null;
+
+  if (live.marketHoliday) {
+    return (
+      <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 12, padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <span style={{ fontSize: 20 }}>🗓</span>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>Market Holiday — {live.reason?.replace('Market Holiday — ', '')}</div>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>No trading today. Next session opens Monday 9:30 AM ET.</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!live.timeline) return null;
 
   const { timeline, narrative, orHigh, orLow, aUpLevel, aDownLevel, gLine, pwHigh, pwLow, pmVAH, pmVAL, pmPOC, sessionHigh, sessionLow, currentPrice, barTime, barsAnalyzed } = live;
 
   return (
     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 12, padding: '20px 24px' }}>
+      {live.earlyClose && (
+        <div style={{ marginBottom: 12, padding: '6px 12px', background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.4)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24' }}>⏰ EARLY CLOSE</span>
+          <span style={{ fontSize: 12, color: '#fcd34d' }}>{live.earlyClose.label} — RTH ends at 1:00 PM ET. No new setups after noon; manage existing positions into the early close.</span>
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
           Today's Setup Timeline
@@ -18524,13 +18561,26 @@ function SessionStatusBar({ conf, onStateChange }) {
 
         const isFadeSetup = sc2.type?.includes('FADE');
         const isTrendDay  = dayType?.label === 'TREND DAY';
+        const isMonday    = live?.dayOfWeek === 1;
+        const isShortFade = isFadeSetup && sc2.direction === 'SHORT';
 
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {isFadeSetup && isTrendDay && (
               <div style={{ padding: '6px 12px', background: 'rgba(249,115,22,0.15)', border: '1px solid rgba(249,115,22,0.5)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 13, fontWeight: 800, color: '#f97316', letterSpacing: '0.06em' }}>⚠ TREND DAY</span>
-                <span style={{ fontSize: 12, color: '#fb923c' }}>Fades underperform on trend days — 37% WR Jul 1. Consider skipping or waiting for extreme exhaustion.</span>
+                <span style={{ fontSize: 12, color: '#fb923c' }}>Fades underperform on trend days. Consider skipping or waiting for extreme exhaustion.</span>
+              </div>
+            )}
+            {isFadeSetup && isMonday && (
+              <div style={{ padding: '6px 12px', background: 'rgba(234,179,8,0.12)', border: '1px solid rgba(234,179,8,0.45)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: '#eab308', letterSpacing: '0.06em' }}>⚠ MONDAY</span>
+                <span style={{ fontSize: 12, color: '#facc15' }}>Context analysis: fades historically lose on Mondays. Wait for post-IB confirmation and strong exhaustion before taking.</span>
+              </div>
+            )}
+            {isShortFade && !isTrendDay && !isMonday && (
+              <div style={{ padding: '4px 10px', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>SHORT fades slightly underperform LONG directionally — prefer LONG entries at this level type when available.</span>
               </div>
             )}
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
