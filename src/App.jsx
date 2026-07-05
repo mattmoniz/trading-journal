@@ -5,6 +5,7 @@ import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './util
 import { TOOLTIPS } from './constants/tooltips.js';
 import DashboardView from './components/dashboard/DashboardView.jsx';
 import AntigravityEdgesView from './components/dashboard/AntigravityEdgesView.jsx';
+import AlphaEngineOverview from './components/dashboard/AlphaEngineOverview.jsx';
 import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import SessionForecastPanel from './components/dashboard/SessionForecastPanel.jsx';
 import BalanceZonePanel from './components/dashboard/BalanceZonePanel.jsx';
@@ -9688,6 +9689,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid var(--border-color)', paddingBottom: 0, flexWrap: 'wrap' }}>
         {[
           ['setups', 'Setup Log'],
+          ['alpha', 'Alpha Engine'],
           ['audit', 'Performance Audit'],
           ['edge', 'Edge Analysis'],
           ['efficiency', 'Efficiency Analysis'],
@@ -9718,6 +9720,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       </div>
 
       {activeSection === 'setups' && <SetupHistoryView />}
+      {activeSection === 'alpha' && <AlphaEngineOverview />}
       {activeSection === 'scenarios' && <ScenarioTesterView />}
       {activeSection === 'risk' && <RiskView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} />}
       {activeSection === 'audit' && <PerformanceAuditPanel />}
@@ -10948,7 +10951,6 @@ function ACDSessionState({ todayData, nl, pivot }) {
           <span style={{ fontSize: 12, color: '#fcd34d', marginLeft: 4 }}>{liveSetup.earlyClose.label} — RTH ends at 1:00 PM ET.</span>
         </div>
       )}
-
       {/* Live setup banner — refreshes every 30 seconds */}
       {liveSetup && liveSetup.setup && (
         <div style={{ marginBottom: 12, padding: '10px 14px', background: `${liveSetup.color}18`, border: `2px solid ${liveSetup.color}`, borderRadius: 9 }}>
@@ -18583,6 +18585,93 @@ function SessionStatusBar({ conf, onStateChange }) {
                 <span style={{ fontSize: 11, color: '#94a3b8' }}>SHORT fades slightly underperform LONG directionally — prefer LONG entries at this level type when available.</span>
               </div>
             )}
+            {/* ── PLAYBOOK STRIP ─────────────────────────────────────────── */}
+            {(() => {
+              const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const etMin = nowET.getHours() * 60 + nowET.getMinutes();
+              const isPreIb   = etMin >= 570 && etMin < 630;  // 9:30–10:30
+              const isMornAdj = etMin >= 630 && etMin < 750;  // 10:30–12:30
+              const isMidday  = etMin >= 750 && etMin < 870;  // 12:30–2:30
+              const sessionPhase = etMin < 570 ? 'PRE-MARKET'
+                : isPreIb   ? 'EARLY AM'
+                : isMornAdj ? 'MID MORNING'
+                : isMidday  ? 'MIDDAY'
+                             : 'LATE SESSION';
+              const phaseColor = etMin < 570 ? '#64748b'  // pre-market
+                : isPreIb   ? '#22c55e'
+                : isMornAdj ? '#60a5fa'
+                : '#f59e0b';
+
+              const riskPt    = sc2.entry != null && sc2.stop   != null ? Math.abs(sc2.entry - sc2.stop)   : null;
+              const rewardPt  = sc2.entry != null && sc2.target != null ? Math.abs(sc2.target - sc2.entry) : null;
+              const riskDol   = riskPt   ? (riskPt   * 2).toFixed(0) : null;
+              const rewardDol = rewardPt ? (rewardPt * 2).toFixed(0) : null;
+              const t2Pt      = rewardPt ? (rewardPt * 2).toFixed(0) : null;
+
+              const tierAction = sc2.tier === 'PRIME'    ? 'TAKE IT — full size'
+                : sc2.tier === 'SOLID'    ? 'TAKE IT — standard size'
+                : sc2.tier === 'MARGINAL' ? 'OPTIONAL — AM first touch only, skip re-tests'
+                : 'BELOW THRESHOLD — skip';
+
+              const runnerLines = !isFadeSetup
+                // IB_BULLISH / IB_BEARISH — breakout, not a fade
+                ? (liveDayTypeGuess === 'TREND'
+                  ? ['IB break — enter on retrace back to IB boundary, trail stop just inside IB. TREND day: let it run.']
+                  : ['IB break — enter on retrace, target value area edge. Take T1, re-evaluate for runner.'])
+                // Level fade setups
+                : liveDayTypeGuess === 'TURBULENT'
+                ? ['Full size. If up 30pt in 10 min → move stop to BE, hold half to 2×T1' + (rewardPt ? ` (~${t2Pt}pt · $${(rewardPt*2*2).toFixed(0)})` : '') + '.']
+                : liveDayTypeGuess === 'BALANCE'
+                ? ['Take T1 and exit. No runners on BALANCE days — mean-reversion snaps back.']
+                : liveDayTypeGuess === 'TREND'
+                ? ['TREND day — fade WITH trend direction only. Take T1 quickly; don\'t hold counter-moves.']
+                : ['Take T1 and reassess.'];
+
+              const touchNote = etMin < 570
+                ? 'Alert fired pre-session — level is valid, monitor for 9:30 open approach'
+                : isPreIb
+                ? '✓ Early AM — statistically highest WR window (pre-IB-close first touch)'
+                : isMornAdj
+                ? 'Post-IB close — may be re-test; confirm level hasn\'t been visited already today'
+                : 'Late session — reduce size, expect lower follow-through';
+
+              const tierColor = sc2.tier === 'PRIME' ? '#22c55e'
+                : sc2.tier === 'SOLID'    ? '#60a5fa'
+                : sc2.tier === 'MARGINAL' ? '#94a3b8'
+                : '#f59e0b';
+
+              return (
+                <div style={{ background: 'rgba(10,18,35,0.8)', border: `1px solid ${tierColor}28`, borderLeft: `3px solid ${tierColor}`, borderRadius: 6, padding: '9px 13px', marginBottom: 10 }}>
+                  {/* Row 1: phase + action + size */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: phaseColor, letterSpacing: '0.09em' }}>{sessionPhase}</span>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: tierColor }}>{tierAction}</span>
+                    <span style={{ fontSize: 11, color: '#475569', marginLeft: 'auto', whiteSpace: 'nowrap' }}>1 MNQ / account</span>
+                  </div>
+                  {/* Row 2: risk / reward */}
+                  {(riskDol || rewardDol) && (
+                    <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap', fontSize: 12, color: '#94a3b8', marginBottom: 5 }}>
+                      {riskDol   && <span>Risk <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{riskPt}pt · ${riskDol}</strong></span>}
+                      {rewardDol && <span>T1 reward <strong style={{ color: '#818cf8', fontFamily: 'monospace' }}>{rewardPt}pt · ${rewardDol}</strong></span>}
+                      {isFadeSetup && riskPt && rewardPt && (
+                        <span style={{ color: '#475569', fontStyle: 'italic' }}>tight T1 — high WR covers it</span>
+                      )}
+                      {!isFadeSetup && riskPt && rewardPt && (
+                        <span style={{ color: '#64748b' }}>R:R {(rewardPt / riskPt).toFixed(1)}×</span>
+                      )}
+                    </div>
+                  )}
+                  {/* Row 3: runner rule */}
+                  <div style={{ fontSize: 11, color: '#60a5fa', marginBottom: 3 }}>
+                    {runnerLines[0]}
+                  </div>
+                  {/* Row 4: touch / window note */}
+                  <div style={{ fontSize: 11, color: '#475569' }}>{touchNote}</div>
+                </div>
+              );
+            })()}
+            {/* ── END PLAYBOOK STRIP ─────────────────────────────────────── */}
+
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
               {/* Direction + label + stable fire time from DB */}
               <div style={{ minWidth: 160 }}>
@@ -18595,6 +18684,71 @@ function SessionStatusBar({ conf, onStateChange }) {
                       REDUCED CONVICTION
                     </span>
                   )}
+                  {sc2.eliteZone && (
+                    <span style={{ fontSize: 11, fontWeight: 800, color: '#22c55e', background: 'rgba(34,197,94,0.18)', border: '1px solid rgba(34,197,94,0.6)', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      ⚡ TURBULENT + WITH IB · 78% WR
+                    </span>
+                  )}
+                  {sc2.t2 != null && (
+                    <span style={{ fontSize: 11, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.13)', border: '1px solid rgba(251,191,36,0.55)', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      T2 RUNNER · {Math.round(sc2.t2)}
+                    </span>
+                  )}
+                  {sc2.dayTypeEdge && (
+                    <span style={{ fontSize: 11, fontWeight: sc2.dayTypeEdge.strong ? 800 : 700, color: '#a78bfa', background: 'rgba(167,139,250,0.12)', border: `1px solid rgba(167,139,250,${sc2.dayTypeEdge.strong ? '0.6' : '0.35'})`, borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      {sc2.dayTypeEdge.dayType} EDGE · {Math.round((sc2.dayTypeEdge.wr ?? 0) * 100)}% WR
+                    </span>
+                  )}
+                  {sc2.dayTypeWarn && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      ⚠ {sc2.dayTypeWarn.dayType}: {Math.round((sc2.dayTypeWarn.wr ?? 0) * 100)}% WR
+                    </span>
+                  )}
+                  {sc2.streakWarn && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      ⛔ {sc2.streakWarn.losses}× LOSS STREAK
+                    </span>
+                  )}
+                  {sc2.streakBoost && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#4ade80', background: 'rgba(74,222,128,0.10)', border: '1px solid rgba(74,222,128,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      🔥 {sc2.streakBoost.wins}× WIN STREAK
+                    </span>
+                  )}
+                  {sc2.confluencePairPartner && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.12)', border: '1px solid rgba(129,140,248,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      ⊕ PAIR: {sc2.confluencePairPartner}
+                    </span>
+                  )}
+                  {sc2.openVsPriorValue === 'INSIDE_VALUE' && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#f97316', background: 'rgba(249,115,22,0.12)', border: '1px solid rgba(249,115,22,0.45)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      ⚠ INSIDE VALUE
+                    </span>
+                  )}
+                  {sc2.buyersAtLevel && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.4)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      BUYERS HERE
+                    </span>
+                  )}
+                  {sc2.sellersAtLevel && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.4)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      SELLERS HERE
+                    </span>
+                  )}
+                  {sc2.tier && (() => {
+                    const tierColors = {
+                      PRIME:    { bg: 'rgba(34,197,94,0.15)',  border: 'rgba(34,197,94,0.5)',  text: '#22c55e' },
+                      SOLID:    { bg: 'rgba(96,165,250,0.12)', border: 'rgba(96,165,250,0.4)', text: '#60a5fa' },
+                      MARGINAL: { bg: 'rgba(148,163,184,0.1)', border: 'rgba(148,163,184,0.3)', text: '#94a3b8' },
+                      WEAK:     { bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.4)', text: '#f59e0b' },
+                      KILL:     { bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.4)',  text: '#ef4444' },
+                    };
+                    const tc = tierColors[sc2.tier] || tierColors.MARGINAL;
+                    return (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: tc.text, background: tc.bg, border: `1px solid ${tc.border}`, borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                        {sc2.tier}
+                      </span>
+                    );
+                  })()}
                   <span style={{ fontSize: 13, fontWeight: 700, color: contractsRec.convColor, background: `${contractsRec.convColor}1a`, border: `1px solid ${contractsRec.convColor}50`, borderRadius: 4, padding: '1px 5px', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
                     {contractsRec.contracts} CONTRACT{contractsRec.contracts > 1 ? 'S' : ''} MAX
                   </span>

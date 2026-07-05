@@ -1,0 +1,146 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-07-05  (2026-06-29 – 2026-07-05)
+Generated   : 2026-07-05T22:00:09.679Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 3
+Total P&L     : -$787.50
+Daily avg     : -$262.50
+Win days      : 1 / 3 (33%)
+Best day      : 2026-07-01  +$399.00
+Worst day     : 2026-07-02  -$807.00
+
+  2026-06-30  -$379.50
+  2026-07-01  +$399.00
+  2026-07-02  -$807.00
+
+SETUP STATISTICS
+----------------------------------------
+5D_OR_MID_FADE_LONG            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+5D_OR_MID_FADE_SHORT           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$69.00
+A_DOWN_WEAK                    fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+BRACKET_BREAKOUT_LONG          fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+CAM_R4_FADE_LONG               fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$432.20
+CAM_R4_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved | avg +$0.00
+CAM_S3_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$196.25
+CAM_S4_FADE_LONG               fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$198.15
+C_PAIRED_LONG                  fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+C_PAIRED_SHORT                 fired: 2 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+C_STANDALONE_UP                fired: 2 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+FLOOR_PIVOT_FADE_SHORT         fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+FLOOR_R1_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+FLOOR_R1_FADE_SHORT            fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+FLOOR_S1_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$217.50
+FLOOR_S1_FADE_SHORT            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$217.50
+IB_BULLISH                     fired: 4 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$33.00
+IB_HIGH_FADE_LONG              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$146.90
+IB_HIGH_FADE_SHORT             fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg -$94.10
+IB_LOW_FADE_LONG               fired: 3 | wins: 2 | losses: 0 | expired: 1 | wr: 100% | avg +$122.00
+IB_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+IB_MID_SCALP_FADE_LONG         fired: 2 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$140.00
+IB_MID_SCALP_FADE_SHORT        fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$103.63
+MPP_FADE_LONG                  fired: 3 | wins: 2 | losses: 0 | expired: 1 | wr: 100% | avg +$133.33
+OPEN_DRIVE_LONG                fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$111.00
+OR_HIGH_FADE_LONG              fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$51.00
+OR_HIGH_FADE_SHORT             fired: 4 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg -$7.67
+OR_LOW_FADE_LONG               fired: 3 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$127.00
+OR_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+OR_MID_AFTER_IB_FADE_SHORT     fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$183.67
+PD_IB_HIGH_FADE_SHORT          fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$195.50
+PD_IB_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$181.00
+PD_IB_MID_FADE_SHORT           fired: 2 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$181.00
+PD_OR_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+PD_OR_MID_FADE_SHORT           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+PD_POC_FADE_LONG               fired: 3 | wins: 1 | losses: 0 | expired: 2 | wr: 100% | avg +$212.50
+PD_POC_FADE_SHORT              fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50% | avg -$51.00
+PD_SESSION_MID_FADE_SHORT      fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$220.00
+PD_VAH_FADE_SHORT              fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$74.33
+PD_VAL_FADE_LONG               fired: 2 | wins: 0 | losses: 0 | expired: 2 | wr: unresolved
+PD_VAL_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$152.63
+STOP_SWEEP_LONG                fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$59.50
+STOP_SWEEP_SHORT               fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$58.50
+TRT_SHORT                      fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+VWAP_MAGNET_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$61.00
+WEEKLY_VWAP_FADE_SHORT         fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$200.00
+WPP_FADE_LONG                  fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$161.25
+WPP_FADE_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$398.15
+WR1_FADE_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$313.15
+ZONE_EDGE_FADE                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$7.00
+
+DYNAMIC MINED EDGES (Statistical shifts)
+----------------------------------------
+  🚀 Active Boosters (Size Up / Confirm):
+    · TRT_SHORT                    | Thursday               | WR: 60.0% vs Base: 33.3% (+26.7%) (p=0.0404)
+    · VALUE_AREA_RESPONSIVE_SHORT  | Thursday               | WR: 50.0% vs Base: 27.1% (+22.9%) (p=0.0136)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · BRACKET_BREAKOUT_LONG        | Tight OR               | WR: 35.7% vs Base: 17.2% (+18.5%) (p=0.0376)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+
+  🛑 Active Drags (Size Down / Filter):
+    · TRT_SHORT                    | Monday                 | WR: 0.0% vs Base: 33.3% (-33.3%) (p=0.0104)
+    · C_STANDALONE_UP              | Wide OR                | WR: 23.8% vs Base: 37.1% (-13.3%) (p=0.0078)
+    · BRACKET_BREAKOUT_LONG        | Normal OR              | WR: 8.6% vs Base: 17.2% (-8.6%) (p=0.0447)
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 3 day(s) | C confirm: 3 (100%)
+A Down fired  : 2 day(s) | C confirm: 2 (100%)
+Net score Δ   : +4
+Day types     : TREND: 1, BALANCE: 3, TURBULENT: 1
+
+  2026-06-29  score: -4  A↓ C↓  [TREND]
+  2026-06-30  score: +4  A↑ C↑  [BALANCE]
+  2026-07-01  score: +4  A↑ C↑  [BALANCE]
+  2026-07-02  score: +4  A↑ C↑  [TURBULENT]
+  2026-07-03  score: -4  A↓ C↓  [BALANCE]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 45
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills:  45 | wr: 44% | avg fill pnl: -$18.08
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+No coaching data this week.
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$787.50 on 3 trading day(s)
+Low win-day rate: 1/3 (33%)
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-07-05 Analysis
+
+The negative week on only 3 trading days (likely a holiday-shortened week around July 4th) with a 33% win-day rate suggests the trader was likely fighting low-volume, choppy conditions where ACD levels were prone to false breakouts and failed follow-through. A single winning day unable to offset two losing days points to asymmetric loss management — losers are being held too long or sized too aggressively relative to winners. The holiday-week environment in NQ/ES typically compresses ranges and produces noise-driven moves that punish momentum-based ACD entries. The net loss of ~$787.50 is manageable in dollar terms but the behavioral pattern of 1-of-3 is a red flag if it continues into a full trading week.
+
+**Actionable adjustment:** Next week, require confirmation of OR range expansion AND volume validation before committing to an A-up or A-down entry — specifically, do not take any ACD level break in the first 30 minutes of the session unless NQ volume is tracking at least 10% above the 5-day average at that time point, filtering out the low-conviction tape that likely caused the failed setups this week.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+## WEEKLY ASSESSMENT: 2026-06-29 to 2026-07-05
+
+**WEEK SUMMARY:**
+Three trading days produced -$787.50 across 2 losing days and 1 winning day. Zero of 45 fills were annotated, making process evaluation nearly impossible. Signal performance was poor: A_DOWN misfired Monday (70% historical rate, NEUTRAL bias), and A_UP misfired Tuesday and Wednesday (63% historical rate, NEUTRAL bias both days).
+
+**STRONGEST MOMENT:**
+Sitting out June 29 was defensible — A_DOWN fired against a 262-point rally and all three high-probability shorts (PD_POC, FLOOR_R1, PD_VAH, 77–85% rates) stopped out anyway. The data confirms avoidance was the right outcome that day, even if intent is unverifiable without a log entry.
+
+**BIGGEST LEAK:**
+Zero annotation across 45 fills, five sessions, four distinct signal outcomes, and a high-probability short cascade on July 2 (IB_HIGH_FADE_SHORT 75%, FLOOR_R1_FADE_SHORT 70%, PD_VAH_FADE_SHORT 72%, FLOOR_S1_FADE_SHORT 77%) — all resolved TARGET_HIT without a single note. This is a total pattern library failure that repeats every session this week.
+
+**PROCESS GRADE: D**
+One verifiable winning trade exists with no fill ID, no entry price, no stop logged, and "gut_read" as a tag — none of that is assessable or repeatable against the REACTION 74% win-rate framework.
+
+**FOCUS FOR NEXT WEEK:**
+Annotate every fill *before* end of session — entry price, level, trigger, stop. Target: 45 of 45.
+
+============================================================

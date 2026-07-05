@@ -6,6 +6,11 @@
 import express from 'express';
 import { query } from '../db.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { readFileSync, existsSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __dirname_kl = dirname(fileURLToPath(import.meta.url));
 
 const router = express.Router();
 
@@ -1194,6 +1199,231 @@ router.get('/level-approach/today', async (req, res) => {
     });
   } catch (err) {
     console.error('level-approach/today error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/confluence-near-price
+// Returns confluence pairs where both levels are within 15pt of current price.
+// Uses confluence_pairs_latest.json (written by context_analysis.js weekly).
+// Applies today's day_type context to surface the best EV estimate for the session.
+router.get('/confluence-near-price', async (req, res) => {
+  try {
+    const PROX_PT = 15;
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+    // Load pairs JSON
+    const pairsPath = join(__dirname_kl, '../../scripts/output/confluence_pairs_latest.json');
+    if (!existsSync(pairsPath)) return res.json({ pairs: [], error: 'confluence_pairs_latest.json not found — run context_analysis.js' });
+    const pairsData = JSON.parse(readFileSync(pairsPath, 'utf8'));
+    const allPairs = pairsData.pairs || [];
+
+    // Current price (latest bar, any time)
+    const priceRes = await query(`
+      SELECT close::float AS price FROM price_bars_primary
+      WHERE ts::date <= $1 ORDER BY ts DESC LIMIT 1
+    `, [todayET]);
+    const currentPrice = priceRes.rows[0]?.price ?? null;
+    if (!currentPrice) return res.json({ pairs: [], current_price: null, note: 'no price bars available' });
+
+    // Today's level_prices (fallback to yesterday if today not yet computed)
+    const levelsRes = await query(`
+      SELECT level_name, price::float
+      FROM level_prices
+      WHERE trade_date = (
+        SELECT MAX(trade_date) FROM level_prices WHERE trade_date <= $1 AND price IS NOT NULL
+      ) AND price IS NOT NULL
+    `, [todayET]);
+    const levelMap = {};
+    for (const r of levelsRes.rows) levelMap[r.level_name] = r.price;
+
+    // Today's day_type for context-aware EV selection
+    const dtRes = await query(`
+      SELECT day_type FROM acd_daily_log WHERE trade_date = $1 LIMIT 1
+    `, [todayET]);
+    const dayType = dtRes.rows[0]?.day_type ?? null;
+    const dow = ['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date(todayET + 'T12:00:00').getDay()];
+
+    // Find pairs where both levels are within PROX_PT of current price
+    const nearby = [];
+    for (const p of allPairs) {
+      const p1 = levelMap[p.level1];
+      const p2 = levelMap[p.level2];
+      if (!p1 || !p2) continue;
+      if (Math.abs(p1 - currentPrice) > PROX_PT) continue;
+      if (Math.abs(p2 - currentPrice) > PROX_PT) continue;
+
+      // Pick best contextual EV: day_type-specific (N≥10) > all-time
+      let contextEv = p.ev_all, contextWr = p.wr_all, contextN = p.n_all, contextLabel = 'all-time';
+      if (dayType) {
+        const dtRow = (p.dt_breakdown || []).find(d => d.day_type === dayType);
+        if (dtRow && dtRow.n >= 10) {
+          contextEv = dtRow.ev; contextWr = dtRow.wr; contextN = dtRow.n; contextLabel = dayType;
+        }
+      }
+
+      // Best/worst DOW note
+      const dowNote = p.best_dow?.dow === dow ? `best DOW (${dow}: ${p.best_dow.wr}% WR)`
+        : p.worst_dow?.dow === dow ? `worst DOW (${dow}: ${p.worst_dow.wr}% WR)` : null;
+
+      nearby.push({
+        pair:         p.pair,
+        level1:       p.level1,  price1: p1,
+        level2:       p.level2,  price2: p2,
+        dist1:        parseFloat(Math.abs(p1 - currentPrice).toFixed(1)),
+        dist2:        parseFloat(Math.abs(p2 - currentPrice).toFixed(1)),
+        ev:           parseFloat((contextEv ?? p.ev_all ?? 0).toFixed(2)),
+        wr:           parseFloat((contextWr ?? p.wr_all ?? 0).toFixed(1)),
+        n:            contextN ?? p.n_all,
+        context:      contextLabel,
+        recommendation: p.recommendation,
+        dow_note:     dowNote,
+      });
+    }
+
+    // Sort by EV desc, return top 10
+    nearby.sort((a, b) => b.ev - a.ev);
+
+    res.json({
+      current_price: currentPrice,
+      day_type:      dayType,
+      dow,
+      proximity_pt:  PROX_PT,
+      pairs_checked: allPairs.length,
+      pairs:         nearby.slice(0, 10),
+      generated:     pairsData.generated,
+    });
+  } catch (err) {
+    console.error('confluence-near-price error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/volatility-forecast
+// Pre-market next-session volatility prediction from two strongest features:
+//   prior day type + overnight range width (vs rolling percentile thresholds)
+// Conditional probabilities are computed live from acd_daily_log history —
+// no hardcoded lookup table; auto-updates as new days accumulate.
+router.get('/volatility-forecast', async (req, res) => {
+  try {
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+    // 1. Prior session day_type
+    const prevDayRes = await query(`
+      SELECT trade_date::text, day_type
+      FROM acd_daily_log
+      WHERE trade_date < $1 AND day_type IS NOT NULL
+      ORDER BY trade_date DESC LIMIT 1
+    `, [todayET]);
+    const prevDay = prevDayRes.rows[0];
+    const prevDayType = prevDay?.day_type ?? null;
+
+    // 2. Overnight range for today (bars between yesterday 16:00 and today 09:30 ET)
+    const onRes = await query(`
+      SELECT MAX(high)::float - MIN(low)::float AS overnight_range
+      FROM price_bars_primary
+      WHERE ts AT TIME ZONE 'America/New_York'
+            BETWEEN ($1::date - INTERVAL '1 day')::timestamp + INTERVAL '16 hours'
+                AND $1::date::timestamp + INTERVAL '9 hours 30 minutes'
+    `, [todayET]);
+    const overnightRange = onRes.rows[0]?.overnight_range ?? null;
+
+    // 3. Build conditional probability table from historical data (live query, self-updating)
+    const condRes = await query(`
+      WITH all_days AS (
+        SELECT d.trade_date, d.day_type AS next_dt, dp.day_type AS prev_dt,
+               (onh.price - onl.price)::float AS on_range
+        FROM acd_daily_log d
+        JOIN level_prices onh  ON onh.trade_date = d.trade_date  AND onh.level_name = 'ONH'
+        JOIN level_prices onl  ON onl.trade_date = d.trade_date  AND onl.level_name = 'ONL'
+        JOIN LATERAL (
+          SELECT day_type FROM acd_daily_log
+          WHERE trade_date < d.trade_date AND day_type IS NOT NULL
+          ORDER BY trade_date DESC LIMIT 1
+        ) dp ON TRUE
+        WHERE d.day_type IS NOT NULL AND onh.price IS NOT NULL AND onl.price IS NOT NULL
+      ),
+      pcts AS (
+        SELECT percentile_cont(0.33) WITHIN GROUP (ORDER BY on_range) AS p33,
+               percentile_cont(0.67) WITHIN GROUP (ORDER BY on_range) AS p67
+        FROM all_days
+      ),
+      bucketed AS (
+        SELECT next_dt, prev_dt,
+               CASE WHEN on_range < p33 THEN 'NARROW' WHEN on_range < p67 THEN 'MEDIUM' ELSE 'WIDE' END AS on_tier,
+               p33, p67
+        FROM all_days CROSS JOIN pcts
+      )
+      SELECT prev_dt, on_tier,
+             p33, p67,
+             COUNT(*) AS n,
+             ROUND(COUNT(CASE WHEN next_dt='BALANCE'   THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_balance,
+             ROUND(COUNT(CASE WHEN next_dt='TREND'     THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_trend,
+             ROUND(COUNT(CASE WHEN next_dt='TURBULENT' THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_turbulent
+      FROM bucketed GROUP BY prev_dt, on_tier, p33, p67
+      UNION ALL
+      SELECT prev_dt, 'ALL' AS on_tier, p33, p67,
+             COUNT(*) AS n,
+             ROUND(COUNT(CASE WHEN next_dt='BALANCE'   THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_balance,
+             ROUND(COUNT(CASE WHEN next_dt='TREND'     THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_trend,
+             ROUND(COUNT(CASE WHEN next_dt='TURBULENT' THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_turbulent
+      FROM bucketed GROUP BY prev_dt, p33, p67
+      UNION ALL
+      SELECT 'ALL' AS prev_dt, 'ALL' AS on_tier, p33, p67,
+             COUNT(*) AS n,
+             ROUND(COUNT(CASE WHEN next_dt='BALANCE'   THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_balance,
+             ROUND(COUNT(CASE WHEN next_dt='TREND'     THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_trend,
+             ROUND(COUNT(CASE WHEN next_dt='TURBULENT' THEN 1 END)::numeric / NULLIF(COUNT(*),0), 3) AS p_turbulent
+      FROM bucketed GROUP BY p33, p67
+    `);
+
+    const lookup = {};
+    let p33on = 141, p67on = 238;
+    for (const r of condRes.rows) {
+      if (r.p33) { p33on = parseFloat(r.p33); p67on = parseFloat(r.p67); }
+      if (r.n >= 8) lookup[`${r.prev_dt}|${r.on_tier}`] = [parseFloat(r.p_balance), parseFloat(r.p_trend), parseFloat(r.p_turbulent)];
+    }
+
+    const onTier = overnightRange == null ? null
+      : overnightRange < p33on ? 'NARROW'
+      : overnightRange < p67on ? 'MEDIUM' : 'WIDE';
+
+    const key         = `${prevDayType ?? 'ALL'}|${onTier ?? 'ALL'}`;
+    const fallbackKey = `${prevDayType ?? 'ALL'}|ALL`;
+    const [pBal, pTrend, pTurb] = lookup[key] ?? lookup[fallbackKey] ?? lookup['ALL|ALL'] ?? [0.62, 0.20, 0.19];
+
+    const predicted = pBal >= pTrend && pBal >= pTurb ? 'BALANCE'
+      : pTrend >= pTurb ? 'TREND' : 'TURBULENT';
+    const volatility = pTrend + pTurb;
+    const volatileFlag = volatility >= 0.55 ? 'HIGH'
+      : volatility >= 0.42 ? 'ELEVATED' : 'NORMAL';
+
+    // Driver sentence
+    const drivers = [];
+    if (prevDayType === 'TURBULENT') drivers.push('prior TURBULENT session (strongest predictor)');
+    else if (prevDayType === 'TREND') drivers.push('prior TREND session');
+    else if (prevDayType === 'BALANCE') drivers.push('prior BALANCE session (suppresses volatility)');
+    if (onTier === 'WIDE') drivers.push(`wide overnight range (${overnightRange?.toFixed(0)}pt ≥ ${p67on.toFixed(0)}pt p67)`);
+    else if (onTier === 'NARROW') drivers.push(`narrow overnight range (${overnightRange?.toFixed(0)}pt < ${p33on.toFixed(0)}pt p33)`);
+    else if (onTier === 'MEDIUM' && overnightRange) drivers.push(`medium overnight range (${overnightRange.toFixed(0)}pt)`);
+
+    res.json({
+      date: todayET,
+      prev_day: { date: prevDay?.trade_date, type: prevDayType },
+      overnight_range: overnightRange ? parseFloat(overnightRange.toFixed(1)) : null,
+      on_tier: onTier,
+      on_thresholds: { p33: parseFloat(p33on.toFixed(0)), p67: parseFloat(p67on.toFixed(0)) },
+      probabilities: {
+        BALANCE:   parseFloat((pBal * 100).toFixed(0)),
+        TREND:     parseFloat((pTrend * 100).toFixed(0)),
+        TURBULENT: parseFloat((pTurb * 100).toFixed(0)),
+      },
+      predicted,
+      volatility_flag: volatileFlag,
+      drivers,
+    });
+  } catch (err) {
+    console.error('volatility-forecast error:', err);
     res.status(500).json({ error: err.message });
   }
 });

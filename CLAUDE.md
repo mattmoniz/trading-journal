@@ -24,6 +24,9 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 - Backtest scripts live in `scripts/`, named `backtest_<hypothesis>.js`, run manually via `node`, and typically write findings to the `performance_audit` table. They are not imported by the running app.
 - Sierra Chart TAL data is stored as JSONB under `custom_fields->'sierra_data'` rather than typed columns — this lets new TAL columns appear without a migration and lets old Activity Log format rows coexist.
 - Account filter state is lifted to `App.jsx` and shared between Calendar and Dashboard — don't duplicate it locally in a component.
+- **Server-autonomous detection:** `server/index.js` runs a `setInterval` every 60s during 9:30–4 PM ET Mon–Fri calling `GET /api/acd/today`. This is intentional — it makes level fade detection independent of browser clients. Do not remove it. The INSERT in `acd.js` is `ON CONFLICT DO NOTHING` so concurrent client polls don't double-write.
+- **Level fade detection gate:** `acd.js` line ~3838 checks `allRthBarsRow.rows.length >= 3` (not 60). IB-specific levels (`ibHighToday`/`ibLowToday`, `IB_MID_SCALP_FADE`, `OR_MID_AFTER_IB_FADE`) self-gate via `etMinNow >= 630` — do not restore the 60-bar gate.
+- **sizeMultiplier is an IIFE** inside the `levelScalpSetup` object in `acd.js`. All sizing adjustments live there. When adding a new factor: (a) research backs it (N≥20), (b) add to the IIFE, (c) update `AlphaEngineOverview.jsx`, (d) document in OPEN_THREADS.
 
 ## Collaboration
 
@@ -36,8 +39,13 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 
 - Conviction/session read logic: `server/services/caseEngine.js`
 - Opening range / day-type: `server/services/acdService.js` + `server/routes/acd.js`
+- **Level fade alpha engine** (size multiplier stack, suppression logic, keepLevels, sizeMultiplier IIFE): `server/routes/acd.js` lines ~3830–4430. Gate is 3 bars (~9:34 AM). Server polls every 60s via `setInterval` in `server/index.js`.
+- **Alpha Engine overview page**: Edge → Alpha Engine tab (`src/components/dashboard/AlphaEngineOverview.jsx`) — human-readable summary of every system component, size multiplier factor, suppressed setup, and pending road map.
 - Shared query helpers (NL30/NL10, gap drift, prior-week range): `server/services/queries.js` — check here before writing a new one
 - Risk guardrails (DLL, profit-lock, cooldown): `server/routes/dll.js`, `profitLock.js`, `cooldown.js`
+- Optimal stops/targets (data-derived, weekly recompute): `performance_audit` rows with `signal_type='OPTIMAL_STOP'`; computed by `scripts/update_optimal_stops.mjs`; read in acd.js as `liveStats._opt[setup_type]`
+- Day-type per-setup edge (SIZE_UP/SUPPRESS flags): `performance_audit` rows with `signal_type='DAY_TYPE_ALPHA'`; computed by `scripts/backtest_day_type_alpha.js` Sunday 9:10 PM; read in acd.js as `liveStats._dta[setup_type-day_type]`
+- Nightly latency audit results: `performance_audit` rows with `signal_type='LATENCY_AUDIT'`; alerts in `scratch/gemini_alerts.txt`
 - Known bugs / tech debt: [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)
 - Pending decisions, unconfirmed proposals, stale-stats findings, unfinished multi-session work: [docs/OPEN_THREADS.md](docs/OPEN_THREADS.md) — **check this at the start of any session**, especially after a context clear.
 

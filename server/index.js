@@ -691,6 +691,54 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[system_backtest] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 9:10 PM Sunday: day-type × setup_type significance matrix (DAY_TYPE_ALPHA rows)
+  // 5:15 PM ET nightly (Mon–Fri): setup latency audit for today's fades.
+  // Flags CRITICAL (>10min lag) and RETROACTIVE (early-touch backfill) setups.
+  // Writes LATENCY_AUDIT row to performance_audit; appends to scratch/gemini_alerts.txt on critical.
+  cron.schedule('15 17 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('LATENCY_AUDIT', async () => {
+        const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/audit_setup_latency.mjs ${todayET}`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[latency_audit] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // Runs after backtest_unified (9:00 PM) so any new resolved trades are included.
+  cron.schedule('10 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('DAY_TYPE_ALPHA', async () => {
+        execSync('node scripts/backtest_day_type_alpha.js', { cwd: process.cwd(), timeout: 120000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[day_type_alpha] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 6:00 AM Sunday: context edge analysis + confluence pair backtest (writes CONTEXT_ANALYSIS to performance_audit + confluence_pairs_latest.json)
+  cron.schedule('0 6 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('CONTEXT_ANALYSIS', async () => {
+        execSync('node scripts/context_analysis.js', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[context_analysis] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 8:30 PM Sunday: setup anticipation recalibration (writes SETUP_ANTICIPATION to performance_audit)
+  cron.schedule('30 20 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('SETUP_ANTICIPATION', async () => {
+        execSync('node scripts/backtest_level_approach.js', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[setup_anticipation] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // 9:30 PM Sunday: compute MGI levels for today and tag any new BP fills
   cron.schedule('30 21 * * 0', async () => {
     try {
@@ -881,6 +929,24 @@ httpServer.listen(PORT, () => {
       }
     } catch (_) {}
   }, 3600000); // every hour
+
+  // Server-autonomous detection: poll /api/acd/today every 60s during RTH (9:30-4 PM ET, Mon-Fri).
+  // Triggers the fade detection INSERT (idempotent — ON CONFLICT DO NOTHING) without waiting for a client.
+  // Fixes the 70% of setups that previously only fired at 10:30 AM via the IB backfill catch-up.
+  setInterval(async () => {
+    try {
+      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const day = etNow.getDay();
+      if (day === 0 || day === 6) return; // skip weekends
+      const etMin = etNow.getHours() * 60 + etNow.getMinutes();
+      if (etMin < 570 || etMin >= 960) return; // 9:30–4:00 PM ET only
+      const res = await fetch(`http://localhost:${PORT}/api/acd/today`, { signal: AbortSignal.timeout(55000) });
+      if (!res.ok) console.error(`[detection-poll] ${res.status} from /api/acd/today`);
+      else await res.text(); // drain body
+    } catch (err) {
+      if (err.name !== 'TimeoutError') console.error('[detection-poll] Error:', err.message);
+    }
+  }, 60000);
 
   // Auto-backfill ACD history from price bars if the log is empty
   setTimeout(autoBulkBackfillIfEmpty, 3000);

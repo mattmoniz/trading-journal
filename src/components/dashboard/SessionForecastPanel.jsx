@@ -89,6 +89,9 @@ export default function SessionForecastPanel({ date }) {
   const [forecast, setForecast] = useState(null);
   const [edgeData, setEdgeData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [volatilityForecast, setVolatilityForecast] = useState(null);
+  const [setupAnticipation, setSetupAnticipation] = useState(null);
+  const [confluencePairs, setConfluencePairs] = useState(null);
 
   const [scalpPlaybook, setScalpPlaybook] = useState(null);
   const [liveCtx, setLiveCtx] = useState(null);
@@ -100,11 +103,17 @@ export default function SessionForecastPanel({ date }) {
       fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/morning-brief/scalp-playbook/${date}`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/morning-brief/live-session-context/${date}`).then(r => r.json()).catch(() => null),
-    ]).then(([fc, ed, sp, lc]) => {
+      fetch(`${API_URL}/volatility-forecast`).then(r => r.json()).catch(() => null),
+      fetch(`${API_URL}/level-approach/today`).then(r => r.json()).catch(() => null),
+      fetch(`${API_URL}/confluence-near-price`).then(r => r.json()).catch(() => null),
+    ]).then(([fc, ed, sp, lc, vf, sa, cp]) => {
       setForecast(fc);
       setEdgeData(ed);
       setScalpPlaybook(sp);
       setLiveCtx(lc?.noData ? null : lc);
+      setVolatilityForecast(vf?.error ? null : vf);
+      setSetupAnticipation(sa?.setups?.length ? sa : null);
+      setConfluencePairs(cp?.pairs?.length ? cp : null);
     }).finally(() => setLoading(false));
   }, [date]);
 
@@ -197,6 +206,156 @@ export default function SessionForecastPanel({ date }) {
           {priorDayChar?.label === 'NONTREND' && <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 4 }}>{priorDayChar.note}</div>}
         </div>
       )}
+
+      {/* Volatility forecast */}
+      {volatilityForecast && (() => {
+        const vf = volatilityForecast;
+        const flagColor = vf.volatility_flag === 'HIGH' ? '#ef4444' : vf.volatility_flag === 'ELEVATED' ? '#f59e0b' : '#22c55e';
+        const flagBg    = vf.volatility_flag === 'HIGH' ? 'rgba(239,68,68,0.1)' : vf.volatility_flag === 'ELEVATED' ? 'rgba(245,158,11,0.1)' : 'rgba(34,197,94,0.1)';
+        const probs = vf.probabilities || {};
+        return (
+          <div style={{ ...cardSt, borderLeft: `3px solid ${flagColor}`, background: flagBg, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+              <div style={{ ...labelSt, marginBottom: 0 }}>Session Volatility</div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: flagColor, background: `${flagColor}22`, padding: '1px 7px', borderRadius: 10 }}>
+                {vf.volatility_flag}
+              </span>
+              <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>predicted: <strong style={{ color: '#e2e8f0' }}>{vf.predicted}</strong></span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: vf.drivers?.length ? 6 : 0 }}>
+              {['BALANCE','TREND','TURBULENT'].map(dt => {
+                const p = probs[dt] ?? 0;
+                const c = dt === 'BALANCE' ? '#60a5fa' : dt === 'TREND' ? '#22c55e' : '#f59e0b';
+                return (
+                  <div key={dt} style={{ flex: 1, textAlign: 'center', background: 'rgba(15,23,42,0.5)', borderRadius: 4, padding: '4px 0' }}>
+                    <div style={{ fontSize: 11, color: '#94a3b8' }}>{dt}</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: c }}>{p}%</div>
+                  </div>
+                );
+              })}
+            </div>
+            {vf.drivers?.length > 0 && (
+              <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>
+                {vf.drivers.join(' · ')}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Day-type sizing guidance — derived from alpha analysis (Jul 2025–Jul 2026, N=2784) */}
+      {volatilityForecast && (() => {
+        const predicted = volatilityForecast.predicted;
+        const trendProb = volatilityForecast.probabilities?.TREND ?? 0;
+        const turbProb  = volatilityForecast.probabilities?.TURBULENT ?? 0;
+        if (predicted === 'TREND' || trendProb >= 35) {
+          return (
+            <div style={{ ...cardSt, borderLeft: '3px solid #ef4444', background: 'rgba(239,68,68,0.08)', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#ef4444' }}>⚠ FADE EDGE OFF TODAY</span>
+                <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>TREND day</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6 }}>
+                Fade setups lose <strong style={{ color: '#ef4444' }}>−$17.5K/year</strong> on TREND days (54% WR vs 61% break-even).
+                Counter-trend fades suppressed after IB close.
+              </div>
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                Play: wait for IB break → trade WITH the trend (IB_BULLISH/IB_BEARISH). Fade only WITH trend direction.
+              </div>
+            </div>
+          );
+        }
+        if (predicted === 'TURBULENT' || turbProb >= 35) {
+          return (
+            <div style={{ ...cardSt, borderLeft: '3px solid #f59e0b', background: 'rgba(245,158,11,0.06)', marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>⚠ TURBULENT SIGNAL</span>
+                <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>20% classifier accuracy</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6 }}>
+                IF confirmed: fade setups perform best at <strong style={{ color: '#f59e0b' }}>71.5% WR</strong>, $47 EV/trade.
+                But 4 in 5 TURBULENT calls are wrong — wait for confirmation before sizing up.
+              </div>
+              <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                Confirm with: wide wicks on RTH open, failed breakout attempts, expanding range. Then full size at first touch, runners to 2×T1.
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })()}
+
+      {/* Setup anticipation */}
+      {setupAnticipation && (() => {
+        const setups = setupAnticipation.setups.slice(0, 6);
+        return (
+          <div style={{ ...cardSt, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ ...labelSt, marginBottom: 0 }}>Setup Anticipation</div>
+              {setupAnticipation.day_type && <span style={{ fontSize: 11, color: '#94a3b8' }}>{setupAnticipation.day_type} · {setupAnticipation.dow}</span>}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
+              {setups.map(s => {
+                const fireColor = s.fire_rate >= 0.25 ? '#22c55e' : s.fire_rate >= 0.12 ? '#f59e0b' : '#64748b';
+                const wrColor   = s.cond_wr   >= 0.75 ? '#22c55e' : s.cond_wr   >= 0.60 ? '#f59e0b' : '#ef4444';
+                const st   = s.setup || s.setup_type || '';
+                const name = st.replace(/_FADE_?(LONG|SHORT)?$/, '').replace(/_/g, ' ');
+                const dir  = st.endsWith('_LONG') ? '↑' : st.endsWith('_SHORT') ? '↓' : '';
+                return (
+                  <div key={st} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, paddingBottom: 3, borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
+                    <span style={{ color: '#cbd5e1' }}>{dir} {name}</span>
+                    <span style={{ display: 'flex', gap: 8, color: '#94a3b8' }}>
+                      <span style={{ color: fireColor }}>{(s.fire_rate * 100).toFixed(0)}%</span>
+                      <span style={{ color: wrColor }}>{(s.cond_wr * 100).toFixed(0)}%WR</span>
+                      <span style={{ color: '#e2e8f0' }}>${s.expected_ev?.toFixed(0)}</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 10, color: '#475569', marginTop: 5 }}>fire% · WR · exp$/session</div>
+          </div>
+        );
+      })()}
+
+      {/* Confluence near price */}
+      {confluencePairs && (() => {
+        const tradeable = confluencePairs.pairs.filter(p => p.ev > 0).slice(0, 5);
+        if (!tradeable.length) return null;
+        return (
+          <div style={{ ...cardSt, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ ...labelSt, marginBottom: 0 }}>Confluence Near Price</div>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>within 15pt · {confluencePairs.current_price?.toFixed(0)}</span>
+              {confluencePairs.day_type && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>{confluencePairs.day_type}</span>}
+            </div>
+            {tradeable.map(p => {
+              const evColor = p.ev >= 40 ? '#22c55e' : p.ev >= 15 ? '#f59e0b' : '#94a3b8';
+              const wrColor = p.wr >= 75 ? '#22c55e' : p.wr >= 60 ? '#f59e0b' : '#94a3b8';
+              const recColor = p.recommendation === 'TRADE' ? '#22c55e' : p.recommendation === 'AVOID' ? '#ef4444' : '#94a3b8';
+              return (
+                <div key={p.pair} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, paddingBottom: 4, borderBottom: '1px solid rgba(51,65,85,0.3)', marginBottom: 4 }}>
+                  <div>
+                    <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level1}</span>
+                    <span style={{ color: '#475569', margin: '0 4px' }}>+</span>
+                    <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level2}</span>
+                    {p.dow_note && <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>★ {p.dow_note}</span>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                    <span style={{ color: '#64748b' }}>N={p.n}</span>
+                    <span style={{ color: wrColor }}>{p.wr}%</span>
+                    <span style={{ color: evColor }}>${p.ev.toFixed(0)}</span>
+                    <span style={{ color: recColor, fontSize: 10, fontWeight: 700 }}>{p.recommendation}</span>
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
+              {confluencePairs.day_type ? `${confluencePairs.day_type}-adjusted where N≥10` : 'all-time'} · pairs updated {confluencePairs.generated}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Balance zone + session character */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>

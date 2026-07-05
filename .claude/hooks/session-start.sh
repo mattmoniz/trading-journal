@@ -58,7 +58,7 @@ const lines = [
   '   ./start.sh',
   '',
   '7. WEEKLY BACKTEST RE-RUN (or manual)',
-  '   node scripts/backtest_unified.js && node scripts/level_fade_audit.mjs && node scripts/audit_mae_mfe.mjs',
+  '   node scripts/backtest_unified.js && node scripts/level_fade_audit.mjs && node scripts/audit_mae_mfe.mjs && node scripts/backfill_mae_mfe.mjs && node scripts/update_optimal_stops.mjs',
   '',
   '8. COMPUTE LEVELS FOR TODAY',
   '   node scripts/compute_levels.js',

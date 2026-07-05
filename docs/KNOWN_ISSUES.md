@@ -23,6 +23,10 @@ Living tracker. Originally compiled 2026-06-07 (see archived `docs/ARCHITECTURE_
 - "Empty/unused tables" list — `auction_reads` is now actively populated (395 rows, used by 11 files) — no longer dormant. The remaining dormant tables are listed in item 6 above.
 - 6 confirmed-dead tables (`price_bars_old`, `trades_backup_tz_fix`, `calibration_snapshots`, `session_volume_summary`, `sot_signals`, `intraday_snapshots`) were dropped 2026-06-30 — see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
+7. **`ACDSessionState` in `App.jsx` (~line 10875) is dead code** — defined with props `{ todayData, nl, pivot }` but never rendered anywhere in the app. The correct vehicle for ACD-related pre-session UI is `SessionForecastPanel.jsx` and the morning prep view. Do not edit `ACDSessionState` expecting users to see the result.
+
+8. **Approach delta (`buyersAtLevel`/`sellersAtLevel`) is half-wired** — the `+0.15×` factor exists in the sizeMultiplier IIFE and the chip renders in App.jsx, but `allRthBarsRow` (the RTH bar query used for level fade detection) does not include `ask_vol`/`bid_vol` columns. The IB bars query has these columns; `allRthBarsRow` does not. Until that column is added to the bar query, `buyersAtLevel`/`sellersAtLevel` will always be `false` and the chip/multiplier will never fire.
+
 ## Not re-verified (carried over unconfirmed — check before trusting)
 - "Duplicate pattern-memory trigger" (cron + parallel `setInterval` both calling `runNightlyUpdate`)
 - "Silent error handling" (`catch (e) {}` blocks swallowing errors without logging) throughout `index.js`

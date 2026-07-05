@@ -181,10 +181,10 @@ server/
 |---|---|---|
 | Core journal | `dailyLogs.js`, `trades.js`, `sierra.js` | Daily logs CRUD, trade CRUD, TAL import/history, chart uploads |
 | Stats/analytics | `stats.js`, `tearsheet.js`, `backtest.js` | Overview KPIs, by-hour/day breakdowns, risk-of-ruin, tearsheet (P&L distribution, timing heatmap, MAE, rolling expectancy), Kelly sizing |
-| ACD / opening range | `acd.js` (largest route file, ~4000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest |
+| ACD / opening range | `acd.js` (largest route file, ~6000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest. Also hosts the **Level Fade Alpha Engine**: 50+ pre-computed key levels (PD_*, CAM_*, FLOOR_*, WPP, weekly/monthly VA, OR/IB), proximity detection at 15pt, sizeMultiplier stack (streak depth / overnight alignment / approach delta / elite zone / recency / confluence pair / INSIDE_VALUE / DAY_TYPE_ALPHA), setup tier badges (PRIME/SOLID/MARGINAL/WEAK/KILL), suppressed fades list, early-touch backfill (SHADOW). Gate lowered from 60-bar (10:30 AM) to 3-bar (~9:34 AM) on 2026-07-05. |
 | Price data | `priceBars.js` | Bar ingest, partition-aware queries, volume profile |
 | Phase detection | `phaseChange.js` | Compression→expansion phase detection + backtest |
-| Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification (`open_vs_prior_value` + `overnight_inventory` auto-computed from price data; `prior_day_profile` is manual Sierra Chart read), weekly VA migration, key-level regime stats. `keyLevels.js` also hosts `/api/level-prices/:date` (64 level types), `/api/level-prices/tag/:date` (re-tag BP fills), and `/api/level-approach/today` (ranked level anticipation list for today's day_type+DOW, sourced from `performance_audit` LEVEL_APPROACH rows). |
+| Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification (`open_vs_prior_value` + `overnight_inventory` auto-computed from price data; `prior_day_profile` is manual Sierra Chart read), weekly VA migration, key-level regime stats. `keyLevels.js` also hosts `/api/level-prices/:date` (64 level types), `/api/level-prices/tag/:date` (re-tag BP fills), and `/api/level-approach/today` (ranked setup anticipation list for today's day_type+DOW, sourced from `performance_audit` SETUP_ANTICIPATION rows), `/api/volatility-forecast` (next-session day_type probability distribution — live query, self-updating; returns volatility_flag HIGH/ELEVATED/NORMAL + drivers), and `/api/confluence-near-price` (level pairs from `confluence_pairs_latest.json` where both levels are within 15pt of current price; day_type-adjusted EV where N≥10). |
 | Setups | `setups.js`, `pattern.js`, `confluence.js`, `antigravityEdges.js` | Setup detection/backtest, pattern mining endpoints, level confluence score, fade/reversal edges |
 | Risk & behavior guardrails | `cooldown.js`, `profitLock.js`, `dll.js`, `ruleOverrides.js` | Post-loss cooldown, 1PM profit-lock guard, daily loss limit tracking, rule override testing |
 | Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
@@ -216,8 +216,13 @@ server/
 | `volatilityRegimeService.js` | Live read-only volatility regime (morning vol z-score, trend strength) |
 | `marketCalendar.js` | NYSE/CME NQ holiday + early-close calendar 2024–2026. Exports `getMarketStatus(dateStr)` → `{type:'HOLIDAY'|'EARLY_CLOSE', name, rthCloseEtMin?}` or `null`; `isHoliday()`; `getEarlyCloseMinute()`. Used by `/api/acd/live` to short-circuit on holidays and to return `earlyClose` field on early-close days. |
 
-### Scheduled jobs (node-cron, set up in `server/index.js`)
+### Scheduled jobs (node-cron + setInterval, set up in `server/index.js`)
 Morning brief generation, EOD auto-import (4 PM — also runs `tagTradesForDate` + `backfill_auction_reads.js` for today), weekly report, monthly report, pattern memory nightly update, daily coaching, MGI level computation (9:30 PM ET Sunday via `scripts/compute_levels.js`). Each run is logged to `process_log` (see `logProcess()` calls in `index.js`).
+
+- **Server-autonomous detection (2026-07-05):** `setInterval` every 60s during 9:30–4:00 PM ET Mon–Fri polls `GET /api/acd/today` to trigger the level fade detection INSERT without requiring a browser client. The INSERT is idempotent (ON CONFLICT DO NOTHING). This fixed the root cause of 62% of setups firing via retroactive IB-close backfill.
+- **Nightly latency audit:** cron `15 17 * * 1-5` runs `scripts/audit_setup_latency.mjs` for the current ET date; writes `LATENCY_AUDIT` to `performance_audit`; appends CRITICAL alerts to `scratch/gemini_alerts.txt`.
+- **Day-type alpha recompute:** cron Sunday 9:10 PM runs `scripts/backtest_day_type_alpha.js` (per-setup_type × day_type z-scores → `DAY_TYPE_ALPHA` rows in `performance_audit`).
+- **Setup anticipation recompute:** cron Sunday 8:30 PM runs `scripts/backtest_level_approach.js` (P(fire|day_type,DOW) × avg_pnl → `SETUP_ANTICIPATION` rows).
 
 ---
 
@@ -240,20 +245,21 @@ src/
 │   ├── WinChip.jsx        # Win-rate chip: label + WR% + N, highlight/isBaseline props
 │   ├── ErrorBoundary.jsx
 │   └── UpdateDot.jsx
-└── components/dashboard/  # 27 components (4 deleted 2026-07-04)
+└── components/dashboard/  # 28 components (4 deleted 2026-07-04)
 ```
 
 **Sidebar nav (5 items):** Morning Prep → `acd`, Dashboard → `dashboard`, Edge → `backtest`, Trades → `calendar`, Settings → `settings`. Removed 2026-07-03: Structure (`longterm`), Tearsheet, Scenarios, Risk, Setup Log — all absorbed into Edge sub-tabs or Dashboard content.
 
 Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `backtest`, `settings`, `longterm`, `playbook` (still renderable, just not in sidebar nav; `scenario`, `risk`, `setup-log`, `tearsheet` render as Edge sub-tabs or via direct URL).
 
-**BacktestView ("Edge") sub-tabs:** Setup Log (default), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
+**BacktestView ("Edge") sub-tabs:** Setup Log (default), **Alpha Engine** (system overview — size multiplier stack, tiers, suppressions, tools, road map), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
 
 **DashboardView fetches:** `stats/daily`, `stats/cumulative-pnl`, `tearsheet-overview`, `rolling`, `pnl-distribution`. Renders: daily P&L chart, equity curve, Sharpe/Sortino/Kelly chip card, Rolling 20-trade expectancy chart, Trade P&L Distribution chart, LevelMonitorPanel, DevelopingValueCard, Risk-Adjusted Performance section. Removed 2026-07-04: `SetupsTable`, `PerformanceVisuals`, `OptimizationSection`, `BehaviorSection` + their backend endpoints (`stats/by-setup`, `stats/by-duration`, `stats/behavior`, `stats/optimization`, `stats/trade-location`).
 
 | Group | Components |
 |---|---|
 | Pre-market context | `PreSessionChecklist`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard` |
+| Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map |
 | Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard`, `LevelMonitorPanel` |
 | Performance viz | `PnlCharts`, `StatsGrid` |
@@ -287,8 +293,15 @@ A few scripts ARE wired in as scheduled jobs from `server/index.js` (morning bri
 Notable scripts that are scheduled or run after auto-import:
 - `scripts/compute_levels.js` — computes all 64 MGI levels for a session date, writes to `level_prices`; supports single date or `--backfill [--from DATE]`; runs via cron 9:30 PM ET Sunday
 - `scripts/backfill_auction_reads.js` — computes `open_vs_prior_value` and `overnight_inventory` from price bars and writes to `auction_reads`; runs after 4 PM auto-import for today's date; supports single date, `--nulls` (keep existing), or all-dates overwrite
-- `scripts/backtest_level_approach.js` — for each of 64 levels, computes historical touch rate (price within 15pt during RTH) broken down by (day_type, DOW); writes 1260 rows to `performance_audit` with `signal_type='LEVEL_APPROACH'`; signal_name encoded as `LEVEL|DAY_TYPE|DOW` (e.g. `IB_MID|BALANCE|TUE`). Run manually after major level changes or ~monthly. **Recalibrate weekly** via `node scripts/backtest_level_approach.js`.
+- `scripts/backtest_level_approach.js` — computes P(setup fires | day_type, DOW) × avg_pnl from `active_setups` history; writes 906 rows to `performance_audit` with `signal_type='SETUP_ANTICIPATION'`, `window_days=0`; signal_name = `SETUP_TYPE|DAY_TYPE|DOW`. **Run weekly** via `node scripts/backtest_level_approach.js`. Endpoint `/api/level-approach/today` returns ranked list for today's context. Calibrated via `scripts/backtest_anticipation_validation.js` (30-day check: top-3 coverage = 77%).
+- `scripts/backtest_next_day_type.js` — one-off research script; 346-day backtest of next-session day_type predictors. Key finding: prior TURBULENT = +57% volatile lift; overnight range WIDE = +22%, NARROW = -29%; overnight inventory adds near-zero lift. Results baked into `/api/volatility-forecast` lookup table.
+- `scripts/backtest_anticipation_validation.js` — calibration check: for each of last 30 days, top-N predicted setups vs actual fires; reports coverage, calibration buckets, per-setup hit rates. Run after any `backtest_level_approach.js` refresh.
 - `scripts/context_analysis.js` — mines 520 confluence pairs and contextual filters (DOW/day-type/direction); writes `performance_audit` rows with `signal_type='CONTEXT_ANALYSIS'`; cron fires Sunday 6 AM ET
+- `scripts/audit_setup_latency.mjs` — nightly latency audit (`node scripts/audit_setup_latency.mjs [YYYY-MM-DD]`); for each FADE setup finds first RTH bar within 15pt, computes lag (fired_at − first_bar_ts); classifies OK/SLOW/CRITICAL/RETROACTIVE/PREMARKET; writes `LATENCY_AUDIT` rows to `performance_audit`; appends CRITICAL alerts to `scratch/gemini_alerts.txt`; cron fires 5:15 PM ET Mon–Fri
+- `scripts/backtest_latency_impact.mjs` — one-shot P&L impact analysis: entry slippage + phantom wins (T1 hit before alert fired) per lag bucket; quantified ~$44K/yr recovery from server-autonomous detection fix (2026-07-05)
+- `scripts/update_optimal_stops.mjs` — computes p75_mae (stop) and p50_mfe (target) per setup_type directionally from `active_setups`; writes `performance_audit` rows with `signal_type='OPTIMAL_STOP'`; run weekly
+- `scripts/backtest_day_type_alpha.js` — per-(setup_type × day_type) z-score from all resolved trades; writes `DAY_TYPE_ALPHA` rows; cron fires Sunday 9:10 PM ET; live path reads `liveStats._dta` to adjust sizeMultiplier
+- `scripts/backfill_mae_mfe.mjs` — backfills mae_points, mfe_points, bars_to_resolution, resolution_bar_time on `active_setups`; shared replay engine: `server/services/maeMfeReplay.js`
 
 ---
 

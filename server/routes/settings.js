@@ -26,6 +26,7 @@ const PROCESS_SCHEDULE = [
   { name: 'SYSTEM_BACKTEST',     label: 'Full System Backtest',     schedule: 'Monthly (1st Sunday)',      expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 750, critical: false, firstSundayOnly: true },
   { name: 'CONTEXT_ANALYSIS',    label: 'Context Edge Analysis',    schedule: 'Weekly (Sunday 6am)',       expectedDays: ['Sun'],                         scheduledHour: 6,  maxAgeHours: 170, critical: false },
   { name: 'CONFLUENCE_AUDIT',    label: 'Confluence Pair Backtest', schedule: 'Weekly (Sunday 6:30am)',    expectedDays: ['Sun'],                         scheduledHour: 7,  maxAgeHours: 170, critical: false },
+  { name: 'SETUP_ANTICIPATION',  label: 'Setup Anticipation Model', schedule: 'Weekly (Sunday 8:30pm)',    expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 170, critical: false },
   { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Every 60s during RTH',      expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
 ];
@@ -128,7 +129,7 @@ router.get('/settings/process-health', async (req, res) => {
     // Fallback: for manual-script processes (SYSTEM_BACKTEST, MAE_MFE_AUDIT, LEVEL_FADE_AUDIT),
     // if process_log has no row, check performance_audit.run_date directly.
     // Manual node script runs bypass logProcess() so they never write to process_log.
-    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT', CONTEXT_ANALYSIS: 'CONTEXT_ANALYSIS', CONFLUENCE_AUDIT: 'CONFLUENCE_AUDIT' };
+    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT', CONTEXT_ANALYSIS: 'CONTEXT_ANALYSIS', CONFLUENCE_AUDIT: 'CONFLUENCE_AUDIT', SETUP_ANTICIPATION: 'SETUP_ANTICIPATION' };
     const paFallbackQ = await query(`
       SELECT signal_type, MAX(run_date)::text as last_run
       FROM performance_audit
