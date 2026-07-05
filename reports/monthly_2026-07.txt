@@ -1,27 +1,74 @@
 TRADING JOURNAL — MONTHLY REPORT
 Month         : 2026-07  (2026-07-01 – 2026-07-31)
-Generated     : 2026-07-01T04:00:09.368Z
+Generated     : 2026-07-05T23:00:00.673Z
 ============================================================
 
 PERFORMANCE SUMMARY
 ----------------------------------------
-Trading days  : 0
-Total P&L     : +$0.00
-Daily avg     : +$0.00
-Daily σ       : $0.00
-Win days      : 0 / 0 (N/A)
+Trading days  : 2
+Total P&L     : -$408.00
+Daily avg     : -$204.00
+Daily σ       : $603.00
+Win days      : 1 / 2 (50.0%)
+Best day      : 2026-07-01  +$399.00
+Worst day     : 2026-07-02  -$807.00
 
 SETUP STATISTICS
 ----------------------------------------
-No setups this month.
+IB_HIGH_FADE_SHORT             fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 66.7% | avg pnl: -$36.40
+PD_POC_FADE_LONG               fired: 3 | wins: 0 | losses: 0 | expired: 3 | wr: unresolved
+PD_VAH_FADE_SHORT              fired: 3 | wins: 1 | losses: 1 | expired: 0 | wr: 50.0% | avg pnl: -$21.00
+PD_VAL_FADE_LONG               fired: 3 | wins: 0 | losses: 0 | expired: 3 | wr: unresolved
+OR_HIGH_FADE_SHORT             fired: 3 | wins: 2 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+IB_BULLISH                     fired: 3 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$33.00
+IB_LOW_FADE_LONG               fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100.0% | avg pnl: +$79.00
+PD_POC_FADE_SHORT              fired: 2 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+IB_MID_SCALP_FADE_SHORT        fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50.0% | avg pnl: -$103.63
+STOP_SWEEP_SHORT               fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100.0% | avg pnl: +$58.50
+MPP_FADE_LONG                  fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100.0% | avg pnl: +$200.00 | avg conf: 1.5
+PD_VAL_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$152.63
+OR_MID_AFTER_IB_FADE_SHORT     fired: 2 | wins: 1 | losses: 1 | expired: 0 | wr: 50.0% | avg pnl: -$118.00
+PD_IB_MID_FADE_SHORT           fired: 2 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$181.00
+OR_LOW_FADE_LONG               fired: 2 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+CAM_S3_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$196.25 | avg conf: 1.5
+CAM_S4_FADE_LONG               fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$198.15 | avg conf: 1.0
+FLOOR_PIVOT_FADE_SHORT         fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+OPEN_DRIVE_LONG                fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$111.00
+5D_OR_MID_FADE_SHORT           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$69.00
+IB_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+PD_OR_MID_FADE_SHORT           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+A_DOWN_WEAK                    fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+WEEKLY_VWAP_FADE_SHORT         fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$200.00 | avg conf: 1.0
+C_PAIRED_LONG                  fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+OR_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+FLOOR_S1_FADE_SHORT            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$217.50
+TRT_SHORT                      fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+FLOOR_R1_FADE_SHORT            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+C_PAIRED_SHORT                 fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+PD_OR_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+IB_MID_SCALP_FADE_LONG         fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+PD_SESSION_MID_FADE_SHORT      fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$220.00
+FLOOR_S1_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$217.50
+PD_IB_HIGH_FADE_SHORT          fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$195.50
+PD_IB_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$181.00
+OR_HIGH_FADE_LONG              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0.0% | avg pnl: -$181.00
+5D_OR_MID_FADE_LONG            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$79.00
+WPP_FADE_LONG                  fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100.0% | avg pnl: +$161.25
 
 ACD SIGNAL ACCURACY
 ----------------------------------------
-No ACD data this month.
+Sessions      : 3
+A Up fired    : 2 | C confirmed: 2 (100.0%)
+A Down fired  : 1 | C confirmed: 1 (100.0%)
+Net score     : +4  (avg 1.33/session)
+Day types     : Trend 0 / Normal 0 / Neutral 0
 
 EDGE VALIDATION (confluence buckets)
 ----------------------------------------
-No resolved setups for edge validation.
+Confluence bucket | Fired | W | L | Win% | Avg P&L
+------------------------------------------------------------
+0-2               | 16    | 12| 3 | 80.0% | +$103.89
+no_score          | 44    | 18| 5 | 78.3% | +$24.80
 
 BACKTEST DRIFT
 ----------------------------------------
@@ -29,10 +76,10 @@ Insufficient resolved setups (min 5) for drift analysis this month.
 
 FLAGS (auto-detected)
 ----------------------------------------
-No notable flags this month.
+DOWN MONTH: Net -$408.00
 
 INTERPRETATION (AI)
 ----------------------------------------
-(Anthropic API error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-4-20250514"},"request_id":"req_011CcafnD9WfpkVyEaJWhry3"})
+(Anthropic API error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-4-20250514"},"request_id":"req_011CcjjwPhm3cm5UFfiVF97B"})
 
 ============================================================

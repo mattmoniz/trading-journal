@@ -73,7 +73,7 @@ function DailyRecap({ date }) {
           <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginTop: 6, marginBottom: 2 }}>Pipeline Setups</div>
           {recap.pipelineSetups.map((s, i) => (
             <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '1px 0', borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 11 }}>
-              <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{s.setup.replace(/_/g, ' ')}</span>
+              <span style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>{(s.setup || '').replace(/_/g, ' ')}</span>
               <span style={{ color: s.resolution === 'WIN' || s.resolution === 'TARGET_HIT' ? '#4ade80' : s.resolution === 'LOSS' || s.resolution === 'STOP_HIT' ? '#f87171' : '#fbbf24', fontWeight: 700 }}>
                 {s.resolution} {s.pnl != null ? `$${s.pnl}` : ''}
               </span>
