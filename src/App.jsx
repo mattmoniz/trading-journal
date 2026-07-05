@@ -22667,11 +22667,6 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
               </div>
             )}
 
-            {/* Scalp Playbook — forward-looking daily intelligence (what to watch, best setups today) */}
-            <ErrorBoundary name="Scalp Playbook">
-              <ScalpPlaybookCard date={todayET} />
-            </ErrorBoundary>
-
             {/* Split Grid for Core Planning */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
               
