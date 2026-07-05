@@ -9402,7 +9402,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
   const [effData, setEffData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ran, setRan] = useState(false);
-  const [activeSection, setActiveSection] = useState('setups'); // default to Setup Log
+  const [activeSection, setActiveSection] = useState('alpha'); // default to Alpha Engine
   const [chartReviewDate, setChartReviewDate] = useState('');
   const [vpDate, setVpDate] = useState('');
   const [vpSession, setVpSession] = useState('rth');

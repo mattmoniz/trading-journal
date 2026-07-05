@@ -1,33 +1,33 @@
 import React, { useEffect, useState } from 'react';
 
 const S = {
-  page: { padding: '24px 28px', maxWidth: 1100, margin: '0 auto', color: '#e2e8f0', fontFamily: 'inherit' },
-  h1: { fontSize: 22, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 },
-  sub: { fontSize: 13, color: '#94a3b8', marginBottom: 28 },
+  page: { padding: '24px 28px', maxWidth: 1200, margin: 0, color: '#e2e8f0', fontFamily: 'inherit' },
+  h1: { fontSize: 24, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 },
+  sub: { fontSize: 14, color: '#94a3b8', marginBottom: 28 },
   section: { marginBottom: 32 },
-  sectionTitle: { fontSize: 14, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 12, borderBottom: '1px solid #1e293b', paddingBottom: 6 },
+  sectionTitle: { fontSize: 15, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 12, borderBottom: '1px solid #1e293b', paddingBottom: 6 },
   grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 },
   grid4: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 },
   card: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '14px 16px' },
-  cardTitle: { fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 },
+  cardTitle: { fontSize: 13, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 },
   cardVal: { fontSize: 22, fontWeight: 700, color: '#f1f5f9' },
-  cardSub: { fontSize: 11, color: '#64748b', marginTop: 2 },
+  cardSub: { fontSize: 12, color: '#64748b', marginTop: 2 },
   row: { display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 },
-  label: { fontSize: 12, color: '#94a3b8', minWidth: 160 },
-  val: { fontSize: 12, fontWeight: 600, color: '#f1f5f9' },
-  badge: (color, bg) => ({ fontSize: 10, fontWeight: 700, color, background: bg, border: `1px solid ${color}40`, borderRadius: 4, padding: '1px 6px', letterSpacing: '0.05em', whiteSpace: 'nowrap' }),
-  pill: (color) => ({ display: 'inline-block', fontSize: 11, fontWeight: 600, color, background: color + '18', borderRadius: 4, padding: '2px 8px', marginRight: 4, marginBottom: 4 }),
+  label: { fontSize: 13, color: '#94a3b8', minWidth: 160 },
+  val: { fontSize: 13, fontWeight: 600, color: '#f1f5f9' },
+  badge: (color, bg) => ({ fontSize: 11, fontWeight: 700, color, background: bg, border: `1px solid ${color}40`, borderRadius: 4, padding: '2px 7px', letterSpacing: '0.05em', whiteSpace: 'nowrap' }),
+  pill: (color) => ({ display: 'inline-block', fontSize: 12, fontWeight: 600, color, background: color + '18', borderRadius: 4, padding: '2px 8px', marginRight: 4, marginBottom: 4 }),
   factorCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 4 },
-  factorName: { fontSize: 12, fontWeight: 700, color: '#e2e8f0' },
-  factorEffect: { fontSize: 11, color: '#94a3b8' },
-  factorStat: { fontSize: 11, fontWeight: 600 },
-  suppressed: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '6px 10px', fontSize: 11, color: '#94a3b8', marginBottom: 4 },
+  factorName: { fontSize: 13, fontWeight: 700, color: '#e2e8f0' },
+  factorEffect: { fontSize: 12, color: '#94a3b8' },
+  factorStat: { fontSize: 12, fontWeight: 600 },
+  suppressed: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '8px 12px', fontSize: 12, color: '#94a3b8', marginBottom: 4 },
   toolCard: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '14px 16px' },
-  toolTitle: { fontSize: 13, fontWeight: 700, color: '#e2e8f0', marginBottom: 4 },
-  toolDesc: { fontSize: 11, color: '#94a3b8', lineHeight: 1.5 },
-  todo: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6, fontSize: 12, color: '#94a3b8' },
-  todoIcon: { fontSize: 12, marginTop: 1, flexShrink: 0 },
+  toolTitle: { fontSize: 14, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 },
+  toolDesc: { fontSize: 13, color: '#94a3b8', lineHeight: 1.6 },
+  todo: { display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 8, fontSize: 13, color: '#94a3b8' },
+  todoIcon: { fontSize: 13, marginTop: 1, flexShrink: 0 },
 };
 
 function StatCard({ label, value, sub, accent }) {
@@ -42,10 +42,10 @@ function StatCard({ label, value, sub, accent }) {
 
 function FactorRow({ name, effect, stat, color }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #1e293b11' }}>
-      <span style={{ fontSize: 12, color: '#cbd5e1', flex: 1 }}>{name}</span>
-      <span style={{ fontSize: 11, color: color || '#94a3b8', fontWeight: 600, textAlign: 'right', marginLeft: 8 }}>{effect}</span>
-      {stat && <span style={{ fontSize: 10, color: '#475569', marginLeft: 10, minWidth: 120, textAlign: 'right' }}>{stat}</span>}
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #1e293b22' }}>
+      <span style={{ fontSize: 13, color: '#cbd5e1', flex: 1 }}>{name}</span>
+      <span style={{ fontSize: 13, color: color || '#94a3b8', fontWeight: 700, textAlign: 'right', marginLeft: 12 }}>{effect}</span>
+      {stat && <span style={{ fontSize: 12, color: '#64748b', marginLeft: 14, minWidth: 140, textAlign: 'right' }}>{stat}</span>}
     </div>
   );
 }
@@ -205,7 +205,7 @@ export default function AlphaEngineOverview() {
             <div style={S.cardSub}>IB_HIGH/LOW and IB_MID self-gate via etMinNow ≥ 630 — legitimate formation time</div>
           </div>
         </div>
-        <div style={{ ...S.card, marginTop: 10, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
+        <div style={{ ...S.card, marginTop: 10, fontSize: 13, color: '#94a3b8', lineHeight: 1.6 }}>
           <strong style={{ color: '#e2e8f0' }}>Pre-fix (before 2026-07-05):</strong> 62% of setups fired via retroactive IB-close backfill at 10:30 AM.
           248 phantom wins in the PRECOMPUTED bucket (T1 hit before alert fired). Fix recovered <strong style={{ color: '#22c55e' }}>~$44K/yr</strong> at 1 MNQ.
           Structural phantom wins (price hits level + T1 within 60s) are not recoverable with polling — ~53 setups/180 days are in this category.
@@ -216,7 +216,7 @@ export default function AlphaEngineOverview() {
       <div style={S.section}>
         <div style={S.sectionTitle}>Size Multiplier Stack</div>
         <div style={{ ...S.card, marginBottom: 10 }}>
-          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10 }}>
             All factors apply multiplicatively on top of the base. Floor: <strong style={{ color: '#f1f5f9' }}>0.25×</strong> · Ceiling: <strong style={{ color: '#f1f5f9' }}>1.50×</strong>
           </div>
           {multiplierFactors.map(f => (
@@ -233,14 +233,14 @@ export default function AlphaEngineOverview() {
             <div key={t.name} style={{ ...S.card, flex: '1 1 160px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <span style={S.badge(t.color, t.color + '18')}>{t.name}</span>
-                <span style={{ fontSize: 11, color: '#64748b' }}>×{t.n}</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>×{t.n}</span>
               </div>
               <div style={{ fontSize: 18, fontWeight: 700, color: t.pnl.startsWith('+') ? '#22c55e' : '#ef4444' }}>{t.pnl}</div>
-              <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>{t.desc} · 1 MNQ/yr</div>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{t.desc} · 1 MNQ/yr</div>
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 11, color: '#64748b' }}>
+        <div style={{ fontSize: 13, color: '#64748b' }}>
           Badges shown live on each setup card. KILL-tier setups are fully suppressed. PRIME+SOLID combined: <strong style={{ color: '#22c55e' }}>68% WR, $54 avg EV, $59.6K/yr at 1 MNQ · ~$179K at 3 MNQ</strong>.
         </div>
       </div>
@@ -288,7 +288,7 @@ export default function AlphaEngineOverview() {
       </div>
 
       {/* Footer */}
-      <div style={{ fontSize: 10, color: '#334155', textAlign: 'center', marginTop: 8 }}>
+      <div style={{ fontSize: 12, color: '#334155', textAlign: 'center', marginTop: 8 }}>
         All WR/EV claims: N≥20 hard floor · No static thresholds — all derived from rolling distributions · Hard rule: no lookahead in backtests
       </div>
     </div>
