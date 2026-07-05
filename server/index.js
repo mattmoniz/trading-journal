@@ -722,7 +722,7 @@ httpServer.listen(PORT, () => {
     try {
       const { execSync } = await import('child_process');
       await logProcess('CONTEXT_ANALYSIS', async () => {
-        execSync('node scripts/context_analysis.js', { cwd: process.cwd(), timeout: 300000 });
+        execSync('node scripts/context_analysis.js', { cwd: process.cwd(), timeout: 300000, maxBuffer: 50 * 1024 * 1024 });
         return { count: 1 };
       });
     } catch (err) { console.error('[context_analysis] Cron error:', err.message); }

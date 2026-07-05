@@ -77,4 +77,7 @@ cumulative_pl
 # Scratch / temp diagnostic scripts
 scratch/
 
+# Generated script output (JSON reports, backtest exports) — regenerated on demand
+scripts/output/
+
 
