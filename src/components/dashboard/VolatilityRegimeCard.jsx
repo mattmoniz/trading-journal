@@ -675,7 +675,7 @@ export default function VolatilityRegimeCard() {
             <div>
               <div style={{ fontSize: 11, color: '#94a3b8' }}>VWAP</div>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', fontFamily: 'monospace' }}>
-                {data.emaSnap.vwap?.toLocaleString('en-US') || data.emaSnap.ema9.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                {data.emaSnap.vwap?.toLocaleString('en-US') || data.emaSnap.ema9?.toLocaleString('en-US', { maximumFractionDigits: 0 }) || '—'}
               </div>
             </div>
             <div>
