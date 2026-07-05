@@ -562,11 +562,30 @@ export default function VolatilityRegimeCard() {
       .catch(() => {});
   }, []);
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div style={{ ...cardStyle, opacity: 0.5 }}>
+        <div style={titleStyle}>Volatility Regime (live)</div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Loading…</div>
+      </div>
+    );
+  }
 
   if (!data.available) {
-    const isForming = data.barsLoaded !== undefined && data.barsRequired !== undefined;
+    // RTH = 9:30 AM (570) to 4:00 PM (960) ET
+    const isRTH = data.etMin != null && data.etMin >= 570 && data.etMin < 960;
+    const isForming = isRTH && data.barsLoaded !== undefined && data.barsRequired !== undefined;
     const progressPct = isForming ? Math.min(100, (data.barsLoaded / data.barsRequired) * 100) : 0;
+
+    if (!isRTH) {
+      return (
+        <div style={{ ...cardStyle, opacity: 0.6 }}>
+          <div style={titleStyle}>Volatility Regime (live)</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 3 }}>Market Closed</div>
+          <div style={{ fontSize: 11, color: '#64748b' }}>Available Mon–Fri 9:30–4:00 PM ET</div>
+        </div>
+      );
+    }
 
     return (
       <div style={cardStyle}>
@@ -605,13 +624,13 @@ export default function VolatilityRegimeCard() {
                 {progressPct.toFixed(0)}%
               </span>
             </div>
-            
+
             <div style={{ width: '100%', height: 5, backgroundColor: 'rgba(100,116,139,0.15)', borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
               <div style={{ width: `${progressPct}%`, height: '100%', backgroundColor: '#f59e0b', borderRadius: 3, transition: 'width 0.4s ease-out' }} />
             </div>
 
             <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
-              Accumulating regular trading hours (RTH) price bars. Needs 15 minutes of data to compute the first 5-minute standard deviation. Ready at 9:45 AM ET.
+              Accumulating RTH price bars. Ready at 9:45 AM ET.
             </div>
           </div>
         ) : (
