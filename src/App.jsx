@@ -9666,7 +9666,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         <h1>Backtest</h1>
       </header>
 
-      {priceSyncProgress && (
+      {priceSyncProgress && priceSyncProgress.status !== 'success' && (
         <div className={`sync-progress-bar-wrap ${priceSyncProgress.status}`}>
           <div className="sync-progress-bar-header">
             <span className="sync-progress-label">
