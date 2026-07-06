@@ -22622,8 +22622,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
             {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col */}
             <div style={{ display: 'grid', gridTemplateColumns: '30fr 45fr 25fr', gap: 14, alignItems: 'start' }}>
 
-              {/* Col 1: Session intel — navy tint */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(15,23,42,0.35)', borderRadius: 8, padding: 10 }}>
+              {/* Col 1: Session intel — dark navy container, cards float above */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(8,12,24,0.7)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Session Forecast">
                   <SessionForecastPanel date={todayET} section="intel" />
                 </ErrorBoundary>
@@ -22635,8 +22635,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </ErrorBoundary>
               </div>
 
-              {/* Col 2: Live execution — dark/neutral so signals pop */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(9,13,22,0.5)', borderRadius: 8, padding: 10 }}>
+              {/* Col 2: Live execution — near-black so green/red signals pop */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(4,6,14,0.85)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
                 </ErrorBoundary>
@@ -22655,8 +22655,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </CollapsibleSection>
               </div>
 
-              {/* Col 3: Scripts — warm slate tint */}
-              <div style={{ background: 'rgba(30,41,59,0.3)', borderRadius: 8, padding: 10 }}>
+              {/* Col 3: Scripts — warm slate container */}
+              <div style={{ background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Scripts">
                   <SessionForecastPanel date={todayET} section="scripts" />
                 </ErrorBoundary>

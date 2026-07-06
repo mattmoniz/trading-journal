@@ -305,10 +305,10 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 return (
                   <div key={st} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, paddingBottom: 3, borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
                     <span style={{ color: '#cbd5e1' }}>{dir} {name}</span>
-                    <span style={{ display: 'flex', gap: 8, color: '#94a3b8' }}>
-                      <span style={{ color: fireColor }}>{(s.fire_rate * 100).toFixed(0)}%</span>
-                      <span style={{ color: wrColor }}>{(s.cond_wr * 100).toFixed(0)}%WR</span>
-                      <span style={{ color: '#e2e8f0' }}>${s.expected_ev?.toFixed(0)}</span>
+                    <span style={{ display: 'flex' }}>
+                      <span style={{ color: fireColor, width: 28, textAlign: 'right' }}>{(s.fire_rate * 100).toFixed(0)}%</span>
+                      <span style={{ color: wrColor, width: 46, textAlign: 'right' }}>{(s.cond_wr * 100).toFixed(0)}%WR</span>
+                      <span style={{ color: '#e2e8f0', width: 34, textAlign: 'right' }}>${s.expected_ev?.toFixed(0)}</span>
                     </span>
                   </div>
                 );
@@ -342,11 +342,11 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                     <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level2}</span>
                     {p.dow_note && <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>★ {p.dow_note}</span>}
                   </div>
-                  <div style={{ display: 'flex', gap: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                    <span style={{ color: '#64748b' }}>N={p.n}</span>
-                    <span style={{ color: wrColor }}>{p.wr}%</span>
-                    <span style={{ color: evColor }}>${p.ev.toFixed(0)}</span>
-                    <span style={{ color: recColor, fontSize: 10, fontWeight: 700 }}>{p.recommendation}</span>
+                  <div style={{ display: 'flex', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color: '#64748b', width: 40, textAlign: 'right' }}>N={p.n}</span>
+                    <span style={{ color: wrColor, width: 34, textAlign: 'right' }}>{p.wr}%</span>
+                    <span style={{ color: evColor, width: 34, textAlign: 'right' }}>${p.ev.toFixed(0)}</span>
+                    <span style={{ color: recColor, fontSize: 10, fontWeight: 700, width: 54, textAlign: 'right' }}>{p.recommendation}</span>
                   </div>
                 </div>
               );
@@ -440,7 +440,8 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
 
       {/* ── Scripts section ── */}
       {section !== 'intel' && <>
-      {/* First hour script */}
+      {/* First hour script — visible before 12pm ET only */}
+      {(() => { const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); return etH < 12; })() &&
       <div style={{ padding: '10px 12px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Morning Script (Open — 12:00 PM)</div>
@@ -460,7 +461,10 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
         </div>
       </div>
 
-      {/* Midday / Afternoon script */}
+      }
+
+      {/* Afternoon script — visible 12pm–4pm ET only */}
+      {(() => { const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); return etH >= 12 && etH < 16; })() &&
       <div style={{ padding: '10px 12px', background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 6, marginTop: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Afternoon Script (1:00 PM — Close)</div>
@@ -484,7 +488,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           {dow === 5 && <div>5. <strong style={{ color: '#ef4444' }}>Friday PM: lock gains by 12:30.</strong> Afternoon squaring creates reversals that eat Friday profits.</div>}
           {dow !== 5 && <div>5. <strong style={{ color: '#f59e0b' }}>3:00-4:00 PM closing auction.</strong> MOC orders create directional flow. If price is below today's POC, closing sellers may push lower. If above, closing buyers may push higher.</div>}
         </div>
-      </div>
+      </div>}
 
       {/* Daily Recap — how did today's playbook projections do? */}
       {(() => {
