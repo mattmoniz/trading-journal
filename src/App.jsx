@@ -22605,9 +22605,9 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   });
 
   return (
-    <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Dashboard</h2>
+    <div style={{ padding: '12px 20px', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
+      <div style={{ marginBottom: 12 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Dashboard</h2>
       </div>
 
       <div style={{ display: 'flex', gap: 2, marginBottom: 0, borderBottom: '1px solid var(--border-color)' }}>
@@ -22618,66 +22618,75 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
       <div style={{ paddingTop: 20 }}>
         {tab === 'dashboard' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-            {/* ── Alerts (always on top when active) ── */}
+            {/* ── Alerts ── */}
             <VolatilityAlertBanner />
             <TradeAlertBanner />
-
-            {/* ── Macro override warning ── */}
             {forecast?.isMacroDay && (
-              <div style={{ padding: '12px 18px', background: 'rgba(234, 88, 12, 0.15)', border: '1px solid rgba(234, 88, 12, 0.4)', borderRadius: 10, color: '#fb923c', fontSize: 13, fontWeight: 700 }}>
-                ⚠️ MACRO OVERRIDE ACTIVE: {forecast.macroEvents.map(e => e.event_type).join(' + ')} Today. Calendar DOW statistics are secondary, expect high-vol expansion post-release.
+              <div style={{ padding: '10px 16px', background: 'rgba(234, 88, 12, 0.15)', border: '1px solid rgba(234, 88, 12, 0.4)', borderRadius: 8, color: '#fb923c', fontSize: 13, fontWeight: 700 }}>
+                ⚠️ MACRO OVERRIDE ACTIVE: {forecast.macroEvents.map(e => e.event_type).join(' + ')} — calendar DOW stats are secondary.
               </div>
             )}
 
-            {/* ── Pre-Market Prep (auto-opens before 9:30 ET, collapses manually after open) ── */}
-            <div style={{ marginBottom: 8 }}>
+            {/* ── Pre-Market toggle pill (inline, not full-width block) ── */}
+            <div>
               <button
                 onClick={() => setPrepOpen(o => !o)}
                 style={{
-                  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '10px 16px',
-                  background: prepOpen ? 'var(--card-bg)' : 'rgba(15,23,42,0.4)',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: prepOpen ? '8px 8px 0 0' : 8,
-                  cursor: 'pointer', fontFamily: 'Arial, sans-serif',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '4px 12px', border: '1px solid var(--border-color)',
+                  borderRadius: 20, background: prepOpen ? '#1e293b' : 'rgba(15,23,42,0.4)',
+                  color: prepOpen ? '#94a3b8' : '#475569',
+                  fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                  textTransform: 'uppercase', letterSpacing: '0.05em',
                 }}
               >
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                  Pre-Market Prep
-                </span>
-                <span style={{ fontSize: 11, color: '#64748b' }}>{prepOpen ? '▲ collapse' : '▼ expand'}</span>
+                {prepOpen ? '▲' : '▼'} Pre-Market Prep
               </button>
-              {prepOpen && (
-                <div style={{ border: '1px solid var(--border-color)', borderTop: 'none', borderRadius: '0 0 8px 8px', padding: 16, background: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 16 }}>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
-                    <ErrorBoundary name="Session Forecast">
-                      <SessionForecastPanel date={todayET} />
-                    </ErrorBoundary>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                      <ErrorBoundary name="Day-of-Week Playbook">
-                        <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
-                      </ErrorBoundary>
-                      <ErrorBoundary name="Pre-Session Checklist">
-                        <PreSessionChecklist />
-                      </ErrorBoundary>
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* ── Live Market Context (two-column) ── */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+            {/* ── Main console grid: 3-col (prep open) → 2-col (prep closed) ── */}
+            {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col  */}
+            <style>{`
+              .dash-grid { display: grid; gap: 14px; align-items: start; }
+              @media (min-width: 1400px) {
+                .dash-grid.prep-open  { grid-template-columns: 26fr 44fr 30fr; }
+                .dash-grid.prep-closed { grid-template-columns: 55fr 45fr; }
+              }
+              @media (min-width: 900px) and (max-width: 1399px) {
+                .dash-grid.prep-open  { grid-template-columns: 1fr 1fr; }
+                .dash-grid.prep-closed { grid-template-columns: 1fr 1fr; }
+                .dash-grid.prep-open .dash-col-prep { grid-column: 1 / -1; }
+              }
+              @media (max-width: 899px) {
+                .dash-grid { grid-template-columns: 1fr; }
+              }
+            `}</style>
+            <div className={`dash-grid ${prepOpen ? 'prep-open' : 'prep-closed'}`}>
 
-              {/* Left: live price card with morning + afternoon scripts */}
+              {/* Col 1: Pre-Market (conditional) */}
+              {prepOpen && (
+                <div className="dash-col-prep" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <ErrorBoundary name="Session Forecast">
+                    <SessionForecastPanel date={todayET} />
+                  </ErrorBoundary>
+                  <ErrorBoundary name="Day-of-Week Playbook">
+                    <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
+                  </ErrorBoundary>
+                  <ErrorBoundary name="Pre-Session Checklist">
+                    <PreSessionChecklist />
+                  </ErrorBoundary>
+                </div>
+              )}
+
+              {/* Col 2: Live Scripts (always) */}
               <ErrorBoundary name="Live Scripts">
                 <LiveScriptsCard date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} />
               </ErrorBoundary>
 
-              {/* Right: session context stack */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Col 3: Session Context (always) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
                 </ErrorBoundary>
@@ -22694,22 +22703,22 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
             </div>
 
-            {/* ── Active Setups & Confluence (full-width, primary alert surface) ── */}
+            {/* ── Active Setups — full width, primary alert surface ── */}
             <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
               <ErrorBoundary name="Edge Sections" compact>
                 <EdgeSectionsPanel />
               </ErrorBoundary>
             </CollapsibleSection>
 
-            {/* ── Stats & Calibration (below fold, reference only) ── */}
+            {/* ── Stats & Calibration — below fold ── */}
             <CollapsibleSection title="Stats & Calibration">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 14 }}>
                 <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
                 <ErrorBoundary name="Trade Calibration"><TradeCalibrationCard /></ErrorBoundary>
               </div>
             </CollapsibleSection>
 
-            {/* ── Live Commentary (below fold) ── */}
+            {/* ── Live Commentary — below fold ── */}
             <CollapsibleSection title="Live Commentary & Feed">
               <ErrorBoundary name="Live Commentary">
                 <TeleprinterFeed maxHeight={360} />
