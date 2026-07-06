@@ -541,9 +541,10 @@ async function getLiveEdgesContext() {
     ORDER BY ts, id DESC
   `, [targetDate]);
 
-  // Fetch ACD levels for today (used for coil level proximity)
+  // Fetch ACD levels + signals for today (levels used for coil, signals for permission slips)
   const acdTodayQ = await query(`
-    SELECT a_up_level::float, a_down_level::float, or_high::float, or_low::float
+    SELECT a_up_level::float, a_down_level::float, or_high::float, or_low::float,
+           day_type, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed
     FROM acd_daily_log WHERE trade_date = $1
   `, [targetDate]);
   const acdToday = acdTodayQ.rows[0] || null;
@@ -948,6 +949,13 @@ async function getLiveEdgesContext() {
       }
     }
 
+    // First 30-min RTH direction: compare 10:00 ET bar close to 9:30 open
+    const openBar = bars.find(b => b.et_min === 570);
+    const halfHourBar = bars.filter(b => b.et_min >= 599 && b.et_min <= 601).pop();
+    const firstHourDir = (openBar && halfHourBar)
+      ? (halfHourBar.close > openBar.open ? 'UP' : halfHourBar.close < openBar.open ? 'DOWN' : 'FLAT')
+      : null;
+
     liveStatus = {
       active: true,
       isLive: !isFallback,
@@ -959,6 +967,7 @@ async function getLiveEdgesContext() {
       gapOpenValue,
       barsCount: bars.length,
       firstHourStats,
+      firstHourDir,
       coiling: coilingStatus,
       volumeClimax,
       emaSnap,
@@ -971,6 +980,35 @@ async function getLiveEdgesContext() {
       currentSessionRange,
     };
   }
+
+  // Build session permission slips from ACD signals + first-30-min price direction
+  // Stats sourced from backtests against acd_daily_log + price_bars_primary (2024-present, N=140+)
+  const PERMISSION_STATS = {
+    trendAUpCUp:  { label: 'TREND + A Up + C Up confirmed', pct: 85.3, n: 34,  dir: 'LONG'  },
+    aUpFh:        { label: 'A Up + first 30-min positive',  pct: 72.1, n: 140, dir: 'LONG'  },
+    aTrendCDown:  { label: 'TREND + A Down + C Down confirmed', pct: 68.2, n: 22, dir: 'SHORT' },
+    aDownFh:      { label: 'A Down + first 30-min negative', pct: 69.3, n: 137, dir: 'SHORT' },
+  };
+  const permConditions = [];
+  const dayType = acdToday?.day_type || null;
+  const aUpFired = !!acdToday?.a_up_fired;
+  const aDownFired = !!acdToday?.a_down_fired;
+  const cUp = !!acdToday?.c_up_confirmed;
+  const cDown = !!acdToday?.c_down_confirmed;
+  const firstHourDir = liveStatus.firstHourDir || null;
+
+  if (dayType === 'TREND' && aUpFired && cUp) {
+    permConditions.push(PERMISSION_STATS.trendAUpCUp);
+  } else if (aUpFired && firstHourDir === 'UP') {
+    permConditions.push(PERMISSION_STATS.aUpFh);
+  }
+  if (dayType === 'TREND' && aDownFired && cDown) {
+    permConditions.push(PERMISSION_STATS.aTrendCDown);
+  } else if (aDownFired && firstHourDir === 'DOWN') {
+    permConditions.push(PERMISSION_STATS.aDownFh);
+  }
+
+  const sessionPermissions = { dayType, aUpFired, aDownFired, cUpConfirmed: cUp, cDownConfirmed: cDown, firstHourDir, conditions: permConditions };
 
   // 4. Fetch Active Setups for targetDate (exclude SHADOW and removed setups)
   let setupsQ = await query(`
@@ -1219,6 +1257,7 @@ async function getLiveEdgesContext() {
     pd2VA,
     confluenceLevels,
     overnightContext,
+    sessionPermissions,
   };
 }
 

@@ -20,6 +20,7 @@ import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
 import LiveScriptsCard from './components/dashboard/LiveScriptsCard.jsx';
 import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
 import VolatilityAlertBanner from './components/dashboard/VolatilityAlertBanner.jsx';
+import ApproachingLevelBanner from './components/dashboard/ApproachingLevelBanner.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import { useAcdLive } from './utils/useAcdLive.js';
@@ -90,7 +91,7 @@ function InfoTooltip({ text, tooltip, children }) {
           zIndex: 99999, pointerEvents: 'none', lineHeight: 1.7, whiteSpace: 'pre-line' }}>
           <div style={{ color: '#cbd5e1' }}>{content.text}</div>
           {content.source && (
-            <div style={{ marginTop: 6, fontSize: 13, color: '#64748b', borderTop: '1px solid rgba(100,116,139,0.2)', paddingTop: 5 }}>
+            <div style={{ marginTop: 6, fontSize: 13, color: '#94a3b8', borderTop: '1px solid rgba(100,116,139,0.2)', paddingTop: 5 }}>
               Source: {content.source}
             </div>
           )}
@@ -209,7 +210,7 @@ function UpAndDoneNudge({ status, onStop, onDismiss }) {
       <div style={{ background: '#0f1520', border: '1.5px solid rgba(34,197,94,0.5)', borderRadius: 12, padding: '16px 20px', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: '#22c55e', textTransform: 'uppercase' }}>You're Up {fmt$(pnl)}</div>
-          <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 0 0 8px' }}>×</button>
+          <button onClick={onDismiss} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 0 0 8px' }}>×</button>
         </div>
         <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.6, marginBottom: 14 }}>
           Your data: average give-back of <strong style={{ color: '#fde68a' }}>$485–663/day</strong>. Every day. Is today worth the risk?
@@ -324,15 +325,15 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
         {/* DLL stats */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 32 }}>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Today</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Today</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#ef4444' }}>{pnlFmt(pnl)}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Limit</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Limit</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#94a3b8' }}>-${dll}</div>
           </div>
           <div style={{ flex: 1, background: '#111827', borderRadius: 8, padding: '12px 16px', textAlign: 'center' }}>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Near-Limit Days (All-Time)</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Near-Limit Days (All-Time)</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: hitAccount.breach_days > 0 ? '#ef4444' : hitAccount.near_limit_days > 0 ? '#f59e0b' : '#94a3b8' }}>
               {hitAccount.near_limit_days || 0}
             </div>
@@ -897,7 +898,7 @@ function SetupEventModal({ event, onClose }) {
         style={{ background: '#0f172a', border: `1.5px solid ${borderColor}`, borderRadius: 12, padding: '20px 24px', width: '100%', maxWidth: 460, boxShadow: '0 20px 60px rgba(0,0,0,0.8)', position: 'relative' }}
       >
         {/* Close */}
-        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#64748b', fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>✕</button>
+        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 2 }}>✕</button>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -914,7 +915,7 @@ function SetupEventModal({ event, onClose }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, padding: '8px 12px', background: bgColor, borderRadius: 6, border: `1px solid ${borderColor}` }}>
           <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: '#e2e8f0' }}>{timeStr}</span>
           {price && <>
-            <span style={{ color: '#334155' }}>·</span>
+            <span style={{ color: '#94a3b8' }}>·</span>
             <span style={{ fontSize: 14, fontWeight: 700, fontFamily: 'monospace', color: dirColor }}>{price}</span>
           </>}
           {direction && (
@@ -954,7 +955,7 @@ function SetupEventModal({ event, onClose }) {
         {/* Win rate */}
         {stats && (stats.allTime || stats.d90 || stats.d30) && (
           <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 14 }}>
-            <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
+            <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
             <div style={{ display: 'flex', gap: 20, justifyContent: 'center' }}>
               <WinChip label="All time" stat={stats.allTime} />
               <WinChip label="90d" stat={stats.d90} />
@@ -963,7 +964,7 @@ function SetupEventModal({ event, onClose }) {
           </div>
         )}
         {stats && !stats.allTime && !stats.d90 && !stats.d30 && (
-          <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 12, fontSize: 12, color: '#64748b', textAlign: 'center' }}>
+          <div style={{ borderTop: '1px solid rgba(51,65,85,0.6)', paddingTop: 12, fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
             No trade history recorded for this setup type yet.
           </div>
         )}
@@ -1018,7 +1019,7 @@ function CaseSetupDetailModal({ setup, onClose }) {
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 99999, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: '#0f172a', border: `1.5px solid ${borderColor}`, borderRadius: 12, padding: '20px 24px', width: '100%', maxWidth: 480, maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 24px 64px rgba(0,0,0,0.85)', position: 'relative' }}>
-        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#64748b', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>✕</button>
+        <button onClick={onClose} style={{ position: 'absolute', top: 12, right: 14, background: 'none', border: 'none', color: '#94a3b8', fontSize: 18, cursor: 'pointer', lineHeight: 1 }}>✕</button>
 
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
@@ -1026,7 +1027,7 @@ function CaseSetupDetailModal({ setup, onClose }) {
           <span style={{ fontSize: 16, fontWeight: 800, color: dirColor, textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1 }}>{label}</span>
           {(isLong || isShort) && <span style={{ fontSize: 13, fontWeight: 800, color: dirColor, background: `${dirColor}18`, border: `1px solid ${dirColor}40`, borderRadius: 4, padding: '2px 8px', letterSpacing: '0.04em' }}>{isLong ? '↑ LONG' : '↓ SHORT'}</span>}
         </div>
-        {timeStr && <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10, fontFamily: 'monospace' }}>fired {timeStr}</div>}
+        {timeStr && <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10, fontFamily: 'monospace' }}>fired {timeStr}</div>}
 
         {/* Resolution badge if already resolved */}
         {resInfo && (
@@ -1081,7 +1082,7 @@ function CaseSetupDetailModal({ setup, onClose }) {
         {/* Win rates */}
         {stats && (
           <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>Historical win rate</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               <WinChip label="All time" stat={stats.allTime} />
               <WinChip label="90d" stat={stats.d90} />
@@ -1090,7 +1091,7 @@ function CaseSetupDetailModal({ setup, onClose }) {
             {/* By day type — highlight current day type */}
             {stats.byDayType && Object.keys(stats.byDayType).filter(k => k !== 'OVERALL').length > 0 && (
               <div>
-                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By day type {dayType && <span style={{ color: '#818cf8' }}>(today: {dayType})</span>}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>By day type {dayType && <span style={{ color: '#818cf8' }}>(today: {dayType})</span>}</div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {['TREND','BALANCE','TURBULENT'].filter(k => stats.byDayType[k]).map(k => (
                     <WinChip key={k} label={k} stat={stats.byDayType[k]} highlight={k === dayType} />
@@ -1260,7 +1261,7 @@ function LiveSessionPanel() {
               <span style={{ fontWeight: 700, fontSize: 11, color: isLong ? '#22c55e' : '#ef4444', textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {SETUP_DISPLAY_LABELS[active.type] || active.type}
               </span>
-              <span style={{ fontSize: 12, color: '#64748b', flexShrink: 0 }}>{active.detectedAt}</span>
+              <span style={{ fontSize: 12, color: '#94a3b8', flexShrink: 0 }}>{active.detectedAt}</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px 6px', fontSize: 12 }}>
               {entry != null && <span style={{ color: '#94a3b8' }}>Entry <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{Math.round(entry)}</strong></span>}
@@ -1291,7 +1292,7 @@ function LiveSessionPanel() {
             )}
           </>
         ) : (
-          <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 36 }}>
+          <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 36 }}>
             {isClosed ? 'Session closed' : isOpen ? 'Watching — no setup' : 'Market closed'}
           </div>
         )}
@@ -1522,10 +1523,10 @@ function LiveSessionPanel() {
                             {timeDisp}
                           </span>
                           {ev.fired_time && (() => { const h = parseInt(ev.fired_time.split(':')[0], 10); return (h >= 16 || h < 9 || (h === 9 && parseInt(ev.fired_time.split(':')[1], 10) < 30)); })() && (
-                            <span style={{ fontSize: 9, fontWeight: 700, color: '#94a3b8', background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 3, padding: '1px 4px', letterSpacing: '0.04em' }}>pre-mkt</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', background: 'rgba(148,163,184,0.1)', border: '1px solid rgba(148,163,184,0.2)', borderRadius: 3, padding: '1px 4px', letterSpacing: '0.04em' }}>pre-mkt</span>
                           )}
                           {!isCaseEngine && (
-                            <span style={{ fontSize: 9, letterSpacing: '-1px', color: '#cbd5e1' }}>
+                            <span style={{ fontSize: 11, letterSpacing: '-1px', color: '#cbd5e1' }}>
                               {[1,2,3].map(n => (
                                 <span key={n} style={{ color: n <= stars ? color : '#1e293b' }}>★</span>
                               ))}
@@ -1533,16 +1534,16 @@ function LiveSessionPanel() {
                           )}
                           {isCaseEngine && ev._winRate != null && ev._sessions >= 20 && (
                             <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
-                              · {Math.round(ev._winRate * 100)}% <span style={{ fontWeight: 400, color: '#64748b' }}>N={ev._sessions}</span>
+                              · {Math.round(ev._winRate * 100)}% <span style={{ fontWeight: 400, color: '#94a3b8' }}>N={ev._sessions}</span>
                             </span>
                           )}
                         </div>
                         {resLabel && (
-                          <span style={{ 
-                            fontSize: 9, 
-                            fontWeight: 700, 
-                            color: resColor, 
-                            background: badgeBg, 
+                          <span style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: resColor,
+                            background: badgeBg,
                             border: `1px solid ${badgeBorder}`, 
                             borderRadius: 4, 
                             padding: '1px 4px',
@@ -1569,7 +1570,7 @@ function LiveSessionPanel() {
                 );
               })}
               {allEvents.length === 0 && (
-                <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic', padding: '4px 0' }}>No signals yet today</div>
+                <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic', padding: '4px 0' }}>No signals yet today</div>
               )}
             </div>
           </div>
@@ -1583,7 +1584,7 @@ function LiveSessionPanel() {
       {/* Eval Progress */}
       {evalProgress?.accounts?.length > 0 && (
         <div style={{ borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 8 }}>
-          <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Eval Progress</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Eval Progress</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {evalProgress.accounts.map(acct => {
               const currentPnl = acct.current_pnl ?? 0;
@@ -1613,7 +1614,7 @@ function LiveSessionPanel() {
                   {/* Row 3: needs · days */}
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 12, color: '#94a3b8' }}>${Math.round(profitNeeded).toLocaleString()} to pass</span>
-                    <span style={{ fontSize: 12, color: '#64748b' }}>{daysTraded}d traded</span>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>{daysTraded}d traded</span>
                   </div>
                 </div>
               );
@@ -2694,7 +2695,7 @@ function LiveReadBanner({ forecast }) {
         {isRTH ? (
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
             {asOfTime && <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace' }}>{asOfTime} ET</span>}
-            {dataAsOf && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>data thru {dataAsOf}</span>}
+            {dataAsOf && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>data thru {dataAsOf}</span>}
           </span>
         ) : (
           currentCase.date && <span style={{ fontSize: 13, color: '#fb923c', fontFamily: 'monospace', fontWeight: 700 }}>Snapshot: {currentCase.date}</span>
@@ -2726,7 +2727,7 @@ function LiveReadBanner({ forecast }) {
         </div>
       ) : (
         <div style={{
-          fontSize: 10.5,
+          fontSize: 11,
           color: '#94a3b8',
           marginBottom: 12,
           padding: '4px 10px',
@@ -5157,7 +5158,7 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
                 )}
               </div>
               {coachingLoading ? (
-                <div style={{ color: '#64748b', fontSize: 14, fontStyle: 'italic' }}>Loading review...</div>
+                <div style={{ color: '#94a3b8', fontSize: 14, fontStyle: 'italic' }}>Loading review...</div>
               ) : !coachingData ? (
                 <div style={{
                   background: 'rgba(51,65,85,0.35)',
@@ -6843,7 +6844,7 @@ function KlConditionMatrix({ byLevel }) {
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 13, color: '#64748b', marginLeft: 4 }}>{dimConfig?.hint}</span>
+        <span style={{ fontSize: 13, color: '#94a3b8', marginLeft: 4 }}>{dimConfig?.hint}</span>
       </div>
 
       {/* Matrix table */}
@@ -6878,7 +6879,7 @@ function KlConditionMatrix({ byLevel }) {
                   const lvData = byLevel.find(l => l.key === lv.key);
                   const v = lvData?.[lv.side]?.conditionBreakdown?.[dim]?.[group];
                   if (!v || v.touches < 3) {
-                    return <td key={`${lv.key}-${lv.side}`} style={{ padding: '9px 8px', textAlign: 'center', color: '#334155' }}>—</td>;
+                    return <td key={`${lv.key}-${lv.side}`} style={{ padding: '9px 8px', textAlign: 'center', color: '#94a3b8' }}>—</td>;
                   }
                   const rr = v.respectRate ?? 0;
                   const col = rateColor(rr);
@@ -6898,7 +6899,7 @@ function KlConditionMatrix({ byLevel }) {
           </tbody>
         </table>
       </div>
-      <div style={{ padding: '6px 12px', fontSize: 13, color: '#334155', borderTop: '1px solid var(--border-color)' }}>
+      <div style={{ padding: '6px 12px', fontSize: 13, color: '#94a3b8', borderTop: '1px solid var(--border-color)' }}>
         Green ≥55% · Amber 47–55% · Red &lt;38% · ✓ p&lt;0.05 vs random baseline · * fewer than 20 touches
       </div>
     </div>
@@ -8078,7 +8079,7 @@ function EdgeAnalysisView() {
             <span><span style={{ color: '#10b981' }}>★★★</span> p&lt;0.001 (very strong)</span>
             <span><span style={{ color: '#34d399' }}>★★</span> p&lt;0.01 (strong)</span>
             <span><span style={{ color: '#f59e0b' }}>★</span> p&lt;0.05 (significant)</span>
-            <span><span style={{ color: '#64748b' }}>ns</span> not significant</span>
+            <span><span style={{ color: '#94a3b8' }}>ns</span> not significant</span>
             <span style={{ marginLeft: 8 }}>Edge = actual rate minus 50% baseline. Green = bullish/confirmatory, Red = bearish/counter.</span>
           </div>
         </>
@@ -8319,7 +8320,7 @@ function ScenarioTesterView() {
     <div style={{ padding: '24px 28px', maxWidth: 1300, margin: '0 auto' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#e2e8f0', margin: 0 }}>Scenario Tester</h1>
-        <span style={{ fontSize: 13, color: '#64748b' }}>Filter your own trade history — instant P&L impact of any rule</span>
+        <span style={{ fontSize: 13, color: '#94a3b8' }}>Filter your own trade history — instant P&L impact of any rule</span>
       </div>
 
       {/* ── Presets ── */}
@@ -8373,11 +8374,11 @@ function ScenarioTesterView() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               <input type="time" value={timeFrom} onChange={e => setTimeFrom(e.target.value)}
                 style={{ flex: 1, padding: '4px 6px', fontSize: 13, background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 5, color: '#e2e8f0' }} />
-              <span style={{ color: '#64748b', fontSize: 12 }}>to</span>
+              <span style={{ color: '#94a3b8', fontSize: 12 }}>to</span>
               <input type="time" value={timeTo} onChange={e => setTimeTo(e.target.value)}
                 style={{ flex: 1, padding: '4px 6px', fontSize: 13, background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 5, color: '#e2e8f0' }} />
             </div>
-            <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>Leave blank = no time filter</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>Leave blank = no time filter</div>
           </div>
 
           {/* Days of week */}
@@ -8415,7 +8416,7 @@ function ScenarioTesterView() {
           {/* Account */}
           {allAccounts.length > 0 && (
             <div>
-              <div style={LABEL}>Accounts <span style={{ color: '#334155', fontWeight: 400, textTransform: 'none' }}>(none = all)</span></div>
+              <div style={LABEL}>Accounts <span style={{ color: '#94a3b8', fontWeight: 400, textTransform: 'none' }}>(none = all)</span></div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 110, overflowY: 'auto' }}>
                 {allAccounts.map(a => (
                   <button key={a} onClick={() => toggleAccount(a)}
@@ -8468,22 +8469,22 @@ function ScenarioTesterView() {
                 <div style={CARD}>
                   <div style={LABEL}>Scenario P&L</div>
                   <div style={NUM(sc.netPnl >= 0 ? '#22c55e' : '#ef4444')}>{fmt$(sc.netPnl)}</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>vs actual {fmt$(ac?.netPnl)}</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>vs actual {fmt$(ac?.netPnl)}</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Rule impact (delta)</div>
                   <div style={NUM(deltaPos ? '#22c55e' : '#ef4444')}>{fmt$(sc.delta)}</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{deltaPos ? 'better' : 'worse'} than actual</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{deltaPos ? 'better' : 'worse'} than actual</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Win rate</div>
                   <div style={NUM(sc.winRate >= 50 ? '#22c55e' : '#f59e0b')}>{sc.winRate}%</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{sc.winners}W / {sc.losers}L ({sc.tradeCount} fills)</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{sc.winners}W / {sc.losers}L ({sc.tradeCount} fills)</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Win-day rate</div>
                   <div style={NUM(sc.winDayRate >= 50 ? '#22c55e' : '#f59e0b')}>{sc.winDayRate}%</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{sc.winDays}W / {sc.lossDays}L ({sc.dayCount} days)</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{sc.winDays}W / {sc.lossDays}L ({sc.dayCount} days)</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Avg per trade</div>
@@ -8496,12 +8497,12 @@ function ScenarioTesterView() {
                 <div style={CARD}>
                   <div style={LABEL}>Give-back</div>
                   <div style={NUM('#f59e0b')}>{fmt$(sc.giveBack, false)}</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>peak–close cumulative</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>peak–close cumulative</div>
                 </div>
                 <div style={CARD}>
                   <div style={LABEL}>Date range</div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', marginTop: 4 }}>{result?.meta?.start}</div>
-                  <div style={{ fontSize: 13, color: '#64748b' }}>→ {result?.meta?.end}</div>
+                  <div style={{ fontSize: 13, color: '#94a3b8' }}>→ {result?.meta?.end}</div>
                 </div>
               </div>
 
@@ -8523,7 +8524,7 @@ function ScenarioTesterView() {
                 </ResponsiveContainer>
                 <div style={{ display: 'flex', gap: 20, justifyContent: 'center', marginTop: 6 }}>
                   <span style={{ fontSize: 11, color: '#6366f1' }}>— Scenario</span>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>- - Actual</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>- - Actual</span>
                 </div>
               </div>
             </>
@@ -8589,14 +8590,14 @@ function ScenarioTesterView() {
                     })}
                   </tbody>
                 </table>
-                <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.6 }}>
+                <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>
                   <strong style={{ color: '#94a3b8' }}>Saved days:</strong> DLL fired and the actual day P&L was worse — the stop protected you.&nbsp;
                   <strong style={{ color: '#94a3b8' }}>Cut early:</strong> DLL fired but the actual day recovered to better — the stop cost you.&nbsp;
                   ★ = highest net P&L across all DLL levels.
                 </div>
               </div>
             ) : (
-              <div style={{ fontSize: 13, color: '#64748b', textAlign: 'center', padding: '20px 0' }}>
+              <div style={{ fontSize: 13, color: '#94a3b8', textAlign: 'center', padding: '20px 0' }}>
                 Click "Run DLL Compare" to see the $200/$300/$400/$500/None comparison side-by-side.
               </div>
             )}
@@ -8612,8 +8613,8 @@ function ScenarioTesterView() {
           <div style={{ marginTop: 24 }}>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 14 }}>
               Pattern Analysis
-              {patternsLoading && <span style={{ fontSize: 12, fontWeight: 400, color: '#64748b', marginLeft: 10 }}>Loading…</span>}
-              <span style={{ fontSize: 11, fontWeight: 400, color: '#334155', marginLeft: 12, textTransform: 'none', letterSpacing: 0 }}>
+              {patternsLoading && <span style={{ fontSize: 12, fontWeight: 400, color: '#94a3b8', marginLeft: 10 }}>Loading…</span>}
+              <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginLeft: 12, textTransform: 'none', letterSpacing: 0 }}>
                 Date range + account filters apply · sequential rules excluded
               </span>
             </div>
@@ -8629,7 +8630,7 @@ function ScenarioTesterView() {
                   <ScenarioPatBar data={patterns.hourly} />
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.hourly.map(h => (
-                      <span key={h.hour} style={{ fontSize: 11, color: '#64748b' }}>
+                      <span key={h.hour} style={{ fontSize: 11, color: '#94a3b8' }}>
                         <b style={{ color: h.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{h.label}</b>: {h.winRate}% WR · {h.count}f
                       </span>
                     ))}
@@ -8657,7 +8658,7 @@ function ScenarioTesterView() {
                   </ResponsiveContainer>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.dayOfWeek.map(d => (
-                      <span key={d.dow} style={{ fontSize: 11, color: '#64748b' }}>
+                      <span key={d.dow} style={{ fontSize: 11, color: '#94a3b8' }}>
                         <b style={{ color: d.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{d.label}</b>: {d.winRate}% WR · {d.days}d
                       </span>
                     ))}
@@ -8669,11 +8670,11 @@ function ScenarioTesterView() {
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                     Edge by Fill # of Day
                   </div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>Does your edge degrade as you trade more? #1 = first fill of the day.</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 10 }}>Does your edge degrade as you trade more? #1 = first fill of the day.</div>
                   <ScenarioPatBar data={patterns.sessionSequence} />
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '2px 12px', marginTop: 8 }}>
                     {patterns.sessionSequence.map(s => (
-                      <span key={s.seq} style={{ fontSize: 11, color: '#64748b' }}>
+                      <span key={s.seq} style={{ fontSize: 11, color: '#94a3b8' }}>
                         <b style={{ color: s.avgPnl >= 0 ? '#22c55e' : '#ef4444' }}>{s.label}</b>: {s.winRate}% WR · {s.count}f · {fmt$(s.totalPnl)}
                       </span>
                     ))}
@@ -8685,7 +8686,7 @@ function ScenarioTesterView() {
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
                     Next Fill: After Win vs After Loss
                   </div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginBottom: 14 }}>Make-it-back spiral, quantified. How do you trade after a loser?</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 14 }}>Make-it-back spiral, quantified. How do you trade after a loser?</div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                     {[
                       { key: 'afterLoss', label: 'After a Loss', color: '#ef4444' },
@@ -8700,7 +8701,7 @@ function ScenarioTesterView() {
                           </div>
                           <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>avg per fill</div>
                           <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>{s.winRate}% win rate</div>
-                          <div style={{ fontSize: 12, color: '#64748b' }}>{s.count} instances · {fmt$(s.totalPnl)} total</div>
+                          <div style={{ fontSize: 12, color: '#94a3b8' }}>{s.count} instances · {fmt$(s.totalPnl)} total</div>
                         </div>
                       );
                     })}
@@ -8718,7 +8719,7 @@ function ScenarioTesterView() {
         <button onClick={() => setOptExpanded(x => !x)}
           style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Parameter Optimizer (Grid Search)</span>
-          <span style={{ fontSize: 12, color: '#64748b' }}>{optExpanded ? '▲' : '▼'}</span>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>{optExpanded ? '▲' : '▼'}</span>
         </button>
         {optExpanded && (
           <div style={{ padding: '0 18px 18px' }}>
@@ -8748,7 +8749,7 @@ function ScenarioTesterView() {
                 </button>
               ))}
             </div>
-            <div style={{ fontSize: 11, color: '#334155', marginBottom: 12 }}>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 12 }}>
               Unchecked parameters are held at their "no rule" default. Date range and account filters from the main panel apply.
             </div>
 
@@ -8764,7 +8765,7 @@ function ScenarioTesterView() {
               const { topCombos, totalCombos, meta } = optResult;
               return (
                 <div>
-                  <div style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
                     {totalCombos} combinations tested · In-sample: {meta.isSplit.start} → {meta.isSplit.end} ({meta.isSplit.days}d) · Out-of-sample: {meta.oosSplit.start} → {meta.oosSplit.end} ({meta.oosSplit.days}d)
                   </div>
                   <div style={{ overflowX: 'auto' }}>
@@ -8805,7 +8806,7 @@ function ScenarioTesterView() {
                       </tbody>
                     </table>
                   </div>
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.7 }}>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.7 }}>
                     <strong style={{ color: '#94a3b8' }}>Plateau %</strong> — % of ±1-step parameter neighbors that also beat actual P&L in-sample. ≥50% = robust plateau.&nbsp;
                     <strong style={{ color: '#22c55e' }}>ROBUST</strong> = OOS profitable + plateau ≥50%.&nbsp;
                     <strong style={{ color: '#f59e0b' }}>FRAGILE</strong> = OOS profitable but isolated spike.&nbsp;
@@ -8824,7 +8825,7 @@ function ScenarioTesterView() {
         <button onClick={() => setMcExpanded(x => !x)}
           style={{ width: '100%', padding: '14px 18px', background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monte Carlo Robustness</span>
-          <span style={{ fontSize: 12, color: '#64748b' }}>{mcExpanded ? '▲' : '▼'}</span>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>{mcExpanded ? '▲' : '▼'}</span>
         </button>
         {mcExpanded && (
           <div style={{ padding: '0 18px 18px' }}>
@@ -8835,7 +8836,7 @@ function ScenarioTesterView() {
             </div>
 
             {mcParams && (
-              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>
                 Testing: DLL={mcParams.dll != null ? `$${mcParams.dll}` : 'none'} · Cut={mcParams.timeTo || 'none'} · MaxT={mcParams.maxTradesPerDay ?? 'none'} · StopL={mcParams.stopAfterLosses ?? 'none'} · ProfLk={mcParams.profitLock != null ? `$${mcParams.profitLock}` : 'none'}
               </div>
             )}
@@ -8865,7 +8866,7 @@ function ScenarioTesterView() {
                       { label: '95th %ile', val: dist.p95, color: '#22c55e' },
                     ].map(({ label, val, color }) => (
                       <div key={label} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '10px 12px' }}>
-                        <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{label}</div>
+                        <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>{label}</div>
                         <div style={{ fontSize: 18, fontWeight: 800, fontFamily: 'monospace', color }}>{fmt$(val)}</div>
                       </div>
                     ))}
@@ -8880,7 +8881,7 @@ function ScenarioTesterView() {
                       <span style={{ fontSize: 13, color: '#fbbf24' }}>Max drawdown p95: {fmt$(drawdown.p95, false)}</span>
                     </div>
                     <div style={{ padding: '8px 14px', borderRadius: 7, background: '#0f172a', border: '1px solid #1e293b' }}>
-                      <span style={{ fontSize: 13, color: '#64748b' }}>Actual scenario P&L: </span>
+                      <span style={{ fontSize: 13, color: '#94a3b8' }}>Actual scenario P&L: </span>
                       <span style={{ fontSize: 13, fontWeight: 700, color: scenarioNetPnl >= 0 ? '#22c55e' : '#ef4444' }}>{fmt$(scenarioNetPnl)}</span>
                     </div>
                   </div>
@@ -8902,7 +8903,7 @@ function ScenarioTesterView() {
                     </BarChart>
                   </ResponsiveContainer>
 
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', lineHeight: 1.7 }}>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#94a3b8', lineHeight: 1.7 }}>
                     Method: bootstrap resampling — randomly draws {mcResult.dailyPnls.length} daily P&Ls with replacement, 5,000 times.
                     A left-skewed distribution with p5 deeply negative means the strategy is fragile to bad luck runs.
                     The actual result ({fmt$(scenarioNetPnl)}) should sit above the median to be meaningful.
@@ -9136,7 +9137,7 @@ function PerformanceAuditPanel() {
                                 {s.regimeFit === 'OUTPERFORMING' ? 'OUT' : s.regimeFit === 'DEGRADING' ? 'DEG' : 'NRM'}
                               </span>
                             </span>
-                          ) : <span style={{ color: '#64748b' }}>--</span>}
+                          ) : <span style={{ color: '#94a3b8' }}>--</span>}
                         </td>;
                         case 'frequency': return <td key={c.key} style={{ ...cs, color: '#94a3b8', fontSize: 12 }}>{s.frequency || '--'}</td>;
                         case 'distFromPrice': return <td key={c.key} style={{ ...cs,
@@ -9147,7 +9148,7 @@ function PerformanceAuditPanel() {
                             <span style={{ fontSize: 12, fontWeight: 800, padding: '2px 6px', borderRadius: 3,
                               background: probColor(s.next2DayProb) + '20', color: probColor(s.next2DayProb),
                             }}>{probLabel(s.next2DayProb)}</span>
-                          ) : <span style={{ color: '#64748b' }}>--</span>}
+                          ) : <span style={{ color: '#94a3b8' }}>--</span>}
                         </td>;
                         case 'status': return <td key={c.key} style={{ ...cs }}>
                       <span style={{
@@ -9158,7 +9159,7 @@ function PerformanceAuditPanel() {
                         {s.status}
                       </span>
                     </td>;
-                        default: return <td key={c.key} style={{ padding: '8px 6px', color: '#64748b', fontSize: 13 }}>--</td>;
+                        default: return <td key={c.key} style={{ padding: '8px 6px', color: '#94a3b8', fontSize: 13 }}>--</td>;
                       }
                     })}
                   </tr>
@@ -9231,14 +9232,14 @@ function ConfluencePairsTable({ pairs }) {
 
   const wrColor = v => v != null ? (v >= 75 ? '#4ade80' : v >= 60 ? '#a3e635' : v >= 50 ? '#fbbf24' : '#f87171') : '#94a3b8';
   const evColor = v => v != null ? (v > 30 ? '#4ade80' : v > 0 ? '#a3e635' : v > -20 ? '#fbbf24' : '#f87171') : '#94a3b8';
-  const trendIcon = t => t === 'UP' ? <span style={{ color: '#4ade80' }}>↑</span> : t === 'DOWN' ? <span style={{ color: '#f87171' }}>↓</span> : t === 'FLAT' ? <span style={{ color: '#94a3b8' }}>→</span> : <span style={{ color: '#475569' }}>—</span>;
+  const trendIcon = t => t === 'UP' ? <span style={{ color: '#4ade80' }}>↑</span> : t === 'DOWN' ? <span style={{ color: '#f87171' }}>↓</span> : t === 'FLAT' ? <span style={{ color: '#94a3b8' }}>→</span> : <span style={{ color: '#94a3b8' }}>—</span>;
   const recBadge = rec => {
     const c = rec === 'TRADE' ? '#4ade80' : rec === 'CUT' ? '#f87171' : '#94a3b8';
     return <span style={{ fontSize: 11, fontWeight: 800, padding: '1px 6px', borderRadius: 3, background: c + '20', color: c, letterSpacing: '0.04em' }}>{rec}</span>;
   };
   const subTag = (sub, labelKey) => sub
     ? <span title={`N=${sub.n} WR=${sub.wr}% EV=$${sub.ev}`} style={{ fontSize: 11, color: '#94a3b8', cursor: 'default' }}>{sub[labelKey]}</span>
-    : <span style={{ color: '#475569' }}>—</span>;
+    : <span style={{ color: '#94a3b8' }}>—</span>;
 
   const filtered = pairs.filter(p => {
     if (filter !== 'ALL' && p.recommendation !== filter) return false;
@@ -9274,7 +9275,7 @@ function ConfluencePairsTable({ pairs }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 12 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#e2e8f0' }}>Confluence Pairs</h2>
-          <span style={{ fontSize: 11, color: '#64748b' }}>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>
             {pairs.length} validated pairs (N≥10, ≥5 distinct sessions, 15pt proximity) · {tradeCt} TRADE · {ctxCt} CONTEXT · {cutCt} CUT · Updated weekly
           </span>
         </div>
@@ -9320,12 +9321,12 @@ function ConfluencePairsTable({ pairs }) {
                   onMouseLeave={e => e.currentTarget.style.background = expandedPair === p.pair ? 'rgba(148,163,184,0.03)' : 'transparent'}
                 >
                   <td style={{ padding: '7px 8px', fontWeight: 700, color: '#e2e8f0', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{p.pair}</td>
-                  <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: '#64748b' }}>{p.n}</td>
+                  <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: '#94a3b8' }}>{p.n}</td>
                   <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontWeight: 800, color: wrColor(p.wr) }}>{p.wr != null ? p.wr.toFixed(1) + '%' : '—'}</td>
                   <td style={{ padding: '7px 8px', fontFamily: 'monospace', fontWeight: 800, color: evColor(p.ev) }}>{p.ev != null ? '$' + Math.round(p.ev) : '—'}</td>
                   <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: wrColor(p.wr6m) }}>{p.wr6m != null ? p.wr6m.toFixed(1) + '%' : '—'}</td>
                   <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: wrColor(p.wr20) }}>{p.wr20 != null ? p.wr20.toFixed(1) + '%' : '—'}</td>
-                  <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: '#64748b' }}>{p.n20 || '—'}</td>
+                  <td style={{ padding: '7px 8px', fontFamily: 'monospace', color: '#94a3b8' }}>{p.n20 || '—'}</td>
                   <td style={{ padding: '7px 8px', textAlign: 'center' }}>{trendIcon(p.trend)}</td>
                   <td style={{ padding: '7px 8px' }}>{subTag(p.best_dow, 'dow')}</td>
                   <td style={{ padding: '7px 8px' }}>{subTag(p.best_tod, 'tod')}</td>
@@ -9339,39 +9340,39 @@ function ConfluencePairsTable({ pairs }) {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
                         {/* DOW */}
                         <div>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Day of Week</div>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Day of Week</div>
                           {p.dow_breakdown?.length ? p.dow_breakdown.map(d => (
                             <div key={d.dow} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0', borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
                               <span style={{ color: '#94a3b8', minWidth: 40 }}>{d.dow}</span>
                               <span style={{ fontFamily: 'monospace', color: wrColor(d.wr) }}>{d.wr != null ? d.wr.toFixed(1) + '%' : '—'}</span>
                               <span style={{ fontFamily: 'monospace', color: evColor(d.ev), minWidth: 48, textAlign: 'right' }}>{d.ev != null ? '$' + Math.round(d.ev) : '—'}</span>
-                              <span style={{ color: '#475569', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
+                              <span style={{ color: '#94a3b8', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
                             </div>
-                          )) : <span style={{ color: '#475569', fontSize: 12 }}>No data</span>}
+                          )) : <span style={{ color: '#94a3b8', fontSize: 12 }}>No data</span>}
                         </div>
                         {/* TOD */}
                         <div>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Time of Day</div>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Time of Day</div>
                           {p.tod_breakdown?.length ? p.tod_breakdown.map(d => (
                             <div key={d.tod} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0', borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
                               <span style={{ color: '#94a3b8', minWidth: 60 }}>{d.tod}</span>
                               <span style={{ fontFamily: 'monospace', color: wrColor(d.wr) }}>{d.wr != null ? d.wr.toFixed(1) + '%' : '—'}</span>
                               <span style={{ fontFamily: 'monospace', color: evColor(d.ev), minWidth: 48, textAlign: 'right' }}>{d.ev != null ? '$' + Math.round(d.ev) : '—'}</span>
-                              <span style={{ color: '#475569', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
+                              <span style={{ color: '#94a3b8', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
                             </div>
-                          )) : <span style={{ color: '#475569', fontSize: 12 }}>No data</span>}
+                          )) : <span style={{ color: '#94a3b8', fontSize: 12 }}>No data</span>}
                         </div>
                         {/* Day Type */}
                         <div>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Day Type</div>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Day Type</div>
                           {p.dt_breakdown?.length ? p.dt_breakdown.map(d => (
                             <div key={d.day_type} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, padding: '2px 0', borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
                               <span style={{ color: '#94a3b8', minWidth: 72 }}>{d.day_type}</span>
                               <span style={{ fontFamily: 'monospace', color: wrColor(d.wr) }}>{d.wr != null ? d.wr.toFixed(1) + '%' : '—'}</span>
                               <span style={{ fontFamily: 'monospace', color: evColor(d.ev), minWidth: 48, textAlign: 'right' }}>{d.ev != null ? '$' + Math.round(d.ev) : '—'}</span>
-                              <span style={{ color: '#475569', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
+                              <span style={{ color: '#94a3b8', minWidth: 26, textAlign: 'right' }}>N={d.n}</span>
                             </div>
-                          )) : <span style={{ color: '#475569', fontSize: 12 }}>No data</span>}
+                          )) : <span style={{ color: '#94a3b8', fontSize: 12 }}>No data</span>}
                         </div>
                       </div>
                     </td>
@@ -9382,7 +9383,7 @@ function ConfluencePairsTable({ pairs }) {
           </tbody>
         </table>
         {filtered.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 32, color: '#475569' }}>No pairs match this filter.</div>
+          <div style={{ textAlign: 'center', padding: 32, color: '#94a3b8' }}>No pairs match this filter.</div>
         )}
       </div>
     </div>
@@ -9855,9 +9856,9 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                       <div style={{ display: 'flex', gap: 16, marginTop: 8, padding: '7px 12px', background: 'rgba(0,0,0,0.15)', borderRadius: 6, alignItems: 'center' }}>
                         {display ? (
                           <>
-                            <span style={{ fontSize: 13, color: '#64748b', fontFamily: 'monospace', minWidth: 100 }}>
+                            <span style={{ fontSize: 13, color: '#94a3b8', fontFamily: 'monospace', minWidth: 100 }}>
                               {display.log_date ? new Date(display.log_date + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
-                              {!hoveredEffPoint && <span style={{ color: '#334155', fontSize: 13 }}> (latest)</span>}
+                              {!hoveredEffPoint && <span style={{ color: '#94a3b8', fontSize: 13 }}> (latest)</span>}
                             </span>
                             {[
                               { label: 'Entry', value: display.entry_eff, color: '#3b82f6' },
@@ -9872,7 +9873,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                               </span>
                             ))}
                           </>
-                        ) : <span style={{ fontSize: 13, color: '#334155' }}>Hover to inspect</span>}
+                        ) : <span style={{ fontSize: 13, color: '#94a3b8' }}>Hover to inspect</span>}
                       </div>
                       </>
                     );
@@ -9903,7 +9904,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                             <div style={{ fontSize: 20, fontWeight: 800, color: box.color, fontFamily: 'monospace', lineHeight: 1.2 }}>
                               {box.neg ? '-' : ''}{pts ?? '—'} <span style={{ fontSize: 13, fontWeight: 600 }}>pts</span>
                             </div>
-                            <div style={{ fontSize: 13, color: '#64748b', marginTop: 1 }}>{box.sub}</div>
+                            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 1 }}>{box.sub}</div>
                           </div>
                         );
                       })}
@@ -9912,7 +9913,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                           <span style={{ fontSize: 13, color: '#94a3b8' }}>R:R (1 MNQ)  </span>
                           <span style={{ fontWeight: 700, fontFamily: 'monospace', fontSize: 13 }}>
                             <span style={{ color: '#22c55e' }}>{toMnqPts(d.p50Win)}pts</span>
-                            <span style={{ color: '#64748b', margin: '0 4px' }}>vs</span>
+                            <span style={{ color: '#94a3b8', margin: '0 4px' }}>vs</span>
                             <span style={{ color: '#ef4444' }}>{toMnqPts(d.p50Loss)}pts</span>
                             <span style={{ color: '#94a3b8', marginLeft: 6 }}>
                               = {(d.p50Win / Math.abs(d.p50Loss || 1)).toFixed(2)}:1
@@ -10941,7 +10942,7 @@ function ACDSessionState({ todayData, nl, pivot }) {
           <span style={{ fontSize: 16 }}>🗓</span>
           <div>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>Market Holiday</span>
-            <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>{liveSetup.reason?.replace('Market Holiday — ', '')}</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 8 }}>{liveSetup.reason?.replace('Market Holiday — ', '')}</span>
           </div>
         </div>
       )}
@@ -12098,7 +12099,7 @@ function ACDSessionTimeline() {
         <span style={{ fontSize: 20 }}>🗓</span>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8' }}>Market Holiday — {live.reason?.replace('Market Holiday — ', '')}</div>
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>No trading today. Next session opens Monday 9:30 AM ET.</div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>No trading today. Next session opens Monday 9:30 AM ET.</div>
         </div>
       </div>
     );
@@ -15792,7 +15793,7 @@ function LevelConfluenceReference() {
                       transition: 'background 0.1s' }}>
                     <td style={{ padding: '9px 12px' }}>
                       <div style={{ fontWeight: 600, color: dimmed ? '#64748b' : '#e2e8f0' }}>{c.label}</div>
-                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>
+                      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 1 }}>
                         {c.levels.join(' · ')}
                         {STOP_TAG[c.stop] && <span style={{ marginLeft: 6, color: STOP_TAG[c.stop].color }}>{STOP_TAG[c.stop].label}</span>}
                       </div>
@@ -16593,7 +16594,7 @@ Risk: Position sizing and risk parameters are standard. Enter on candle close ou
                             const col = stat.winRate >= 0.58 ? '#22c55e' : stat.winRate >= 0.48 ? 'var(--text-primary)' : '#ef4444';
                             return (
                               <span key={dt} style={{ color: col, fontWeight: 700 }}>
-                                {dt}: {wr}% <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 9 }}>({stat.decidedN}t)</span>
+                                {dt}: {wr}% <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 11 }}>({stat.decidedN}t)</span>
                               </span>
                             );
                           })}
@@ -18640,13 +18641,37 @@ function SessionStatusBar({ conf, onStateChange }) {
                 : sc2.tier === 'MARGINAL' ? '#94a3b8'
                 : '#f59e0b';
 
+              // Verdict — live sizeMultiplier synthesized to one signal
+              const mult = sc2.sizeMultiplier ?? 1.0;
+              const verdict = mult >= 1.1  ? { label: 'TAKE IT',        color: '#22c55e', bg: 'rgba(34,197,94,0.08)',  icon: '✅' }
+                : mult >= 0.85             ? { label: 'STANDARD',       color: '#60a5fa', bg: 'rgba(96,165,250,0.06)', icon: '▶' }
+                : mult >= 0.5              ? { label: 'REDUCED SIZE',   color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', icon: '⚠' }
+                : mult >= 0.2              ? { label: 'LOW CONVICTION', color: '#f97316', bg: 'rgba(249,115,22,0.08)', icon: '⬇' }
+                :                           { label: 'NEAR-SKIP',       color: '#ef4444', bg: 'rgba(239,68,68,0.08)',  icon: '🔴' };
+              // Dim style — for chips that are context-only, not decision-changing
+              const DIM = { fontSize: 11, fontWeight: 500, color: '#4b5563', border: '1px solid rgba(75,85,99,0.18)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.05em', whiteSpace: 'nowrap' };
+
               return (
                 <div style={{ background: 'rgba(10,18,35,0.8)', border: `1px solid ${tierColor}28`, borderLeft: `3px solid ${tierColor}`, borderRadius: 6, padding: '9px 13px', marginBottom: 10 }}>
-                  {/* Row 1: phase + action + size */}
+                  {/* Verdict bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: verdict.bg, border: `1px solid ${verdict.color}28`, borderRadius: 4, padding: '4px 9px', marginBottom: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 800, color: verdict.color, letterSpacing: '0.07em' }}>{verdict.icon} {verdict.label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: verdict.color, fontFamily: 'monospace', opacity: 0.75 }}>{mult.toFixed(2)}×</span>
+                  </div>
+                  {/* Price quick-look — entry / stop / T1 prominent immediately after verdict */}
+                  <div style={{ display: 'flex', gap: 20, alignItems: 'baseline', marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid rgba(99,102,241,0.12)', flexWrap: 'wrap' }}>
+                    {sc2.entry != null && <div><div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 1 }}>Entry</div><div style={{ fontSize: 22, fontWeight: 800, color: c2, fontFamily: 'monospace' }}>{sc2.entry}</div></div>}
+                    {sc2.stop  != null && <div><div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 1 }}>Stop</div><div style={{ fontSize: 22, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{sc2.stop}</div></div>}
+                    {sc2.target != null && <div><div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 1 }}>T1</div><div style={{ fontSize: 22, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{sc2.target}</div></div>}
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 16, alignItems: 'baseline' }}>
+                      {riskDol   && <div style={{ textAlign: 'right' }}><div style={{ fontSize: 11, color: '#94a3b8', letterSpacing: '0.06em', marginBottom: 1 }}>Risk</div><div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444', fontFamily: 'monospace' }}>${riskDol}</div></div>}
+                      {rewardDol && <div style={{ textAlign: 'right' }}><div style={{ fontSize: 11, color: '#94a3b8', letterSpacing: '0.06em', marginBottom: 1 }}>T1</div><div style={{ fontSize: 14, fontWeight: 700, color: '#818cf8', fontFamily: 'monospace' }}>${rewardDol}</div></div>}
+                    </div>
+                  </div>
+                  {/* Row 1: phase + size */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 6 }}>
                     <span style={{ fontSize: 11, fontWeight: 700, color: phaseColor, letterSpacing: '0.09em' }}>{sessionPhase}</span>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: tierColor }}>{tierAction}</span>
-                    <span style={{ fontSize: 11, color: '#475569', marginLeft: 'auto', whiteSpace: 'nowrap' }}>1 MNQ / account</span>
+                    <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto', whiteSpace: 'nowrap' }}>1 MNQ / account</span>
                   </div>
                   {/* Row 2: risk / reward */}
                   {(riskDol || rewardDol) && (
@@ -18654,10 +18679,10 @@ function SessionStatusBar({ conf, onStateChange }) {
                       {riskDol   && <span>Risk <strong style={{ color: '#ef4444', fontFamily: 'monospace' }}>{riskPt}pt · ${riskDol}</strong></span>}
                       {rewardDol && <span>T1 reward <strong style={{ color: '#818cf8', fontFamily: 'monospace' }}>{rewardPt}pt · ${rewardDol}</strong></span>}
                       {isFadeSetup && riskPt && rewardPt && (
-                        <span style={{ color: '#475569', fontStyle: 'italic' }}>tight T1 — high WR covers it</span>
+                        <span style={{ color: '#94a3b8', fontStyle: 'italic' }}>tight T1 — high WR covers it</span>
                       )}
                       {!isFadeSetup && riskPt && rewardPt && (
-                        <span style={{ color: '#64748b' }}>R:R {(rewardPt / riskPt).toFixed(1)}×</span>
+                        <span style={{ color: '#94a3b8' }}>R:R {(rewardPt / riskPt).toFixed(1)}×</span>
                       )}
                     </div>
                   )}
@@ -18666,7 +18691,7 @@ function SessionStatusBar({ conf, onStateChange }) {
                     {runnerLines[0]}
                   </div>
                   {/* Row 4: touch / window note */}
-                  <div style={{ fontSize: 11, color: '#475569' }}>{touchNote}</div>
+                  <div style={{ fontSize: 11, color: '#94a3b8' }}>{touchNote}</div>
                 </div>
               );
             })()}
@@ -18690,14 +18715,14 @@ function SessionStatusBar({ conf, onStateChange }) {
                     </span>
                   )}
                   {sc2.t2 != null && (
-                    <span style={{ fontSize: 11, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.13)', border: '1px solid rgba(251,191,36,0.55)', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
-                      T2 RUNNER · {Math.round(sc2.t2)}
-                    </span>
+                    <span style={DIM}>T2 RUNNER · {Math.round(sc2.t2)}</span>
                   )}
                   {sc2.dayTypeEdge && (
-                    <span style={{ fontSize: 11, fontWeight: sc2.dayTypeEdge.strong ? 800 : 700, color: '#a78bfa', background: 'rgba(167,139,250,0.12)', border: `1px solid rgba(167,139,250,${sc2.dayTypeEdge.strong ? '0.6' : '0.35'})`, borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
-                      {sc2.dayTypeEdge.dayType} EDGE · {Math.round((sc2.dayTypeEdge.wr ?? 0) * 100)}% WR
-                    </span>
+                    (sc2.dayTypeEdge.sizeDelta ?? 0) >= 0.10
+                      ? <span style={{ fontSize: 11, fontWeight: sc2.dayTypeEdge.strong ? 800 : 700, color: '#a78bfa', background: 'rgba(167,139,250,0.12)', border: `1px solid rgba(167,139,250,${sc2.dayTypeEdge.strong ? '0.6' : '0.35'})`, borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                          {sc2.dayTypeEdge.dayType} EDGE · {Math.round((sc2.dayTypeEdge.wr ?? 0) * 100)}% WR
+                        </span>
+                      : <span style={DIM}>{sc2.dayTypeEdge.dayType} EDGE · {Math.round((sc2.dayTypeEdge.wr ?? 0) * 100)}% WR</span>
                   )}
                   {sc2.dayTypeWarn && (
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
@@ -18718,6 +18743,13 @@ function SessionStatusBar({ conf, onStateChange }) {
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.12)', border: '1px solid rgba(129,140,248,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
                       ⊕ PAIR: {sc2.confluencePairPartner}
                     </span>
+                  )}
+                  {sc2.stackCount >= 2 && (
+                    sc2.stackCount >= 7
+                      ? <span style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.45)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                          ⚠ {sc2.stackCount}× STACKED · SUPPRESSED
+                        </span>
+                      : <span style={DIM}>↑ {sc2.stackCount}× same dir</span>
                   )}
                   {sc2.openVsPriorValue === 'INSIDE_VALUE' && (
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#f97316', background: 'rgba(249,115,22,0.12)', border: '1px solid rgba(249,115,22,0.45)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
@@ -18763,25 +18795,6 @@ function SessionStatusBar({ conf, onStateChange }) {
                   </div>
                 )}
               </div>
-
-              <div style={{ width: 1, background: '#6366f1', alignSelf: 'stretch', opacity: 0.4 }} />
-
-              {/* Entry / Stop / Target */}
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>Entry zone</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: c2, fontFamily: 'monospace' }}>{sc2.entry}</div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 13, color: '#94a3b8' }}>Stop</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: '#ef4444', fontFamily: 'monospace' }}>{sc2.stop}</div>
-              </div>
-              {sc2.target && (
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 13, color: '#94a3b8' }}>T1</div>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: '#818cf8', fontFamily: 'monospace' }}>{sc2.target}</div>
-                  {sc2.targetLabel && <div style={{ fontSize: 13, color: '#94a3b8' }}>{sc2.targetLabel}</div>}
-                </div>
-              )}
 
               <div style={{ width: 1, background: '#6366f1', alignSelf: 'stretch', opacity: 0.4 }} />
 
@@ -19336,16 +19349,6 @@ function OvernightContextStrip() {
 }
 
 function BacktestedEdgeStatsCard() {
-  const [edgeData, setEdgeData] = React.useState(null);
-  React.useEffect(() => {
-    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setEdgeData).catch(() => {});
-  }, []);
-
-  const price = edgeData?.liveStatus?.currentPrice;
-  const cl = edgeData?.confluenceLevels;
-  const PROX = 25;
-  const isNear = (val) => price && val && Math.abs(price - val) <= PROX;
-
   const setups = [
     { name: 'VWAP Magnet', wr: '62%', delta: '+12% edge', color: '#94a3b8', status: 'CONTEXT', tip: 'Price 25% of range from VWAP → fade toward VWAP. 62% WR (N=460). Shadow-tracked only (not a primary entry). Self-scaling threshold. Best on BALANCE days (79% WR). 20pt target, 30pt stop.' },
     { name: 'PD_POC Fade', wr: '85%', delta: '$38/trade', color: '#10b981', status: 'ACTIVE', tip: 'Fade at prior day POC. 85% WR (N=40). 90pt stop, 40pt target. System anchor — 22% of total P&L. AM first touch.' },
@@ -19362,21 +19365,6 @@ function BacktestedEdgeStatsCard() {
     { name: 'TRT_LONG', wr: '75%@20bar', delta: '+24% edge', color: '#94a3b8', status: 'CONTEXT', tip: 'A+C failed, price through OR. 75% WR at 20 bars (not 10) — slow burn reversal. Shadow-tracked only. 120 min expiry. High MAE (143pt). Suppressed on wide OR.' },
   ];
 
-  const confLevels = [
-    { name: 'PD-2 VAH', delta: '+44.8%', color: '#10b981', val: cl?.pd2?.vah, tip: 'Strongest confluence. +44.8% controlled edge. Target: 15pt (83% hit). $45/ct.' },
-    { name: 'PD-2 VAL', delta: '+20.5%', color: '#10b981', val: cl?.pd2?.val, tip: 'Extension target. +20.5% controlled edge. Target: 75pt (33% hit). $55/ct.' },
-    { name: 'PW Low', delta: '+15.0%', color: '#10b981', val: cl?.pw?.low, tip: 'Prior week low support. +15.0% edge. Target: 100pt (33% hit). $100/ct.' },
-    { name: 'PD-3 VAH', delta: '+14.7%', color: '#34d399', val: cl?.pd3?.vah, tip: '3-day-prior VAH resistance. +14.7% edge. Scalp: 15pt (85% hit). $48/ct.' },
-    { name: '2D VAH', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.vah, tip: 'Prior day VAH. +9.6% edge. Target: 30pt (52% hit). $31/ct.' },
-    { name: '2D POC', delta: '+9.0%', color: '#34d399', val: cl?.pd1?.poc, tip: 'Prior day POC magnet. +9.0% edge. Target: 20pt (62% hit). $25/ct.' },
-    { name: 'OR Mid', delta: '+18.0%', color: '#60a5fa', val: cl?.orMid, tip: 'OR midpoint. With absorption: 60% WR, +$16 exp. 15pt target/15pt stop. Log via Quick Trade Log.' },
-    { name: 'PW High', delta: '+5.1%', color: '#fb923c', val: cl?.pw?.high, tip: 'Prior week high resistance. +5.1% edge. Target: 15pt (72% hit).' },
-    { name: '2D VAL', delta: '+9.6%', color: '#34d399', val: cl?.pd1?.val, tip: 'Prior day VAL. 82% fade WR (system backtest). 90pt stop, 40pt target.' },
-    { name: 'PP', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.pp, tip: 'Floor Pivot. 80% fade WR (system backtest). 90pt stop, 40pt target.' },
-    { name: 'S1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.s1, tip: 'Floor S1. 61% fade WR. Best 12-2PM (75%). BALANCE days 77%.' },
-    { name: 'R1', delta: 'pivot', color: '#60a5fa', val: cl?.floorPivots?.r1, tip: 'Floor R1. 53% fade WR. Coils after 3+ losses (100% WR N=4).' },
-  ];
-
   const removed = [
     { name: 'OTD_SHORT', edge: '-5.6%', status: 'REMOVED', color: '#ef4444' },
     { name: 'OTD_LONG', edge: '-20%', status: 'REMOVED', color: '#ef4444' },
@@ -19390,15 +19378,9 @@ function BacktestedEdgeStatsCard() {
     { name: 'FAILED_AUCTION', edge: '0% WR', status: 'REMOVED', color: '#ef4444' },
   ];
 
-  const rowSt = (active) => ({
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 6px', margin: '0 -6px', borderRadius: 4,
-    background: active ? 'rgba(251,191,36,0.08)' : 'transparent',
-    borderLeft: active ? '3px solid #fbbf24' : '3px solid transparent',
-  });
-
   return (
     <div style={{ padding: '8px 16px' }}>
-      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>Controlled tests, 12mo NQ (2025-2026). Confluence levels highlight when price is within 25pt.</div>
+      <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 10 }}>Controlled tests, 12mo NQ (2025-2026).</div>
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 240px', minWidth: 220 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>RANKED ACTIVE SETUPS</div>
@@ -19411,38 +19393,10 @@ function BacktestedEdgeStatsCard() {
                 </span>
                 <span style={{ display: 'flex', gap: 6 }}>
                   <span style={{ color: s.color, fontWeight: 700 }}>{s.wr}</span>
-                  <span style={{ color: '#94a3b8', fontSize: 10 }}>{s.delta}</span>
+                  <span style={{ color: '#94a3b8', fontSize: 11 }}>{s.delta}</span>
                 </span>
               </div>
             ))}
-          </div>
-        </div>
-
-        <div style={{ flex: '1 1 220px', minWidth: 200 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.25)', paddingBottom: 4, marginBottom: 6 }}>CONFLUENCE EDGE (Controlled Delta)</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
-            {confLevels.map((l, i) => {
-              const active = isNear(l.val);
-              const dist = price && l.val ? Math.round(price - l.val) : null;
-              return (
-                <div key={i} style={rowSt(active)} title={l.tip}>
-                  <span style={{ color: active ? '#e2e8f0' : '#94a3b8', fontWeight: active ? 700 : 400, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    {l.name}
-                    {l.val != null && <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{fmtP(l.val, 0)}</span>}
-                    {active && <span style={{ fontSize: 11, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '0 4px', borderRadius: 2 }}>ACTIVE</span>}
-                  </span>
-                  <span style={{ display: 'flex', gap: 4 }}>
-                    <span style={{ color: l.color, fontWeight: 700 }}>{l.delta}</span>
-                    {dist != null && <span style={{ fontSize: 11, color: '#94a3b8' }}>{dist > 0 ? '+' : ''}{dist}pt</span>}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 6, paddingTop: 4, borderTop: '1px solid rgba(51,65,85,0.2)', fontSize: 12, color: '#94a3b8' }}>ANTI-CONFLUENCE (avoid):</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11, color: '#f87171', marginTop: 2 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB High</span><span>-23.9%</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>IB Low</span><span>-28.1%</span></div>
           </div>
         </div>
 
@@ -19453,7 +19407,7 @@ function BacktestedEdgeStatsCard() {
               <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1px 0', color: '#94a3b8' }}>
                 <span>{s.name}</span>
                 <span style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <span style={{ color: '#ef4444', fontWeight: 600, fontSize: 10 }}>{s.edge}</span>
+                  <span style={{ color: '#ef4444', fontWeight: 600, fontSize: 11 }}>{s.edge}</span>
                   <span style={{ fontSize: 7, color: '#ef4444', background: 'rgba(239,68,68,0.12)', padding: '0 3px', borderRadius: 2, fontWeight: 700 }}>SHADOW</span>
                 </span>
               </div>
@@ -19498,7 +19452,7 @@ function SetupFeedbackForm({ setup, existingFeedback, onSaved }) {
     setSaving(false);
   };
 
-  const btnBase = { fontSize: 10, padding: '2px 7px', borderRadius: 3, border: '1px solid', cursor: 'pointer', fontWeight: 700 };
+  const btnBase = { fontSize: 11, padding: '2px 7px', borderRadius: 3, border: '1px solid', cursor: 'pointer', fontWeight: 700 };
   if (!open) return (
     <button onClick={() => setOpen(true)} style={{ ...btnBase, marginTop: 6, background: 'transparent', borderColor: existingFeedback ? '#6366f1' : 'rgba(100,116,139,0.4)', color: existingFeedback ? '#818cf8' : '#64748b' }}>
       {existingFeedback ? `✓ ${existingFeedback.action}${existingFeedback.tags?.length ? ' · ' + existingFeedback.tags.slice(0,2).join(', ') : ''}` : '+ Feedback'}
@@ -19510,11 +19464,11 @@ function SetupFeedbackForm({ setup, existingFeedback, onSaved }) {
         {['TAKEN','PASSED'].map(a => (
           <button key={a} onClick={() => setAction(a)} style={{ ...btnBase, background: action === a ? '#6366f1' : 'transparent', borderColor: action === a ? '#6366f1' : 'rgba(100,116,139,0.4)', color: action === a ? '#fff' : '#94a3b8' }}>{a}</button>
         ))}
-        <button onClick={() => setOpen(false)} style={{ ...btnBase, marginLeft: 'auto', background: 'transparent', borderColor: 'transparent', color: '#64748b' }}>✕</button>
+        <button onClick={() => setOpen(false)} style={{ ...btnBase, marginLeft: 'auto', background: 'transparent', borderColor: 'transparent', color: '#94a3b8' }}>✕</button>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
         {MGMT_TAGS.map(t => (
-          <button key={t} onClick={() => toggleTag(t)} style={{ ...btnBase, fontSize: 10, background: tags.includes(t) ? 'rgba(99,102,241,0.2)' : 'transparent', borderColor: tags.includes(t) ? '#6366f1' : 'rgba(100,116,139,0.3)', color: tags.includes(t) ? '#a5b4fc' : '#64748b' }}>{t}</button>
+          <button key={t} onClick={() => toggleTag(t)} style={{ ...btnBase, fontSize: 11, background: tags.includes(t) ? 'rgba(99,102,241,0.2)' : 'transparent', borderColor: tags.includes(t) ? '#6366f1' : 'rgba(100,116,139,0.3)', color: tags.includes(t) ? '#a5b4fc' : '#64748b' }}>{t}</button>
         ))}
       </div>
       <input value={note} onChange={e => setNote(e.target.value)} placeholder="Optional note..." style={{ width: '100%', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 4, color: '#cbd5e1', fontSize: 11, padding: '4px 7px', boxSizing: 'border-box', marginBottom: 6 }} />
@@ -19555,65 +19509,21 @@ function EdgeSectionsPanel() {
   if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
-  const { liveStatus, setups, confluenceLevels, windows, overnightContext } = data;
-  const price = liveStatus?.currentPrice;
-  const PROX = 25;
+  const { liveStatus, setups, windows, overnightContext, sessionPermissions } = data;
   const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
   const inv = overnightContext?.overnight_inventory;
   const ovp = overnightContext?.open_vs_prior_value;
   const pdp = overnightContext?.prior_day_profile;
   const cellSt = (v) => ({ padding: '6px 10px', fontSize: 12, color: v != null && v >= 60 ? '#22c55e' : v != null && v >= 45 ? '#f59e0b' : '#94a3b8', fontFamily: 'monospace', textAlign: 'center' });
 
-  const rawLevels = confluenceLevels ? [
-    { name: 'PD-2 VAH', val: confluenceLevels.pd2?.vah, target: 15, hitRate: 83, ctrlDelta: 44.8, color: '#f87171', role: 'resistance' },
-    { name: 'PD-2 VAL', val: confluenceLevels.pd2?.val, target: 75, hitRate: 33, ctrlDelta: 20.5, color: '#4ade80', role: 'support' },
-    { name: 'PW Low', val: confluenceLevels.pw?.low, target: 100, hitRate: 33, ctrlDelta: 15.0, color: '#4ade80', role: 'support' },
-    { name: 'PD-3 VAH', val: confluenceLevels.pd3?.vah, target: 15, hitRate: 85, ctrlDelta: 14.7, color: '#f87171', role: 'resistance' },
-    { name: 'PD-3 VAL', val: confluenceLevels.pd3?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
-    { name: 'PD-3 POC', val: confluenceLevels.pd3?.poc, target: 20, hitRate: 0, ctrlDelta: 0, color: '#a78bfa', role: 'magnet' },
-    { name: '2D VAH', val: confluenceLevels.pd1?.vah, target: 30, hitRate: 52, ctrlDelta: 9.6, color: '#fb923c', role: 'resistance' },
-    { name: '2D VAL', val: confluenceLevels.pd1?.val, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
-    { name: '2D POC', val: confluenceLevels.pd1?.poc, target: 20, hitRate: 62, ctrlDelta: 9.0, color: '#a78bfa', role: 'magnet' },
-    { name: 'OR Mid', val: confluenceLevels.orMid, target: 15, hitRate: 60, ctrlDelta: 18.0, color: '#60a5fa', role: 'pivot' },
-    { name: 'PW High', val: confluenceLevels.pw?.high, target: 15, hitRate: 72, ctrlDelta: 5.1, color: '#fb923c', role: 'resistance' },
-    { name: 'Floor PP', val: confluenceLevels.floorPivots?.pp, target: 20, hitRate: 99, ctrlDelta: 0, color: '#94a3b8', role: 'pivot' },
-    { name: 'Floor S1', val: confluenceLevels.floorPivots?.s1, target: 20, hitRate: 40, ctrlDelta: 0, color: '#94a3b8', role: 'support' },
-    { name: 'Floor R1', val: confluenceLevels.floorPivots?.r1, target: 20, hitRate: 45, ctrlDelta: 0, color: '#94a3b8', role: 'resistance' },
-    { name: 'Floor S2', val: confluenceLevels.floorPivots?.s2, target: 20, hitRate: 41, ctrlDelta: 0, color: '#64748b', role: 'support' },
-    { name: 'Floor S3', val: confluenceLevels.floorPivots?.s3, target: 20, hitRate: 37, ctrlDelta: 0, color: '#64748b', role: 'support' },
-    { name: '2D High', val: confluenceLevels.pd1?.high, target: 20, hitRate: 0, ctrlDelta: 0, color: '#fb923c', role: 'resistance' },
-    { name: '2D Low', val: confluenceLevels.pd1?.low, target: 20, hitRate: 0, ctrlDelta: 0, color: '#4ade80', role: 'support' },
-  ].filter(l => l.val != null) : [];
-
-  // Zone clustering: group levels within 15pt of each other
-  const ZONE_PROX = 15;
-  const zones = [];
-  const used = new Set();
-  const sorted = [...rawLevels].sort((a, b) => a.val - b.val);
-  for (let i = 0; i < sorted.length; i++) {
-    if (used.has(i)) continue;
-    const cluster = [sorted[i]];
-    used.add(i);
-    for (let j = i + 1; j < sorted.length; j++) {
-      if (used.has(j)) continue;
-      if (Math.abs(sorted[j].val - sorted[i].val) <= ZONE_PROX) {
-        cluster.push(sorted[j]);
-        used.add(j);
-      }
-    }
-    if (cluster.length >= 2) {
-      const lo = Math.min(...cluster.map(l => l.val));
-      const hi = Math.max(...cluster.map(l => l.val));
-      const mid = (lo + hi) / 2;
-      zones.push({ levels: cluster, lo, hi, mid, count: cluster.length });
-    }
-  }
-
-  // Levels sorted by distance from price, with zone info attached
-  const levels = sorted.map(l => {
-    const zone = zones.find(z => z.levels.includes(l));
-    return { ...l, zone, note: null };
-  });
+  const dayType = sessionPermissions?.dayType || null;
+  // Case engine setup types gated by day_type: show only when day type matches their edge
+  const CASE_ENGINE_GATE = {
+    'IB_BULLISH':       'TREND',     // 77.8% WR on TREND, -$46.5 on BALANCE
+    'C_STANDALONE_UP':  'TREND',     // 63.3% WR on TREND, -$69.9 on BALANCE
+    'IB_BEARISH':       'TURBULENT', // 74.2% WR on TURBULENT, -$15 on BALANCE
+    'C_STANDALONE_DOWN':'TURBULENT', // 63.3% WR on TURBULENT, -$30 on BALANCE
+  };
 
   const firedTypes = new Set((setups?.list || []).map(s => s.setup_type));
   const potentials = [];
@@ -19638,17 +19548,79 @@ function EdgeSectionsPanel() {
       {/* Active Setups */}
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>🎯 Today's Actionable Setups</div>
+        {(() => {
+          const activeList = setups?.list || [];
+          // Derive today's totals: active (ACTIVE) + resolved (RESOLVED/EXPIRED already in resolvedSetups)
+          const longTotal  = activeList.filter(s => s.direction === 'LONG').length
+                           + resolvedSetups.filter(s => s.direction === 'LONG'  || s.setup_type?.endsWith('_LONG')).length;
+          const shortTotal = activeList.filter(s => s.direction === 'SHORT').length
+                           + resolvedSetups.filter(s => s.direction === 'SHORT' || s.setup_type?.endsWith('_SHORT')).length;
+          const MAX = 7;
+          if (longTotal + shortTotal < 2) return null;
+          const barColor = (n) => n >= MAX ? '#ef4444' : n >= 4 ? '#f97316' : '#22c55e';
+          const StackSide = ({ label, count }) => (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', width: 32, textAlign: 'right', fontWeight: 700, letterSpacing: '0.06em' }}>{label}</span>
+              <div style={{ flex: 1, height: 5, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.min(count / MAX * 100, 100)}%`, background: barColor(count), borderRadius: 3 }} />
+              </div>
+              <span style={{ fontSize: 12, fontWeight: 700, fontFamily: 'monospace', color: barColor(count), width: 14 }}>{count}</span>
+              {count >= MAX && <span style={{ fontSize: 11, fontWeight: 800, color: '#ef4444', letterSpacing: '0.07em' }}>SUPPRESS</span>}
+            </div>
+          );
+          return (
+            <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(10,18,35,0.5)', borderRadius: 4, border: '1px solid rgba(51,65,85,0.25)' }}>
+              <div style={{ fontSize: 11, color: '#94a3b8', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 5, fontWeight: 700 }}>Fade Stacking Today · max {MAX} before suppress</div>
+              <div style={{ display: 'flex', gap: 12 }}>
+                <StackSide label="LONG"  count={longTotal}  />
+                <StackSide label="SHORT" count={shortTotal} />
+              </div>
+            </div>
+          );
+        })()}
+        {/* Permission Slips — session-level probability stats */}
+        {sessionPermissions?.conditions?.length > 0 && (
+          <div style={{ marginBottom: 8, padding: '8px 11px', background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 6 }}>
+            <div style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>Permission Slip</div>
+            {sessionPermissions.conditions.map((c, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: i < sessionPermissions.conditions.length - 1 ? 3 : 0 }}>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>{c.label}</span>
+                <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: c.dir === 'LONG' ? '#22c55e' : '#ef4444' }}>{c.pct}%</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>day closes {c.dir} · N={c.n}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
         {setups?.list?.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             {setups.list.map(s => {
+              // Case engine setups have conditional edge — gate by day type
+              const gatedDayType = CASE_ENGINE_GATE[s.setup_type];
+              const isGated = gatedDayType != null;
+              const dayTypeKnown = !!dayType;
+              const isActiveForDayType = !isGated || !dayTypeKnown || dayType === gatedDayType;
+
+              if (isGated && dayTypeKnown && !isActiveForDayType) {
+                return (
+                  <div key={s.id} style={{ padding: '5px 10px', borderRadius: 4, background: 'rgba(15,23,42,0.2)', border: '1px solid rgba(51,65,85,0.15)', borderLeft: '3px solid #334155', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: 11, color: '#475569', fontWeight: 600 }}>{s.setup_type.replace(/_/g, ' ')}</span>
+                    <span style={{ fontSize: 11, color: '#334155' }}>context only · needs {gatedDayType} day</span>
+                  </div>
+                );
+              }
+
               const cc = s.confidence === 'HIGH' ? '#10b981' : s.confidence === 'MEDIUM' ? '#3b82f6' : s.confidence === 'LOW' ? '#f59e0b' : '#ef4444';
               const edgeCtx = {
                 'VALUE_AREA_RESPONSIVE_SHORT': 'Fade 2D VAH. 66.7% WR controlled. Best on BALANCE + NL30 aligned. 15pt stop / 20pt target.',
-                'IB_BEARISH': 'IB range break short. 45% filtered WR. Best on TURBULENT + POC aligned. Workhorse setup.',
+                'IB_BEARISH': 'IB range break short. 74.2% WR on TURBULENT (N=31). Best on TURBULENT + POC aligned.',
+                'IB_BULLISH': 'IB range break long. 77.8% WR on TREND (N=27). Elevated edge today.',
                 'OPEN_DRIVE_SHORT': 'Pullback to OR Low after opening drive. 68% WR. Best WED/FRI + tight OR.',
                 'OPEN_DRIVE_LONG': 'Pullback to OR High after opening drive. 67% WR. Best TREND + tight OR.',
                 'TRT_LONG': 'Trapped shorts reversal. 75% WR at 20 bars. 120-min expiry. Suppress on wide OR.',
-                'C_STANDALONE_DOWN': 'C signal break. 63% filtered WR. ONLY near PD-2 VA (gated). Death sequence gate active.',
+                'C_STANDALONE_DOWN': 'C signal break. 63.3% WR on TURBULENT (N=30). Elevated edge today.',
+                'C_STANDALONE_UP': 'C signal break. 63.3% WR on TREND (N=30). Elevated edge today.',
                 'ABSORPTION_LONG': 'Bullish absorption at support. 71% WR on BALANCE. 2-min bar detection. Runner profile.',
                 'EMA_SNAPBACK_LONG': '9 EMA stretch fade long. 96% directional reversion. Scalp toward EMA.',
                 'EMA_SNAPBACK_SHORT': '9 EMA stretch fade short. 96% directional reversion. Scalp toward EMA.',
@@ -19656,10 +19628,15 @@ function EdgeSectionsPanel() {
                 'COIL_SURGE_SHORT': 'Coil + vol surge. Fade toward VWAP. TREND/NL30-aligned only.',
               }[s.setup_type] || s.recommendation || '';
               const fb = feedbackBySetupId[s.id];
+              const isElevated = isGated && dayType === gatedDayType;
+              const cardBorderColor = isElevated ? '#f59e0b' : cc;
               return (
-                <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderLeft: `3px solid ${cc}` }}>
+                <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: isElevated ? 'rgba(245,158,11,0.05)' : 'rgba(15,23,42,0.4)', border: `1px solid ${isElevated ? 'rgba(245,158,11,0.25)' : 'rgba(51,65,85,0.3)'}`, borderLeft: `3px solid ${cardBorderColor}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ fontWeight: 700, color: '#e2e8f0' }}>{s.setup_type}</span>
+                    <span style={{ fontWeight: 700, color: '#e2e8f0' }}>
+                      {s.setup_type}
+                      {isElevated && <span style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '1px 5px', borderRadius: 2, marginLeft: 6 }}>{gatedDayType}</span>}
+                    </span>
                     <span style={{ fontSize: 11, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
                   </div>
                   <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
@@ -19697,7 +19674,7 @@ function EdgeSectionsPanel() {
               {' · '}
               <span style={{ color: '#a78bfa' }}>${resolvedSetups.reduce((sum, s) => sum + (parseFloat(s.actual_pnl) || 0), 0).toFixed(0)} simulated</span>
             </span>
-            <span style={{ fontSize: 10, color: '#64748b' }}>{showClosed ? '▲' : '▼'}</span>
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>{showClosed ? '▲' : '▼'}</span>
           </div>
           {showClosed && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 6 }}>
@@ -19718,7 +19695,7 @@ function EdgeSectionsPanel() {
                         {pnl !== 0 && <span style={{ fontSize: 11, color: pnl > 0 ? '#10b981' : '#f87171', fontFamily: 'monospace' }}>{pnl > 0 ? '+' : ''}{pnl.toFixed(0)} pts</span>}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 10, fontSize: 10, color: '#64748b', marginBottom: 3 }}>
+                    <div style={{ display: 'flex', gap: 10, fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>
                       <span>Fired {firedTime} → Closed {resolvedTime}</span>
                       <span style={{ color: '#ef4444' }}>Stop {fmtP(s.stop_level, 0)}</span>
                       <span style={{ color: '#34d399' }}>T1 {fmtP(s.t1_level, 0)}</span>
@@ -21064,7 +21041,7 @@ function AuctionReadModalContent({ nl, todayData }) {
               alignItems: 'center'
             }}>
               <span>Session Timeline</span>
-              <span style={{ color: '#64748b', fontSize: 11, fontWeight: 500 }}>({liveCtx.timeline.length})</span>
+              <span style={{ color: '#94a3b8', fontSize: 11, fontWeight: 500 }}>({liveCtx.timeline.length})</span>
             </div>
             <div style={{ 
               display: 'flex', 
@@ -21138,12 +21115,12 @@ function AuctionReadModalContent({ nl, todayData }) {
                     >
                       {/* Time & Badge */}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b', fontFamily: 'monospace' }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', fontFamily: 'monospace' }}>
                           {ev.time}
                         </span>
                         {ev.note && (
                           <span style={{ 
-                            fontSize: 9, 
+                            fontSize: 11, 
                             fontWeight: 700, 
                             color: dotColor, 
                             background: badgeBg, 
@@ -21163,7 +21140,7 @@ function AuctionReadModalContent({ nl, todayData }) {
                           {ev.event}
                         </span>
                         {ev.price && (
-                          <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>
+                          <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>
                             @ {Math.round(ev.price).toLocaleString()}
                           </span>
                         )}
@@ -22627,38 +22604,40 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 <ErrorBoundary name="Session Forecast">
                   <SessionForecastPanel date={todayET} section="intel" />
                 </ErrorBoundary>
+                <ErrorBoundary name="Volatility Regime" compact>
+                  <VolatilityRegimeCard />
+                </ErrorBoundary>
                 <ErrorBoundary name="Day-of-Week Playbook">
                   <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
-                </ErrorBoundary>
-                <ErrorBoundary name="Pre-Session Checklist">
-                  <PreSessionChecklist />
                 </ErrorBoundary>
               </div>
 
               {/* Col 2: Live execution — near-black so green/red signals pop */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(4,6,14,0.85)', borderRadius: 8, padding: 10 }}>
-                <ErrorBoundary name="Overnight Context">
-                  <OvernightContextStrip />
-                </ErrorBoundary>
+                {/* Approaching level pre-touch alert */}
+                <ApproachingLevelBanner />
                 {/* Edge Setups — primary live content, center stage */}
                 <ErrorBoundary name="Edge Sections" compact>
                   <EdgeSectionsPanel />
                 </ErrorBoundary>
+                <ErrorBoundary name="Overnight Context">
+                  <OvernightContextStrip />
+                </ErrorBoundary>
                 <ErrorBoundary name="Balance Zone Panel">
                   <BalanceZonePanel />
                 </ErrorBoundary>
-                <CollapsibleSection title="Live Read & Market Regimes" defaultOpen>
-                  <LiveReadBanner forecast={forecast} />
-                  <div style={{ marginTop: 8 }}>
-                    <ErrorBoundary name="Volatility Regime" compact><VolatilityRegimeCard /></ErrorBoundary>
-                  </div>
-                </CollapsibleSection>
               </div>
 
-              {/* Col 3: Scripts — warm slate container */}
-              <div style={{ background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
+              {/* Col 3: Scripts + Live Read + Checklist */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Scripts">
                   <SessionForecastPanel date={todayET} section="scripts" />
+                </ErrorBoundary>
+                <CollapsibleSection title="Live Read" defaultOpen>
+                  <LiveReadBanner forecast={forecast} />
+                </CollapsibleSection>
+                <ErrorBoundary name="Pre-Session Checklist">
+                  <PreSessionChecklist />
                 </ErrorBoundary>
               </div>
 
@@ -22779,8 +22758,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                           <td style={{ padding: '5px 8px', fontWeight: 600, color: '#e2e8f0' }}>{s.name}</td>
                           <td style={{ padding: '5px 8px', color: s.color, fontWeight: 700 }}>{s.edge}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
-                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.ctx}</td>
-                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 11 }}>{s.ctx}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 11 }}>{s.tests}</td>
                           <td style={{ padding: '5px 8px' }}><span style={{ fontSize: 11, fontWeight: 800, color: s.color, background: `${s.color}20`, padding: '1px 5px', borderRadius: 3 }}>{s.status}</span></td>
                         </tr>
                       ))}
@@ -22810,8 +22789,8 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                           <td style={{ padding: '5px 8px', color: '#10b981', fontWeight: 700 }}>{s.wr}</td>
                           <td style={{ padding: '5px 8px', color: '#34d399' }}>{s.edge}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{s.freq}</td>
-                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 10 }}>{s.tests}</td>
-                          <td style={{ padding: '5px 8px', color: '#f59e0b', fontSize: 10 }}>{s.why}</td>
+                          <td style={{ padding: '5px 8px', color: '#94a3b8', fontSize: 11 }}>{s.tests}</td>
+                          <td style={{ padding: '5px 8px', color: '#f59e0b', fontSize: 11 }}>{s.why}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -22845,7 +22824,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                           <td style={{ padding: '5px 8px', color: '#a78bfa' }}>{l.target}</td>
                           <td style={{ padding: '5px 8px', color: '#94a3b8' }}>{l.hit}</td>
                           <td style={{ padding: '5px 8px', color: '#34d399', fontWeight: 700 }}>{l.exp}</td>
-                          <td style={{ padding: '5px 8px', color: l.profile === 'Extension' ? '#f59e0b' : '#94a3b8', fontWeight: 600, fontSize: 10 }}>{l.profile}</td>
+                          <td style={{ padding: '5px 8px', color: l.profile === 'Extension' ? '#f59e0b' : '#94a3b8', fontWeight: 600, fontSize: 11 }}>{l.profile}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -23554,7 +23533,7 @@ function SetupHistoryView() {
   const resLabel = (r) => r === 'TARGET_HIT' ? 'T1 ✓' : r === 'STOP_HIT' ? 'Stop ✗' : r === 'TIME_EXPIRED' ? 'Expired' : r === 'SESSION_CLOSED' ? 'Closed' : r === 'INVALIDATED' ? 'Inv.' : r === 'EXPIRED' ? 'Expired' : r === 'ACTIVE' ? 'Active' : r || '—';
 
   const inputStyle = { background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(51,65,85,0.5)', borderRadius: 6, color: '#cbd5e1', fontSize: 12, padding: '5px 9px' };
-  const thBase = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid rgba(51,65,85,0.4)', whiteSpace: 'nowrap', userSelect: 'none', cursor: 'grab' };
+  const thBase = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: '1px solid rgba(51,65,85,0.4)', whiteSpace: 'nowrap', userSelect: 'none', cursor: 'grab' };
   const tdStyle = { padding: '7px 10px', fontSize: 12, color: '#cbd5e1', borderBottom: '1px solid rgba(51,65,85,0.15)', verticalAlign: 'middle' };
 
   const renderCell = (s, col) => {
@@ -23581,12 +23560,12 @@ function SetupHistoryView() {
     <div style={{ padding: '24px 28px', maxWidth: 1300, margin: '0 auto', color: '#94a3b8' }}>
       <div style={{ marginBottom: 20, display: 'flex', alignItems: 'baseline', gap: 16 }}>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: '#e2e8f0', margin: 0 }}>Setup Log</h2>
-        <span style={{ fontSize: 13, color: '#64748b' }}>
+        <span style={{ fontSize: 13, color: '#94a3b8' }}>
           {setups.length < total ? `${setups.length.toLocaleString()} of ${total.toLocaleString()} setups` : `${total.toLocaleString()} setups`}
         </span>
         {colOrder && (
           <button onClick={() => { setColOrder(null); localStorage.removeItem('setup-log-col-order'); }}
-            style={{ fontSize: 11, color: '#64748b', background: 'none', border: '1px solid #334155', borderRadius: 4, padding: '2px 7px', cursor: 'pointer' }}>
+            style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: '1px solid #334155', borderRadius: 4, padding: '2px 7px', cursor: 'pointer' }}>
             Reset columns
           </button>
         )}
@@ -23595,11 +23574,11 @@ function SetupHistoryView() {
       {/* Summary bar */}
       {resolved.length > 0 && (
         <div style={{ display: 'flex', gap: 24, marginBottom: 20, padding: '12px 16px', background: 'rgba(15,23,42,0.6)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 8 }}>
-          <div><span style={{ color: '#64748b', fontSize: 12 }}>Win Rate </span><span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 16 }}>{Math.round(wins / resolved.length * 100)}%</span><span style={{ color: '#64748b', fontSize: 11 }}> · N={resolved.length} resolved</span></div>
-          <div><span style={{ color: '#64748b', fontSize: 12 }}>Wins </span><span style={{ color: '#22c55e', fontWeight: 700, fontSize: 16 }}>{wins}</span></div>
-          <div><span style={{ color: '#64748b', fontSize: 12 }}>Losses </span><span style={{ color: '#ef4444', fontWeight: 700, fontSize: 16 }}>{resolved.length - wins}</span></div>
-          <div><span style={{ color: '#64748b', fontSize: 12 }}>Total P&L </span><span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
-          <div style={{ marginLeft: 'auto', fontSize: 11, color: '#64748b', alignSelf: 'center' }}>Drag column headers to reorder</div>
+          <div><span style={{ color: '#94a3b8', fontSize: 12 }}>Win Rate </span><span style={{ color: '#e2e8f0', fontWeight: 700, fontSize: 16 }}>{Math.round(wins / resolved.length * 100)}%</span><span style={{ color: '#94a3b8', fontSize: 11 }}> · N={resolved.length} resolved</span></div>
+          <div><span style={{ color: '#94a3b8', fontSize: 12 }}>Wins </span><span style={{ color: '#22c55e', fontWeight: 700, fontSize: 16 }}>{wins}</span></div>
+          <div><span style={{ color: '#94a3b8', fontSize: 12 }}>Losses </span><span style={{ color: '#ef4444', fontWeight: 700, fontSize: 16 }}>{resolved.length - wins}</span></div>
+          <div><span style={{ color: '#94a3b8', fontSize: 12 }}>Total P&L </span><span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700, fontSize: 16 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
+          <div style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8', alignSelf: 'center' }}>Drag column headers to reorder</div>
         </div>
       )}
 
@@ -23636,7 +23615,7 @@ function SetupHistoryView() {
       </div>
 
       {loading ? (
-        <div style={{ color: '#64748b', padding: 40, textAlign: 'center' }}>Loading…</div>
+        <div style={{ color: '#94a3b8', padding: 40, textAlign: 'center' }}>Loading…</div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -23680,7 +23659,7 @@ function SetupHistoryView() {
                         return (
                           <td key={col.key} style={{ ...tdStyle, color: dirColor, fontWeight: 600 }}>
                             {s.setup_type?.replace(/_/g, ' ')}
-                            <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: '#7c3aed', background: 'rgba(124,58,237,0.15)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.05em' }}>SHADOW</span>
+                            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, color: '#7c3aed', background: 'rgba(124,58,237,0.15)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.05em' }}>SHADOW</span>
                           </td>
                         );
                       }
@@ -23690,7 +23669,7 @@ function SetupHistoryView() {
                 );
               })}
               {sorted.length === 0 && (
-                <tr><td colSpan={effectiveCols.length} style={{ ...tdStyle, textAlign: 'center', color: '#64748b', padding: 40 }}>No setups found</td></tr>
+                <tr><td colSpan={effectiveCols.length} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: 40 }}>No setups found</td></tr>
               )}
             </tbody>
           </table>
