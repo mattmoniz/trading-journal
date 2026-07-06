@@ -295,7 +295,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
               <div style={{ ...labelSt, marginBottom: 0 }}>Setup Anticipation</div>
               {setupAnticipation.day_type && <span style={{ fontSize: 11, color: '#94a3b8' }}>{setupAnticipation.day_type} · {setupAnticipation.dow}</span>}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 12px', fontVariantNumeric: 'tabular-nums' }}>
               {setups.map(s => {
                 const fireColor = s.fire_rate >= 0.25 ? '#22c55e' : s.fire_rate >= 0.12 ? '#f59e0b' : '#64748b';
                 const wrColor   = s.cond_wr   >= 0.75 ? '#22c55e' : s.cond_wr   >= 0.60 ? '#f59e0b' : '#ef4444';
@@ -342,7 +342,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                     <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level2}</span>
                     {p.dow_note && <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>★ {p.dow_note}</span>}
                   </div>
-                  <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+                  <div style={{ display: 'flex', gap: 10, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
                     <span style={{ color: '#64748b' }}>N={p.n}</span>
                     <span style={{ color: wrColor }}>{p.wr}%</span>
                     <span style={{ color: evColor }}>${p.ev.toFixed(0)}</span>

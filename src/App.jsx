@@ -22620,10 +22620,10 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
             {/* ── Main console grid: 3 fixed columns ── */}
             {/* Col 1: session intel | Col 2: overnight context + live read | Col 3: scripts */}
             {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col */}
-            <div style={{ display: 'grid', gridTemplateColumns: '28fr 36fr 36fr', gap: 14, alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '30fr 45fr 25fr', gap: 14, alignItems: 'start' }}>
 
-              {/* Col 1: Session intel (no scripts) */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Col 1: Session intel — navy tint */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(15,23,42,0.35)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Session Forecast">
                   <SessionForecastPanel date={todayET} section="intel" />
                 </ErrorBoundary>
@@ -22635,10 +22635,14 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </ErrorBoundary>
               </div>
 
-              {/* Col 2: Overnight context + live read */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Col 2: Live execution — dark/neutral so signals pop */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(9,13,22,0.5)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
+                </ErrorBoundary>
+                {/* Edge Setups — primary live content, center stage */}
+                <ErrorBoundary name="Edge Sections" compact>
+                  <EdgeSectionsPanel />
                 </ErrorBoundary>
                 <ErrorBoundary name="Balance Zone Panel">
                   <BalanceZonePanel />
@@ -22651,19 +22655,14 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </CollapsibleSection>
               </div>
 
-              {/* Col 3: Scripts (morning / afternoon / evening) */}
-              <ErrorBoundary name="Scripts">
-                <SessionForecastPanel date={todayET} section="scripts" />
-              </ErrorBoundary>
+              {/* Col 3: Scripts — warm slate tint */}
+              <div style={{ background: 'rgba(30,41,59,0.3)', borderRadius: 8, padding: 10 }}>
+                <ErrorBoundary name="Scripts">
+                  <SessionForecastPanel date={todayET} section="scripts" />
+                </ErrorBoundary>
+              </div>
 
             </div>
-
-            {/* ── Active Setups — full width, primary alert surface ── */}
-            <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
-              <ErrorBoundary name="Edge Sections" compact>
-                <EdgeSectionsPanel />
-              </ErrorBoundary>
-            </CollapsibleSection>
 
             {/* ── Stats & Calibration — below fold ── */}
             <CollapsibleSection title="Stats & Calibration">
