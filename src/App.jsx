@@ -22557,7 +22557,7 @@ function CaseView({ setCurrentView, nl, todayData }) {
 function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const [tab, setTab] = React.useState(() => {
-    return sessionStorage.getItem('acd-dash-tab') || 'morning';
+    return sessionStorage.getItem('acd-dash-tab') || 'dashboard';
   });
   React.useEffect(() => { sessionStorage.setItem('acd-dash-tab', tab); }, [tab]);
   const [todayData, setTodayData] = React.useState(null);
@@ -22571,6 +22571,19 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   React.useEffect(() => {
     const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     fetch(`${API_URL}/morning-brief/forecast/${todayET}`).then(r => r.json()).then(setForecast).catch(() => {});
+  }, []);
+
+  // Pre-Market Prep section: auto-uncollapses before 9:30 AM ET, never auto-collapses
+  const getEtMin = () => {
+    const now = new Date();
+    const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(now));
+    const m = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', minute: 'numeric' }).format(now));
+    return h * 60 + m;
+  };
+  const [prepOpen, setPrepOpen] = React.useState(() => getEtMin() < 570);
+  React.useEffect(() => {
+    const id = setInterval(() => { if (getEtMin() < 570) setPrepOpen(true); }, 60000);
+    return () => clearInterval(id);
   }, []);
 
   const loadAll = React.useCallback(() => {
@@ -22594,11 +22607,11 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1200, margin: '0 auto', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
       <div style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Daily Prep</h2>
+        <h2 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Dashboard</h2>
       </div>
 
       <div style={{ display: 'flex', gap: 2, marginBottom: 0, borderBottom: '1px solid var(--border-color)' }}>
-        {[['morning', 'Daily Prep'], ['dashboard', 'Dashboard'], ['edges', 'Antigravity Edges'], ['history', 'History'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
+        {[['dashboard', 'Dashboard'], ['edges', 'Antigravity Edges'], ['history', 'History'], ['chart', 'NL Chart'], ['log', 'Daily Log'], ['backtest', 'Backtest'], ['correlation', 'Correlation']].map(([t, label]) => (
           <button key={t} onClick={() => setTab(t)} style={tabStyle(t)}>{label}</button>
         ))}
       </div>
@@ -22607,28 +22620,63 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
         {tab === 'dashboard' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
 
+            {/* ── Alerts (always on top when active) ── */}
             <VolatilityAlertBanner />
             <TradeAlertBanner />
 
-            {/* Split Grid for Daily Execution Info */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
-              
-              {/* Left Column: Live Scripts, Commentary & Edge Stats */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <ErrorBoundary name="Live Scripts">
-                  <LiveScriptsCard date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} />
-                </ErrorBoundary>
-                <CollapsibleSection title="Live Commentary & Feed" defaultOpen>
-                  <ErrorBoundary name="Live Commentary">
-                    <TeleprinterFeed maxHeight={360} />
-                  </ErrorBoundary>
-                </CollapsibleSection>
-                <CollapsibleSection title="Backtested Edge Statistics" defaultOpen>
-                  <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
-                </CollapsibleSection>
+            {/* ── Macro override warning ── */}
+            {forecast?.isMacroDay && (
+              <div style={{ padding: '12px 18px', background: 'rgba(234, 88, 12, 0.15)', border: '1px solid rgba(234, 88, 12, 0.4)', borderRadius: 10, color: '#fb923c', fontSize: 13, fontWeight: 700 }}>
+                ⚠️ MACRO OVERRIDE ACTIVE: {forecast.macroEvents.map(e => e.event_type).join(' + ')} Today. Calendar DOW statistics are secondary, expect high-vol expansion post-release.
               </div>
+            )}
 
-              {/* Right Column: Live Session Context */}
+            {/* ── Pre-Market Prep (auto-opens before 9:30 ET, collapses manually after open) ── */}
+            <div style={{ marginBottom: 8 }}>
+              <button
+                onClick={() => setPrepOpen(o => !o)}
+                style={{
+                  width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '10px 16px',
+                  background: prepOpen ? 'var(--card-bg)' : 'rgba(15,23,42,0.4)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: prepOpen ? '8px 8px 0 0' : 8,
+                  cursor: 'pointer', fontFamily: 'Arial, sans-serif',
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                  Pre-Market Prep
+                </span>
+                <span style={{ fontSize: 11, color: '#64748b' }}>{prepOpen ? '▲ collapse' : '▼ expand'}</span>
+              </button>
+              {prepOpen && (
+                <div style={{ border: '1px solid var(--border-color)', borderTop: 'none', borderRadius: '0 0 8px 8px', padding: 16, background: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+                    <ErrorBoundary name="Session Forecast">
+                      <SessionForecastPanel date={todayET} />
+                    </ErrorBoundary>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      <ErrorBoundary name="Day-of-Week Playbook">
+                        <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
+                      </ErrorBoundary>
+                      <ErrorBoundary name="Pre-Session Checklist">
+                        <PreSessionChecklist />
+                      </ErrorBoundary>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Live Market Context (two-column) ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
+
+              {/* Left: live price card with morning + afternoon scripts */}
+              <ErrorBoundary name="Live Scripts">
+                <LiveScriptsCard date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} />
+              </ErrorBoundary>
+
+              {/* Right: session context stack */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
@@ -22636,7 +22684,6 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 <ErrorBoundary name="Balance Zone Panel">
                   <BalanceZonePanel />
                 </ErrorBoundary>
-
                 <CollapsibleSection title="Live Read & Market Regimes" defaultOpen>
                   <LiveReadBanner forecast={forecast} />
                   <div style={{ marginTop: 8 }}>
@@ -22647,59 +22694,27 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
             </div>
 
-            {/* Middle Section: Active Execution Setups */}
+            {/* ── Active Setups & Confluence (full-width, primary alert surface) ── */}
             <CollapsibleSection title="Edge Setups & Confluence" defaultOpen>
               <ErrorBoundary name="Edge Sections" compact>
                 <EdgeSectionsPanel />
               </ErrorBoundary>
             </CollapsibleSection>
 
-
-          </div>
-        )}
-        {tab === 'morning' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 4px' }}>
-            
-            {/* Playbook Alerts & Dynamic Warnings */}
-            {forecast?.isMacroDay && (
-              <div style={{ padding: '12px 18px', background: 'rgba(234, 88, 12, 0.15)', border: '1px solid rgba(234, 88, 12, 0.4)', borderRadius: 10, color: '#fb923c', fontSize: 13, fontWeight: 700 }}>
-                ⚠️ MACRO OVERRIDE ACTIVE: {forecast.macroEvents.map(e => e.event_type).join(' + ')} Today. Calendar DOW statistics are secondary, expect high-vol expansion post-release.
+            {/* ── Stats & Calibration (below fold, reference only) ── */}
+            <CollapsibleSection title="Stats & Calibration">
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
+                <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
+                <ErrorBoundary name="Trade Calibration"><TradeCalibrationCard /></ErrorBoundary>
               </div>
-            )}
+            </CollapsibleSection>
 
-            {/* Split Grid for Core Planning */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16, alignItems: 'start' }}>
-              
-              {/* Left Side: Session Forecast (Levels, Pivot, Targets) */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <ErrorBoundary name="Session Forecast">
-                  <SessionForecastPanel date={todayET} />
-                </ErrorBoundary>
-              </div>
-
-              {/* Right Side: Narrative Read & Day Guidelines */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                <ErrorBoundary name="Day-of-Week Playbook">
-                  <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
-                </ErrorBoundary>
-
-                <ErrorBoundary name="Pre-Session Checklist">
-                  <PreSessionChecklist />
-                </ErrorBoundary>
-              </div>
-
-            </div>
-
-            {/* Calibration & Edge Baseline Comparisons */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 16 }}>
-              <ErrorBoundary name="Backtested Edge Statistics">
-                <BacktestedEdgeStatsCard />
+            {/* ── Live Commentary (below fold) ── */}
+            <CollapsibleSection title="Live Commentary & Feed">
+              <ErrorBoundary name="Live Commentary">
+                <TeleprinterFeed maxHeight={360} />
               </ErrorBoundary>
-
-              <ErrorBoundary name="Trade Calibration">
-                <TradeCalibrationCard />
-              </ErrorBoundary>
-            </div>
+            </CollapsibleSection>
 
           </div>
         )}
