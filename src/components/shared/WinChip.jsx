@@ -31,7 +31,7 @@ export default function WinChip({ label, stat, highlight = false, isBaseline = f
         {(wr * 100).toFixed(0)}%
       </div>
       {n != null && (
-        <div style={{ fontSize: 11, color: '#64748b' }}>n={n}{stat.limitedSample ? ' ⚠' : ''}</div>
+        <div style={{ fontSize: 11, color: '#94a3b8' }}>n={n}{stat.limitedSample ? ' ⚠' : ''}</div>
       )}
     </div>
   );

@@ -27,7 +27,13 @@ export default function createPriceBarsRouter(io, getBestACDParams, computeORLev
       if (updated.length > 0) {
         const totalBars = updated.reduce((s, r) => s + (r.bars_inserted || 0), 0);
         io.emit('price-sync-progress', { status: 'success', message: `Auto-sync: ${totalBars} bars`, total: updated.length, done: updated.length });
-        if (updated.some(r => r.symbol === 'NQ')) setTimeout(autoComputeTodayACD, 1000);
+        if (updated.some(r => r.symbol === 'NQ')) {
+          setTimeout(autoComputeTodayACD, 1000);
+          // Bar-triggered detection: fire immediately after new bars land rather than waiting for
+          // the next poll cycle — cuts detection lag for static levels from up to 60s to ~2-3s.
+          const todayForDetect = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+          setTimeout(() => detectAndEmitSetup(io, todayForDetect).catch(() => {}), 2500);
+        }
       }
     } catch (e) { /* silent */ }
   }, 60000);

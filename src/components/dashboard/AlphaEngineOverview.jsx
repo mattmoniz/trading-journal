@@ -10,9 +10,9 @@ const S = {
   grid3: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 },
   grid4: { display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 },
   card: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: '14px 16px' },
-  cardTitle: { fontSize: 13, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 },
+  cardTitle: { fontSize: 13, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 },
   cardVal: { fontSize: 22, fontWeight: 700, color: '#f1f5f9' },
-  cardSub: { fontSize: 12, color: '#64748b', marginTop: 2 },
+  cardSub: { fontSize: 12, color: '#94a3b8', marginTop: 2 },
   row: { display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 },
   label: { fontSize: 13, color: '#94a3b8', minWidth: 160 },
   val: { fontSize: 13, fontWeight: 600, color: '#f1f5f9' },
@@ -45,7 +45,7 @@ function FactorRow({ name, effect, stat, color }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #1e293b22' }}>
       <span style={{ fontSize: 13, color: '#cbd5e1', flex: 1 }}>{name}</span>
       <span style={{ fontSize: 13, color: color || '#94a3b8', fontWeight: 700, textAlign: 'right', marginLeft: 12 }}>{effect}</span>
-      {stat && <span style={{ fontSize: 12, color: '#64748b', marginLeft: 14, minWidth: 140, textAlign: 'right' }}>{stat}</span>}
+      {stat && <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 14, minWidth: 140, textAlign: 'right' }}>{stat}</span>}
     </div>
   );
 }
@@ -60,7 +60,7 @@ export default function AlphaEngineOverview() {
   const tiers = [
     { name: 'PRIME', n: 15, pnl: '+$42.7K', color: '#22c55e', desc: 'EV ≥ $50/trade' },
     { name: 'SOLID', n: 12, pnl: '+$16.9K', color: '#3b82f6', desc: 'EV $20–49' },
-    { name: 'MARGINAL', n: 15, pnl: '+$6.0K', color: '#64748b', desc: 'EV $0–19' },
+    { name: 'MARGINAL', n: 15, pnl: '+$6.0K', color: '#94a3b8', desc: 'EV $0–19' },
     { name: 'WEAK', n: 8, pnl: '-$4.4K', color: '#f59e0b', desc: 'EV -$1 to -$20' },
     { name: 'KILL', n: 12, pnl: '-$27.7K', color: '#ef4444', desc: 'EV < -$20' },
   ];
@@ -83,9 +83,18 @@ export default function AlphaEngineOverview() {
     { name: 'Verified confluence pair', effect: '+0.15', stat: 'OR_MID+DAILY_OPEN 84%, OR_LOW+IB_LOW 80%', color: '#a78bfa' },
     { name: 'INSIDE_VALUE open', effect: '−0.15', stat: '68.3% vs 72.7% outside z=−2.43', color: '#f59e0b' },
     { name: 'Day-type significance', effect: '±data-driven', stat: 'From DAY_TYPE_ALPHA rows (weekly recompute)', color: '#06b6d4' },
-    { name: 'Stacking (7-8 same-dir/day)', effect: '+0.10', stat: '77% WR at stacking count 7-8', color: '#22c55e' },
-    { name: 'Floor', effect: '0.25×', stat: 'Hard minimum', color: '#475569' },
-    { name: 'Ceiling', effect: '1.50×', stat: 'Hard maximum', color: '#475569' },
+    { name: 'Stacking 7+ same-dir/day', effect: '0.10× (suppress)', stat: '62.4% WR -$15.7 EV N=1,922 — trend day, fades dead', color: '#ef4444' },
+    { name: 'NL30 MILD_BULL/BEAR + SHORT', effect: '−0.20', stat: '61.6–62.6% WR -$17 to -$19 EV, z=−2.5 to −2.7 N=255-289', color: '#ef4444' },
+    { name: 'NL30 STRONG_BEAR + SHORT', effect: '+0.10', stat: '77.7% WR +$68.1 EV z=+3.34 N=337', color: '#22c55e' },
+    { name: 'NL30 STRONG_BULL + LONG', effect: '+0.10', stat: '77.6% WR +$62.0 EV z=+2.63 N=429', color: '#22c55e' },
+    { name: 'NL30 MILD_BULL + LONG', effect: '+0.10', stat: '77.3% WR +$63.7 EV z=+2.06 N=299', color: '#22c55e' },
+    { name: 'First visit of day to level', effect: '+0.15', stat: '78% WR +$71 EV z=+2.74 N=283 — untouched liquidity', color: '#22c55e' },
+    { name: 'Level revisit 3hr+ stale', effect: '−0.25', stat: '60% WR -$35 EV z=-2.74 N=129 — liquidity picked off', color: '#ef4444' },
+    { name: 'VWAP Extension (>mean+σ)', effect: '+0.15', stat: '76.2% WR +$59.7 EV z=+2.95 N=600 — fade + reversion stacked', color: '#22c55e' },
+    { name: 'OR Expansion: no breach yet (BALANCE/TURBULENT)', effect: '+0.10', stat: 'BALANCE 78.9% WR N=161 z=2.03; TURBULENT 96.2% N=26 z=2.77 — liquidity intact', color: '#22c55e' },
+    { name: 'Regime Persistence: TURBULENT 3-day streak (non-NEUTRAL NL30)', effect: '+0.10', stat: '84.1% WR N=157 z=3.45 (+8.9pp lift) — confirmed regime momentum', color: '#22c55e' },
+    { name: 'Floor', effect: '0.25×', stat: 'Hard minimum', color: '#94a3b8' },
+    { name: 'Ceiling', effect: '1.50×', stat: 'Hard maximum', color: '#94a3b8' },
   ];
 
   const suppressed = [
@@ -146,7 +155,7 @@ export default function AlphaEngineOverview() {
     },
     {
       name: 'Engine Self-Tracking',
-      color: '#64748b',
+      color: '#94a3b8',
       desc: '248 rows in engine_reads (Jan–Jul 2026). 107 CORRECT / 63 WRONG / 78 NEUTRAL = ~63% accuracy on decisive calls. Overnight reads auto-saved, 387 days backfilled. Context-only (no mechanical sizing from overnight reads alone).',
     },
     {
@@ -156,7 +165,7 @@ export default function AlphaEngineOverview() {
     },
     {
       name: 'Shadow Validation System',
-      color: '#475569',
+      color: '#94a3b8',
       desc: '17 removed setups persist with status=SHADOW for forward testing. Resolution against price runs automatically. Promoted to ACTIVE at positive EV over 30+ forward trades. Next review: ~2026-08-05 for IB_MID_SCALP_FADE_SHORT and OR_MID_AFTER_IB_FADE_SHORT (both flip positive with tight stops).',
     },
     {
@@ -216,7 +225,7 @@ export default function AlphaEngineOverview() {
       <div style={S.section}>
         <div style={S.sectionTitle}>Size Multiplier Stack</div>
         <div style={{ ...S.card, marginBottom: 10 }}>
-          <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10 }}>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 10 }}>
             All factors apply multiplicatively on top of the base. Floor: <strong style={{ color: '#f1f5f9' }}>0.25×</strong> · Ceiling: <strong style={{ color: '#f1f5f9' }}>1.50×</strong>
           </div>
           {multiplierFactors.map(f => (
@@ -233,14 +242,14 @@ export default function AlphaEngineOverview() {
             <div key={t.name} style={{ ...S.card, flex: '1 1 160px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <span style={S.badge(t.color, t.color + '18')}>{t.name}</span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>×{t.n}</span>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>×{t.n}</span>
               </div>
               <div style={{ fontSize: 18, fontWeight: 700, color: t.pnl.startsWith('+') ? '#22c55e' : '#ef4444' }}>{t.pnl}</div>
-              <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{t.desc} · 1 MNQ/yr</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{t.desc} · 1 MNQ/yr</div>
             </div>
           ))}
         </div>
-        <div style={{ fontSize: 13, color: '#64748b' }}>
+        <div style={{ fontSize: 13, color: '#94a3b8' }}>
           Badges shown live on each setup card. KILL-tier setups are fully suppressed. PRIME+SOLID combined: <strong style={{ color: '#22c55e' }}>68% WR, $54 avg EV, $59.6K/yr at 1 MNQ · ~$179K at 3 MNQ</strong>.
         </div>
       </div>
@@ -252,7 +261,7 @@ export default function AlphaEngineOverview() {
           {suppressed.map(s => (
             <div key={s.name} style={S.suppressed}>
               <span style={{ color: '#ef4444', fontWeight: 700 }}>{s.name}</span>
-              <span style={{ color: '#64748b' }}> — {s.reason}</span>
+              <span style={{ color: '#94a3b8' }}> — {s.reason}</span>
             </div>
           ))}
         </div>
@@ -288,7 +297,7 @@ export default function AlphaEngineOverview() {
       </div>
 
       {/* Footer */}
-      <div style={{ fontSize: 12, color: '#334155', textAlign: 'center', marginTop: 8 }}>
+      <div style={{ fontSize: 12, color: '#94a3b8', textAlign: 'center', marginTop: 8 }}>
         All WR/EV claims: N≥20 hard floor · No static thresholds — all derived from rolling distributions · Hard rule: no lookahead in backtests
       </div>
     </div>

@@ -12,10 +12,25 @@ export default function PreSessionChecklist() {
       return { macro: false, risk: false, levels: false, mindset: false };
     }
   });
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     sessionStorage.setItem(storageKey, JSON.stringify(checkedItems));
   }, [checkedItems, storageKey]);
+
+  // Auto-collapse after market open (9:30 ET)
+  useEffect(() => {
+    const check = () => {
+      const now = new Date();
+      const etParts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now);
+      const h = parseInt(etParts.find(p => p.type === 'hour').value, 10);
+      const m = parseInt(etParts.find(p => p.type === 'minute').value, 10);
+      if (h * 60 + m >= 9 * 60 + 30) setCollapsed(true);
+    };
+    check();
+    const t = setInterval(check, 30000);
+    return () => clearInterval(t);
+  }, []);
 
   const toggleItem = (key) => {
     setCheckedItems(prev => ({ ...prev, [key]: !prev[key] }));
@@ -23,13 +38,34 @@ export default function PreSessionChecklist() {
 
   const allChecked = Object.values(checkedItems).every(v => v);
 
+  if (collapsed) {
+    return (
+      <div
+        style={{ ...cardStyle, padding: '8px 14px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => setCollapsed(false)}
+      >
+        <span style={{ ...titleStyle, fontSize: 12 }}>PRE-SESSION CHECKLIST</span>
+        <span style={allChecked ? lockedBadgeStyle : { ...unlockedBadgeStyle, background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+          {allChecked ? '✓ PRE-FLIGHT COMPLETED' : 'INCOMPLETE — TAP TO OPEN'}
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div style={cardStyle}>
       <div style={headerStyle}>
         <span style={titleStyle}>📋 Pre-Session Checklist Gate</span>
-        <span style={allChecked ? lockedBadgeStyle : unlockedBadgeStyle}>
-          {allChecked ? 'GATE LOCKED' : 'GATE OPEN'}
-        </span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={allChecked ? lockedBadgeStyle : unlockedBadgeStyle}>
+            {allChecked ? 'GATE LOCKED' : 'GATE OPEN'}
+          </span>
+          <button
+            onClick={() => setCollapsed(true)}
+            style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: '0 2px' }}
+            title="Collapse"
+          >×</button>
+        </div>
       </div>
 
       <div style={listStyle}>

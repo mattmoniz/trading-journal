@@ -55,6 +55,7 @@ import { logProcess } from './lib/processLog.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
 import { scanAndIngestNewBarFiles } from './services/priceBarService.js';
 import { runNightlyUpdate } from './services/patternMemoryUpdate.js';
+import { scanSession, persistScan, mineLevelFades } from './services/patternScannerService.js';
 import SierraWatcher from './watchers/sierraWatcher.js';
 
 const app = express();
@@ -613,6 +614,22 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[developing_value] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // Pattern Scanner — 4:30 PM ET Mon–Fri (scan today's session + mine level fades)
+  cron.schedule('30 16 * * 1-5', async () => {
+    try {
+      await logProcess('PATTERN_SCAN', async () => {
+        const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        const result = await scanSession(todayET);
+        let count = 0;
+        if (result) {
+          count = await persistScan(todayET, result);
+          await mineLevelFades();
+        }
+        return { count };
+      });
+    } catch (err) { console.error('[pattern_scan] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Daily Coaching — 4:45 PM ET Mon–Fri
   cron.schedule('45 16 * * 1-5', async () => {
     try {
@@ -821,17 +838,18 @@ httpServer.listen(PORT, () => {
       }
 
       // Daily coaching — due 4:45 PM Mon–Fri; catch up after 5 PM
-      // Also re-run if coaching ran but on 0 trades (import came in late)
+      // Re-run only if coaching has never run OR it ran with 0 live-account trades but live fills now exist.
+      // Uses LIKE '%-PRO%' to match live accounts — avoids infinite loop when sim-only fills exist.
       if (day >= 1 && day <= 5 && hour >= 17) {
-        const [coachRows, fillRows] = await Promise.all([
+        const [coachRows, liveFillRows] = await Promise.all([
           query(`SELECT trades_count FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [today]),
-          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [today]),
+          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1 AND custom_fields->>'account' LIKE '%-PRO%'`, [today]),
         ]);
         const coached = coachRows.rows[0];
-        const fillCount = parseInt(fillRows.rows[0]?.count || 0);
-        const needsCoaching = !coached || (coached.trades_count === 0 && fillCount > 0);
+        const liveFillCount = parseInt(liveFillRows.rows[0]?.count || 0);
+        const needsCoaching = !coached || (coached.trades_count === 0 && liveFillCount > 0);
         if (needsCoaching) {
-          console.log(`[catch-up] Daily coaching ${!coached ? 'overdue' : 'stale (0 trades coached, ' + fillCount + ' fills now in DB)'} — running now`);
+          console.log(`[catch-up] Daily coaching ${!coached ? 'overdue' : `stale (0 live trades coached, ${liveFillCount} live fills now in DB)`} — running now`);
           await logProcess('DAILY_COACHING', async () => {
             const text = await runDailyCoaching(null, io);
             return { count: text ? 1 : 0 };
@@ -847,15 +865,15 @@ httpServer.listen(PORT, () => {
         d.setDate(d.getDate() - 1);
         while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
         const prevDay = d.toLocaleDateString('en-CA');
-        const [prevCoachRows, prevFillRows] = await Promise.all([
+        const [prevCoachRows, prevLiveFillRows] = await Promise.all([
           query(`SELECT trades_count FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [prevDay]),
-          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1`, [prevDay]),
+          query(`SELECT COUNT(*) as count FROM trades WHERE log_date = $1 AND custom_fields->>'account' LIKE '%-PRO%'`, [prevDay]),
         ]);
         const prevCoached = prevCoachRows.rows[0];
-        const prevFillCount = parseInt(prevFillRows.rows[0]?.count || 0);
-        const prevNeedsCoaching = prevFillCount > 0 && (!prevCoached || (prevCoached.trades_count === 0 && prevFillCount > 0));
+        const prevLiveFillCount = parseInt(prevLiveFillRows.rows[0]?.count || 0);
+        const prevNeedsCoaching = prevLiveFillCount > 0 && (!prevCoached || (prevCoached.trades_count === 0 && prevLiveFillCount > 0));
         if (prevNeedsCoaching) {
-          console.log(`[catch-up] Prior day coaching missing for ${prevDay} (${prevFillCount} fills in DB) — running now`);
+          console.log(`[catch-up] Prior day coaching missing for ${prevDay} (${prevLiveFillCount} live fills in DB) — running now`);
           await logProcess('DAILY_COACHING', async () => {
             const text = await runDailyCoaching(prevDay, io);
             return { count: text ? 1 : 0 };
@@ -911,7 +929,7 @@ httpServer.listen(PORT, () => {
     }
   }, { timezone: 'America/New_York' });
 
-  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM, ComputeLevels 9:30PM ET Sun | Catch-up every 30min');
+  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Pattern Scan 4:30PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM, ComputeLevels 9:30PM ET Sun | Catch-up every 30min');
 
   // Hourly overdue process check (9 AM–5 PM ET Mon–Fri)
   setInterval(async () => {
@@ -930,9 +948,10 @@ httpServer.listen(PORT, () => {
     } catch (_) {}
   }, 3600000); // every hour
 
-  // Server-autonomous detection: poll /api/acd/today every 60s during RTH (9:30-4 PM ET, Mon-Fri).
-  // Triggers the fade detection INSERT (idempotent — ON CONFLICT DO NOTHING) without waiting for a client.
-  // Fixes the 70% of setups that previously only fired at 10:30 AM via the IB backfill catch-up.
+  // Server-autonomous detection: poll /api/acd/setup-detection every 15s during RTH (9:30-4 PM ET, Mon-Fri).
+  // This is the correct endpoint — it runs the full level-fade detection and INSERTs to active_setups
+  // (idempotent — ON CONFLICT DO NOTHING). Polling at 15s instead of 60s cuts the detection window
+  // from up to 60s to at most 15s, closing the gap for static levels that should fire within one cycle.
   setInterval(async () => {
     try {
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -940,13 +959,13 @@ httpServer.listen(PORT, () => {
       if (day === 0 || day === 6) return; // skip weekends
       const etMin = etNow.getHours() * 60 + etNow.getMinutes();
       if (etMin < 570 || etMin >= 960) return; // 9:30–4:00 PM ET only
-      const res = await fetch(`http://localhost:${PORT}/api/acd/today`, { signal: AbortSignal.timeout(55000) });
-      if (!res.ok) console.error(`[detection-poll] ${res.status} from /api/acd/today`);
+      const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection`, { signal: AbortSignal.timeout(14000) });
+      if (!res.ok) console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);
       else await res.text(); // drain body
     } catch (err) {
       if (err.name !== 'TimeoutError') console.error('[detection-poll] Error:', err.message);
     }
-  }, 60000);
+  }, 15000);
 
   // Auto-backfill ACD history from price bars if the log is empty
   setTimeout(autoBulkBackfillIfEmpty, 3000);

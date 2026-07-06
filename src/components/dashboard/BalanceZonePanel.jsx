@@ -87,7 +87,7 @@ export default function BalanceZonePanel() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ color: '#94a3b8', fontSize: 11 }}>NQ: <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{fmtP(price)}</strong></span>
-          {nearest && <span style={{ color: '#94a3b8', fontSize: 10 }}>→ {nearest.name} {fmtP(nearest.price)} ({Math.round(nearest.dist)}pt)</span>}
+          {nearest && <span style={{ color: '#94a3b8', fontSize: 11 }}>→ {nearest.name} {fmtP(nearest.price)} ({Math.round(nearest.dist)}pt)</span>}
         </div>
       </div>
       <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>{contextText}</div>

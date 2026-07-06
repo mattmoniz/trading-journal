@@ -2538,6 +2538,12 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
+  // Per-level cooldown for APPROACHING alerts — prevents spam on balance days.
+  // Map: levelName → timestamp of last emit. Cleared at session close.
+  const _approachCooldown = new Map();
+  const APPROACH_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes per level
+  const APPROACH_MIN_EV = 20; // only PRIME/SOLID tiers ($20+ EV)
+
   // GET /api/acd/setup-detection — detect the highest-priority intraday setup
   // Returns one setup card at a time. Priority: IB_CONFIRMATION > OPEN_DRIVE_CONT >
   // FAILED_AUCTION > BRACKET_BREAKOUT > VALUE_AREA_RESP
@@ -3147,6 +3153,10 @@ export default function createACDRouter(io) {
         };
       }
 
+      // Day type — fetched early so IB tier and all downstream gates can use it
+      const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
+      const dtClass = dtClassRow.rows[0]?.day_type || null;
+
       // ── SETUP 3: IB CONFIRMATION ──────────────────────────────────────────────
       // Detect after 30-min IB period completes (after 10:00 AM ET)
       let ibSetup = null;
@@ -3539,10 +3549,6 @@ export default function createACDRouter(io) {
         }
       }
 
-      // Day type classification for setup gating
-      const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
-      const dtClass = dtClassRow.rows[0]?.day_type || null;
-
       // IB setup BALANCE suppression — replay_ib_setups.js 2026-07-01 (N=397 sessions):
       // TREND 71.7% WR (N=46), TURBULENT 70.0% (N=40) → keep.
       // BALANCE 51.9% (N=106) → below breakeven after commission → suppress.
@@ -3787,12 +3793,54 @@ export default function createACDRouter(io) {
       const lfPriorStop = lfConsecLosses >= 1;
       const lfPriorWin  = lfConsecWins  >= 1;
       // Stacking count: same-direction setups fired today (ACTIVE or RESOLVED).
-      // Research 2026-07-05: 7-8 same-dir setups/day = 77% WR peak. Below 7 or 9+ = normal/regression.
+      // Verified 2026-07-05: 1-6 setups = 80-86% WR solid; 7+ = 62.4% WR -$15.7 EV (N=1922) suppress.
       const _lfSameDirCountQ = await query(
-        `SELECT direction, COUNT(*) as cnt FROM active_setups WHERE trade_date=$1 AND status IN ('ACTIVE','RESOLVED') GROUP BY direction`,
+        `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
+                COUNT(*) as cnt
+         FROM active_setups WHERE trade_date=$1 AND status IN ('ACTIVE','RESOLVED')
+         GROUP BY 1`,
         [todayET]
       ).catch(() => ({ rows: [] }));
       const _lfSameDirCounts = Object.fromEntries(_lfSameDirCountQ.rows.map(r => [r.direction, parseInt(r.cnt)]));
+      // NL30: rolling 30-day sum of daily ACD scores — conditions fade edge by market regime.
+      // Verified 2026-07-05 (N=229-429 per bucket): MILD trend = SHORT fades penalized (-$17 to -$19 EV);
+      // STRONG regime boosts both extremes; prior-day only (< today) to avoid lookahead.
+      const _lfNl30Q = await query(`
+        SELECT COALESCE(SUM(COALESCE(daily_score, 0)), 0)::int AS nl30
+        FROM (SELECT daily_score FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 30) sub
+      `, [todayET]).catch(() => ({ rows: [{ nl30: 0 }] }));
+      const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
+      const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
+        _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
+      // VWAP at detection time — computed from today's RTH bars (ask_vol+bid_vol ≈ total volume).
+      // Rolling σ of VWAP distances over last 20 sessions gives the dynamic threshold.
+      // Verified 2026-07-06: far extended (>mean+σ) = 76.2% WR +$59.7 EV z=+2.95 N=600.
+      const _lfVwapData = allRthBarsRow.rows.reduce((acc, b) => {
+        const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
+        acc.pv += b.close * vol; acc.vol += vol; return acc;
+      }, { pv: 0, vol: 0 });
+      const _lfVwap = _lfVwapData.vol > 0 ? _lfVwapData.pv / _lfVwapData.vol : null;
+      const _cachedVwapSigma = getCached(todayET, 'lfVwapSigma');
+      let _lfVwapMean = _cachedVwapSigma?.mean ?? null;
+      let _lfVwapStd  = _cachedVwapSigma?.std  ?? null;
+      if (_lfVwapMean == null) {
+        const _lfVwapSigmaQ = await query(`
+          WITH svwap AS (
+            SELECT close::float as c,
+              SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float * close::float) OVER (PARTITION BY ts::date ORDER BY ts) /
+              NULLIF(SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) OVER (PARTITION BY ts::date ORDER BY ts), 0) AS vwap
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND ts::date IN (SELECT DISTINCT ts::date FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 ORDER BY ts::date DESC LIMIT 20)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          )
+          SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
+          FROM svwap WHERE vwap IS NOT NULL
+        `, [todayET]).catch(() => ({ rows: [{}] }));
+        _lfVwapMean = _lfVwapSigmaQ.rows[0]?.mean_dist ?? null;
+        _lfVwapStd  = _lfVwapSigmaQ.rows[0]?.std_dist  ?? null;
+        if (_lfVwapMean != null) setCached(todayET, 'lfVwapSigma', { mean: _lfVwapMean, std: _lfVwapStd });
+      }
       // Level recency: last test date per level base name (past 21 days).
       // Research 2026-07-05: 1-2d ago = 65.9% WR $22 EV, 21d+ fresh = 60.5% WR -$5 EV.
       const _lfRecencyQ = await query(`
@@ -3832,6 +3880,23 @@ export default function createACDRouter(io) {
         : null;
       // turbConfirmed = true once 9:45 has passed and range >= rolling mean
       const turbConfirmed = _lfFirst15Range != null && _lfAvgFirst15Range != null && _lfFirst15Range >= _lfAvgFirst15Range;
+
+      // OR Expansion Bias: no A Up/A Down breach yet = untouched liquidity reinforces fade.
+      // BALANCE: 78.88% WR N=161 (+5.77pp lift, z=2.03). TURBULENT: 96.15% WR N=26 (+20.97pp, z=2.77).
+      // aUpFired/aDownFired are written to DB progressively each poll — real-time, not lookahead.
+      const _lfOrExpanded = aUpFired || aDownFired;
+
+      // Regime Persistence: prior 2 days same day_type = 3-day streak. Only meaningful on TURBULENT.
+      // TURBULENT × streak: 84.08% WR N=157 (+8.89pp, z=3.45). BALANCE: flat (+0.20pp, skip).
+      // NL30 nuance: streak negative in NEUTRAL (-3.13pp) — skip when NL30 is ranging.
+      const _lfRegimePersistQ = dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL'
+        ? await query(`
+            SELECT COUNT(*) AS streak_days
+            FROM (SELECT day_type FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 2) sub
+            WHERE day_type = $2
+          `, [todayET, dtClass]).catch(() => ({ rows: [{ streak_days: '0' }] }))
+        : { rows: [{ streak_days: '0' }] };
+      const _lfRegimePersist = parseInt(_lfRegimePersistQ.rows[0]?.streak_days ?? '0') >= 2;
 
       // ── Level Scalp detection ────────────────────────────────────────────
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
@@ -4161,7 +4226,7 @@ export default function createACDRouter(io) {
           const lsMon = (key) => liveStats._mon?.[key] || null;
 
           const monOverride = (key) => isMonday && lsMon(key) ? lsMon(key) : {};
-          const keepLevels = [
+          const keepLevelsAll = [
             // Prior-day value area (POC, VAH, VAL — all three)
             { name: 'PD_POC_FADE',    level: lp.PD_POC ?? pdPOC,   ...(ls('PD_POC')     || {}), ...monOverride('PD_POC') },
             { name: 'PD_VAH_FADE',    level: lp.PD_VAH ?? pdVAH,   ...(ls('PD_VAH')     || {}), ...monOverride('PD_VAH') },
@@ -4248,12 +4313,28 @@ export default function createACDRouter(io) {
             // IB mid and OR mid — only valid after IB closes at 10:30
             { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
             { name: 'OR_MID_AFTER_IB_FADE', level: etMinNow >= 630 ? orMid : null, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
-          ].filter(l => l.level != null && !mondaySkip.includes(l.name));
+          ].filter(l => l.level != null);
+          const keepLevels = keepLevelsAll.filter(l => !mondaySkip.includes(l.name));
 
           // Collect ALL levels within 15pt — wider than the old 10pt window to catch
           // approaches that reverse before piercing deeply. Pick the highest-EV level
           // as the primary setup; annotate description with confluence when 2+ stack.
           const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
+
+          // Monday-skip suppression audit: write SHADOW rows for levels excluded by DOW rule
+          if (isMonday && mondaySkip.length > 0) {
+            const mondayNear = keepLevelsAll.filter(l =>
+              mondaySkip.includes(l.name) && Math.abs(currentPrice - l.level) <= 15
+            );
+            for (const lv of mondayNear) {
+              await query(`
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','MONDAY_SKIP')
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+              `, [todayET, lv.name, currentPrice]).catch(() => {});
+            }
+          }
+
           if (nearLevels.length > 0) {
             const primary = nearLevels.reduce((best, lv) =>
               (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
@@ -4305,6 +4386,15 @@ export default function createACDRouter(io) {
             const _nearNames = new Set(nearLevels.filter(l => l.name !== lv.name).map(l => l.name));
             const _PAIR_BONUS_MAP = { 'OR_MID': ['DAILY_OPEN'], 'OR_LOW': ['IB_LOW'], 'OR_HIGH': ['IB_HIGH'], 'IB_LOW': ['OR_LOW'], 'IB_HIGH': ['OR_HIGH'] };
             const confluencePairPartner = (_PAIR_BONUS_MAP[levelBase] ?? []).find(p => _nearNames.has(p)) ?? null;
+
+            // Revisit latency: intraday minutes since price last closed within 10pt of this level.
+            // Verified 2026-07-06: first visit of day = 78% WR +$71 EV (z=+2.74 N=283);
+            // 3hr+ stale return = 60% WR -$35 EV (z=-2.74 N=129). Zero or null = first visit.
+            const _barsNearLevel = allRthBarsRow.rows.filter(b =>
+              b.et_min < etMinNow && Math.abs(b.close - lv.level) <= 10
+            );
+            const _lastVisitBar = _barsNearLevel.length > 0 ? _barsNearLevel[_barsNearLevel.length - 1] : null;
+            const minutesSinceVisit = _lastVisitBar ? etMinNow - _lastVisitBar.et_min : null;
 
             levelScalpSetup = {
               type,
@@ -4369,9 +4459,28 @@ export default function createACDRouter(io) {
                 }
                 // Open vs prior value: INSIDE_VALUE = 68.28% WR (z=-2.43) vs OUTSIDE = 72.74% (2026-07-05)
                 if (_lfOvOpen === 'INSIDE_VALUE') mult = Math.max(mult - 0.15, 0.25);
-                // Stacking count: 7-8 same-dir setups fired today = 77% WR peak (research 2026-07-05)
+                // Stacking: 7+ same-dir setups = 62.4% WR -$15.7 EV (N=1922) — trend day, fades dead.
                 const _lfSameDirN = _lfSameDirCounts[dir] ?? 0;
-                if (_lfSameDirN >= 7 && _lfSameDirN <= 8) mult = Math.min(mult + 0.10, 1.5);
+                if (_lfSameDirN >= 7) mult = 0.10;
+                // NL30 regime conditioning (verified 2026-07-05, N=229-429 per bucket):
+                if      (_lfNl30Bucket === 'MILD_BULL'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 62.6% WR -$16.8 EV z=-2.48
+                else if (_lfNl30Bucket === 'MILD_BEAR'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 61.6% WR -$19.1 EV z=-2.69
+                else if (_lfNl30Bucket === 'STRONG_BEAR' && dir === 'SHORT') mult = Math.min(mult + 0.10, 1.5);  // 77.7% WR +$68.1 EV z=+3.34
+                else if (_lfNl30Bucket === 'STRONG_BULL' && dir === 'LONG')  mult = Math.min(mult + 0.10, 1.5);  // 77.6% WR +$62.0 EV z=+2.63
+                else if (_lfNl30Bucket === 'MILD_BULL'   && dir === 'LONG')  mult = Math.min(mult + 0.10, 1.5);  // 77.3% WR +$63.7 EV z=+2.06
+                // Revisit latency: untouched liquidity on first visit; picked-off zone on 3hr+ return.
+                if (minutesSinceVisit === null)    mult = Math.min(mult + 0.15, 1.5);  // 78% WR +$71 EV z=+2.74 N=283
+                else if (minutesSinceVisit >= 180) mult = Math.max(mult - 0.25, 0.25); // 60% WR -$35 EV z=-2.74 N=129
+                // VWAP Extension: level far from VWAP = reversion force stacks with fade (z=+2.95 N=600)
+                if (_lfVwap != null && _lfVwapMean != null && _lfVwapStd != null &&
+                    Math.abs(currentPrice - _lfVwap) > _lfVwapMean + _lfVwapStd)
+                  mult = Math.min(mult + 0.15, 1.5);
+                // OR Expansion Bias: no expansion yet = liquidity intact (BALANCE z=2.03 N=161, TURBULENT z=2.77 N=26)
+                if (!_lfOrExpanded && (dtClass === 'BALANCE' || dtClass === 'TURBULENT'))
+                  mult = Math.min(mult + 0.10, 1.5);
+                // Regime Persistence: TURBULENT 3-day streak +8.89pp (N=157, z=3.45). Skip on NEUTRAL NL30.
+                if (_lfRegimePersist && dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL')
+                  mult = Math.min(mult + 0.10, 1.5);
                 return mult;
               })(),
               overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
@@ -4397,9 +4506,72 @@ export default function createACDRouter(io) {
               sellersAtLevel,
               confluenceCount,
               confluenceLevels: nearLevels.map(l => l.name.replace(/_FADE$/, '')),
+              stackCount: _lfSameDirCounts[dir] ?? 0,
               tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
             };
             } // end !suppressedFades check
+            else {
+              // Suppressed near-level audit: write SHADOW row so user can verify suppression decisions
+              const suppressReason = suppressedFades.has(type) ? 'SUPPRESSED_FADE'
+                : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
+                : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+              await query(`
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
+                VALUES ($1,$2,NOW(),$3,'SHADOW',$4)
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+              `, [todayET, type, currentPrice, suppressReason]).catch(() => {});
+            }
+          }
+
+          // ── Approach alert — pre-touch early warning ─────────────────────
+          // Fires a WebSocket event when price is 15–30pt from a level AND the
+          // last 2 bars show net movement toward it. Gives ~60s advance notice
+          // (median lead-time from backtest: 60s, 42% coverage). Does not write
+          // to active_setups — purely a real-time push to the frontend.
+          // Threshold: 30pt derived from backtest distribution (avg_dist - 0.5σ).
+          if (last5.length >= 2) {
+            const prevBar = last5[last5.length - 2];
+            const lastBar = last5[last5.length - 1];
+            const approachingLevels = keepLevels.filter(lv => {
+              const dist = Math.abs(currentPrice - lv.level);
+              if (dist < 15 || dist > 30) return false; // outside approach zone
+              const movingToward = lv.level > currentPrice
+                ? lastBar.close > prevBar.close  // approaching from below (resistance)
+                : lastBar.close < prevBar.close; // approaching from above (support)
+              return movingToward;
+            });
+            // Filter to quality levels only (EV >= $20) and apply per-level cooldown
+            const qualityApproaching = approachingLevels.filter(lv => {
+              if ((lv.ev ?? -999) < APPROACH_MIN_EV) return false;
+              const lastEmit = _approachCooldown.get(lv.name);
+              return !lastEmit || (Date.now() - lastEmit) > APPROACH_COOLDOWN_MS;
+            });
+            if (qualityApproaching.length > 0) {
+              const top = qualityApproaching.reduce((best, lv) =>
+                Math.abs(currentPrice - lv.level) < Math.abs(currentPrice - best.level) ? lv : best,
+                qualityApproaching[0]);
+              _approachCooldown.set(top.name, Date.now());
+              const dist = Math.round(Math.abs(currentPrice - top.level));
+              const dir = top.level > currentPrice ? 'RESISTANCE' : 'SUPPORT';
+              // Confluence: any other keepLevels within 15pt of THIS level (not of currentPrice)
+              const nearThisLevel = keepLevels.filter(lv =>
+                lv.name !== top.name && Math.abs(top.level - lv.level) <= 15
+              );
+              io.emit('level-approaching', {
+                level: top.level,
+                levelName: top.name,
+                currentPrice,
+                distance: dist,
+                direction: dir,
+                ev: top.ev,
+                wr: top.wr,
+                n: top.n,
+                confluenceCount: nearThisLevel.length,
+                confluenceLevels: nearThisLevel.map(l => l.name),
+                tier: top.ev >= 50 ? 'PRIME' : top.ev >= 20 ? 'SOLID' : top.ev >= 0 ? 'MARGINAL' : 'WEAK',
+                timestamp: new Date().toISOString(),
+              });
+            }
           }
 
           // ── Early-touch backfill ──────────────────────────────────────────
@@ -5186,8 +5358,9 @@ export default function createACDRouter(io) {
             entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-            nl30_at_detection, structural_state_at_detection
-          ) VALUES ($1,$2,$3,$4,'ACTIVE',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            nl30_at_detection, structural_state_at_detection,
+            size_multiplier
+          ) VALUES ($1,$2,$3,$4,'ACTIVE',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
           ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -5195,6 +5368,7 @@ export default function createACDRouter(io) {
           active.entry,
           hist.winRate ?? null, hist.occurrences ?? null, hist.avgPnl ?? null, hist.t1HitRate ?? null,
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
+          active.sizeMultiplier ?? 1.0,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -5221,6 +5395,12 @@ export default function createACDRouter(io) {
           INSERT INTO acd_setup_events (trade_date, setup_type, fired_time, fired_price)
           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING
         `, [todayET, active.type, firedTimeStr, active.entry || null]);
+      }
+
+      // Keep size_multiplier current — it changes with intraday conditions (streak, stacking, etc.)
+      if (setupId && active.sizeMultiplier != null) {
+        query('UPDATE active_setups SET size_multiplier=$1 WHERE id=$2',
+          [active.sizeMultiplier, setupId]).catch(() => {});
       }
 
       const expiresAt = computeExpiry(active.type);

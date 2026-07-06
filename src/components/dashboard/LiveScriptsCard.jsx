@@ -162,7 +162,7 @@ export default function LiveScriptsCard({ date }) {
             {L.dailyVwapSigma != null ? `${L.dailyVwapSigma > 0 ? '+' : ''}${L.dailyVwapSigma}σ` : '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtP(L.vwap)} ({L.vwapDist > 0 ? '+' : ''}{L.vwapDist}pt)</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
         <div style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, borderLeft: `3px solid ${Math.abs(L.vwap24Sigma || 0) >= 2 ? '#fbbf24' : Math.abs(L.vwap24Sigma || 0) >= 1 ? '#fb923c' : '#94a3b8'}` }}>
           <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>24HR VWAP</div>
@@ -170,7 +170,7 @@ export default function LiveScriptsCard({ date }) {
             {L.vwap24Sigma != null ? `${L.vwap24Sigma > 0 ? '+' : ''}${L.vwap24Sigma}σ` : '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.vwap24 ? `${fmtP(L.vwap24)} (${L.vwap24Dist > 0 ? '+' : ''}${L.vwap24Dist}pt)` : '—'}</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
         <div style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, borderLeft: `3px solid ${Math.abs(L.weeklyVwapSigma || 0) >= 2 ? '#ef4444' : Math.abs(L.weeklyVwapSigma || 0) >= 1 ? '#fb923c' : '#94a3b8'}` }}>
           <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Weekly VWAP</div>
@@ -178,7 +178,7 @@ export default function LiveScriptsCard({ date }) {
             {L.weeklyVwapSigma != null ? `${L.weeklyVwapSigma > 0 ? '+' : ''}${L.weeklyVwapSigma}σ` : '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.weeklyVwap ? `${fmtP(L.weeklyVwap)} (${L.weeklyVwapSigma != null && L.weeklyVwapStd ? Math.round(L.weeklyVwapSigma * L.weeklyVwapStd) + 'pt' : L.weeklyVwapSigma != null ? Math.round(L.weeklyVwapSigma * 251) + 'pt' : '—'})` : '—'}</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
       </div>
 
@@ -191,7 +191,7 @@ export default function LiveScriptsCard({ date }) {
             {L.relVol ? `${L.relVol.ratio}x` : '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.relVol ? `${L.relVol.label || ((L.relVol.sigma || 0) >= 1 ? 'Elevated' : (L.relVol.sigma || 0) <= -1 ? 'Low' : 'Normal')} (${L.relVol.sigma != null ? (L.relVol.sigma > 0 ? '+' : '') + L.relVol.sigma + 'σ' : '—'})` : '—'}</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
         {/* Cumulative Delta card */}
         <div onClick={() => setActiveModal('cumDelta')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.delta ? '#94a3b8' : Math.abs(L.delta.sigma || 0) >= 2 ? (L.delta.cumDelta > 0 ? '#4ade80' : '#ef4444') : Math.abs(L.delta.sigma || 0) >= 1 ? (L.delta.cumDelta > 0 ? '#86efac' : '#fca5a5') : '#94a3b8'}` }}>
@@ -200,7 +200,7 @@ export default function LiveScriptsCard({ date }) {
             {L.delta ? `${L.delta.cumDelta > 0 ? '+' : ''}${(L.delta.cumDelta / 1000).toFixed(1)}K` : '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.delta ? `${L.delta.label || 'Normal'} (${L.delta.sigma != null ? (L.delta.sigma > 0 ? '+' : '') + L.delta.sigma + 'σ' : '—'})` : '—'}</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
         {/* Delta Trend card */}
         <div onClick={() => setActiveModal('deltaTrend')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.delta ? '#94a3b8' : deltaTrendColor(L.delta.trend)}` }}>
@@ -209,7 +209,7 @@ export default function LiveScriptsCard({ date }) {
             {L.delta?.trend || '—'}
           </div>
           <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.delta ? `Last 15 vs prior 15 bars` : '—'}</div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
         </div>
       </div>
 
@@ -224,7 +224,7 @@ export default function LiveScriptsCard({ date }) {
               <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 Delta Flow (15-min)
               </span>
-              <span style={{ fontSize: 9, color: '#475569' }}>as of {fmtEtTime(L.etMin) || '—'}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>as of {fmtEtTime(L.etMin) || '—'}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 1, height: 48 }}>
               {flow.map((p, i) => {
@@ -248,9 +248,9 @@ export default function LiveScriptsCard({ date }) {
               })}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
-              <span style={{ fontSize: 11, color: '#64748b' }}>{flow[0]?.time}</span>
-              <span style={{ fontSize: 11, color: '#64748b' }}>{flow[Math.floor(flow.length/2)]?.time}</span>
-              <span style={{ fontSize: 11, color: '#64748b' }}>{flow[flow.length-1]?.time}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{flow[0]?.time}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{flow[Math.floor(flow.length/2)]?.time}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{flow[flow.length-1]?.time}</span>
             </div>
           </div>
         );
@@ -274,7 +274,7 @@ export default function LiveScriptsCard({ date }) {
             </div>
             <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace' }}>{flushRisk.probability}% within 48hr</span>
           </div>
-          <div style={{ fontSize: 9, color: '#475569', marginTop: 2 }}>as of {flushRiskAsOf}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {flushRiskAsOf}</div>
           {flushRisk.triggers.length > 0 && (
             <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
               {flushRisk.triggers.map((t, i) => (

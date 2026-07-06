@@ -90,7 +90,7 @@ export default function LevelMonitorPanel({ date }) {
               <span style={{ fontWeight: 600, fontSize: '0.78rem', letterSpacing: '0.05em', textTransform: 'uppercase', color: '#94a3b8' }}>
                 {CATEGORY_LABELS[cat] || cat}
               </span>
-              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{isOpen ? '▾' : '▸'} {rows.length}</span>
+              <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{isOpen ? '▾' : '▸'} {rows.length}</span>
             </div>
             {isOpen && (
               <div className="level-rows">

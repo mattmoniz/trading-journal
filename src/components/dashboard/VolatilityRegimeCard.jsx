@@ -257,7 +257,7 @@ function VolChartModal({ history, zHigh, zLow, regimeColor, onClose }) {
           <span><span style={{ color: '#a78bfa' }}>---</span> Vol z-score</span>
           <span><span style={{ color: 'rgba(239,68,68,0.7)' }}>- -</span> High-vol threshold</span>
           <span><span style={{ color: 'rgba(59,130,246,0.7)' }}>- -</span> Low-vol threshold</span>
-          <span style={{ color: '#64748b' }}>Shaded = regime zones</span>
+          <span style={{ color: '#94a3b8' }}>Shaded = regime zones</span>
         </div>
       </div>
     </div>
@@ -342,7 +342,7 @@ function TextureMetrics({ texture, etMin }) {
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
         Texture{' '}
-        <span style={{ fontWeight: 400, color: '#64748b', textTransform: 'none', letterSpacing: 0 }}>({windowStr})</span>
+        <span style={{ fontWeight: 400, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>({windowStr})</span>
       </div>
 
       {wideBarWarning && (
@@ -516,7 +516,7 @@ function PredictiveStats({ data, btStats }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Play</span>
           <span style={{ fontSize: 11, fontWeight: 700, color: playbook.dirColor }}>{playbook.direction}</span>
-          <span style={{ fontSize: 11, color: '#334155', marginLeft: 'auto' }}>N={btStats.sessionCount}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>N={textureStats?.n ?? btStats.sessionCount}</span>
         </div>
         <ul style={{ margin: 0, padding: '0 0 0 12px', listStyle: 'disc' }}>
           {playbook.rules.map((r, i) => (
@@ -566,7 +566,7 @@ export default function VolatilityRegimeCard() {
     return (
       <div style={{ ...cardStyle, opacity: 0.5 }}>
         <div style={titleStyle}>Volatility Regime (live)</div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>Loading…</div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>
       </div>
     );
   }
@@ -581,8 +581,8 @@ export default function VolatilityRegimeCard() {
       return (
         <div style={{ ...cardStyle, opacity: 0.6 }}>
           <div style={titleStyle}>Volatility Regime (live)</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 3 }}>Market Closed</div>
-          <div style={{ fontSize: 11, color: '#64748b' }}>Available Mon–Fri 9:30–4:00 PM ET</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 3 }}>Market Closed</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Available Mon–Fri 9:30–4:00 PM ET</div>
         </div>
       );
     }

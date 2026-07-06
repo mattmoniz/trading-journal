@@ -821,7 +821,7 @@ body {
 }
 
 .cal-setup-line {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -831,13 +831,13 @@ body {
 }
 
 .cal-setup-more {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--text-muted);
   font-style: italic;
 }
 
 .cal-confluence-badge {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   color: #f59e0b;
   letter-spacing: 0.03em;
@@ -1417,7 +1417,7 @@ body {
 }
 
 .day-stats-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -3041,7 +3041,7 @@ body {
   margin-bottom: 4px;
 }
 .ann-marker {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;

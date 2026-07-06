@@ -21,7 +21,7 @@ function DailyRecap({ date }) {
     <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.04)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 6, marginTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
         <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Daily Recap</span>
-        <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+        <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'monospace', color: pnlColor }}>${sc.totalPnl.toLocaleString()}</span>
       </div>
       {recap.session && (
@@ -162,7 +162,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
     const fp = cl.floorPivots;
     if (fp.pp) keyLevels.push({ price: fp.pp, name: 'Floor PP', behavior: 'Directional pivot. Bias shifts above/below.', color: '#94a3b8' });
     if (fp.s1) keyLevels.push({ price: fp.s1, name: 'Floor S1', behavior: 'First support.', color: '#94a3b8' });
-    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. 12% of days. Strong reaction.', color: '#64748b' });
+    if (fp.s3) keyLevels.push({ price: fp.s3, name: 'Floor S3', behavior: 'Extreme support. 12% of days. Strong reaction.', color: '#94a3b8' });
     if (fp.r1) keyLevels.push({ price: fp.r1, name: 'Floor R1', behavior: 'First resistance.', color: '#94a3b8' });
   }
 
@@ -271,7 +271,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
             <div style={{ ...cardSt, borderLeft: '3px solid #f59e0b', background: 'rgba(245,158,11,0.06)', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b' }}>⚠ TURBULENT SIGNAL</span>
-                <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>20% classifier accuracy</span>
+                <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>20% classifier accuracy</span>
               </div>
               <div style={{ fontSize: 11, color: '#cbd5e1', lineHeight: 1.6 }}>
                 IF confirmed: fade setups perform best at <strong style={{ color: '#f59e0b' }}>71.5% WR</strong>, $47 EV/trade.
@@ -314,7 +314,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 );
               })}
             </div>
-            <div style={{ fontSize: 10, color: '#475569', marginTop: 5 }}>fire% · WR · exp$/session</div>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5 }}>fire% · WR · exp$/session</div>
           </div>
         );
       })()}
@@ -328,7 +328,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <div style={{ ...labelSt, marginBottom: 0 }}>Confluence Near Price</div>
               <span style={{ fontSize: 11, color: '#94a3b8' }}>within 15pt · {confluencePairs.current_price?.toFixed(0)}</span>
-              {confluencePairs.day_type && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 'auto' }}>{confluencePairs.day_type}</span>}
+              {confluencePairs.day_type && <span style={{ fontSize: 11, color: '#94a3b8', marginLeft: 'auto' }}>{confluencePairs.day_type}</span>}
             </div>
             {tradeable.map(p => {
               const evColor = p.ev >= 40 ? '#22c55e' : p.ev >= 15 ? '#f59e0b' : '#94a3b8';
@@ -338,20 +338,20 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 <div key={p.pair} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11, paddingBottom: 4, borderBottom: '1px solid rgba(51,65,85,0.3)', marginBottom: 4 }}>
                   <div>
                     <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level1}</span>
-                    <span style={{ color: '#475569', margin: '0 4px' }}>+</span>
+                    <span style={{ color: '#94a3b8', margin: '0 4px' }}>+</span>
                     <span style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{p.level2}</span>
-                    {p.dow_note && <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 10 }}>★ {p.dow_note}</span>}
+                    {p.dow_note && <span style={{ color: '#f59e0b', marginLeft: 6, fontSize: 11 }}>★ {p.dow_note}</span>}
                   </div>
                   <div style={{ display: 'flex', flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>
-                    <span style={{ color: '#64748b', width: 40, textAlign: 'right' }}>N={p.n}</span>
+                    <span style={{ color: '#94a3b8', width: 40, textAlign: 'right' }}>N={p.n}</span>
                     <span style={{ color: wrColor, width: 34, textAlign: 'right' }}>{p.wr}%</span>
                     <span style={{ color: evColor, width: 34, textAlign: 'right' }}>${p.ev.toFixed(0)}</span>
-                    <span style={{ color: recColor, fontSize: 10, fontWeight: 700, width: 54, textAlign: 'right' }}>{p.recommendation}</span>
+                    <span style={{ color: recColor, fontSize: 11, fontWeight: 700, width: 54, textAlign: 'right' }}>{p.recommendation}</span>
                   </div>
                 </div>
               );
             })}
-            <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
               {confluencePairs.day_type ? `${confluencePairs.day_type}-adjusted where N≥10` : 'all-time'} · pairs updated {confluencePairs.generated}
             </div>
           </div>
@@ -445,7 +445,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       <div style={{ padding: '10px 12px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Morning Script (Open — 12:00 PM)</div>
-          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#818cf8' }}>Overnight positioning.</strong> {oc.overnight_inventory ? `${invLabel}. ${oc.overnight_inventory === 'SHORT_TRAPPED' ? 'Shorts squeezed — buying fuel early. Expect upward drift into first level test.' : oc.overnight_inventory === 'LONG_TRAPPED' ? 'Longs trapped — selling pressure builds. Expect downward drift. Watch for capitulation volume.' : 'Neutral — no trapped participants. Wait for OR to establish direction.'}` : 'Check overnight close vs today\'s VA before the bell.'}</div>
@@ -468,7 +468,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       <div style={{ padding: '10px 12px', background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 6, marginTop: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Afternoon Script (1:00 PM — Close)</div>
-          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#f59e0b' }}>Developing POC is today's magnet.</strong> Afternoon volume drops — price mean-reverts toward wherever today's volume concentrated. Watch where your chart shows the thickest profile.</div>
@@ -502,7 +502,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       <div style={{ padding: '10px 12px', background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.12)', borderRadius: 6, marginTop: 8 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={labelSt}>Evening Read (Closing the Loop → Tomorrow)</div>
-          <span style={{ fontSize: 11, color: '#64748b' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#a78bfa' }}>Today's session character.</strong> {bz?.active

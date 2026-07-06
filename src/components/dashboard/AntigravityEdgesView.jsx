@@ -430,7 +430,7 @@ export default function AntigravityEdgesView() {
                   <span>🧠</span> {pd.title}
                 </span>
                 <span style={{
-                  fontSize: '9px',
+                  fontSize: '11px',
                   fontWeight: '800',
                   background: pd.alert.includes('⚠️') ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)',
                   color: pd.alert.includes('⚠️') ? '#f87171' : '#34d399',
@@ -446,9 +446,9 @@ export default function AntigravityEdgesView() {
               </p>
               {pd.recs.length > 0 && (
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '10px', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Focus Setups:</span>
+                  <span style={{ fontSize: '11px', color: '#94a3b8', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Focus Setups:</span>
                   {pd.recs.map(r => (
-                    <span key={r} style={{ fontSize: '10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', color: '#94a3b8', padding: '1px 6px', borderRadius: '4px', fontWeight: '600' }}>
+                    <span key={r} style={{ fontSize: '11px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)', color: '#94a3b8', padding: '1px 6px', borderRadius: '4px', fontWeight: '600' }}>
                       {r}
                     </span>
                   ))}
@@ -805,7 +805,7 @@ export default function AntigravityEdgesView() {
                 <div style={{ ...cardItemValueStyle(activeBacktest.baselinePnl >= 0 ? 'TIGHT' : 'WIDE'), fontSize: '24px', marginTop: '6px' }}>
                   ${activeBacktest.baselinePnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
-                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
                   Total historical net performance in this period.
                 </div>
               </div>
@@ -821,7 +821,7 @@ export default function AntigravityEdgesView() {
                 <div style={{ ...cardItemValueStyle(activeBacktest.combinedPnl >= 0 ? 'TIGHT' : 'WIDE'), fontSize: '24px', marginTop: '6px', color: activeBacktest.combinedPnl >= 0 ? '#10b981' : '#f87171' }}>
                   ${activeBacktest.combinedPnl.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
-                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px' }}>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
                   P&L after applying Monday block, size decel, & trailing locks.
                 </div>
               </div>
@@ -832,7 +832,7 @@ export default function AntigravityEdgesView() {
                 <div style={savingsValueStyle}>
                   +${activeBacktest.combinedDelta.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
-                <div style={{ fontSize: '10px', color: '#6ee7b7', marginTop: '4px', fontWeight: '500' }}>
+                <div style={{ fontSize: '11px', color: '#6ee7b7', marginTop: '4px', fontWeight: '500' }}>
                   🔥 P&L improvement of {((activeBacktest.combinedDelta / Math.abs(activeBacktest.baselinePnl || 1)) * 100).toFixed(1)}% vs baseline
                 </div>
               </div>
@@ -1052,7 +1052,7 @@ export default function AntigravityEdgesView() {
                       {s.recommendation}
                     </div>
 
-                    <div style={{ fontSize: '9px', color: '#94a3b8', marginTop: '8px', textAlign: 'right', fontStyle: 'italic' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px', textAlign: 'right', fontStyle: 'italic' }}>
                       * Heuristic WR uses qualitative coaching assumptions, not database measurements.
                     </div>
                   </div>
@@ -1527,7 +1527,7 @@ const sectionTitleStyle = {
 };
 
 const fallbackBadgeStyle = {
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: '600',
   background: 'rgba(245,158,11,0.15)',
   border: '1px solid rgba(245,158,11,0.35)',
@@ -1570,7 +1570,7 @@ const liveCardHeaderStyle = {
 };
 
 const liveBadgeStyle = {
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: '800',
   background: '#ef4444',
   color: '#fff',
@@ -1580,7 +1580,7 @@ const liveBadgeStyle = {
 };
 
 const historicalBadgeStyle = {
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: '800',
   background: 'rgba(59, 130, 246, 0.2)',
   border: '1px solid rgba(59, 130, 246, 0.4)',
@@ -1609,7 +1609,7 @@ const cardItemStyle = {
 };
 
 const cardItemLabelStyle = {
-  fontSize: '10px',
+  fontSize: '11px',
   color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',
@@ -1679,7 +1679,7 @@ const setupTypeStyle = {
 };
 
 const setupBadgeStyle = (color, bg) => ({
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: '800',
   color,
   background: bg,
@@ -1699,7 +1699,7 @@ const setupMetricsGrid = {
 };
 
 const metricLabelStyle = {
-  fontSize: '9px',
+  fontSize: '11px',
   color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',
@@ -1713,8 +1713,8 @@ const metricValueStyle = {
 };
 
 const sampleLabel = {
-  fontSize: '10px',
-  color: '#64748b',
+  fontSize: '11px',
+  color: '#94a3b8',
   fontWeight: '400',
 };
 
@@ -1786,7 +1786,7 @@ const tableColHeaderStyle = {
 };
 
 const toolStyle = {
-  fontSize: '10px',
+  fontSize: '11px',
   color: '#94a3b8',
   fontWeight: '400',
   marginTop: '2px',
@@ -1840,7 +1840,7 @@ const auditItemHeader = {
 const rankBadge = {
   background: '#4f46e5',
   color: '#fff',
-  fontSize: '10px',
+  fontSize: '11px',
   fontWeight: '700',
   width: '18px',
   height: '18px',
@@ -1860,7 +1860,7 @@ const auditCatBadge = {
   background: 'rgba(255,255,255,0.05)',
   border: '1px solid rgba(255,255,255,0.1)',
   color: '#94a3b8',
-  fontSize: '9px',
+  fontSize: '11px',
   padding: '1px 5px',
   borderRadius: '3px',
   marginLeft: 'auto',
@@ -1877,7 +1877,7 @@ const impactBadgeStyle = (val) => ({
   background: 'rgba(99,102,241,0.12)',
   border: '1px solid rgba(99,102,241,0.3)',
   color: '#a5b4fc',
-  fontSize: '9px',
+  fontSize: '11px',
   fontWeight: '700',
   padding: '1px 5px',
   borderRadius: '3px',
@@ -1999,7 +1999,7 @@ const ruleTitleContainer = {
 const ruleNumBadge = {
   background: '#312e81',
   color: '#818cf8',
-  fontSize: '9px',
+  fontSize: '11px',
   fontWeight: '800',
   width: '16px',
   height: '16px',
@@ -2035,7 +2035,7 @@ const ruleMetricsRow = {
 };
 
 const ruleMetricLabel = {
-  fontSize: '8px',
+  fontSize: '11px',
   color: '#94a3b8',
   textTransform: 'uppercase',
   fontWeight: '700',

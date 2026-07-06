@@ -27,7 +27,7 @@ async function runMorningBrief(targetDate) {
   let evalAccounts = [];
   try { evalAccounts = await computeEvalProgress(); } catch (_) {}
 
-  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ, onQ, pwPdQ, dynamicEdgesQ] = await Promise.all([
+  const [acdQ, prevAcdQ, dplQ, arQ, nl30Q, setupsQ, coachingQ, acdMonthlyQ, importLogQ, gLineQ, gLineWeekQ, onQ, pwPdQ, dynamicEdgesQ, patternDiscoveriesQ, behavioralStatsQ] = await Promise.all([
     // Today's ACD
     query(`SELECT trade_date::text, day_type, daily_score, or_high, or_low,
              a_up_fired, a_down_fired, a_up_level, a_down_level,
@@ -50,7 +50,7 @@ async function runMorningBrief(targetDate) {
            ORDER BY trade_date DESC LIMIT 1`),
 
     // Today's auction read
-    query(`SELECT opening_call_type, a_signal_override
+    query(`SELECT opening_call_type, a_signal_override, overnight_inventory
            FROM auction_reads WHERE trade_date = $1`, [targetDate]),
 
     // NL30 live
@@ -132,10 +132,65 @@ async function runMorningBrief(targetDate) {
     `, [targetDate]),
 
     // Active dynamic edges from mining
-    query(`SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
+    query(`SELECT setup_type, dimension, segment, tested_n, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
            FROM dynamic_edges_mining
            WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
            ORDER BY status DESC, ABS(deviation) DESC`).catch(() => ({ rows: [] })),
+
+    // Validated pattern signals (N>=20, ACTIVE)
+    query(`SELECT pattern_key, dimension, win_rate::float as win_rate, sample_size
+           FROM pattern_discoveries
+           WHERE status = 'ACTIVE' AND sample_size >= 20
+           ORDER BY win_rate DESC LIMIT 40`).catch(() => ({ rows: [] })),
+
+    // Behavioral level map — rolling 60-session stats (distinct visits, bars/visit, VA excursion)
+    query(`
+      WITH sessions AS (
+        SELECT DISTINCT ts::date as d FROM price_bars_primary
+        WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          AND ts::date >= CURRENT_DATE-90 AND ts::date < CURRENT_DATE
+        ORDER BY d DESC LIMIT 60
+      ),
+      va AS (
+        SELECT trade_date, vah, val, poc FROM developing_value_log
+        WHERE trade_date IN (SELECT d FROM sessions) AND vah IS NOT NULL
+      ),
+      bars AS (
+        SELECT b.ts, b.ts::date as d, (b.high+b.low)/2.0 as mid, v.vah, v.val, v.poc,
+          ABS((b.high+b.low)/2.0 - v.vah) <= 5 as at_vah,
+          ABS((b.high+b.low)/2.0 - v.val) <= 5 as at_val,
+          ABS((b.high+b.low)/2.0 - v.poc) <= 5 as at_poc,
+          LAG(ABS((b.high+b.low)/2.0 - v.vah) <= 5) OVER (PARTITION BY b.ts::date ORDER BY b.ts) as prev_vah,
+          LAG(ABS((b.high+b.low)/2.0 - v.val) <= 5) OVER (PARTITION BY b.ts::date ORDER BY b.ts) as prev_val,
+          LAG(ABS((b.high+b.low)/2.0 - v.poc) <= 5) OVER (PARTITION BY b.ts::date ORDER BY b.ts) as prev_poc
+        FROM price_bars_primary b JOIN va v ON b.ts::date = v.trade_date
+        WHERE b.symbol='NQ' AND EXTRACT(hour FROM b.ts)*60+EXTRACT(minute FROM b.ts) BETWEEN 570 AND 959
+      ),
+      per_session AS (
+        SELECT d,
+          SUM(CASE WHEN at_vah AND NOT COALESCE(prev_vah,false) THEN 1 ELSE 0 END) as vah_visits,
+          SUM(CASE WHEN at_vah THEN 1 ELSE 0 END) as vah_bars,
+          SUM(CASE WHEN at_val AND NOT COALESCE(prev_val,false) THEN 1 ELSE 0 END) as val_visits,
+          SUM(CASE WHEN at_val THEN 1 ELSE 0 END) as val_bars,
+          SUM(CASE WHEN at_poc AND NOT COALESCE(prev_poc,false) THEN 1 ELSE 0 END) as poc_visits,
+          SUM(CASE WHEN at_poc THEN 1 ELSE 0 END) as poc_bars,
+          MAX(GREATEST(
+            CASE WHEN mid > vah THEN mid - vah ELSE 0 END,
+            CASE WHEN mid < val THEN val - mid ELSE 0 END
+          )) as max_va_ext
+        FROM bars GROUP BY d
+      )
+      SELECT
+        ROUND(AVG(vah_visits)::numeric,1) as avg_vah_retests,
+        ROUND(AVG(CASE WHEN vah_visits>0 THEN vah_bars::float/vah_visits END)::numeric,1) as avg_vah_dwell,
+        ROUND(AVG(val_visits)::numeric,1) as avg_val_retests,
+        ROUND(AVG(CASE WHEN val_visits>0 THEN val_bars::float/val_visits END)::numeric,1) as avg_val_dwell,
+        ROUND(AVG(poc_visits)::numeric,1) as avg_poc_visits,
+        ROUND(AVG(CASE WHEN poc_visits>0 THEN poc_bars::float/poc_visits END)::numeric,1) as avg_poc_dwell,
+        ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY max_va_ext)::numeric,0) as p50_va_ext,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY max_va_ext)::numeric,0) as p75_va_ext
+      FROM per_session
+    `).catch(() => ({ rows: [] })),
   ]);
 
   // Structural levels via direct TPO query (same as phaseChangeDetector)
@@ -215,6 +270,7 @@ async function runMorningBrief(targetDate) {
   const prev = prevAcdQ.rows;
   const dpl = dplQ.rows[0] || {};
   const ar = arQ.rows[0] || {};
+  const overnightInventory = ar.overnight_inventory || null;
   const nl30 = parseInt(nl30Q.rows[0]?.nl30) || 0;
   const nl10 = parseInt(nl30Q.rows[0]?.nl10) || 0;
   const setups = setupsQ.rows;
@@ -260,35 +316,36 @@ async function runMorningBrief(targetDate) {
   };
 
   // Load live stats from combo_stats table (updated weekly by combo_backtest.js)
+  // Only surface combos with positive EV — no hardcoded fallbacks (they were wrong)
   const comboStatsRows = await query(`SELECT combo_id, avg_pnl, win_rate, n FROM combo_stats`).then(r => r.rows).catch(() => []);
   const comboStatsMap = Object.fromEntries(comboStatsRows.map(r => [r.combo_id, r]));
-  const liveStats = (id, fallback) => {
+  const liveStats = (id) => {
     const s = comboStatsMap[id];
-    return s ? { avg: Math.round(parseFloat(s.avg_pnl)), win: Math.round(parseFloat(s.win_rate)), n: parseInt(s.n) } : fallback;
+    if (!s) return null;
+    const avg = Math.round(parseFloat(s.avg_pnl));
+    if (avg <= 0) return null; // negative EV — suppress
+    return { avg, win: Math.round(parseFloat(s.win_rate)), n: parseInt(s.n) };
   };
 
-  const PM_COMBOS = [
+  const PM_COMBOS_DEF = [
     { id: 'on_lo_pd_lo',  levels: ['ON_Lo', 'PD_Lo'],  label: 'ON Low + PD Low',
-      ...liveStats('on_lo_pd_lo', { avg: 63, win: 61, n: 70 }),
-      must: ['Entry above ON Low (support, +$248 vs −$6 below)', 'Wide IB day preferred', 'Open outside PD VA'],
-      avoid: ['Inside VA open (−$40)', 'Wednesdays (−$96)'] },
+      must: ['Entry above ON Low (support)', 'Wide IB day preferred', 'Open outside PD VA'],
+      avoid: ['Inside VA open', 'Wednesdays'] },
     { id: 'on_lo_pdpoc_vwap', levels: ['ON_Lo', 'PD_POC'], label: 'ON Low + PD POC',
-      ...liveStats('on_lo_pdpoc_vwap', { avg: 41, win: 35, n: 97 }),
-      must: ['PD POC from below (+$52)', 'Mid-morning or Wed ($+112)'],
-      avoid: ['Fridays (0% win rate)', 'Close session (−$126)'] },
+      must: ['PD POC from below', 'Mid-morning or Wed'],
+      avoid: ['Fridays', 'Close session'] },
     { id: 'pd_lo_pd_val', levels: ['PD_Lo', 'PD_VAL'], label: 'PD Low + PD VAL',
-      ...liveStats('pd_lo_pd_val', { avg: 22, win: 44, n: 128 }),
-      must: ['Entry above PD VAL (+$108 vs −$16 from below)', 'Mid-morning ($+67)'],
-      avoid: ['Below VA open (−$63)', 'Afternoons (−$37)'] },
+      must: ['Entry above PD VAL', 'Mid-morning'],
+      avoid: ['Below VA open', 'Afternoons'] },
     { id: 'pd_val_wvwap', levels: ['PD_VAL', 'W_VWAP'], label: 'PD VAL + W-VWAP',
-      ...liveStats('pd_val_wvwap', { avg: 60, win: 57, n: 109 }),
-      must: ['Entry above PD VAL (+$81)', 'Narrow IB (+$81 vs +$20 wide)'],
-      avoid: ['Inside VA open (−$141)', 'Thursdays (−$178)'] },
-    { id: 'on_lo_pd_lo',  levels: ['PD_Lo', 'PD_VAL'],  label: 'PD Low + PD VAL',
-      ...liveStats('pd_lo_pd_val', { avg: 42, win: 42, n: 50 }),
-      must: ['PD POC from below (+$84 vs −$260 from above)', 'Mid-morning ($+96)'],
-      avoid: ['Open drive ($+5 only)', 'Thursdays (−$20)'] },
+      must: ['Entry above PD VAL', 'Narrow IB'],
+      avoid: ['Inside VA open', 'Thursdays'] },
   ];
+  const PM_COMBOS = PM_COMBOS_DEF.map(c => {
+    const stats = liveStats(c.id);
+    if (!stats) return null;
+    return { ...c, ...stats };
+  }).filter(Boolean);
 
   const activeCombos = PM_COMBOS.filter(c => {
     const vals = c.levels.map(l => levelValues[l]).filter(v => v != null);
@@ -413,19 +470,63 @@ async function runMorningBrief(targetDate) {
   if (dynamicBoosters.length > 0 || dynamicDrags.length > 0) {
     const lines = [];
     if (dynamicBoosters.length > 0) {
-      lines.push('  🚀 Active Boosters (Size Up / Confirm):');
+      lines.push('  Active Boosters (Size Up / Confirm):');
       for (const e of dynamicBoosters) {
-        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (+${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+        const nTag = (e.tested_n != null && e.tested_n < 20) ? ` ⚠N=${e.tested_n} (thin)` : ` N=${e.tested_n ?? '?'}`;
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs ${e.base_wr.toFixed(1)}% (+${e.deviation.toFixed(1)}%) p=${e.p_value.toFixed(4)}${nTag}`);
       }
     }
     if (dynamicDrags.length > 0) {
       if (lines.length > 0) lines.push('');
-      lines.push('  🛑 Active Drags (Size Down / Filter):');
+      lines.push('  Active Drags (Size Down / Filter):');
       for (const e of dynamicDrags) {
-        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs Base: ${e.base_wr.toFixed(1)}% (${e.deviation.toFixed(1)}%) (p=${e.p_value.toFixed(4)})`);
+        const nTag = (e.tested_n != null && e.tested_n < 20) ? ` ⚠N=${e.tested_n} (thin)` : ` N=${e.tested_n ?? '?'}`;
+        lines.push(`    · ${e.setup_type.padEnd(28)} | ${e.segment.padEnd(22)} | WR: ${e.wr.toFixed(1)}% vs ${e.base_wr.toFixed(1)}% (${e.deviation.toFixed(1)}%) p=${e.p_value.toFixed(4)}${nTag}`);
       }
     }
     dynamicEdgesLines = lines.join('\n');
+  }
+
+  // Pattern discoveries — context-matched to today
+  const todayDowShort = dow.slice(0, 3); // "Mon", "Tue", etc.
+  const todayDayType = today.day_type || null;
+  const allPatterns = patternDiscoveriesQ.rows || [];
+
+  const contextPatterns = allPatterns.filter(p => {
+    const key = p.pattern_key;
+    if (key.includes(`×${todayDowShort}`)) return true;
+    if (todayDayType && key.includes(`×${todayDayType}`)) return true;
+    if (overnightInventory && key.includes(`×${overnightInventory}`)) return true;
+    return false;
+  }).sort((a, b) => b.win_rate - a.win_rate);
+
+  const alwaysOnPatterns = allPatterns.filter(p =>
+    (p.dimension === 'level_x_touch' || p.dimension === 'level_x_openval') &&
+    !contextPatterns.some(cp => cp.pattern_key === p.pattern_key)
+  ).slice(0, 4);
+
+  let patternSignalLines;
+  if (contextPatterns.length === 0 && alwaysOnPatterns.length === 0) {
+    patternSignalLines = '  (No validated pattern signals for today\'s context)';
+  } else {
+    const pLines = [];
+    if (contextPatterns.length > 0) {
+      const ctxDesc = [dow, todayDayType, overnightInventory ? `overnight:${overnightInventory}` : null].filter(Boolean).join(', ');
+      pLines.push(`  Matched to today (${ctxDesc}):`);
+      for (const p of contextPatterns) {
+        const [, rest] = p.pattern_key.split(':');
+        pLines.push(`    · ${(rest || p.pattern_key).padEnd(34)} ${(p.win_rate * 100).toFixed(0)}% WR  N=${p.sample_size}`);
+      }
+    }
+    if (alwaysOnPatterns.length > 0) {
+      if (pLines.length > 0) pLines.push('');
+      pLines.push('  First touch / open-vs-value:');
+      for (const p of alwaysOnPatterns) {
+        const [, rest] = p.pattern_key.split(':');
+        pLines.push(`    · ${(rest || p.pattern_key).padEnd(34)} ${(p.win_rate * 100).toFixed(0)}% WR  N=${p.sample_size}`);
+      }
+    }
+    patternSignalLines = pLines.join('\n');
   }
 
   const balanceRegime = Math.abs(nl10) <= 6 ? 'BALANCE (Oscillating/Overlapping)' : 'IMBALANCE (Expansion/Trend)';
@@ -506,14 +607,19 @@ async function runMorningBrief(targetDate) {
     'DYNAMIC MINED EDGES (Statistical shifts)',
     dynamicEdgesLines,
     '',
-    'BEHAVIORAL LEVEL MAP & SESSIONS FORECAST',
+    'VALIDATED PATTERN SIGNALS (pattern_discoveries N>=20)',
+    patternSignalLines,
+    '',
+    'BEHAVIORAL LEVEL MAP (rolling 60 sessions, distinct visits)',
     (() => {
       const p = (v) => v != null ? fmtPrice(v) : '—';
+      const bs = behavioralStatsQ.rows[0] || {};
+      const fmtStat = (v) => v != null ? parseFloat(v).toFixed(1) : '—';
       return [
-        `  POC Magnet (${p(pdPoc)}) : Expect fast approach (16 pts/bar), touch-and-go (1.3 bar dwell). Target only, no entry.`,
-        `  VAH Edge   (${p(pdVah)}) : Expect heavy retests (4.4 avg) & churn (4.8 bar dwell). Let it absorb before fade.`,
-        `  VAL Edge   (${p(pdVal)}) : Fast resolution (2.1 bar dwell, 2.3 retests). Support holds or breaks quickly.`,
-        `  Balance Excursions   : 83% return within 15 bars (65% in 5). Limit is ~29pt max excursion before snapback.`,
+        `  POC (${p(pdPoc)}) : avg ${fmtStat(bs.avg_poc_visits)} passes/session, ${fmtStat(bs.avg_poc_dwell)} bars/pass. Target only — too many passes for reliable entry.`,
+        `  VAH (${p(pdVah)}) : avg ${fmtStat(bs.avg_vah_retests)} retests/session, ${fmtStat(bs.avg_vah_dwell)} bars/visit. Let it absorb before fading.`,
+        `  VAL (${p(pdVal)}) : avg ${fmtStat(bs.avg_val_retests)} retests/session, ${fmtStat(bs.avg_val_dwell)} bars/visit. Support holds or breaks quickly.`,
+        `  VA Excursion (all sessions): p50=${bs.p50_va_ext ?? '—'}pt / p75=${bs.p75_va_ext ?? '—'}pt max exit from VA boundary.`,
       ].join('\n');
     })(),
     '',

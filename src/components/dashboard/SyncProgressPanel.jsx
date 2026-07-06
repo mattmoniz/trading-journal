@@ -33,12 +33,12 @@ export default function SyncProgressPanel({ syncProgress, syncLog, onDismissSync
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
         {syncLog.map((entry, i) => (
           <div key={i} style={{ display: 'flex', gap: 10, fontSize: 13, lineHeight: 1.5 }}>
-            <span style={{ color: '#64748b', flexShrink: 0, fontFamily: 'monospace', fontSize: 13 }}>{entry.ts}</span>
+            <span style={{ color: '#94a3b8', flexShrink: 0, fontFamily: 'monospace', fontSize: 13 }}>{entry.ts}</span>
             <span style={{ color: entry.status === 'error' ? '#ef4444' : entry.status === 'success' ? '#22c55e' : '#94a3b8' }}>{entry.msg}</span>
           </div>
         ))}
         {syncProgress?.status === 'running' && (
-          <div style={{ fontSize: 13, color: '#64748b', marginTop: 4 }}>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4 }}>
             {syncProgress.message}
           </div>
         )}

@@ -82,7 +82,7 @@ export default function VolatilityAlertBanner() {
       <button
         onClick={() => setDismissed(true)}
         style={{
-          background: 'none', border: 'none', color: '#64748b',
+          background: 'none', border: 'none', color: '#94a3b8',
           fontSize: '1rem', cursor: 'pointer', padding: '0 4px', lineHeight: 1, flexShrink: 0,
         }}
         title="Dismiss"

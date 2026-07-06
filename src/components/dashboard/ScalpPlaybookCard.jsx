@@ -28,8 +28,8 @@ export default function ScalpPlaybookCard({ date }) {
           <span style={{ fontSize: 13, fontWeight: 700, color: '#4ade80' }}>Scalp Playbook — {data.dayOfWeek}</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 11, color: '#64748b' }}>{ts}</span>
-          <span style={{ fontSize: 12, color: '#64748b' }}>{collapsed ? '▸' : '▾'}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{ts}</span>
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>{collapsed ? '▸' : '▾'}</span>
         </div>
       </div>
 
@@ -84,7 +84,7 @@ export default function ScalpPlaybookCard({ date }) {
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
                 Setup Anticipation — {approachData.day_type ?? 'ALL'} {approachData.dow}
-                <span style={{ fontSize: 10, fontWeight: 400, color: '#64748b', marginLeft: 6 }}>fire% · WR · exp$/session</span>
+                <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>fire% · WR · exp$/session</span>
               </div>
               {approachData.setups.slice(0, 10).map((r, i) => {
                 const label = r.setup.replace(/_FADE_?(LONG|SHORT)?$/, '').replace(/_/g, ' ') +
@@ -100,10 +100,10 @@ export default function ScalpPlaybookCard({ date }) {
                     <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#e2e8f0' }}>{label}</span>
                     <span style={{ fontSize: 11 }}>
                       <span style={{ color: frColor, fontWeight: 700 }}>{fr}</span>
-                      <span style={{ color: '#475569' }}> · </span>
+                      <span style={{ color: '#94a3b8' }}> · </span>
                       <span style={{ color: wrColor }}>{wr}</span>
-                      {ev && <><span style={{ color: '#475569' }}> · </span><span style={{ color: '#a78bfa', fontWeight: 700 }}>{ev}</span></>}
-                      <span style={{ color: '#334155', fontSize: 10, marginLeft: 4 }}>N={r.n}</span>
+                      {ev && <><span style={{ color: '#94a3b8' }}> · </span><span style={{ color: '#a78bfa', fontWeight: 700 }}>{ev}</span></>}
+                      <span style={{ color: '#94a3b8', fontSize: 11, marginLeft: 4 }}>N={r.n}</span>
                     </span>
                   </div>
                 );
