@@ -22573,18 +22573,6 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
     fetch(`${API_URL}/morning-brief/forecast/${todayET}`).then(r => r.json()).then(setForecast).catch(() => {});
   }, []);
 
-  // Pre-Market Prep section: auto-uncollapses before 9:30 AM ET, never auto-collapses
-  const getEtMin = () => {
-    const now = new Date();
-    const h = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(now));
-    const m = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', minute: 'numeric' }).format(now));
-    return h * 60 + m;
-  };
-  const [prepOpen, setPrepOpen] = React.useState(() => getEtMin() < 570);
-  React.useEffect(() => {
-    const id = setInterval(() => { if (getEtMin() < 570) setPrepOpen(true); }, 60000);
-    return () => clearInterval(id);
-  }, []);
 
   const loadAll = React.useCallback(() => {
     Promise.all([
@@ -22629,63 +22617,25 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
               </div>
             )}
 
-            {/* ── Pre-Market toggle pill (inline, not full-width block) ── */}
-            <div>
-              <button
-                onClick={() => setPrepOpen(o => !o)}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '4px 12px', border: '1px solid var(--border-color)',
-                  borderRadius: 20, background: prepOpen ? '#1e293b' : 'rgba(15,23,42,0.4)',
-                  color: prepOpen ? '#94a3b8' : '#475569',
-                  fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                  textTransform: 'uppercase', letterSpacing: '0.05em',
-                }}
-              >
-                {prepOpen ? '▲' : '▼'} Pre-Market Prep
-              </button>
-            </div>
+            {/* ── Main console grid: 3 fixed columns ── */}
+            {/* Col 1: session intel | Col 2: overnight context + live read | Col 3: scripts */}
+            {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col */}
+            <div style={{ display: 'grid', gridTemplateColumns: '28fr 36fr 36fr', gap: 14, alignItems: 'start' }}>
 
-            {/* ── Main console grid: 3-col (prep open) → 2-col (prep closed) ── */}
-            {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col  */}
-            <style>{`
-              .dash-grid { display: grid; gap: 14px; align-items: start; }
-              @media (min-width: 1400px) {
-                .dash-grid.prep-open  { grid-template-columns: 26fr 44fr 30fr; }
-                .dash-grid.prep-closed { grid-template-columns: 55fr 45fr; }
-              }
-              @media (min-width: 900px) and (max-width: 1399px) {
-                .dash-grid.prep-open  { grid-template-columns: 1fr 1fr; }
-                .dash-grid.prep-closed { grid-template-columns: 1fr 1fr; }
-                .dash-grid.prep-open .dash-col-prep { grid-column: 1 / -1; }
-              }
-              @media (max-width: 899px) {
-                .dash-grid { grid-template-columns: 1fr; }
-              }
-            `}</style>
-            <div className={`dash-grid ${prepOpen ? 'prep-open' : 'prep-closed'}`}>
+              {/* Col 1: Session intel (no scripts) */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <ErrorBoundary name="Session Forecast">
+                  <SessionForecastPanel date={todayET} section="intel" />
+                </ErrorBoundary>
+                <ErrorBoundary name="Day-of-Week Playbook">
+                  <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
+                </ErrorBoundary>
+                <ErrorBoundary name="Pre-Session Checklist">
+                  <PreSessionChecklist />
+                </ErrorBoundary>
+              </div>
 
-              {/* Col 1: Pre-Market (conditional) */}
-              {prepOpen && (
-                <div className="dash-col-prep" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <ErrorBoundary name="Session Forecast">
-                    <SessionForecastPanel date={todayET} />
-                  </ErrorBoundary>
-                  <ErrorBoundary name="Day-of-Week Playbook">
-                    <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
-                  </ErrorBoundary>
-                  <ErrorBoundary name="Pre-Session Checklist">
-                    <PreSessionChecklist />
-                  </ErrorBoundary>
-                </div>
-              )}
-
-              {/* Col 2: Live Scripts (always) */}
-              <ErrorBoundary name="Live Scripts">
-                <LiveScriptsCard date={new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' })} />
-              </ErrorBoundary>
-
-              {/* Col 3: Session Context (always) */}
+              {/* Col 2: Overnight context + live read */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
@@ -22700,6 +22650,11 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                   </div>
                 </CollapsibleSection>
               </div>
+
+              {/* Col 3: Scripts (morning / afternoon / evening) */}
+              <ErrorBoundary name="Scripts">
+                <SessionForecastPanel date={todayET} section="scripts" />
+              </ErrorBoundary>
 
             </div>
 

@@ -8,6 +8,20 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 ## Active work in progress
 
+- **HomeAssistant hosting via Cloudflare Tunnel (future, no timeline).** Goal: access the trading journal from the HA sidebar (and HA Companion app on phone) without a separate URL. Tunnel is already running — the app has a `cloudflared` URL.
+  - **Easiest path (zero code changes):** Add a `panel_iframe` entry to HA `configuration.yaml` pointing at the tunnel URL. Shows up as a sidebar item in HA and in the HA Companion app. No backend or frontend changes needed.
+    ```yaml
+    panel_iframe:
+      trading_journal:
+        title: "Trading Journal"
+        icon: mdi:chart-line
+        url: "https://<your-tunnel>.trycloudflare.com"
+    ```
+  - **Alternative (HA dashboard card):** Use an `iframe` card inside a HA dashboard — more embedded feel, works in the same viewport as other HA cards.
+  - **Subpath proxy (code changes required):** If the app needs to live at `ha.local/journal` instead of its own domain: set `base: '/journal/'` in `vite.config.js`, update all `fetch('/api/...')` refs to `/journal/api/...`, add Express `app.use('/journal', router)`. More work, only needed if a dedicated subdomain isn't acceptable.
+  - **PWA / phone home screen:** Add a `manifest.json` + `<link rel="manifest">` in `index.html` so iOS/Android can "Add to Home Screen" for a native app-like launch icon. No backend changes. The app is already responsive (CSS grid breakpoints at 1400/900px). This makes the cloudflare URL feel like an installed app.
+  - **Prerequisite:** Verify the tunnel URL is stable (not ephemeral `trycloudflare.com` free tier) — if it rotates, the HA panel needs updating each time. Pinned tunnels require a Cloudflare account + `config.yml` with a named tunnel.
+
 ## Active bugs / pending fixes
 
 - **Nightly setup latency audit live (2026-07-05).** `scripts/audit_setup_latency.mjs [YYYY-MM-DD]` — for each FADE setup, finds the first RTH bar where price was within 15pt of the entry level, computes detection lag (fired_at − first_bar_ts). Classifies: OK (0–60s, ≤1 poll cycle), SLOW (60–120s, narrowing entry window), CRITICAL (>120s, first-touch fade window likely gone), RETROACTIVE (>2700s — IB early-touch backfill, expected), PREMARKET (globex-fired, excluded from RTH stats). Writes `LATENCY_AUDIT` rows to `performance_audit`. Appends to `scratch/gemini_alerts.txt` on CRITICAL or >50% SLOW rate. Cron: 5:15 PM ET Mon–Fri. **CRITICAL = >2 min** — a first-touch fade can hit T1 and reverse in 90s; 2 min of missed signal is material.

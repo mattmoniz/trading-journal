@@ -85,7 +85,7 @@ function DailyRecap({ date }) {
   );
 }
 
-export default function SessionForecastPanel({ date }) {
+export default function SessionForecastPanel({ date, section = 'all' }) {
   const [forecast, setForecast] = useState(null);
   const [edgeData, setEdgeData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -186,7 +186,8 @@ export default function SessionForecastPanel({ date }) {
 
   return (
     <div style={{ fontSize: 12, color: '#cbd5e1' }}>
-      {/* Macro warning */}
+      {/* ── Intel section ── */}
+      {section !== 'scripts' && <>
       {forecast?.isMacroDay && (
         <div style={{ padding: '10px 14px', background: 'rgba(234,88,12,0.12)', border: '1px solid rgba(234,88,12,0.4)', borderRadius: 6, color: '#f97316', marginBottom: 12 }}>
           <strong>MACRO OVERRIDE:</strong> {forecast.macroEvents?.map(e => `${e.event_type} at ${e.event_time?.slice(0,5)} ET`).join(', ')}. Calendar stats secondary — expect high-vol expansion.
@@ -435,6 +436,10 @@ export default function SessionForecastPanel({ date }) {
         </div>
       )}
 
+      </>}
+
+      {/* ── Scripts section ── */}
+      {section !== 'intel' && <>
       {/* First hour script */}
       <div style={{ padding: '10px 12px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 6 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -530,6 +535,7 @@ export default function SessionForecastPanel({ date }) {
           })()}</div>
         </div>
       </div>}
+      </>}
     </div>
   );
 }
