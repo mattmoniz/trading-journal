@@ -189,6 +189,23 @@ Categories: `BUG`, `DATA`, `EDGE`, `BEHAVIOR`, `STRUCTURE`, `COACH`
 
 ---
 
+## Part 5 — Open Observations
+
+After completing the structured audit, write a free-form section with anything else you noticed that doesn't fit neatly into the categories above. No format required. No N≥20 rule — these can be hunches, patterns, anomalies, or things that just felt off while reading. Examples of what belongs here:
+
+- A coaching session where the tone shifted and something seemed off
+- A setup whose description in code doesn't match how it behaves in the data
+- A gap between what the morning brief says and what the trading data shows actually happens
+- An edge in the price data you noticed while running other queries that isn't in any current backtest
+- A UI element that seems to be surfacing the wrong information at the wrong time
+- A risk in the system design that isn't a bug but could cause a problem under specific conditions
+- Anything about the trader's patterns that jumps out from reading the coaching text longitudinally that the behavioral stats don't capture
+- Any question you'd want answered if you were trading this system yourself
+
+Write what you actually think. Be direct. This section exists specifically because structured audits miss the things that don't fit a template.
+
+---
+
 ## Deliverable: `scratch/opus_audit_results.md`
 
 1. **Executive Summary** (10 bullets max — highest-impact only)
@@ -198,7 +215,8 @@ Categories: `BUG`, `DATA`, `EDGE`, `BEHAVIOR`, `STRUCTURE`, `COACH`
 5. **Code & System Bugs** (BUG items)
 6. **Data Quality** (DATA items)
 7. **Structural Notes** (STRUCTURE + COACH)
-8. **Gemini Raw Output** (labeled by task)
-9. **Priority Action List for Sonnet** (ordered, estimated session count per item)
+8. **Open Observations** (free-form — anything noticed that doesn't fit above)
+9. **Gemini Raw Output** (labeled by task)
+10. **Priority Action List for Sonnet** (ordered, estimated session count per item)
 
 Final line: `[OPUS AUDIT COMPLETE]`
