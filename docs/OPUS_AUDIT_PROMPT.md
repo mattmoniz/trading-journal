@@ -1,157 +1,204 @@
-# AUTONOMOUS — OPUS APP AUDIT
+# AUTONOMOUS — OPUS FULL AUDIT
 
-You are Claude Opus 4.8, doing a top-to-bottom audit of a live NQ futures trading journal application. Your job is to **find, analyze, and recommend** — not to implement. Everything you produce should be a structured brief that Claude Sonnet can execute in a follow-up session. Do not rewrite any file. Do not generate code blocks intended for immediate paste. Write action items with enough specificity that Sonnet can execute them cold.
+You are Claude Opus 4.8. Your job is a top-to-bottom audit of a live NQ futures trading journal — code quality, data integrity, strategy edge, and trader behavior. You have access to 3+ years of 1-min NQ bars, 3,800+ resolved trades with MAE/MFE, 55+ coaching sessions, and a full behavioral trend system.
+
+**Deliverable**: `scratch/opus_audit_results.md` — structured findings that Claude Sonnet will execute in follow-up sessions. Do not implement anything. Do not generate code for immediate paste. Write action items specific enough that Sonnet can execute them cold.
 
 ---
 
 ## Context: What This App Is
 
-A full-stack trading journal (React + Express + PostgreSQL) for a professional NQ futures day trader on a prop firm. Key systems:
+Full-stack trading journal (React + Express + PostgreSQL) for a professional NQ futures day trader on a prop firm. Key systems:
+
 - **Alpha Engine** (`server/routes/acd.js`, ~4,500 lines): detects level fade setups in real time, sizes them via a 14-factor `sizeMultiplier` IIFE, sends live alerts. Heart of the app.
-- **AI Coach** (`server/routes/playbook.js`): Sonnet-powered live assess tool (TAKE/WAIT/STAND DOWN verdicts), Haiku daily setup review, behavioral trend tracking.
-- **Mining pipeline** (20+ scripts in `scripts/`): backtests that write findings to `performance_audit` table; weekly crons re-run them.
+- **AI Coach** (`server/routes/playbook.js`): Sonnet-4.6 live assess (TAKE/WAIT/STAND DOWN), Haiku daily setup review, behavioral trend tracking injected into coaching prompt.
+- **Mining pipeline** (~20 scripts in `scripts/`): backtests writing to `performance_audit` table; weekly crons re-run them.
 - **Dashboard** (`src/components/dashboard/`): live setup cards, session forecast, permission slips, coaching, morning brief.
-- **Data**: ~3 years of 1-min NQ bars, 3,800+ resolved trades, 55+ coaching sessions, 406 days of computed levels.
+- **Data available to you**:
+  - `price_bars_primary`: 1-min OHLCV + ask_volume/bid_volume, Nov 2023–present
+  - `active_setups`: 3,800+ resolved trades — setup_type, fired_at, entry, stop, t1, resolution (TARGET_HIT/STOP_HIT/EXPIRED), actual_pnl, mae_points, mfe_points, size_multiplier, log_date
+  - `acd_daily_log`: day_type (BALANCE/TREND/TURBULENT), a_up_fired, a_down_fired, c signals, or_high/or_low per date
+  - `daily_coaching`: 55+ sessions of coaching text (behavioral observations, what to improve, tomorrow's watch)
+  - `performance_audit`: all backtest results by signal_type — SESSION_BIAS, CONTEXT_ANALYSIS, DAY_TYPE_ALPHA, OPTIMAL_STOP, AI_SETUP_REVIEW, BEHAVIORAL_STATS, etc.
+  - `level_prices`: 64 computed levels per date (backfilled 406 dates)
+  - `auction_reads`: open_vs_prior_value, overnight_inventory per date
+  - `playbook_conversations`: every live assess call + AI response
 
-**Hard rules from the team:**
-1. No static thresholds — everything derived from rolling distributions.
-2. P&L uses CumPL diff method, never SUM(pnl).
-3. N≥20 before any stat is treated as decisive.
-4. No lookahead in backtests.
-5. Never fabricate a stat.
-
----
-
-## What to Read First (in this order)
-
-1. `/home/mmoniz/trading-journal/CLAUDE.md` — conventions, hard rules, collaboration model
-2. `/home/mmoniz/trading-journal/docs/OPEN_THREADS.md` — pending work, unconfirmed proposals, stale stats
-3. `/home/mmoniz/trading-journal/ARCHITECTURE.md` — route/service/table inventory
-4. `/home/mmoniz/trading-journal/docs/KNOWN_ISSUES.md` — known bugs and tech debt
-5. `/home/mmoniz/trading-journal/docs/HARDCODED_CONSTANTS.md` — every threshold and why it exists
+**Hard rules you must follow:**
+1. N≥20 before citing any stat as meaningful. Below that, say "N=X (thin)" and do not recommend action.
+2. No lookahead — any pattern you find must be detectable before the trade is taken.
+3. Never fabricate a stat. Query the DB, cite the count.
+4. Check `docs/OPEN_THREADS.md` before raising anything already tracked there.
 
 ---
 
-## Audit Dimensions
+## Read First (in this order)
 
-Work through each of these. For each finding, produce a structured item (see Output Format below).
+1. `CLAUDE.md` — conventions, hard rules, system overview
+2. `docs/OPEN_THREADS.md` — pending work, unconfirmed proposals
+3. `docs/KNOWN_ISSUES.md` — confirmed bugs
+4. `docs/HARDCODED_CONSTANTS.md` — every threshold and why it exists
+5. `ARCHITECTURE.md` — route/service/table inventory
 
-### 1. Code Correctness / Bugs
+---
 
-- **Alpha Engine** (`server/routes/acd.js`, lines 3800–4500): read the `sizeMultiplier` IIFE carefully. Are there any factors that could produce multipliers outside [0.25, 1.5] cap? Are there edge cases where `null`/`undefined` factors silently pass through as `NaN`? Are any factors using data that could have lookahead (e.g., querying tomorrow's bars)?
-- **Assess endpoint** (`server/routes/playbook.js`, the `/assess` route): check that `sim_time` correctly clips bars and overrides session phase. Check that `nearLevels` (within 25pt) correctly uses today's `level_prices` — not stale dates.
-- **Daily AI review** (`persist-feedback` / `persistFeedbackForDate`): are there edge cases where the AI returns a `stop_verdict` or `t1_verdict` value that causes a crash or bad DB write?
-- **Cron timing** (`server/index.js`): list all crons, their times, and check if any overlap or could produce duplicate writes.
-- **P&L path**: grep for `SUM(pnl)`, `SUM(FlatToFlat)` across all route files — confirm neither appears in a live P&L endpoint.
+## Part 1 — Code & System Audit
 
-### 2. Data Quality
+### 1A. Alpha Engine Integrity (`server/routes/acd.js`)
 
-Use Gemini for these (write the tasks, see Gemini section below):
-- **`performance_audit` staleness**: for each `signal_type`, what is the most recent `run_date`? Which are >30 days stale?
-- **`active_setups` data gaps**: how many rows have `null` for `mae_points`, `mfe_points`, `size_multiplier`? Is the gap growing or shrinking?
-- **`AI_SETUP_REVIEW` accumulation pace**: at the current rate of daily reviews × 8 setups/day, when will the first setup hit N=20 (required for `AI_SETUP_AGG` to flag NEEDS_ADJUST)?
-- **`BEHAVIORAL_STATS` accuracy**: pick 5 random coaching sessions from `daily_coaching`. Does the text actually contain the behavioral keywords in `scripts/aggregate_behavioral_stats.js`? Or are the regex patterns missing real instances?
+- Read the `sizeMultiplier` IIFE (lines ~4380–4460). List every factor. For each: (a) what is the condition, (b) is the input guaranteed non-null, (c) can it produce NaN/undefined that silently bypasses the cap? `Math.min(NaN, 1.5)` returns NaN — a silent failure that sends a broken multiplier downstream.
+- Are any factors using lookahead data? Specifically: does `_lfVwapExtFar` (VWAP extension sigma) read a daily sigma that includes today's session close? Does `turbConfirmed` use any bar data that wouldn't exist at detection time?
+- `last5 = allRthBarsRow.rows.slice(-6, -1)` — at market open with < 6 bars, does `last5` silently return 1–4 bars or empty array? Does approach delta compute correctly with an empty array (sum of empty = 0 = no buyer/seller signal, which is the right fallback)?
 
-### 3. Trading Improvement Opportunities
+### 1B. Cron Ordering and Dependencies (`server/index.js`)
 
-Read the data, then think like a seasoned trading coach:
-- **`active_setups` outcome distribution**: what percentage of setups are TARGET_HIT vs STOP_HIT vs EXPIRED? Is there a setup_type with disproportionately high EXPIRED rate (never resolving, just expiring) — that's a signal the entry criteria are too narrow or the holding period is wrong.
-- **`sizeMultiplier` distribution**: if you had the data from `active_setups.size_multiplier`, what is the actual distribution? Are there too many setups clustered near the 1.5× cap (suggesting positive factors stack without discrimination)? Are there setups near the 0.25× floor that still fire (if something is scoring that low, should it be suppressed entirely)?
-- **Behavioral patterns in context**: the `BEHAVIORAL_STATS` show `annotation_gaps` at 60% last 10 sessions (WORSENING) and `give_back_pattern` at 40%. Based on the coaching session text and trade data in DB — what is the *actual* behavioral pattern driving give-back? Is it late exits (MFE >> T1), re-entry after stop, or sizing up on second trades after a loss?
-- **Morning brief utility**: read `server/services/morningBrief.js`. Is the content actually actionable? Compare what it outputs vs what the AI coach in `daily_coaching.js` writes. Are they redundant? What's missing?
-- **Setup timing gaps**: using `active_setups.fired_at` and `active_setups.resolution_bar_time` — are there setups that consistently fire late in the session (post-2 PM ET) with much lower WR than pre-noon? This would argue for a time-of-day gate that isn't currently wired.
+- List all scheduled crons with their ET times. Find any that could produce duplicate writes to `performance_audit`. Find ordering dependencies where Script B needs Script A's output.
+- 4:30 PM coaching + 4:35 PM review + 5 PM catch-up: can the catch-up trigger even after both already ran? That would produce a duplicate `daily_ai_reviews` row or hit the unique constraint.
 
-### 4. Structural / Architectural Suggestions
+### 1C. P&L Path Correctness
 
-- **`acd.js` size**: at ~4,500 lines it's monolithic. What are the natural split points? (Don't propose a rewrite — identify the seams so a future session can extract cleanly if desired.)
-- **Coaching pipeline feedback loop**: the AI coach generates BEHAVIORAL_STATS, which get injected back into the coach prompt. Is there a risk of feedback loop amplification (the coach increasingly fixates on annotation gaps because it keeps seeing "60% WORSENING" even when the user has improved)? How should the decay / recency weighting be structured?
-- **`performance_audit` as a bus**: this table now serves as the output target for 15+ different `signal_type` values. Is there a risk of collision, stale reads, or signal_type namespace conflicts? Any signal_types that overlap in meaning or could be consolidated?
-- **Cron dependency ordering**: is the Sunday batch (day_type_alpha → optimal_stops → behavioral_stats → setup_agg → context_analysis → session_bias → scan_patterns) structured so each script has the inputs it needs from the prior scripts? Or are there hidden ordering dependencies that could cause a bad run?
-- **AI cost trajectory**: given the current cron schedule (coaching 4:30 PM, review 4:35 PM, periodic catch-up), estimate the monthly AI cost at current usage. Is there a path where costs grow unexpectedly (e.g., the catch-up loop firing multiple times per day)?
+- Grep for `SUM(pnl)`, `SUM(FlatToFlat)` in all route files. Neither must appear in a live P&L endpoint. The correct pattern is CumPL diff CTE. Check `/api/stats/overview`, `/api/stats/daily`, `/api/stats/cumulative-pnl`, `/api/daily-logs` — all four must use it.
 
-### 5. Pattern Recognition in Historical Data
+### 1D. Behavioral Stats Data Quality
 
-This is where Gemini can do the heavy lifting. Write tasks for Gemini to run these queries and report back. You're looking for things the current system might have missed:
+- In `scripts/aggregate_behavioral_stats.js`, check the keyword arrays for each `BEHAVIOR_THEME`. Pull 10 random `daily_coaching` rows. Do the keywords actually match how the AI coach writes? Coaching text is generated by an LLM — it may describe give-back as "gave back gains" or "let winners turn to losers" instead of the exact keyword. Measure false-negative rate.
+- Feedback amplification risk: if annotation_gaps is flagged WORSENING and injected into every coaching session, does the coach keep calling it out even after the behavior improves? Is there a staleness mechanism or does it stay WORSENING until the rolling_10d rate drops below prior_20?
 
-- **Consecutive day patterns**: does today's gap direction predict tomorrow's fade direction? (e.g., two consecutive gap-up days → fade short has higher WR on day 2)
-- **Post-holiday behavior**: first trading day after a market holiday — what is the WR on level fades vs normal days?
-- **Time-of-day × setup_type interaction**: is there a setup that consistently hits T1 before 11 AM but stops out after 1 PM? A time-of-day gate for that setup would be a pure edge gain.
-- **Volume profile of stop-outs**: on STOP_HIT trades, what was the bar volume at the bar before the stop? High volume stops (conviction flush) vs low volume stops (drift) may have different recovery patterns.
+---
+
+## Part 2 — Strategy Audit
+
+Use Gemini for multi-table joins. Verify 3–5 key numbers yourself before citing.
+
+### 2A. Setup-Level Forensics
+
+For each active setup_type with N≥20 resolved trades:
+
+1. **WR by time of day** — bucket `fired_at` ET hour: 9–10, 10–11, 11–12, 12–14, 14–16. Flag any setup where PM WR is >15pp below AM WR (N≥20 in the PM bucket required). A time gate on that setup is a pure edge gain.
+
+2. **MAE/MFE ratio** — `avg_mfe_points / avg_mae_points` per setup_type. Ratio < 1.5 = thin edge (barely going your way before stopping out). Ratio > 3 = structural conviction. Rank all active setups. Any active setup with ratio < 1.5 should be on watch.
+
+3. **Expiry rate** — `COUNT(*) FILTER (WHERE resolution='EXPIRED') / COUNT(*)` per setup_type. Rate > 30% means the setup fires but price never commits — entry criteria may be too early or holding window too short.
+
+4. **Size multiplier discrimination** — from `active_setups WHERE size_multiplier IS NOT NULL`, bucket into <0.5, 0.5–0.8, 0.8–1.1, 1.1–1.3, 1.3–1.5. Compute TARGET_HIT rate and avg actual_pnl per bucket. If the 0.5× bucket and 1.5× bucket have similar WR, the 14-factor sizeMultiplier system is not discriminating — that's a critical finding.
+
+5. **Sequential failure by setup** — the aggregate shows after_loss WR=44.3% vs after_win WR=80.5%. Break this down per setup_type. Is the failure pattern uniform or concentrated in 2–3 setups? If one setup causes 70% of sequential-loss blow-ups, suppressing that specific setup post-loss is a targeted fix.
+
+6. **DAY_TYPE_ALPHA drift** — join `active_setups` to `acd_daily_log`. For each setup_type, compare live WR by day_type vs what `DAY_TYPE_ALPHA` rows in `performance_audit` predict. If live BALANCE WR has drifted >10pp from the backtest, the weights need a refresh (the cron runs weekly — check if the drift is just lag or structural).
+
+### 2B. Price History Patterns Not Yet Wired
+
+Query `price_bars_primary` joined to `acd_daily_log` + `active_setups`. N≥20 required.
+
+1. **First-hour range as a filter**: wider 9:30–10:30 OR correlates with TURBULENT confirmation. Does extending the TURBULENT gate from 15-min range to the full IB range improve discrimination beyond the current `turbConfirmed` check?
+
+2. **Gap direction vs fade direction**: classify each session by gap (today OR open vs prior day close). Do fades in the gap direction outperform fades against the gap? If yes, this is a directional preference layer that's missing from the current system.
+
+3. **VWAP relationship at entry**: at `fired_at`, was price above or below the cumulative VWAP for that day? Do LONG fades taken below VWAP outperform? SHORT fades above VWAP? This refines when the approach delta factor should apply more weight.
+
+4. **Bar body quality at entry**: at the bar coinciding with `fired_at`, what is `|close-open| / (high-low)`? High body quality (>0.6) = conviction. Low (<0.3) = doji/indecision. Does body quality at entry correlate with TARGET_HIT? If yes, it's a filter that could cut marginal entries without hurting good ones.
+
+5. **Post-loss bar count before re-entry**: after a STOP_HIT, how many bars elapse before the next trade? The cooldown system exists but: is there a minimum bar count below which re-entries are statistically worse? Does a 5-minute cooldown suffice or does the data say 15+ minutes?
+
+---
+
+## Part 3 — Behavioral Forensics (Most Important)
+
+The trader knows the system. Losses come from execution errors, emotional overrides, and regime misreads. Find the specific patterns with numbers.
+
+### 3A. Quantified Loss Patterns
+
+1. **Annotation gap cost**: on days where `daily_coaching.open_notes` is NULL or < 100 chars (no pre-market prep), how do trade outcomes compare to fully-annotated days? Express as: avg P&L difference per day, WR difference, and estimated annual cost at current trade frequency.
+
+2. **Give-back re-entry rate**: after a TARGET_HIT, find `active_setups` entries of the same setup_type within 30 minutes on the same day. What percentage of those re-entries stop out? What is the P&L impact of re-entries vs simply holding after T1?
+
+3. **PM overtrading**: after 1:00 PM ET, how many setups are taken per day on average? What is the PM WR vs AM WR? Express as: PM P&L drag per day and estimated annual cost. If the system keeps firing PM setups and they underperform, the question is whether to suppress them or the trader needs a hard PM cutoff.
+
+4. **Loss cluster anatomy**: find the 5 worst P&L days from `daily_logs` (CumPL diff). For each, pull all `active_setups` that fired. Look for: wrong day type, wrong time of day, wrong setup type, or sequential compounding (each loss led to another trade). Are the same 2–3 setups showing up across multiple worst days?
+
+5. **Assess tool compliance**: from `playbook_conversations`, find all STAND DOWN or WAIT responses. Check `active_setups` for a trade in the same direction within 10 minutes of the response. When the AI said STAND DOWN and the trader traded anyway — what was the outcome? Quantify the cost of overriding the system.
+
+6. **Winning day formula**: find the 5 best P&L days. What was the setup_type distribution? Time of day? Day-type? Was the session forecast correct on those days? Finding the anatomy of your best days is as important as avoiding your worst.
+
+### 3B. Coaching System Feedback Loop Check
+
+- Read the last 20 `daily_coaching` entries chronologically. Is the coach repeating the same observations session after session? If "watch for give-back" appears in 15 of 20 sessions, either the behavior isn't improving or the coach is stuck in a pattern regardless of actual outcomes. Distinguish by checking whether stop-out rates are actually higher on days the coach flagged give-back.
+- Is "TOMORROW'S WATCH" from each session reflected in the next day's coaching context? Does the system use `committed_plan` from `premarket_walkthroughs`? If the coach sets a watch item but it never appears in the next-day context, the feedback loop is broken.
+
+---
+
+## Part 4 — Structural Notes (Brief)
+
+- **`acd.js` natural split points**: identify 3–4 extraction seams without proposing a full refactor. What would make the file navigable without breaking it?
+- **`performance_audit` cleanup**: 15+ signal_types write here. Are there stale signal_types from old backtests that should be archived? Any namespace collision risks?
+- **Sunday cron ordering**: verify each script in the Sunday batch has the inputs it needs from prior scripts.
+- **App improvement suggestions**: given all of the above, what 3–5 features or UI changes would most directly help the trader make better decisions in real time? These should be grounded in the data patterns you found, not generic dashboard ideas.
 
 ---
 
 ## How to Use Gemini
 
-For data-heavy queries, write your task to `scratch/claude_request.md` using the format below, then run:
+Write tasks to `scratch/claude_request.md`, then:
 ```
 ./scripts/invoke_gemini.sh 30m
 ```
-Output appears in `scratch/antigravity_response.md`. Gemini has read-only access to the DB (`gemini_readonly` role). Always verify 3–5 key numbers from Gemini's output with a direct query before including them in your audit findings.
+Output: `scratch/antigravity_response.md`. Gemini = read-only DB access (`gemini_readonly` role, password `gemini_ro_2026`).
 
-**Gemini task format:**
+**Always verify 3–5 key numbers from Gemini with a direct spot-check before citing.**
+
+Gemini task format:
 ```markdown
 # AUTONOMOUS
 
 ## TASK: [title]
 
-Run the following queries against the trading_journal DB and report results precisely.
+[SQL queries]
 
-[queries]
-
-Output format: exact numbers, N counts, no rounding to convenient figures.
+Report: exact numbers, N counts, no rounding.
 ```
 
-**Gemini failure protocol:** if `scratch/antigravity_response.md` hasn't updated after 10 minutes, do the query yourself directly using the DB credentials in `.env`. Never block.
+**Timeout**: if `scratch/antigravity_response.md` hasn't updated in 10 min (`stat --format='%Y' scratch/antigravity_response.md`), do the query yourself. DB: host=localhost, user=trader, password=trader123, db=trading_journal. Never block.
 
 ---
 
 ## Output Format
 
-For each finding, write a structured item:
-
+For each finding:
 ```
 ## [CATEGORY]: [SHORT TITLE]
 
 **Severity**: CRITICAL / HIGH / MEDIUM / LOW / SUGGESTION
-**File**: path/to/file.js (line range if known)
-**What**: one sentence describing the issue or opportunity
-**Why it matters**: one sentence on impact
-**Action for Sonnet**: specific instruction — file, function, what to change or verify. No code blocks.
-**Data needed first**: (optional) what to query or verify before acting
+**Source**: file, table, or query
+**What**: one sentence
+**Why it matters**: P&L or behavioral impact with a number if possible
+**Action for Sonnet**: specific instruction, no code blocks
+**Data needed first**: (if applicable)
 ```
 
-Group findings under:
-- `## BUG` — code correctness issues
-- `## DATA` — data quality / staleness issues  
-- `## TRADING EDGE` — opportunities to improve P&L or decision quality
-- `## STRUCTURE` — architectural suggestions (no rewrites)
-- `## COACH` — ways the AI coaching system could be improved
+Categories: `BUG`, `DATA`, `EDGE`, `BEHAVIOR`, `STRUCTURE`, `COACH`
 
 ---
 
 ## Constraints
 
-- **Do not propose a rebuild or major rewrite** of any system. If something is structurally broken, say so and describe the minimum intervention.
-- **Do not generate code** intended for immediate paste into files.
-- **Cite N counts** for any trading stat you reference. If N<20, say so.
-- **Check OPEN_THREADS.md before raising anything** — if it's already tracked there, note that and move on. Don't re-surface known pending work as a new finding.
-- **Use Gemini for queries** where the dataset is >500 rows or requires joining multiple tables. Reserve direct queries for spot-checks and verification.
-- **Do not call the API** (no Anthropic calls, no external HTTP). Read files, query the DB, invoke Gemini.
+- No rebuilds. Minimum intervention only.
+- No code blocks for immediate paste.
+- N≥20 for every stat cited. Below that: state N and do not recommend action.
+- Check `docs/OPEN_THREADS.md` first — don't re-surface tracked work.
+- No Anthropic API calls. Read files, query DB, invoke Gemini.
 
 ---
 
-## Deliverable
+## Deliverable: `scratch/opus_audit_results.md`
 
-A single markdown file: `scratch/opus_audit_results.md`
+1. **Executive Summary** (10 bullets max — highest-impact only)
+2. **Stop Doing This Immediately** (BEHAVIOR findings, ordered by estimated P&L cost)
+3. **Strategy Edge Opportunities** (EDGE items backed by data)
+4. **App Improvement Suggestions** (what to build next to help the trader most)
+5. **Code & System Bugs** (BUG items)
+6. **Data Quality** (DATA items)
+7. **Structural Notes** (STRUCTURE + COACH)
+8. **Gemini Raw Output** (labeled by task)
+9. **Priority Action List for Sonnet** (ordered, estimated session count per item)
 
-Sections:
-1. **Executive Summary** (5–10 bullets, the most important findings)
-2. **Bug Findings** (BUG items)
-3. **Data Quality Findings** (DATA items)
-4. **Trading Edge Opportunities** (TRADING EDGE items)
-5. **Structural Suggestions** (STRUCTURE items)
-6. **Coaching System Suggestions** (COACH items)
-7. **Gemini Task Results** (raw output from Gemini tasks, clearly labeled)
-8. **What to Do First** (ordered priority list for Sonnet to execute, with estimated session count)
-
-When done, write `[OPUS AUDIT COMPLETE]` as the final line of `scratch/opus_audit_results.md`.
+Final line: `[OPUS AUDIT COMPLETE]`
