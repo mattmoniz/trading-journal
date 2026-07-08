@@ -57,15 +57,39 @@ async function aggregateBehavioralStats() {
     return;
   }
 
+  // Structured overtrading signal: EP-bounded round-trips (flat-to-flat) per day.
+  // trades_count in daily_coaching = raw fills (max 784) — not usable directly.
+  // EP fills = position returned to flat = 1 per round trip.
+  // Opus audit 2026-07-07: keyword NLP caught only 4/27 heavy-trade sessions (85% miss rate).
+  const rtRes = await query(`
+    SELECT log_date::text as session_date, COUNT(*) as round_trips
+    FROM trades
+    WHERE custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+      AND custom_fields->>'account' LIKE '%-PRO%'
+    GROUP BY log_date
+    ORDER BY log_date
+  `).catch(() => ({ rows: [] }));
+  const rtByDate = Object.fromEntries(rtRes.rows.map(r => [r.session_date, parseInt(r.round_trips)]));
+  // Rolling mean+σ threshold: flag sessions above mean + 0.5σ
+  const rtValues = Object.values(rtByDate).filter(v => v > 0).sort((a, b) => a - b);
+  const rtMean = rtValues.length ? rtValues.reduce((s, v) => s + v, 0) / rtValues.length : 5;
+  // Use p75 as threshold — more robust to outlier days (std is 2× mean due to skew).
+  // Opus: 27/56 sessions had ≥20 fills → p75 RT threshold should flag roughly same proportion.
+  const rtP75 = rtValues.length ? rtValues[Math.floor(rtValues.length * 0.75)] : 10;
+  const rtThreshold = rtP75;
+  console.log(`  overtrading RT stats: mean=${rtMean.toFixed(1)} p75=${rtP75} threshold=${rtThreshold}`);
+
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const totalSessions = rows.length;
 
   for (const [themeLabel, ...keywords] of BEHAVIOR_THEMES) {
-    // Per-session boolean
+    // Per-session boolean — overtrading uses structured EP round-trip count, not NLP
     const sessionHits = rows.map(r => ({
       date: r.session_date,
       week: getWeekLabel(r.session_date),
-      hit: matchesTheme(r.coaching_text, keywords),
+      hit: themeLabel === 'overtrading_after_11am'
+        ? (rtByDate[r.session_date] ?? 0) >= rtThreshold
+        : matchesTheme(r.coaching_text, keywords),
     }));
 
     // Weekly counts

@@ -3898,6 +3898,27 @@ export default function createACDRouter(io) {
         : { rows: [{ streak_days: '0' }] };
       const _lfRegimePersist = parseInt(_lfRegimePersistQ.rows[0]?.streak_days ?? '0') >= 2;
 
+      // Cascade breaker: detect trend-running-over-fades regime (Opus audit 2026-07-07).
+      // Worst 5 days each had 17–18 STOP_HITs across 20–29 setups — all different levels cascading.
+      // Distribution (N=1564 stop-out events): normal avg=1.84 prior same-day stops in 60min, std=2.16.
+      // Worst days: avg=5.89. Threshold = mean + σ = 4 total distinct stops → trigger at ≥3 to catch early.
+      // Window = 45 min (tighter than 60 to detect cascades sooner). Never fires on best days (max 6 stops total).
+      const _cascadeQ = await query(`
+        SELECT COUNT(DISTINCT setup_type)::int AS stop_count
+        FROM active_setups
+        WHERE trade_date = $1
+          AND resolution = 'STOP_HIT'
+          AND resolved_at >= NOW() - INTERVAL '45 minutes'
+      `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] }));
+      const _cascadeStopCount = _cascadeQ.rows[0]?.stop_count ?? 0;
+      const _cascadeThreshold = 3; // data-derived: normal p75 = 3 "prior" stops ≈ 4 total; -1 for early trigger
+      const cascadeBreaker = {
+        active: _cascadeStopCount >= _cascadeThreshold,
+        stopCount: _cascadeStopCount,
+        threshold: _cascadeThreshold,
+        windowMins: 45,
+      };
+
       // ── Level Scalp detection ────────────────────────────────────────────
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
       let levelScalpSetup = null;
@@ -4078,11 +4099,15 @@ export default function createACDRouter(io) {
             // --- KILL tier (tier analysis 2026-07-05) ---
             'IB_HIGH_FADE_SHORT',          // 55.7% WR N=79, EV=-$35 — stop-wide structural loser SHORT side
             'OR_MID_AFTER_IB_FADE_SHORT',  // 61.7% WR N=60, EV=-$32 — LONG side solid, SHORT kills edge
-            'CAM_R4_FADE_LONG',            // 64.3% WR N=28, EV=-$28 — fading LONG from extreme resistance fails
-            'CAM_S2_FADE_SHORT',           // 60.0% WR N=30, EV=-$23 — selling support level fails structurally
-            'CAM_R1_FADE_LONG',            // 61.5% WR N=39, EV=-$17 — WEAK/KILL boundary; buying R1 resistance
-            'CAM_R1_FADE_SHORT',           // 61.8% WR N=34, EV=-$16 — WEAK; symmetric R1 loser both directions
+            'CAM_R4_FADE_LONG',            // 64.3% WR N=28, EV=-$9 (confirmed 2026-07-07, N=69) — fading LONG from extreme resistance fails
+            'CAM_R1_FADE_LONG',            // 61.5% WR N=39, EV=-$6 (confirmed 2026-07-07, N=68) — WEAK/KILL boundary; buying R1 resistance
             'PD_VAH_FADE_SHORT',           // 60.0% WR N=45, EV=-$16 — WEAK; VAH SHORT fails, VAH LONG is PRIME
+            // CAM support-level fades that lose on the LONG side (Opus audit 2026-07-07, all N≥20)
+            'CAM_S3_FADE_LONG',            // WR=57% N=37, EV=-$31 — worst CAM loser; S3 LONG fades structurally fail
+            'CAM_S1_FADE_LONG',            // WR=61% N=61, EV=-$21 — S1 LONG consistently negative EV
+            'CAM_S3_FADE_SHORT',           // WR=64% N=67, EV=-$12 — S3 SHORT also negative; both sides KILL
+            // CAM_R1_FADE_SHORT RESTORED (was suppressed on old N=34 data showing EV=-$16; re-backtest N=64 shows +$11 EV)
+            // CAM_S2_FADE_SHORT RESTORED (was suppressed on old N=30 data showing EV=-$23; re-backtest N=75 shows +$8 EV)
           ]);
 
           // On TREND days after IB close: suppress counter-trend fades only.
@@ -4335,7 +4360,17 @@ export default function createACDRouter(io) {
             }
           }
 
-          if (nearLevels.length > 0) {
+          // Cascade breaker: skip new fade setup detection when trend regime detected.
+          if (cascadeBreaker.active && nearLevels.length > 0) {
+            for (const lv of nearLevels) {
+              await query(`
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','CASCADE_BREAKER')
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+              `, [todayET, lv.name, currentPrice]).catch(() => {});
+            }
+          }
+          if (!cascadeBreaker.active && nearLevels.length > 0) {
             const primary = nearLevels.reduce((best, lv) =>
               (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
             const lv = primary;
@@ -4428,25 +4463,22 @@ export default function createACDRouter(io) {
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               sizeMultiplier: (() => {
                 let mult = confluenceCount >= 2 ? 1.0 : (lv.ev >= 30 ? 1.0 : 0.75);
-                // Streak depth: research 2026-07-05. Scale with consecutive count.
-                if (lfConsecLosses >= 3)      mult = 0.10;                            // 28.4% WR — near skip
-                else if (lfConsecLosses === 2) mult = Math.max(mult * 0.10, 0.10);    // 31.6% WR
-                else if (lfConsecLosses === 1) mult = Math.max(mult * 0.25, 0.25);    // 47.0% WR
-                else if (lfConsecWins   >= 3)  mult = Math.min(mult + 0.50, 1.5);     // 87.8% WR
-                else if (lfConsecWins   === 2) mult = Math.min(mult + 0.35, 1.5);     // 79.7% WR
-                else if (lfConsecWins   === 1) mult = Math.min(mult + 0.25, 1.5);     // 76.6% WR
-                else if (lfFirstOfDay)         mult = Math.min(mult + 0.10, 1.5);     // 79.4% WR — best group (2026-07-05)
-                // Overnight NEUTRAL worst (68.2% WR vs 72-73% aligned/counter)
-                if (!isOvernightAligned(dir) && !isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.5);
+                // First-of-day / win-streak boost (only when no loss streak — applied first so cap can override)
+                if      (lfConsecWins >= 3)  mult = Math.min(mult + 0.50, 1.5);     // 87.8% WR
+                else if (lfConsecWins === 2)  mult = Math.min(mult + 0.35, 1.5);    // 79.7% WR
+                else if (lfConsecWins === 1)  mult = Math.min(mult + 0.25, 1.5);    // 76.6% WR
+                else if (lfFirstOfDay)        mult = Math.min(mult + 0.10, 1.5);    // 79.4% WR — best group (2026-07-05)
+                // Overnight NEUTRAL worst (68.2% WR vs 72-73% aligned/counter) — floor 0.25 not 0.5
+                if (!isOvernightAligned(dir) && !isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.25);
                 // Approach delta: buyers/sellers confirming level (research 2026-07-05: +6% WR)
                 if (buyersAtLevel || sellersAtLevel) mult = Math.min(mult + 0.15, 1.5);
                 // Specific confluence pair bonus: verified N≥20 pairs (2026-07-05 Gemini Task 4)
                 if (confluencePairPartner) mult = Math.min(mult + 0.15, 1.5);
                 // Elite zone: TURBULENT + with IB direction = 78-82% WR (best segment)
                 if (eliteZone) mult = Math.min(mult + 0.15, 1.5);
-                // Level recency: 1-2d ago = $22 EV proven defender; 21d+ fresh = -$5 EV unproven
+                // Level recency: 1-2d ago = $22 EV proven defender; 21d+ fresh = -$5 EV unproven — floor 0.25 not 0.5
                 if (daysSinceTest != null && daysSinceTest <= 2) mult = Math.min(mult + 0.15, 1.5);
-                else if (daysSinceTest == null) mult = Math.max(mult - 0.1, 0.5);
+                else if (daysSinceTest == null) mult = Math.max(mult - 0.1, 0.25);
                 // Day-type significance: data-driven from performance_audit DAY_TYPE_ALPHA rows.
                 // size_delta scales with z_score (no fixed amount). Currently: only WEEKLY_VWAP_FADE_LONG
                 // BALANCE reaches z≥1.5 (z=1.9). All other day_type divergences are within noise.
@@ -4481,6 +4513,11 @@ export default function createACDRouter(io) {
                 // Regime Persistence: TURBULENT 3-day streak +8.89pp (N=157, z=3.45). Skip on NEUTRAL NL30.
                 if (_lfRegimePersist && dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL')
                   mult = Math.min(mult + 0.10, 1.5);
+                // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
+                // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
+                if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
+                else if (lfConsecLosses >= 2) mult = Math.min(mult, 0.10); // 31.6% WR
+                else if (lfConsecLosses >= 1) mult = Math.min(mult, 0.25); // 47.0% WR
                 return mult;
               })(),
               overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
@@ -5256,7 +5293,7 @@ export default function createACDRouter(io) {
         })();
       }
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, cascadeBreaker });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
@@ -5453,6 +5490,7 @@ export default function createACDRouter(io) {
           sizeMultiplier: active.sizeMultiplier ?? 1.0,
         },
         noNewEntries: !!noNewEntries,
+        cascadeBreaker,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   });

@@ -19832,7 +19832,7 @@ function EdgeSectionsPanel() {
   if (err && !data) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
-  const { liveStatus, setups, windows, overnightContext, sessionPermissions } = data;
+  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker } = data;
   const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
   const inv = overnightContext?.overnight_inventory;
   const ovp = overnightContext?.open_vs_prior_value;
@@ -19867,6 +19867,12 @@ function EdgeSectionsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
+      {/* Cascade Breaker Banner */}
+      {cascadeBreaker?.active && (
+        <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.15)', border: '2px solid #ef4444', borderRadius: 8, color: '#ef4444', fontWeight: 700, fontSize: 13 }}>
+          ⛔ FADE REGIME OFF — {cascadeBreaker.stopCount} different levels stopped out in {cascadeBreaker.windowMins} min · tape is trending · no new fade entries
+        </div>
+      )}
       {/* Overnight Structural Context — moved to right column top */}
       {/* Active Setups */}
       <div>

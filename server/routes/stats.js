@@ -314,7 +314,8 @@ router.get('/stats/by-hour', async (req, res) => {
       ORDER BY hour ASC
     `, queryParams);
 
-    res.json(result.rows);
+    // SUM(pnl) is gross fill P&L — overcounts vs CumPL-diff session P&L. Label so consumers know.
+    res.json({ rows: result.rows, _pnl_note: 'gross_fill_pnl_not_session_pnl' });
   } catch (error) {
     console.error('Error fetching hourly stats:', error);
     res.status(500).json({ error: 'Failed to fetch hourly statistics' });
@@ -372,7 +373,8 @@ router.get('/stats/by-day-of-week', async (req, res) => {
       ORDER BY day_num ASC
     `, queryParams);
 
-    res.json(result.rows);
+    // SUM(pnl) is gross fill P&L — overcounts vs CumPL-diff session P&L. Label so consumers know.
+    res.json({ rows: result.rows, _pnl_note: 'gross_fill_pnl_not_session_pnl' });
   } catch (error) {
     console.error('Error fetching day of week stats:', error);
     res.status(500).json({ error: 'Failed to fetch day of week statistics' });

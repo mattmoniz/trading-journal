@@ -41,6 +41,7 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 - Opening range / day-type: `server/services/acdService.js` + `server/routes/acd.js`
 - **Level fade alpha engine** (size multiplier stack, suppression logic, keepLevels, sizeMultiplier IIFE): `server/routes/acd.js` lines ~3830–4430. Gate is 3 bars (~9:34 AM). Server polls every 60s via `setInterval` in `server/index.js`.
 - **Alpha Engine overview page**: Edge → Alpha Engine tab (`src/components/dashboard/AlphaEngineOverview.jsx`) — human-readable summary of every system component, size multiplier factor, suppressed setup, and pending road map.
+- **Opus audit prompts**: `docs/OPUS_AUDIT_PROMPT.md` (Audit 1 — code/bugs/behavioral forensics; all 9 findings implemented 2026-07-07) · `docs/OPUS_AUDIT_PROMPT_2.md` (Audit 2 — sizeMultiplier discrimination, objective alignment, edge attribution, coaching efficacy, untapped data). Run via Claude Opus 4.8 — not invoked automatically, triggered manually when strategic review is needed.
 - Shared query helpers (NL30/NL10, gap drift, prior-week range): `server/services/queries.js` — check here before writing a new one
 - Risk guardrails (DLL, profit-lock, cooldown): `server/routes/dll.js`, `profitLock.js`, `cooldown.js`
 - Optimal stops/targets (data-derived, weekly recompute): `performance_audit` rows with `signal_type='OPTIMAL_STOP'`; computed by `scripts/update_optimal_stops.mjs`; read in acd.js as `liveStats._opt[setup_type]`

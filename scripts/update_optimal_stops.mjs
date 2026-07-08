@@ -16,8 +16,22 @@ const DEFAULT_TARGET = 35;
 async function main() {
   console.log('Computing optimal stops from active_setups MAE data...');
 
+  // 0. Mark corrupted MAE/MFE rows as BAD_DATA so they're excluded from all analysis.
+  //    Opus audit 2026-07-07: 303/304 rows from 2023 have mae or mfe > 300pt (max 11,766pt).
+  //    Root cause: bad bar data in price_bars_primary for Nov–Dec 2023 (price_at_resolution IS NULL).
+  //    300pt is the clear boundary — 2024+ data is clean (0/1083 bad in 2024).
+  const badRows = await query(`
+    UPDATE active_setups
+    SET replay_resolution = 'BAD_DATA'
+    WHERE (mae_points > 300 OR mfe_points > 300)
+      AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+    RETURNING id
+  `);
+  if (badRows.rows.length > 0) console.log(`Marked ${badRows.rows.length} corrupted MAE/MFE rows as BAD_DATA`);
+
   // 1. Compute p75_mae (optimal stop) and p50_mfe (optimal target) per setup_type
   //    Only resolved trades with clean MAE data; exclude EXPIRED (they inflate MAE/MFE)
+  //    Excludes BAD_DATA rows (mae/mfe > 300pt from 2023 corruption).
   const statsRes = await query(`
     SELECT
       setup_type,
@@ -32,6 +46,8 @@ async function main() {
     WHERE mae_points     IS NOT NULL
       AND mfe_points     IS NOT NULL
       AND actual_pnl     IS NOT NULL
+      AND mae_points     <= 300
+      AND mfe_points     <= 300
       AND status         = 'RESOLVED'
       AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
     GROUP BY setup_type

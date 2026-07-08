@@ -1557,6 +1557,18 @@ async function getLiveEdgesContext() {
   // Overnight structural reads for edge display
   const overnightContext = arReads.rows[0] || {};
 
+  // Cascade breaker: count distinct different-level STOP_HITs in the last 45 min.
+  // Threshold=3 derived from normal-day distribution (mean=1.84+std=2.16 prior stops; p75=3).
+  const _cascadeQ = await query(`
+    SELECT COUNT(DISTINCT setup_type)::int AS stop_count
+    FROM active_setups
+    WHERE trade_date = $1
+      AND resolution = 'STOP_HIT'
+      AND resolved_at >= NOW() - INTERVAL '45 minutes'
+  `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] }));
+  const _cascadeCount = _cascadeQ.rows[0]?.stop_count ?? 0;
+  const cascadeBreaker = { active: _cascadeCount >= 3, stopCount: _cascadeCount, threshold: 3, windowMins: 45 };
+
   return {
     windows: resultsByWindow,
     liveStatus,
@@ -1572,6 +1584,7 @@ async function getLiveEdgesContext() {
     overnightContext,
     sessionPermissions,
     sessionBias,
+    cascadeBreaker,
   };
 }
 

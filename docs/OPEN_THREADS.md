@@ -6,6 +6,10 @@ All hardcoded thresholds, suppressed setups, and design rationale: [docs/HARDCOD
 
 When an item is finished, delete it (don't mark it done — git history is the record of what was fixed and when, same convention as KNOWN_ISSUES.md). When a session confirms a decision, proposes a follow-up, or finds a stats/data-freshness gap and doesn't finish it in the same session, add it here before the session ends.
 
+## Pending decisions / unconfirmed proposals
+
+- **Opus Audit 2 ready to run (2026-07-07).** `docs/OPUS_AUDIT_PROMPT_2.md` written. Scope: (1) does the 14-factor sizeMultiplier actually discriminate — WR by multiplier bucket; (2) is EV-per-setup the right objective given prop firm DLL constraints; (3) edge attribution by level family / time window / day-type; (4) coaching efficacy — has anything actually improved; (5) untapped data (bid/ask vol, bar structure at detection, macro calendar); (6) fresh-eyes question: what would you build differently. Output goes to `scratch/opus_audit_2_results.md`. Run when ready for a strategic review session.
+
 ## Active work in progress
 
 - **AI Coach system (playbook.js) — live as of 2026-07-06/07.** Three components:
@@ -108,7 +112,7 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 - **Alpha surgery complete (2026-07-05).** Full-year tier analysis (Jul 2025–Jul 2026, N=2784 resolved trades). Tier summary: PRIME=15 setups +$42.7K, SOLID=12 +$16.9K, MARGINAL=15 +$6K, WEAK=8 -$4.4K, KILL=12 -$27.7K. **Changes made:**
   1. `isTrendCounterFade(dir)` — TREND day counter-direction fade suppression (IB_BULLISH=suppress SHORT fades, IB_BEARISH=suppress LONG fades). Recovers -$17.5K/yr.
-  2. New suppressedFades additions: `IB_HIGH_FADE_SHORT` (-$2.8K), `OR_MID_AFTER_IB_FADE_SHORT` (-$1.9K), `CAM_R4_FADE_LONG` (-$778), `CAM_S2_FADE_SHORT` (-$683), `CAM_R1_FADE_LONG` (-$680), `CAM_R1_FADE_SHORT` (-$554), `PD_VAH_FADE_SHORT` (-$703). Total ~-$7.5K recovered.
+  2. New suppressedFades additions: `IB_HIGH_FADE_SHORT` (-$2.8K), `OR_MID_AFTER_IB_FADE_SHORT` (-$1.9K), `CAM_R4_FADE_LONG` (-$778), `CAM_R1_FADE_LONG` (-$680), `PD_VAH_FADE_SHORT` (-$703). Total ~-$7.5K recovered. **Updated 2026-07-07 (Opus audit):** `CAM_R1_FADE_SHORT` and `CAM_S2_FADE_SHORT` RESTORED — old N=30-34 data showed -EV, re-backtest at N=64-75 shows +$8-11 EV. Three new suppressions added: `CAM_S3_FADE_LONG` (EV=-$31, N=37), `CAM_S1_FADE_LONG` (EV=-$21, N=61), `CAM_S3_FADE_SHORT` (EV=-$12, N=67).
   3. `OPEN_TEST_DRIVE_LONG/SHORT` — force-nulled in acd.js (27-32% WR, -$7.7K/yr). Shadow tracking continues.
   4. `C_STANDALONE_UP` — force-nulled (53.7% WR, needs 67%, -$5.7K/yr). DOWN still active with nearPD2VA gate.
   5. Tier badges added to live setup card (PRIME=green, SOLID=blue, MARGINAL=gray, WEAK=amber, KILL=red).
@@ -143,6 +147,17 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 
 ## Recently completed (kept briefly for handoff continuity, then delete)
+
+- **Opus audit fixes complete (2026-07-07).** 9 items from `scratch/opus_audit_results.md`, all implemented:
+  1. **AI Daily Review cron** — 3 sites in `server/index.js` had wrong column (`log_date`→`trade_date`) and wrong status values (`'HIT','STOPPED','EXPIRED'`→`'RESOLVED','EXPIRED'`). Auto-trigger at 5 PM was silently fetching 0 setups.
+  2. **sizeMultiplier loss-streak cap** — streak cap (0.10×) was applied mid-chain and overridden by additive boosts that came after it. Restructured so loss-streak cap is a hard `Math.min` ceiling applied LAST; floors changed 0.5→0.25 so caps aren't defeated by floors.
+  3. **Cascade breaker** — σ-derived circuit breaker: ≥3 distinct levels stopped in 45 min → `cascadeBreaker.active=true` → all new levels write SHADOW rows, red banner fires in EdgeSectionsPanel ("FADE REGIME OFF"). Threshold=normal-day p75. Added to both `acd.js` and `antigravityEdges.js`.
+  4. **MAE/MFE corruption** — 369 rows from Nov-Dec 2023 marked `replay_resolution='BAD_DATA'` (mae/mfe >300pt = bad bar data). `update_optimal_stops.mjs` now excludes them; percentile computation is clean 2024+.
+  5. **fired_at TZ** — already handled correctly everywhere (`TO_CHAR` direct, `getUTCHours()` workaround). No changes.
+  6. **Overtrading detection** — replaced keyword NLP (4/27 detection rate) with EP-bounded round-trip count vs p75 threshold (14 RT/day from PRO accounts). Now 7/56 sessions detected.
+  7. **premarket_walkthroughs** — table was empty (seed INSERT only ran at coaching generation time). Backfilled 56 rows manually via temporary script.
+  8. **CAM direction-split** — verified suppressedFades against current UNIFIED_BACKTEST. `CAM_R1_FADE_SHORT` (+$11 EV, N=64) and `CAM_S2_FADE_SHORT` (+$8 EV, N=75) RESTORED (were suppressed on old N=30-34 data). Three new suppressions: `CAM_S3_FADE_LONG` (-$31), `CAM_S1_FADE_LONG` (-$21), `CAM_S3_FADE_SHORT` (-$12).
+  9. **by-hour/by-DOW endpoints** — added `_pnl_note: 'gross_fill_pnl_not_session_pnl'` to both JSON responses. Both endpoints are unused by current frontend (legacy routes).
 
 - **Engine self-tracking live (2026-07-06).** `EngineAccuracyPanel` component added to `AlphaEngineOverview.jsx` — live data from `/api/engine-reads/hit-rates`. Shows per-read-type accuracy (A_UP 67%, A_DOWN 58%, BIAS_LONG 74%, BIAS_SHORT 48%), per-bias sub-cuts (A_UP+LONG=88% best, A_DOWN+LONG=42% worst), and best/worst call combos. Replaces hardcoded "248 rows / 63%" with dynamic data.
 

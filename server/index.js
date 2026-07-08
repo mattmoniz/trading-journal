@@ -651,7 +651,7 @@ httpServer.listen(PORT, () => {
         const existing = (await query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1`, [todayET])).rows;
         if (existing.length) { console.log(`[ai_daily_review] Already exists for ${todayET} — skipping`); return { count: 0, skipped: true }; }
         // Skip if no setups fired today
-        const setups = (await query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED')`, [todayET])).rows;
+        const setups = (await query(`SELECT id FROM active_setups WHERE trade_date = $1 AND status IN ('RESOLVED','EXPIRED') AND resolution IS NOT NULL`, [todayET])).rows;
         if (!setups.length) { console.log(`[ai_daily_review] No resolved setups for ${todayET} — skipping`); return { count: 0, skipped: true }; }
         // Call our own endpoint (avoids importing Anthropic logic into index.js)
         const port = process.env.PORT || 3002;
@@ -903,7 +903,7 @@ httpServer.listen(PORT, () => {
               const portNum = process.env.PORT || 3002;
               const existingReview = (await query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1`, [today])).rows;
               if (!existingReview.length) {
-                const resolvedSetups = (await query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED') LIMIT 1`, [today])).rows;
+                const resolvedSetups = (await query(`SELECT id FROM active_setups WHERE trade_date = $1 AND status IN ('RESOLVED','EXPIRED') AND resolution IS NOT NULL LIMIT 1`, [today])).rows;
                 if (resolvedSetups.length) {
                   await logProcess('AI_DAILY_REVIEW', async () => {
                     const res = await fetch(`http://localhost:${portNum}/api/playbook/daily-review/${today}/generate`, {
@@ -944,7 +944,7 @@ httpServer.listen(PORT, () => {
       if (day >= 1 && day <= 5 && hour >= 17) {
         const [reviewRows, setupRows] = await Promise.all([
           query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1 LIMIT 1`, [today]),
-          query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED') LIMIT 1`, [today]),
+          query(`SELECT id FROM active_setups WHERE trade_date = $1 AND status IN ('RESOLVED','EXPIRED') AND resolution IS NOT NULL LIMIT 1`, [today]),
         ]);
         if (!reviewRows.rows.length && setupRows.rows.length) {
           console.log('[catch-up] AI daily setup review overdue — running now');
