@@ -8,19 +8,23 @@ import AntigravityEdgesView from './components/dashboard/AntigravityEdgesView.js
 import AlphaEngineOverview from './components/dashboard/AlphaEngineOverview.jsx';
 import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import SessionForecastPanel from './components/dashboard/SessionForecastPanel.jsx';
+import SessionBiasPanel from './components/dashboard/SessionBiasPanel.jsx';
 import BalanceZonePanel from './components/dashboard/BalanceZonePanel.jsx';
 import TradeCalibrationCard from './components/dashboard/TradeCalibrationCard.jsx';
 import DayOfWeekPlaybookCard from './components/dashboard/DayOfWeekPlaybookCard.jsx';
 import ScalpPlaybookCard from './components/dashboard/ScalpPlaybookCard.jsx';
+import BehavioralPatternsCard from './components/dashboard/BehavioralPatternsCard.jsx';
 import PreSessionChecklist from './components/dashboard/PreSessionChecklist.jsx';
 import PostLossCooldown from './components/dashboard/PostLossCooldown.jsx';
 import { NavUpdateDot, SectionUpdateDot, Dot, useDataUpdateDot, useFieldUpdateDots } from './components/shared/UpdateDot.jsx';
 import VolatilityRegimeCard from './components/dashboard/VolatilityRegimeCard.jsx';
 import TeleprinterFeed from './components/dashboard/TeleprinterFeed.jsx';
 import LiveScriptsCard from './components/dashboard/LiveScriptsCard.jsx';
+import SessionPulseCard from './components/dashboard/SessionPulseCard.jsx';
 import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
 import VolatilityAlertBanner from './components/dashboard/VolatilityAlertBanner.jsx';
 import ApproachingLevelBanner from './components/dashboard/ApproachingLevelBanner.jsx';
+import LivePlaybookCard from './components/dashboard/LivePlaybookCard.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import { useAcdLive } from './utils/useAcdLive.js';
@@ -107,7 +111,7 @@ function InfoTooltip({ text, tooltip, children }) {
 }
 
 // ==================== PROFIT GIVE-BACK BANNER (full-screen, no override) ====================
-function ProfitGivebackBanner({ status }) {
+function ProfitGivebackBanner({ status, onDismiss }) {
   const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
   const gbPct = Math.round((status?.giveBackPct || 0) * 100);
   const peak  = status?.peakPnl || 0;
@@ -147,13 +151,21 @@ function ProfitGivebackBanner({ status }) {
             <div style={{ fontSize: 20, fontWeight: 800, color: '#f59e0b' }}>-${fmtP(gb)}</div>
           </div>
         </div>
-        <div style={{ background: '#1a1200', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ background: '#1a1200', border: '1px solid rgba(245,158,11,0.4)', borderRadius: 8, padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
           <div style={{ fontSize: 16 }}>🔒</div>
           <div>
             <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b', marginBottom: 2 }}>Session locked</div>
-            <div style={{ fontSize: 12, color: '#94a3b8' }}>No override. You are done for today.</div>
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>You are done for today.</div>
           </div>
         </div>
+        {onDismiss && (
+          <button
+            onClick={onDismiss}
+            style={{ width: '100%', padding: '10px 0', borderRadius: 8, border: '1px solid #334155', background: 'transparent', color: '#64748b', fontWeight: 600, fontSize: 13, cursor: 'pointer' }}
+          >
+            Dismiss — I know, just working on the app
+          </button>
+        )}
       </div>
     </div>
   );
@@ -398,6 +410,7 @@ function App() {
   const [processAlertCount, setProcessAlertCount] = useState(0);
   const [dllStatus, setDllStatus] = useState(null);
   const [dllBannerDismissed, setDllBannerDismissed] = useState(false);
+  const [profitLockBannerDismissed, setProfitLockBannerDismissed] = useState(false);
   const [profitLockStatus, setProfitLockStatus] = useState(null);
   const [show1PMModal, setShow1PMModal] = useState(false);
   const [onePMChoice, setOnePMChoice] = useState(null);
@@ -555,7 +568,7 @@ function App() {
   const _etHour = _nowET.getHours();
   const _todayDateET = _nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const isDLLBannerActive = dllStatus?.anyDllHit && dllStatus?.date === _todayDateET && _etHour < 16 && !dllBannerDismissed;
-  const isProfitLockFired = profitLockStatus?.fired && profitLockStatus?.date === _todayDateET && _etHour < 16;
+  const isProfitLockFired = profitLockStatus?.fired && profitLockStatus?.date === _todayDateET && _etHour < 16 && !profitLockBannerDismissed;
   const showUpAndDone = profitLockStatus?.armed && !profitLockStatus?.fired && !upAndDoneDismissed
     && upAndDoneShownRef.current && profitLockStatus?.date === _todayDateET && _etHour < 16;
 
@@ -574,7 +587,7 @@ function App() {
     <CaseProvider>
     <div className="app-container">
       {isDLLBannerActive && <DLLBlockingBanner hits={dllStatus.hitsAccounts} allAccounts={dllStatus.accounts} onDismiss={() => setDllBannerDismissed(true)} />}
-      {isProfitLockFired && !isDLLBannerActive && <ProfitGivebackBanner status={profitLockStatus} />}
+      {isProfitLockFired && !isDLLBannerActive && <ProfitGivebackBanner status={profitLockStatus} onDismiss={() => setProfitLockBannerDismissed(true)} />}
       {show1PMModal && onePMChoice === null && <OnePMReminderModal pnlAtReminder={profitLockStatus?._1pmPnl ?? profitLockStatus?.currentPnl} onAck={handle1PMAck} />}
       {showUpAndDone && <UpAndDoneNudge status={profitLockStatus} onStop={handleUpAndDoneStop} onDismiss={() => setUpAndDoneDismissed(true)} />}
       <Sidebar
@@ -3682,7 +3695,6 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
   const [accountDropdownOpen, setAccountDropdownOpen] = useState(false);
   const [accountsExpanded, setAccountsExpanded] = useState(false);
   const [weekExpanded, setWeekExpanded] = useState({});
-  const [calendarSetups, setCalendarSetups] = useState({});
   const [weeklyAssessments, setWeeklyAssessments] = useState({});
   const [selectedWeekReport, setSelectedWeekReport] = useState(null);
 
@@ -3692,10 +3704,6 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
     const dim = new Date(y, m + 1, 0).getDate();
     const startDate = `${y}-${String(m+1).padStart(2,'0')}-01`;
     const endDate   = `${y}-${String(m+1).padStart(2,'0')}-${String(dim).padStart(2,'0')}`;
-    fetch(`${API_URL}/setups/best-by-date?startDate=${startDate}&endDate=${endDate}`)
-      .then(r => r.json())
-      .then(setCalendarSetups)
-      .catch(() => setCalendarSetups({}));
   }, [currentMonth]);
 
   useEffect(() => {
@@ -3911,10 +3919,6 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
                   dateStr === todayStr ? 'cal-today' : '',
                   hasActivity ? 'cal-clickable' : '',
                 ].join(' ');
-                const daySetupData = calendarSetups[dateStr];
-                const daySetups = daySetupData?.setups || [];
-                const dayConfluence = daySetupData?.confluence || false;
-                const dayMoreCount = daySetupData?.moreCount || 0;
                 return (
                   <div key={dateStr} className={cls} onClick={() => hasActivity && handleDayClick(dateStr, log)}>
                     <span className="cal-day-num">{dayNum}</span>
@@ -3925,21 +3929,6 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
                         </span>
                         <span className="cal-trade-count">{log.trade_count}t</span>
                       </>
-                    )}
-                    {daySetups.length > 0 && (
-                      <div className="cal-setups">
-                        {dayConfluence && (
-                          <span className="cal-confluence-badge">⚡⚡ CONFLUENCE</span>
-                        )}
-                        {daySetups.map((s, i) => (
-                          <span key={i} className="cal-setup-line" style={{ color: calSetupColor(s.resolution) }}>
-                            {'⚡'} {CAL_SETUP_SHORT_LABELS[s.type] || s.type.replace(/_/g,' ')} {s.time} {'★'.repeat(s.stars)}
-                          </span>
-                        ))}
-                        {dayMoreCount > 0 && (
-                          <span className="cal-setup-more">+{dayMoreCount} more</span>
-                        )}
-                      </div>
                     )}
                     {hasActivity && (
                       <button
@@ -4508,6 +4497,11 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
   const [coachingData, setCoachingData] = useState(null);
   const [coachingLoading, setCoachingLoading] = useState(true);
   const [coachingRead, setCoachingRead] = useState(false);
+  const [aiReview, setAiReview] = useState(null);
+  const [aiReviewLoading, setAiReviewLoading] = useState(false);
+  const [aiReviewEstimate, setAiReviewEstimate] = useState(null);
+  const [modalTab, setModalTab] = useState('TRADES');
+  const [persistingFeedback, setPersistingFeedback] = useState(false);
   const [chartExpanded, setChartExpanded] = useState(openToChart);
   const chartSectionRef = useRef(null);
   const [annotations, setAnnotations] = useState([]);
@@ -4548,6 +4542,39 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
       })
       .catch(() => setCoachingData(null))
       .finally(() => setCoachingLoading(false));
+    // Load AI setup review — auto-generate if setups exist and no review yet
+    setAiReview(null);
+    setAiReviewEstimate(null);
+    setAiReviewLoading(false);
+    fetch(`${API_URL}/playbook/daily-review/${dateStr}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.exists) {
+          setAiReview(d);
+        } else {
+          // Auto-generate if there are resolved setups for this date
+          fetch(`${API_URL}/playbook/daily-review/${dateStr}/estimate`, { method: 'POST' })
+            .then(r => r.json())
+            .then(est => {
+              if (est.setup_count > 0) {
+                setAiReviewLoading(true);
+                fetch(`${API_URL}/playbook/daily-review/${dateStr}/generate`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ confirmed: true }),
+                })
+                  .then(r => r.json())
+                  .then(d => { if (!d.error) setAiReview(d); })
+                  .catch(() => {})
+                  .finally(() => setAiReviewLoading(false));
+              } else {
+                setAiReviewEstimate(est);
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
   }, [dateStr]);
 
   // Filter by selected accounts, then deduplicate
@@ -5097,6 +5124,304 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
           <button className="day-modal-close" onClick={onClose}>✕</button>
         </div>
 
+        {/* Tab bar */}
+        <div style={{ display: 'flex', borderBottom: '1px solid rgba(30,41,59,0.8)', marginBottom: 16 }}>
+          {[
+            { id: 'TRADES', label: 'Trades' },
+            { id: 'SETUPS', label: 'Setup Review', dot: aiReview },
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setModalTab(tab.id)}
+              style={{
+                padding: '8px 18px',
+                fontSize: 11,
+                fontWeight: 800,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                background: 'none',
+                border: 'none',
+                borderBottom: modalTab === tab.id ? '2px solid #38bdf8' : '2px solid transparent',
+                color: modalTab === tab.id ? '#38bdf8' : '#475569',
+                cursor: 'pointer',
+                marginBottom: -1,
+                transition: 'color 0.15s',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+              }}
+            >
+              {tab.label}
+              {tab.dot && (
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#38bdf8', display: 'inline-block', flexShrink: 0 }} />
+              )}
+            </button>
+          ))}
+        </div>
+
+        {modalTab === 'SETUPS' ? (() => {
+          const generateReview = async () => {
+            setAiReviewLoading(true);
+            try {
+              const r = await fetch(`${API_URL}/playbook/daily-review/${dateStr}/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ confirmed: true }),
+              });
+              const d = await r.json();
+              if (d.error) throw new Error(d.error);
+              setAiReview(d);
+              setAiReviewEstimate(null);
+            } catch (e) {
+              alert('Review failed: ' + e.message);
+            } finally {
+              setAiReviewLoading(false);
+            }
+          };
+
+          const augmentReview = async () => {
+            setAiReviewLoading(true);
+            try {
+              const r = await fetch(`${API_URL}/playbook/daily-review/${dateStr}/augment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+              });
+              const d = await r.json();
+              if (d.error) throw new Error(d.error);
+              setAiReview(d);
+            } catch (e) {
+              alert('Augment failed: ' + e.message);
+            } finally {
+              setAiReviewLoading(false);
+            }
+          };
+
+          const persistFeedback = async () => {
+            setPersistingFeedback(true);
+            try {
+              const r = await fetch(`${API_URL}/playbook/daily-review/${dateStr}/persist-feedback`, { method: 'POST' });
+              const d = await r.json();
+              if (d.error) throw new Error(d.error);
+              alert(`Saved ${d.persisted} rating${d.persisted !== 1 ? 's' : ''} to performance audit.`);
+            } catch (e) {
+              alert('Persist failed: ' + e.message);
+            } finally {
+              setPersistingFeedback(false);
+            }
+          };
+
+          const VERDICT_COLORS = {
+            GOOD:             { bg: 'rgba(34,197,94,0.12)',  border: 'rgba(34,197,94,0.35)',  text: '#4ade80' },
+            LATE:             { bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.3)',  text: '#fbbf24' },
+            EARLY:            { bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.3)',  text: '#fbbf24' },
+            CHASED:           { bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.3)',   text: '#f87171' },
+            CALIBRATED:       { bg: 'rgba(34,197,94,0.1)',   border: 'rgba(34,197,94,0.3)',   text: '#4ade80' },
+            TOO_TIGHT:        { bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.3)',   text: '#f87171' },
+            TOO_WIDE:         { bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.3)',  text: '#fbbf24' },
+            TOO_CONSERVATIVE: { bg: 'rgba(251,191,36,0.1)',  border: 'rgba(251,191,36,0.3)',  text: '#fbbf24' },
+            TOO_AGGRESSIVE:   { bg: 'rgba(239,68,68,0.1)',   border: 'rgba(239,68,68,0.3)',   text: '#f87171' },
+          };
+
+          const Chip = ({ label }) => {
+            const c = VERDICT_COLORS[label] || { bg: 'rgba(71,85,105,0.2)', border: 'rgba(71,85,105,0.4)', text: '#94a3b8' };
+            return (
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', padding: '3px 8px', borderRadius: 4, background: c.bg, border: `1px solid ${c.border}`, color: c.text }}>
+                {label}
+              </span>
+            );
+          };
+
+          const StarRating = ({ rating }) => (
+            <span style={{ fontSize: 15, letterSpacing: 1 }}>
+              {[1,2,3,4,5].map(i => (
+                <span key={i} style={{ color: i <= rating ? '#fbbf24' : '#334155' }}>★</span>
+              ))}
+            </span>
+          );
+
+          const ratings = Array.isArray(aiReview?.stop_target_analysis) ? aiReview.stop_target_analysis : [];
+
+          // Build lookup: setup_type → actual DB row (for real prices + correct times)
+          const setupDetailsMap = {};
+          (aiReview?.setup_details || []).forEach(s => {
+            if (!setupDetailsMap[s.setup_type]) setupDetailsMap[s.setup_type] = s;
+          });
+          // fired_at is TIMESTAMP WITHOUT TIME ZONE; OR/IB setups store ET time as-is (09:30 = 9:30 AM ET)
+          // using getUTC* reads the stored value directly without shifting
+          const fmtET = ts => {
+            if (!ts) return null;
+            const d = new Date(ts);
+            return String(d.getUTCHours()).padStart(2,'0') + ':' + String(d.getUTCMinutes()).padStart(2,'0');
+          };
+
+          if (aiReviewLoading) return (
+            <div style={{ padding: '40px 0', textAlign: 'center', color: '#475569', fontSize: 13, fontStyle: 'italic' }}>
+              Generating AI review…
+            </div>
+          );
+
+          if (!aiReview) return (
+            <div style={{ padding: '24px 0' }}>
+              <div style={{ fontSize: 13, color: '#64748b', marginBottom: 16, lineHeight: 1.6 }}>
+                Claude reviews every setup that fired — entry quality, stop/target calibration, and patterns worth tracking.
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                {aiReviewEstimate && (
+                  <span style={{ fontSize: 12, color: '#475569' }}>
+                    {aiReviewEstimate.setup_count} setup{aiReviewEstimate.setup_count !== 1 ? 's' : ''} · est. ${(aiReviewEstimate.estimated_cost_usd || 0).toFixed(4)}
+                  </span>
+                )}
+                <button
+                  onClick={generateReview}
+                  style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: 5, padding: '6px 16px', cursor: 'pointer' }}
+                >
+                  Generate Setup Review
+                </button>
+              </div>
+            </div>
+          );
+
+          return (
+            <div>
+              {/* Narrative */}
+              <div style={{ background: 'rgba(15,23,42,0.5)', border: '1px solid rgba(56,189,248,0.15)', borderRadius: 8, padding: '14px 18px', marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: '#38bdf8', textTransform: 'uppercase' }}>Session Narrative</span>
+                  {aiReview.cost_usd && (
+                    <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>${parseFloat(aiReview.cost_usd).toFixed(4)}</span>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>
+                  {aiReview.augmented_response || aiReview.ai_response}
+                </div>
+                {Array.isArray(aiReview.data_requests) && aiReview.data_requests.length > 0 && !aiReview.augmented_response && (
+                  <div style={{ marginTop: 12, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 6, padding: '8px 12px' }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+                      Claude needs more data for full precision:
+                    </div>
+                    {aiReview.data_requests.map((dr, i) => (
+                      <div key={i} style={{ fontSize: 12, color: '#94a3b8', marginBottom: 3 }}>
+                        {dr.type} {dr.window ? `(${dr.window})` : ''} — {dr.reason}
+                      </div>
+                    ))}
+                    <button
+                      onClick={augmentReview}
+                      disabled={aiReviewLoading}
+                      style={{ marginTop: 8, fontSize: 11, fontWeight: 700, color: '#fbbf24', background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 4, padding: '4px 12px', cursor: 'pointer' }}
+                    >
+                      Get More Detail
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Per-setup rating cards */}
+              {ratings.length > 0 && (
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', color: '#64748b', textTransform: 'uppercase', marginBottom: 12 }}>
+                    Setup Ratings
+                  </div>
+                  {ratings.map((r, i) => {
+                    const detail = setupDetailsMap[r.setup_type];
+                    const timeStr = detail ? fmtET(detail.fired_at) : (r.fired_at || null);
+                    return (
+                    <div key={i} style={{ background: 'rgba(15,23,42,0.6)', border: `1px solid ${r.rating >= 4 ? 'rgba(34,197,94,0.25)' : r.rating <= 2 ? 'rgba(239,68,68,0.25)' : 'rgba(51,65,85,0.6)'}`, borderRadius: 8, padding: '14px 16px', marginBottom: 10 }}>
+                      {/* Header row */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: 13, fontWeight: 800, color: '#f1f5f9', letterSpacing: '0.04em' }}>
+                            {r.setup_type}
+                          </span>
+                          {timeStr && (
+                            <span style={{ fontSize: 11, color: '#64748b', fontFamily: 'monospace' }}>{timeStr}</span>
+                          )}
+                        </div>
+                        <StarRating rating={r.rating || 0} />
+                      </div>
+
+                      {/* Actual price levels + outcome */}
+                      {detail && (detail.entry_zone_low || detail.stop_level || detail.t1_level) && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontFamily: 'monospace', fontSize: 12, marginBottom: 4 }}>
+                            {detail.entry_zone_low && (
+                              <span><span style={{ color: '#64748b' }}>Entry </span><span style={{ color: '#e2e8f0' }}>{detail.entry_zone_low}{detail.entry_zone_high && detail.entry_zone_high !== detail.entry_zone_low ? `–${detail.entry_zone_high}` : ''}</span></span>
+                            )}
+                            {detail.stop_level && (
+                              <span><span style={{ color: '#64748b' }}>Stop </span><span style={{ color: '#f87171' }}>{detail.stop_level}</span></span>
+                            )}
+                            {detail.t1_level && (
+                              <span><span style={{ color: '#64748b' }}>T1 </span><span style={{ color: '#4ade80' }}>{detail.t1_level}</span></span>
+                            )}
+                          </div>
+                          {(detail.mae_points != null || detail.mfe_points != null) && (
+                            <div style={{ display: 'flex', gap: 14, fontFamily: 'monospace', fontSize: 11, color: '#64748b' }}>
+                              {detail.mae_points != null && (
+                                <span>MAE <span style={{ color: '#fbbf24' }}>{detail.mae_points}pt</span>{detail.stop_level && detail.entry_zone_low ? <span style={{ color: '#475569' }}> / {Math.abs(parseFloat(detail.stop_level) - parseFloat(detail.entry_zone_low)).toFixed(0)}pt stop</span> : ''}</span>
+                              )}
+                              {detail.mfe_points != null && (
+                                <span>MFE <span style={{ color: '#4ade80' }}>{detail.mfe_points}pt</span>{detail.t1_level && detail.entry_zone_low ? <span style={{ color: '#475569' }}> / {Math.abs(parseFloat(detail.t1_level) - parseFloat(detail.entry_zone_low)).toFixed(0)}pt T1</span> : ''}</span>
+                              )}
+                              {detail.resolution && (
+                                <span style={{ color: detail.resolution === 'TARGET_HIT' ? '#4ade80' : detail.resolution === 'STOP_HIT' ? '#f87171' : '#64748b' }}>
+                                  {detail.resolution.replace('_', ' ')}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Verdict chips */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                        {r.entry_quality && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Entry</span>
+                            <Chip label={r.entry_quality} />
+                          </div>
+                        )}
+                        {r.stop_verdict && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Stop</span>
+                            <Chip label={r.stop_verdict} />
+                            {r.stop_verdict !== 'CALIBRATED' && r.stop_recommended_pts && (
+                              <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>
+                                {r.stop_current_pts}pt → {r.stop_recommended_pts}pt
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {r.t1_verdict && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                            <span style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>T1</span>
+                            <Chip label={r.t1_verdict} />
+                            {r.t1_verdict !== 'CALIBRATED' && r.t1_recommended_pts && (
+                              <span style={{ fontSize: 12, color: '#94a3b8', fontFamily: 'monospace' }}>
+                                {r.t1_current_pts}pt → {r.t1_recommended_pts}pt
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Reasoning */}
+                      {r.reasoning && (
+                        <div style={{ fontSize: 13, color: '#cbd5e1', lineHeight: 1.65, borderTop: '1px solid rgba(51,65,85,0.5)', paddingTop: 9 }}>
+                          {r.reasoning}
+                        </div>
+                      )}
+                    </div>
+                    );
+                  })}
+
+                </div>
+              )}
+            </div>
+          );
+        })() : null}
+
+        {modalTab === 'TRADES' && (<>
+
         {/* Trade Feedback Logs */}
         {feedbackLogs.length > 0 && (
           <div style={{ marginBottom: 12, padding: '10px 14px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 8 }}>
@@ -5117,7 +5442,7 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
           </div>
         )}
 
-        {/* AI Coaching Review — prominent, always visible after header */}
+        {/* AI Coaching Review */}
         {(() => {
           const parseCoaching = (text) => {
             if (!text) return null;
@@ -5140,80 +5465,70 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
             });
             return out.length ? out : null;
           };
+
+          const regenerateCoaching = async () => {
+            setCoachingLoading(true);
+            try {
+              const r = await fetch(`${API_URL}/calendar/coaching/${dateStr}/regenerate`, { method: 'POST' });
+              const d = await r.json();
+              if (d.error) { alert('Regenerate failed: ' + d.error); return; }
+              setCoachingData(d.coaching);
+              setCoachingRead(false);
+            } catch (e) {
+              alert('Regenerate failed: ' + e.message);
+            } finally {
+              setCoachingLoading(false);
+            }
+          };
+
           const sections = coachingData ? parseCoaching(coachingData.coaching_text) : null;
           return (
-            <div style={{
-              background: 'rgba(15,23,42,0.8)',
-              border: '1px solid rgba(99,102,241,0.3)',
-              borderRadius: 10,
-              padding: '16px 20px',
-              margin: '0 0 16px 0',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', color: '#818cf8', textTransform: 'uppercase' }}>
-                  AI Coaching Review
-                </span>
-                {coachingData && !coachingRead && (
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
-                )}
+            <div style={{ background: 'rgba(15,23,42,0.8)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: 10, padding: '16px 20px', margin: '0 0 16px 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.1em', color: '#818cf8', textTransform: 'uppercase' }}>AI Coaching Review</span>
+                  {coachingData && !coachingRead && (
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block', flexShrink: 0 }} />
+                  )}
+                </div>
+                <button
+                  onClick={regenerateCoaching}
+                  disabled={coachingLoading}
+                  style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.08)', border: '1px solid rgba(129,140,248,0.25)', borderRadius: 4, padding: '3px 10px', cursor: coachingLoading ? 'default' : 'pointer', opacity: coachingLoading ? 0.5 : 1 }}
+                >
+                  {coachingLoading ? '...' : '↺ Regenerate'}
+                </button>
               </div>
               {coachingLoading ? (
-                <div style={{ color: '#94a3b8', fontSize: 14, fontStyle: 'italic' }}>Loading review...</div>
+                <div style={{ color: '#94a3b8', fontSize: 14, fontStyle: 'italic' }}>Generating review...</div>
               ) : !coachingData ? (
-                <div style={{
-                  background: 'rgba(51,65,85,0.35)',
-                  borderRadius: 7,
-                  padding: '12px 16px',
-                  color: '#94a3b8',
-                  fontSize: 14,
-                  lineHeight: 1.7,
-                }}>
+                <div style={{ background: 'rgba(51,65,85,0.35)', borderRadius: 7, padding: '12px 16px', color: '#94a3b8', fontSize: 14, lineHeight: 1.7 }}>
                   No coaching review for this session.<br />
-                  Reviews generate at 4:45 PM ET on trading days.
+                  Reviews generate at 4:45 PM ET on trading days, or click ↺ Regenerate above.
                 </div>
               ) : sections ? (
                 <div>
                   {sections.map(sec => (
                     <div key={sec.key} style={{ marginBottom: 14 }}>
-                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.07em', color: sec.color, textTransform: 'uppercase', marginBottom: 5 }}>
-                        {sec.key}
-                      </div>
-                      <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65 }}>
-                        {sec.content}
-                      </div>
+                      <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.07em', color: sec.color, textTransform: 'uppercase', marginBottom: 5 }}>{sec.key}</div>
+                      <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65 }}>{sec.content}</div>
                     </div>
                   ))}
                   {!coachingRead && (
-                    <button
-                      onClick={() => {
-                        setCoachingRead(true);
-                        fetch(`${API_URL}/calendar/coaching/${dateStr}/read`, { method: 'PATCH' }).catch(() => {});
-                      }}
-                      style={{
-                        marginTop: 4,
-                        fontSize: 12,
-                        color: '#94a3b8',
-                        background: 'none',
-                        border: '1px solid #334155',
-                        borderRadius: 5,
-                        padding: '4px 12px',
-                        cursor: 'pointer',
-                      }}
-                    >
+                    <button onClick={() => { setCoachingRead(true); fetch(`${API_URL}/calendar/coaching/${dateStr}/read`, { method: 'PATCH' }).catch(() => {}); }}
+                      style={{ marginTop: 4, fontSize: 12, color: '#94a3b8', background: 'none', border: '1px solid #334155', borderRadius: 5, padding: '4px 12px', cursor: 'pointer' }}>
                       Mark as Read
                     </button>
                   )}
                 </div>
               ) : (
-                <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
-                  {coachingData.coaching_text}
-                </div>
+                <div style={{ fontSize: 14, color: '#cbd5e1', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{coachingData.coaching_text}</div>
               )}
             </div>
           );
         })()}
 
-        {/* Intraday Chart — collapsible, sits just below AI coaching */}
+        {/* Intraday Chart */}
         <div ref={chartSectionRef} style={{ borderTop: '1px solid var(--border-color)', marginTop: 8 }}>
           <button
             style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', fontSize: 12, fontWeight: 700, letterSpacing: '0.07em', textTransform: 'uppercase' }}
@@ -5655,6 +5970,8 @@ function DayModal({ day, trades, loading, selectedAccounts, onClose, openToChart
             })}
           </div>
         )}
+
+        </>)}
 
       </div>
     </div>
@@ -19317,10 +19634,9 @@ function OvernightContextStrip() {
   React.useEffect(() => {
     fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(d => setData(d?.overnightContext)).catch(() => {});
   }, []);
-  if (!data) return null;
-  const inv = data.overnight_inventory;
-  const ovp = data.open_vs_prior_value;
-  const pdp = data.prior_day_profile;
+  const inv = data?.overnight_inventory;
+  const ovp = data?.open_vs_prior_value;
+  const pdp = data?.prior_day_profile;
   const aligned = (inv === 'SHORT_TRAPPED' && ovp === 'ABOVE_VALUE') || (inv === 'LONG_TRAPPED' && ovp === 'BELOW_VALUE');
   return (
     <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(139,92,246,0.06)', border: `1px solid ${aligned ? 'rgba(34,197,94,0.3)' : 'rgba(139,92,246,0.2)'}`, borderLeft: `3px solid ${aligned ? '#22c55e' : '#a78bfa'}` }}>
@@ -19328,22 +19644,28 @@ function OvernightContextStrip() {
         <span style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Overnight Structure</span>
         <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} ET</span>
       </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
-        {inv && <span>Inventory: <strong style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>{inv.replace(/_/g, ' ')}</strong></span>}
-        {ovp && <span>Open: <strong style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>{ovp.replace(/_/g, ' ')}</strong></span>}
-        {pdp && <span>Prior Day: <strong style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>{pdp}</strong></span>}
-      </div>
-      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
-        {inv === 'LONG_TRAPPED' && 'Yesterday\'s buyers underwater — bearish fuel. '}
-        {inv === 'SHORT_TRAPPED' && 'Yesterday\'s sellers squeezed — bullish fuel. '}
-        {inv === 'NEUTRAL' && 'No trapped participants. '}
-        {ovp === 'BELOW_VALUE' && 'Below yesterday\'s VA — IB_BEARISH 88% WR. '}
-        {ovp === 'ABOVE_VALUE' && 'Above yesterday\'s VA — bullish setups 61% WR. '}
-        {ovp === 'INSIDE_VALUE' && 'Inside VA — no directional tilt. '}
-        {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is high conviction (61% WR).'}
-        {pdp === 'TREND' && 'Yesterday trended — continuation or reversal, wait for OR to confirm.'}
-      </div>
-      {aligned && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+      {(!inv && !ovp && !pdp) ? (
+        <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic' }}>Loading overnight context…</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
+            {inv && <span>Inventory: <strong style={{ color: inv === 'SHORT_TRAPPED' ? '#22c55e' : inv === 'LONG_TRAPPED' ? '#ef4444' : '#94a3b8' }}>{inv.replace(/_/g, ' ')}</strong></span>}
+            {ovp && <span>Open: <strong style={{ color: ovp === 'ABOVE_VALUE' ? '#22c55e' : ovp === 'BELOW_VALUE' ? '#ef4444' : '#94a3b8' }}>{ovp.replace(/_/g, ' ')}</strong></span>}
+            {pdp && <span>Prior Day: <strong style={{ color: pdp === 'NONTREND' ? '#fbbf24' : pdp === 'TREND' ? '#22c55e' : '#94a3b8' }}>{pdp}</strong></span>}
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4, lineHeight: 1.5 }}>
+            {inv === 'LONG_TRAPPED' && 'Yesterday\'s buyers underwater — bearish fuel. '}
+            {inv === 'SHORT_TRAPPED' && 'Yesterday\'s sellers squeezed — bullish fuel. '}
+            {inv === 'NEUTRAL' && 'No trapped participants. '}
+            {ovp === 'BELOW_VALUE' && 'Below yesterday\'s VA — IB_BEARISH 88% WR. '}
+            {ovp === 'ABOVE_VALUE' && 'Above yesterday\'s VA — bullish setups 61% WR. '}
+            {ovp === 'INSIDE_VALUE' && 'Inside VA — no directional tilt. '}
+            {pdp === 'NONTREND' && 'Yesterday balanced — first directional move today is high conviction (61% WR).'}
+            {pdp === 'TREND' && 'Yesterday trended — continuation or reversal, wait for OR to confirm.'}
+          </div>
+          {aligned && <div style={{ fontSize: 12, color: '#22c55e', fontWeight: 700, marginTop: 3 }}>Both aligned — 63% WR (N=113). Size up.</div>}
+        </>
+      )}
     </div>
   );
 }
@@ -19497,8 +19819,9 @@ function EdgeSectionsPanel() {
   };
 
   React.useEffect(() => {
-    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(e => setErr(e.message));
-    const iv = setInterval(() => { fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(setData).catch(() => {}); }, 30000);
+    const loadEdges = () => fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(d => { setData(d); setErr(null); }).catch(e => setErr(e.message));
+    loadEdges();
+    const iv = setInterval(loadEdges, 30000);
     return () => clearInterval(iv);
   }, []);
   React.useEffect(() => { loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET]);
@@ -19506,7 +19829,7 @@ function EdgeSectionsPanel() {
   // Must be before early returns — hook call count must be constant across renders
   const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
 
-  if (err) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
+  if (err && !data) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
   const { liveStatus, setups, windows, overnightContext, sessionPermissions } = data;
@@ -19595,12 +19918,35 @@ function EdgeSectionsPanel() {
         )}
         {setups?.list?.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
-            {setups.list.map(s => {
+            {[...setups.list].sort((a, b) => {
+              // Fresh cards (fired ≤10 min ago) bubble to top
+              const isFresh = (s) => {
+                if (!s.fired_time) return false;
+                const [h, m] = s.fired_time.split(':').map(Number);
+                const now = new Date();
+                const nowET = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                const firedMin = h * 60 + m;
+                const nowMin = nowET.getHours() * 60 + nowET.getMinutes();
+                return Math.abs(nowMin - firedMin) <= 10;
+              };
+              return (isFresh(b) ? 1 : 0) - (isFresh(a) ? 1 : 0);
+            }).map(s => {
               // Case engine setups have conditional edge — gate by day type
               const gatedDayType = CASE_ENGINE_GATE[s.setup_type];
               const isGated = gatedDayType != null;
               const dayTypeKnown = !!dayType;
               const isActiveForDayType = !isGated || !dayTypeKnown || dayType === gatedDayType;
+
+              // Fresh = fired within last 10 min → pulse animation
+              const isFresh = (() => {
+                if (!s.fired_time) return false;
+                const [h, m] = s.fired_time.split(':').map(Number);
+                const now = new Date();
+                const nowET = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                const firedMin = h * 60 + m;
+                const nowMin = nowET.getHours() * 60 + nowET.getMinutes();
+                return Math.abs(nowMin - firedMin) <= 10;
+              })();
 
               if (isGated && dayTypeKnown && !isActiveForDayType) {
                 return (
@@ -19629,13 +19975,14 @@ function EdgeSectionsPanel() {
               }[s.setup_type] || s.recommendation || '';
               const fb = feedbackBySetupId[s.id];
               const isElevated = isGated && dayType === gatedDayType;
-              const cardBorderColor = isElevated ? '#f59e0b' : cc;
+              const cardBorderColor = isFresh ? '#fbbf24' : isElevated ? '#f59e0b' : cc;
               return (
-                <div key={s.id} style={{ padding: '10px 12px', borderRadius: 6, background: isElevated ? 'rgba(245,158,11,0.05)' : 'rgba(15,23,42,0.4)', border: `1px solid ${isElevated ? 'rgba(245,158,11,0.25)' : 'rgba(51,65,85,0.3)'}`, borderLeft: `3px solid ${cardBorderColor}` }}>
+                <div key={s.id} className={isFresh ? 'setup-card-fresh' : ''} style={{ padding: '10px 12px', borderRadius: 6, background: isFresh ? 'rgba(251,191,36,0.06)' : isElevated ? 'rgba(245,158,11,0.05)' : 'rgba(15,23,42,0.4)', border: `1px solid ${isElevated ? 'rgba(245,158,11,0.25)' : 'rgba(51,65,85,0.3)'}`, borderLeft: `3px solid ${cardBorderColor}` }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ fontWeight: 700, color: '#e2e8f0' }}>
+                    <span style={{ fontWeight: 700, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: 6 }}>
                       {s.setup_type}
-                      {isElevated && <span style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '1px 5px', borderRadius: 2, marginLeft: 6 }}>{gatedDayType}</span>}
+                      {isFresh && <span style={{ fontSize: 10, fontWeight: 800, color: '#fbbf24', background: 'rgba(251,191,36,0.15)', padding: '1px 5px', borderRadius: 2, letterSpacing: '0.06em' }}>JUST FIRED</span>}
+                      {isElevated && !isFresh && <span style={{ fontSize: 11, fontWeight: 800, color: '#f59e0b', background: 'rgba(245,158,11,0.15)', padding: '1px 5px', borderRadius: 2, marginLeft: 6 }}>{gatedDayType}</span>}
                     </span>
                     <span style={{ fontSize: 11, fontWeight: 800, color: cc, background: `${cc}15`, padding: '1px 6px', borderRadius: 3 }}>{s.confidence}</span>
                   </div>
@@ -22595,68 +22942,58 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
             )}
 
             {/* ── Main console grid: 3 fixed columns ── */}
-            {/* Col 1: session intel | Col 2: overnight context + live read | Col 3: scripts */}
+            {/* Col 1: session intel | Col 2: scripts + live read | Col 3: live setups */}
             {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col */}
-            <div style={{ display: 'grid', gridTemplateColumns: '30fr 45fr 25fr', gap: 14, alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '30fr 25fr 45fr', gap: 14, alignItems: 'start' }}>
 
-              {/* Col 1: Session intel — dark navy container, cards float above */}
+              {/* Col 1: Live data — updates every bar */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(8,12,24,0.7)', borderRadius: 8, padding: 10 }}>
-                <ErrorBoundary name="Session Forecast">
-                  <SessionForecastPanel date={todayET} section="intel" />
+                <ErrorBoundary name="Live Scripts">
+                  <LiveScriptsCard date={todayET} />
+                </ErrorBoundary>
+                <ErrorBoundary name="Session Pulse">
+                  <SessionPulseCard />
                 </ErrorBoundary>
                 <ErrorBoundary name="Volatility Regime" compact>
                   <VolatilityRegimeCard />
                 </ErrorBoundary>
+              </div>
+
+              {/* Col 2: Stats + Anticipatory */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Day-of-Week Playbook">
                   <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
                 </ErrorBoundary>
-              </div>
-
-              {/* Col 2: Live execution — near-black so green/red signals pop */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(4,6,14,0.85)', borderRadius: 8, padding: 10 }}>
-                {/* Approaching level pre-touch alert */}
-                <ApproachingLevelBanner />
-                {/* Edge Setups — primary live content, center stage */}
-                <ErrorBoundary name="Edge Sections" compact>
-                  <EdgeSectionsPanel />
+                <ErrorBoundary name="Scripts">
+                  <SessionForecastPanel date={todayET} section="scripts" />
                 </ErrorBoundary>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
                 </ErrorBoundary>
-                <ErrorBoundary name="Balance Zone Panel">
-                  <BalanceZonePanel />
+                <ErrorBoundary name="Session Signals">
+                  <SessionBiasPanel />
+                </ErrorBoundary>
+                <ErrorBoundary name="Behavioral Patterns">
+                  <BehavioralPatternsCard />
+                </ErrorBoundary>
+                <ErrorBoundary name="Live Commentary">
+                  <TeleprinterFeed maxHeight={280} />
                 </ErrorBoundary>
               </div>
 
-              {/* Col 3: Scripts + Live Read + Checklist */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
-                <ErrorBoundary name="Scripts">
-                  <SessionForecastPanel date={todayET} section="scripts" />
+              {/* Col 3: Live execution — near-black so green/red signals pop */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(4,6,14,0.85)', borderRadius: 8, padding: 10 }}>
+                <ErrorBoundary name="Live Playbook">
+                  <LivePlaybookCard date={todayET} />
                 </ErrorBoundary>
-                <CollapsibleSection title="Live Read" defaultOpen>
-                  <LiveReadBanner forecast={forecast} />
-                </CollapsibleSection>
-                <ErrorBoundary name="Pre-Session Checklist">
-                  <PreSessionChecklist />
+                <ApproachingLevelBanner />
+                <ErrorBoundary name="Edge Sections" compact>
+                  <EdgeSectionsPanel />
                 </ErrorBoundary>
               </div>
 
             </div>
 
-            {/* ── Stats & Calibration — below fold ── */}
-            <CollapsibleSection title="Stats & Calibration">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 14 }}>
-                <ErrorBoundary name="Backtested Edge Stats"><BacktestedEdgeStatsCard /></ErrorBoundary>
-                <ErrorBoundary name="Trade Calibration"><TradeCalibrationCard /></ErrorBoundary>
-              </div>
-            </CollapsibleSection>
-
-            {/* ── Live Commentary — below fold ── */}
-            <CollapsibleSection title="Live Commentary & Feed">
-              <ErrorBoundary name="Live Commentary">
-                <TeleprinterFeed maxHeight={360} />
-              </ErrorBoundary>
-            </CollapsibleSection>
 
           </div>
         )}

@@ -183,35 +183,68 @@ export default function LiveScriptsCard({ date }) {
       </div>
 
       {/* Volume & Delta Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, padding: '8px 14px', borderBottom: '1px solid #1e293b' }}>
-        {/* RVol card */}
-        <div onClick={() => setActiveModal('relVol')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.relVol ? '#94a3b8' : (L.relVol.sigma || 0) >= 2 ? '#fbbf24' : (L.relVol.sigma || 0) >= 1 ? '#4ade80' : (L.relVol.sigma || 0) <= -1 ? '#60a5fa' : '#94a3b8'}` }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Rel Volume</div>
-          <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'monospace', color: !L.relVol ? '#94a3b8' : (L.relVol.sigma || 0) >= 2 ? '#fbbf24' : (L.relVol.sigma || 0) >= 1 ? '#4ade80' : '#cbd5e1' }}>
-            {L.relVol ? `${L.relVol.ratio}x` : '—'}
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.relVol ? `${L.relVol.label || ((L.relVol.sigma || 0) >= 1 ? 'Elevated' : (L.relVol.sigma || 0) <= -1 ? 'Low' : 'Normal')} (${L.relVol.sigma != null ? (L.relVol.sigma > 0 ? '+' : '') + L.relVol.sigma + 'σ' : '—'})` : '—'}</div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
-        </div>
-        {/* Cumulative Delta card */}
-        <div onClick={() => setActiveModal('cumDelta')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.delta ? '#94a3b8' : Math.abs(L.delta.sigma || 0) >= 2 ? (L.delta.cumDelta > 0 ? '#4ade80' : '#ef4444') : Math.abs(L.delta.sigma || 0) >= 1 ? (L.delta.cumDelta > 0 ? '#86efac' : '#fca5a5') : '#94a3b8'}` }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Cum Delta</div>
-          <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'monospace', color: !L.delta ? '#94a3b8' : Math.abs(L.delta.sigma || 0) >= 2 ? (L.delta.cumDelta > 0 ? '#4ade80' : '#ef4444') : Math.abs(L.delta.sigma || 0) >= 1 ? (L.delta.cumDelta > 0 ? '#86efac' : '#fca5a5') : '#cbd5e1' }}>
-            {L.delta ? `${L.delta.cumDelta > 0 ? '+' : ''}${(L.delta.cumDelta / 1000).toFixed(1)}K` : '—'}
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.delta ? `${L.delta.label || 'Normal'} (${L.delta.sigma != null ? (L.delta.sigma > 0 ? '+' : '') + L.delta.sigma + 'σ' : '—'})` : '—'}</div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
-        </div>
-        {/* Delta Trend card */}
-        <div onClick={() => setActiveModal('deltaTrend')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.delta ? '#94a3b8' : deltaTrendColor(L.delta.trend)}` }}>
-          <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Delta Trend</div>
-          <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'monospace', color: !L.delta ? '#94a3b8' : deltaTrendColor(L.delta.trend) }}>
-            {L.delta?.trend || '—'}
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.delta ? `Last 15 vs prior 15 bars` : '—'}</div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
-        </div>
-      </div>
+      {(() => {
+        const trend = L.delta?.trend;
+        const isDownMove = (L.closeVsOpen || 0) < -80;
+        const isUpMove   = (L.closeVsOpen || 0) > 80;
+        const longDiv    = isDownMove && (trend === 'BUYING' || trend === 'WEAKENING');
+        const shortDiv   = isUpMove   && (trend === 'SELLING' || trend === 'WEAKENING');
+        const confirming = (isDownMove && (trend === 'SELLING' || trend === 'STRENGTHENING'))
+                        || (isUpMove   && (trend === 'BUYING'  || trend === 'STRENGTHENING'));
+        const divSignal  = longDiv ? 'LONG' : shortDiv ? 'SHORT' : null;
+        const sigLabel   = longDiv ? 'LONG DIVERGENCE' : shortDiv ? 'SHORT DIVERGENCE' : confirming ? 'CONFIRMING' : 'NEUTRAL';
+        const sigColor   = longDiv ? '#4ade80' : shortDiv ? '#f87171' : confirming ? '#94a3b8' : '#64748b';
+        const sigBg      = longDiv ? 'rgba(74,222,128,0.08)' : shortDiv ? 'rgba(248,113,113,0.08)' : 'rgba(30,41,59,0.3)';
+        const sigBorder  = longDiv ? 'rgba(74,222,128,0.4)' : shortDiv ? 'rgba(248,113,113,0.4)' : '#475569';
+        return (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, padding: '8px 14px', borderBottom: '1px solid #1e293b' }}>
+              {/* RVol card */}
+              <div onClick={() => setActiveModal('relVol')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.relVol ? '#94a3b8' : (L.relVol.sigma || 0) >= 2 ? '#fbbf24' : (L.relVol.sigma || 0) >= 1 ? '#4ade80' : (L.relVol.sigma || 0) <= -1 ? '#60a5fa' : '#94a3b8'}` }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Rel Volume</div>
+                <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'monospace', color: !L.relVol ? '#94a3b8' : (L.relVol.sigma || 0) >= 2 ? '#fbbf24' : (L.relVol.sigma || 0) >= 1 ? '#4ade80' : '#cbd5e1' }}>
+                  {L.relVol ? `${L.relVol.ratio}x` : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.relVol ? `${L.relVol.label || ((L.relVol.sigma || 0) >= 1 ? 'Elevated' : (L.relVol.sigma || 0) <= -1 ? 'Low' : 'Normal')} (${L.relVol.sigma != null ? (L.relVol.sigma > 0 ? '+' : '') + L.relVol.sigma + 'σ' : '—'})` : '—'}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+              </div>
+              {/* Cumulative Delta card — context only */}
+              <div onClick={() => setActiveModal('cumDelta')} style={{ padding: '6px 8px', background: 'rgba(30,41,59,0.3)', borderRadius: 4, cursor: 'pointer', borderLeft: `3px solid ${!L.delta ? '#94a3b8' : Math.abs(L.delta.sigma || 0) >= 2 ? (L.delta.cumDelta > 0 ? '#4ade80' : '#ef4444') : Math.abs(L.delta.sigma || 0) >= 1 ? (L.delta.cumDelta > 0 ? '#86efac' : '#fca5a5') : '#94a3b8'}` }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Cum Delta</div>
+                <div style={{ fontSize: 16, fontWeight: 800, fontFamily: 'monospace', color: !L.delta ? '#94a3b8' : Math.abs(L.delta.sigma || 0) >= 2 ? (L.delta.cumDelta > 0 ? '#4ade80' : '#ef4444') : '#cbd5e1' }}>
+                  {L.delta ? `${L.delta.cumDelta > 0 ? '+' : ''}${(L.delta.cumDelta / 1000).toFixed(1)}K` : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>{L.delta ? `${L.delta.sigma != null ? (L.delta.sigma > 0 ? '+' : '') + L.delta.sigma + 'σ' : '—'}` : '—'}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+              </div>
+              {/* Delta Signal card — THE actionable read */}
+              <div onClick={() => setActiveModal('deltaTrend')} style={{ padding: '6px 8px', background: sigBg, borderRadius: 4, cursor: 'pointer', border: `1px solid ${sigBorder}`, borderLeft: `3px solid ${sigColor}` }}>
+                <div style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase' }}>Delta Signal</div>
+                <div style={{ fontSize: 13, fontWeight: 800, fontFamily: 'monospace', color: sigColor, lineHeight: 1.2, marginTop: 2 }}>
+                  {sigLabel}
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
+                  {trend || '—'} · {L.delta?.sigma != null ? `${L.delta.sigma > 0 ? '+' : ''}${L.delta.sigma}σ` : '—'}
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>as of {fmtEtTime(L.etMin) || '—'}</div>
+              </div>
+            </div>
+            {/* Divergence alert banner — fires when price is directional but delta disagrees */}
+            {divSignal && (
+              <div style={{ padding: '6px 14px', background: divSignal === 'LONG' ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', borderBottom: '1px solid #1e293b', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: divSignal === 'LONG' ? '#4ade80' : '#f87171' }}>
+                  ⚡ {divSignal === 'LONG' ? 'LONG' : 'SHORT'} DIVERGENCE
+                </span>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                  {divSignal === 'LONG'
+                    ? `price ${L.closeVsOpen}pt — but delta ${trend?.toLowerCase()}. Sellers exhausting. Watch for reversal.`
+                    : `price +${L.closeVsOpen}pt — but delta ${trend?.toLowerCase()}. Buyers fading. Watch for reversal.`}
+                </span>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* Delta Flow Bar Chart — 15-min phases showing buying/selling story */}
       {L.deltaFlow && L.deltaFlow.length > 1 && (() => {
@@ -231,22 +264,28 @@ export default function LiveScriptsCard({ date }) {
                 const pct = Math.abs(p.delta) / maxAbs;
                 const h = Math.max(2, Math.round(pct * 40));
                 const isUp = p.delta >= 0;
-                const clr = Math.abs(p.delta) > maxAbs * 0.6
+                const isRecent = i >= flow.length - 4;
+                // Recent bars: full opacity + glow; earlier bars: dimmed
+                const clr = isRecent
                   ? (isUp ? '#4ade80' : '#ef4444')
-                  : Math.abs(p.delta) > maxAbs * 0.25
-                    ? (isUp ? '#86efac80' : '#fca5a580')
-                    : '#64748b60';
+                  : Math.abs(p.delta) > maxAbs * 0.6
+                    ? (isUp ? '#4ade8060' : '#ef444460')
+                    : Math.abs(p.delta) > maxAbs * 0.25
+                      ? (isUp ? '#86efac40' : '#fca5a540')
+                      : '#64748b40';
                 return (
                   <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1, height: '100%', justifyContent: 'flex-end' }}
                     title={`${p.time} ET | Delta: ${p.delta > 0 ? '+' : ''}${(p.delta/1000).toFixed(1)}K | Price: ${p.close}`}>
                     <div style={{
                       width: `${barW}%`, minWidth: 4, height: h,
                       background: clr, borderRadius: '2px 2px 0 0',
+                      boxShadow: isRecent ? `0 0 4px ${isUp ? '#4ade8080' : '#ef444480'}` : 'none',
                     }} />
                   </div>
                 );
               })}
             </div>
+            <div style={{ fontSize: 10, color: '#475569', marginTop: 1, textAlign: 'right' }}>last 4 bars highlighted</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
               <span style={{ fontSize: 11, color: '#94a3b8' }}>{flow[0]?.time}</span>
               <span style={{ fontSize: 11, color: '#94a3b8' }}>{flow[Math.floor(flow.length/2)]?.time}</span>

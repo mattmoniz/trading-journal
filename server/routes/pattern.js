@@ -152,4 +152,22 @@ router.get('/pattern/combinations', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/behavioral-patterns — all BEHAVIORAL_PATTERN rows from performance_audit
+// Optional: ?min_wr=70 (default 70), ?limit=200
+router.get('/behavioral-patterns', async (req, res) => {
+  try {
+    const minWr = parseFloat(req.query.min_wr || '70') / 100;
+    const limit = parseInt(req.query.limit || '200');
+    const r = await query(`
+      SELECT id, run_date, signal_name, sample_size, win_rate, recommendation, notes
+      FROM performance_audit
+      WHERE signal_type = 'BEHAVIORAL_PATTERN'
+        AND win_rate >= $1
+      ORDER BY win_rate DESC, sample_size DESC
+      LIMIT $2
+    `, [minWr, limit]);
+    res.json({ patterns: r.rows, count: r.rows.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;

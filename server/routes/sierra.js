@@ -76,7 +76,7 @@ export default function createSierraRouter(io, sierraWatcher) {
       emitProgress(1, 'Launching export script...', 'running');
 
       await new Promise((resolve, reject) => {
-        const proc = spawn('powershell.exe', [
+        const proc = spawn('/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe', [
           '-ExecutionPolicy', 'Bypass',
           '-NonInteractive',
           '-File', 'C:\\SierraChart\\export_tal.ps1'

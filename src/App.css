@@ -9,6 +9,15 @@
   fill: rgba(255, 255, 255, 0.05) !important;
 }
 
+/* Setup card slow pulse — fires when a setup just fired (within ~10 min) */
+@keyframes setupPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(251, 191, 36, 0); border-color: rgba(251, 191, 36, 0.35); }
+  50%       { box-shadow: 0 0 14px 3px rgba(251, 191, 36, 0.25); border-color: rgba(251, 191, 36, 0.75); }
+}
+.setup-card-fresh {
+  animation: setupPulse 2.5s ease-in-out infinite;
+}
+
 :root {
   /* ── Backgrounds ── */
   --bg-primary:   #0a0e27;

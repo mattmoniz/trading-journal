@@ -27,6 +27,12 @@ const PROCESS_SCHEDULE = [
   { name: 'CONTEXT_ANALYSIS',    label: 'Context Edge Analysis',    schedule: 'Weekly (Sunday 6am)',       expectedDays: ['Sun'],                         scheduledHour: 6,  maxAgeHours: 170, critical: false },
   { name: 'CONFLUENCE_AUDIT',    label: 'Confluence Pair Backtest', schedule: 'Weekly (Sunday 6:30am)',    expectedDays: ['Sun'],                         scheduledHour: 7,  maxAgeHours: 170, critical: false },
   { name: 'SETUP_ANTICIPATION',  label: 'Setup Anticipation Model', schedule: 'Weekly (Sunday 8:30pm)',    expectedDays: ['Sun'],                         scheduledHour: 20, maxAgeHours: 170, critical: false },
+  { name: 'SESSION_BIAS',        label: 'Session Bias Miner',       schedule: 'Weekly (Sunday 9:20am)',    expectedDays: ['Sun'],                         scheduledHour: 9,  maxAgeHours: 170, critical: false },
+  { name: 'TOD_PATTERN',        label: 'TOD Pattern Miner',        schedule: 'Weekly (Sunday 9:20am)',    expectedDays: ['Sun'],                         scheduledHour: 9,  maxAgeHours: 170, critical: false },
+  { name: 'DAY_TYPE_ALPHA',      label: 'Day-Type Alpha Backtest',  schedule: 'Weekly (Sunday 9:10pm)',    expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 170, critical: false },
+  { name: 'OPTIMAL_STOP',        label: 'Optimal Stop Computation', schedule: 'Weekly (Sunday 9:10pm)',    expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 170, critical: false },
+  { name: 'PERMISSION_SLIP',     label: 'Permission Slip Mining',   schedule: 'Weekly (Sunday 9:20pm)',    expectedDays: ['Sun'],                         scheduledHour: 21, maxAgeHours: 170, critical: false },
+  { name: 'AI_DAILY_REVIEW',     label: 'AI Setup Review',          schedule: '5:00 PM ET Mon-Fri',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], scheduledHour: 17, maxAgeHours: 25,  critical: false },
   { name: 'BAR_INGEST',          label: 'Sierra Chart Bar Sync',    schedule: 'Every 60s during RTH',      expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
   { name: 'SETUP_DETECTION',     label: 'Setup Detection',          schedule: 'On each bar insert',        expectedDays: ['Mon','Tue','Wed','Thu','Fri'], maxAgeMinutes: 5, critical: true,  isLive: true },
 ];
@@ -129,7 +135,7 @@ router.get('/settings/process-health', async (req, res) => {
     // Fallback: for manual-script processes (SYSTEM_BACKTEST, MAE_MFE_AUDIT, LEVEL_FADE_AUDIT),
     // if process_log has no row, check performance_audit.run_date directly.
     // Manual node script runs bypass logProcess() so they never write to process_log.
-    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT', CONTEXT_ANALYSIS: 'CONTEXT_ANALYSIS', CONFLUENCE_AUDIT: 'CONFLUENCE_AUDIT', SETUP_ANTICIPATION: 'SETUP_ANTICIPATION' };
+    const manualScriptTypes = { SYSTEM_BACKTEST: 'SYSTEM_BACKTEST', MAE_MFE_AUDIT: 'MAE_MFE_AUDIT', LEVEL_FADE_AUDIT: 'LEVEL_FADE_AUDIT', CONTEXT_ANALYSIS: 'CONTEXT_ANALYSIS', CONFLUENCE_AUDIT: 'CONFLUENCE_AUDIT', SETUP_ANTICIPATION: 'SETUP_ANTICIPATION', SESSION_BIAS: 'SESSION_BIAS', TOD_PATTERN: 'TOD_PATTERN', DAY_TYPE_ALPHA: 'DAY_TYPE_ALPHA', OPTIMAL_STOP: 'OPTIMAL_STOP', PERMISSION_SLIP: 'PERMISSION_SLIP' };
     const paFallbackQ = await query(`
       SELECT signal_type, MAX(run_date)::text as last_run
       FROM performance_audit
@@ -175,21 +181,26 @@ router.get('/settings/process-health', async (req, res) => {
         lastRun = ld.lastRun; lastStatus = ld.lastStatus;
       } else {
         const row = logsByName[proc.name];
-        if (row) {
-          lastRun = row.started_at;
-          lastStatus = row.status;
-          lastDuration = fmtDuration(row.started_at, row.completed_at);
-          recordsAffected = row.records_affected;
-          errorMessage = row.error_message;
-        } else if (manualScriptTypes[proc.name] && paFallback[manualScriptTypes[proc.name]]) {
-          // Manual script ran but bypassed process_log — date-only from performance_audit.
-          // Format as a short date string directly to avoid fake time display.
-          const dateStr = paFallback[manualScriptTypes[proc.name]];
+        const paDate = manualScriptTypes[proc.name] ? paFallback[manualScriptTypes[proc.name]] : null;
+        // For manualScriptTypes: prefer the more recent of paFallback vs process_log.
+        // A newer paFallback date beats an older FAILED process_log entry.
+        const rowDateStr = row
+          ? new Date(row.started_at).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })
+          : null;
+        const usePA = paDate && (!rowDateStr || paDate > rowDateStr || (paDate === rowDateStr && row?.status === 'FAILED'));
+        if (usePA) {
+          const dateStr = paDate;
           lastRun = dateStr + 'T00:00:00';
           lastStatus = 'SUCCESS';
           errorMessage = null;
           const d = new Date(dateStr + 'T12:00:00');
           lastRunFormatted = d.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' });
+        } else if (row) {
+          lastRun = row.started_at;
+          lastStatus = row.status;
+          lastDuration = fmtDuration(row.started_at, row.completed_at);
+          recordsAffected = row.records_affected;
+          errorMessage = row.error_message;
         }
       }
 

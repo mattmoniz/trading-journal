@@ -43,6 +43,7 @@ import premarketWalkthroughRouter from './routes/premarketWalkthrough.js';
 import annotationsRouter from './routes/annotations.js';
 import developingValueRouter from './routes/developingValue.js';
 import antigravityEdgesRouter from './routes/antigravityEdges.js';
+import playbookRouter from './routes/playbook.js';
 import { computeAndPersistSession } from './services/developingValueService.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
@@ -285,6 +286,7 @@ app.use('/api', premarketWalkthroughRouter);
 app.use('/api', annotationsRouter);
 app.use('/api', developingValueRouter);
 app.use('/api', antigravityEdgesRouter);
+app.use('/api/playbook', playbookRouter);
 
 // Client-side error reporting — catches React render crashes via ErrorBoundary
 
@@ -630,14 +632,41 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[pattern_scan] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
-  // Daily Coaching — 4:45 PM ET Mon–Fri
-  cron.schedule('45 16 * * 1-5', async () => {
+  // Daily Coaching — 4:30 PM ET Mon–Fri (runs after trades are imported at 4:00 PM)
+  cron.schedule('30 16 * * 1-5', async () => {
     try {
       await logProcess('DAILY_COACHING', async () => {
         const text = await runDailyCoaching(null, io);
         return { count: text ? 1 : 0 };
       });
     } catch (err) { console.error('[daily_coaching] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // AI Daily Setup Review — 4:35 PM ET Mon–Fri (after coaching + trades imported)
+  cron.schedule('35 16 * * 1-5', async () => {
+    try {
+      await logProcess('AI_DAILY_REVIEW', async () => {
+        const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        // Skip if review already exists for today
+        const existing = (await query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1`, [todayET])).rows;
+        if (existing.length) { console.log(`[ai_daily_review] Already exists for ${todayET} — skipping`); return { count: 0, skipped: true }; }
+        // Skip if no setups fired today
+        const setups = (await query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED')`, [todayET])).rows;
+        if (!setups.length) { console.log(`[ai_daily_review] No resolved setups for ${todayET} — skipping`); return { count: 0, skipped: true }; }
+        // Call our own endpoint (avoids importing Anthropic logic into index.js)
+        const port = process.env.PORT || 3002;
+        const res = await fetch(`http://localhost:${port}/api/playbook/daily-review/${todayET}/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ confirmed: true }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        console.log(`[ai_daily_review] Generated for ${todayET} — ${(data.stop_target_analysis || []).length} setup ratings`);
+        if (io) io.emit('ai-review-ready', { date: todayET, setupCount: (data.stop_target_analysis || []).length });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[ai_daily_review] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Weekly Report — 6:00 PM ET Sunday
@@ -732,6 +761,44 @@ httpServer.listen(PORT, () => {
         return { count: 1 };
       });
     } catch (err) { console.error('[day_type_alpha] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:20 PM Sunday: permission slip mining — discovers ACD signal combinations that
+  // reliably bias session direction. Writes PERMISSION_SLIP rows to performance_audit.
+  // Runs after DAY_TYPE_ALPHA (9:10 PM). API reads these instead of hardcoded stats.
+  cron.schedule('20 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('PERMISSION_SLIP', async () => {
+        execSync('node scripts/backtest_permission_slips.mjs', { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[permission_slip] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:05 PM Sunday: AI review aggregation — aggregate AI_SETUP_REVIEW ratings per setup_type
+  // and behavioral theme frequencies from coaching text. Writes AI_SETUP_AGG + BEHAVIORAL_STATS rows.
+  cron.schedule('5 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('AI_SETUP_AGG', async () => {
+        execSync('node scripts/aggregate_ai_setup_reviews.js', { cwd: process.cwd(), timeout: 60000 });
+        execSync('node scripts/aggregate_behavioral_stats.js', { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[ai_setup_agg] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:25 PM Sunday: session bias mining — discovers simple 1-2-variable stats
+  // (morning dir, IB break, day type, DOW, etc.) → writes SESSION_BIAS rows to performance_audit
+  cron.schedule('25 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('SESSION_BIAS', async () => {
+        execSync('node scripts/mine_session_bias.mjs', { cwd: process.cwd(), timeout: 120000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[session_bias] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // 6:00 AM Sunday: context edge analysis + confluence pair backtest (writes CONTEXT_ANALYSIS to performance_audit + confluence_pairs_latest.json)
@@ -832,12 +899,28 @@ httpServer.listen(PORT, () => {
                 const text = await runDailyCoaching(today, io);
                 return { count: text ? 1 : 0 };
               });
+              // Also run AI setup review now that fills are in
+              const portNum = process.env.PORT || 3002;
+              const existingReview = (await query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1`, [today])).rows;
+              if (!existingReview.length) {
+                const resolvedSetups = (await query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED') LIMIT 1`, [today])).rows;
+                if (resolvedSetups.length) {
+                  await logProcess('AI_DAILY_REVIEW', async () => {
+                    const res = await fetch(`http://localhost:${portNum}/api/playbook/daily-review/${today}/generate`, {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ confirmed: true }),
+                    });
+                    const d = await res.json();
+                    return { count: d.error ? 0 : 1 };
+                  });
+                }
+              }
             }
           }
         }
       }
 
-      // Daily coaching — due 4:45 PM Mon–Fri; catch up after 5 PM
+      // Daily coaching — due 4:30 PM Mon–Fri; catch up after 5 PM
       // Re-run only if coaching has never run OR it ran with 0 live-account trades but live fills now exist.
       // Uses LIKE '%-PRO%' to match live accounts — avoids infinite loop when sim-only fills exist.
       if (day >= 1 && day <= 5 && hour >= 17) {
@@ -853,6 +936,27 @@ httpServer.listen(PORT, () => {
           await logProcess('DAILY_COACHING', async () => {
             const text = await runDailyCoaching(null, io);
             return { count: text ? 1 : 0 };
+          });
+        }
+      }
+
+      // AI daily setup review — due 4:35 PM Mon–Fri; catch up after 5 PM
+      if (day >= 1 && day <= 5 && hour >= 17) {
+        const [reviewRows, setupRows] = await Promise.all([
+          query(`SELECT id FROM daily_ai_reviews WHERE review_date = $1 LIMIT 1`, [today]),
+          query(`SELECT id FROM active_setups WHERE log_date = $1 AND status IN ('HIT','STOPPED','EXPIRED') LIMIT 1`, [today]),
+        ]);
+        if (!reviewRows.rows.length && setupRows.rows.length) {
+          console.log('[catch-up] AI daily setup review overdue — running now');
+          const port = process.env.PORT || 3002;
+          await logProcess('AI_DAILY_REVIEW', async () => {
+            const res = await fetch(`http://localhost:${port}/api/playbook/daily-review/${today}/generate`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ confirmed: true }),
+            });
+            const d = await res.json();
+            if (d.error) throw new Error(d.error);
+            return { count: 1 };
           });
         }
       }
@@ -929,7 +1033,7 @@ httpServer.listen(PORT, () => {
     }
   }, { timezone: 'America/New_York' });
 
-  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Pattern Scan 4:30PM, Daily Coaching 4:45PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM, ComputeLevels 9:30PM ET Sun | Catch-up every 30min');
+  console.log('[cron] Registered: Morning Brief 8:30AM, Auto-Import 4PM, Pattern Memory 4:05PM, Pattern Scan 4:30PM, Daily Coaching 4:30PM, AI Setup Review 4:35PM ET Mon-Fri | Weekly Report 6PM, Monthly Report 7PM, LevelFadeAudit 7:30PM, MAE/MFE Audit 8PM, UnifiedBacktest 9PM, ComputeLevels 9:30PM ET Sun | Catch-up every 30min');
 
   // Hourly overdue process check (9 AM–5 PM ET Mon–Fri)
   setInterval(async () => {

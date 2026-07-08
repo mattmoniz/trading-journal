@@ -7,8 +7,26 @@ const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maxi
 // DOW_PLAYBOOKS removed — replaced by live backtested data from /api/morning-brief/scalp-playbook
 
 
+function ScriptBlock({ title, accentColor, bg, border, timestamp, defaultOpen = true, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ padding: '10px 12px', background: bg, border: `1px solid ${border}`, borderRadius: 6, marginTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', marginBottom: open ? 8 : 0 }}
+           onClick={() => setOpen(o => !o)}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: accentColor, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{title}</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {timestamp && <span style={{ fontSize: 11, color: '#94a3b8' }}>{timestamp}</span>}
+          <span style={{ fontSize: 11, color: '#94a3b8', userSelect: 'none' }}>{open ? '▲' : '▼'}</span>
+        </div>
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
 function DailyRecap({ date }) {
   const [recap, setRecap] = useState(null);
+  const [open, setOpen] = useState(true);
   useEffect(() => {
     fetch(`${API_URL}/morning-brief/scalp-recap/${date}`).then(r => r.json()).then(setRecap).catch(() => {});
   }, [date]);
@@ -19,11 +37,16 @@ function DailyRecap({ date }) {
   const pnlColor = sc.totalPnl > 0 ? '#4ade80' : sc.totalPnl < 0 ? '#f87171' : '#94a3b8';
   return (
     <div style={{ padding: '10px 12px', background: 'rgba(34,197,94,0.04)', border: '1px solid rgba(34,197,94,0.12)', borderRadius: 6, marginTop: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: open ? 6 : 0, cursor: 'pointer' }}
+           onClick={() => setOpen(o => !o)}>
         <span style={{ fontSize: 12, fontWeight: 700, color: '#4ade80', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Daily Recap</span>
-        <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-        <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'monospace', color: pnlColor }}>${sc.totalPnl.toLocaleString()}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 14, fontWeight: 800, fontFamily: 'monospace', color: pnlColor }}>${sc.totalPnl.toLocaleString()}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+          <span style={{ fontSize: 11, color: '#94a3b8', userSelect: 'none' }}>{open ? '▲' : '▼'}</span>
+        </div>
       </div>
+      {open && <>
       {recap.session && (
         <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>
           {recap.session.type} · {recap.session.range}pt range · {recap.session.rotations} rotations · Closed at {recap.session.closePct}%
@@ -81,6 +104,7 @@ function DailyRecap({ date }) {
           ))}
         </>
       )}
+      </>}
     </div>
   );
 }
@@ -442,11 +466,9 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       {section !== 'intel' && <>
       {/* First hour script — visible before 12pm ET only */}
       {(() => { const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); return etH < 12; })() &&
-      <div style={{ padding: '10px 12px', background: 'rgba(99,102,241,0.04)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 6 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={labelSt}>Morning Script (Open — 12:00 PM)</div>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-        </div>
+      <ScriptBlock title="Morning Script (Open — 12:00 PM)" accentColor="#818cf8"
+        bg="rgba(99,102,241,0.04)" border="rgba(99,102,241,0.15)"
+        timestamp={new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#818cf8' }}>Overnight positioning.</strong> {oc.overnight_inventory ? `${invLabel}. ${oc.overnight_inventory === 'SHORT_TRAPPED' ? 'Shorts squeezed — buying fuel early. Expect upward drift into first level test.' : oc.overnight_inventory === 'LONG_TRAPPED' ? 'Longs trapped — selling pressure builds. Expect downward drift. Watch for capitulation volume.' : 'Neutral — no trapped participants. Wait for OR to establish direction.'}` : 'Check overnight close vs today\'s VA before the bell.'}</div>
           {cl.pd1?.poc && <div>2. <strong style={{ color: '#818cf8' }}>POC magnet at {fmtP(cl.pd1.poc)}.</strong> Expect touch within 51 min (91% of days). Price arrives fast (16pt/bar), barely pauses (1 bar dwell), then drifts away slowly. Use as a target for your first trade, not an entry level.</div>}
@@ -459,17 +481,13 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           <div>6. <strong style={{ color: '#818cf8' }}>10:30 AM — IB close.</strong> The Initial Balance is set. IB range defines the session framework. If IB is tight (under 47pt) → breakout expansion likely. If IB is wide (over 91pt) → range day, fade the IB extremes.</div>
           <div>7. <strong style={{ color: '#818cf8' }}>10:30 AM — 12:00 PM: the resolution window.</strong> This is when the morning thesis either confirms or fails. If the A signal held and IB broke in the same direction → trend developing. If the A signal failed → reassess. Most setups fire by noon.</div>
         </div>
-      </div>
-
-      }
+      </ScriptBlock>}
 
       {/* Afternoon script — visible 12pm–4pm ET only */}
       {(() => { const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); return etH >= 12 && etH < 16; })() &&
-      <div style={{ padding: '10px 12px', background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)', borderRadius: 6, marginTop: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={labelSt}>Afternoon Script (1:00 PM — Close)</div>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-        </div>
+      <ScriptBlock title="Afternoon Script (1:00 PM — Close)" accentColor="#f59e0b"
+        bg="rgba(245,158,11,0.04)" border="rgba(245,158,11,0.12)"
+        timestamp={new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#f59e0b' }}>Developing POC is today's magnet.</strong> Afternoon volume drops — price mean-reverts toward wherever today's volume concentrated. Watch where your chart shows the thickest profile.</div>
           <div>2. <strong style={{ color: '#f59e0b' }}>Stop initiating after 1:30 PM</strong> unless a clear failed auction or TRT is still active (120-min expiry). Afternoon breakout attempts have low follow-through.</div>
@@ -488,7 +506,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
           {dow === 5 && <div>5. <strong style={{ color: '#ef4444' }}>Friday PM: lock gains by 12:30.</strong> Afternoon squaring creates reversals that eat Friday profits.</div>}
           {dow !== 5 && <div>5. <strong style={{ color: '#f59e0b' }}>3:00-4:00 PM closing auction.</strong> MOC orders create directional flow. If price is below today's POC, closing sellers may push lower. If above, closing buyers may push higher.</div>}
         </div>
-      </div>}
+      </ScriptBlock>}
 
       {/* Daily Recap — how did today's playbook projections do? */}
       {(() => {
@@ -499,11 +517,9 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
 
       {/* Evening script — only after 4:00 PM ET when the close is final */}
       {(() => { const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date())); return etH < 16 ? null : true; })() &&
-      <div style={{ padding: '10px 12px', background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.12)', borderRadius: 6, marginTop: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={labelSt}>Evening Read (Closing the Loop → Tomorrow)</div>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
-        </div>
+      <ScriptBlock title="Evening Read (Closing the Loop → Tomorrow)" accentColor="#a78bfa"
+        bg="rgba(139,92,246,0.04)" border="rgba(139,92,246,0.12)"
+        timestamp={new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}>
         <div style={{ fontSize: 12, lineHeight: 1.7, color: '#cbd5e1' }}>
           <div>1. <strong style={{ color: '#a78bfa' }}>Today's session character.</strong> {bz?.active
             ? `Price spent the session inside a ${bz.age}-day balance zone (${fmtP(bz.low)}–${fmtP(bz.high)}). ${priorDayChar?.label === 'NONTREND' ? 'The NONTREND resolution played out — did the first move sustain or reverse?' : 'Balance held — range rules carried the day.'}`
@@ -538,7 +554,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
             return `Price closing inside VA → tomorrow starts neutral. Direction will be set by overnight activity and the first 30 minutes. Wait for the morning read to build conviction.`;
           })()}</div>
         </div>
-      </div>}
+      </ScriptBlock>}
       </>}
     </div>
   );

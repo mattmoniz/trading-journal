@@ -83,6 +83,7 @@ SELECT column_name, data_type FROM information_schema.columns WHERE table_name =
 | Risk / behavioral guardrails | `post_loss_cooldowns`, `dll_daily_events`, `profit_lock_config`, `profit_lock_events`, `risk_settings`, `rule_overrides` | Daily loss limit tracking, 1PM profit-lock guard, cooldown-after-loss enforcement |
 | Sessions & timing | `trading_sessions`, `session_analysis`, `session_patterns` | Per-session OHLC/texture metrics (Monday texture, Friday bias, etc.) |
 | Review & coaching | `morning_briefs`, `premarket_walkthroughs`, `daily_coaching`, `weekly_assessments`, `trade_annotations`, `trade_feedback`, `trade_timeline_events` | Persisted output of scheduled/manual review jobs and trade-level annotations |
+| AI coach | `playbook_conversations`, `daily_ai_reviews`, `ai_cost_log` | Live session assessments (Sonnet), per-day structured setup ratings (Haiku, auto-runs 5 PM ET), cost ledger with $5 boundary socket alerts. `daily_ai_reviews.stop_target_analysis` JSONB holds per-setup ratings (1-5 stars, entry_quality, stop_verdict, t1_verdict, recommended pts). Auto-persist on generate writes `AI_SETUP_REVIEW` rows (signal_type='AI_SETUP_REVIEW') to `performance_audit`. |
 | Engine evaluation | `engine_reads`, `daytype_accuracy_log`, `performance_audit`, `phase_change_alerts`, `phase_change_backtest_results`, `level_regime_performance`, `monte_carlo_runs` | Forward-test/backtest results for every signal system — **this is where backtest scripts write findings** (see `performance_audit`) |
 | Misc config | `account_settings`, `settings_todos`, `import_log`, `process_log`, `macro_events` | App settings, scheduled-job run log, macro calendar |
 
@@ -189,7 +190,8 @@ server/
 | Risk & behavior guardrails | `cooldown.js`, `profitLock.js`, `dll.js`, `ruleOverrides.js` | Post-loss cooldown, 1PM profit-lock guard, daily loss limit tracking, rule override testing |
 | Conviction/case | `case.js`, `scenario.js` | Case Engine (multi-factor conviction read), Monte Carlo + optimization scenarios |
 | Prep & review | `morningBrief.js`, `premarketWalkthrough.js`, `calendar.js`, `annotations.js`, `longterm.js` | Pre-open forecast/scalp playbook, structured pre-market prep, coaching notes, trade annotations, multi-session structural state |
-| Config | `settings.js` | Health check, setup types, custom fields, settings/todos |
+| AI coach | `playbook.js` | Manual live assessment (3-button: LONG/SHORT/NOT SURE → Sonnet ~300-word, saves to `playbook_conversations`); assess prompt includes current price/bar trend/level distances/move extension tier/session phase/stall signals (2026-07-07). Auto daily setup review at 5 PM ET (Haiku, saves to `daily_ai_reviews`). Auto-persist on generate: `AI_SETUP_REVIEW` rows to `performance_audit` — no button. `/api/playbook/daily-review/:date` returns `setup_details` (mae_points/mfe_points/entry/stop/t1). |
+| Config | `settings.js` | Health check (includes `AI_DAILY_REVIEW` schedule entry), setup types, custom fields, settings/todos |
 | Volatility / error | `index.js` (direct) | `/api/vol-alert` (GET) — overnight range σ + OR-width σ, double-alert flag, used by `VolatilityAlertBanner`; `/api/client-error` (POST) — receives React `ErrorBoundary` crashes, stores in in-memory ring buffer; `/api/errors/recent` (GET, `?since=ISO`) — new errors since timestamp, polled by Gemini error watcher every 60s |
 
 ### Services (`server/services/`)
@@ -217,7 +219,7 @@ server/
 | `marketCalendar.js` | NYSE/CME NQ holiday + early-close calendar 2024–2026. Exports `getMarketStatus(dateStr)` → `{type:'HOLIDAY'|'EARLY_CLOSE', name, rthCloseEtMin?}` or `null`; `isHoliday()`; `getEarlyCloseMinute()`. Used by `/api/acd/live` to short-circuit on holidays and to return `earlyClose` field on early-close days. |
 
 ### Scheduled jobs (node-cron + setInterval, set up in `server/index.js`)
-Morning brief generation, EOD auto-import (4 PM — also runs `tagTradesForDate` + `backfill_auction_reads.js` for today), weekly report, monthly report, pattern memory nightly update, daily coaching, MGI level computation (9:30 PM ET Sunday via `scripts/compute_levels.js`). Each run is logged to `process_log` (see `logProcess()` calls in `index.js`).
+Morning brief generation, EOD auto-import (4 PM — also runs `tagTradesForDate` + `backfill_auction_reads.js` for today), weekly report, monthly report, pattern memory nightly update, daily coaching (4:45 PM), **AI setup review (5:00 PM ET Mon-Fri** — auto-generates per-setup ratings via Haiku; skips if review already exists or no resolved setups), MGI level computation (9:30 PM ET Sunday via `scripts/compute_levels.js`). Each run is logged to `process_log` (see `logProcess()` calls in `index.js`).
 
 - **Server-autonomous detection (2026-07-05):** `setInterval` every 60s during 9:30–4:00 PM ET Mon–Fri polls `GET /api/acd/today` to trigger the level fade detection INSERT without requiring a browser client. The INSERT is idempotent (ON CONFLICT DO NOTHING). This fixed the root cause of 62% of setups firing via retroactive IB-close backfill.
 - **Nightly latency audit:** cron `15 17 * * 1-5` runs `scripts/audit_setup_latency.mjs` for the current ET date; writes `LATENCY_AUDIT` to `performance_audit`; appends CRITICAL alerts to `scratch/gemini_alerts.txt`.

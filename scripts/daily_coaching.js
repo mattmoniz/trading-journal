@@ -8,16 +8,19 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '../.env') });
 
-const LIVE_ACCOUNTS = [
-  'LFE050-573N6QJT-TEST005',
-  'LFE050-6S7UV87R-TEST007',
-  'LFE050-CFB210Y9-TEST006',
-  'LFE050-0J003ABA-TEST008',
-  'LTF050-8QA00U6B-PRO009',
-  'LTF050-MHF7U342-PRO007',
-  'LTF050-OS753S7J-PRO008',
-];
-const LIVE_PLACEHOLDERS = LIVE_ACCOUNTS.map((_, i) => `$${i + 2}`).join(', ');
+// Dynamically resolved per call — see getLiveAccounts()
+let _liveAccounts = null;
+async function getLiveAccounts() {
+  if (_liveAccounts) return _liveAccounts;
+  const { rows } = await query(`
+    SELECT DISTINCT custom_fields->>'account' AS account
+    FROM trades
+    WHERE custom_fields->>'account' LIKE '%-PRO%'
+    ORDER BY account
+  `);
+  _liveAccounts = rows.map(r => r.account).filter(Boolean);
+  return _liveAccounts;
+}
 
 function fmt$(n) {
   if (n == null) return 'N/A';
@@ -28,6 +31,9 @@ function fmt$(n) {
 const DLL_THRESHOLD = -250;
 
 async function buildCoachingContext(targetDate) {
+  const LIVE_ACCOUNTS = await getLiveAccounts();
+  const LIVE_PLACEHOLDERS = LIVE_ACCOUNTS.map((_, i) => `$${i + 2}`).join(', ');
+
   const [
     tradesQ, acdQ, arQ, dplQ, setupsQ, missedQ, nl30Q,
     accountSummaryQ, accountCurveQ,
@@ -411,7 +417,8 @@ HARD RULES — NEVER VIOLATE:
 7. context_marker PLANNED = pre-planned setup (affirm discipline); REACTION = reactive trade (assess whether structure supported it).
 8. SIGNAL ALIGNMENT: if a SIGNAL ALIGNMENT note is provided, it tells you whether the trader's net position direction matched, fought, or traded the resolution of a failed/invalidated version of the day's A signal — and gives you the pre-computed framing for that. Use it verbatim — do not recompute or restate any percentage differently, and do not invent your own "fade"/"beat the odds" framing if the note says the signal was invalidated or its validity is unknown. If the note says the trader fought a still-VALID confident signal and won, that is the clearest "challenge" case: explicitly say the win was on the statistically less likely side. If the note says the signal was INVALIDATED and the trader traded with the resolution, frame it as correctly reading the failed signal/breakdown — never as "fading" or "beating the odds."
 9. Under 230 words total. No generic platitudes. Every sentence must reference a specific number, fill, or annotation from today.
-10. LEVEL TOUCH TRACK RECORD entries (IB high/low touches) measure how often price REVERSED/BOUNCED off that level within 30 minutes — they are NOT breakout-continuation rates. If the trader's setup involved breaking through that level for continuation (e.g. shorting an IB-low breakdown), a HIGH reversal/bounce rate means their continuation trade caught the statistically LESS common outcome — frame it that way (challenge if it won "on the less likely case", note if it lost "consistent with the level usually holding"). Use the percentage and "(n=X)" verbatim from the data, and use the exact reversal/bounce wording given — never relabel it as a breakout or continuation stat. COMBO TRACK RECORD entries are background reference only — mention one only if it maps directly to a level/setup the trader actually traded or annotated today; otherwise don't mention combos at all.`;
+10. LEVEL TOUCH TRACK RECORD entries (IB high/low touches) measure how often price REVERSED/BOUNCED off that level within 30 minutes — they are NOT breakout-continuation rates. If the trader's setup involved breaking through that level for continuation (e.g. shorting an IB-low breakdown), a HIGH reversal/bounce rate means their continuation trade caught the statistically LESS common outcome — frame it that way (challenge if it won "on the less likely case", note if it lost "consistent with the level usually holding"). Use the percentage and "(n=X)" verbatim from the data, and use the exact reversal/bounce wording given — never relabel it as a breakout or continuation stat. COMBO TRACK RECORD entries are background reference only — mention one only if it maps directly to a level/setup the trader actually traded or annotated today; otherwise don't mention combos at all.
+11. BEHAVIORAL CONTINUITY: If a BEHAVIORAL HISTORY section is provided, scan it before writing WHAT TO IMPROVE. If today's session shows the same flaw as prior sessions (e.g., overtrading after 11 AM, late entries, annotation gaps, chasing), explicitly name it as a recurring pattern — not a one-off observation. If today BREAKS a previously flagged pattern, name that too as genuine improvement worth acknowledging. Never fabricate a pattern that isn't in both the history and today's data.`;
 }
 
 function buildPrompt(ctx) {
@@ -437,9 +444,23 @@ function buildPrompt(ctx) {
 
   const comboBlock = `\nCOMBO TRACK RECORD (level-confluence combos — cite ONLY if directly relevant to today's setups/annotations, otherwise ignore):\n${ctx.comboSummary}\n`;
 
-  return `DATE: ${ctx.targetDate}
+  const priorBlock = ctx.priorPatterns && ctx.priorPatterns.sessionCount > 0 ? `
+=== BEHAVIORAL HISTORY (last ${ctx.priorPatterns.sessionCount} sessions) ===
 
-SESSION CONTEXT:
+${ctx.priorPatterns.recurring.length > 0
+  ? `RECURRING PATTERNS (pre-computed — these have been flagged repeatedly, not just today):\n${ctx.priorPatterns.recurring.map(r => `  ⚠️  ${r}`).join('\n')}\nIf today shows the same pattern, name it explicitly as recurring in WHAT TO IMPROVE, not a one-off.`
+  : 'No dominant recurring patterns detected yet — comment on today\'s session as normal.'}
+
+WHAT TO IMPROVE — recent callouts (newest first):
+${ctx.priorPatterns.improvements.slice(0, 12).join('\n')}
+
+TOMORROW'S WATCH — prior callouts (newest first):
+${ctx.priorPatterns.watches.slice(0, 6).join('\n')}
+
+` : '';
+
+  return `DATE: ${ctx.targetDate}
+${priorBlock}SESSION CONTEXT:
 Structural state: ${ctx.structuralState}
 NL30: ${ctx.nl30} | Day type: ${ctx.dayType}
 Opening call: ${ctx.openingCall} | Confluence: ${ctx.confluenceScore}/12
@@ -483,6 +504,77 @@ TOMORROW'S WATCH:
 [One specific level or condition based on today's close and structure.]`;
 }
 
+// ── Behavioral history helpers ────────────────────────────────────────────────
+
+function extractSection(text, header) {
+  if (!text) return null;
+  const allHeaders = ["WHAT HAPPENED:", "WHAT WORKED:", "WHAT TO IMPROVE:", "TOMORROW'S WATCH:"];
+  const startIdx = text.indexOf(header + ':');
+  if (startIdx === -1) return null;
+  const after = text.slice(startIdx + header.length + 1).trim();
+  let end = after.length;
+  for (const h of allHeaders) {
+    if (h === header + ':') continue;
+    const idx = after.indexOf('\n' + h.replace(':', ''));
+    if (idx > -1 && idx < end) end = idx;
+  }
+  return after.slice(0, end).trim().replace(/\s+/g, ' ');
+}
+
+// Theme detection keywords — each entry is [label, ...keywords]
+const BEHAVIOR_THEMES = [
+  ['annotation gaps',        'annotation', 'unannotated', 'no note', 'no fill id', 'add your read'],
+  ['overtrading after 11am', 'after 11', 'post-11', 'overtrade', 'overtraded', 'too many fills', 'late session'],
+  ['late entries / chasing', 'late entr', 'chased', 'chasing', 'between levels', 'no level'],
+  ['fading valid signal',    'fading a valid', 'against the signal', 'fought the signal', 'against a live'],
+  ['annotation quality',     'gut_read', 'gut read', 'no level price', 'unverifiable'],
+  ['missed setups',          'no fills captured', 'sat out', 'setups resolved with no fill', 'stayed out'],
+  ['give-back pattern',      'give-back', 'gave back', 'peak intraday', 'peak pnl'],
+];
+
+async function getPriorCoachingPatterns(targetDate) {
+  const { rows } = await query(`
+    SELECT session_date, coaching_text
+    FROM daily_coaching
+    WHERE session_date < $1
+      AND coaching_text IS NOT NULL
+      AND length(coaching_text) > 50
+      AND coaching_text NOT ILIKE '%unavailable%'
+    ORDER BY session_date DESC
+    LIMIT 30
+  `, [targetDate]).catch(() => ({ rows: [] }));
+
+  if (rows.length === 0) return null;
+
+  const improvements = [];
+  const watches = [];
+  const themeCounts = {};
+
+  for (const row of rows) {
+    const imp   = extractSection(row.coaching_text, 'WHAT TO IMPROVE');
+    const watch = extractSection(row.coaching_text, "TOMORROW'S WATCH");
+    if (imp)   improvements.push(`${row.session_date}: ${imp.slice(0, 140)}`);
+    if (watch) watches.push(`${row.session_date}: ${watch.slice(0, 120)}`);
+
+    // Count theme occurrences across the full coaching text
+    const full = (row.coaching_text || '').toLowerCase();
+    for (const [label, ...keywords] of BEHAVIOR_THEMES) {
+      if (keywords.some(kw => full.includes(kw))) {
+        themeCounts[label] = (themeCounts[label] || 0) + 1;
+      }
+    }
+  }
+
+  // Recurring = appears in 3+ of last 10 sessions (or 4+ of last 30)
+  const n = Math.min(rows.length, 10);
+  const recurring = Object.entries(themeCounts)
+    .filter(([, count]) => count >= Math.max(3, Math.round(rows.length * 0.3)))
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => `${label} (${count}/${rows.length} sessions)`);
+
+  return { improvements, watches, sessionCount: rows.length, recurring };
+}
+
 export async function runDailyCoaching(targetDate, io) {
   if (!targetDate) {
     targetDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -508,6 +600,7 @@ export async function runDailyCoaching(targetDate, io) {
   try {
     ctx = await buildCoachingContext(targetDate);
     ctx.importNote = importNote;
+    ctx.priorPatterns = await getPriorCoachingPatterns(targetDate);
   } catch (err) {
     console.error('[daily_coaching] Context build failed:', err.message);
     return;
@@ -518,7 +611,7 @@ export async function runDailyCoaching(targetDate, io) {
     const client = new Anthropic();
     const response = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 500,
+      max_tokens: 600,
       system: buildSystemPrompt(),
       messages: [{ role: 'user', content: buildPrompt(ctx) }],
     });

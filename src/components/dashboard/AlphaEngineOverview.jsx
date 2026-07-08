@@ -30,6 +30,228 @@ const S = {
   todoIcon: { fontSize: 13, marginTop: 1, flexShrink: 0 },
 };
 
+const API_URL = '/api';
+
+function EngineAccuracyPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/engine-reads/hit-rates`)
+      .then(r => r.json())
+      .then(d => { if (!d.error) setData(d.rates); })
+      .catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+
+  const readTypes = [
+    { key: 'A_UP',        label: 'A Up signal',    color: '#22c55e' },
+    { key: 'A_DOWN',      label: 'A Down signal',  color: '#ef4444' },
+    { key: 'BIAS_LONG',   label: 'Pre-mkt LONG',   color: '#22c55e' },
+    { key: 'BIAS_SHORT',  label: 'Pre-mkt SHORT',  color: '#ef4444' },
+    { key: 'BIAS_NEUTRAL',label: 'Pre-mkt NEUTRAL',color: '#94a3b8' },
+  ];
+
+  // Find best and worst sub-combo across all types
+  let bestCombo = null, worstCombo = null;
+  for (const rt of readTypes) {
+    const bucket = data[rt.key];
+    if (!bucket?.byBias) continue;
+    for (const [bias, stats] of Object.entries(bucket.byBias)) {
+      if (stats.decisive < 10) continue;
+      const pct = Math.round(stats.hitRate * 100);
+      const combo = { label: `${rt.label} + ${bias}`, pct, n: stats.decisive };
+      if (!bestCombo || pct > bestCombo.pct) bestCombo = combo;
+      if (!worstCombo || pct < worstCombo.pct) worstCombo = combo;
+    }
+  }
+
+  const totalDecisive = readTypes.reduce((s, rt) => s + (data[rt.key]?.overall?.decisive || 0), 0);
+  const totalCorrect  = readTypes.reduce((s, rt) => s + (data[rt.key]?.overall?.correct  || 0), 0);
+  const totalN        = readTypes.reduce((s, rt) => s + (data[rt.key]?.overall?.n        || 0), 0);
+  const overallAcc    = totalDecisive > 0 ? Math.round(100 * totalCorrect / totalDecisive) : null;
+
+  return (
+    <div>
+      {/* Summary row */}
+      <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: overallAcc >= 65 ? '#22c55e' : overallAcc >= 55 ? '#fbbf24' : '#ef4444' }}>{overallAcc}%</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>decisive accuracy</div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#cbd5e1' }}>{totalN}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>total reads</div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#22c55e' }}>{totalCorrect}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>correct</div>
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#ef4444' }}>{totalDecisive - totalCorrect}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>wrong</div>
+        </div>
+      </div>
+
+      {/* Per-type rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginBottom: 10 }}>
+        {readTypes.map(rt => {
+          const d = data[rt.key]?.overall;
+          if (!d) return null;
+          const pct = Math.round(d.hitRate * 100);
+          const col = pct >= 65 ? '#22c55e' : pct >= 55 ? '#fbbf24' : '#ef4444';
+          const byBias = data[rt.key]?.byBias || {};
+          const subRows = Object.entries(byBias)
+            .filter(([, s]) => s.decisive >= 5)
+            .sort((a, b) => b[1].hitRate - a[1].hitRate);
+          return (
+            <div key={rt.key} style={{ padding: '6px 0', borderBottom: '1px solid #1e293b' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, color: '#cbd5e1' }}>{rt.label}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 14, fontWeight: 700, color: col }}>
+                  {pct}% <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>N={d.decisive}</span>
+                </span>
+              </div>
+              {subRows.length > 0 && (
+                <div style={{ display: 'flex', gap: 10, marginTop: 3, flexWrap: 'wrap' }}>
+                  {subRows.map(([bias, s]) => {
+                    const sp = Math.round(s.hitRate * 100);
+                    const sc = sp >= 65 ? '#22c55e' : sp >= 55 ? '#fbbf24' : '#ef4444';
+                    return (
+                      <span key={bias} style={{ fontSize: 11, color: '#94a3b8' }}>
+                        {bias} <span style={{ color: sc, fontWeight: 700 }}>{sp}%</span>
+                        <span style={{ color: '#64748b' }}> n={s.decisive}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Best / worst combos */}
+      {(bestCombo || worstCombo) && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {bestCombo && (
+            <div style={{ flex: 1, minWidth: 160, padding: '6px 10px', background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 6, fontSize: 12 }}>
+              <div style={{ color: '#22c55e', fontWeight: 700, marginBottom: 2 }}>Best call</div>
+              <div style={{ color: '#e2e8f0' }}>{bestCombo.label}</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 15, fontWeight: 700, color: '#22c55e' }}>{bestCombo.pct}% <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>N={bestCombo.n}</span></div>
+            </div>
+          )}
+          {worstCombo && (
+            <div style={{ flex: 1, minWidth: 160, padding: '6px 10px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 6, fontSize: 12 }}>
+              <div style={{ color: '#ef4444', fontWeight: 700, marginBottom: 2 }}>Weakest call</div>
+              <div style={{ color: '#e2e8f0' }}>{worstCombo.label}</div>
+              <div style={{ fontFamily: 'monospace', fontSize: 15, fontWeight: 700, color: '#ef4444' }}>{worstCombo.pct}% <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8' }}>N={worstCombo.n}</span></div>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: '#475569', marginTop: 8 }}>Overnight reads context-only · no mechanical sizing · 387 days backfilled</div>
+    </div>
+  );
+}
+
+function SetupCalibrationPanel() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    fetch('/api/playbook/setup-calibration').then(r => r.json()).then(setData).catch(() => {});
+  }, []);
+
+  if (!data || !data.items?.length) {
+    return (
+      <div style={{ fontSize: 13, color: '#475569', fontStyle: 'italic' }}>
+        Accumulating data — N≥20 per setup required before flags appear. Check back after ~4 weeks of daily reviews.
+      </div>
+    );
+  }
+
+  const needsAdjust = data.items.filter(i => i.flag === 'NEEDS_ADJUST');
+  const calibrated = data.items.filter(i => i.flag === 'CALIBRATED');
+  const accumulating = data.items.filter(i => i.flag === 'ACCUMULATING');
+
+  return (
+    <div>
+      {needsAdjust.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          {needsAdjust.map(item => (
+            <div key={item.setup_type} style={{ background: '#1c0a0a', border: '1px solid #7f1d1d', borderRadius: 6, padding: '8px 12px', marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#fca5a5' }}>{item.setup_type}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#ef4444' }}>{item.avg_rating}⭐ avg (N={item.n})</span>
+              </div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 3 }}>
+                stop issues: {item.stop_issues} · T1 issues: {item.t1_issues} · entry issues: {item.entry_issues}
+                {item.trend_delta !== null && <span> · trend {item.trend_delta >= 0 ? '+' : ''}{item.trend_delta}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {calibrated.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {calibrated.map(item => (
+            <span key={item.setup_type} style={{ fontSize: 12, background: '#052e16', border: '1px solid #14532d', borderRadius: 4, padding: '3px 8px', color: '#86efac' }}>
+              ✓ {item.setup_type} {item.avg_rating}⭐ (N={item.n})
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: '#475569' }}>
+        {accumulating.length} setups accumulating (N&lt;20): {accumulating.map(i => i.setup_type).join(', ')}
+      </div>
+    </div>
+  );
+}
+
+function BehavioralStatsPanel() {
+  const [data, setData] = useState(null);
+  useEffect(() => {
+    fetch('/api/playbook/behavioral-stats').then(r => r.json()).then(setData).catch(() => {});
+  }, []);
+
+  if (!data || !data.items?.length) {
+    return (
+      <div style={{ fontSize: 13, color: '#475569', fontStyle: 'italic' }}>
+        No behavioral data yet — runs Sunday 9:05 PM after coaching history accumulates.
+      </div>
+    );
+  }
+
+  const trendColor = t => t === 'WORSENING' ? '#ef4444' : t === 'IMPROVING' ? '#22c55e' : '#94a3b8';
+  const trendIcon = t => t === 'WORSENING' ? '↑' : t === 'IMPROVING' ? '↓' : '→';
+
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: '#475569', marginBottom: 8 }}>
+        N={data.items[0]?.n} sessions analyzed · Last run: {data.run_date}
+      </div>
+      {data.items.map(item => (
+        <div key={item.theme} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <div style={{ minWidth: 180, fontSize: 13, color: '#e2e8f0' }}>
+            {item.theme.replace(/_/g, ' ')}
+          </div>
+          <div style={{ minWidth: 100 }}>
+            <div style={{ height: 6, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.round(item.rolling_10d * 100)}%`, background: item.rolling_10d > 0.4 ? '#ef4444' : item.rolling_10d > 0.2 ? '#f59e0b' : '#22c55e', borderRadius: 3 }} />
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8', minWidth: 100 }}>
+            last10: <strong style={{ color: '#f1f5f9' }}>{Math.round(item.rolling_10d * 100)}%</strong>
+            {' '}all: {Math.round(item.all_time_rate * 100)}%
+          </div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: trendColor(item.trend) }}>
+            {trendIcon(item.trend)} {item.trend}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -153,11 +375,7 @@ export default function AlphaEngineOverview() {
       color: '#8b5cf6',
       desc: '5,000 paths × 180 combos × 3 filter modes. Key finding: Stop=20 sizing unit / Target=50–60pt = 100% survival across all paths. Current system params confirmed optimal. Re-run trigger: proximity window change or 20+ new trading days.',
     },
-    {
-      name: 'Engine Self-Tracking',
-      color: '#94a3b8',
-      desc: '248 rows in engine_reads (Jan–Jul 2026). 107 CORRECT / 63 WRONG / 78 NEUTRAL = ~63% accuracy on decisive calls. Overnight reads auto-saved, 387 days backfilled. Context-only (no mechanical sizing from overnight reads alone).',
-    },
+    { name: 'Engine Self-Tracking', color: '#94a3b8', _live: true },
     {
       name: 'Setup Anticipation',
       color: '#0ea5e9',
@@ -277,9 +495,31 @@ export default function AlphaEngineOverview() {
                 <div style={{ width: 3, height: 16, background: t.color, borderRadius: 2, flexShrink: 0 }} />
                 <div style={S.toolTitle}>{t.name}</div>
               </div>
-              <div style={S.toolDesc}>{t.desc}</div>
+              {t._live ? <EngineAccuracyPanel /> : <div style={S.toolDesc}>{t.desc}</div>}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* AI Setup Calibration */}
+      <div style={S.section}>
+        <div style={S.sectionTitle}>AI Setup Calibration (from Daily Reviews)</div>
+        <div style={S.card}>
+          <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+            Per-setup avg rating from AI daily reviews. Flags NEEDS_ADJUST when avg &lt; 3.5⭐ (N≥20). Updated Sunday 9:05 PM.
+          </div>
+          <SetupCalibrationPanel />
+        </div>
+      </div>
+
+      {/* Behavioral Trends */}
+      <div style={S.section}>
+        <div style={S.sectionTitle}>Behavioral Trends (from Coaching History)</div>
+        <div style={S.card}>
+          <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+            Frequency of behavioral patterns across all coaching sessions. WORSENING = last 10 sessions &gt;10pp above prior 20.
+          </div>
+          <BehavioralStatsPanel />
         </div>
       </div>
 

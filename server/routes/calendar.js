@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
+import { runDailyCoaching } from '../../scripts/daily_coaching.js';
 
 const router = express.Router();
 
@@ -17,6 +18,23 @@ router.get('/calendar/coaching/:date', async (req, res) => {
     res.json({ coaching: row || null });
   } catch (e) {
     res.json({ coaching: null });
+  }
+});
+
+// POST /api/calendar/coaching/:date/regenerate — force a fresh coaching review for any date
+router.post('/calendar/coaching/:date/regenerate', async (req, res) => {
+  try {
+    const { date } = req.params;
+    // Delete existing so runDailyCoaching writes a fresh row
+    await query(`DELETE FROM daily_coaching WHERE session_date = $1`, [date]).catch(() => {});
+    const io = req.app.get('io');
+    const text = await runDailyCoaching(date, io);
+    if (!text) return res.status(500).json({ error: 'Coaching generation returned empty — check that trades exist for this date.' });
+    const result = await query(`SELECT coaching_text, coaching_read, created_at FROM daily_coaching WHERE session_date = $1 LIMIT 1`, [date]);
+    res.json({ coaching: result.rows[0] || null });
+  } catch (e) {
+    console.error('[coaching/regenerate]', e.message);
+    res.status(500).json({ error: e.message });
   }
 });
 

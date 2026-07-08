@@ -6,17 +6,12 @@ const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maxi
 
 export default function ScalpPlaybookCard({ date }) {
   const [data, setData] = useState(null);
-  const [approachData, setApproachData] = useState(null);
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     fetch(`${API_URL}/morning-brief/scalp-playbook/${d}`).then(r => r.json()).then(setData).catch(() => {});
   }, [date]);
-
-  useEffect(() => {
-    fetch(`${API_URL}/level-approach/today`).then(r => r.json()).then(setApproachData).catch(() => {});
-  }, []);
 
   if (!data) return null;
   const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -73,37 +68,6 @@ export default function ScalpPlaybookCard({ date }) {
                     <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{parts[0]} @ {parts[1]}</span>
                     <span style={{ fontSize: 11 }}>
                       <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> · <span style={{ color: confidenceTier(p.n).color }} title={confidenceTier(p.n).title}>{confidenceTier(p.n).label}</span>
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {approachData?.setups?.length > 0 && (
-            <div style={{ marginBottom: 8 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
-                Setup Anticipation — {approachData.day_type ?? 'ALL'} {approachData.dow}
-                <span style={{ fontSize: 11, fontWeight: 400, color: '#94a3b8', marginLeft: 6 }}>fire% · WR · exp$/session</span>
-              </div>
-              {approachData.setups.slice(0, 10).map((r, i) => {
-                const label = r.setup.replace(/_FADE_?(LONG|SHORT)?$/, '').replace(/_/g, ' ') +
-                  (r.setup.endsWith('_LONG') || r.setup.includes('_FADE_LONG') ? ' ↑' :
-                   r.setup.endsWith('_SHORT') || r.setup.includes('_FADE_SHORT') ? ' ↓' : '');
-                const fr = r.fire_rate != null ? (r.fire_rate * 100).toFixed(0) + '%' : '?';
-                const wr = r.cond_wr  != null ? (r.cond_wr  * 100).toFixed(0) + '%' : '?';
-                const ev = r.expected_ev != null ? '$' + r.expected_ev.toFixed(0) : '';
-                const frColor = r.fire_rate >= 0.25 ? '#4ade80' : r.fire_rate >= 0.12 ? '#fbbf24' : '#94a3b8';
-                const wrColor = r.cond_wr  >= 0.75 ? '#4ade80' : r.cond_wr  >= 0.60 ? '#fbbf24' : '#f87171';
-                return (
-                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#e2e8f0' }}>{label}</span>
-                    <span style={{ fontSize: 11 }}>
-                      <span style={{ color: frColor, fontWeight: 700 }}>{fr}</span>
-                      <span style={{ color: '#94a3b8' }}> · </span>
-                      <span style={{ color: wrColor }}>{wr}</span>
-                      {ev && <><span style={{ color: '#94a3b8' }}> · </span><span style={{ color: '#a78bfa', fontWeight: 700 }}>{ev}</span></>}
-                      <span style={{ color: '#94a3b8', fontSize: 11, marginLeft: 4 }}>N={r.n}</span>
                     </span>
                   </div>
                 );

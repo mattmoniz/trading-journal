@@ -531,6 +531,7 @@ function PredictiveStats({ data, btStats }) {
 export default function VolatilityRegimeCard() {
   const [data, setData] = useState(null);
   const [btStats, setBtStats] = useState(null);
+  const [liveCtx, setLiveCtx] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -560,6 +561,24 @@ export default function VolatilityRegimeCard() {
       .then(r => r.json())
       .then(d => d && setBtStats(d))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const load = () => {
+      const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      fetch(`${API_URL}/morning-brief/live-session-context/${d}`)
+        .then(r => r.json())
+        .then(c => { if (!c?.noData) setLiveCtx(c); })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 30000);
+    const sock = window._tradingSocket;
+    if (sock) sock.on('price-sync-progress', load);
+    return () => {
+      clearInterval(id);
+      if (sock) sock.off('price-sync-progress', load);
+    };
   }, []);
 
   if (!data) {
@@ -717,6 +736,32 @@ export default function VolatilityRegimeCard() {
               {data.emaSnap.triggerLevel} · 20pt target, 30pt stop
             </div>
           )}
+        </div>
+      )}
+      {liveCtx && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #1e293b' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+            {[
+              { label: 'RTH VWAP', sigma: liveCtx.dailyVwapSigma, price: liveCtx.vwap, dist: liveCtx.vwapDist, alertAt: 2 },
+              { label: '24HR VWAP', sigma: liveCtx.vwap24Sigma, price: liveCtx.vwap24, dist: liveCtx.vwap24Dist, alertAt: 2 },
+              { label: 'Wkly VWAP', sigma: liveCtx.weeklyVwapSigma, price: liveCtx.weeklyVwap, dist: liveCtx.weeklyVwapSigma != null && liveCtx.weeklyVwapStd ? Math.round(liveCtx.weeklyVwapSigma * liveCtx.weeklyVwapStd) : null, alertAt: 1.8 },
+            ].map(({ label, sigma, price, dist }) => {
+              const abs = Math.abs(sigma || 0);
+              const borderColor = abs >= 2 ? '#fbbf24' : abs >= 1 ? '#fb923c' : '#334155';
+              const sigmaColor  = abs >= 2 ? '#fbbf24' : abs >= 1 ? '#fb923c' : '#94a3b8';
+              return (
+                <div key={label} style={{ padding: '5px 7px', background: 'rgba(15,23,42,0.5)', borderRadius: 4, borderLeft: `3px solid ${borderColor}` }}>
+                  <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>{label}</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, fontFamily: 'monospace', color: sigmaColor, lineHeight: 1.1 }}>
+                    {sigma != null ? `${sigma > 0 ? '+' : ''}${sigma}σ` : '—'}
+                  </div>
+                  {dist != null && (
+                    <div style={{ fontSize: 10, color: '#475569' }}>{dist > 0 ? '+' : ''}{dist}pt</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
       <PredictiveStats data={data} btStats={btStats} />
