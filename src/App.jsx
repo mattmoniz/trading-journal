@@ -25,6 +25,7 @@ import TradeAlertBanner from './components/dashboard/TradeAlertBanner.jsx';
 import VolatilityAlertBanner from './components/dashboard/VolatilityAlertBanner.jsx';
 import ApproachingLevelBanner from './components/dashboard/ApproachingLevelBanner.jsx';
 import LivePlaybookCard from './components/dashboard/LivePlaybookCard.jsx';
+import MarketPulseBar from './components/dashboard/MarketPulseBar.jsx';
 import ErrorBoundary from './components/shared/ErrorBoundary.jsx';
 import { formatNumber } from './utils/format.js';
 import { useAcdLive } from './utils/useAcdLive.js';
@@ -1270,11 +1271,11 @@ function LiveSessionPanel() {
         {active ? (
           <>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: isLong ? '#22c55e' : '#ef4444', animation: 'pulse 2s infinite', flexShrink: 0 }} />
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: isLong ? '#22c55e' : '#ef4444', animation: (active.minsRemaining == null || active.minsRemaining > 0) ? 'pulse 2s infinite' : 'none', flexShrink: 0 }} />
               <span style={{ fontWeight: 700, fontSize: 11, color: isLong ? '#22c55e' : '#ef4444', textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {SETUP_DISPLAY_LABELS[active.type] || active.type}
               </span>
-              <span style={{ fontSize: 12, color: '#94a3b8', flexShrink: 0 }}>{active.detectedAt}</span>
+              <span style={{ fontSize: 11, color: '#64748b', flexShrink: 0, fontFamily: 'monospace' }}>fired {active.detectedAt} ET</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px 6px', fontSize: 12 }}>
               {entry != null && <span style={{ color: '#94a3b8' }}>Entry <strong style={{ color: '#e2e8f0', fontFamily: 'monospace' }}>{Math.round(entry)}</strong></span>}
@@ -1368,9 +1369,13 @@ function LiveSessionPanel() {
           _sessions: s.historical_sessions,
           _isCaseEngine: true,
         }));
-        // Session Timeline: resolved/expired setups only — ACTIVE ones show in the top card above
+        // Session Timeline: resolved/expired setups only, RTH hours only (no pre/post-market)
         const allEvents = caseEvents
-          .filter(e => e.fired_time && e._status !== 'SHADOW' && e._status !== 'ACTIVE')
+          .filter(e => {
+            if (!e.fired_time || e._status === 'SHADOW' || e._status === 'ACTIVE') return false;
+            const [h, m] = e.fired_time.split(':').map(Number);
+            return (h > 9 || (h === 9 && m >= 30)) && h < 16;
+          })
           .sort((a, b) => {
             if (!a.fired_time) return 1;
             if (!b.fired_time) return -1;
@@ -2908,7 +2913,7 @@ function LiveReadBanner({ forecast }) {
           ) : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
-                <span style={{ width: 9, height: 9, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
+                <span style={{ width: 9, height: 9, borderRadius: '50%', background: tClr, animation: tState === 'ACTIVE' ? 'pulse 2s infinite' : 'none', flexShrink: 0 }} />
                 <span style={{ fontWeight: 700, fontSize: 14, color: tClr, textTransform: 'uppercase', letterSpacing: '0.07em', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(tSetup?.type || '').replace(/_/g, ' ')}</span>
                 <span style={{ fontSize: 12, fontFamily: 'monospace', fontWeight: 700, color: tClr, background: `${tClr}22`, border: `1px solid ${tClr}44`, borderRadius: 4, padding: '2px 7px', flexShrink: 0 }}>{tSetup?.impactScore ?? '?'}/10</span>
               </div>
@@ -18960,7 +18965,9 @@ function SessionStatusBar({ conf, onStateChange }) {
 
               // Verdict — live sizeMultiplier synthesized to one signal
               const mult = sc2.sizeMultiplier ?? 1.0;
-              const verdict = mult >= 1.1  ? { label: 'TAKE IT',        color: '#22c55e', bg: 'rgba(34,197,94,0.08)',  icon: '✅' }
+              const verdict = sc2.standDown
+                ?                           { label: 'STAND DOWN',      color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  icon: '⛔' }
+                : mult >= 1.1              ? { label: 'TAKE IT',        color: '#22c55e', bg: 'rgba(34,197,94,0.08)',  icon: '✅' }
                 : mult >= 0.85             ? { label: 'STANDARD',       color: '#60a5fa', bg: 'rgba(96,165,250,0.06)', icon: '▶' }
                 : mult >= 0.5              ? { label: 'REDUCED SIZE',   color: '#f59e0b', bg: 'rgba(245,158,11,0.08)', icon: '⚠' }
                 : mult >= 0.2              ? { label: 'LOW CONVICTION', color: '#f97316', bg: 'rgba(249,115,22,0.08)', icon: '⬇' }
@@ -19054,6 +19061,33 @@ function SessionStatusBar({ conf, onStateChange }) {
                   {sc2.streakBoost && (
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#4ade80', background: 'rgba(74,222,128,0.10)', border: '1px solid rgba(74,222,128,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
                       🔥 {sc2.streakBoost.wins}× WIN STREAK
+                    </span>
+                  )}
+                  {(() => {
+                    const dbRow = todaySetups.find(s => s.setup_type === sc2.type && s.status !== 'SHADOW');
+                    const bp = dbRow?.body_pct; const bd = dbRow?.bar_dir;
+                    if (bp == null) return null;
+                    const isDoji = bp < 30;
+                    const isStrong = bp >= 65;
+                    if (!isDoji && !isStrong) return null;
+                    return (
+                      <span style={{ fontSize: 11, fontWeight: 700,
+                        color: isDoji ? '#fbbf24' : '#60a5fa',
+                        background: isDoji ? 'rgba(251,191,36,0.10)' : 'rgba(96,165,250,0.10)',
+                        border: `1px solid ${isDoji ? 'rgba(251,191,36,0.45)' : 'rgba(96,165,250,0.45)'}`,
+                        borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                        {isDoji ? `DOJI (${bp}%)` : `${bd} BODY (${bp}%)`}
+                      </span>
+                    );
+                  })()}
+                  {sc2.sessionDeltaNeutral && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', background: 'rgba(148,163,184,0.10)', border: '1px solid rgba(148,163,184,0.35)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      QUIET SESSION −0.10×
+                    </span>
+                  )}
+                  {sc2.sessionDeltaHigh && !sc2.sessionDeltaNeutral && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#34d399', background: 'rgba(52,211,153,0.10)', border: '1px solid rgba(52,211,153,0.35)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                      HIGH ΔFLOW +0.10×
                     </span>
                   )}
                   {sc2.confluencePairPartner && (
@@ -19877,15 +19911,30 @@ function EdgeSectionsPanel() {
       {/* Active Setups */}
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#10b981', marginBottom: 6 }}>🎯 Today's Actionable Setups</div>
+        {/* Permission Slips — session-level probability stats, shown first */}
+        {sessionPermissions?.conditions?.length > 0 && (
+          <div style={{ marginBottom: 8, padding: '8px 11px', background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 6 }}>
+            <div style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>Permission Slip</div>
+            {sessionPermissions.conditions.map((c, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: i < sessionPermissions.conditions.length - 1 ? 3 : 0 }}>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>{c.label}</span>
+                <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: c.dir === 'LONG' ? '#22c55e' : '#ef4444' }}>{c.pct}%</span>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>day closes {c.dir} · N={c.n}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {/* Fade Stacking — only show when approaching suppress threshold (≥4) */}
         {(() => {
           const activeList = setups?.list || [];
-          // Derive today's totals: active (ACTIVE) + resolved (RESOLVED/EXPIRED already in resolvedSetups)
           const longTotal  = activeList.filter(s => s.direction === 'LONG').length
                            + resolvedSetups.filter(s => s.direction === 'LONG'  || s.setup_type?.endsWith('_LONG')).length;
           const shortTotal = activeList.filter(s => s.direction === 'SHORT').length
                            + resolvedSetups.filter(s => s.direction === 'SHORT' || s.setup_type?.endsWith('_SHORT')).length;
           const MAX = 7;
-          if (longTotal + shortTotal < 2) return null;
+          if (Math.max(longTotal, shortTotal) < 4) return null;
           const barColor = (n) => n >= MAX ? '#ef4444' : n >= 4 ? '#f97316' : '#22c55e';
           const StackSide = ({ label, count }) => (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -19907,21 +19956,6 @@ function EdgeSectionsPanel() {
             </div>
           );
         })()}
-        {/* Permission Slips — session-level probability stats */}
-        {sessionPermissions?.conditions?.length > 0 && (
-          <div style={{ marginBottom: 8, padding: '8px 11px', background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 6 }}>
-            <div style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 5 }}>Permission Slip</div>
-            {sessionPermissions.conditions.map((c, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: i < sessionPermissions.conditions.length - 1 ? 3 : 0 }}>
-                <span style={{ fontSize: 12, color: '#94a3b8' }}>{c.label}</span>
-                <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: c.dir === 'LONG' ? '#22c55e' : '#ef4444' }}>{c.pct}%</span>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>day closes {c.dir} · N={c.n}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
         {setups?.list?.length > 0 ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8 }}>
             {[...setups.list].sort((a, b) => {
@@ -21911,7 +21945,7 @@ function DashboardCardGrid({ setCurrentView, nl, todayData, onComplete, onStateC
     return (
       <>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: tClr, animation: 'pulse 2s infinite', flexShrink: 0 }} />
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: tClr, animation: tState === 'ACTIVE' ? 'pulse 2s infinite' : 'none', flexShrink: 0 }} />
           <InfoTooltip text={tDesc}>
             <span style={{ fontSize: 14, fontWeight: 800, color: tClr, textTransform: 'uppercase', letterSpacing: '0.04em', cursor: 'help' }}>{(tSetup.type||'').replace(/_/g,' ')}</span>
           </InfoTooltip>
@@ -22923,7 +22957,12 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   });
 
   return (
-    <div style={{ padding: '12px 20px', fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
+    <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
+
+      {/* ── Market Pulse Bar — always on top ── */}
+      <MarketPulseBar />
+
+      <div style={{ padding: '12px 20px' }}>
       <div style={{ marginBottom: 12 }}>
         <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Dashboard</h2>
       </div>
@@ -22948,15 +22987,12 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
             )}
 
             {/* ── Main console grid: 3 fixed columns ── */}
-            {/* Col 1: session intel | Col 2: scripts + live read | Col 3: live setups */}
+            {/* Col 1: session intel | Col 2: analysis + newsfeed + briefs | Col 3: live setups */}
             {/* Breakpoints: ≥1400px = 3-col / 900–1399px = 2-col / <900px = 1-col */}
-            <div style={{ display: 'grid', gridTemplateColumns: '30fr 25fr 45fr', gap: 14, alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '22fr 28fr 50fr', gap: 14, alignItems: 'start' }}>
 
-              {/* Col 1: Live data — updates every bar */}
+              {/* Col 1: Live market data — updates every bar */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(8,12,24,0.7)', borderRadius: 8, padding: 10 }}>
-                <ErrorBoundary name="Live Scripts">
-                  <LiveScriptsCard date={todayET} />
-                </ErrorBoundary>
                 <ErrorBoundary name="Session Pulse">
                   <SessionPulseCard />
                 </ErrorBoundary>
@@ -22965,16 +23001,10 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </ErrorBoundary>
               </div>
 
-              {/* Col 2: Stats + Anticipatory */}
+              {/* Col 2: Stats + Patterns + Newsfeed + Briefs below the feed */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(12,18,36,0.65)', borderRadius: 8, padding: 10 }}>
                 <ErrorBoundary name="Day-of-Week Playbook">
                   <DayOfWeekPlaybookCard todayData={todayData} forecast={forecast} />
-                </ErrorBoundary>
-                <ErrorBoundary name="Scripts">
-                  <SessionForecastPanel date={todayET} section="scripts" />
-                </ErrorBoundary>
-                <ErrorBoundary name="Overnight Context">
-                  <OvernightContextStrip />
                 </ErrorBoundary>
                 <ErrorBoundary name="Session Signals">
                   <SessionBiasPanel />
@@ -22984,6 +23014,13 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </ErrorBoundary>
                 <ErrorBoundary name="Live Commentary">
                   <TeleprinterFeed maxHeight={280} />
+                </ErrorBoundary>
+                {/* ── Morning/afternoon scripts + overnight brief go below the newsfeed ── */}
+                <ErrorBoundary name="Scripts">
+                  <SessionForecastPanel date={todayET} section="scripts" />
+                </ErrorBoundary>
+                <ErrorBoundary name="Overnight Context">
+                  <OvernightContextStrip />
                 </ErrorBoundary>
               </div>
 
@@ -23233,6 +23270,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
           </CollapsibleSection>
         )}
       </div>
+      </div>{/* end padding wrapper */}
     </div>
   );
 }

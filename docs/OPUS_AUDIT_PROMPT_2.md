@@ -390,6 +390,10 @@ Same format as Audit 1 Part 5. After the structured sections: write anything els
 
 Be direct. The open observations section is the most valuable part.
 
+## Part 8 
+- 
+ -Design a self-calibrating architecture for this system. Specifically: (1) how should suppressedFades become data-driven rather than hardcoded — what table schema, what query, what threshold logic, what weekly job; (2) how should sizeMultiplier factor weights auto-update from active_setups outcomes — same pattern as DAY_TYPE_ALPHA but for the deltas themselves; (3) what's the right pipeline from Gemini pattern discovery → shadow validation → auto-promote to live. For each: design the data model, the promotion criteria, and the failure modes. The hard constraint is N≥20 and no static thresholds — any self-modification must be conservative by default.
+
 ---
 
 ## Deliverable: `scratch/opus_audit_2_results.md`

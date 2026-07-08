@@ -91,15 +91,7 @@ export default function SessionPulseCard() {
         </div>
       </div>
 
-      {/* 4 chips */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 6 }}>
-        <Chip label="Rotations" value={rots ?? '—'} color={rotColor} />
-        <Chip label="Volume" value={relVol ? `${relVol.ratio}x` : '—'} color={volColor} />
-        <Chip label="Delta" value={delta?.trend || '—'} color={deltaColor} />
-        <Chip label="Structure" value={microTrend?.replace('_',' ') || '—'} color={mtColor} />
-      </div>
-
-      {/* Exhaustion signal — shows when 3+ conditions stack */}
+      {/* Exhaustion signal — shows first when 3+ conditions stack */}
       {exhaustionScore >= 3 && (
         <div style={{ padding: '5px 8px', background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: 4, marginBottom: 6 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', marginBottom: 2 }}>
@@ -119,6 +111,14 @@ export default function SessionPulseCard() {
           </div>
         </div>
       )}
+
+      {/* 4 chips */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4, marginBottom: 6 }}>
+        <Chip label="Rotations" value={rots ?? '—'} color={rotColor} />
+        <Chip label="Volume" value={relVol ? `${relVol.ratio}x` : '—'} color={volColor} />
+        <Chip label="Delta" value={delta?.trend || '—'} color={deltaColor} />
+        <Chip label="Structure" value={microTrend?.replace('_',' ') || '—'} color={mtColor} />
+      </div>
 
       {/* Counter-move tracker */}
       {retraceDisplay && (

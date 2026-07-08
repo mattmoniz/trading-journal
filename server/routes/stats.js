@@ -783,4 +783,84 @@ router.post('/stats/combo-stats/rerun', async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /api/stats/capture-ratio — model P&L vs actual account P&L comparison
+router.get('/stats/capture-ratio', async (req, res) => {
+  try {
+    const r = await query(`
+      WITH ep_fills AS (
+        SELECT log_date, custom_fields->>'account' AS account, exit_time,
+          CASE WHEN custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\.[0-9]+)?$'
+          THEN (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric ELSE NULL END AS cum_pl
+        FROM trades
+        WHERE custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+          AND exit_time IS NOT NULL AND custom_fields->>'account' LIKE '%-PRO%'
+      ),
+      last_ep AS (
+        SELECT DISTINCT ON (log_date, account) log_date, account, cum_pl
+        FROM ep_fills WHERE cum_pl IS NOT NULL ORDER BY log_date, account, exit_time DESC
+      ),
+      daily_per_acct AS (
+        SELECT log_date,
+          cum_pl - LAG(cum_pl) OVER (PARTITION BY account ORDER BY log_date) AS session_pnl
+        FROM last_ep
+      ),
+      actual AS (
+        SELECT log_date AS trade_date, SUM(session_pnl) AS actual_pnl
+        FROM daily_per_acct WHERE session_pnl IS NOT NULL GROUP BY log_date
+      ),
+      model AS (
+        SELECT trade_date,
+          SUM(actual_pnl) AS model_pnl,
+          COUNT(*) AS n_setups,
+          SUM(CASE WHEN resolution='TARGET_HIT' THEN 1 ELSE 0 END) AS model_wins,
+          SUM(CASE WHEN resolution='STOP_HIT' THEN 1 ELSE 0 END) AS model_losses
+        FROM active_setups
+        WHERE status='RESOLVED' AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+        GROUP BY trade_date
+      ),
+      combined AS (
+        SELECT m.trade_date, m.model_pnl, a.actual_pnl,
+          a.actual_pnl - m.model_pnl AS gap,
+          m.n_setups, m.model_wins, m.model_losses,
+          al.day_type
+        FROM model m
+        JOIN actual a ON a.trade_date = m.trade_date
+        LEFT JOIN acd_daily_log al ON al.trade_date = m.trade_date
+      )
+      SELECT
+        trade_date::text,
+        ROUND(model_pnl, 0)::int AS model_pnl,
+        ROUND(actual_pnl, 0)::int AS actual_pnl,
+        ROUND(gap, 0)::int AS gap,
+        n_setups::int,
+        model_wins::int,
+        model_losses::int,
+        day_type,
+        -- flag days where actual is suspiciously near a fixed threshold (DLL likely hit)
+        CASE WHEN actual_pnl BETWEEN -500 AND -300 AND model_pnl > 200 THEN true ELSE false END AS likely_dll_hit
+      FROM combined
+      ORDER BY trade_date DESC
+    `);
+
+    const rows = r.rows;
+    const modelTotal = rows.reduce((s, d) => s + (d.model_pnl || 0), 0);
+    const actualTotal = rows.reduce((s, d) => s + (d.actual_pnl || 0), 0);
+    const captureRatio = modelTotal !== 0 ? actualTotal / modelTotal : null;
+    const dllHitDays = rows.filter(d => d.likely_dll_hit).length;
+    const bigDivergenceDays = rows.filter(d => d.model_pnl > 200 && d.actual_pnl < -200).length;
+
+    res.json({
+      summary: {
+        trading_days: rows.length,
+        model_total: modelTotal,
+        actual_total: actualTotal,
+        capture_ratio: captureRatio !== null ? Math.round(captureRatio * 1000) / 10 : null,
+        dll_hit_days: dllHitDays,
+        big_divergence_days: bigDivergenceDays,
+      },
+      by_day: rows,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 export default router;

@@ -1401,7 +1401,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
       const stop = s.stop_level != null ? Math.round(s.stop_level) : null;
       const t1 = s.t1_level != null ? Math.round(s.t1_level) : null;
       const levels = [`Entry ${entry}`, stop && `Stop ${stop}`, t1 && `T1 ${t1}`].filter(Boolean).join(' · ');
-      const firedTime = s.fired_at ? new Date(s.fired_at).toLocaleTimeString('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' }) : '';
+      const firedTime = s.fired_at ? `${String(new Date(s.fired_at).getUTCHours()).padStart(2,'0')}:${String(new Date(s.fired_at).getUTCMinutes()).padStart(2,'0')} ET` : '';
       const prefix = isConfirmation ? 'CONFIRMS: ' : isResolved ? `${s.resolution === 'TARGET_HIT' ? 'WON' : 'LOST'}: ` : '';
       alerts.push({
         id: `setup-${s.setup_type}`,

@@ -233,12 +233,12 @@ export default function LivePlaybookCard({ date }) {
           if (rows.length > 0) {
             const last = rows[0];
             setAiResponse(last.ai_response);
-            setAiMeta({ cost_usd: last.cost_usd, conversation_id: last.id });
+            setAiMeta({ cost_usd: last.cost_usd != null ? parseFloat(last.cost_usd) : null, conversation_id: last.id, readAt: last.triggered_at });
           }
         }
       }).catch(() => {});
     fetch(`${API_URL}/playbook/cost-summary`)
-      .then(r => r.json()).then(d => setMonthlyCost(d.month_total_usd)).catch(() => {});
+      .then(r => r.json()).then(d => setMonthlyCost(d.month_total_usd != null ? parseFloat(d.month_total_usd) : null)).catch(() => {});
   };
 
   useEffect(() => {
@@ -267,8 +267,8 @@ export default function LivePlaybookCard({ date }) {
       const data = await r.json();
       if (data.error) throw new Error(data.error);
       setAiResponse(data.response);
-      setAiMeta({ cost_usd: data.cost_usd, monthly_total_usd: data.monthly_total_usd, conversation_id: data.conversation_id });
-      setMonthlyCost(data.monthly_total_usd);
+      setAiMeta({ cost_usd: data.cost_usd != null ? parseFloat(data.cost_usd) : null, conversation_id: data.conversation_id, readAt: new Date().toISOString() });
+      setMonthlyCost(data.monthly_total_usd != null ? parseFloat(data.monthly_total_usd) : null);
       loadConversations();
     } catch (e) {
       setAiError(e.message);
@@ -288,7 +288,7 @@ export default function LivePlaybookCard({ date }) {
 
   if (!p && !aiResponse) return (
     <div style={{ padding: '8px 12px', background: biasBgFallback, border: `1px solid ${biasBorderFallback}`, borderRadius: 6 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Live Playbook · Ask Claude</div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>Live Playbook · Ask Claude</div>
       <IntentButtons onTrigger={triggerAssess} loading={aiLoading} />
       <textarea value={tapeContext} onChange={e => setTapeContext(e.target.value)} placeholder="What's the tape doing? (optional)" rows={2} style={{ display:'block', width:'100%', marginTop:6, padding:'5px 8px', background:'rgba(15,23,42,0.6)', border:'1px solid rgba(51,65,85,0.5)', borderRadius:4, color:'#94a3b8', fontSize:11, resize:'vertical', outline:'none', boxSizing:'border-box', fontFamily:'inherit' }} />
       {aiError && <div style={{ fontSize: 11, color: '#f87171', marginTop: 6 }}>{aiError}</div>}
@@ -301,7 +301,7 @@ export default function LivePlaybookCard({ date }) {
     return (
       <div style={{ padding: '10px 12px', background: 'rgba(15,23,42,0.4)', border: '1px solid rgba(51,65,85,0.3)', borderRadius: 6, fontSize: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Live Playbook · Ask Claude</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Live Playbook · Ask Claude</span>
           {monthlyCost != null && <span style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>${monthlyCost.toFixed(3)}/mo</span>}
         </div>
         <IntentButtons onTrigger={triggerAssess} loading={aiLoading} />
@@ -336,7 +336,7 @@ export default function LivePlaybookCard({ date }) {
 
       {/* Header — tiny, just label + cost */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Live Playbook</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Live Playbook</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {monthlyCost != null && (
             <span style={{ fontSize: 10, color: '#334155', fontFamily: 'monospace' }}>${monthlyCost.toFixed(3)}/mo</span>
@@ -373,19 +373,26 @@ export default function LivePlaybookCard({ date }) {
 
       {/* ── AI RESPONSE (manual trigger result) ── */}
       {aiResponse && (
-        <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(15,23,42,0.7)', border: '1px solid rgba(56,189,248,0.25)', borderLeft: '3px solid #38bdf8', borderRadius: 4 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Claude's Read</span>
+        <div style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(15,23,42,0.7)', border: '1px solid rgba(56,189,248,0.25)', borderLeft: '3px solid #38bdf8', borderRadius: 4 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Claude's Read</span>
+              {aiMeta?.readAt && (
+                <span style={{ fontSize: 11, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+                  {new Date(aiMeta.readAt).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' }).replace(',', '')}
+                </span>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {aiMeta?.cost_usd && <span style={{ fontSize: 10, color: '#475569', fontFamily: 'monospace' }}>${parseFloat(aiMeta.cost_usd).toFixed(4)}</span>}
+              {aiMeta?.cost_usd && <span style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace' }}>${parseFloat(aiMeta.cost_usd).toFixed(4)}</span>}
               {conversations.length > 1 && (
-                <button onClick={() => setShowHistory(h => !h)} style={{ fontSize: 10, color: '#475569', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
+                <button onClick={() => setShowHistory(h => !h)} style={{ fontSize: 11, color: '#94a3b8', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}>
                   {showHistory ? 'hide' : `+${conversations.length - 1} earlier`}
                 </button>
               )}
             </div>
           </div>
-          <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{aiResponse}</div>
+          <div style={{ fontSize: 13, color: '#f1f5f9', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{aiResponse}</div>
         </div>
       )}
 
@@ -395,10 +402,10 @@ export default function LivePlaybookCard({ date }) {
           {conversations.slice(1).map((c, i) => (
             <div key={c.id} style={{ marginBottom: 6, padding: '6px 8px', background: 'rgba(15,23,42,0.4)', borderRadius: 4, border: '1px solid rgba(51,65,85,0.3)' }}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: intentColors[c.intent] || '#94a3b8' }}>{c.intent}</span>
-                <span style={{ fontSize: 10, color: '#475569' }}>{new Date(c.triggered_at).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: intentColors[c.intent] || '#94a3b8' }}>{c.intent}</span>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date(c.triggered_at).toLocaleTimeString('en-US',{timeZone:'America/New_York',hour:'2-digit',minute:'2-digit'})}</span>
               </div>
-              <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.5 }}>{c.ai_response.slice(0, 200)}…</div>
+              <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.55 }}>{c.ai_response.slice(0, 200)}…</div>
             </div>
           ))}
         </div>
@@ -407,7 +414,7 @@ export default function LivePlaybookCard({ date }) {
       {/* ── DIVIDER before computed quick read ── */}
       {p && aiResponse && (
         <div style={{ margin: '10px 0 6px', borderTop: '1px solid rgba(51,65,85,0.2)', paddingTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 10, color: '#334155', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Auto read · {p.bias} {p.confidence}%</span>
+          <span style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Auto read · {p.bias} {p.confidence}%</span>
         </div>
       )}
 

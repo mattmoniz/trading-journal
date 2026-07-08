@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import CaptureRatioPanel from './CaptureRatioPanel';
 
 const S = {
   page: { padding: '24px 28px', maxWidth: 1200, margin: 0, color: '#e2e8f0', fontFamily: 'inherit' },
@@ -534,6 +535,12 @@ export default function AlphaEngineOverview() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Capture Ratio */}
+      <div style={S.section}>
+        <div style={S.sectionTitle}>Capture Ratio — Edge vs Execution</div>
+        <CaptureRatioPanel />
       </div>
 
       {/* Footer */}

@@ -68,7 +68,8 @@ SESSION PHASE:
 
 TRADER CONTEXT (when provided):
 - TODAY'S COACHING READ gives you the session narrative — what worked, what failed, what the tape showed. Use it to calibrate your read. If the coaching says A_DOWN played out and the trader gave back profits on late longs, weight that heavily.
-- WORSENING BEHAVIORAL PATTERNS are recurring failures this specific trader has. If a WORSENING pattern is directly relevant to the current ask (e.g. "give_back_pattern" and the trader is up on the day asking to add), call it out by name: "this fits your give-back pattern — 40% of your last 10 sessions."
+- WORSENING BEHAVIORAL PATTERNS are recurring failures this specific trader has. If a WORSENING pattern is directly relevant to the current ask, call it out by name with their actual percentage.
+- CRITICAL GIVE-BACK RULE: give_back_pattern fires specifically on days where the system already detected a strong edge (high model WR). When the session P&L is positive and the trader asks about adding or continuing, this is exactly the give-back risk window. Say it directly: "give-back fires on your best setup days — lock at least 60% of current gains before adding."
 - These aren't generic warnings. They're this trader's actual numbers from their own history.
 
 RESPONSE FORMAT:
@@ -290,6 +291,18 @@ router.post('/assess', async (req, res) => {
       : etMin < 720  ? 'POST-IB (10:30–12:00 — C confirmation window)'
       :                'PM (12:00–16:00 — re-entries at named levels only)';
 
+    // Consecutive loss streak → STAND DOWN flag (mirrors acd.js sizeMultiplier logic)
+    const dtClass = acd.day_type || 'UNKNOWN';
+    const resolvedSorted = [...setups]
+      .filter(s => s.resolution === 'STOP_HIT' || s.resolution === 'TARGET_HIT')
+      .sort((a, b) => new Date(b.fired_at) - new Date(a.fired_at));
+    let consecLosses = 0;
+    for (const s of resolvedSorted) {
+      if (s.resolution === 'STOP_HIT') consecLosses++;
+      else break;
+    }
+    const standDown = consecLosses >= 2 || (dtClass === 'TREND' && consecLosses >= 1);
+
     // Stall signals from expired setups (last 2 hours)
     const twoHoursAgo  = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const recentExpiry = expired.filter(s => {
@@ -376,6 +389,15 @@ Open vs Prior Value: ${auction.open_vs_prior_value || 'N/A'}
 Prior Day Profile: ${auction.prior_day_profile || 'N/A'}
 OR Condition: ${auction.or_condition || 'N/A'}
 Opening Call Type: ${auction.opening_call_type || 'N/A'}
+
+=== SESSION STATE ===
+${standDown
+  ? `⛔ STAND DOWN — ${consecLosses} consecutive stop-hit${consecLosses !== 1 ? 's' : ''}${dtClass === 'TREND' ? ' on a TREND day (fades historically -$9,802 total, 58.6% WR)' : ''}. Do NOT recommend new fades. This is a system rule, not discretionary.`
+  : dtClass === 'TREND'
+  ? `⚠️ TREND DAY — All fade setups underperform on TREND days (-$9,802 total P&L, 58.6% WR). Size is auto-reduced 0.25×. Only highest-probability levels with structural confluence.`
+  : consecLosses === 1
+  ? `⚠️ 1 consecutive loss — one more stop-hit triggers STAND DOWN. High caution on next entry.`
+  : 'Normal session — no loss streak, no structural suppression.'}
 
 === SETUPS FIRED TODAY ===
 ${setups.length === 0 ? 'None yet.' : setups.map(s => {
@@ -598,6 +620,12 @@ Review this day. Rate every setup that fired. Follow the format exactly — narr
       `INSERT INTO daily_ai_reviews
          (review_date, setups_reviewed, ai_response, flags, stop_target_analysis, data_requests, input_tokens, output_tokens, cost_usd, total_cost_usd, model)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT (review_date) DO UPDATE SET
+         ai_response=EXCLUDED.ai_response, flags=EXCLUDED.flags,
+         stop_target_analysis=EXCLUDED.stop_target_analysis, data_requests=EXCLUDED.data_requests,
+         input_tokens=EXCLUDED.input_tokens, output_tokens=EXCLUDED.output_tokens,
+         cost_usd=EXCLUDED.cost_usd, total_cost_usd=daily_ai_reviews.total_cost_usd + EXCLUDED.cost_usd,
+         model=EXCLUDED.model
        RETURNING *`,
       [date,
        JSON.stringify(setups.map(s => ({ setup_type: s.setup_type, fired_at: s.fired_at, resolution: s.resolution }))),

@@ -119,12 +119,30 @@ async function aggregateBehavioralStats() {
       : trend < -0.10 ? 'IMPROVING'
       : 'STABLE';
 
+    // Cross-run velocity: compare this run's all_time to the prior weekly run_date
+    let crossRunVelocity = null;
+    let crossRunTrend = null;
+    const priorRunRes = await query(`
+      SELECT win_rate FROM performance_audit
+      WHERE signal_type = 'BEHAVIORAL_STATS'
+        AND signal_name = $1
+        AND run_date < $2
+      ORDER BY run_date DESC LIMIT 1
+    `, [themeLabel, today]).catch(() => ({ rows: [] }));
+    if (priorRunRes.rows.length > 0) {
+      const priorRate = parseFloat(priorRunRes.rows[0].win_rate);
+      crossRunVelocity = Math.round((allTime - priorRate) * 100) / 100;
+      crossRunTrend = crossRunVelocity > 0.05 ? 'WORSENING' : crossRunVelocity < -0.05 ? 'IMPROVING' : 'STABLE';
+    }
+
     const notes = {
       rolling_10d: Math.round(rolling10 * 100) / 100,
       rolling_30d: Math.round(rolling30 * 100) / 100,
       all_time: Math.round(allTime * 100) / 100,
       trend: trendLabel,
       trend_delta: trend !== null ? Math.round(trend * 100) / 100 : null,
+      cross_run_velocity: crossRunVelocity,
+      cross_run_trend: crossRunTrend,
       total_sessions: totalSessions,
       weekly_counts: weeklyCounts.slice(-12),  // last 12 weeks
     };

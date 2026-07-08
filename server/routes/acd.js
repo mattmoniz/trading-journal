@@ -3549,10 +3549,12 @@ export default function createACDRouter(io) {
         }
       }
 
-      // IB setup BALANCE suppression — replay_ib_setups.js 2026-07-01 (N=397 sessions):
-      // TREND 71.7% WR (N=46), TURBULENT 70.0% (N=40) → keep.
-      // BALANCE 51.9% (N=106) → below breakeven after commission → suppress.
+      // IB setup day-type precision gate — Opus Audit 2 2026-07-07 (N per cell ≥18):
+      // IB_BULLISH: TREND 75.0% WR +$16 EV N=32 ✓ | TURBULENT 55.0% WR -$45 EV N=20 ✗ | BALANCE 58.5% -$47 ✗
+      // IB_BEARISH: TURBULENT 74.2% WR +$65 EV N=31 ✓ | TREND 55.6% WR -$35 EV N=18 ✗ | BALANCE 49.0% -$18 ✗
       if (dtClass === 'BALANCE' && ibSetup) ibSetup = null;
+      if (dtClass === 'TURBULENT' && ibSetup?.type === 'IB_BULLISH') ibSetup = null;
+      if (dtClass === 'TREND' && ibSetup?.type === 'IB_BEARISH') ibSetup = null;
 
       // Morning volatility regime — used to gate C_STANDALONE in HIGH-VOL-CHOP (0% WR confirmed, regime backtest 2026-06-30)
       const regimeResult = await computeLiveVolatilityRegime().catch(() => ({ regime: null }));
@@ -3898,6 +3900,133 @@ export default function createACDRouter(io) {
         : { rows: [{ streak_days: '0' }] };
       const _lfRegimePersist = parseInt(_lfRegimePersistQ.rows[0]?.streak_days ?? '0') >= 2;
 
+      // Overnight gap: pre-9:30 range vs rolling 60-session p33.
+      // Opus audit 2026-07-07: small gaps (< p33) = 60.8% WR, -$27 EV (N=332) — quiet consolidation kills fades.
+      // Threshold is rolling p33 (no hardcoded number per CLAUDE.md hard rule).
+      const _lfOnGapQ = await query(`
+        WITH today_on AS (
+          SELECT MAX(high)::float - MIN(low)::float AS on_range
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date=$1
+            AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
+                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+        ),
+        prior_on AS (
+          SELECT MAX(high) - MIN(low) AS on_range
+          FROM price_bars_primary
+          WHERE symbol='NQ'
+            AND ts::date IN (
+              SELECT DISTINCT ts::date FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date < $1
+              ORDER BY ts::date DESC LIMIT 60
+            )
+            AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
+                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+          GROUP BY ts::date
+        )
+        SELECT
+          (SELECT on_range FROM today_on) AS today_on_range,
+          PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY on_range) AS p33_60d
+        FROM prior_on
+      `, [todayET]).catch(() => ({ rows: [{}] }));
+      const _lfTodayOnRange = _lfOnGapQ.rows[0]?.today_on_range ?? null;
+      const _lfOnRangeP33   = _lfOnGapQ.rows[0]?.p33_60d ?? null;
+      const _lfSmallGap = _lfTodayOnRange != null && _lfOnRangeP33 != null && _lfTodayOnRange < _lfOnRangeP33;
+
+      // Session delta: cumulative (ask_vol - bid_vol) from RTH open to now.
+      // Backtest 2026-07-08 (N=4,354 fades): neutral |Δ|<p25 = 57.9% WR -$3 EV; high |Δ|>p75 = 69.3% WR +$28 EV.
+      // Against-flow is slightly better than with-flow overall (overextension reversal logic) — only magnitude matters.
+      const _lfSessionDelta = allRthBarsRow.rows.reduce((sum, b) => sum + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
+      const _lfAbsDelta = Math.abs(_lfSessionDelta);
+      const _cachedDeltaPerc = getCached(todayET, 'lfDeltaPerc');
+      let _lfDeltaP25 = _cachedDeltaPerc?.p25 ?? null;
+      let _lfDeltaP75 = _cachedDeltaPerc?.p75 ?? null;
+      if (_lfDeltaP25 == null) {
+        const _lfDeltaPercQ = await query(`
+          WITH session_deltas AS (
+            SELECT ts::date AS bar_date,
+              SUM(COALESCE(ask_volume,0) - COALESCE(bid_volume,0)) AS net_delta
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND ts::date IN (
+                SELECT DISTINCT ts::date FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date < $1
+                ORDER BY ts::date DESC LIMIT 60
+              )
+              AND EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
+                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') BETWEEN 570 AND 959
+            GROUP BY ts::date
+          )
+          SELECT
+            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(net_delta)) AS p25,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ABS(net_delta)) AS p75
+          FROM session_deltas
+        `, [todayET]).catch(() => ({ rows: [{}] }));
+        _lfDeltaP25 = _lfDeltaPercQ.rows[0]?.p25 ?? null;
+        _lfDeltaP75 = _lfDeltaPercQ.rows[0]?.p75 ?? null;
+        if (_lfDeltaP25 != null) setCached(todayET, 'lfDeltaPerc', { p25: _lfDeltaP25, p75: _lfDeltaP75 });
+      }
+      const _lfDeltaNeutral = _lfDeltaP25 != null && _lfAbsDelta < _lfDeltaP25;
+      const _lfDeltaHigh    = _lfDeltaP75 != null && _lfAbsDelta > _lfDeltaP75;
+
+      // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
+      // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
+      // Score distribution: 0→58.8% WR, 1→65.4%, 2→71.8%, 3→78.8% (N=80 CI=[73.8%,85%])
+      const _pulseBars = allRthBarsRow.rows;
+
+      // Per-minute vol baseline (90-day, cached per day)
+      let _pulseVolBaseline = getCached(todayET, 'pulseVolBaseline');
+      if (!_pulseVolBaseline) {
+        const _pvbQ = await query(`
+          SELECT (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                  EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York'))::int AS et_min,
+                 AVG((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS avg_vol,
+                 STDDEV((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS std_vol
+          FROM price_bars_primary
+          WHERE symbol='NQ'
+            AND ts::date >= $1::date - 90 AND ts::date < $1
+            AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                 EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 959
+          GROUP BY 1
+        `, [todayET]).catch(() => ({ rows: [] }));
+        _pulseVolBaseline = {};
+        for (const r of _pvbQ.rows) _pulseVolBaseline[r.et_min] = { avg: +r.avg_vol, std: +(r.std_vol || 1) };
+        if (Object.keys(_pulseVolBaseline).length > 0) setCached(todayET, 'pulseVolBaseline', _pulseVolBaseline);
+      }
+
+      // Vol sigma: max sigma across last 3 bars
+      const _pulseLast3 = _pulseBars.slice(-3);
+      let _pulseVolSigma = null;
+      for (const b of _pulseLast3) {
+        const bl = _pulseVolBaseline?.[b.et_min];
+        if (!bl || bl.avg <= 0) continue;
+        const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
+        const sig = (vol - bl.avg) / bl.std;
+        if (_pulseVolSigma == null || sig > _pulseVolSigma) _pulseVolSigma = sig;
+      }
+      const _pulseHighVol = _pulseVolSigma != null && _pulseVolSigma >= 2.5;
+
+      // Delta 15-bar (direction computed per-setup inside IIFE)
+      const _pulseDelta15 = _pulseBars.slice(-15).reduce((s, b) => s + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
+
+      // Micro structure: last 8 bars strict higher-lows OR lower-highs
+      const _pulseStruct = (() => {
+        const last8 = _pulseBars.slice(-8);
+        if (last8.length < 2) return false;
+        const hl = last8.every((b, i) => i === 0 || b.low  >= last8[i - 1].low);
+        const lh = last8.every((b, i) => i === 0 || b.high <= last8[i - 1].high);
+        return hl || lh;
+      })();
+
+      // Rotations ≤1: full session close sign-changes (rarely fires — tiebreaker)
+      let _pulseRots = 0;
+      for (let i = 2; i < _pulseBars.length; i++) {
+        const d1 = Math.sign(_pulseBars[i].close   - _pulseBars[i - 1].close);
+        const d0 = Math.sign(_pulseBars[i - 1].close - _pulseBars[i - 2].close);
+        if (d1 !== 0 && d0 !== 0 && d1 !== d0) _pulseRots++;
+      }
+      const _pulseLowRots = _pulseRots <= 1;
+
       // Cascade breaker: detect trend-running-over-fades regime (Opus audit 2026-07-07).
       // Worst 5 days each had 17–18 STOP_HITs across 20–29 setups — all different levels cascading.
       // Distribution (N=1564 stop-out events): normal avg=1.84 prior same-day stops in 60min, std=2.16.
@@ -3966,12 +4095,12 @@ export default function createACDRouter(io) {
 
         // ── Unified Level Fade Setups ──
         // All KEEP levels from the system backtest. 90pt stop, 40pt target.
-        // AM only (before noon). First touch only (tracked via active_setups dedup).
-        // Stats from 180-day system backtest.
+        // RTH-wide detection (9:30 AM – 4:00 PM). First touch only (tracked via active_setups dedup).
+        // Stats from 180-day system backtest (originally AM-only, now extended to full RTH).
         // Monday-specific rules: start at 10:30, PD levels only, tighter stops
         const isMonday = new Date(todayET + 'T12:00:00').getDay() === 1;
         const mondayGate = isMonday ? etMinNow >= 630 : true; // Mondays: wait for IB close (10:30)
-        if (last5.length >= 3 && etMinNow < 720 && mondayGate) {
+        if (last5.length >= 3 && etMinNow < 960 && mondayGate) {
           const approachDir = last5[0].close < currentPrice ? 'FROM_BELOW' : 'FROM_ABOVE';
           const STOP = isMonday ? 60 : 90;
           const TARGET = isMonday ? 30 : 40;
@@ -4513,6 +4642,28 @@ export default function createACDRouter(io) {
                 // Regime Persistence: TURBULENT 3-day streak +8.89pp (N=157, z=3.45). Skip on NEUTRAL NL30.
                 if (_lfRegimePersist && dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL')
                   mult = Math.min(mult + 0.10, 1.5);
+                // TREND day: all fades structurally underperform (58.6% WR -$9,802 total, Opus audit 2026-07-07).
+                // Size down — don't block entirely (WITH-trend fades can still be marginal), but penalize.
+                if (dtClass === 'TREND') mult = Math.max(mult - 0.25, 0.25);
+                // Small overnight gap: quiet consolidation days = 60.8% WR -$27 EV (N=332, Opus audit 2026-07-07).
+                // Threshold: rolling p33 of 60-session overnight range (no hardcoded number).
+                if (_lfSmallGap) mult = Math.max(mult - 0.15, 0.25);
+                // Session delta magnitude (backtest 2026-07-08, N=4354):
+                // Neutral |Δ|<p25 = 57.9% WR -$3 EV — quiet session kills fade resolution.
+                // High |Δ|>p75 = 69.3% WR +$28 EV — strong conviction, clean reversals.
+                // Thresholds: rolling p25/p75 of 60-session |cumulative delta| (no hardcoded numbers).
+                if (_lfDeltaNeutral) mult = Math.max(mult - 0.10, 0.25);
+                if (_lfDeltaHigh)    mult = Math.min(mult + 0.10, 1.5);
+                // Pulse score: session-state at signal time (MC-calibrated + day-type conditioned 2026-07-08)
+                // BALANCE=full matrix; TURBULENT: score-0 penalty off (N=335, EV=+$32) + score-3 boost off
+                // (N=21, EV=-$47 — "perfect conditions" on volatile days = climax chasing not conviction);
+                // TREND: score-2 boost off (N=163, EV=-$11 — fades structurally weak on trend days).
+                // Validated weekly via backtest_pulse_score.mjs → performance_audit PULSE_SCORE_AUDIT rows.
+                const _psDeltaDiv  = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
+                const _pulseScore  = (_pulseHighVol ? 1 : 0) + (_psDeltaDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
+                if      (_pulseScore >= 3 && dtClass !== 'TURBULENT')   mult = Math.min(mult + 0.20, 1.5);
+                else if (_pulseScore >= 2 && dtClass !== 'TREND')       mult = Math.min(mult + 0.10, 1.5);
+                else if (_pulseScore === 0 && dtClass !== 'TURBULENT')  mult = Math.max(mult - 0.10, 0.25);
                 // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
                 // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
                 if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
@@ -4537,6 +4688,17 @@ export default function createACDRouter(io) {
               } : null,
               streakWarn: lfConsecLosses >= 2 ? { losses: lfConsecLosses } : null,
               streakBoost: lfConsecWins >= 2 ? { wins: lfConsecWins } : null,
+              // STAND DOWN: filter out (don't just size down) when conditions are clearly -EV.
+              // Opus audit 2026-07-07: after-loss 31.6% WR, TREND day 58.6% WR, TREND+loss compounding.
+              standDown: lfConsecLosses >= 2 || (dtClass === 'TREND' && lfConsecLosses >= 1),
+              smallGapDay: _lfSmallGap,
+              sessionDeltaNeutral: _lfDeltaNeutral,
+              sessionDeltaHigh: _lfDeltaHigh,
+              pulseScore: (() => {
+                const dDiv = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
+                return (_pulseHighVol ? 1 : 0) + (dDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
+              })(),
+              pulseVolSigma: _pulseVolSigma != null ? +_pulseVolSigma.toFixed(2) : null,
               confluencePairPartner,
               openVsPriorValue: _lfOvOpen,
               buyersAtLevel,
@@ -5591,11 +5753,29 @@ export default function createACDRouter(io) {
       const dates = [todayET];
       if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
       const r = await query(`
-        SELECT *,
-          TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
-          TO_CHAR(expires_at, 'YYYY-MM-DD HH24:MI:SS') as expires_at_str,
-          TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
-        FROM active_setups WHERE trade_date = ANY($1) ORDER BY fired_at
+        SELECT s.*,
+          TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
+          TO_CHAR(s.expires_at, 'YYYY-MM-DD HH24:MI:SS') as expires_at_str,
+          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str,
+          b.body_pct, b.bar_dir
+        FROM active_setups s
+        LEFT JOIN LATERAL (
+          SELECT
+            CASE WHEN (pb.high - pb.low) > 0
+              THEN ROUND(ABS(pb.close - pb.open) / (pb.high - pb.low) * 100)::int
+              ELSE NULL END AS body_pct,
+            CASE WHEN pb.close > pb.open THEN 'UP'
+                 WHEN pb.close < pb.open THEN 'DOWN' ELSE 'FLAT' END AS bar_dir
+          FROM price_bars pb
+          WHERE pb.symbol = 'NQ'
+            AND pb.ts::date = s.fired_at::date
+            AND EXTRACT(HOUR   FROM pb.ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+              = EXTRACT(HOUR   FROM s.fired_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+            AND EXTRACT(MINUTE FROM pb.ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+              = EXTRACT(MINUTE FROM s.fired_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
+          ORDER BY pb.ts LIMIT 1
+        ) b ON s.fired_at IS NOT NULL
+        WHERE s.trade_date = ANY($1) ORDER BY s.fired_at
       `, [dates]);
       res.json({ setups: r.rows });
     } catch(e) { res.status(500).json({ error: e.message }); }
@@ -6716,6 +6896,306 @@ export default function createACDRouter(io) {
     } catch (err) {
       console.error('Unified audit error:', err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ── Market Pulse — lightweight live state for MarketPulseBar ───────────────
+  // Returns: currentPrice, session range, cumulative delta, RVol, engagement verdict.
+  // Polled every 30s during RTH. Range/delta percentiles cached daily.
+  router.get('/market/pulse', async (req, res) => {
+    try {
+      const now = new Date();
+      const etOffset = -4; // EDT
+      const etNow = new Date(now.getTime() + etOffset * 3600000);
+      const todayET = etNow.toISOString().split('T')[0];
+      const etHour = etNow.getUTCHours();
+      const etMin  = etNow.getUTCMinutes();
+      const etMinTotal = etHour * 60 + etMin;
+      const isRTH = etMinTotal >= 570 && etMinTotal < 960 &&
+        etNow.getUTCDay() >= 1 && etNow.getUTCDay() <= 5;
+
+      // Current price + session bars + live setup + ACD state
+      const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
+        query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
+               WHERE symbol='NQ' AND ts::date=$1
+               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
+        query(`SELECT close::float, COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int,
+               (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min
+               FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+               ORDER BY ts`, [todayET]),
+        query(`SELECT setup_type, status FROM active_setups
+               WHERE trade_date=$1 AND status IN ('PENDING','ACTIVE','ACTIVE_MANAGING')
+               ORDER BY fired_at DESC LIMIT 1`, [todayET]),
+        query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, day_type
+               FROM acd_daily_log WHERE trade_date=$1 LIMIT 1`, [todayET]),
+      ]);
+
+      const currentPrice = priceQ.rows[0]?.close ?? null;
+      const sessionHigh = sessionQ.rows[0]?.h ?? null;
+      const sessionLow  = sessionQ.rows[0]?.l ?? null;
+      const bars = rthBarsQ.rows;
+      const sessionOpen = bars[0]?.close ?? null;
+      const sessionRange = sessionHigh && sessionLow ? +(sessionHigh - sessionLow).toFixed(1) : null;
+      const ptsFromOpen = currentPrice && sessionOpen ? +(currentPrice - sessionOpen).toFixed(1) : null;
+
+      // Cumulative delta
+      const sessionDelta = bars.reduce((s, b) => s + (b.ask_vol - b.bid_vol), 0);
+      const sessionVolume = bars.reduce((s, b) => s + (b.volume || 0), 0);
+
+      // Cached daily: range percentiles + delta percentiles + avg volume
+      let rangeP25 = null, rangeP50 = null, rangeP75 = null;
+      let deltaP25 = null, deltaP75 = null;
+      let avgSessionVol = null;
+
+      const cached = getCached(todayET, 'marketPulse');
+      if (cached) {
+        ({ rangeP25, rangeP50, rangeP75, deltaP25, deltaP75, avgSessionVol } = cached);
+      } else {
+        const [rangeQ, deltaQ, volQ] = await Promise.all([
+          query(`
+            WITH daily AS (
+              SELECT ts::date as d, MAX(high)-MIN(low) as rng
+              FROM price_bars_primary WHERE symbol='NQ'
+                AND ts::date < $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
+              GROUP BY 1 HAVING COUNT(*)>200
+            )
+            SELECT
+              PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY rng)::float as p25,
+              PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY rng)::float as p50,
+              PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY rng)::float as p75
+            FROM daily`, [todayET]),
+          query(`
+            WITH daily AS (
+              SELECT ts::date as d,
+                ABS(SUM(COALESCE(ask_volume,0)-COALESCE(bid_volume,0)))::float as abs_delta
+              FROM price_bars_primary WHERE symbol='NQ'
+                AND ts::date < $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
+              GROUP BY 1 HAVING COUNT(*)>200
+            )
+            SELECT
+              PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY abs_delta)::float as p25,
+              PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY abs_delta)::float as p75
+            FROM daily`, [todayET]),
+          query(`
+            WITH daily AS (
+              SELECT ts::date as d, SUM(volume)::float as total_vol
+              FROM price_bars_primary WHERE symbol='NQ'
+                AND ts::date < $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                AND EXTRACT(DOW FROM ts) BETWEEN 1 AND 5
+              GROUP BY 1 HAVING COUNT(*)>200
+              ORDER BY d DESC LIMIT 20
+            )
+            SELECT AVG(total_vol)::float as avg FROM daily`, [todayET]),
+        ]);
+        rangeP25 = rangeQ.rows[0]?.p25 ?? null;
+        rangeP50 = rangeQ.rows[0]?.p50 ?? null;
+        rangeP75 = rangeQ.rows[0]?.p75 ?? null;
+        deltaP25 = deltaQ.rows[0]?.p25 ?? null;
+        deltaP75 = deltaQ.rows[0]?.p75 ?? null;
+        avgSessionVol = volQ.rows[0]?.avg ?? null;
+        setCached(todayET, 'marketPulse', { rangeP25, rangeP50, rangeP75, deltaP25, deltaP75, avgSessionVol });
+      }
+
+      // Derived signals
+      const absDelta = Math.abs(sessionDelta);
+      const deltaSign = sessionDelta > 0 ? 'BUYING' : sessionDelta < 0 ? 'SELLING' : 'NEUTRAL';
+      let deltaClass = 'NORMAL';
+      if (deltaP25 != null && absDelta < deltaP25) deltaClass = 'QUIET';
+      else if (deltaP75 != null && absDelta > deltaP75) deltaClass = 'HIGH';
+
+      // Range extension: where is today's range relative to historical?
+      let rangeClass = 'NORMAL';
+      if (rangeP25 != null && sessionRange < rangeP25) rangeClass = 'QUIET';
+      else if (rangeP75 != null && sessionRange > rangeP75) rangeClass = 'EXTENDED';
+
+      // RVol: time-of-day adjusted — last bar vs 90-day per-minute baseline (same method as VOLUME_SPIKE alert)
+      // This makes the chip consistent with the VOLUME SPIKE banner in TradeAlertBanner.
+      let rvol = null, rvolSigma = null;
+      const last3 = bars.slice(-3);
+      if (last3.length > 0) {
+        try {
+          const minLo = Math.min(...last3.map(b => b.et_min));
+          const minHi = Math.max(...last3.map(b => b.et_min));
+          const volBaseQ = await query(`
+            SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+                   AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
+            FROM price_bars_primary WHERE symbol='NQ'
+            AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) BETWEEN $1 AND $2
+            AND ts::date >= $3::date - 90 AND ts::date < $3
+            GROUP BY et_min
+          `, [minLo, minHi, todayET]);
+          const baseline = {};
+          for (const r of volBaseQ.rows) baseline[r.et_min] = { avg: +r.avg_vol, std: +r.std_vol };
+          let maxSigma = -Infinity, maxRatio = 1;
+          for (const b of last3) {
+            const bl = baseline[b.et_min];
+            if (!bl || bl.avg <= 0) continue;
+            const sig = bl.std > 0 ? (b.volume - bl.avg) / bl.std : 0;
+            if (sig > maxSigma) { maxSigma = sig; maxRatio = b.volume / bl.avg; }
+          }
+          if (maxSigma > -Infinity) {
+            rvol = +maxRatio.toFixed(2);
+            rvolSigma = +maxSigma.toFixed(2);
+          }
+        } catch (_) {}
+      }
+
+      // Engagement verdict — uses active setup, ACD signals, delta/range, time of day
+      const liveSetup = setupQ.rows[0] ?? null;
+      const acd       = acdQ.rows[0]  ?? null;
+
+      // Direction from setup_type name (e.g. IB_MID_SCALP_FADE_LONG → LONG)
+      const setupDir = liveSetup?.setup_type?.includes('_LONG')  ? 'LONG'
+        :              liveSetup?.setup_type?.includes('_SHORT') ? 'SHORT'
+        : null;
+
+      // ACD directional read — C-confirmed is strong, A-only is softer
+      const aUpStrong   = acd?.a_up_fired   && acd?.c_up_confirmed;
+      const aDownStrong = acd?.a_down_fired  && acd?.c_down_confirmed;
+      const acdDir = aUpStrong   ? 'LONG'
+        :            aDownStrong ? 'SHORT'
+        :            acd?.a_up_fired   ? 'LONG'
+        :            acd?.a_down_fired ? 'SHORT'
+        : null;
+
+      // After 3:30 PM ET with nothing live — wind down
+      const isWindDown = etMinTotal >= 930 && !liveSetup;
+
+      let verdict    = 'WAIT';
+      let verdictDir = null;
+
+      if (isWindDown) {
+        verdict = 'STAND_ASIDE';
+      } else if (liveSetup) {
+        // Active fired setup is the clearest signal we have — go
+        verdict    = 'ENGAGE';
+        verdictDir = setupDir;
+      } else if ((aUpStrong || aDownStrong) && deltaClass !== 'QUIET') {
+        // A+C confirmed with some participation — high conviction directional
+        verdict    = 'ENGAGE';
+        verdictDir = acdDir;
+      } else if (acdDir && rangeClass !== 'QUIET' && deltaClass === 'HIGH') {
+        // A-only + strong flow — engage but softer
+        verdict    = 'ENGAGE';
+        verdictDir = acdDir;
+      } else if (deltaClass === 'QUIET' && rangeClass === 'QUIET' && !acdDir) {
+        // No flow, no range expansion, no ACD — nothing to trade
+        verdict = 'STAND_ASIDE';
+      } else if (deltaClass === 'HIGH' && rangeClass !== 'QUIET') {
+        // Strong flow even without a named setup — worth watching
+        verdict    = 'ENGAGE';
+        verdictDir = deltaSign === 'BUYING' ? 'LONG' : 'SHORT';
+      }
+
+      res.json({
+        currentPrice,
+        sessionOpen,
+        sessionHigh,
+        sessionLow,
+        sessionRange,
+        ptsFromOpen,
+        sessionDelta,
+        deltaSign,
+        deltaClass,
+        absDelta,
+        deltaP25, deltaP75,
+        rangeP25, rangeP50, rangeP75,
+        rangeClass,
+        rvol,
+        rvolSigma,
+        verdict,
+        verdictDir,
+        isRTH,
+        barsLoaded: bars.length,
+        ts: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error('market/pulse error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Live Reads — log manual trade reads with auto market context ─────────
+  router.post('/live-reads', async (req, res) => {
+    try {
+      const { direction, entryPrice, note, attributed_setups, outcome, pnl_pts } = req.body;
+      if (!direction || !entryPrice) return res.status(400).json({ error: 'direction and entryPrice required' });
+
+      const now = new Date();
+      const etOffset = -4;
+      const etNow = new Date(now.getTime() + etOffset * 3600000);
+      const todayET = etNow.toISOString().split('T')[0];
+
+      // Auto-attach market context
+      const [barQ, levelQ, dayTypeQ] = await Promise.all([
+        query(`SELECT close::float, open::float, high::float, low::float,
+                 COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol,
+                 EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as et_min
+               FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+               ORDER BY ts DESC LIMIT 1`, [todayET]),
+        query(`SELECT level_name, price::float as level_value FROM level_prices
+               WHERE trade_date=$1 ORDER BY ABS(price - $2) LIMIT 3`, [todayET, entryPrice]).catch(() => ({ rows: [] })),
+        query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
+      ]);
+
+      const bar = barQ.rows[0];
+      const barBodyPct = bar && (bar.high - bar.low) > 0
+        ? Math.round(Math.abs(bar.close - bar.open) / (bar.high - bar.low) * 100)
+        : null;
+      const barDir = bar ? (bar.close > bar.open ? 'UP' : bar.close < bar.open ? 'DOWN' : 'FLAT') : null;
+      const etMinAtEntry = bar ? parseInt(bar.et_min) : null;
+      const dayType = dayTypeQ.rows[0]?.day_type ?? null;
+      const nearestLevel = levelQ.rows[0] ? {
+        name: levelQ.rows[0].level_name,
+        value: levelQ.rows[0].level_value,
+        dist: Math.round(Math.abs(entryPrice - levelQ.rows[0].level_value)),
+      } : null;
+
+      // Cumulative delta to this point
+      const deltaQ = await query(`
+        SELECT SUM(COALESCE(ask_volume,0)-COALESCE(bid_volume,0))::int as cum_delta
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $2`,
+        [todayET, etMinAtEntry ?? 959]);
+      const cumDelta = deltaQ.rows[0]?.cum_delta ?? 0;
+
+      const r = await query(`
+        INSERT INTO live_reads
+          (trade_date, logged_at, direction, entry_price, note,
+           nearest_level_name, nearest_level_value, nearest_level_dist,
+           bar_body_pct, bar_dir, et_min, day_type, cum_delta_at_entry,
+           attributed_setups, outcome, pnl_pts)
+        VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        RETURNING *`,
+        [todayET, direction, entryPrice, note || null,
+         nearestLevel?.name || null, nearestLevel?.value || null, nearestLevel?.dist || null,
+         barBodyPct, barDir, etMinAtEntry, dayType, cumDelta,
+         attributed_setups?.length ? attributed_setups : null,
+         outcome || null, pnl_pts ?? null]);
+
+      res.json({ ok: true, read: r.rows[0] });
+    } catch (e) {
+      console.error('live-reads POST error:', e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.get('/live-reads', async (req, res) => {
+    try {
+      const date = req.query.date || new Date().toLocaleDateString('en-CA');
+      const r = await query(
+        `SELECT * FROM live_reads WHERE trade_date=$1 ORDER BY logged_at DESC`, [date]);
+      res.json({ reads: r.rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 
