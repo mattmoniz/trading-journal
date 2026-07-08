@@ -4654,16 +4654,11 @@ export default function createACDRouter(io) {
                 // Thresholds: rolling p25/p75 of 60-session |cumulative delta| (no hardcoded numbers).
                 if (_lfDeltaNeutral) mult = Math.max(mult - 0.10, 0.25);
                 if (_lfDeltaHigh)    mult = Math.min(mult + 0.10, 1.5);
-                // Pulse score: session-state at signal time (MC-calibrated + day-type conditioned 2026-07-08)
-                // BALANCE=full matrix; TURBULENT: score-0 penalty off (N=335, EV=+$32) + score-3 boost off
-                // (N=21, EV=-$47 — "perfect conditions" on volatile days = climax chasing not conviction);
-                // TREND: score-2 boost off (N=163, EV=-$11 — fades structurally weak on trend days).
-                // Validated weekly via backtest_pulse_score.mjs → performance_audit PULSE_SCORE_AUDIT rows.
+                // Pulse score: informational only — not wired to sizeMultiplier.
+                // Backtest shows real lift on aggregate but too many false negatives on strong days.
+                // Weekly backtest_pulse_score.mjs continues to accumulate data; revisit when N is larger.
                 const _psDeltaDiv  = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
                 const _pulseScore  = (_pulseHighVol ? 1 : 0) + (_psDeltaDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
-                if      (_pulseScore >= 3 && dtClass !== 'TURBULENT')   mult = Math.min(mult + 0.20, 1.5);
-                else if (_pulseScore >= 2 && dtClass !== 'TREND')       mult = Math.min(mult + 0.10, 1.5);
-                else if (_pulseScore === 0 && dtClass !== 'TURBULENT')  mult = Math.max(mult - 0.10, 0.25);
                 // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
                 // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
                 if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip

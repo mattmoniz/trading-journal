@@ -19090,6 +19090,26 @@ function SessionStatusBar({ conf, onStateChange }) {
                       HIGH ΔFLOW +0.10×
                     </span>
                   )}
+                  {(() => {
+                    const ps = sc2.pulseScore;
+                    if (ps == null) return null;
+                    if (ps >= 3) return (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#f0abfc', background: 'rgba(240,171,252,0.13)', border: '1px solid rgba(240,171,252,0.55)', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                        🎯 PULSE {ps}/4 +0.20×
+                      </span>
+                    );
+                    if (ps === 2) return (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#c084fc', background: 'rgba(192,132,252,0.10)', border: '1px solid rgba(192,132,252,0.40)', borderRadius: 4, padding: '1px 7px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
+                        🎯 PULSE {ps}/4 +0.10×
+                      </span>
+                    );
+                    if (ps === 0) return (
+                      <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', background: 'rgba(148,163,184,0.08)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                        PULSE 0/4 −0.10×
+                      </span>
+                    );
+                    return null; // score=1 neutral — no chip
+                  })()}
                   {sc2.confluencePairPartner && (
                     <span style={{ fontSize: 11, fontWeight: 700, color: '#818cf8', background: 'rgba(129,140,248,0.12)', border: '1px solid rgba(129,140,248,0.40)', borderRadius: 4, padding: '1px 6px', letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
                       ⊕ PAIR: {sc2.confluencePairPartner}
