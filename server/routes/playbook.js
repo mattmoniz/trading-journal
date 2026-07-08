@@ -403,6 +403,7 @@ Based on all of the above, give me your read. I am thinking ${intent}.`.trim();
     const msg = await anthropic.messages.create({
       model: ASSESS_MODEL,
       max_tokens: 1200,
+      temperature: 0,
       system: ASSESS_SYSTEM,
       messages: [{ role: 'user', content: userMsg }],
     });
