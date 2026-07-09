@@ -4264,7 +4264,7 @@ export default function createACDRouter(io) {
           const cachedLevelStats = getCached(todayET, 'levelFadeStats');
           let liveStats = cachedLevelStats;
           if (!liveStats) {
-            const [statsQ, monQ, optStopQ, dtaQ] = await Promise.all([
+            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ] = await Promise.all([
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
                   sample_size, win_rate::float, ev_per_trade::float,
@@ -4298,6 +4298,14 @@ export default function createACDRouter(io) {
                   sample_size, win_rate::float, ev_per_trade::float, recommendation, notes
                 FROM performance_audit
                 WHERE signal_type = 'DAY_TYPE_ALPHA'
+                ORDER BY signal_name, run_date DESC
+              `).catch(() => ({ rows: [] })),
+              // Setup-level suppression: setups with N≥50, WR<48%, EV<-$5 fire as SHADOW.
+              // Promoted back when recent 90-day WR≥52% and EV>$0. Updated weekly by backtest_setup_status.mjs.
+              query(`
+                SELECT DISTINCT ON (signal_name) signal_name, recommendation
+                FROM performance_audit
+                WHERE signal_type = 'SETUP_STATUS'
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
             ]);
@@ -4373,6 +4381,12 @@ export default function createACDRouter(io) {
                 sizeDelta:      parsedNotes.size_delta ?? 0.10,
                 zScore:         parsedNotes.z_score    ?? null,
               };
+            }
+            // Setup-level suppression set — keyed by setup_type
+            // New setups of SUPPRESS types insert as SHADOW; PROMOTE clears suppression
+            liveStats._suppressedSetups = new Set();
+            for (const r of setupStatusQ.rows) {
+              if (r.recommendation === 'SUPPRESS') liveStats._suppressedSetups.add(r.signal_name);
             }
             setCached(todayET, 'levelFadeStats', liveStats);
           }
@@ -5553,8 +5567,8 @@ export default function createACDRouter(io) {
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection,
-            size_multiplier
-          ) VALUES ($1,$2,$3,$4,'ACTIVE',$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+            size_multiplier, suppression_reason
+          ) VALUES ($1,$2,$3,$4,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
           ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -5563,6 +5577,8 @@ export default function createACDRouter(io) {
           hist.winRate ?? null, hist.occurrences ?? null, hist.avgPnl ?? null, hist.t1HitRate ?? null,
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
           active.sizeMultiplier ?? 1.0,
+          liveStats._suppressedSetups?.has(active.type) ? 'SHADOW' : 'ACTIVE',
+          liveStats._suppressedSetups?.has(active.type) ? 'PERFORMANCE_BELOW_THRESHOLD' : null,
         ]);
         let row = ins.rows[0];
         if (!row) {
