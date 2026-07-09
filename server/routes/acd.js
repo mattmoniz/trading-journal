@@ -5062,6 +5062,11 @@ export default function createACDRouter(io) {
         }
       }
 
+      // Re-read from cache — liveStats is block-scoped inside the level-fade block above.
+      // The block writes it to cache via setCached before closing; this recovers it for the
+      // candidates array, the INSERT loop, and any other outer-scope usage.
+      const liveStats = getCached(todayET, 'levelFadeStats');
+
       // ACTIVE candidates — ONLY the 9 KEEP level fades from system backtest.
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
