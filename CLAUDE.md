@@ -27,6 +27,13 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 - **Server-autonomous detection:** `server/index.js` runs a `setInterval` every 60s during 9:30–4 PM ET Mon–Fri calling `GET /api/acd/today`. This is intentional — it makes level fade detection independent of browser clients. Do not remove it. The INSERT in `acd.js` is `ON CONFLICT DO NOTHING` so concurrent client polls don't double-write.
 - **Level fade detection gate:** `acd.js` line ~3838 checks `allRthBarsRow.rows.length >= 3` (not 60). IB-specific levels (`ibHighToday`/`ibLowToday`, `IB_MID_SCALP_FADE`, `OR_MID_AFTER_IB_FADE`) self-gate via `etMinNow >= 630` — do not restore the 60-bar gate.
 - **sizeMultiplier is an IIFE** inside the `levelScalpSetup` object in `acd.js`. All sizing adjustments live there. When adding a new factor: (a) research backs it (N≥20), (b) add to the IIFE, (c) update `AlphaEngineOverview.jsx`, (d) document in OPEN_THREADS.
+- **New setup type checklist (anti-hardcode gate):** Before any new `setup_type` goes live in `acd.js`, ALL of the following must be satisfied:
+  1. Run `node scripts/backtest_setup_status.mjs` → generates/updates `SETUP_STATUS` row in `performance_audit`
+  2. Run `node scripts/update_optimal_stops.mjs` → generates/updates `OPTIMAL_STOP` row with data-derived stop/target
+  3. If N<20 resolved trades, do NOT fire live — insert as `status='SHADOW'` only until N≥20
+  4. Never write a stop, target, or WR claim as a literal number in `acd.js` — always read from `liveStats._opt[type]` or `performance_audit`
+  - The `Stop` hook (`.claude/hooks/check-docs-drift.sh`) scans for hardcoded anti-patterns and will warn if any of these are violated. The `SessionStart` hook checks for setup_types missing a fresh SETUP_STATUS row.
+- **Unified suppression pipeline (the only suppression source):** All suppression of level fade setups flows through `scripts/backtest_setup_status.mjs` → `performance_audit` SETUP_STATUS/SETUP_STATUS_DOW → `liveStats._suppressedSetups` / `liveStats._dowSuppressToday`. Never add a hardcoded suppression list or day-of-week skip list to `acd.js` — the pipeline handles it automatically and re-evaluates weekly.
 
 ## Collaboration
 

@@ -32,7 +32,7 @@
                                   └──────────────────────────────────┘
 ```
 
-`scripts/` contains ~50 standalone analysis/backtest scripts run manually via `node` — they are **not** wired into the running app (a few exceptions are scheduled reporters, noted below).
+`scripts/` contains ~37 standalone analysis/backtest scripts run manually via `node` — they are **not** wired into the running app (a few exceptions are scheduled reporters, noted below). 87 one-off/superseded scripts moved to `scripts/archive/` on 2026-07-09 — safe to browse but not maintained.
 
 ---
 
@@ -182,7 +182,7 @@ server/
 |---|---|---|
 | Core journal | `dailyLogs.js`, `trades.js`, `sierra.js` | Daily logs CRUD, trade CRUD, TAL import/history, chart uploads |
 | Stats/analytics | `stats.js`, `tearsheet.js`, `backtest.js` | Overview KPIs, by-hour/day breakdowns, risk-of-ruin, tearsheet (P&L distribution, timing heatmap, MAE, rolling expectancy), Kelly sizing |
-| ACD / opening range | `acd.js` (largest route file, ~6000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest. Also hosts the **Level Fade Alpha Engine**: 50+ pre-computed key levels (PD_*, CAM_*, FLOOR_*, WPP, weekly/monthly VA, OR/IB), proximity detection at 15pt, sizeMultiplier stack (streak depth / overnight alignment / approach delta / elite zone / recency / confluence pair / INSIDE_VALUE / DAY_TYPE_ALPHA / NL30 regime / stacking suppress at 7+ / revisit latency / VWAP extension / OR expansion bias / TURBULENT regime persistence), setup tier badges (PRIME/SOLID/MARGINAL/WEAK/KILL), suppressed fades list, early-touch backfill (SHADOW). Gate lowered from 60-bar (10:30 AM) to 3-bar (~9:34 AM) on 2026-07-05. |
+| ACD / opening range | `acd.js` (largest route file, ~6000 lines) | OR computation, structural levels, day-type, NL30, pivots, A/B/C signal backtest. Also hosts the **Level Fade Alpha Engine**: 50+ pre-computed key levels (PD_*, CAM_*, FLOOR_*, WPP, weekly/monthly VA, OR/IB), proximity detection at 15pt, sizeMultiplier stack (streak depth / overnight alignment / approach delta / elite zone / recency / confluence pair / INSIDE_VALUE / DAY_TYPE_ALPHA / NL30 regime / stacking suppress at 7+ / revisit latency / VWAP extension / OR expansion bias / TURBULENT regime persistence), setup tier badges (PRIME/SOLID/MARGINAL/WEAK/KILL), unified data-driven suppression (`_suppressedSetups` from `performance_audit` SETUP_STATUS — hardcoded list removed 2026-07-09), early-touch backfill (SHADOW). Gate lowered from 60-bar (10:30 AM) to 3-bar (~9:34 AM) on 2026-07-05. |
 | Price data | `priceBars.js` | Bar ingest, partition-aware queries, volume profile |
 | Phase detection | `phaseChange.js` | Compression→expansion phase detection + backtest |
 | Auction/value | `developingValue.js`, `auctionRead.js`, `weekly.js`, `keyLevels.js` | POC/VAH/VAL tracking, opening-call classification (`open_vs_prior_value` + `overnight_inventory` auto-computed from price data; `prior_day_profile` is manual Sierra Chart read), weekly VA migration, key-level regime stats. `keyLevels.js` also hosts `/api/level-prices/:date` (64 level types), `/api/level-prices/tag/:date` (re-tag BP fills), and `/api/level-approach/today` (ranked setup anticipation list for today's day_type+DOW, sourced from `performance_audit` SETUP_ANTICIPATION rows), `/api/volatility-forecast` (next-session day_type probability distribution — live query, self-updating; returns volatility_flag HIGH/ELEVATED/NORMAL + drivers), and `/api/confluence-near-price` (level pairs from `confluence_pairs_latest.json` where both levels are within 15pt of current price; day_type-adjusted EV where N≥10). |
@@ -288,7 +288,7 @@ Managed via `systemctl --user [start|stop|restart|status] <name>`. Both enabled 
 
 ## `scripts/` — Ad-hoc Analysis & Backtests
 
-~50 standalone Node scripts run manually (`node scripts/backtest_X.js`) against the live DB via `server/db.js`. They are **not imported by the running app** — each one tests a specific edge hypothesis (delta divergence, overnight inventory, sweep-reclaim, flush-balance, confluence, etc.) and most write their findings into the `performance_audit` table for later reference. Treat this directory as a research lab, not production code — naming convention is `backtest_<hypothesis>.js`.
+~37 standalone Node scripts run manually (`node scripts/backtest_X.js`) against the live DB via `server/db.js`. They are **not imported by the running app** — each one tests a specific edge hypothesis and most write findings into `performance_audit`. Naming convention is `backtest_<hypothesis>.js`. 87 superseded scripts moved to `scripts/archive/` (2026-07-09) — not maintained.
 
 A few scripts ARE wired in as scheduled jobs from `server/index.js` (morning brief, weekly/monthly report, daily coaching, level computation) — check `index.js` cron registrations before assuming a script is dead.
 
@@ -301,9 +301,11 @@ Notable scripts that are scheduled or run after auto-import:
 - `scripts/context_analysis.js` — mines 520 confluence pairs and contextual filters (DOW/day-type/direction); writes `performance_audit` rows with `signal_type='CONTEXT_ANALYSIS'`; cron fires Sunday 6 AM ET
 - `scripts/audit_setup_latency.mjs` — nightly latency audit (`node scripts/audit_setup_latency.mjs [YYYY-MM-DD]`); for each FADE setup finds first RTH bar within 15pt, computes lag (fired_at − first_bar_ts); classifies OK/SLOW/CRITICAL/RETROACTIVE/PREMARKET; writes `LATENCY_AUDIT` rows to `performance_audit`; appends CRITICAL alerts to `scratch/gemini_alerts.txt`; cron fires 5:15 PM ET Mon–Fri
 - `scripts/backtest_latency_impact.mjs` — one-shot P&L impact analysis: entry slippage + phantom wins (T1 hit before alert fired) per lag bucket; quantified ~$44K/yr recovery from server-autonomous detection fix (2026-07-05)
-- `scripts/update_optimal_stops.mjs` — computes p75_mae (stop) and p50_mfe (target) per setup_type directionally from `active_setups`; writes `performance_audit` rows with `signal_type='OPTIMAL_STOP'`; run weekly
+- `scripts/update_optimal_stops.mjs` — EV-sweep + p75_mae stop + p75_mfe-capped T1 per setup_type; writes `OPTIMAL_STOP` rows; **daily** (via `run_daily_calibration.sh` 4:20 PM ET) + Sunday 9:13 PM
 - `scripts/backtest_day_type_alpha.js` — per-(setup_type × day_type) z-score from all resolved trades; writes `DAY_TYPE_ALPHA` rows; cron fires Sunday 9:10 PM ET; live path reads `liveStats._dta` to adjust sizeMultiplier
-- `scripts/backfill_mae_mfe.mjs` — backfills mae_points, mfe_points, bars_to_resolution, resolution_bar_time on `active_setups`; shared replay engine: `server/services/maeMfeReplay.js`
+- `scripts/backfill_mae_mfe.mjs` — backfills mae_points, mfe_points, bars_to_resolution, resolution_bar_time on `active_setups`; shared replay engine: `server/services/maeMfeReplay.js`; **daily** (via `run_daily_calibration.sh`)
+- `scripts/run_daily_calibration.sh` — runs `backfill_mae_mfe.mjs` + `update_optimal_stops.mjs` + `backtest_setup_status.mjs` at 4:20 PM ET Mon-Fri (system crontab); fast pass (~2 min); ensures stops/suppression reflect same-day resolved trades
+- `scripts/backtest_monday_deep.js` — Monday WR/EV overrides per level; writes `MON_BACKTEST` rows read live by `acd.js` keepLevels logic; cron fires Sunday via `run_weekly_backtests.sh`
 
 ---
 

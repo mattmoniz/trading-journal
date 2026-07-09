@@ -1,314 +1,213 @@
 # Hardcoded Constants & Design Decisions
 
-This file documents every hardcoded threshold in the live codebase — what it is, why it exists, its current status (true hardcode vs. data-derived fallback), and what would need to happen to replace it. Maintained alongside OPEN_THREADS.md.
+Living audit of every hardcoded value in the trading codebase — what it is, why it exists, its category, and what it would take to replace it. Also tracks recently removed hardcoded items so the cleanup history is preserved.
 
-Last updated: 2026-07-05
-
----
-
-## Day-Type Significance Classification (`scripts/backtest_day_type_alpha.js`)
-
-These constants govern how the weekly DAY_TYPE_ALPHA backtest classifies (setup_type × day_type) cells into SIZE_UP_STRONG / SIZE_UP / SIZE_DOWN / SUPPRESS / NEUTRAL. Results are read by `liveStats._dta` in `acd.js` and flow into the `sizeMultiplier` IIFE.
-
-```js
-const MIN_N          = 20;    // N≥20 rule (CLAUDE.md) — below this always NEUTRAL
-const SCALE_FACTOR   = 0.07;  // size_delta = |z_score| × 0.07, capped 0.25
-const Z_UP_STRONG    = 2.0;   // z ≥ 2.0 → SIZE_UP_STRONG (strong statistical evidence)
-const Z_UP           = 1.5;   // z ≥ 1.5 → SIZE_UP
-const Z_DOWN         = 1.5;   // z ≤ -1.5 → SIZE_DOWN
-const Z_SUPPRESS     = 2.0;   // z ≤ -2.0 AND WR < 0.55 → SUPPRESS
-const WR_UP_STRONG   = 0.75;  // absolute WR floor for SIZE_UP_STRONG
-const WR_UP          = 0.65;  // absolute WR floor for SIZE_UP
-const WR_SUPPRESS    = 0.55;  // absolute WR ceiling for SUPPRESS
-```
-
-**What's hardcoded:** The z-score thresholds (1.5/2.0) and WR floors (0.75/0.65/0.55). These are classification boundaries, not trading thresholds — they don't gate entries or set stops.
-
-**Why these values:**
-- z=1.5/2.0: standard statistical significance conventions. At typical cell sizes (N=25-70), z=1.5 requires ~8-12% WR divergence, z=2.0 requires ~11-16%. Both are large enough to be practically meaningful.
-- WR_UP_STRONG=0.75 / WR_UP=0.65: a SIZE_UP cell must ALSO have meaningful absolute performance, not just be statistically above a poor baseline.
-- SCALE_FACTOR=0.07: at z=1.5 → size_delta=0.105; at z=2.0 → 0.14; at z=3.0 → 0.21; capped at 0.25. Keeps day-type adjustments proportional to evidence without ever dominating other sizeMultiplier signals.
-
-**Current findings (as of 2026-07-05):** Only 2 actionable cells — WEEKLY_VWAP_FADE_LONG BALANCE (z=1.9, SIZE_UP, delta=0.13) and IB_HIGH_FADE_SHORT TREND (z=-1.6, SIZE_DOWN — already globally suppressed). All other day-type WR differences are within noise once each setup's own (already high) baseline is accounted for. The system will auto-discover new actionable cells as data accumulates.
-
-**Replacement:** The thresholds are intentional statistical choices. SCALE_FACTOR could be increased to give more weight to day-type signals; current 0.07 is conservative to avoid over-fitting on limited N.
+Updated by the Stop hook when structural files change. Add an entry here whenever a hardcoded item is added OR removed from the live codebase.
 
 ---
 
-## Stop & Target Distances
+## How to use this file
 
-### `STOP` / `TARGET` in `server/routes/acd.js` (line ~3804)
+**Adding a constant:** Document it here before committing — category, reason, replacement plan.
 
-```js
-const STOP   = isMonday ? 60 : 90;
-const TARGET = isMonday ? 30 : 40;
-```
+**Removing a constant:** Move it to the "Removed" section with date and how it was replaced.
 
-**Status:** Last-resort fallback. The live path now has two layers above these before it falls through:
-1. `liveStats._opt[type]` — directional p75_mae / p50_mfe from `performance_audit` (OPTIMAL_STOP rows), updated weekly
-2. `lv.mae_p75` / `lv.mfe` — per-level stats loaded from `performance_audit` (UNIFIED_BACKTEST)
-
-These constants are only hit if both (1) and (2) return null — e.g. a brand new level with zero historical data.
-
-**Why 90/30 non-Monday:** Historical UNIFIED_BACKTEST p75_mae across all level fades clustered around 60–90pt; 40pt target was the p50_mfe median before individual-level data existed. These values are now obsolete for any level with N≥20 data.
-
-**Why 60/30 Monday:** Monday backtest (MON_BACKTEST rows) showed consistently tighter MAE — price moves slower before IB closes. 60pt stop / 30pt target was the p75/p50 cluster from ~60 Monday trades per level group.
-
-**Replacement:** Already replaced in practice. To remove the constants entirely, ensure every level in `keepLevels` has OPTIMAL_STOP data (N≥20 resolved trades). Gap today: very new levels (MONTHLY_OPEN, 3M_POC, etc.) may still hit these fallbacks.
+**Categories:**
+- `DATA_DERIVED_FALLBACK` — only fires when performance_audit has no row yet; safe
+- `SIMULATION_PARAMETER` — used in retrospective reporting, not live trading decisions
+- `STATISTICAL_CLASSIFICATION` — classification boundary, not a trading threshold; defensible
+- `SESSION_STRUCTURE` — fixed time/session boundaries (RTH open/close, IB close, etc.); stable
+- `BUSINESS_RULE` — prop firm rules or display choices; external constraints
+- `TODO` — genuinely needs data-derivation; tagged for removal
 
 ---
 
-### `mae_p75: 50, mfe: 15, mfe_p75: 30` on `IB_MID_SCALP_FADE` (line ~4127)
+## Currently Active Constants
 
-```js
-{ name: 'IB_MID_SCALP_FADE', level: ..., mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) }
-```
+### `STOP = 90`, `TARGET = 40` in `acd.js` (level fade fallback)
 
-**Status:** Inline override. These are baked into the level definition object and spread last-to-first — they get overwritten by `ls('IB_MID_SCALP')` if DB data exists, so they're only active when the DB lookup returns nothing.
-
-**Why:** IB_MID_SCALP is a scalp-mode setup (tight in/out). Before the OPTIMAL_STOP system existed, these numbers came from a manual review of ~50 IB mid setups. The 50pt stop / 15pt target captures the scalp nature — wider stop allows the typical IB mid oscillation, tight target books the first move.
-
-**Replacement:** The OPTIMAL_STOP row for IB_MID_SCALP_FADE_LONG / SHORT now supersedes these. The inline numbers are kept as safety fallback.
+- **Category:** `DATA_DERIVED_FALLBACK`
+- **Location:** `server/routes/acd.js` line ~4110
+- **When it fires:** Only when `liveStats._opt[type]` is null AND `lv.mae_p75` is null — i.e., a level type with zero OPTIMAL_STOP data
+- **Normal path:** All active level types have OPTIMAL_STOP rows in performance_audit; these constants are never reached in normal operation
+- **Replacement:** Ensure every level in keepLevels has ≥20 resolved trades. Then remove constants entirely.
 
 ---
 
-### `mae_p75: 35, mfe: 20, mfe_p75: 40` on `OR_MID_AFTER_IB_FADE` (line ~4128)
+### `IB_BULLISH/BEARISH` stop fallback `?? 50` in `acd.js`
 
-Same structure as IB_MID_SCALP above. 35pt stop / 20pt target came from early OR_MID backtest analysis. OPTIMAL_STOP rows now supersede for any setup_type with N≥20.
-
----
-
-### `DEFAULT_STOP = 65`, `DEFAULT_TARGET = 35` in `scripts/update_optimal_stops.mjs`
-
-```js
-const DEFAULT_STOP = 65;
-const DEFAULT_TARGET = 35;
-```
-
-**Status:** Script-only fallback. Only used when `p75_mae` comes back null for a row (shouldn't happen since the query filters `mae_points IS NOT NULL`). Effectively dead code.
+- **Category:** `DATA_DERIVED_FALLBACK`
+- **Location:** `server/routes/acd.js` line ~3189: `ibOpt?.stop ?? 50`
+- **When it fires:** Only when OPTIMAL_STOP has no row for IB_BULLISH/IB_BEARISH
+- **Normal path:** Stop sweep runs weekly and always writes a row for both types
 
 ---
 
-## Proximity & Window Thresholds
+### `mae_p75: 50, mfe: 15, mfe_p75: 30` on `IB_MID_SCALP_FADE` level object
 
-### `15pt` level proximity — level fade alert trigger (`acd.js` line ~4134)
-
-```js
-const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
-```
-
-**Status:** Hardcoded. This is the "within 15 points = approaching this level" gate for the live alert banner. Also used in the early-touch backfill scanner.
-
-**Why 15:** Widened from 10pt on 2026-07-05 after backtests showed the 10pt window was missing approaches that reversed before piercing — price gets to within 10–14pt of a level and snaps back. 15pt still excludes noise (levels 20pt away that never get tested). Widening to 20pt showed too many false alerts in range-bound sessions.
-
-**Replacement:** Could be derived from σ of "closest approach distance" per level, but 15pt has tested well. Low priority to change.
+- **Category:** `DATA_DERIVED_FALLBACK`
+- **Location:** `server/routes/acd.js` line ~4481
+- **When it fires:** These are spread into the level definition object — `...(ls('IB_MID_SCALP') || {})` overwrites them when DB data exists. Only active if OPTIMAL_STOP has no row for IB_MID_SCALP_FADE.
+- **Normal path:** OPTIMAL_STOP row exists for IB_MID_SCALP_FADE_LONG; fallbacks rarely fire
 
 ---
 
-### `60pt` PROX in key-level hit-rate section (`acd.js` line ~1679)
+### `mae_p75: 35, mfe: 20, mfe_p75: 40` on `OR_MID_AFTER_IB_FADE` level object
 
-```js
-const PROX = 60;
-```
-
-**Status:** Hardcoded. Used in the key-levels hit-rate subsection (reads condition breakdown data for levels within 60pt of current price). This is a different subsection from the fade alert — it governs which levels show statistical hit rates in the full key-levels panel.
-
-**Why 60:** Wider window intentionally — this is for informational display, not trading triggers. 60pt shows the context of nearby levels that could matter if price moves.
+- **Category:** `DATA_DERIVED_FALLBACK`
+- **Location:** `server/routes/acd.js` line ~4482
+- Same pattern as IB_MID_SCALP above
 
 ---
 
-### `>= 60 bars` COIL SURGE gate + `ci = 50` scan start (`acd.js` lines ~3609, 3621)
+### `cfg = { target: 20, stop: 25 }` in `morningBrief.js`
 
-```js
-if (allRthBarsRow.rows.length >= 60) { ... }
-for (let ci = 50; ci < cbars.length; ci++) { ... }
-```
-
-**Status:** Hardcoded.
-
-**Why 60/50:** COIL SURGE requires detecting a range contraction (15-bar rolling window) followed by a volume pop. 60 bars minimum = ~1 hour of RTH data, enough to compute a baseline volume. The scan starts at bar 50 (not 0) because the rolling window needs the prior 15 bars plus 35 bars of volume baseline — starting earlier would reference pre-session data in the wrong context.
+- **Category:** `SIMULATION_PARAMETER`
+- **Location:** `server/routes/morningBrief.js` line ~510
+- **What it is:** Used in the retrospective morning brief session simulator — checks whether each level approach during the day resulted in a 20pt move before a 25pt adverse move. This is a coarse "did something happen here?" filter for retrospective reporting, not a live trade threshold.
+- **Why not OPTIMAL_STOP:** The simulation runs across multiple level types in a single loop; per-type stop/target lookup would add complexity with minimal benefit (the morning brief result is informational, not actionable). The 20pt target is intentionally a "minimum meaningful move" threshold, not a trade target.
+- **Replacement:** Could use median OPTIMAL_STOP values from performance_audit. Low priority.
 
 ---
 
-### `<= 960 minutes` RTH end in `maeMfeReplay.js`
+### Level Exhaustion WR description strings in `morningBrief.js`
 
-```js
-AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
-```
-
-**Status:** Hardcoded. 960 = 4:00 PM ET. This is the RTH session close — correct and stable.
-
----
-
-## Tier EV Thresholds
-
-### `tier: lv.ev >= 50 ? 'PRIME' : ev >= 20 ? 'SOLID' : ev >= 0 ? 'MARGINAL' : ev >= -20 ? 'WEAK' : 'KILL'` (`acd.js` line ~4172)
-
-**Status:** Hardcoded thresholds applied to EV-per-trade (dollars at 1 MNQ).
-
-**Why these numbers:**
-- **PRIME ≥ $50:** Top quartile of level fades in the Jul 2025–Jul 2026 full-year backtest. At 1 MNQ, $50/trade compounds meaningfully.
-- **SOLID ≥ $20:** Second quartile — reliably positive, worth taking at standard size.
-- **MARGINAL ≥ $0:** Technically positive but noise-sensitive. Take AM first-touch only.
-- **WEAK ≥ -$20:** Marginal negative — a different stop calibration might flip these positive. Don't suppress without a stop-sweep test first.
-- **KILL < -$20:** Structurally negative EV. Already on the `suppressedFades` list if directional analysis confirmed.
-
-**What drives the action instructions in the playbook strip:**
-- PRIME / SOLID → `TAKE IT` (differ only by "full" vs "standard" size)
-- MARGINAL → `OPTIONAL — AM first touch only, skip re-tests`
-- WEAK / KILL → `BELOW THRESHOLD — skip`
-
-**Replacement:** These are business rules, not parameters to tune. Changing $50→$40 as PRIME threshold changes what gets shown to the user in green. Low value in making these data-derived.
+- **Category:** `SIMULATION_PARAMETER` (cosmetic display text)
+- **Location:** `server/routes/morningBrief.js` lines 1254, 1269
+- **What:** `'65% WR at triple confluence (N=112)'`, `'62% WR at this stretch (N=437)'`, `'59% WR (N=907)'`
+- **Replacement:** Wire to CONTEXT_ANALYSIS or LEVEL_FADE_AUDIT rows in performance_audit. Low priority — these are description strings in coaching alerts.
 
 ---
 
-## Session Phase Time Boundaries
+### POC Magnet `'66% WR, 20pt target, 25pt stop. [Backtested N=402]'` in `morningBrief.js`
 
-### Playbook strip phases in `src/App.jsx` (line ~18589)
-
-```js
-const isPreIb   = etMin >= 570 && etMin < 630;  // 9:30–10:29 ET
-const isMornAdj = etMin >= 630 && etMin < 750;  // 10:30–12:29 ET
-const isMidday  = etMin >= 750 && etMin < 870;  // 12:30–2:29 ET
-// Late Session: 870+ (2:30 ET+)
-```
-
-**Status:** Hardcoded. These are trading session structure boundaries, not tunable parameters.
-
-**Why these specific minute values:**
-- **570 = 9:30 ET** — RTH open
-- **630 = 10:30 ET** — IB closes. This is the most important boundary: first-touch fades before IB close have higher WR (pre-IB-close price hasn't established the day's range yet).
-- **750 = 12:30 ET** — Lunch/midday transition. Volume drops, mean-reversion weakens.
-- **870 = 2:30 ET** — Late session starts. Fill risk increases, setups degrade.
-
-**Playbook guidance differs by phase:**
-- EARLY AM (9:30–10:30): Highest WR. "Statistically highest WR window."
-- MID MORNING (10:30–12:30): Re-test risk — confirm level hasn't already been visited.
-- LATE SESSION (2:30+): Reduce size, expect lower follow-through.
-
-These boundaries also control the AM-only gate on level fade setups: `etMinNow < 720` in the keepLevels firing condition (720 = noon ET).
+- **Category:** `SIMULATION_PARAMETER` (cosmetic display text)
+- **Location:** `server/routes/morningBrief.js` line ~1045
+- **Replacement:** Wire `sample_size` and `win_rate` from OPTIMAL_STOP row for `PD_POC_FADE`. Low priority.
 
 ---
 
-## Size & Position Rules
+### MARGINAL-tier base discount in `sizeMultiplier` IIFE (`acd.js`)
 
-### `1 MNQ / account` in playbook strip (`App.jsx` line ~18647)
-
-```js
-<span ...>1 MNQ / account</span>
-```
-
-**Status:** Hardcoded display string. Reflects current prop firm constraint (account-level sizing).
+- **Category:** `TODO`
+- **Location:** `server/routes/acd.js` line ~4593: `if (lv.ev < 30 && confluenceCount < 2) mult = Math.max(mult - 0.25, 0.25)`
+- **What:** MARGINAL setups (EV < $30) with no confluence partner start at 0.75× size. Confluent setups always start at 1.0×.
+- **Why `$30`:** Midpoint of SOLID tier ($20–$50). Should eventually be derived as the EV at the 40th percentile of all active setup_types — but current N is too small.
+- **Replacement:** When N per setup_type is large enough, derive the EV percentile cutoff from performance_audit and replace `30` with `liveStats._opt.evP40 ?? 30`. Target: N≥50 per type, ~2026-10.
 
 ---
 
-### `sizeMultiplier` in level fade setup (`acd.js` line ~4169)
+### Tier EV thresholds in `acd.js`
 
-```js
-sizeMultiplier: confluenceCount >= 2 ? 1.0 : (lv.ev >= 30 ? 1.0 : 0.75)
-```
-
-**Status:** Hardcoded. Sets multiplier passed to the frontend's contracts-recommendation logic.
-
-**Why:** Single-level setups with EV < $30 get 0.75× size (reduced size for marginal entries). Confluence (2+ levels stacking) or EV ≥ $30 gets full 1.0×. The $30 EV split was chosen as the midpoint of SOLID tier ($20–$50).
-
-**Note:** This is a static threshold — technically a CLAUDE.md violation (hard rules: no static thresholds). However, modifying it requires the contracts-recommendation UI to expose a σ-based size curve. Logged in OPEN_THREADS.md as future work.
+- **Category:** `BUSINESS_RULE`
+- **Location:** `server/routes/acd.js` lines 4703/4765
+- **What:** `lv.ev >= 50 → PRIME, >= 20 → SOLID, >= 0 → MARGINAL, >= -20 → WEAK, else KILL`
+- **Why:** These are display classification boundaries based on the Jul 2025–Jul 2026 full-year backtest quartiles. PRIME=$50 = top quartile. Changing them changes what shows green in the UI, not live trade behavior.
+- **Replacement:** Not warranted — these are business-rule display choices, not trading thresholds.
 
 ---
 
-### Runner guidance thresholds in playbook strip (`App.jsx` line ~18621)
+### `proximityThreshold = Math.max(30, Math.round(devRange * 0.12))` in `morningBrief.js`
 
-```js
-'Full size. If up 30pt in 10 min → move stop to BE, hold half to 2×T1 (~${t2Pt}pt)'
-```
-
-**Status:** Hardcoded. The 30pt / 10min trail rule came from observational analysis of TURBULENT-day fade setups. 30pt in 10 minutes = ~3pt/min momentum — strong enough that the setup has proven itself and half-position management is appropriate. This is judgment, not a backtest-derived number.
-
----
-
-## Sample Size Floor
-
-### `MIN_N = 20` in `update_optimal_stops.mjs` and throughout
-
-```js
-const MIN_N = 20;
-```
-
-**Status:** Hard floor from CLAUDE.md convention (enforced project-wide). Below N=20, no WR or EV claim is reported as decisive. This number is documented as a rule, not a parameter — changing it would require amending CLAUDE.md explicitly.
+- **Category:** `DATA_DERIVED_FALLBACK` (partially dynamic)
+- **Location:** `server/routes/morningBrief.js` line ~1221
+- **What:** Minimum 30pt or 12% of daily range — controls which levels are "in proximity" for exhaustion alerts. The 0.12 and 30pt floor are semi-arbitrary but range-scaled.
+- **Replacement:** Low priority; range-scaling already makes it adaptive.
 
 ---
 
-## Suppressed Fades (Direction-Specific)
+### `Z_UP_STRONG=2.0`, `Z_UP=1.5`, `Z_SUPPRESS=2.0`, `WR_UP_STRONG=0.75`, `WR_UP=0.65`, `WR_SUPPRESS=0.55` in `backtest_day_type_alpha.js`
 
-### `suppressedFades` Set in `acd.js` (lines ~3921–3935)
-
-These are setups where the directional backtest showed negative EV at N≥20 AND no stop calibration recovered positive EV.
-
-| Setup | WR | N | EV | Reason |
-|---|---|---|---|---|
-| `PD_POC_FADE_SHORT` | 52.9% | 34 | -$30 | KILL — structurally fails SHORT |
-| `IB_MID_SCALP_FADE_SHORT` | 63.6% | 66 | -$16 | Stop width kills SHORT edge |
-| `IB_MID_SCALP_FADE_LONG` (BALANCE/TURBULENT only) | — | — | $0.58 | Near-zero EV noise; TREND day LONG is 82% WR — conditional suppress |
-| `IB_HIGH_FADE_SHORT` | 55.7% | 79 | -$35 | Stop-wide structural loser SHORT; 54.5% WR even with 35pt stop |
-| `OR_MID_AFTER_IB_FADE_SHORT` | 61.7% | 60 | -$32 | LONG side solid ($97 EV); SHORT kills combined edge |
-| `CAM_R4_FADE_LONG` | 64.3% | 28 | -$28 | Fading LONG from extreme resistance fails structurally |
-| `CAM_S2_FADE_SHORT` | 60.0% | 30 | -$23 | Selling support level fails structurally |
-| `CAM_R1_FADE_LONG` | 61.5% | 39 | -$17 | WEAK/KILL boundary |
-| `CAM_R1_FADE_SHORT` | 61.8% | 34 | -$16 | WEAK; symmetric loser both sides |
-| `PD_VAH_FADE_SHORT` | 60.0% | 45 | -$16 | VAH SHORT fails; VAH LONG is PRIME |
-
-**Shadow-period fades** (in suppressedFades, monitoring for 30 days before unsuppressing):
-- `IB_MID_SCALP_FADE_SHORT` — stop sweep showed +$38 EV at 50pt stop. Review ~2026-08-05.
-- `OR_MID_AFTER_IB_FADE_SHORT` — stop sweep showed +$36 EV at 35pt stop. Review ~2026-08-05.
-
-**Permanently suppressed via force-null (not suppressedFades):**
-- `OPEN_TEST_DRIVE_LONG/SHORT`: 27–32% WR, -$7.7K/yr. `candidates.filter()` removes them upstream.
-- `C_STANDALONE_UP`: 53.7% WR N=95, -$60 EV.
+- **Category:** `STATISTICAL_CLASSIFICATION`
+- **Location:** `scripts/backtest_day_type_alpha.js` lines 24–30
+- **What:** Classification boundaries for DAY_TYPE_ALPHA cells (SIZE_UP_STRONG/SIZE_UP/SUPPRESS/NEUTRAL). Results flow into `liveStats._dta` and the sizeMultiplier IIFE.
+- **Why z=1.5/2.0:** Standard statistical significance conventions at typical cell sizes (N=25-70), z=1.5 requires ~8-12% WR divergence.
+- **Why WR floors:** SIZE_UP cells must also have meaningful absolute WR, not just be statistically above a poor baseline.
+- **Replacement:** Not warranted — these are classification boundaries, not trading thresholds.
 
 ---
 
-## Monday-Specific Overrides
+### `nl30 > 9` / `nl30 < -9` in `caseEngine.js`
 
-### `mondaySkip` array (`acd.js` line ~3914)
-
-```js
-const mondaySkip = isMonday
-  ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE', 'PD_SESSION_MID_FADE']
-  : [];
-```
-
-**Status:** Hardcoded based on MON_BACKTEST analysis. These six levels showed materially lower Monday WR vs. all-days WR. The Monday backtest rows in `performance_audit` (signal_type='MON_BACKTEST') capture this — these levels don't appear in that table at all because they never hit significance.
-
-### `mondayGate = isMonday ? etMinNow >= 630 : true` (line ~3801)
-
-Mondays: don't fire any level fade before 10:30 ET (IB close). Non-Mondays: fire from 9:30. Monday open trades have historically been low-quality (low volume, wide spreads pre-IB-close).
+- **Category:** `STATISTICAL_CLASSIFICATION`
+- **Location:** `server/services/caseEngine.js` lines 240-241, 354, 878-879, 1089-1094, 1393, 1400
+- **What:** ACD methodology constant — NL30 above/below ±9 ticks defines structural trend bias. Feeds into sizeMultiplier (+2/-3 for alignment/counter-trend).
+- **Why 9:** Mark Fisher's ACD system defines "significant" as a meaningful NL score relative to daily ACD value. 9 ≈ 1× daily A value on an average day.
+- **Replacement:** Could be tuned as a rolling percentile of |nl30| distribution. Major downstream effects — needs dedicated research session before changing. Not high priority.
 
 ---
 
-## COIL SURGE Internal Parameters (`acd.js` line ~3611)
+### `EXPIRY_WINDOW` map in `acd.js`
 
-```js
-const cRW = 15, cRT = 40, cVR = 0.40, cBB = 20, cPOP = 2.5;
-```
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `cRW` | 15 | Rolling window size (bars) for range measurement |
-| `cRT` | 40 | Range threshold — must be < 40pt to qualify as a coil |
-| `cVR` | 0.40 | Volume ratio threshold — current bar must be ≥ 40% above baseline |
-| `cBB` | 20 | Baseline bars — volume average window before the coil window |
-| `cPOP` | 2.5 | Minimum price pop (points) from close to VWAP |
-
-These were calibrated manually from ~30 COIL SURGE visual reviews. They are not yet in the optimal-stop system because COIL SURGE is logged to `active_setups` but has low N (< 20 resolved).
+- **Category:** `BUSINESS_RULE`
+- **Location:** `server/routes/acd.js` line ~5466
+- **What:** Per-setup-type expiry windows (minutes from fired_at before a setup expires if unresolved).
+- **Replacement:** Could derive from "how long after detection does price stay near the level" analysis. Low priority — operational config.
 
 ---
 
-## Optimal Stop System Summary
+### `COOLDOWN_MINUTES = 15` in `cooldown.js`
 
-For the ~68 setup types with N≥20 resolved trades in `active_setups`, stop and target distances are fully data-derived:
-- **Stop = `p75_mae`** — 75th percentile of max adverse excursion across resolved trades for that exact setup_type (e.g., `OR_HIGH_FADE_SHORT`)
-- **Target = `p50_mfe`** — median of max favorable excursion
+- **Category:** `BUSINESS_RULE`
+- **Location:** `server/routes/cooldown.js` line 7
+- **What:** Post-loss cooldown period. Operational config, not a performance threshold.
 
-These live in `performance_audit` (signal_type='OPTIMAL_STOP') and are recomputed weekly. The live path reads them at startup and caches for 60s. See `scripts/update_optimal_stops.mjs` and `server/services/maeMfeReplay.js`.
+---
 
-The hardcoded values above (`STOP`, `TARGET`, `DEFAULT_STOP`, `DEFAULT_TARGET`) are only hit for setups outside the 68-type coverage — currently new/rare level types that haven't accumulated N=20 resolved trades yet.
+### Session phase minute boundaries (`570`, `630`, `750`, `870`, `960`) throughout codebase
+
+- **Category:** `SESSION_STRUCTURE`
+- **What:** `570=9:30 ET` (RTH open), `630=10:30 ET` (IB close), `750=12:30` (midday), `870=2:30` (late), `960=4:00 PM` (RTH close). These are fixed market session structure times — stable and correct.
+
+---
+
+### COIL SURGE parameters in `acd.js`
+
+- **Category:** `TODO` (low priority)
+- **Location:** `server/routes/acd.js` line ~3611: `const cRW = 15, cRT = 40, cVR = 0.40, cBB = 20, cPOP = 2.5`
+- **What:** Range window (15 bars), range threshold (40pt), volume ratio (40% above baseline), baseline bars (20), price pop (2.5pt).
+- **Why:** Calibrated manually from ~30 visual reviews. COIL_SURGE has insufficient N for data derivation.
+- **Replacement:** When COIL_SURGE reaches N≥20 resolved trades, run a sweep on cRT and cVR.
+
+---
+
+### `PASS_TARGET = 3000` in `dll.js`
+
+- **Category:** `BUSINESS_RULE`
+- **Location:** `server/routes/dll.js` line ~155
+- **What:** Prop firm evaluation profit target. External constraint.
+
+---
+
+### `meter > 15` / `meter < -15` in `caseEngine.js`
+
+- **Category:** `STATISTICAL_CLASSIFICATION`
+- **Location:** `server/services/caseEngine.js` line ~1344
+- **What:** Classification boundary on the [-100, 100] composite conviction score ("meter"). Above +15 = bullish lean; below -15 = bearish lean; between ±15 = neutral. Used for daily coaching/read summaries only.
+- **Why not data-derived:** `meter` is a synthetic composite score computed on the fly from NL30, ACD signals, and day-type factors. It is NOT stored in any DB table. There is no historical distribution to query — rolling percentiles would require first logging meter values for every session. ±15 = ≈15% of max range, which is a standard "just outside noise" classification threshold.
+- **Replacement:** Not warranted without first adding a `meter_score` column to `daily_log` or equivalent and accumulating 90+ days of history. The ±15 boundary can then be derived as p33/p67 of the historical distribution.
+
+---
+
+### `favor >= 20, adverse >= 30` in `morningBrief.js` (VWAP simulation)
+
+- **Category:** `SIMULATION_PARAMETER`
+- **Location:** `server/routes/morningBrief.js` lines ~567-568
+- **What:** Used in the VWAP_MAGNET retrospective simulator — checks whether each VWAP approach during the day yielded 20pt in the favorable direction before a 30pt adverse move. Used for morning-brief "did VWAP work today?" reporting only.
+- **Why not OPTIMAL_STOP:** No `OPTIMAL_STOP` row exists for `VWAP_MAGNET` — the setup is SHADOW (insufficient N for live deployment). `performance_audit` has no authoritative target/stop for this type yet.
+- **Replacement:** When VWAP_MAGNET reaches N≥20 resolved trades, run `update_optimal_stops.mjs` and wire `liveStats._opt['VWAP_MAGNET']` here.
+
+---
+
+## Removed Constants (cleanup log)
+
+| Removed | Date | What it was | How it was replaced |
+|---|---|---|---|
+| `suppressedFades` Set in `acd.js` | 2026-07-09 | Hardcoded set of 10+ suppressed setup types. Was blocking setups with positive EV (CAM_S3_FADE_LONG +$87). | `backtest_setup_status.mjs` → `performance_audit SETUP_STATUS` → `liveStats._suppressedSetups`. Re-evaluates weekly, auto-promotes recovering setups. |
+| `mondaySkip` array in `acd.js` | 2026-07-09 | Hardcoded list of 6 setups blocked on Mondays. Was blocking elite Monday setups (+$89, +$100, +$125 EV). | `backtest_setup_status.mjs` per-DOW section → `performance_audit SETUP_STATUS_DOW` → `liveStats._dowSuppressToday`. Re-evaluates weekly. |
+| `isMonday ? 60 : 90` STOP / `isMonday ? 30 : 40` TARGET in `acd.js` | 2026-07-09 | Monday-specific tighter stop/target fallbacks with no data backing. | Unified fallback: `STOP = 90, TARGET = 40` (both annotated `// Fallback`). IB types use sweep-optimal 50pt via `_opt`. |
+| IB_BULLISH/BEARISH stop `(isBull ? 50 : 80)` in `acd.js` | 2026-07-09 | Hardcoded IB stops (50pt BULLISH, 80pt BEARISH). IB_BEARISH 80pt was too wide — sweep found 50pt optimal for both. | `update_optimal_stops.mjs` stop sweep (20-150pt range) → `performance_audit OPTIMAL_STOP` → `liveStats._opt[IB_BULLISH/IB_BEARISH].stop`. |
+| `sizeMultiplier: confluenceCount >= 2 ? 1.0 : (lv.ev >= 30 ? 1.0 : 0.75)` | 2026-07-09 | EV-based starting multiplier was outside the IIFE, hiding a `$30` hardcoded threshold from the Stop hook scanner. | Moved inside IIFE as explicit comment: `if (lv.ev < 30 && confluenceCount < 2) mult -= 0.25`. Same behavior, now visible and scannable. |
+| IB description text `'N=89'`, `'73% WR'`, `'80pt'` | 2026-07-09 | Stale stats baked into the conflicting-signal description string and targetLabel. | Replaced with live `_opt.IB_BEARISH` stats via IIFE template literal. |
+| Monday description text `'60pt stop, 30pt target, post-IB only'` | 2026-07-09 | Stale stop/target values in level fade description string. | Changed to `'post-IB only (waits for IB close 10:30 ET)'` — operational text only, stop/target shown separately from `_opt`. |
+| `ibRange < 50 → TIGHT_IB, > 100 → WIDE_IB` in `morningBrief.js` | 2026-07-09 | IB range classification hardcoded at 50/100pt. 252-day distribution: p10=93pt (so < 50 NEVER fired), p20=114pt (so > 100 fired ~80% of sessions). Both thresholds completely wrong. | Rolling p33/p67 from last 90 sessions via `price_bars_primary` query, with fallbacks 146/229 (252d sample values). |

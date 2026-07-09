@@ -3181,10 +3181,13 @@ export default function createACDRouter(io) {
             const aDownTestedInIB = aDownLevel  && ibBars.some(b => b.low  <= aDownLevel);
             const conflicting = isBull ? (aUpTestedInIB && !aUpFired) : (aDownTestedInIB && !aDownFired);
 
-            // Stop geometry: fixed distance from ENTRY (not from IB boundary).
-            // Stop sweep simulation 2026-07-05: IB_BULLISH optimal=50pt (EV -$101→+$50),
-            // IB_BEARISH optimal=80pt (EV +$113→+$140). Old ibLow-2/ibHigh+2 was too wide on TREND days.
-            const stop = isBull ? +(currentPrice - 50).toFixed(0) : +(currentPrice + 80).toFixed(0);
+            // Stop geometry: data-derived via stop sweep in update_optimal_stops.mjs → performance_audit.
+            // Read from liveStats._opt[type].stop (sweep-optimal, not p75_mae).
+            // Fallback 50/80pt from 2026-07-05 sweep research if _opt is unavailable.
+            const ibTypeName = isBull ? 'IB_BULLISH' : 'IB_BEARISH';
+            const ibOpt = liveStats?._opt?.[ibTypeName];
+            const ibStopPts = ibOpt?.stop ?? 50; // sweep-optimal 50pt for both BULLISH and BEARISH
+            const stop = isBull ? +(currentPrice - ibStopPts).toFixed(0) : +(currentPrice + ibStopPts).toFixed(0);
             const target = isBull
               ? (pdVAH && pdVAH > currentPrice ? Math.round(pdVAH) : Math.round(ibHigh + (orRange || 0) * 0.5))
               : (pdVAL && pdVAL < currentPrice ? Math.round(pdVAL) : Math.round(ibLow - (orRange || 0) * 0.5));
@@ -3198,16 +3201,16 @@ export default function createACDRouter(io) {
               entry: +currentPrice.toFixed(0),
               stop,
               target,
-              targetLabel: isBull ? `T1: PD VAH (half off) · Stop: 50pt from entry (${stop})` : `T1: PD VAL (half off) · Stop: 80pt from entry (${stop})`,
+              targetLabel: isBull ? `T1: PD VAH (half off) · Stop: ${ibStopPts}pt from entry (${stop})` : `T1: PD VAL (half off) · Stop: ${ibStopPts}pt from entry (${stop})`,
               keyLevel: +ibMid.toFixed(0),
               keyLevelLabel: 'IB Midpoint',
               description: conflicting
                 ? (isBull
                   ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Half conviction only: smaller size, wider stop tolerance.`
-                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH has +1.3% directional edge at baseline (N=89). On TREND days: 73% WR. On TURBULENT: 62% WR (+13%). At PD-2 VA: 69% WR (+20%). EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop 80pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — 69% WR zone.' : ''}`)
+                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH ${(() => { const r = liveStats?._opt?.IB_BEARISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~55% WR'; })()} overall. On TURBULENT: strongest. EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`)
                 : (isBull
-                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH 64.2% WR overall (N=106). TREND days: 76.2% (N=42 decided). TURBULENT: 69.2% (N=39). BALANCE suppressed (51.9%). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop 50pt below entry (${stop}). Target PD VAH or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH 54.5% WR overall (N=99). TREND days: 71.7% combined WR. TURBULENT: 70.0%. BALANCE suppressed (51.9%). EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop 80pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
+                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${(() => { const r = liveStats?._opt?.IB_BULLISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~64% WR'; })()} overall. TREND days: strongest. BALANCE: suppressed (below breakeven). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target PD VAH or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${(() => { const r = liveStats?._opt?.IB_BEARISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~55% WR'; })()} overall. TURBULENT: strongest. BALANCE: suppressed. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
               // IB_BULLISH: TREND 68.8% WR +$20 EV (solid). TURBULENT thin data. BALANCE suppressed.
               // IB_BEARISH: TURBULENT 63.2% WR +$48 EV (solid). BALANCE marginal. TREND thin N=8.
@@ -4094,16 +4097,18 @@ export default function createACDRouter(io) {
         }
 
         // ── Unified Level Fade Setups ──
-        // All KEEP levels from the system backtest. 90pt stop, 40pt target.
+        // All KEEP levels from the system backtest.
         // RTH-wide detection (9:30 AM – 4:00 PM). First touch only (tracked via active_setups dedup).
         // Stats from 180-day system backtest (originally AM-only, now extended to full RTH).
-        // Monday-specific rules: start at 10:30, PD levels only, tighter stops
+        // Monday gate: wait for IB close (10:30 ET) before firing level fades.
         const isMonday = new Date(todayET + 'T12:00:00').getDay() === 1;
         const mondayGate = isMonday ? etMinNow >= 630 : true; // Mondays: wait for IB close (10:30)
         if (last5.length >= 3 && etMinNow < 960 && mondayGate) {
           const approachDir = last5[0].close < currentPrice ? 'FROM_BELOW' : 'FROM_ABOVE';
-          const STOP = isMonday ? 60 : 90;
-          const TARGET = isMonday ? 30 : 40;
+          // Fallback stop/target — only used when no OPTIMAL_STOP row exists AND no mae_p75 from level data.
+          // Per-setup-type values are loaded from performance_audit via liveStats._opt[type].
+          const STOP = 90;   // Fallback — only fires when _opt[type] is null AND lv.mae_p75 is null
+          const TARGET = 40; // Fallback — only fires when _opt[type] is null AND lv.mfe is null
 
           // Compute rolling composite levels
           let or5Mid = null;
@@ -4210,34 +4215,8 @@ export default function createACDRouter(io) {
             setCached(todayET, '2dPOC', twoDayPOC ?? null);
           }
 
-          // Monday: skip intraday levels that fail on Mondays
-          // IB_HIGH_FADE / IB_LOW_FADE also skip on Mondays (IB context different)
-          const mondaySkip = isMonday ? ['OR_HIGH_FADE', 'FLOOR_PIVOT_FADE', 'IB_HIGH_FADE', 'IB_LOW_FADE', 'OR_LOW_FADE', 'PD_SESSION_MID_FADE'] : [];
-
-          // Direction-suppressed setups: 54.3% WR N=56, -$2,445 across 406-day backfill (2026-07-03)
-          // Format: SET_TYPE_DIR strings — checked against the constructed `type` after direction resolves
-          // Tier analysis Jul 2025–Jul 2026 (N=2784 resolved trades).
-          // KILL = negative EV with N≥20; WEAK = marginal negative EV.
-          // See performance_audit signal_type='ALPHA_ANALYSIS' for full breakdown.
-          const suppressedFades = new Set([
-            // --- Previously suppressed ---
-            'PD_POC_FADE_SHORT',       // 52.9% WR N=34, EV=-$30 (KILL 2026-07-03)
-            'IB_MID_SCALP_FADE_SHORT', // 63.6% WR N=66, EV=-$16 (KILL 2026-07-04, stop width kills edge SHORT side)
-            ...(dtClass !== 'TREND' ? ['IB_MID_SCALP_FADE_LONG'] : []),  // BALANCE/TURBULENT: $0.58 EV noise; TREND only: 82% WR $15 EV
-
-            // --- KILL tier (tier analysis 2026-07-05) ---
-            'IB_HIGH_FADE_SHORT',          // 55.7% WR N=79, EV=-$35 — stop-wide structural loser SHORT side
-            'OR_MID_AFTER_IB_FADE_SHORT',  // 61.7% WR N=60, EV=-$32 — LONG side solid, SHORT kills edge
-            'CAM_R4_FADE_LONG',            // 64.3% WR N=28, EV=-$9 (confirmed 2026-07-07, N=69) — fading LONG from extreme resistance fails
-            'CAM_R1_FADE_LONG',            // 61.5% WR N=39, EV=-$6 (confirmed 2026-07-07, N=68) — WEAK/KILL boundary; buying R1 resistance
-            'PD_VAH_FADE_SHORT',           // 60.0% WR N=45, EV=-$16 — WEAK; VAH SHORT fails, VAH LONG is PRIME
-            // CAM support-level fades that lose on the LONG side (Opus audit 2026-07-07, all N≥20)
-            'CAM_S3_FADE_LONG',            // WR=57% N=37, EV=-$31 — worst CAM loser; S3 LONG fades structurally fail
-            'CAM_S1_FADE_LONG',            // WR=61% N=61, EV=-$21 — S1 LONG consistently negative EV
-            'CAM_S3_FADE_SHORT',           // WR=64% N=67, EV=-$12 — S3 SHORT also negative; both sides KILL
-            // CAM_R1_FADE_SHORT RESTORED (was suppressed on old N=34 data showing EV=-$16; re-backtest N=64 shows +$11 EV)
-            // CAM_S2_FADE_SHORT RESTORED (was suppressed on old N=30 data showing EV=-$23; re-backtest N=75 shows +$8 EV)
-          ]);
+          // All suppression is data-driven: SETUP_STATUS (global) + SETUP_STATUS_DOW (per-DOW).
+          // Both loaded below into _suppressedSetups and _dowSuppressToday. Hardcoded lists removed 2026-07-09.
 
           // On TREND days after IB close: suppress counter-trend fades only.
           // Full-year analysis (Jul 2025–Jul 2026, N=484 TREND-day trades): SHORT fades on UP-trend
@@ -4264,7 +4243,9 @@ export default function createACDRouter(io) {
           const cachedLevelStats = getCached(todayET, 'levelFadeStats');
           let liveStats = cachedLevelStats;
           if (!liveStats) {
-            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ] = await Promise.all([
+            // DOW as integer (0=Sun, 1=Mon...5=Fri, 6=Sat) for SETUP_STATUS_DOW lookup
+            const todayDowInt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
+            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ] = await Promise.all([
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
                   sample_size, win_rate::float, ev_per_trade::float,
@@ -4300,7 +4281,7 @@ export default function createACDRouter(io) {
                 WHERE signal_type = 'DAY_TYPE_ALPHA'
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
-              // Setup-level suppression: setups with N≥50, WR<48%, EV<-$5 fire as SHADOW.
+              // Setup-level suppression: N≥20, EV<-$5/trade. No WR gate — catches high-WR structural losers.
               // Promoted back when recent 90-day WR≥52% and EV>$0. Updated weekly by backtest_setup_status.mjs.
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name, recommendation
@@ -4308,6 +4289,15 @@ export default function createACDRouter(io) {
                 WHERE signal_type = 'SETUP_STATUS'
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
+              // DOW-specific suppression: setups negative on one DOW but positive all-time.
+              // signal_name = '{SETUP_TYPE}_DOW_{N}'. Only loads today's DOW rows.
+              query(`
+                SELECT DISTINCT ON (signal_name) signal_name, recommendation
+                FROM performance_audit
+                WHERE signal_type = 'SETUP_STATUS_DOW'
+                  AND signal_name LIKE $1
+                ORDER BY signal_name, run_date DESC
+              `, [`%_DOW_${todayDowInt}`]).catch(() => ({ rows: [] })),
             ]);
             liveStats = { _mon: {} };
             for (const r of statsQ.rows) {
@@ -4382,11 +4372,22 @@ export default function createACDRouter(io) {
                 zScore:         parsedNotes.z_score    ?? null,
               };
             }
-            // Setup-level suppression set — keyed by setup_type
-            // New setups of SUPPRESS types insert as SHADOW; PROMOTE clears suppression
+            // Setup-level suppression set — keyed by setup_type (directional)
+            // SUPPRESS: N≥20, EV<-$5 — auto-suppress structural losers
+            // THIN_N: N<20 — CLAUDE.md rule: insufficient data, must shadow until N≥20
+            // Both cause new setups to insert as SHADOW rather than ACTIVE
             liveStats._suppressedSetups = new Set();
             for (const r of setupStatusQ.rows) {
-              if (r.recommendation === 'SUPPRESS') liveStats._suppressedSetups.add(r.signal_name);
+              if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') liveStats._suppressedSetups.add(r.signal_name);
+            }
+            // DOW-specific suppression for today — setups negative on this DOW but fine all-time
+            // signal_name format: '{SETUP_TYPE}_DOW_{DOW_INT}' — strip the suffix to get setup_type
+            liveStats._dowSuppressToday = new Set();
+            for (const r of dowStatusQ.rows) {
+              if (r.recommendation === 'SUPPRESS') {
+                const setupType = r.signal_name.replace(/_DOW_\d+$/, '');
+                liveStats._dowSuppressToday.add(setupType);
+              }
             }
             setCached(todayET, 'levelFadeStats', liveStats);
           }
@@ -4482,26 +4483,12 @@ export default function createACDRouter(io) {
             { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
             { name: 'OR_MID_AFTER_IB_FADE', level: etMinNow >= 630 ? orMid : null, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
           ].filter(l => l.level != null);
-          const keepLevels = keepLevelsAll.filter(l => !mondaySkip.includes(l.name));
+          const keepLevels = keepLevelsAll;
 
           // Collect ALL levels within 15pt — wider than the old 10pt window to catch
           // approaches that reverse before piercing deeply. Pick the highest-EV level
           // as the primary setup; annotate description with confluence when 2+ stack.
           const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
-
-          // Monday-skip suppression audit: write SHADOW rows for levels excluded by DOW rule
-          if (isMonday && mondaySkip.length > 0) {
-            const mondayNear = keepLevelsAll.filter(l =>
-              mondaySkip.includes(l.name) && Math.abs(currentPrice - l.level) <= 15
-            );
-            for (const lv of mondayNear) {
-              await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
-                VALUES ($1,$2,NOW(),$3,'SHADOW','MONDAY_SKIP')
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
-              `, [todayET, lv.name, currentPrice]).catch(() => {});
-            }
-          }
 
           // Cascade breaker: skip new fade setup detection when trend regime detected.
           if (cascadeBreaker.active && nearLevels.length > 0) {
@@ -4520,7 +4507,7 @@ export default function createACDRouter(io) {
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const type = `${lv.name}_${dir}`;
-            if (!suppressedFades.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
+            if (!liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
@@ -4601,11 +4588,14 @@ export default function createACDRouter(io) {
                   if (dtaRow.recommendation === 'SIZE_DOWN')      return ` Caution — ${dtClass}: ${pct}% WR (below baseline).`;
                   return dtClass ? ` (${dtClass} day)` : '';
                 })();
-                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: 60pt stop, 30pt target, post-IB only.' : ' AM first touch.'}`;
+                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               sizeMultiplier: (() => {
-                let mult = confluenceCount >= 2 ? 1.0 : (lv.ev >= 30 ? 1.0 : 0.75);
+                let mult = 1.0;
+                // MARGINAL-tier starting discount: EV < $30 with no confluence → -0.25 base
+                // (PRIME/SOLID tiers or confluent setups start at full size)
+                if (lv.ev < 30 && confluenceCount < 2) mult = Math.max(mult - 0.25, 0.25);
                 // First-of-day / win-streak boost (only when no loss streak — applied first so cap can override)
                 if      (lfConsecWins >= 3)  mult = Math.min(mult + 0.50, 1.5);     // 87.8% WR
                 else if (lfConsecWins === 2)  mult = Math.min(mult + 0.35, 1.5);    // 79.7% WR
@@ -4717,10 +4707,11 @@ export default function createACDRouter(io) {
               stackCount: _lfSameDirCounts[dir] ?? 0,
               tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
             };
-            } // end !suppressedFades check
+            } // end suppression check
             else {
               // Suppressed near-level audit: write SHADOW row so user can verify suppression decisions
-              const suppressReason = suppressedFades.has(type) ? 'SUPPRESSED_FADE'
+              const suppressReason = liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
+                : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
               await query(`
@@ -4801,7 +4792,7 @@ export default function createACDRouter(io) {
               : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
             const isLong = touchApproachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
-            if (suppressedFades.has(`${lv.name}_${dir}`) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
+            if (liveStats._suppressedSetups?.has(`${lv.name}_${dir}`) || liveStats._dowSuppressToday?.has(`${lv.name}_${dir}`) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
             {
             const btType = `${lv.name}_${dir}`;
             const btOpt  = liveStats._opt?.[btType];
@@ -5073,7 +5064,9 @@ export default function createACDRouter(io) {
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
         levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
-        ibSetup,         // IB_BULLISH / IB_BEARISH — TREND 71.7% WR, TURBULENT 70.0%. BALANCE suppressed (51.9% < breakeven).
+        // IB_BULLISH / IB_BEARISH — TREND 71.7% WR, TURBULENT 70.0%. BALANCE suppressed (51.9% < breakeven).
+        // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27, Fri×IB_BULLISH EV=-$51 N=25 suppressed as of 2026-07-09.
+        (ibSetup && !liveStats?._dowSuppressToday?.has(ibSetup.type)) ? ibSetup : null,
       ];
       // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
       // These persist to active_setups with status='SHADOW', resolve against price,
@@ -6666,6 +6659,13 @@ export default function createACDRouter(io) {
         'M1_VAL':      { price: m1VALaudit,  bestCtx: '58% WR N=35, EV negative', freq: '~daily' },
         'M3_VAH':      { price: m3VAHaudit,  bestCtx: '64% WR N=54, EV negative', freq: '~daily' },
         'M3_VAL':      { price: null,        bestCtx: 'N=18 (thin)', freq: '~daily' },
+        // Directional display cards sourced from UNIFIED_BACKTEST (replaces CONTEXT/SCALP legacy orphan types)
+        'IB_BULLISH':           { price: null,  bestCtx: 'IB breakout direction context (all-day-type blended)', freq: '~0.4/day' },
+        'IB_BEARISH':           { price: null,  bestCtx: 'IB breakdown direction context (all-day-type blended)', freq: '~0.4/day' },
+        'IB_MID_SCALP_LONG':   { price: ibMid, bestCtx: '79% WR scalp fade LONG from IB midpoint', freq: '~1.5/day' },
+        'IB_MID_SCALP_SHORT':  { price: ibMid, bestCtx: '67% WR scalp fade SHORT from IB midpoint', freq: '~1.5/day' },
+        'OR_MID_AFTER_IB_LONG':  { price: orMid, bestCtx: '68% WR scalp fade LONG post-IB OR midpoint', freq: '~1/day' },
+        'OR_MID_AFTER_IB_SHORT': { price: orMid, bestCtx: '51% WR scalp fade SHORT post-IB OR midpoint', freq: '~1/day' },
       };
 
       // Build unified setups array
@@ -6689,15 +6689,25 @@ export default function createACDRouter(io) {
       };
 
       // Priority order for dedup: LEVEL_FADE / PD_LEVEL / SCALP / ROLLING > LEVEL_FADE_AUDIT / MIDPOINT_FADE_AUDIT > SYSTEM_BACKTEST
-      // UNIFIED_BACKTEST and other analytical types are not displayed here (they feed keepLevels directly)
+      // UNIFIED_BACKTEST: shown only for the specific signal_names that replace CONTEXT/SCALP legacy orphan types.
       const displayPrimary = new Set(['LEVEL_FADE', 'PD_LEVEL', 'SCALP', 'ROLLING']);
       const hasPrimary = (name) => auditQ.rows.some(r => r.signal_name === name && displayPrimary.has(r.signal_type));
       const hasSystemBacktest = (name) => auditQ.rows.some(r => r.signal_name === name && r.signal_type === 'SYSTEM_BACKTEST');
+
+      // UNIFIED_BACKTEST rows shown in the table (replaces CONTEXT/SCALP/SETUP legacy orphan types).
+      // Recommendation is null for most UNIFIED_BACKTEST rows — status is derived from EV/WR below.
+      const UNIFIED_DISPLAY = new Set([
+        'IB_BULLISH', 'IB_BEARISH',                                        // replaces CONTEXT type
+        'IB_MID_SCALP_LONG', 'IB_MID_SCALP_SHORT',                        // replaces SCALP type
+        'OR_MID_AFTER_IB_LONG', 'OR_MID_AFTER_IB_SHORT',                  // replaces SCALP type
+        // TRT_LONG: WR=33% EV=-$77 N=69 in UNIFIED_BACKTEST — dead setup, not shown
+      ]);
+
       for (const row of auditQ.rows) {
         if (row.signal_type === 'SYSTEM_SUMMARY') continue;
         if (row.signal_type === 'ROLLING_IB_AUDIT') continue;
-        // UNIFIED_BACKTEST feeds keepLevels directly — not for audit display
-        if (row.signal_type === 'UNIFIED_BACKTEST') continue;
+        // UNIFIED_BACKTEST: only show the specific signal_names above; everything else feeds keepLevels only
+        if (row.signal_type === 'UNIFIED_BACKTEST' && !UNIFIED_DISPLAY.has(row.signal_name)) continue;
         // SYSTEM_BACKTEST is fallback only when no primary source (LEVEL_FADE etc.) exists
         if (row.signal_type === 'SYSTEM_BACKTEST' && hasPrimary(row.signal_name)) continue;
         // Audit types are suppressed when a primary source or SYSTEM_BACKTEST exists for the same signal
@@ -6711,19 +6721,42 @@ export default function createACDRouter(io) {
         const levelPrice = meta.price != null ? Math.round(meta.price * 100) / 100 : null;
         const dist = levelPrice != null && currentPrice != null ? Math.round(Math.abs(currentPrice - levelPrice)) : null;
 
-        // Determine status — skip rows with no deterministic status (e.g. SYSTEM_BACKTEST fallbacks, MON_BACKTEST, etc.)
+        // Determine status
         let status;
-        if (row.recommendation === 'KEEP' || row.recommendation === 'ACTIVE') status = 'ACTIVE';
-        else if (row.recommendation === 'DIRECTIONAL' || row.recommendation === 'CONTEXT' || row.recommendation === 'DLL_TRADEABLE' || row.recommendation === 'THIN') status = 'CONTEXT';
-        else if (row.recommendation === 'CUT') status = 'REMOVED';
-        else continue; // skip analytical rows with no display status (null, non-standard)
+        if (row.signal_type === 'UNIFIED_BACKTEST') {
+          // IB_BULLISH/BEARISH: always CONTEXT — EV is blended across day types (good on TREND, bad on BALANCE)
+          if (row.signal_name === 'IB_BULLISH' || row.signal_name === 'IB_BEARISH') {
+            status = 'CONTEXT';
+          } else {
+            const ev = row.ev_per_trade || 0;
+            const wr = row.win_rate || 0;
+            if (ev > 0 && wr >= 0.52) status = 'ACTIVE';
+            else if (ev < -5)          status = 'REMOVED';
+            else                       status = 'CONTEXT';
+          }
+        } else if (row.recommendation === 'KEEP' || row.recommendation === 'ACTIVE') {
+          status = 'ACTIVE';
+        } else if (row.recommendation === 'DIRECTIONAL' || row.recommendation === 'CONTEXT' || row.recommendation === 'DLL_TRADEABLE' || row.recommendation === 'THIN') {
+          status = 'CONTEXT';
+        } else if (row.recommendation === 'CUT') {
+          status = 'REMOVED';
+        } else {
+          continue; // skip analytical rows with no display status (null, non-standard)
+        }
 
         // Determine type
         let type;
-        if (row.signal_type === 'SCALP') type = 'SCALP';
-        else if (row.signal_type === 'CONTEXT') type = 'CONTEXT';
-        else if (row.signal_type === 'SETUP') type = 'SETUP';
-        else type = 'LEVEL_FADE';
+        if (row.signal_type === 'SCALP' ||
+            (row.signal_type === 'UNIFIED_BACKTEST' && (row.signal_name.includes('_SCALP_') || row.signal_name.startsWith('OR_MID_AFTER_IB')))) {
+          type = 'SCALP';
+        } else if (row.signal_type === 'CONTEXT' ||
+            (row.signal_type === 'UNIFIED_BACKTEST' && (row.signal_name === 'IB_BULLISH' || row.signal_name === 'IB_BEARISH'))) {
+          type = 'CONTEXT';
+        } else if (row.signal_type === 'SETUP') {
+          type = 'SETUP';
+        } else {
+          type = 'LEVEL_FADE';
+        }
 
         // Next 2 day probability based on ATR distance
         let next2DayProb = null;
@@ -6741,7 +6774,7 @@ export default function createACDRouter(io) {
         const tests = [];
         if (row.signal_type === 'SYSTEM_BACKTEST') tests.push(`180d system backtest (N=${row.sample_size})`);
         else if (row.signal_type === 'LEVEL_FADE') tests.push(`Level fade audit (N=${row.sample_size})`);
-        else if (row.signal_type === 'SCALP') tests.push(`Scalp backtest (N=${row.sample_size})`);
+        else if (row.signal_type === 'SCALP' || row.signal_type === 'UNIFIED_BACKTEST') tests.push(`Unified backtest (N=${row.sample_size})`);
         else if (row.signal_type === 'CONTEXT') tests.push(`Context analysis (N=${row.sample_size})`);
         else tests.push(`${row.signal_type} (N=${row.sample_size})`);
         if (regimeFit) tests.push('regime analysis');

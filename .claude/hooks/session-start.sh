@@ -31,12 +31,33 @@ ORDER BY days_ago DESC;
 SQLEOF
 )
 
+# Check pipeline coverage — any setup_type that has resolved trades in the last 30 days
+# but NO SETUP_STATUS row dated within 8 days means it was added without running the pipeline.
+export UNCOVERED_SETUPS
+UNCOVERED_SETUPS=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+SELECT a.setup_type
+FROM (
+  SELECT DISTINCT setup_type
+  FROM active_setups
+  WHERE trade_date >= CURRENT_DATE - 30
+    AND resolution IN ('TARGET_HIT','STOP_HIT')
+) a
+WHERE NOT EXISTS (
+  SELECT 1 FROM performance_audit
+  WHERE signal_type = 'SETUP_STATUS'
+    AND signal_name = a.setup_type
+    AND run_date >= CURRENT_DATE - 8
+);
+SQLEOF
+)
+
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
 const w = process.env.WATCHER_STATUS || 'unknown';
 const n = process.env.ALERT_COUNT || '0';
 const last = process.env.LAST_ALERT || '';
 const miningRaw = process.env.MINING_STATUS || '';
+const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -49,6 +70,9 @@ const miningStale = miningRaw.split('\n').filter(Boolean).some(line => {
   const days = parseInt(line.split('|')[2], 10);
   return days > 8;
 });
+
+// Pipeline coverage: setup types with no fresh SETUP_STATUS row
+const uncovered = uncoveredRaw.split('\n').filter(Boolean);
 
 const lines = [
   '=== SESSION START PROTOCOL ===',
@@ -65,6 +89,10 @@ const lines = [
   `=== MINING SCRIPTS STATUS ${miningStale ? '⚠️  (STALE — re-run needed)' : '(all fresh)'}  ===`,
   ...miningLines,
   miningStale ? '\nACTION: Run stale scripts or check cron logs in scratch/session_bias.log / scratch/weekly_backtests.log' : '',
+  '',
+  uncovered.length > 0
+    ? `🔴 PIPELINE COVERAGE GAP — setup types with trades in last 30d but NO fresh SETUP_STATUS row:\n  ${uncovered.join(', ')}\n  ACTION: run node scripts/backtest_setup_status.mjs && node scripts/update_optimal_stops.mjs`
+    : '✅ Pipeline coverage: all active setup types have fresh SETUP_STATUS rows',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

@@ -861,6 +861,29 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[setup_anticipation] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 9:07 PM Sunday: MAE/MFE backfill — fills any missing bars for today's resolved setups
+  // Must run before optimal stops (9:13 PM) so new data is included in stop computation.
+  cron.schedule('7 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('MAE_MFE_BACKFILL', async () => {
+        execSync('node scripts/backfill_mae_mfe.mjs', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[mae_mfe_backfill] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:22 PM Sunday: level fade audit — per-level EV/WR/N for all 50+ tracked levels
+  cron.schedule('22 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('LEVEL_FADE_AUDIT', async () => {
+        execSync('node scripts/level_fade_audit.mjs', { cwd: process.cwd(), timeout: 300000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[level_fade_audit] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // 9:30 PM Sunday: compute MGI levels for today and tag any new BP fills
   cron.schedule('30 21 * * 0', async () => {
     try {

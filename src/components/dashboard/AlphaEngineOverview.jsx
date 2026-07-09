@@ -253,6 +253,106 @@ function BehavioralStatsPanel() {
   );
 }
 
+function PipelineHealthPanel() {
+  const [data, setData] = useState(null);
+  const [filter, setFilter] = useState('All');
+
+  useEffect(() => {
+    fetch('/api/playbook/pipeline-status').then(r => r.json()).then(setData).catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+
+  const cats = ['All', 'Core', 'Context', 'Coaching', 'Specialized', 'Orphan'];
+  const staleCount = data.pipelines.filter(p => p.status === 'STALE').length;
+  const neverCount = data.pipelines.filter(p => p.status === 'NEVER').length;
+  const orphanCount = data.pipelines.filter(p => p.status === 'ORPHAN').length;
+
+  const visible = filter === 'All' ? data.pipelines : data.pipelines.filter(p => p.cat === filter);
+
+  const statusColor = s => s === 'OK' ? '#22c55e' : s === 'STALE' ? '#f59e0b' : s === 'ORPHAN' ? '#475569' : '#ef4444';
+  const statusBg    = s => s === 'OK' ? '#052e16' : s === 'STALE' ? '#1c1a0a' : s === 'ORPHAN' ? '#0f172a' : '#1c0a0a';
+  const statusBorder= s => s === 'OK' ? '#14532d' : s === 'STALE' ? '#713f12' : s === 'ORPHAN' ? '#1e293b' : '#7f1d1d';
+
+  return (
+    <div>
+      {/* Summary row */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 13, color: '#94a3b8' }}>
+          {data.pipelines.length} tracked · as of {data.as_of}
+        </div>
+        {staleCount > 0 && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#f59e0b', background: '#1c1a0a', border: '1px solid #713f12', borderRadius: 4, padding: '2px 8px' }}>
+            {staleCount} STALE
+          </span>
+        )}
+        {neverCount > 0 && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#ef4444', background: '#1c0a0a', border: '1px solid #7f1d1d', borderRadius: 4, padding: '2px 8px' }}>
+            {neverCount} NEVER RUN
+          </span>
+        )}
+        {orphanCount > 0 && (
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#475569', background: '#0f172a', border: '1px solid #1e293b', borderRadius: 4, padding: '2px 8px' }}>
+            {orphanCount} ORPHAN
+          </span>
+        )}
+        {/* Category filter */}
+        <div style={{ display: 'flex', gap: 4, marginLeft: 'auto', flexWrap: 'wrap' }}>
+          {cats.map(c => (
+            <button key={c} onClick={() => setFilter(c)} style={{
+              fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+              background: filter === c ? '#3b82f6' : '#1e293b',
+              color: filter === c ? '#fff' : '#94a3b8',
+              border: `1px solid ${filter === c ? '#3b82f6' : '#334155'}`,
+            }}>{c}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Pipeline rows */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {visible.map(p => (
+          <div key={p.signal_type} style={{
+            background: statusBg(p.status),
+            border: `1px solid ${statusBorder(p.status)}`,
+            borderRadius: 6, padding: '8px 12px',
+            display: 'grid', gridTemplateColumns: '120px 1fr auto', gap: '6px 12px', alignItems: 'start',
+          }}>
+            {/* Left: type + status */}
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: statusColor(p.status), fontFamily: 'monospace', marginBottom: 2 }}>
+                {p.signal_type}
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: statusColor(p.status), background: statusColor(p.status) + '18', border: `1px solid ${statusColor(p.status)}40`, borderRadius: 3, padding: '1px 5px' }}>
+                {p.status}
+              </span>
+            </div>
+            {/* Center: description + schedule */}
+            <div>
+              <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5, marginBottom: 2 }}>{p.desc}</div>
+              <div style={{ fontSize: 11, color: '#475569' }}>
+                {p.schedule} · <span style={{ fontFamily: 'monospace' }}>{p.scripts}</span>
+              </div>
+            </div>
+            {/* Right: last run + rows */}
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: p.last_run ? '#e2e8f0' : '#475569' }}>
+                {p.last_run ? p.last_run : '—'}
+              </div>
+              {p.days_since !== null && (
+                <div style={{ fontSize: 11, color: '#64748b' }}>{p.days_since}d ago</div>
+              )}
+              {p.total_rows > 0 && (
+                <div style={{ fontSize: 11, color: '#475569' }}>{p.total_rows.toLocaleString()} rows</div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -334,7 +434,7 @@ export default function AlphaEngineOverview() {
     { name: 'IB_MID_SCALP_FADE_LONG', reason: 'BALANCE/TURBULENT only — TREND re-enabled (82% WR)' },
     { name: 'TREND counter-direction fades', reason: 'SHORT on UP-trend / LONG on DOWN-trend: 55–61% WR, −$28 to −$52 EV, −$17.5K/yr' },
     { name: 'S2 double-counter', reason: 'Both overnight inventory AND open-vs-value disagree: 54% WR → suppressed' },
-    { name: 'Monday IB/OR/FLOOR_PIVOT/PD_SESSION_MID', reason: 'Monday-specific suppression list — different market structure' },
+    { name: 'Globally suppressed setups (pipeline-driven)', reason: 'Auto-suppression engine writes SETUP_STATUS rows weekly — any setup with N≥20 and EV<-$5 fires as SHADOW. Setups flip back to ACTIVE when 90d data recovers. mondaySkip list removed 2026-07-09 — DOW edge handled by SETUP_STATUS_DOW.' },
   ];
 
   const tools = [
@@ -387,7 +487,7 @@ export default function AlphaEngineOverview() {
     {
       name: 'Auto-Suppression Engine',
       color: '#ef4444',
-      desc: 'scripts/backtest_setup_status.mjs — weekly Sunday 9:17 PM. SUPPRESS: N≥50, WR<48%, EV<-$5 → new setups fire as SHADOW. PROMOTE: recent 90-day WR≥52% + EV>$0 + N≥15 → restored to ACTIVE. Directly flips open active_setups rows on each run. Safety net: if this stops running, losing setups accumulate silently.',
+      desc: 'scripts/backtest_setup_status.mjs — weekly Sunday 9:20 PM. SUPPRESS: N≥20, EV<-$5 (no WR gate — catches high-WR structural losers). PROMOTE: 90-day WR≥52% + EV>$0 + N≥15 → restored to ACTIVE. Directly flips open active_setups rows on each run. Currently 17 types suppressed (19 SETUP_STATUS rows as of 2026-07-09). Safety net: if this stops running, losing setups accumulate silently.',
       _live: 'setupStatus',
     },
     {
@@ -406,13 +506,13 @@ export default function AlphaEngineOverview() {
   return (
     <div style={S.page}>
       <div style={S.h1}>Alpha Engine Overview</div>
-      <div style={S.sub}>Level Fade System — built Jan–Jul 2026 · All thresholds data-derived · Last alpha surgery 2026-07-05</div>
+      <div style={S.sub}>Level Fade System — built Jan–Jul 2026 · All thresholds data-derived · Last alpha surgery 2026-07-09</div>
 
       {/* Top-line stats */}
       <div style={{ ...S.grid4, marginBottom: 28 }}>
-        <StatCard label="Trades analyzed" value="2,784" sub="Jul 2025–Jul 2026 resolved" accent="#3b82f6" />
-        <StatCard label="PRIME+SOLID EV" value="$59.6K/yr" sub="At 1 MNQ contract" accent="#22c55e" />
-        <StatCard label="Alpha recovered" value="~$82K/yr" sub="Suppressions + latency fix" accent="#a78bfa" />
+        <StatCard label="Trades analyzed" value="4,424" sub="Nov 2023–Jul 2026 resolved" accent="#3b82f6" />
+        <StatCard label="PRIME+SOLID EV" value="$68.5K/yr" sub="Jul 2025–Jul 2026 at 1 MNQ" accent="#22c55e" />
+        <StatCard label="Alpha recovered" value="~$75K/yr" sub="Suppressions ($31K) + latency fix ($44K)" accent="#a78bfa" />
         <StatCard label="Active levels" value="50+" sub="PD / CAM / FLOOR / WPP / monthly" accent="#06b6d4" />
       </div>
 
@@ -541,6 +641,17 @@ export default function AlphaEngineOverview() {
             Frequency of behavioral patterns across all coaching sessions. WORSENING = last 10 sessions &gt;10pp above prior 20.
           </div>
           <BehavioralStatsPanel />
+        </div>
+      </div>
+
+      {/* Pipeline Health */}
+      <div style={S.section}>
+        <div style={S.sectionTitle}>Pipeline Health</div>
+        <div style={{ ...S.card, padding: '14px 16px' }}>
+          <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+            All calibration pipelines tracked here. STALE = last run exceeded max expected age. Core pipelines (SETUP_STATUS, OPTIMAL_STOP) weekly; LATENCY_AUDIT + AI reviews daily.
+          </div>
+          <PipelineHealthPanel />
         </div>
       </div>
 

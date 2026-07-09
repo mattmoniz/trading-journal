@@ -883,4 +883,84 @@ router.get('/behavioral-stats', async (req, res) => {
   }
 });
 
+// Pipeline health: last run date + row count per signal_type, with metadata
+router.get('/pipeline-status', async (req, res) => {
+  // Metadata for each known signal_type: description, schedule string, script(s), max_age_days
+  const META = {
+    SETUP_STATUS:        { cat: 'Core', desc: 'Auto-suppression gate — flags N≥20 + EV<-$5 setups as SHADOW. Also promotes recovered setups. Safety net: if stale, losing setups accumulate undetected.', schedule: 'Daily 4:20 PM ET + Sun 9:20 PM', scripts: 'backtest_setup_status.mjs', maxAge: 2 },
+    SETUP_STATUS_DOW:    { cat: 'Core', desc: 'Per-DOW suppression overlay (e.g. Thu×IB_BEARISH EV=-$17). Stacks on top of global suppression; today\'s DOW rows loaded at startup.', schedule: 'Daily 4:20 PM ET + Sun 9:20 PM', scripts: 'backtest_setup_status.mjs', maxAge: 2 },
+    OPTIMAL_STOP:        { cat: 'Core', desc: 'Data-derived stops + EV-sweep targets per setup type. Stop=p75_MAE (EV-sweep for IB). T1=argmax EV(T) where T≤p75_MFE. Live engine reads liveStats._opt[type].', schedule: 'Daily 4:20 PM ET + Sun', scripts: 'update_optimal_stops.mjs', maxAge: 2 },
+    MON_BACKTEST:        { cat: 'Core', desc: 'Monday WR/EV overrides per level — used in keepLevels logic in acd.js. IB_LOW_MONDAY: EV=-$60, OR_MID_MONDAY: 75.5% WR. Prevents level noise on statistically bad Monday setups.', schedule: 'Sun (weekly backtest)', scripts: 'backtest_monday_deep.js', maxAge: 8 },
+    UNIFIED_BACKTEST:    { cat: 'Core', desc: 'EV, WR, N per setup_type×direction across all resolved trades. Primary source of truth for setup performance ranking and tier classification.', schedule: 'Sun 9:10 PM ET', scripts: 'backtest_unified.js', maxAge: 8 },
+    DAY_TYPE_ALPHA:      { cat: 'Core', desc: 'Per-(setup_type × day_type) z-score → SIZE_UP/SUPPRESS cells in sizeMultiplier IIFE. Only cells with z≥1.5 + N≥20 affect live sizing.', schedule: 'Sun (weekly)', scripts: 'backtest_day_type_alpha.js', maxAge: 8 },
+    LATENCY_AUDIT:       { cat: 'Core', desc: 'Setup fire latency: lag from first bar near level to alert. RETROACTIVE (>45min) = phantom win. Fix recovered ~$44K/yr. Alerts to gemini_alerts.txt.', schedule: 'Daily 5:15 PM ET', scripts: 'audit_setup_latency.mjs', maxAge: 2 },
+    CONTEXT_ANALYSIS:    { cat: 'Context', desc: 'DOW × day-type × time-of-day edge across 136 conditions. Stable rules: no Monday fades, BALANCE-only, prefer LONG, IB_MID Fri=best.', schedule: 'Sun 6:00 AM ET', scripts: 'context_analysis.js', maxAge: 8 },
+    SESSION_BIAS:        { cat: 'Context', desc: 'Pre-market direction bias (A Up, NL30, gap) vs session outcome. Powers the permission slip system for directional confidence.', schedule: 'Sun (weekly)', scripts: 'mine_session_bias.mjs', maxAge: 8 },
+    PERMISSION_SLIP:     { cat: 'Context', desc: 'Session bias hit rates by context combo: A Up+NL30 72.1% N=140. Used in SessionBiasPanel for directional sizing confidence.', schedule: 'Sun (weekly)', scripts: 'backtest_permission_slips.mjs', maxAge: 8 },
+    SETUP_ANTICIPATION:  { cat: 'Context', desc: 'P(setup fires | day_type, DOW) × avg_pnl. Powers top-3 forecast in SessionForecastPanel. Top: BALANCE→OR_HIGH_FADE_SHORT 29% fire rate / 84% WR.', schedule: 'Sun 8:30 PM ET', scripts: 'backtest_level_approach.js', maxAge: 8 },
+    PULSE_SCORE_AUDIT:   { cat: 'Context', desc: 'Pulse score (composite market-read: delta, volume, range, momentum) calibration vs next-day outcomes. Validates the scoring model.', schedule: 'Sun (weekly)', scripts: 'backtest_pulse_score.mjs', maxAge: 8 },
+    TOD_ALPHA:           { cat: 'Context', desc: 'Time-of-day alpha per setup type: which setups outperform at which hours of the RTH session.', schedule: 'Sun (weekly)', scripts: 'mine_tod_patterns.mjs', maxAge: 8 },
+    DOW_TOD_ALPHA:       { cat: 'Context', desc: 'DOW × time-of-day cross-analysis (e.g. Friday morning fades vs Thursday afternoon setups).', schedule: 'Sun (weekly)', scripts: 'mine_tod_patterns.mjs', maxAge: 8 },
+    CONFLUENCE_AUDIT:    { cat: 'Context', desc: 'Level pair confluence at 15pt proximity: 108 TRADE-rated pairs. Top: CAM_S2+PD_IB_HIGH 75.5% EV=$55. Used in SessionForecastPanel.', schedule: 'Sun (weekly)', scripts: 'backtest_confluence.js', maxAge: 8 },
+    AI_SETUP_REVIEW:     { cat: 'Coaching', desc: 'Per-session AI review of each trade: stop/entry/T1 quality rating (1–5⭐). Raw input for AI_SETUP_AGG.', schedule: 'Daily 4:35 PM ET', scripts: 'daily_coaching.js', maxAge: 2 },
+    AI_SETUP_AGG:        { cat: 'Coaching', desc: 'Aggregated AI ratings per setup type — flags NEEDS_ADJUST when avg<3.5⭐ N≥20. Shown in Setup Calibration panel.', schedule: 'Daily 4:35 PM ET', scripts: 'aggregate_ai_setup_reviews.js', maxAge: 2 },
+    BEHAVIORAL_STATS:    { cat: 'Coaching', desc: 'Behavioral pattern frequency trends across all coaching sessions (revenge trading, oversizing, etc). WORSENING = last10 >10pp above prior 20.', schedule: 'Sun 9:05 PM ET', scripts: 'aggregate_behavioral_stats.js', maxAge: 8 },
+    BEHAVIORAL_PATTERN:  { cat: 'Coaching', desc: 'Specific behavioral patterns mined from coaching history text. Input to BEHAVIORAL_STATS.', schedule: 'Sun (weekly)', scripts: 'mine_behavioral_patterns.mjs', maxAge: 8 },
+    LEVEL_FADE_AUDIT:    { cat: 'Specialized', desc: 'Per-level fade edge audit: EV/WR/N for each of the 50+ key levels. Identifies which levels are worth tracking vs noise.', schedule: 'Sun 9:22 PM ET', scripts: 'level_fade_audit.mjs', maxAge: 8 },
+    MAE_MFE_AUDIT:       { cat: 'Specialized', desc: 'MAE/MFE distribution health: verifies backfill completeness and that stop/target distributions are well-formed and not skewed by outliers.', schedule: 'Sun 8:00 PM ET', scripts: 'audit_mae_mfe.mjs', maxAge: 8 },
+    SYSTEM_BACKTEST:     { cat: 'Specialized', desc: 'Full system-level backtest across all trade types and regime conditions. Broader than UNIFIED_BACKTEST — includes combo and contextual signals.', schedule: 'Weekly', scripts: 'backtest_full_system.js', maxAge: 10 },
+    LEVEL_PATTERN:       { cat: 'Specialized', desc: 'Pattern recognition at key levels (absorption bars, volume spikes, reclaim patterns). Feeds into sizeMultiplier confluence factor.', schedule: 'Weekly', scripts: 'backtest_level_patterns.mjs', maxAge: 10 },
+    TOD_PATTERN:         { cat: 'Specialized', desc: 'Time-of-day pattern mining: recurring price behavior at specific intraday times.', schedule: 'Weekly', scripts: 'mine_tod_patterns.mjs', maxAge: 10 },
+    LEVEL_FADE_DELTA:    { cat: 'Specialized', desc: 'Delta confirmation at level fades — net buyer/seller imbalance at approach validates +0.15 sizeMultiplier factor.', schedule: 'Weekly', scripts: 'backtest_level_patterns.mjs', maxAge: 10 },
+    MIDPOINT_FADE_AUDIT: { cat: 'Specialized', desc: 'High-N historical baseline (N=293–483/level) for IB_MID, OR_MID, OR_MID_AFTER_IB, PD_MID, SESSION_MID, VWAP. Script archived — data is frozen 2024 reference. UNIFIED_BACKTEST covers directional splits for active levels.', schedule: 'Historical (script archived 2026-07-09)', scripts: 'midpoint_fade_audit.mjs', maxAge: 9999 },
+    PD_IB_AUDIT:         { cat: 'Specialized', desc: 'High-N historical baseline (N=167–297/level) for PD_IB_HIGH/LOW/MID, PD_OR_HIGH/LOW, PD_OR_MID, PD_SESSION_MID. Script archived — data frozen. PD_OR_HIGH and PD_OR_LOW have no UNIFIED_BACKTEST directional equivalent yet.', schedule: 'Historical (script archived 2026-07-09)', scripts: 'pd_ib_or_fade_audit.mjs', maxAge: 9999 },
+  };
+
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { rows } = await query(`
+      SELECT signal_type,
+             MAX(run_date)::text AS last_run,
+             COUNT(*) AS total_rows,
+             MAX(run_date) AS last_run_ts
+      FROM performance_audit
+      GROUP BY signal_type
+      ORDER BY MAX(run_date) DESC
+    `);
+
+    const known = new Set(rows.map(r => r.signal_type));
+
+    // Build result: known types + any META types not yet in DB
+    const allTypes = [
+      ...rows.map(r => {
+        const meta = META[r.signal_type];
+        const daysSince = Math.floor((new Date(today) - new Date(r.last_run)) / 86400000);
+        if (!meta) {
+          // Not in META = not a scheduled pipeline; mark as ORPHAN for Gemini consolidation
+          return { signal_type: r.signal_type, last_run: r.last_run, total_rows: parseInt(r.total_rows, 10), days_since: daysSince, cat: 'Orphan', desc: 'Not in scheduled pipeline set — likely one-off analysis or superseded. Gemini consolidation audit will classify.', schedule: '(unscheduled)', scripts: '?', maxAge: 0, status: 'ORPHAN' };
+        }
+        return { signal_type: r.signal_type, last_run: r.last_run, total_rows: parseInt(r.total_rows, 10), days_since: daysSince, ...meta };
+      }),
+      ...Object.entries(META)
+        .filter(([k]) => !known.has(k))
+        .map(([k, m]) => ({ signal_type: k, last_run: null, total_rows: 0, days_since: null, ...m, status: 'NEVER' })),
+    ];
+
+    // Freshness for META types: OK / STALE / NEVER
+    const result = allTypes.map(r => {
+      if (r.status) return r; // already set (ORPHAN / NEVER)
+      let status = 'NEVER';
+      if (r.last_run) {
+        status = r.days_since <= r.maxAge ? 'OK' : 'STALE';
+      }
+      return { ...r, status };
+    });
+
+    res.json({ pipelines: result, as_of: today });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

@@ -1,7 +1,9 @@
 /**
  * Auto-shadow / auto-promote setup types based on accumulated performance.
+ * UNIFIED suppression system — the ONLY suppression source. acd.js hardcoded
+ * suppressedFades set was removed 2026-07-09; all suppression flows through here.
  *
- * SUPPRESS: all-time N≥50, WR<48%, EV<-$5 → setup fires as SHADOW going forward
+ * SUPPRESS: N≥20, EV<-$5/trade (no WR gate — catches high-WR structural losers)
  * PROMOTE:  currently suppressed AND recent 90-day N≥15, WR≥52%, EV>$0 → restore to ACTIVE
  *
  * Shadow setups still resolve (TARGET_HIT/STOP_HIT) so data keeps accumulating.
@@ -20,15 +22,22 @@ import pool from '../server/db.js';
 
 const SIGNAL_TYPE = 'SETUP_STATUS';
 
-// Thresholds — conservative to avoid suppressing setups on thin data
-const SUPPRESS_MIN_N   = 50;   // need at least 50 resolved trades all-time
-const SUPPRESS_MAX_WR  = 0.48; // WR below 48%
-const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade
+// Thresholds — EV-only gate catches high-WR structural losers that a WR threshold misses
+const SUPPRESS_MIN_N   = 20;   // N≥20 satisfies the hard floor from CLAUDE.md
+const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR gate)
 
 const PROMOTE_WINDOW_DAYS = 90;
 const PROMOTE_MIN_N    = 15;   // 15 trades in last 90 days is enough to signal recovery
 const PROMOTE_MIN_WR   = 0.52;
 const PROMOTE_MIN_EV   = 0;    // any positive EV
+
+// Setup types that are day-type conditional — their overall EV blends good and bad day types
+// and therefore can't be evaluated as a single suppress/promote decision. These are managed
+// by DAY_TYPE_ALPHA in acd.js, which applies per-(setup_type × day_type) sizing adjustments.
+const DAY_TYPE_CONDITIONAL = new Set([
+  'IB_BULLISH',  // TREND=76%+WR, BALANCE=51% → overall EV dragged by BALANCE (which self-gates)
+  'IB_BEARISH',  // same pattern — TURBULENT elite, BALANCE marginal
+]);
 
 async function run() {
   console.log('[backtest_setup_status] Starting...');
@@ -86,6 +95,15 @@ async function run() {
     const rec90  = recent[type];
     const wasSuppressed = currentStatus[type] === 'SUPPRESS';
 
+    // Day-type conditional setups: skip global suppress/promote — managed by DAY_TYPE_ALPHA.
+    // Still write a row so the session-start coverage check knows these types are assessed.
+    if (DAY_TYPE_CONDITIONAL.has(type)) {
+      const rec = wasSuppressed ? 'ACTIVE' : 'DAY_TYPE_MANAGED'; // clear stale SUPPRESS if any
+      results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation: rec, rec90 });
+      unchanged++;
+      continue;
+    }
+
     let recommendation = 'ACTIVE';
 
     if (wasSuppressed && rec90 && +rec90.n >= PROMOTE_MIN_N && +rec90.wr >= PROMOTE_MIN_WR && +rec90.ev > PROMOTE_MIN_EV) {
@@ -93,11 +111,17 @@ async function run() {
       recommendation = 'PROMOTE';
       promoted++;
       console.log(`  PROMOTE  ${type.padEnd(38)} all: N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}  recent90: N=${rec90.n} WR=${(+rec90.wr*100).toFixed(1)}% EV=$${(+rec90.ev).toFixed(0)}`);
-    } else if (n >= SUPPRESS_MIN_N && wr < SUPPRESS_MAX_WR && ev < SUPPRESS_MAX_EV) {
+    } else if (n >= SUPPRESS_MIN_N && ev < SUPPRESS_MAX_EV) {
       recommendation = 'SUPPRESS';
       suppressed++;
       const tag = wasSuppressed ? '(already suppressed)' : '← NEW';
       console.log(`  SUPPRESS ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} total=$${r.total_pnl.toFixed(0)} ${tag}`);
+    } else if (n < SUPPRESS_MIN_N) {
+      // CLAUDE.md hard rule: N<20 → SHADOW until enough data to evaluate.
+      // acd.js reads THIN_N the same as SUPPRESS — inserts new setups as SHADOW.
+      // Auto-clears when N reaches 20 and EV qualifies (next weekly run).
+      recommendation = 'THIN_N';
+      console.log(`  THIN_N   ${type.padEnd(38)} N=${n} EV=$${ev.toFixed(0)} — shadow until N≥20`);
     } else {
       unchanged++;
     }
@@ -107,10 +131,10 @@ async function run() {
 
   console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged`);
 
-  // Write to performance_audit
+  // Write to performance_audit — always write every evaluated type so the session-start
+  // coverage check can verify all active setup_types have been assessed this week.
   let written = 0;
   for (const r of results) {
-    if (r.recommendation === 'ACTIVE' && !currentStatus[r.type]) continue; // no change, skip write
     const notes = JSON.stringify({
       all_time_n:  r.n,
       all_time_wr: +(r.wr * 100).toFixed(1),
@@ -162,6 +186,100 @@ async function run() {
   }
 
   console.log(`\n[backtest_setup_status] ${written} rows written → performance_audit SETUP_STATUS`);
+
+  // ── Per-DOW suppression (SETUP_STATUS_DOW) ────────────────────────────────
+  // For each (DOW, setup_type) with N≥20 and EV<-$5 that isn't ALREADY globally suppressed,
+  // write a SETUP_STATUS_DOW row. acd.js loads today's DOW rows into _dowSuppressToday.
+  // DOW_TYPE_CONDITIONAL setups (IB_BULLISH/IB_BEARISH) are excluded — they use the
+  // candidates path and aren't gated by _dowSuppressToday in the level-fade engine.
+  console.log('\n[backtest_setup_status] Computing per-DOW suppression...');
+  const DOW_SIGNAL_TYPE = 'SETUP_STATUS_DOW';
+  const DOW_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  const globalSuppress = new Set(results.filter(r => r.recommendation === 'SUPPRESS').map(r => r.type));
+
+  const dowQ = await query(`
+    SELECT
+      EXTRACT(DOW FROM trade_date)::int AS dow,
+      setup_type,
+      COUNT(*) AS n,
+      AVG((resolution='TARGET_HIT')::int)::float AS wr,
+      AVG(actual_pnl)::float AS ev,
+      SUM(actual_pnl)::float AS total_pnl
+    FROM active_setups
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT')
+      AND actual_pnl IS NOT NULL
+    GROUP BY 1, 2
+    HAVING COUNT(*) >= ${SUPPRESS_MIN_N}
+    ORDER BY 1, 2
+  `);
+
+  let dowSuppressed = 0, dowWritten = 0;
+  for (const r of dowQ.rows) {
+    const dow = +r.dow;
+    const type = r.setup_type;
+    const n = +r.n, ev = +r.ev, wr = +r.wr;
+
+    // Skip globally suppressed (already handled) and Sun/Sat.
+    // DAY_TYPE_CONDITIONAL (IB_BULLISH/IB_BEARISH) are NOT skipped here — they are excluded from
+    // global suppression, but per-DOW suppression is valid and needed for them.
+    // acd.js checks _dowSuppressToday for IB types when building the candidates array.
+    if (globalSuppress.has(type) || dow === 0 || dow === 6) continue;
+
+    const shouldSuppress = ev < SUPPRESS_MAX_EV;
+    if (!shouldSuppress) continue;
+
+    const signalName = `${type}_DOW_${dow}`;
+    const notes = JSON.stringify({ dow, dow_name: DOW_NAMES[dow], setup_type: type, n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2) });
+
+    await query(`
+      INSERT INTO performance_audit
+        (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
+      VALUES ($1, 0, $2, $3, $4, $5, $6, $7, 'SUPPRESS', $8)
+      ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+        sample_size    = EXCLUDED.sample_size,
+        win_rate       = EXCLUDED.win_rate,
+        ev_per_trade   = EXCLUDED.ev_per_trade,
+        total_pnl      = EXCLUDED.total_pnl,
+        recommendation = EXCLUDED.recommendation,
+        notes          = EXCLUDED.notes
+    `, [today, DOW_SIGNAL_TYPE, signalName, n, wr, ev, +r.total_pnl, notes]);
+
+    console.log(`  DOW_SUPPRESS ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}`);
+    dowSuppressed++;
+    dowWritten++;
+  }
+
+  // Clear any stale DOW suppression rows that no longer qualify (set to ACTIVE)
+  // Any signal_name matching DOW pattern that ISN'T in this run's suppress set → write ACTIVE
+  const currentDowQ = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, recommendation
+    FROM performance_audit
+    WHERE signal_type = $1
+    ORDER BY signal_name, run_date DESC
+  `, [DOW_SIGNAL_TYPE]);
+
+  const newDowSuppress = new Set();
+  for (const r of dowQ.rows) {
+    const dow = +r.dow;
+    if (globalSuppress.has(r.setup_type) || dow === 0 || dow === 6) continue;
+    if (+r.ev < SUPPRESS_MAX_EV && +r.n >= SUPPRESS_MIN_N) newDowSuppress.add(`${r.setup_type}_DOW_${dow}`);
+  }
+
+  for (const row of currentDowQ.rows) {
+    if (row.recommendation === 'SUPPRESS' && !newDowSuppress.has(row.signal_name)) {
+      // Was suppressed, no longer qualifies — write ACTIVE to clear it
+      await query(`
+        INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
+        VALUES ($1, 0, $2, $3, 0, 0, 0, 0, 'ACTIVE', '{"cleared":"no_longer_qualifies"}')
+        ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET recommendation='ACTIVE', notes='{"cleared":"no_longer_qualifies"}'
+      `, [today, DOW_SIGNAL_TYPE, row.signal_name]);
+      console.log(`  DOW_CLEARED ${row.signal_name} (no longer qualifies)`);
+      dowWritten++;
+    }
+  }
+
+  console.log(`\n[backtest_setup_status] ${dowSuppressed} DOW-specific suppressions | ${dowWritten} rows written → SETUP_STATUS_DOW`);
   await pool.end();
 }
 

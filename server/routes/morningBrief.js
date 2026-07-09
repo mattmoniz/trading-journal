@@ -133,6 +133,36 @@ async function getTrailingORWidths(date, days = 90) {
   return res.rows.map(r => r.or_width).filter(w => w > 0);
 }
 
+// Fetch rolling p50 of 30-bar net-delta magnitude (same formula as divergence alert).
+// p10 of |delta30| ≈ 500 (old hardcoded value — fired 90% of the time, useless).
+// p50 ≈ 2100, p67 ≈ 3400. Using p50 means "notable net flow" = above-median pressure.
+async function getTrailingDelta30P50(date, days = 30) {
+  const res = await query(`
+    WITH recent_bars AS (
+      SELECT open::float, high::float, low::float, close::float, volume::float, ts
+      FROM price_bars_primary
+      WHERE symbol='NQ'
+        AND ts::date >= $1::date - $2::int AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ),
+    delta30_windows AS (
+      SELECT ABS(SUM(
+        (CASE WHEN close >= open THEN 1 ELSE -1 END)
+        * volume
+        * GREATEST(
+            CASE WHEN (high - low) > 0 THEN ABS(close - open) / (high - low) ELSE 0 END,
+            0.3
+          )
+      ) OVER (PARTITION BY ts::date ORDER BY ts ROWS BETWEEN 29 PRECEDING AND CURRENT ROW)) AS abs_delta30
+      FROM recent_bars
+    )
+    SELECT PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY abs_delta30) AS p50
+    FROM delta30_windows
+    WHERE abs_delta30 IS NOT NULL
+  `, [date, days]).catch(() => ({ rows: [{}] }));
+  return Math.round(res.rows[0]?.p50 ?? 2100);  // Fallback: p50 from 90d analysis 2026-07-09
+}
+
 // Fetch trailing ATR(20) for rotation threshold
 async function getTrailingATR(date, days = 20) {
   const res = await query(`
@@ -664,7 +694,10 @@ router.get('/live-session-context/:date', async (req, res) => {
     const ibBroken = ibH && ibL ? (price > ibH ? 'ABOVE' : price < ibL ? 'BELOW' : 'INSIDE') : null;
 
     // Rotations — 5-min close-to-close, ATR-scaled threshold (no static 65pt)
-    const atr20 = await getTrailingATR(date, 20);
+    const [atr20, delta30P50] = await Promise.all([
+      getTrailingATR(date, 20),
+      getTrailingDelta30P50(date, 30),
+    ]);
     const rotThreshold = Math.round(atr20 * 0.15); // ~15% of ATR(20)
     const fiveMapRot = {};
     for (const b of bars) {
@@ -703,14 +736,31 @@ router.get('/live-session-context/:date', async (req, res) => {
     const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std); // +2σ = EXTREME_CHOP
     const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
 
+    // IB range classification thresholds — derived from rolling p33/p67 of last 90 sessions.
+    // Replaces former hardcoded < 50 (never fired, p10=93pt) and > 100 (fired 80% of days, p20=114pt).
+    const ibRangePercQ = await query(`
+      SELECT
+        PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p33,
+        PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p67
+      FROM (
+        SELECT MAX(high)::float AS ib_high, MIN(low)::float AS ib_low
+        FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date < $1
+          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        GROUP BY ts::date ORDER BY ts::date DESC LIMIT 90
+      ) t
+    `, [date]).catch(() => ({ rows: [{}] }));
+    const ibTightThreshold = Math.round(ibRangePercQ.rows[0]?.p33 ?? 146);  // Fallback: p33 from 252d sample
+    const ibWideThreshold  = Math.round(ibRangePercQ.rows[0]?.p67 ?? 229);  // Fallback: p67 from 252d sample
+
     let sessionChar = 'DEVELOPING';
     if (etMin >= 630) {
       if (rots >= extremeChopThreshold) sessionChar = 'EXTREME_CHOP';
       else if (rots >= chopThreshold) sessionChar = 'CHOP';
       else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct > 70) sessionChar = 'TREND_UP';
       else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct < 30) sessionChar = 'TREND_DOWN';
-      else if (ibRange && ibRange < 50) sessionChar = 'TIGHT_IB';
-      else if (ibRange && ibRange > 100) sessionChar = 'WIDE_IB';
+      else if (ibRange && ibRange < ibTightThreshold) sessionChar = 'TIGHT_IB';
+      else if (ibRange && ibRange > ibWideThreshold) sessionChar = 'WIDE_IB';
       else sessionChar = 'BALANCE';
     }
 
@@ -1221,6 +1271,10 @@ router.get('/trade-alerts/:date', async (req, res) => {
     const proximityThreshold = Math.max(30, Math.round(devRange * 0.12));
 
     // Compute divergence stretch: 30-bar price move vs 30-bar delta move
+    const [atr20, delta30P50] = await Promise.all([
+      getTrailingATR(date, 20),
+      getTrailingDelta30P50(date, 30),
+    ]);
     if (b.length >= 30) {
       const recent30 = b.slice(-30);
       const priceMove30 = recent30[recent30.length-1].close - recent30[0].close;
@@ -1231,10 +1285,14 @@ router.get('/trade-alerts/:date', async (req, res) => {
         delta30 += (bar.close >= bar.open ? 1 : -1) * Number(bar.vol || 0) * Math.max(bp, 0.3);
       }
       const stretchPct = devRange > 0 ? Math.abs(priceMove30) / devRange * 100 : 0;
-      const priceFalling = priceMove30 < -10;
-      const priceRising = priceMove30 > 10;
-      const deltaBuying = delta30 > 500;
-      const deltaSelling = delta30 < -500;
+      // Thresholds derived from rolling distributions — no static values.
+      // priceMove: p50 of 30-bar |close change| ≈ 35pt (old: 10pt = p20, fired 80% of bars).
+      // delta30: p50 of |30-bar net-delta| from rolling 30 sessions (old: 500 = p10, always true).
+      const priceMoveThr = Math.round(atr20 * 0.155); // ≈ p50 of 30-bar move, scales with regime
+      const priceFalling = priceMove30 < -priceMoveThr;
+      const priceRising = priceMove30 > priceMoveThr;
+      const deltaBuying = delta30 > delta30P50;
+      const deltaSelling = delta30 < -delta30P50;
       const bullishDivergence = priceFalling && deltaBuying;
       const bearishDivergence = priceRising && deltaSelling;
 

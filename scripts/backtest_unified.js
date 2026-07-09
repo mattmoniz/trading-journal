@@ -964,6 +964,7 @@ async function main() {
       PD_IB_LOW:   lp.PD_IB_LOW   ?? null,
       PD_IB_MID:   lp.PD_IB_MID   ?? pdIb,
       PD_OR_MID:   pdOrMid,
+      PD_SESSION_MID: lp.PD_SESSION_MID ?? (prevDvl?.session_high && prevDvl?.session_low ? (prevDvl.session_high + prevDvl.session_low) / 2 : null),
       // Floor pivots (all 7)
       FLOOR_PIVOT: lp.FLOOR_PIVOT ?? fpLevels.FLOOR_PIVOT ?? null,
       FLOOR_R1:    lp.FLOOR_R1    ?? fpLevels.FLOOR_R1    ?? null,
