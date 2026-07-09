@@ -12,7 +12,8 @@
  *   TURBULENT: range_ratio >= 1.25 AND NOT TREND
  *   BALANCE:   everything else
  *
- * Only updates existing acd_daily_log rows. Never touches today's session.
+ * Only updates existing acd_daily_log rows. Today's session is included when
+ * the session is complete (HAVING COUNT(*) >= 200 bars acts as the completeness gate).
  * Never modifies classifyDayType or any live classifier.
  */
 
@@ -56,7 +57,7 @@ async function main() {
       FROM price_bars
       WHERE symbol = 'NQ'
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-        AND ts::date < CURRENT_DATE
+        AND ts::date <= CURRENT_DATE
       GROUP BY ts::date
       HAVING COUNT(*) >= 200
     ),

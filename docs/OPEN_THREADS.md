@@ -8,6 +8,16 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 ## Pending decisions / unconfirmed proposals
 
+- **First-5-min MAE gate (backtest 2026-07-09, N=123). Decision pending.** Blanket 9:35 time gate is only +$454/yr — not worth implementing. But MAE bracket analysis inside the 9:30–9:34 window shows a sharp split:
+  - Low MAE (≤22pt): WR=70.7% avg=+$55.8 (N=41) — good trades, keep
+  - Mid MAE (22–38pt): WR=29.3% avg=+$39.4 (N=41)
+  - **High MAE (>38pt): WR=9.8% avg=-$112.3 (N=41) — near-zero recovery rate**
+  - BRACKET_BREAKOUT_LONG (N=28, WR=28.6%, -$1,138 total) was the main historical culprit but is already suppressed.
+  - **Proposed action**: if a first-5-min setup (fired_min < 575) absorbs >38pt MAE before the 9:35 bar closes, exit immediately. This is a tighter stop rule specific to open chaos, not a time gate. Needs wiring into `acd.js` resolution logic. Annual benefit ~$400-500 at 1 MNQ (rough estimate — exact depends on how many of the 41 high-MAE trades are still live setups post-suppression).
+  - **Not yet wired** — confirm decision before implementing.
+
+- **Gemini auth broken (2026-07-09).** "You are not logged into Antigravity" error on all `agy` calls. Needs re-auth before Gemini can run autonomous tasks. Claude completing analysis directly in the meantime.
+
 - **90-day degradation watch items (flagged 2026-07-09).** Full backtest run found three high-volume setups with alarming 90d EV deterioration vs prior history. Not suppressed yet (all-time EV still positive), but auto-suppression will catch them if degradation persists:
   - `OR_HIGH_FADE_SHORT`: prior=$90/trade → 90d=-$18/trade (N=20). Delta=-$108. Previously elite (N=100 all-time, +$69 EV), now barely negative in 90d window. Watch closely — one more bad quarter flips it suppressed.
   - `PD_VAH_FADE_SHORT`: prior=$48 → 90d=-$68/trade (N=15). Delta=-$115. All-time EV still +$22 but 90d is $90/trade below prior. Only 5 more bad trades before all-time EV goes negative.
@@ -184,6 +194,10 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 
 ## Recently completed (kept briefly for handoff continuity, then delete)
+
+- **`liveStats is not defined` 500 on `/api/acd/setup-detection` fixed (2026-07-09).** IB setup detection at line ~3188 referenced `liveStats` which is declared inside the level-fade block at line 4244 (different JS scope). The IB block ran before `liveStats` was ever declared, throwing a ReferenceError on every poll from ~15:02 ET. Fix: introduced `_ibLS = getCached(todayET, 'levelFadeStats')` at the IB block entry point; replaced all 4 `liveStats?._opt?.IB_*` refs inside IB setup construction with `_ibLS?._opt?.IB_*`. The `liveStats` variable is unchanged in the level-fade block.
+
+- **`derive_day_types.js` added to daily calibration cron (2026-07-09).** The script was not scheduled anywhere — root cause of NULL `day_type` at end of 7/8 and 7/9 sessions. Script now appended to `scripts/run_daily_calibration.sh` (runs 4:20 PM ET Mon-Fri). Also fixed `< CURRENT_DATE` → `<= CURRENT_DATE` so today's completed session (HAVING COUNT(*) ≥ 200 bars) gets classified. 7/9 correctly classified as BALANCE: range=379pt, avg_range_20=582pt, ratio=0.65 from `price_bars` — ratio below 0.75 TREND threshold despite directional close. (`price_bars` avg_range_20 differs from `price_bars_primary` because the 20-session window pulls different sessions — script uses `price_bars`, that's the authoritative answer.)
 
 - **Orphan signal_type migration complete (2026-07-09). Pipeline health: OK:27 ORPHAN:0.** Replaced 3 legacy orphan signal_types with clean UNIFIED_BACKTEST equivalents in `acd.js` display loop, then deleted 36 stale rows from `performance_audit`:
   - **CONTEXT** (2 rows) → replaced by IB_BULLISH/IB_BEARISH from UNIFIED_BACKTEST (type=CONTEXT, status derived from EV/WR).

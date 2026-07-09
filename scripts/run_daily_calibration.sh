@@ -9,5 +9,6 @@ echo "=== Daily calibration: $(date) ==="
 /usr/bin/node scripts/backfill_mae_mfe.mjs
 /usr/bin/node scripts/update_optimal_stops.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
+/usr/bin/node scripts/derive_day_types.js
 
 echo "=== Daily calibration complete: $(date) ==="
