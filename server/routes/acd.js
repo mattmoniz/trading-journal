@@ -6238,6 +6238,30 @@ export default function createACDRouter(io) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Auto-suppression engine status — current SUPPRESS/PROMOTE list from backtest_setup_status.mjs
+  router.get('/acd/setup-status', async (req, res) => {
+    try {
+      const r = await query(`
+        SELECT DISTINCT ON (signal_name)
+          signal_name AS setup_type,
+          recommendation,
+          sample_size,
+          win_rate::float,
+          ev_per_trade::float,
+          total_pnl::float,
+          notes,
+          run_date::text
+        FROM performance_audit
+        WHERE signal_type = 'SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const lastRun = r.rows[0]?.run_date ?? null;
+      const suppressed = r.rows.filter(x => x.recommendation === 'SUPPRESS');
+      const promoted   = r.rows.filter(x => x.recommendation === 'PROMOTE');
+      res.json({ suppressed, promoted, lastRun, total: r.rows.length });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // Regime-Adaptive Level Performance
   router.get('/level-regime-performance', async (req, res) => {
     try {

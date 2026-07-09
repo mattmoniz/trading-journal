@@ -357,13 +357,13 @@ async function runMorningBrief(targetDate) {
       spread: +(Math.max(...vals) - Math.min(...vals)).toFixed(2) };
   });
 
-  // Intraday watch: OR-level combos — flag the anchor levels
+  // Intraday watch: OR-level anchor flags (combo stats removed — were hardcoded/stale, violate no-static-threshold rule)
   const watchLevels = [];
   if (pwHigh != null) watchLevels.push({ level: 'PW Hi', price: pwHigh,
-    combos: ['OR_Hi+PW_Hi ($+58, 48% win)', 'OR5Mid+OR_Hi+PW_Hi ($+94, 67% win)'],
-    note: 'Open drive only. OR Hi from below. Entry above PW Hi (+$116 vs +$39). Avoid Fridays.' });
+    combos: [],
+    note: 'Open drive only. OR Hi from below. Entry above PW Hi. Avoid Fridays.' });
   if (onHigh != null) watchLevels.push({ level: 'ON Hi', price: onHigh,
-    combos: ['ON_Hi+OR5Mid+OR_Hi ($+45, 57% win)'],
+    combos: [],
     note: 'If OR prints near ON Hi: mid-morning or open drive, ON Hi from above.' });
 
   const dow = new Date(targetDate + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long' });

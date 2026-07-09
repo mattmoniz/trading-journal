@@ -763,6 +763,44 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[day_type_alpha] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 9:13 PM Sunday: optimal stops/targets — derives p75 MAE stop and p50 MFE target
+  // per setup_type from active_setups MAE/MFE backfill. Feeds liveStats._opt in acd.js.
+  cron.schedule('13 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('OPTIMAL_STOP', async () => {
+        execSync('node scripts/update_optimal_stops.mjs', { cwd: process.cwd(), timeout: 120000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[optimal_stop] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:15 PM Sunday: pulse score backtest — validates MC-calibrated session-state conditions
+  // against resolved setups. Writes PULSE_SCORE_AUDIT rows (16: 4 day_types × 4 score buckets).
+  cron.schedule('15 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('PULSE_SCORE_AUDIT', async () => {
+        execSync('node scripts/backtest_pulse_score.mjs', { cwd: process.cwd(), timeout: 180000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[pulse_score] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // 9:17 PM Sunday: auto-suppress/promote engine — computes per-setup WR/EV/N all-time,
+  // SUPPRESS at N≥50+WR<48%+EV<-$5, PROMOTE when recent-90d WR≥52%+EV>$0+N≥15.
+  // Writes SETUP_STATUS rows and directly flips open active_setups rows.
+  // THIS IS THE SAFETY NET — if this stops running, losing setups accumulate silently.
+  cron.schedule('17 21 * * 0', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('SETUP_STATUS', async () => {
+        execSync('node scripts/backtest_setup_status.mjs', { cwd: process.cwd(), timeout: 120000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[setup_status] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // 9:20 PM Sunday: permission slip mining — discovers ACD signal combinations that
   // reliably bias session direction. Writes PERMISSION_SLIP rows to performance_audit.
   // Runs after DAY_TYPE_ALPHA (9:10 PM). API reads these instead of hardcoded stats.

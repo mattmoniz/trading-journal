@@ -275,9 +275,11 @@ function FactorRow({ name, effect, stat, color }) {
 
 export default function AlphaEngineOverview() {
   const [liveStats, setLiveStats] = useState(null);
+  const [setupStatus, setSetupStatus] = useState(null);
 
   useEffect(() => {
     fetch('/api/acd/engine-summary').then(r => r.json()).then(setLiveStats).catch(() => {});
+    fetch('/api/acd/setup-status').then(r => r.json()).then(setSetupStatus).catch(() => {});
   }, []);
 
   const tiers = [
@@ -383,14 +385,15 @@ export default function AlphaEngineOverview() {
       desc: 'scripts/backtest_level_approach.js — weekly Sunday 8:30 PM. Computes P(setup fires | day_type, DOW) × avg_pnl from 906+ rows. Top-3 coverage = 77% (3 in 4 trading days, ≥1 top-3 setup fires). Shown in SessionForecastPanel. Key: BALANCE→OR_HIGH_FADE_SHORT 29% fire rate / 84% WR.',
     },
     {
-      name: 'Shadow Validation System',
-      color: '#94a3b8',
-      desc: '17 removed setups persist with status=SHADOW for forward testing. Resolution against price runs automatically. Promoted to ACTIVE at positive EV over 30+ forward trades. Next review: ~2026-08-05 for IB_MID_SCALP_FADE_SHORT and OR_MID_AFTER_IB_FADE_SHORT (both flip positive with tight stops).',
+      name: 'Auto-Suppression Engine',
+      color: '#ef4444',
+      desc: 'scripts/backtest_setup_status.mjs — weekly Sunday 9:17 PM. SUPPRESS: N≥50, WR<48%, EV<-$5 → new setups fire as SHADOW. PROMOTE: recent 90-day WR≥52% + EV>$0 + N≥15 → restored to ACTIVE. Directly flips open active_setups rows on each run. Safety net: if this stops running, losing setups accumulate silently.',
+      _live: 'setupStatus',
     },
     {
       name: 'Tier Analysis System',
-      color: '#ef4444',
-      desc: 'Full-year tier analysis Jul 2025–Jul 2026 (N=2,784 resolved trades). PRIME+SOLID = $59.6K/yr at 1 MNQ. Kill tier (12 setups) recovered $27.7K/yr by suppression. Alpha surgery (suppressions + TREND counter-direction filter) recovered ~$38K/yr combined. OPEN_TEST_DRIVE and C_STANDALONE_UP force-nulled.',
+      color: '#94a3b8',
+      desc: 'Full-year tier analysis Jul 2025–Jul 2026 (N=2,784 resolved trades). PRIME+SOLID = $59.6K/yr at 1 MNQ. Kill tier (12 setups) recovered $27.7K/yr by suppression. Alpha surgery (suppressions + TREND counter-direction filter) recovered ~$38K/yr combined. Systematic suppression now automated via Auto-Suppression Engine above.',
     },
   ];
 
@@ -496,7 +499,24 @@ export default function AlphaEngineOverview() {
                 <div style={{ width: 3, height: 16, background: t.color, borderRadius: 2, flexShrink: 0 }} />
                 <div style={S.toolTitle}>{t.name}</div>
               </div>
-              {t._live ? <EngineAccuracyPanel /> : <div style={S.toolDesc}>{t.desc}</div>}
+              {t._live === 'setupStatus' ? (
+                <div>
+                  <div style={S.toolDesc}>{t.desc}</div>
+                  {setupStatus ? (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>
+                        Last run: {setupStatus.lastRun ?? '—'} · {setupStatus.suppressed?.length ?? 0} suppressed
+                        {setupStatus.promoted?.length > 0 && ` · ${setupStatus.promoted.length} recently promoted`}
+                      </div>
+                      {(setupStatus.suppressed ?? []).map(s => (
+                        <div key={s.setup_type} style={{ fontSize: 11, color: '#ef4444', marginBottom: 2 }}>
+                          ✕ {s.setup_type} — WR {(s.win_rate * 100).toFixed(1)}% · EV ${s.ev_per_trade?.toFixed(0)} · N={s.sample_size}
+                        </div>
+                      ))}
+                    </div>
+                  ) : <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>Loading...</div>}
+                </div>
+              ) : t._live ? <EngineAccuracyPanel /> : <div style={S.toolDesc}>{t.desc}</div>}
             </div>
           ))}
         </div>
