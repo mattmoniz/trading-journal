@@ -1,5 +1,13 @@
 #!/bin/bash
 
+# Self-heal the pre-commit hook symlink (.git/hooks/ isn't tracked by git, so a fresh
+# clone won't have it — this makes it reappear on the next ./start.sh instead of
+# silently missing forever).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ ! -e "$REPO_ROOT/.git/hooks/pre-commit" ]; then
+  ln -sf ../../scripts/git-hooks/pre-commit "$REPO_ROOT/.git/hooks/pre-commit"
+fi
+
 APP_PORTS=(3000 3001 3002 5173)
 
 cleanup_ports() {
