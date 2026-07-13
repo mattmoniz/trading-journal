@@ -97,6 +97,53 @@ Updated by the Stop hook when structural files change. Add an entry here wheneve
 
 ---
 
+### Touch/break tolerances in IB re-test detection (`scripts/backtest_ib_retest.mjs` + `antigravityEdges.js`)
+
+- **Category:** `TODO`
+- **Location:** `scripts/backtest_ib_retest.mjs` (`tol=3, band=15, breakBuffer=5`); mirrors the live constants in `server/routes/antigravityEdges.js`'s IB re-test block (found 2026-07-13 during the fabricated-stats fix — the backtest script deliberately copied the live flat-point tolerances so the two stay apples-to-apples, but neither was ever derived from anything).
+- **What:** Flat point tolerances for "touched the level" / "broke through" regardless of current volatility regime.
+- **Why flagged now:** NQ's volatility roughly doubled 2023→2026 per this session's Gemini audit — a flat 15pt band was a different fraction of "typical move" at the start of the dataset than at the end. Should scale with a rolling ATR/range measure instead.
+- **Replacement:** Derive tolerance as a fraction of rolling 20-day average bar range instead of a flat point value. Not fixed — logged 2026-07-13.
+
+---
+
+### First-30-min move size + pullback retracement fraction in V-pattern detection (`scripts/backtest_v_pattern.mjs` + `antigravityEdges.js`)
+
+- **Category:** `TODO`
+- **Location:** `scripts/backtest_v_pattern.mjs` (`Math.abs(fmove) >= 10`, pullback level = `25%` retracement); mirrors the live V-pattern block in `antigravityEdges.js`. Same copy-from-live pattern as the IB re-test entry above, found/logged 2026-07-13.
+- **What:** `10` = minimum first-30-min move (points) to qualify as a real move, not noise. `0.25` = how far back price must retrace to count as "pulled back."
+- **Replacement:** Same fix as above — scale the 10pt qualifying-move floor with rolling volatility. The 25% retracement fraction is more defensible as a fixed ratio (Fibonacci-style, dimensionless) but hasn't been tested against alternatives (e.g. 38%, 50%).
+
+---
+
+### `GAP_THRESHOLD = 8` in gap-fill detection (`scripts/backtest_gap_fill.mjs` + `antigravityEdges.js`)
+
+- **Category:** `TODO`
+- **Location:** `scripts/backtest_gap_fill.mjs` line ~22; mirrors the live `>= 8` gap-significance gate in `antigravityEdges.js`. Self-flagged in the script's own header comment when written 2026-07-13 ("an existing, separate hardcoded trigger-size choice, not touched here") but never propagated to this file until now.
+- **What:** Minimum |open − prior close| in points to count as a "gap" worth generating a card for.
+- **Replacement:** Same volatility-scaling fix as the two entries above.
+
+---
+
+### `Math.abs(deviation) >= 0.08` significance floor in `edge_miner.mjs`
+
+- **Category:** `TODO`
+- **Location:** `scripts/edge_miner.mjs` (`isSignificant = p < 0.05 && Math.abs(deviation) >= 0.08`). Preserved verbatim from the original script when it was revived from `scripts/archive/` 2026-07-13 (only `MIN_N` was raised 10/15→20 at that time; this 8% floor was not re-examined).
+- **What:** A segment's win-rate deviation from its setup's baseline must be ≥8 percentage points, in addition to p<0.05, to count as a real edge (POSITIVE_BOOSTER/NEGATIVE_DRAG vs NEUTRAL).
+- **`p < 0.05`** is a standard statistical convention (fits the existing `STATISTICAL_CLASSIFICATION` category, defensible as-is) — it's the flat **8%** that's the more arbitrary business-logic threshold.
+- **Replacement:** Could derive the minimum meaningful deviation from the standard error of the win-rate estimate at the segment's actual N, rather than one flat percentage for every N. Not fixed — logged 2026-07-13.
+
+---
+
+### `252` trading-day window in `mine_session_bias.mjs`
+
+- **Category:** `SESSION_STRUCTURE`-adjacent (not a live trading threshold, but not derived from this data either)
+- **Location:** `scripts/mine_session_bias.mjs` — `last252e = enriched.slice(-252)`
+- **What:** Standard "252 trading days ≈ 1 year" finance convention, used as the rolling comparison window for SESSION_BIAS stats. Found 2026-07-13 that this field was labeled "252d" but the code was silently using the full all-time array instead — fixed to actually slice to 252, but the choice of 252 itself (vs. e.g. 180 or 365 calendar days) was never independently justified for this specific use case.
+- **Replacement:** Low priority — this is a widely-accepted convention, not a fabricated number, but worth revisiting if SESSION_BIAS stats ever need faster/slower drift sensitivity.
+
+---
+
 ### Tier EV thresholds in `acd.js`
 
 - **Category:** `BUSINESS_RULE`
