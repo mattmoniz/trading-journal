@@ -130,14 +130,13 @@ export default function SessionBiasPanel() {
                     live
                   </span>
                 )}
-                <DriftBadge drift={s.drift} pct={s.pct} pct_30d={s.pct_30d} n_30d={s.n_30d} driftWarn={s.driftWarn} />
                 <span style={{
                   fontSize: 12, fontWeight: 700, color: ds.color,
                   background: ds.bg, padding: '1px 6px', borderRadius: 4,
                 }}>
                   {s.pct}% {ds.label}
                 </span>
-                <span style={{ fontSize: 11, color: '#475569' }}>N={s.n}</span>
+                <span style={{ fontSize: 11, color: '#64748b' }}>N={s.n}</span>
                 {/* Traded It button */}
                 {wasTraded ? (
                   <span style={{ fontSize: 10, fontWeight: 700, color: '#10b981', background: 'rgba(16,185,129,0.12)', padding: '1px 7px', borderRadius: 4, border: '1px solid rgba(16,185,129,0.25)' }}>
@@ -161,13 +160,7 @@ export default function SessionBiasPanel() {
                 )}
               </div>
             </div>
-            {/* Row 2: drift detail */}
-            {isStrong && s.drift != null && Math.abs(s.drift) >= 10 && s.pct_30d != null && (
-              <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 1, paddingLeft: 1 }}>
-                Recent 30 days: {s.pct_30d}% (N={s.n_30d}) vs {s.pct}% historical
-              </div>
-            )}
-            {/* Row 3: action note */}
+            {/* Row 2: action note */}
             {isStrong && s.action && (
               <div style={{ fontSize: 11, color: s.driftWarn ? '#fbbf24' : '#64748b', marginTop: 2, paddingLeft: 1, lineHeight: 1.4 }}>
                 → {s.action}

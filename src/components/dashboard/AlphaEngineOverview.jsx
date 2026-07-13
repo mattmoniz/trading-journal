@@ -435,6 +435,8 @@ export default function AlphaEngineOverview() {
     { name: 'TREND counter-direction fades', reason: 'SHORT on UP-trend / LONG on DOWN-trend: 55–61% WR, −$28 to −$52 EV, −$17.5K/yr' },
     { name: 'S2 double-counter', reason: 'Both overnight inventory AND open-vs-value disagree: 54% WR → suppressed' },
     { name: 'Globally suppressed setups (pipeline-driven)', reason: 'Auto-suppression engine writes SETUP_STATUS rows weekly — any setup with N≥20 and EV<-$5 fires as SHADOW. Setups flip back to ACTIVE when 90d data recovers. mondaySkip list removed 2026-07-09 — DOW edge handled by SETUP_STATUS_DOW.' },
+    { name: 'WPP_FADE_SHORT (general)', reason: 'EV=−$10.8, N=67. Suppressed. ↓ See conditional variant below.' },
+    { name: 'WPP_FADE_SHORT_GAP_UP [ACTIVE — conditional variant]', reason: '59.3% WR, EV=+$8.7, N=27 (backtest 2026-07-09). Fires when session 9:30 open is BELOW WPP (gap brought price up into resistance). Separate SETUP_STATUS + OPTIMAL_STOP rows in performance_audit. Maintained by scripts/backtest_wpp_short_gap.mjs on weekly cron. acd.js resolveSetupType() converts WPP_FADE_SHORT → this type when gap-up condition met.' },
   ];
 
   const tools = [

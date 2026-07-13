@@ -1151,13 +1151,7 @@ router.get('/trade-alerts/:date', async (req, res) => {
       }
     }
 
-    if (pd?.val && price < pd.val - 10) {
-      alerts.push({ id: 'valBreak', type: 'VAL_BREAK', msg: `2D VAL BROKEN at ${Math.round(price)}. Next: PD Low ${Math.round(pd.lo)}. Short rallies.`, time: timeStr, color: '#f87171' });
-    }
-
-    if (pd?.vah && price > pd.vah + 10) {
-      alerts.push({ id: 'vahBreak', type: 'VAH_BREAK', msg: `2D VAH BROKEN at ${Math.round(price)}. Long pullbacks to ${Math.round(pd.vah)}.`, time: timeStr, color: '#4ade80' });
-    }
+    // VAL/VAH break banners removed — too noisy relative to their signal value
 
     if (onLo) {
       const recent = b.slice(-8);

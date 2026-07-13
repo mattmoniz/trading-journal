@@ -327,14 +327,13 @@ async function getLiveEdgesContext() {
   let targetDate = todayET;
   let isFallback = false;
 
-  // Check if we have setups today. If not, check if we have price bars today.
-  const todaySetupsCount = await query(`
-    SELECT COUNT(*) FROM active_setups WHERE trade_date=$1
-  `, [todayET]).catch(() => ({ rows: [{ count: 0 }] }));
-
-  const todayBarsCount = await query(`
-    SELECT 1 FROM price_bars WHERE ts >= $1::date AND ts < $1::date + interval '1 day' LIMIT 1
-  `, [todayET]).catch(() => ({ rows: [] }));
+  // Step 1: Determine target date — parallelize the 2 initial checks
+  const [todaySetupsCount, todayBarsCount] = await Promise.all([
+    query(`SELECT COUNT(*) FROM active_setups WHERE trade_date=$1`, [todayET])
+      .catch(() => ({ rows: [{ count: 0 }] })),
+    query(`SELECT 1 FROM price_bars WHERE ts >= $1::date AND ts < $1::date + interval '1 day' LIMIT 1`, [todayET])
+      .catch(() => ({ rows: [] })),
+  ]);
 
   const hasBarsToday = todayBarsCount.rows.length > 0;
   const hasSetupsToday = parseInt(todaySetupsCount.rows[0]?.count || 0) > 0;
@@ -349,22 +348,40 @@ async function getLiveEdgesContext() {
     }
   }
 
-  let resultsByWindow;
-  let Q1_LIMIT;
-  let Q4_LIMIT;
-  let lastSession;
-  let adr20;
+  // Step 2: Fire ALL independent queries in parallel.
+  // barsQ (170-day history) and medQ (efficiency percentile) only run on cache miss
+  // and are stored in edgesHistoryCache so warm calls skip them entirely.
+  //
+  // ⚠️  ORDERING IS LOAD-BEARING — the destructured variable names must stay in exact
+  // sync with the Promise.all array entries below. If you add or remove a query, update
+  // BOTH the destructuring list AND the array body, and keep them in the same order.
+  // Mismatches assign silently wrong values with no runtime error.
+  const isCached = edgesHistoryCache.has(targetDate);
 
-  if (edgesHistoryCache.has(targetDate)) {
-    const cached = edgesHistoryCache.get(targetDate);
-    resultsByWindow = cached.resultsByWindow;
-    Q1_LIMIT = cached.Q1_LIMIT;
-    Q4_LIMIT = cached.Q4_LIMIT;
-    lastSession = cached.lastSession;
-    adr20 = cached.adr20;
-  } else {
-    // 1. Fetch all RTH price bars for NQ (9:30 ET to 16:00 ET)
-    const barsQ = await query(`
+  const [
+    _barsQResult,      // 0 — cache-miss only
+    _medQResult,       // 1 — cache-miss only
+    _prevCloseResult,  // 2 — cache-miss only (prior 4PM close for gap signal)
+    _priorRTHResult,   // 3 — cache-miss only (prior RTH H/L/C for floor pivots)
+    todayBarsQ,        // 4
+    acdTodayQ,         // 5
+    permSlipsQ,        // 6
+    arReadsQ,          // 7
+    setupsQ,           // 8
+    baselinesQ,        // 9
+    minedEdgesQ,       // 10
+    confLevelsQ,       // 11
+    pwQ,               // 12
+    cascadeQ,          // 13
+    nl30Q,             // 14
+    todayOpenQ,        // 15 — always fresh (today's 9:30 open, ~2ms)
+    sbQ,               // 16
+    todQ,              // 17
+    tradeBacktest,     // 18
+    vwapThresholdResult, // 19
+  ] = await Promise.all([
+    // 170-day RTH bars — skip on cache hit
+    isCached ? Promise.resolve(null) : query(`
       SELECT DISTINCT ON (ts)
         ts::date::text as trade_date,
         (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
@@ -374,11 +391,175 @@ async function getLiveEdgesContext() {
         AND ts::date >= CURRENT_DATE - INTERVAL '170 days'
         AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
       ORDER BY ts, id DESC
-    `);
+    `),
+    // 30-day Kaufman efficiency percentile (~198ms) — cached alongside barsQ, skip on hit
+    isCached ? Promise.resolve(null) : query(`
+      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY eff) AS median_eff
+      FROM (
+        SELECT (p.ts AT TIME ZONE 'America/New_York')::date AS td,
+          ABS(
+            MAX(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') BETWEEN 599 AND 601 THEN p.close END) -
+            MIN(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') = 570         THEN p.open  END)
+          ) /
+          NULLIF(SUM(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') BETWEEN 570 AND 599 THEN ABS(p.close - p.open) END), 0) AS eff
+        FROM price_bars_primary p
+        WHERE p.symbol = 'NQ'
+          AND (p.ts AT TIME ZONE 'America/New_York')::date BETWEEN $1::date - interval '30 days' AND $1::date - interval '1 day'
+        GROUP BY td
+      ) t WHERE eff IS NOT NULL
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Prior day 4PM close (~130ms) — split out of gapQ so it can be cached; today's open fetched fresh below
+    // Use MAX(prior trading day with a 4PM bar) to handle weekends and overnight UTC spill
+    isCached ? Promise.resolve(null) : query(`
+      SELECT MAX(CASE WHEN EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York')*60 +
+                            EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 959 AND 961
+                     THEN close::float END) AS close_400_est
+      FROM price_bars_primary WHERE symbol = 'NQ'
+        AND (ts AT TIME ZONE 'America/New_York')::date = (
+          SELECT MAX((ts AT TIME ZONE 'America/New_York')::date)
+          FROM price_bars_primary WHERE symbol = 'NQ'
+            AND (ts AT TIME ZONE 'America/New_York')::date < ($1::date)
+            AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York')*60 +
+                EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 959 AND 961
+        )
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Prior RTH session H/L/C for floor pivots (~136ms) — fully cacheable (prior-day data)
+    // Subquery scoped to dates with actual RTH bars (avoids overnight Globex UTC-date spill)
+    isCached ? Promise.resolve(null) : query(`
+      SELECT MAX(high)::float as h, MIN(low)::float as l,
+        (array_agg(close ORDER BY ts DESC))[1]::float as c
+      FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date = (
+        SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      )
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Today's bars
+    query(`
+      SELECT DISTINCT ON (ts)
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
+        open::float, high::float, low::float, close::float,
+        COALESCE(volume, 0)::int as volume
+      FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date=$1
+        AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+      ORDER BY ts, id DESC
+    `, [targetDate]),
+    // ACD levels + signals
+    query(`
+      SELECT a_up_level::float, a_down_level::float, or_high::float, or_low::float,
+             day_type, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed
+      FROM acd_daily_log WHERE trade_date = $1
+    `, [targetDate]),
+    // Permission slips
+    query(`
+      SELECT signal_name, sample_size, win_rate::float, recommendation, notes
+      FROM performance_audit
+      WHERE signal_type = 'PERMISSION_SLIP'
+        AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'PERMISSION_SLIP')
+    `).catch(() => ({ rows: [] })),
+    // Overnight reads
+    query(`SELECT overnight_inventory, open_vs_prior_value, prior_day_profile FROM auction_reads WHERE trade_date=$1`, [targetDate])
+      .catch(() => ({ rows: [] })),
+    // Active setups
+    query(`
+      SELECT s.id, s.setup_type, TO_CHAR(s.fired_at, 'HH24:MI') as fired_time,
+             s.entry_zone_low::float, s.entry_zone_high::float, s.stop_level::float, s.t1_level::float,
+             s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
+             s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
+             EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day
+      FROM active_setups s
+      WHERE s.trade_date = $1 AND s.status != 'SHADOW'
+      ORDER BY s.fired_at DESC
+    `, [targetDate]),
+    // Baseline win rates
+    query(`
+      SELECT setup_type, win_rate::float as wr, decided_n as n
+      FROM setup_daytype_winrates
+      WHERE day_type = 'OVERALL' AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
+    `),
+    // Dynamic overnight mined edges
+    query(`
+      SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
+      FROM dynamic_edges_mining
+      WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
+    `).catch(err => { console.error('Error fetching dynamic_edges_mining:', err); return { rows: [] }; }),
+    // Confluence levels (3 prior days) — also used for vaAtIb check (replaces separate pvQ)
+    query(`
+      SELECT trade_date::text as d, vah::float, val::float, poc::float, session_high::float as sh, session_low::float as sl
+      FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 3
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Prior week high/low
+    query(`
+      SELECT MAX(session_high)::float as pwh, MIN(session_low)::float as pwl
+      FROM (SELECT session_high, session_low FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 5) x
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Cascade breaker
+    query(`
+      SELECT COUNT(DISTINCT setup_type)::int AS stop_count
+      FROM active_setups
+      WHERE trade_date = $1
+        AND resolution = 'STOP_HIT'
+        AND resolved_at >= NOW() - INTERVAL '45 minutes'
+    `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] })),
+    // NL30 regime
+    query(`
+      SELECT COALESCE(SUM(daily_score), 0)::float AS nl30
+      FROM acd_daily_log
+      WHERE trade_date >= $1::date - interval '30 days' AND trade_date < $1::date
+    `, [targetDate]).catch(() => ({ rows: [{ nl30: null }] })),
+    // Today's 9:30 open — cheap single-bar lookup; combined with cached prevClose to form gap signal
+    query(`
+      SELECT MIN(open::float) AS open_930
+      FROM price_bars_primary
+      WHERE symbol = 'NQ' AND ts::date = $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) = 570
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    // Session bias rows
+    query(`
+      SELECT signal_name, recommendation, win_rate::float, sample_size, notes
+      FROM performance_audit
+      WHERE signal_type = 'SESSION_BIAS'
+        AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'SESSION_BIAS')
+    `).catch(() => ({ rows: [] })),
+    // TOD patterns
+    query(`
+      SELECT signal_name, win_rate, sample_size, recommendation, notes
+      FROM performance_audit
+      WHERE signal_type = 'TOD_PATTERN'
+        AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'TOD_PATTERN')
+    `).catch(() => ({ rows: [] })),
+    // Trade backtest (has its own 30s in-memory cache)
+    getTradeBacktest(),
+    // VWAP std threshold — only needs a date, no bars required
+    getTrailingVwapStd(todayET, 30).catch(() => ({ threshold: 25 })),
+  ]);
 
+  // Step 3: Process edgesHistoryCache
+  let resultsByWindow;
+  let Q1_LIMIT;
+  let Q4_LIMIT;
+  let lastSession;
+  let adr20;
+  let cachedEfficiencyMedian;
+  let cachedPriorClose4PM;
+  let cachedPriorRTH;
+
+  if (isCached) {
+    const cached = edgesHistoryCache.get(targetDate);
+    resultsByWindow = cached.resultsByWindow;
+    Q1_LIMIT = cached.Q1_LIMIT;
+    Q4_LIMIT = cached.Q4_LIMIT;
+    lastSession = cached.lastSession;
+    adr20 = cached.adr20;
+    cachedEfficiencyMedian = cached.efficiencyMedian ?? null;
+    cachedPriorClose4PM = cached.priorClose4PM ?? null;
+    cachedPriorRTH = cached.priorRTH ?? null;
+  } else {
     // Group bars by date
     const sessions = {};
-    for (const bar of barsQ.rows) {
+    for (const bar of _barsQResult.rows) {
       if (!sessions[bar.trade_date]) sessions[bar.trade_date] = [];
       sessions[bar.trade_date].push(bar);
     }
@@ -516,12 +697,19 @@ async function getLiveEdgesContext() {
       ? Math.round(priorSessions.reduce((sum, s) => sum + s.range, 0) / priorSessions.length)
       : 250;
 
+    cachedEfficiencyMedian = _medQResult?.rows[0]?.median_eff ?? null;
+    cachedPriorClose4PM = _prevCloseResult?.rows[0]?.close_400_est ?? null;
+    cachedPriorRTH = _priorRTHResult?.rows[0] ?? null;
+
     edgesHistoryCache.set(targetDate, {
       resultsByWindow,
       Q1_LIMIT,
       Q4_LIMIT,
       lastSession,
-      adr20
+      adr20,
+      efficiencyMedian: cachedEfficiencyMedian,
+      priorClose4PM: cachedPriorClose4PM,
+      priorRTH: cachedPriorRTH,
     });
     if (edgesHistoryCache.size > 5) {
       const firstKey = edgesHistoryCache.keys().next().value;
@@ -529,26 +717,8 @@ async function getLiveEdgesContext() {
     }
   }
 
-  // Fetch price bars for targetDate
-  const todayBarsQ = await query(`
-    SELECT DISTINCT ON (ts)
-      (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
-      open::float, high::float, low::float, close::float,
-      COALESCE(volume, 0)::int as volume
-    FROM price_bars_primary
-    WHERE symbol='NQ' AND ts::date=$1
-      AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
-    ORDER BY ts, id DESC
-  `, [targetDate]);
-
-  // Fetch ACD levels + signals for today (levels used for coil, signals for permission slips)
-  const acdTodayQ = await query(`
-    SELECT a_up_level::float, a_down_level::float, or_high::float, or_low::float,
-           day_type, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed
-    FROM acd_daily_log WHERE trade_date = $1
-  `, [targetDate]);
+  // Step 4: Process today's bars (already fetched in wave 1)
   const acdToday = acdTodayQ.rows[0] || null;
-
   let liveStatus = { active: false, reason: 'Market closed or no bars today' };
   let currentOr5Status = 'WAITING';
   let currentGapStatus = 'INSIDE';
@@ -571,8 +741,7 @@ async function getLiveEdgesContext() {
       currentOr5Status = or5Range < Q1_LIMIT ? 'TIGHT' : or5Range >= Q4_LIMIT ? 'WIDE' : 'NORMAL';
     }
 
-    // Gap status relative to yesterday — filter to sessions strictly before today
-    // so today's live session (once it crosses 300 bars) doesn't pollute PDH/PDL/PDC
+    // Gap status relative to yesterday
     let gapOpenValue = 0;
     if (lastSession) {
       if (bars[0].open > lastSession.high) {
@@ -650,8 +819,6 @@ async function getLiveEdgesContext() {
     const ibHigh = fhBars.length > 0 ? Math.max(...fhBars.map(b => b.high)) : null;
     const ibLow  = fhBars.length > 0 ? Math.min(...fhBars.map(b => b.low)) : null;
 
-    // Expected Daily Range (ADR) & Current Session Range
-    
     const currentSessionRange = bars.length > 0
       ? Math.max(...bars.map(b => b.high)) - Math.min(...bars.map(b => b.low))
       : null;
@@ -766,8 +933,6 @@ async function getLiveEdgesContext() {
     }
 
     // Volume climax detection: last bar volume ≥ 4x trailing 20-bar average.
-    // Signals potential exhaustion / institutional reversal — price has moved fast
-    // and large participants are likely absorbing the move.
     let volumeClimax = null;
     if (bars.length >= 21) {
       const lastBar = bars[bars.length - 1];
@@ -789,8 +954,8 @@ async function getLiveEdgesContext() {
       }
     }
 
-    // VWAP magnet detection — replaces EMA snap (0% WR, removed)
-    let emaSnap = null; // kept as emaSnap key for frontend compat
+    // VWAP magnet detection — uses pre-fetched threshold from wave 1
+    let emaSnap = null;
     let cumPV = 0, cumVol = 0;
     for (const b of bars) {
       cumPV += (b.high + b.low + b.close) / 3 * (Number(b.vol) || 1);
@@ -799,8 +964,7 @@ async function getLiveEdgesContext() {
     const vwapVal = cumVol > 0 ? cumPV / cumVol : null;
     if (vwapVal && currentPrice) {
       const vwapDist = currentPrice - vwapVal;
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      const { threshold: vwapThreshold } = await getTrailingVwapStd(todayStr, 30);
+      const vwapThreshold = vwapThresholdResult.threshold;
       const extended = Math.abs(vwapDist) >= vwapThreshold;
       emaSnap = {
         ema9: Math.round(vwapVal * 100) / 100,
@@ -913,7 +1077,7 @@ async function getLiveEdgesContext() {
           const lowCluster=wb.filter(b=>Math.abs(b.low-wL)<5).length;
           const highCluster=wb.filter(b=>Math.abs(b.high-wH)<5).length;
           const bullDetected=lowCluster>=4&&rsiDrift>5&&priceFlat;
-          const watching=lowCluster>=3&&rsiDrift>3&&priceFlat; // approaching threshold
+          const watching=lowCluster>=3&&rsiDrift>3&&priceFlat;
           if(bullDetected||watching) absorption={detected:bullDetected,watching:watching&&!bullDetected,lowCluster,highCluster,rsiDrift:Math.round(rsiDrift*10)/10,wRange:Math.round(wH-wL),supportLevel:Math.round(wL)};
         }
       }
@@ -984,16 +1148,7 @@ async function getLiveEdgesContext() {
     };
   }
 
-  // Build session permission slips from ACD signals + first-30-min price direction.
-  // Stats are mined weekly by scripts/backtest_permission_slips.mjs → performance_audit
-  // (signal_type='PERMISSION_SLIP'). Each row's notes JSON holds the requires conditions.
-  const permSlipsQ = await query(`
-    SELECT signal_name, sample_size, win_rate::float, recommendation, notes
-    FROM performance_audit
-    WHERE signal_type = 'PERMISSION_SLIP'
-      AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'PERMISSION_SLIP')
-  `).catch(() => ({ rows: [] }));
-
+  // Step 5: Build session permission slips from pre-fetched data
   const permConditions = [];
   const dayType    = acdToday?.day_type || null;
   const aUpFired   = !!acdToday?.a_up_fired;
@@ -1035,61 +1190,26 @@ async function getLiveEdgesContext() {
 
   const sessionPermissions = { dayType, aUpFired, aDownFired, cUpConfirmed: cUp, cDownConfirmed: cDown, firstHourDir, conditions: permConditions };
 
-  // Overnight structural reads (needed by session bias + returned as overnightContext)
-  const arReads = await query(`SELECT overnight_inventory, open_vs_prior_value, prior_day_profile FROM auction_reads WHERE trade_date=$1`, [targetDate]).catch(() => ({ rows: [] }));
-
-  // ── Session Bias: query DB rows and match today's context ────────────────
+  // Step 6: Build session bias using all pre-fetched data (no more awaits in this block)
   const sessionBias = [];
   try {
-    // Context already available: dayType, firstHourDir (= morning_dir), arReads
-    const oc2 = arReads.rows[0] || {};
+    const oc2 = arReadsQ.rows[0] || {};
     const dowNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const todayDow = dowNames[new Date(targetDate + 'T12:00:00Z').getDay()] || null;
 
-    // NL30 regime from 30-day rolling sum of acd daily_score < targetDate
-    const nl30Q = await query(`
-      SELECT COALESCE(SUM(daily_score), 0)::float AS nl30
-      FROM acd_daily_log
-      WHERE trade_date >= $1::date - interval '30 days' AND trade_date < $1::date
-    `, [targetDate]).catch(() => ({ rows: [{ nl30: null }] }));
+    // NL30 regime from pre-fetched nl30Q
     const nl30Val = nl30Q.rows[0]?.nl30 ?? null;
     const nl30Regime = nl30Val == null ? null
       : nl30Val >= 15 ? 'STRONG_BULL' : nl30Val >= 5 ? 'MILD_BULL'
       : nl30Val <= -15 ? 'STRONG_BEAR' : nl30Val <= -5 ? 'MILD_BEAR' : 'NEUTRAL';
 
-    // Gap fill stat: computed from today's open vs prior close.
-    // Gap-up: 72% fill before close (Gemini: 85.7% in last 30d, stable). Gap-down: 62% (drifting lower recently).
-    // Fires as a pre-session or early-session signal — before the gap is filled.
-    const gapQ = await query(`
-      WITH prev AS (
-        SELECT close_400_est FROM (
-          SELECT
-            (ts AT TIME ZONE 'America/New_York')::date AS td,
-            MAX(CASE WHEN EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York')*60 +
-                          EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') BETWEEN 959 AND 961
-                     THEN close::float END) AS close_400_est
-          FROM price_bars_primary WHERE symbol = 'NQ'
-            AND (ts AT TIME ZONE 'America/New_York')::date = $1::date - interval '1 day'
-          GROUP BY td
-        ) t WHERE close_400_est IS NOT NULL
-      ),
-      today_open AS (
-        SELECT MIN(CASE WHEN EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York')*60 +
-                             EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') = 570
-                        THEN open::float END) AS open_930
-        FROM price_bars_primary WHERE symbol = 'NQ'
-          AND (ts AT TIME ZONE 'America/New_York')::date = $1::date
-      )
-      SELECT prev.close_400_est AS prior_close, today_open.open_930
-      FROM prev CROSS JOIN today_open
-    `, [targetDate]).catch(() => ({ rows: [] }));
-
-    if (gapQ.rows.length > 0) {
-      const { prior_close: pc, open_930: op } = gapQ.rows[0];
+    // Gap fill stat — prior close from cache, today's open from cheap fresh query
+    const open_930 = todayOpenQ.rows[0]?.open_930 ?? null;
+    if (cachedPriorClose4PM != null && open_930 != null) {
+      const { prior_close: pc, open_930: op } = { prior_close: cachedPriorClose4PM, open_930 };
       if (pc && op && Math.abs(op - pc) >= 8) {
         const isGapUp = op > pc;
         const gapPt   = Math.round(Math.abs(op - pc));
-        // Check if gap is already filled (current last bar)
         const lastClose = bars.length ? bars[bars.length - 1].close : null;
         const gapFilled = isGapUp ? (lastClose != null && lastClose <= pc) : (lastClose != null && lastClose >= pc);
         if (!gapFilled) {
@@ -1105,13 +1225,13 @@ async function getLiveEdgesContext() {
             dir:     isGapUp ? 'SHORT' : 'LONG',
             specificity: 50,
             computed: true,
-            driftWarn: !isGapUp, // gap-down fill rate is drifting lower
+            driftWarn: !isGapUp,
           });
         }
       }
     }
 
-    // IB break direction: did any bar 9:30–10:30 close beyond the OR extremes?
+    // IB break direction
     let ibBreak = null;
     if (liveStatus.active || bars?.length) {
       const ibBars = (bars || []).filter(b => b.et_min >= 570 && b.et_min <= 630);
@@ -1126,51 +1246,21 @@ async function getLiveEdgesContext() {
       }
     }
 
-    // VA position at IB close: compare close_1030 bar vs prior-day VAH/VAL
+    // VA position at IB close — use confLevelsQ.rows[0] (already fetched, same data as pvQ)
     let vaAtIb = null;
     const ibCloseBars = bars.filter(b => b.et_min >= 629 && b.et_min <= 631);
     if (ibCloseBars.length) {
       const close1030 = ibCloseBars[ibCloseBars.length - 1].close;
-      const pvQ = await query(`
-        SELECT vah::float, val::float FROM developing_value_log
-        WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
-      `, [targetDate]).catch(() => ({ rows: [] }));
-      const pv = pvQ.rows[0];
+      const pv = confLevelsQ.rows[0];
       if (pv?.vah && pv?.val) {
         vaAtIb = close1030 > pv.vah ? 'ABOVE_VA' : close1030 < pv.val ? 'BELOW_VA' : 'INSIDE_VA';
       }
     }
 
-    // Load all SESSION_BIAS rows
-    const sbQ = await query(`
-      SELECT signal_name, recommendation, win_rate::float, sample_size, notes
-      FROM performance_audit
-      WHERE signal_type = 'SESSION_BIAS'
-        AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'SESSION_BIAS')
-    `).catch(() => ({ rows: [] }));
-
-    // Kaufman Efficiency Ratio tier — rolling 30-day median as dynamic threshold
+    // Kaufman Efficiency Ratio tier — use cached efficiencyMedian (computed in cache-build, not per-request)
     let efficiencyTier = null;
-    if (firstHourEfficiency != null) {
-      const medQ = await query(`
-        SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY eff) AS median_eff
-        FROM (
-          SELECT (p.ts AT TIME ZONE 'America/New_York')::date AS td,
-            ABS(
-              MAX(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') BETWEEN 599 AND 601 THEN p.close END) -
-              MIN(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') = 570         THEN p.open  END)
-            ) /
-            NULLIF(SUM(CASE WHEN EXTRACT(HOUR FROM p.ts AT TIME ZONE 'America/New_York')*60+EXTRACT(MINUTE FROM p.ts AT TIME ZONE 'America/New_York') BETWEEN 570 AND 599 THEN ABS(p.close - p.open) END), 0) AS eff
-          FROM price_bars_primary p
-          WHERE p.symbol = 'NQ'
-            AND (p.ts AT TIME ZONE 'America/New_York')::date BETWEEN $1::date - interval '30 days' AND $1::date - interval '1 day'
-          GROUP BY td
-        ) t WHERE eff IS NOT NULL
-      `, [targetDate]).catch(() => ({ rows: [] }));
-      const medianEff = medQ.rows[0]?.median_eff ?? null;
-      if (medianEff != null) {
-        efficiencyTier = firstHourEfficiency >= medianEff ? 'HIGH' : 'LOW';
-      }
+    if (firstHourEfficiency != null && cachedEfficiencyMedian != null) {
+      efficiencyTier = firstHourEfficiency >= cachedEfficiencyMedian ? 'HIGH' : 'LOW';
     }
 
     const sbContext = {
@@ -1193,6 +1283,7 @@ async function getLiveEdgesContext() {
     };
     const _sbSpec = req => Object.values(req).filter(v => v != null).length;
 
+    // Session bias rows from pre-fetched sbQ
     for (const row of sbQ.rows) {
       let meta;
       try { meta = JSON.parse(row.notes); } catch { continue; }
@@ -1212,9 +1303,7 @@ async function getLiveEdgesContext() {
     // Sort: more specific first, then by win_rate
     sessionBias.sort((a, b) => b.specificity - a.specificity || b.pct - a.pct);
 
-    // Live IB level re-test detection (fires post-IB close, et_min > 630)
-    // IB HIGH re-test: price returns to IB HIGH after 10:30 → 63% retrace (N=102) stable; 37% extends
-    // IB LOW re-test: drifting → 73% extension in last 30 days (N=87 252d); DRIFT +17% toward breakdown
+    // Live IB level re-test detection
     const etNow = bars.length > 0 ? Number(bars[bars.length - 1].et_min) : 0;
     if (bars.length >= 12 && etNow > 630) {
       const ibBars   = bars.filter(b => Number(b.et_min) >= 570 && Number(b.et_min) <= 629);
@@ -1223,10 +1312,9 @@ async function getLiveEdgesContext() {
         const ibHigh = Math.max(...ibBars.map(b => b.high));
         const ibLow  = Math.min(...ibBars.map(b => b.low));
         const lastBar = postIB[postIB.length - 1];
-        const recentBars = postIB.slice(-6); // last 6 bars (~6 min)
-        const touchTol = 3; // pts within which we consider a "touch"
+        const recentBars = postIB.slice(-6);
+        const touchTol = 3;
 
-        // IB HIGH re-test: any recent bar tagged the IB HIGH from below
         const touchedIbHigh = recentBars.some(b => b.high >= ibHigh - touchTol && b.high <= ibHigh + 15);
         if (touchedIbHigh && lastBar.close < ibHigh + 5) {
           sessionBias.unshift({
@@ -1240,7 +1328,6 @@ async function getLiveEdgesContext() {
           });
         }
 
-        // IB LOW re-test: any recent bar tagged the IB LOW from above — NOTE DRIFT
         const touchedIbLow = recentBars.some(b => b.low <= ibLow + touchTol && b.low >= ibLow - 15);
         if (touchedIbLow && lastBar.close > ibLow - 5) {
           sessionBias.unshift({
@@ -1257,9 +1344,7 @@ async function getLiveEdgesContext() {
       }
     }
 
-    // Live V-pattern detection: morning made a directional move, pulled back 25%,
-    // 73% chance it re-extends past the first-hour extreme before noon (N=338).
-    // Only fires before noon and only when a real pullback is detected in today's bars.
+    // Live V-pattern detection
     if (bars.length >= 12 && etNow < 720) {
       const fhm30 = bars.filter(b => b.et_min >= 570 && b.et_min <= 595);
       const postBars = bars.filter(b => b.et_min > 599 && b.et_min < 720);
@@ -1292,22 +1377,17 @@ async function getLiveEdgesContext() {
         }
       }
     }
-    // TOD patterns: surface the active time-window edge from performance_audit
-    // Fires when etNow is inside the window and day_type matches (or pattern has no day_type requirement)
-    try {
-      const todQ = await query(`
-        SELECT signal_name, win_rate, sample_size, recommendation, notes
-        FROM performance_audit
-        WHERE signal_type = 'TOD_PATTERN'
-          AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'TOD_PATTERN')
-      `);
-      for (const row of todQ.rows) {
+
+    // TOD patterns from pre-fetched todQ
+    for (const row of todQ.rows) {
+      try {
         const meta = row.notes || {};
         const req  = meta.requires || {};
         const winStart = Number(req.time_window_start);
         const winEnd   = Number(req.time_window_end);
         if (!winStart || !winEnd) continue;
-        if (etNow < winStart || etNow >= winEnd) continue;
+        const etNow2 = bars.length > 0 ? Number(bars[bars.length - 1].et_min) : 0;
+        if (etNow2 < winStart || etNow2 >= winEnd) continue;
         if (req.day_type && req.day_type !== dayType) continue;
         const pct = Math.round(row.win_rate * 100);
         sessionBias.unshift({
@@ -1319,55 +1399,23 @@ async function getLiveEdgesContext() {
           specificity: 97,
           computed:    true,
         });
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
 
   } catch (_) {}
 
-  // 4. Fetch Active Setups for targetDate (exclude SHADOW and removed setups)
-  let setupsQ = await query(`
-    SELECT s.id, s.setup_type, TO_CHAR(s.fired_at, 'HH24:MI') as fired_time,
-           s.entry_zone_low::float, s.entry_zone_high::float, s.stop_level::float, s.t1_level::float,
-           s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
-           s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
-           EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day
-    FROM active_setups s
-    WHERE s.trade_date = $1 AND s.status != 'SHADOW'
-    ORDER BY s.fired_at DESC
-  `, [targetDate]);
-
-  let setupDate = targetDate;
-
-  // Fetch baseline win rates
-  const baselinesQ = await query(`
-    SELECT setup_type, win_rate::float as wr, decided_n as n
-    FROM setup_daytype_winrates
-    WHERE day_type = 'OVERALL' AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
-  `);
+  // Step 7: Active setups for targetDate (from pre-fetched setupsQ)
   const baselineMap = {};
   for (const row of baselinesQ.rows) {
     baselineMap[row.setup_type] = { wr: row.wr, n: row.n };
   }
 
-  // Fetch dynamically mined overnight edges
-  const minedEdgesQ = await query(`
-    SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
-    FROM dynamic_edges_mining
-    WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
-  `).catch(err => {
-    console.error('Error fetching dynamic_edges_mining:', err);
-    return { rows: [] };
-  });
   const dynamicEdgesMap = {};
   for (const row of minedEdgesQ.rows) {
-    if (!dynamicEdgesMap[row.setup_type]) {
-      dynamicEdgesMap[row.setup_type] = [];
-    }
+    if (!dynamicEdgesMap[row.setup_type]) dynamicEdgesMap[row.setup_type] = [];
     dynamicEdgesMap[row.setup_type].push(row);
   }
 
-  // Setup-specific context adjustments — backtested on 440 resolved trades
-  // across the 6 surviving setups (June 2025 - June 2026).
   const SETUP_CONTEXT = {
     'IB_BEARISH':                   { monAdj: -0.20, tightAdj: -0.09, wideAdj: +0.14, turbAdj: +0.25 },
     'OPEN_DRIVE_SHORT':             { monAdj: -0.10, tightAdj: -0.14, wideAdj: -0.20, turbAdj: +0.38 },
@@ -1377,7 +1425,7 @@ async function getLiveEdgesContext() {
     'C_STANDALONE_DOWN':            { monAdj: -0.08, tightAdj: -0.11, wideAdj: +0.11, turbAdj: +0.26 },
   };
   const processedSetups = [];
-  const todayD = new Date(setupDate + 'T12:00:00Z');
+  const todayD = new Date(targetDate + 'T12:00:00Z');
   const setupDayOfWeek = todayD.getDay();
 
   for (const s of setupsQ.rows) {
@@ -1392,27 +1440,19 @@ async function getLiveEdgesContext() {
     const isMeanReversion = setupType.includes('REVERSAL') || setupType.includes('FAILED') || setupType.includes('RESPONSIVE') || setupType.includes('C_STANDALONE');
 
     if (ctx) {
-      // 1. Monday Penalty (Statistically tested: negligible impact)
       if (setupDayOfWeek === 1 && isBreakout) {
         adjustedWr -= 0.01;
         rec = '✅ Monday Morning Breakout: standard risk profile (39.2% win rate, -0.7% deviation).';
-      }
-      // 2. OR5 Wide Range Penalty (Statistically tested: -7.2% impact)
-      else if (currentOr5Status === 'WIDE' && isBreakout) {
+      } else if (currentOr5Status === 'WIDE' && isBreakout) {
         adjustedWr -= 0.07;
         rec = '⚠️ Wide Opening Range: breakout follow-through is degraded (-7.2% deviation). Standard sizing only.';
-      }
-      // 3. OR5 Tight Range Bonus (Statistically tested: +6.2% impact)
-      else if (currentOr5Status === 'TIGHT' && isBreakout) {
+      } else if (currentOr5Status === 'TIGHT' && isBreakout) {
         adjustedWr += 0.06;
         rec = '✅ Squeezed Opening Range: breakout follow-through edge is elevated (+6.2% deviation).';
-      }
-      // 4. Gap open context (Statistically tested: gap open degrades reversals by -5.9% due to trend continuation)
-      else if (currentGapStatus !== 'INSIDE' && isMeanReversion) {
+      } else if (currentGapStatus !== 'INSIDE' && isMeanReversion) {
         adjustedWr -= 0.06;
         rec = '⚠️ Gap Open: reversal setups have degraded accuracy (-5.9% deviation) due to momentum continuation.';
-      }
-      else {
+      } else {
         if (setupDayOfWeek === 1 && ctx.monAdj !== 0) {
           adjustedWr += ctx.monAdj;
           if (ctx.monAdj <= -0.15) reasons.push(`Monday: ${(ctx.monAdj*100).toFixed(0)}% (reduce size)`);
@@ -1430,7 +1470,6 @@ async function getLiveEdgesContext() {
       }
     }
 
-    // Apply dynamic overnight mined edges
     const dynamicEdges = dynamicEdgesMap[s.setup_type] || [];
     let dynamicAdj = 0;
     const dynamicReasons = [];
@@ -1497,51 +1536,30 @@ async function getLiveEdgesContext() {
     });
   }
 
-  const tradeBacktest = await getTradeBacktest();
-
-  // Confluence levels for edge display (controlled-test-validated)
-  const confLevelsQ = await query(`
-    SELECT trade_date::text as d, vah::float, val::float, poc::float, session_high::float as sh, session_low::float as sl
-    FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 3
-  `, [targetDate]).catch(() => ({ rows: [] }));
+  // Step 8: Confluence levels and floor pivots (from pre-fetched data)
   const pd1va = confLevelsQ.rows[0] || null;
   const pd2va = confLevelsQ.rows[1] || null;
   const pd3va = confLevelsQ.rows[2] || null;
 
-  // Prior week high/low
-  const pwQ = await query(`
-    SELECT MAX(session_high)::float as pwh, MIN(session_low)::float as pwl
-    FROM (SELECT session_high, session_low FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 5) x
-  `, [targetDate]).catch(() => ({ rows: [] }));
   const pwHigh = pwQ.rows[0]?.pwh || null;
   const pwLow = pwQ.rows[0]?.pwl || null;
 
   const orMid = acdToday?.or_high && acdToday?.or_low ? (acdToday.or_high + acdToday.or_low) / 2 : null;
 
-  // Standard Floor Pivots from prior RTH session
   let floorPivots = null;
-  try {
-    const priorRTH = await query(`
-      SELECT MAX(high)::float as h, MIN(low)::float as l,
-        (array_agg(close ORDER BY ts DESC))[1]::float as c
-      FROM price_bars_primary WHERE symbol='NQ'
-      AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1)
-      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-    `, [targetDate]);
-    const p = priorRTH.rows[0];
-    if (p?.h && p?.l && p?.c) {
-      const PP = (p.h + p.l + p.c) / 3;
-      floorPivots = {
-        pp: Math.round(PP * 100) / 100,
-        r1: Math.round((2*PP - p.l) * 100) / 100,
-        r2: Math.round((PP + (p.h - p.l)) * 100) / 100,
-        r3: Math.round((p.h + 2*(PP - p.l)) * 100) / 100,
-        s1: Math.round((2*PP - p.h) * 100) / 100,
-        s2: Math.round((PP - (p.h - p.l)) * 100) / 100,
-        s3: Math.round((p.l - 2*(p.h - PP)) * 100) / 100,
-      };
-    }
-  } catch {}
+  const p = cachedPriorRTH;
+  if (p?.h && p?.l && p?.c) {
+    const PP = (p.h + p.l + p.c) / 3;
+    floorPivots = {
+      pp: Math.round(PP * 100) / 100,
+      r1: Math.round((2*PP - p.l) * 100) / 100,
+      r2: Math.round((PP + (p.h - p.l)) * 100) / 100,
+      r3: Math.round((p.h + 2*(PP - p.l)) * 100) / 100,
+      s1: Math.round((2*PP - p.h) * 100) / 100,
+      s2: Math.round((PP - (p.h - p.l)) * 100) / 100,
+      s3: Math.round((p.l - 2*(p.h - PP)) * 100) / 100,
+    };
+  }
 
   const pd2VA = pd2va ? { vah: pd2va.vah, val: pd2va.val } : null;
 
@@ -1554,19 +1572,9 @@ async function getLiveEdgesContext() {
     floorPivots,
   };
 
-  // Overnight structural reads for edge display
-  const overnightContext = arReads.rows[0] || {};
+  const overnightContext = arReadsQ.rows[0] || {};
 
-  // Cascade breaker: count distinct different-level STOP_HITs in the last 45 min.
-  // Threshold=3 derived from normal-day distribution (mean=1.84+std=2.16 prior stops; p75=3).
-  const _cascadeQ = await query(`
-    SELECT COUNT(DISTINCT setup_type)::int AS stop_count
-    FROM active_setups
-    WHERE trade_date = $1
-      AND resolution = 'STOP_HIT'
-      AND resolved_at >= NOW() - INTERVAL '45 minutes'
-  `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] }));
-  const _cascadeCount = _cascadeQ.rows[0]?.stop_count ?? 0;
+  const _cascadeCount = cascadeQ.rows[0]?.stop_count ?? 0;
   const cascadeBreaker = { active: _cascadeCount >= 3, stopCount: _cascadeCount, threshold: 3, windowMins: 45 };
 
   return {
@@ -1574,7 +1582,7 @@ async function getLiveEdgesContext() {
     liveStatus,
     limits: { Q1_LIMIT, Q4_LIMIT },
     setups: {
-      date: setupDate,
+      date: targetDate,
       isFallback,
       list: processedSetups
     },
@@ -1587,6 +1595,7 @@ async function getLiveEdgesContext() {
     cascadeBreaker,
   };
 }
+
 
 // GET /api/antigravity/edges-context
 router.get('/antigravity/edges-context', async (req, res) => {

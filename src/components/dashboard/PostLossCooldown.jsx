@@ -162,14 +162,11 @@ export default function PostLossCooldown() {
       )}
 
       {phase === null && (
-        <>
-          <div style={triggerWrapStyle}>
-            <button style={triggerBtnStyle} onClick={startCooldown}>
-              Took a loss — start {COOLDOWN_MINUTES}-minute cooldown
-            </button>
-          </div>
-          <DecisionIntel />
-        </>
+        <div style={triggerWrapStyle}>
+          <button style={triggerBtnStyle} onClick={startCooldown}>
+            Took a loss — start {COOLDOWN_MINUTES}-minute cooldown
+          </button>
+        </div>
       )}
     </>
   );

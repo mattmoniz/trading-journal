@@ -278,6 +278,7 @@ export default function DashboardView({
           </ResponsiveContainer>
         </div>
       )}
+
     </div>
   );
 }

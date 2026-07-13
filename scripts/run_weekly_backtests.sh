@@ -10,6 +10,9 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/backtest_pulse_score.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 
+# --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
+/usr/bin/node scripts/backtest_wpp_short_gap.mjs
+
 # --- Context + anticipation pipelines ---
 /usr/bin/node scripts/backtest_permission_slips.mjs
 /usr/bin/node scripts/backtest_level_approach.js

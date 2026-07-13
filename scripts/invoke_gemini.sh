@@ -22,6 +22,6 @@ echo "[invoke_gemini] Task: $(head -3 "$REQUEST" | tail -1)"
 # Clear previous response before writing new one
 > "$RESPONSE"
 
-agy --print --print-timeout "$TIMEOUT" < "$REQUEST" > "$RESPONSE" 2>&1
+agy --print "$(cat "$REQUEST")" --print-timeout "$TIMEOUT" > "$RESPONSE" 2>&1
 
 echo "[invoke_gemini] Done at $(date '+%H:%M:%S') — $(wc -l < "$RESPONSE") lines written"

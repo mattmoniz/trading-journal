@@ -2,6 +2,7 @@ import express from 'express';
 import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
+import { inferDirection } from '../config/setupTypes.js';
 
 const router = express.Router();
 
@@ -49,7 +50,7 @@ router.get('/setups/tp-recommendation', async (req, res) => {
     if (!setupType) return res.status(400).json({ error: 'setupType required' });
 
     const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const isLong = setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('UP');
+    const isLong = inferDirection(setupType) === 'LONG';
 
     // Find active setup for entry zone — by id, then ACTIVE status, then most recent
     let setupRow = null;

@@ -90,7 +90,7 @@ function conditionChips(req, ctx) {
 export default function BehavioralPatternsCard() {
   const [patterns, setPatterns] = useState([]);
   const [ctx, setCtx]           = useState({});
-  const [minWr, setMinWr]       = useState(65);
+  const [minWr, setMinWr]       = useState(75);
   const [loading, setLoading]   = useState(true);
 
   const load = useCallback(async () => {

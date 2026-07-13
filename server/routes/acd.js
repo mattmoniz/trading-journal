@@ -607,6 +607,189 @@ export default function createACDRouter(io) {
     }
   });
 
+  // GET /api/acd/trend-watch
+  // Returns a 6-condition stack score predicting major directional moves.
+  // Conditions: overnight_inventory, open_vs_value, prior day not TREND,
+  // A signal aligned, IB range medium, cumulative delta aligned.
+  // Score 4+/6 = alert. Includes historical context (range distributions) for each direction.
+  router.get('/acd/trend-watch', async (req, res) => {
+    try {
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+      const [arQ, priorQ, acdQ, ibQ, deltaQ] = await Promise.all([
+        // 1. Auction reads — overnight inventory + open vs value
+        query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date = $1`, [todayET]),
+        // 2. Prior day type
+        query(`SELECT day_type FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]),
+        // 3. Today's A signal
+        query(`SELECT a_up_fired, a_down_fired,
+          TO_CHAR(a_up_time, 'HH24:MI') AS a_up_et,
+          TO_CHAR(a_down_time, 'HH24:MI') AS a_down_et
+          FROM acd_daily_log WHERE trade_date = $1`, [todayET]),
+        // 4. IB range today + rolling p33/p67 from last 60 sessions
+        query(`
+          WITH ib_hist AS (
+            SELECT (ts AT TIME ZONE 'America/New_York')::date AS d,
+              MAX(high::float) - MIN(low::float) AS ib_range
+            FROM price_bars WHERE symbol='NQ'
+              AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                   EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 629
+              AND (ts AT TIME ZONE 'America/New_York')::date <= $1::date
+            GROUP BY 1 ORDER BY 1 DESC LIMIT 61
+          )
+          SELECT
+            (SELECT ib_range FROM ib_hist WHERE d = $1::date) AS today_ib,
+            PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY ib_range) AS p33,
+            PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY ib_range) AS p50,
+            PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY ib_range) AS p67
+          FROM ib_hist WHERE d < $1::date
+        `, [todayET]),
+        // 5. Cumulative delta today + rolling p25/p75 from last 60 sessions
+        query(`
+          WITH delta_hist AS (
+            SELECT (ts AT TIME ZONE 'America/New_York')::date AS d,
+              SUM(COALESCE(ask_volume,0) - COALESCE(bid_volume,0)) AS cum_delta
+            FROM price_bars WHERE symbol='NQ'
+              AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                   EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 959
+              AND (ts AT TIME ZONE 'America/New_York')::date <= $1::date
+            GROUP BY 1 ORDER BY 1 DESC LIMIT 61
+          )
+          SELECT
+            (SELECT cum_delta FROM delta_hist WHERE d = $1::date) AS today_delta,
+            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY cum_delta) AS p25,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY cum_delta) AS p75
+          FROM delta_hist WHERE d < $1::date
+        `, [todayET]),
+      ]);
+
+      const ar = arQ.rows[0] || {};
+      const priorDayType = priorQ.rows[0]?.day_type ?? null;
+      const acd = acdQ.rows[0] || {};
+      const ib = ibQ.rows[0] || {};
+      const dl = deltaQ.rows[0] || {};
+
+      const onInv = ar.overnight_inventory;
+      const ovv = ar.open_vs_prior_value;
+
+      // Determine direction: both pre-market conditions pointing same way = strong;
+      // single condition or A signal only = weak
+      let direction = null;
+      if (onInv === 'LONG_TRAPPED' && ovv === 'BELOW_VALUE') direction = 'BEAR';
+      else if (onInv === 'SHORT_TRAPPED' && ovv === 'ABOVE_VALUE') direction = 'BULL';
+      else if (onInv === 'LONG_TRAPPED') direction = 'BEAR';
+      else if (onInv === 'SHORT_TRAPPED') direction = 'BULL';
+      if (!direction && acd.a_down_fired) direction = 'BEAR';
+      if (!direction && acd.a_up_fired) direction = 'BULL';
+
+      const todayIb   = ib.today_ib  != null ? parseFloat(ib.today_ib)  : null;
+      const ibP33     = parseFloat(ib.p33), ibP67 = parseFloat(ib.p67), ibP50 = parseFloat(ib.p50);
+      const cumDelta  = dl.today_delta != null ? parseFloat(dl.today_delta) : null;
+      const dlP25     = parseFloat(dl.p25), dlP75 = parseFloat(dl.p75);
+
+      const ibTierMedium = todayIb != null && todayIb >= ibP33 && todayIb <= ibP67;
+      const ibTierLabel  = todayIb == null ? 'forming'
+        : todayIb < ibP33 ? 'TIGHT' : todayIb > ibP67 ? 'WIDE' : 'MEDIUM';
+
+      const deltaAligned   = cumDelta != null && ((direction === 'BEAR' && cumDelta < dlP25) || (direction === 'BULL' && cumDelta > dlP75));
+      const deltaDiverging = cumDelta != null && ((direction === 'BEAR' && cumDelta > dlP75) || (direction === 'BULL' && cumDelta < dlP25));
+
+      const conditions = [
+        {
+          key: 'inventoryAligned',
+          label: 'Overnight inventory',
+          met: direction === 'BEAR' ? onInv === 'LONG_TRAPPED' : direction === 'BULL' ? onInv === 'SHORT_TRAPPED' : false,
+          value: onInv ?? 'unknown',
+          when: 'pre-market',
+          detail: onInv === 'LONG_TRAPPED' ? 'Longs trapped — forced sellers at open'
+            : onInv === 'SHORT_TRAPPED' ? 'Shorts trapped — forced buyers at open'
+            : 'Neutral inventory — no structural pressure',
+        },
+        {
+          key: 'valueAligned',
+          label: 'Open vs prior value',
+          met: direction === 'BEAR' ? ovv === 'BELOW_VALUE' : direction === 'BULL' ? ovv === 'ABOVE_VALUE' : false,
+          value: ovv ?? 'unknown',
+          when: 'pre-market',
+          detail: ovv === 'BELOW_VALUE' ? 'Opens below value — structure confirms bearish bias'
+            : ovv === 'ABOVE_VALUE' ? 'Opens above value — structure confirms bullish bias'
+            : 'Opens inside value — no structural edge',
+        },
+        {
+          key: 'priorNotTrend',
+          label: 'Prior day not Trend',
+          met: priorDayType != null && priorDayType !== 'TREND',
+          value: priorDayType ?? 'unknown',
+          when: 'pre-market',
+          detail: priorDayType === 'TREND' ? 'Prior TREND day — directional exhaustion likely, fades favored today'
+            : priorDayType === 'TURBULENT' ? 'Prior TURBULENT — momentum can persist, p75 range 522pt follow-through'
+            : priorDayType === 'BALANCE' ? 'Prior BALANCE — compression, directional follow-through 47%'
+            : 'Unknown prior day',
+        },
+        {
+          key: 'aSignal',
+          label: 'A signal confirmed',
+          met: direction === 'BEAR' ? !!acd.a_down_fired : direction === 'BULL' ? !!acd.a_up_fired : false,
+          value: acd.a_down_fired ? `A Down ${acd.a_down_et || ''}` : acd.a_up_fired ? `A Up ${acd.a_up_et || ''}` : 'not fired',
+          when: 'live',
+          detail: (direction === 'BEAR' && acd.a_down_fired) ? `A Down fired${acd.a_down_et ? ` at ${acd.a_down_et}` : ''} — market accepted bearish extension`
+            : (direction === 'BULL' && acd.a_up_fired) ? `A Up fired${acd.a_up_et ? ` at ${acd.a_up_et}` : ''} — market accepted bullish extension`
+            : 'A signal not yet fired in expected direction',
+        },
+        {
+          key: 'ibMedium',
+          label: 'IB range medium',
+          met: ibTierMedium,
+          value: todayIb != null ? `${Math.round(todayIb)}pt (${ibTierLabel})` : 'IB forming',
+          when: '10:30 AM',
+          detail: ibTierMedium ? `Medium IB ${Math.round(todayIb)}pt — unresolved tension, directional break expected post-IB (49% hist dir close)`
+            : ibTierLabel === 'TIGHT' ? `Tight IB ${Math.round(todayIb)}pt — smaller absolute moves, ${Math.round(ibP33)}pt threshold`
+            : ibTierLabel === 'WIDE' ? `Wide IB ${Math.round(todayIb)}pt — volatile but often non-directional close (37% hist dir close). Watch for reversal.`
+            : 'IB not yet closed',
+        },
+        {
+          key: 'deltaConfirmed',
+          label: 'Delta confirmed',
+          met: deltaAligned,
+          warning: deltaDiverging,
+          value: cumDelta != null ? `${cumDelta > 0 ? '+' : ''}${Math.round(cumDelta).toLocaleString()}` : 'no data',
+          when: 'live',
+          detail: deltaAligned
+            ? `Cumulative delta ${cumDelta > 0 ? 'strongly positive' : 'strongly negative'} — institutional flow confirms direction. Historical: ${direction === 'BEAR' ? 'p75 range 598pt on neg-delta bear days' : '60.7% bull-close rate on pos-delta days'}`
+            : deltaDiverging
+              ? `⚠ DELTA DIVERGING: flow contradicts price (${cumDelta > 0 ? 'buyers absorbing selling' : 'sellers absorbing rally'}) — potential reversal, not runner`
+              : cumDelta != null ? 'Delta neutral — no institutional conviction yet'
+              : 'No delta data for today',
+        },
+      ];
+
+      const score = conditions.filter(c => c.met).length;
+
+      // Historical context from backtests (hardcoded from empirical results)
+      const hist = direction === 'BEAR'
+        ? { dirRate: 45, deltaConfirmedDirRate: 60, p50Range: 371, p75Range: 522,
+            deltaP75Range: 598, note: 'BEAR_CLOSE: p50=371pt, p75=522pt. Neg delta + bear context → p75=598pt' }
+        : direction === 'BULL'
+        ? { dirRate: 55, deltaConfirmedDirRate: 61, p50Range: 275, p75Range: 428,
+            deltaP75Range: 353, note: 'BULL_CLOSE: p50=275pt, p75=428pt. Strong pos delta alone → 60.7% bull-close rate' }
+        : { dirRate: 44, p50Range: 291, p75Range: 419, note: 'No direction signal yet — base rate 44% directional' };
+
+      res.json({
+        direction,
+        score,
+        maxScore: conditions.length,
+        alert: score >= 4,
+        conditions,
+        historicalContext: hist,
+        ibTierLabel,
+        ibRaw: { today: todayIb != null ? Math.round(todayIb) : null, p33: Math.round(ibP33), p67: Math.round(ibP67) },
+        deltaRaw: { today: cumDelta != null ? Math.round(cumDelta) : null, p25: Math.round(dlP25), p75: Math.round(dlP75) },
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // GET /api/acd/today
   router.get('/acd/today', async (req, res) => {
     try {
@@ -4487,6 +4670,18 @@ export default function createACDRouter(io) {
           ].filter(l => l.level != null);
           const keepLevels = keepLevelsAll;
 
+          // Conditional type override table. Converts raw `${lv.name}_${dir}` into a
+          // variant type when entry conditions change the edge profile enough to warrant
+          // separate calibration. Both the live path AND the early-touch backfill path
+          // must call this — it is the single source of truth for all type overrides.
+          const resolveSetupType = (rawType, lv) => {
+            if (rawType === 'WPP_FADE_SHORT') {
+              const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
+              if (sessionOpenBar && parseFloat(sessionOpenBar.open) < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
+            }
+            return rawType;
+          };
+
           // Collect ALL levels within 15pt — wider than the old 10pt window to catch
           // approaches that reverse before piercing deeply. Pick the highest-EV level
           // as the primary setup; annotate description with confluence when 2+ stack.
@@ -4508,7 +4703,7 @@ export default function createACDRouter(io) {
             const lv = primary;
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
-            const type = `${lv.name}_${dir}`;
+            const type = resolveSetupType(`${lv.name}_${dir}`, lv);
             if (!liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
@@ -4794,9 +4989,9 @@ export default function createACDRouter(io) {
               : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
             const isLong = touchApproachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
-            if (liveStats._suppressedSetups?.has(`${lv.name}_${dir}`) || liveStats._dowSuppressToday?.has(`${lv.name}_${dir}`) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
+            const btType = resolveSetupType(`${lv.name}_${dir}`, lv);
+            if (liveStats._suppressedSetups?.has(btType) || liveStats._dowSuppressToday?.has(btType) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
             {
-            const btType = `${lv.name}_${dir}`;
             const btOpt  = liveStats._opt?.[btType];
             const btStop = btOpt?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
             const btTgt  = btOpt?.target ?? Math.round(lv.mfe     ?? TARGET);
@@ -5073,7 +5268,7 @@ export default function createACDRouter(io) {
         levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
         // IB_BULLISH / IB_BEARISH — TREND 71.7% WR, TURBULENT 70.0%. BALANCE suppressed (51.9% < breakeven).
         // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27, Fri×IB_BULLISH EV=-$51 N=25 suppressed as of 2026-07-09.
-        (ibSetup && !liveStats?._dowSuppressToday?.has(ibSetup.type)) ? ibSetup : null,
+        (ibSetup && !getCached(todayET, 'levelFadeStats')?._dowSuppressToday?.has(ibSetup.type)) ? ibSetup : null,
       ];
       // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
       // These persist to active_setups with status='SHADOW', resolve against price,
@@ -5577,8 +5772,8 @@ export default function createACDRouter(io) {
           hist.winRate ?? null, hist.occurrences ?? null, hist.avgPnl ?? null, hist.t1HitRate ?? null,
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
           active.sizeMultiplier ?? 1.0,
-          liveStats._suppressedSetups?.has(active.type) ? 'SHADOW' : 'ACTIVE',
-          liveStats._suppressedSetups?.has(active.type) ? 'PERFORMANCE_BELOW_THRESHOLD' : null,
+          getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type) ? 'SHADOW' : 'ACTIVE',
+          getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type) ? 'PERFORMANCE_BELOW_THRESHOLD' : null,
         ]);
         let row = ins.rows[0];
         if (!row) {

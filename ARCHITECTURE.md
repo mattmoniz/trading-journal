@@ -233,7 +233,8 @@ Morning brief generation, EOD auto-import (4 PM — also runs `tagTradesForDate`
 ```
 src/
 ├── main.jsx               # Entry point
-├── App.jsx                # Global state (account, view routing, socket.io, profit-lock/DLL banners), ~all view switching
+├── App.jsx                # Global state only (account, socket.io, profit-lock/DLL banners, view routing shell)
+│                          # Reduced 17k→1.8k lines 2026-07-12; all view content extracted to src/views/
 ├── App.css                # Dark theme, CSS variables
 ├── utils/
 │   ├── usePollData.js     # Generic fetch+setInterval hook (cancellation built in)
@@ -242,6 +243,14 @@ src/
 │   ├── format.js
 │   ├── timestamps.js
 │   └── updateDots.js
+├── views/                 # All top-level views extracted from App.jsx (lazy-loaded except ACDView/PlaybookView)
+│   ├── ACDView.jsx        # 6,556 lines — static import (Sidebar uses named exports)
+│   ├── BacktestView.jsx   # 2,854 lines — lazy
+│   ├── CalendarView.jsx   # 2,303 lines — static import
+│   ├── PlaybookView.jsx   # 1,564 lines — static import (ACDView uses named exports)
+│   ├── ScenarioTesterView.jsx, AllTradesView.jsx, LongTermStructureView.jsx
+│   ├── RiskView.jsx, TearsheetView.jsx, SetupHistoryView.jsx, SettingsView.jsx
+│   └── (all lazy-loaded except ACDView, CalendarView, PlaybookView)
 ├── components/shared/
 │   ├── Card.jsx           # Standard card wrapper (var(--card-bg), var(--border-color))
 │   ├── WinChip.jsx        # Win-rate chip: label + WR% + N, highlight/isBaseline props
@@ -252,7 +261,7 @@ src/
 
 **Sidebar nav (5 items):** Morning Prep → `acd`, Dashboard → `dashboard`, Edge → `backtest`, Trades → `calendar`, Settings → `settings`. Removed 2026-07-03: Structure (`longterm`), Tearsheet, Scenarios, Risk, Setup Log — all absorbed into Edge sub-tabs or Dashboard content.
 
-Views routed inside `App.jsx`: `dashboard`, `all-trades`, `calendar`, `acd`, `backtest`, `settings`, `longterm`, `playbook` (still renderable, just not in sidebar nav; `scenario`, `risk`, `setup-log`, `tearsheet` render as Edge sub-tabs or via direct URL).
+Views routed inside `App.jsx` → `src/views/`: `dashboard`, `all-trades`, `calendar`, `acd`, `backtest`, `settings`, `longterm`, `playbook` (still renderable, just not in sidebar nav; `scenario`, `risk`, `setup-log`, `tearsheet` render as Edge sub-tabs or via direct URL).
 
 **BacktestView ("Edge") sub-tabs:** Setup Log (default), **Alpha Engine** (system overview — size multiplier stack, tiers, suppressions, tools, road map), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
 

@@ -50,13 +50,15 @@ function ChipPopover({ rect, content, onClose }) {
     return () => document.removeEventListener('mousedown', h);
   }, [onClose]);
 
-  const left = Math.min(rect.left, window.innerWidth - 290);
+  const popWidth = 340;
+  const centered = rect.left + rect.width / 2 - popWidth / 2;
+  const left = Math.max(8, Math.min(centered, window.innerWidth - popWidth - 8));
   return (
     <div ref={ref} style={{
       position: 'fixed', top: rect.bottom + 6, left,
-      background: '#0f172a', border: '1px solid rgba(255,255,255,0.14)',
-      borderRadius: 8, padding: '12px 14px', zIndex: 10001,
-      boxShadow: '0 8px 32px rgba(0,0,0,0.65)', minWidth: 230, maxWidth: 310,
+      background: '#111827', border: '1px solid rgba(255,255,255,0.22)',
+      borderRadius: 8, padding: '14px 16px', zIndex: 10001,
+      boxShadow: '0 12px 40px rgba(0,0,0,0.75)', minWidth: 250, maxWidth: 340,
     }}>
       {content}
     </div>
@@ -65,9 +67,9 @@ function ChipPopover({ rect, content, onClose }) {
 
 function PopRow({ label, value, color }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0', gap: 12 }}>
-      <span style={{ fontSize: 11, color: C.muted }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 700, color: color || C.text, fontVariantNumeric: 'tabular-nums' }}>{value ?? '—'}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0', gap: 16 }}>
+      <span style={{ fontSize: 12, color: '#94a3b8' }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: color || C.text, fontVariantNumeric: 'tabular-nums' }}>{value ?? '—'}</span>
     </div>
   );
 }
@@ -75,8 +77,8 @@ function PopRow({ label, value, color }) {
 function PopNote({ text }) {
   return (
     <>
-      <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '6px 0' }} />
-      <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5 }}>{text}</div>
+      <div style={{ height: 1, background: 'rgba(255,255,255,0.1)', margin: '8px 0' }} />
+      <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.6 }}>{text}</div>
     </>
   );
 }
@@ -178,24 +180,27 @@ function SizeChip() {
 
 // ── All context chips — inline, each clickable for full detail ─────────────────
 function ContextChips({ date }) {
-  const [ctx,     setCtx]     = useState(null);
-  const [flush,   setFlush]   = useState(null);
-  const [ovn,     setOvn]     = useState(null);
-  const [popover, setPopover] = useState(null); // { key, rect, content }
+  const [ctx,        setCtx]        = useState(null);
+  const [flush,      setFlush]      = useState(null);
+  const [ovn,        setOvn]        = useState(null);
+  const [trendWatch, setTrendWatch] = useState(null);
+  const [popover,    setPopover]    = useState(null); // { key, rect, content }
 
   useEffect(() => {
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const load = async () => {
-      const [ctxR, flushR, autoR] = await Promise.all([
+      const [ctxR, flushR, autoR, twR] = await Promise.all([
         fetch(`${API_URL}/morning-brief/live-session-context/${d}`).then(r => r.json()).catch(() => ({})),
         fetch(`${API_URL}/morning-brief/flush-risk/${d}`).then(r => r.json()).catch(() => ({})),
         fetch(`${API_URL}/auction-read/auto`).then(r => r.json()).catch(() => ({})),
+        fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).catch(() => null),
       ]);
       if (!ctxR?.noData) setCtx(ctxR);
       if (!flushR?.error) setFlush(flushR);
       const { overnight_inventory: inv, open_vs_prior_value: ovp, prior_day_profile: pdp,
               value_area_high: vah, value_area_low: val_, poc, inventory_reason: invReason } = autoR || {};
       if (inv || ovp || pdp) setOvn({ inv, ovp, pdp, vah, val: val_, poc, invReason });
+      if (twR && !twR.error) setTrendWatch(twR);
     };
     load();
     const iv = setInterval(load, POLL_MS);
@@ -332,6 +337,50 @@ function ContextChips({ date }) {
         />
       );
     }
+  }
+
+  // Big Move alert — prior TURBULENT + delta confirming
+  if (ovn?.pdp === 'TURBULENT') {
+    const deltaConfirmed = trendWatch?.conditions?.find(c => c.key === 'deltaConfirmed')?.met === true;
+    const bmColor = deltaConfirmed ? C.amber : '#f97316';
+    const bmLabel = deltaConfirmed ? 'BIG MOVE' : 'PRIOR TURB';
+    const bmValue = deltaConfirmed ? 'TURB+Δ ★' : 'TURBULENT';
+    chips.push(
+      <DataChip key="turbdelta" label={bmLabel} value={bmValue} color={bmColor}
+        flash={true} flashColor={bmColor} flashSpeed={deltaConfirmed ? 'fast' : 'slow'}
+        active={popover?.key === 'turbdelta'}
+        onClick={e => openPop('turbdelta', e, (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: bmColor, marginBottom: 6 }}>
+              {deltaConfirmed ? '★ BIG MOVE SIGNAL' : '⚡ Prior Day: TURBULENT'}
+            </div>
+            <PopRow label="Prior day" value="TURBULENT" color={C.amber} />
+            <PopRow label="Delta" value={deltaConfirmed ? 'CONFIRMED ✓' : 'not yet confirmed'} color={deltaConfirmed ? C.green : C.muted} />
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '6px 0' }} />
+            {deltaConfirmed ? (
+              <>
+                <div style={{ fontSize: 11, color: C.text, lineHeight: 1.6, marginBottom: 6 }}>
+                  Both conditions met. Strongest large-move signal in the dataset (N=21).
+                </div>
+                <PopRow label="Expected p50 range" value="450pt" color={C.text} />
+                <PopRow label="Expected p75 range" value="526pt" color={C.amber} />
+                <PopRow label="Sessions >400pt" value="52%" color={C.amber} />
+                <PopNote text="Watch for A signal to lock in direction. Once A signal + delta align, the move is typically underway. Size up in trend direction — fade edge is OFF." />
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, color: C.text, lineHeight: 1.6, marginBottom: 6 }}>
+                  Prior TURBULENT day. Large follow-through likely when delta confirms. Watch for: A signal fire + cumulative delta crossing into top/bottom quartile.
+                </div>
+                <PopRow label="Prior TURB p75 range" value="522pt" color={C.text} />
+                <PopRow label="% sessions >400pt" value="48%" color={C.text} />
+                <PopNote text="Delta confirmation pending. When it fires, this chip pulses fast and updates to BIG MOVE. Until then, treat as elevated volatility — standard size." />
+              </>
+            )}
+          </div>
+        ))}
+      />
+    );
   }
 
   // Flush risk
@@ -485,7 +534,12 @@ export function LiveReadModal({ onClose, suggestedPrice }) {
 export default function MarketPulseBar() {
   const [pulse,     setPulse]     = useState(null);
   const [showModal, setShowModal] = useState(false);
+  const [pop,       setPop]       = useState(null);
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const openPop = (key, e, content) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setPop(prev => prev?.key === key ? null : { key, rect, content });
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -529,16 +583,42 @@ export default function MarketPulseBar() {
           sub={fromOpenStr} subColor={fromOpenClr} color={C.text}
           flash={Math.abs(ptsFromOpen || 0) >= 60}
           flashColor={ptsFromOpen >= 0 ? C.green : C.red} flashSpeed="fast"
+          active={pop?.key === 'nq'}
+          onClick={e => openPop('nq', e, (
+            <div>
+              <PopRow label="Price"     value={currentPrice?.toFixed(2)} color={C.text} />
+              <PopRow label="From open" value={fromOpenStr} color={fromOpenClr} />
+              <PopNote text="Distance from today's RTH open. Flashes at ±60pt — signals momentum or trapped participants building pressure." />
+            </div>
+          ))}
         />
         <DataChip label="Range" value={sessionRange ? `${sessionRange.toFixed(0)}pt` : '—'}
           sub={rangeLabel} subColor={moveColor} color={moveColor}
           flash={rangeClass === 'EXTENDED'} flashColor={C.red} flashSpeed="fast"
           extra={rangeBar(sessionRange, rangeP25, rangeP50, rangeP75)}
+          active={pop?.key === 'range'}
+          onClick={e => openPop('range', e, (
+            <div>
+              <PopRow label="Session range" value={sessionRange ? `${sessionRange.toFixed(0)}pt` : '—'} color={moveColor} />
+              <PopRow label="Class"         value={rangeLabel} color={moveColor} />
+              <PopRow label="p25 / p50 / p75" value={`${rangeP25?.toFixed(0)} / ${rangeP50?.toFixed(0)} / ${rangeP75?.toFixed(0)}pt`} />
+              <PopNote text="Range vs 90-day distribution. EXTENDED = above p75 (big move day). QUIET = below p25 (low conviction, wait for expansion). Flashes red when extended." />
+            </div>
+          ))}
         />
         <DataChip label="CumΔ"
           value={sessionDelta != null ? `${deltaArrow} ${Math.abs(sessionDelta).toLocaleString()}` : '—'}
           sub={deltaClass !== 'NORMAL' ? deltaClass : null} subColor={deltaColor}
           color={deltaColor} flash={deltaClass === 'HIGH'} flashColor={deltaColor} flashSpeed="fast"
+          active={pop?.key === 'cumd'}
+          onClick={e => openPop('cumd', e, (
+            <div>
+              <PopRow label="Cum delta"  value={sessionDelta != null ? `${sessionDelta > 0?'+':''}${sessionDelta.toLocaleString()}` : '—'} color={deltaColor} />
+              <PopRow label="Direction"  value={deltaSign || '—'} color={deltaColor} />
+              <PopRow label="Class"      value={deltaClass} color={deltaColor} />
+              <PopNote text="Cumulative order flow (ask vol − bid vol) since RTH open. HIGH class = top/bottom quartile of 60-day history. Strong positive delta on a prior-TURB day = big move signal." />
+            </div>
+          ))}
         />
         {rvol != null && (
           <DataChip label="RVol" value={`${rvol.toFixed(1)}×`}
@@ -546,6 +626,14 @@ export default function MarketPulseBar() {
             color={rvolColor}
             flash={rvolFlash} flashColor={rvolSigma >= 2 ? C.red : C.amber}
             flashSpeed={rvolSigma >= 2 ? 'fast' : 'slow'}
+            active={pop?.key === 'rvol'}
+            onClick={e => openPop('rvol', e, (
+              <div>
+                <PopRow label="Rel volume"   value={`${rvol.toFixed(1)}×`} color={rvolColor} />
+                <PopRow label="σ vs baseline" value={rvolSigma != null ? `${rvolSigma > 0?'+':''}${rvolSigma.toFixed(1)}σ` : '—'} color={rvolColor} />
+                <PopNote text="Time-adjusted volume vs 90-day same-minute baseline. SPIKE (1σ+) = elevated participation. EXTREME (2σ+) = institutional conviction or flush risk. High RVol on A signal bar = stronger follow-through." />
+              </div>
+            ))}
           />
         )}
 
@@ -556,19 +644,8 @@ export default function MarketPulseBar() {
         {/* Session + overnight context — all inline, click each for detail */}
         <ContextChips date={dateStr} />
 
-        {/* Verdict + log read */}
+        {/* Log read */}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            padding: '3px 10px', borderRadius: 5, fontSize: 11, fontWeight: 800,
-            textTransform: 'uppercase', letterSpacing: '0.08em', flexShrink: 0,
-            background: `${verdictColor(verdict)}22`, color: verdictColor(verdict),
-            border: `1px solid ${verdictColor(verdict)}44`,
-          }}>
-            {verdict === 'ENGAGE'
-              ? `⚡ ENGAGE${verdictDir === 'LONG' ? ' ↑' : verdictDir === 'SHORT' ? ' ↓' : ''}`
-              : verdict === 'STAND_ASIDE' ? '⏸ STAND ASIDE'
-              : '◌ WAIT'}
-          </span>
           <button onClick={() => setShowModal(true)}
             style={{ padding: '3px 10px', borderRadius: 5, border: `1px solid ${C.border}`, background: 'rgba(255,255,255,0.04)', color: C.dim, fontSize: 11, fontWeight: 600, cursor: 'pointer', letterSpacing: '0.04em', flexShrink: 0 }}
             onMouseEnter={e => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
@@ -579,6 +656,7 @@ export default function MarketPulseBar() {
 
       </div>
 
+      {pop && <ChipPopover rect={pop.rect} content={pop.content} onClose={() => setPop(null)} />}
       {showModal && <LiveReadModal onClose={() => setShowModal(false)} suggestedPrice={pulse.currentPrice} />}
     </>
   );

@@ -89,7 +89,7 @@ body {
 
 /* ==================== SIDEBAR ==================== */
 .sidebar {
-  width: 340px;
+  width: 400px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
   padding: 16px;

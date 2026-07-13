@@ -119,6 +119,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
 
   const [scalpPlaybook, setScalpPlaybook] = useState(null);
   const [liveCtx, setLiveCtx] = useState(null);
+  const [trendWatch, setTrendWatch] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -130,7 +131,8 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       fetch(`${API_URL}/volatility-forecast`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/level-approach/today`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/confluence-near-price`).then(r => r.json()).catch(() => null),
-    ]).then(([fc, ed, sp, lc, vf, sa, cp]) => {
+      fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).catch(() => null),
+    ]).then(([fc, ed, sp, lc, vf, sa, cp, tw]) => {
       setForecast(fc);
       setEdgeData(ed);
       setScalpPlaybook(sp);
@@ -138,6 +140,7 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
       setVolatilityForecast(vf?.error ? null : vf);
       setSetupAnticipation(sa?.setups?.length ? sa : null);
       setConfluencePairs(cp?.pairs?.length ? cp : null);
+      setTrendWatch(tw?.error ? null : tw);
     }).finally(() => setLoading(false));
   }, [date]);
 
@@ -148,6 +151,18 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
     const interval = setInterval(() => {
       fetch(`${API_URL}/morning-brief/live-session-context/${date}`).then(r => r.json()).then(lc => {
         if (!lc?.noData) setLiveCtx(lc);
+      }).catch(() => {});
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [date]);
+
+  // Auto-refresh trend watch every 60 seconds during RTH
+  useEffect(() => {
+    const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
+    if (etH < 9 || etH >= 16) return;
+    const interval = setInterval(() => {
+      fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).then(tw => {
+        if (!tw?.error) setTrendWatch(tw);
       }).catch(() => {});
     }, 60000);
     return () => clearInterval(interval);
@@ -310,6 +325,102 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
         return null;
       })()}
 
+      {/* Trend Watch — composite stack score for major directional day */}
+      {trendWatch && (() => {
+        const tw = trendWatch;
+        const score = tw.score ?? 0;
+        const maxScore = tw.maxScore ?? 6;
+        const dir = tw.direction; // 'BULL' | 'BEAR' | null
+        const isAlert = tw.alert;
+        const conditions = tw.conditions || [];
+        const hCtx = tw.historicalContext || {};
+        const deltaRaw = tw.deltaRaw || {};
+        const ibRaw = tw.ibRaw || {};
+
+        const dirColor = dir === 'BULL' ? '#22c55e' : dir === 'BEAR' ? '#ef4444' : '#94a3b8';
+        const dirArrow = dir === 'BULL' ? '↑' : dir === 'BEAR' ? '↓' : '—';
+        const alertBg = isAlert
+          ? (score >= 5 ? (dir === 'BULL' ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)') : 'rgba(245,158,11,0.07)')
+          : 'rgba(15,23,42,0.3)';
+        const alertBorder = isAlert
+          ? (score >= 5 ? dirColor : '#f59e0b')
+          : 'rgba(51,65,85,0.3)';
+
+        const hasDeltaDivergence = conditions.some(c => c.warning);
+
+        return (
+          <div style={{ ...cardSt, borderLeft: `3px solid ${alertBorder}`, background: alertBg, marginBottom: 10 }}>
+            {/* Header row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ ...labelSt, marginBottom: 0 }}>Trend Watch</div>
+              {dir && (
+                <span style={{ fontSize: 13, fontWeight: 800, color: dirColor }}>{dirArrow} {dir}</span>
+              )}
+              <span style={{
+                fontSize: 11, fontWeight: 700, color: isAlert ? (score >= 5 ? dirColor : '#f59e0b') : '#94a3b8',
+                background: isAlert ? `${alertBorder}22` : 'rgba(51,65,85,0.3)',
+                padding: '1px 8px', borderRadius: 10, marginLeft: 4
+              }}>
+                {score}/{maxScore}
+              </span>
+              {isAlert && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: score >= 5 ? dirColor : '#f59e0b', marginLeft: 'auto' }}>
+                  {score >= 5 ? '★ HIGH CONVICTION' : '⚠ WATCH'}
+                </span>
+              )}
+            </div>
+
+            {/* Alert context when score ≥ 4 */}
+            {isAlert && dir && (() => {
+              const dcRate = hCtx.dirRate;
+              const p75range = hCtx.p75Range;
+              const deltaCtx = hCtx.deltaConfirmedDirRate;
+              const deltaConfirmed = conditions.find(c => c.key === 'deltaConfirmed')?.met;
+              return (
+                <div style={{ padding: '6px 8px', background: `${dirColor}11`, borderRadius: 4, marginBottom: 6, fontSize: 11, lineHeight: 1.6 }}>
+                  <span style={{ color: '#e2e8f0' }}>Based on this profile: </span>
+                  {dcRate && <span style={{ color: dirColor, fontWeight: 700 }}>{dcRate}% directional close</span>}
+                  {p75range && <span style={{ color: '#94a3b8' }}> · p75 range = <strong style={{ color: '#e2e8f0' }}>{p75range}pt</strong></span>}
+                  {dir === 'BULL' && deltaConfirmed && deltaCtx && (
+                    <span style={{ color: '#22c55e' }}> · delta confirmed → {deltaCtx}% dir rate</span>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Delta divergence warning */}
+            {hasDeltaDivergence && (
+              <div style={{ padding: '4px 8px', background: 'rgba(245,158,11,0.1)', borderRadius: 4, marginBottom: 6, fontSize: 11, color: '#f59e0b' }}>
+                ⚠ Delta contradicts stack direction — reduce size or wait for confirmation
+              </div>
+            )}
+
+            {/* Conditions checklist */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2px 12px' }}>
+              {conditions.map(c => (
+                <div key={c.key} style={{ display: 'flex', alignItems: 'flex-start', gap: 5, fontSize: 11, paddingBottom: 3 }}>
+                  <span style={{ color: c.warning ? '#f59e0b' : c.met ? '#22c55e' : '#475569', flexShrink: 0, marginTop: 1 }}>
+                    {c.warning ? '⚠' : c.met ? '✓' : '·'}
+                  </span>
+                  <span style={{ color: c.met ? '#cbd5e1' : '#475569', lineHeight: 1.4 }}>
+                    {c.label}
+                    {c.value && <span style={{ color: '#94a3b8' }}> ({c.value})</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Footer: IB tier + delta range */}
+            {(tw.ibTierLabel || deltaRaw.today != null) && (
+              <div style={{ fontSize: 11, color: '#64748b', marginTop: 5, borderTop: '1px solid rgba(51,65,85,0.3)', paddingTop: 4, display: 'flex', gap: 12 }}>
+                {tw.ibTierLabel && <span>IB: <span style={{ color: '#94a3b8' }}>{tw.ibTierLabel}</span>{ibRaw.today != null ? ` (${Math.round(ibRaw.today)}pt)` : ''}</span>}
+                {deltaRaw.today != null && <span>Δ: <span style={{ color: '#94a3b8' }}>{deltaRaw.today > 0 ? '+' : ''}{Math.round(deltaRaw.today).toLocaleString()}</span></span>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Setup anticipation */}
       {setupAnticipation && (() => {
         const setups = setupAnticipation.setups.slice(0, 6);
@@ -325,7 +436,10 @@ export default function SessionForecastPanel({ date, section = 'all' }) {
                 const wrColor   = s.cond_wr   >= 0.75 ? '#22c55e' : s.cond_wr   >= 0.60 ? '#f59e0b' : '#ef4444';
                 const st   = s.setup || s.setup_type || '';
                 const name = st.replace(/_FADE_?(LONG|SHORT)?$/, '').replace(/_/g, ' ');
-                const dir  = st.endsWith('_LONG') ? '↑' : st.endsWith('_SHORT') ? '↓' : '';
+                // Strip conditional entry suffixes (_GAP_UP, _GAP_DOWN) before direction check —
+                // those describe the entry condition, not trade direction (e.g. WPP_FADE_SHORT_GAP_UP is SHORT)
+                const stBase = st.replace(/_GAP_(UP|DOWN)$/, '');
+                const dir  = stBase.endsWith('_LONG') ? '↑' : stBase.endsWith('_SHORT') ? '↓' : '';
                 return (
                   <div key={st} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, paddingBottom: 3, borderBottom: '1px solid rgba(51,65,85,0.3)' }}>
                     <span style={{ color: '#cbd5e1' }}>{dir} {name}</span>
