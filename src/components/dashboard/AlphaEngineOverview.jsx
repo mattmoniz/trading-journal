@@ -353,6 +353,46 @@ function PipelineHealthPanel() {
   );
 }
 
+function LearningDigestPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/learning-digest/recent').then(r => r.json()).then(setData).catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+  const events = data.events || [];
+  if (events.length === 0) {
+    return <div style={{ fontSize: 12, color: '#94a3b8' }}>Nothing new since this panel started tracking — check back after the next 4:35 PM ET run.</div>;
+  }
+
+  const meta = {
+    NEW_PATTERN:              { color: '#22c55e', bg: '#052e16', label: 'NEW' },
+    PATTERN_DEGRADED:         { color: '#64748b', bg: '#0f172a', label: 'RETIRED' },
+    STOP_CHANGED:             { color: '#3b82f6', bg: '#0a1a2e', label: 'STOP' },
+    TARGET_CHANGED:           { color: '#3b82f6', bg: '#0a1a2e', label: 'TARGET' },
+    SETUP_STATUS_CHANGED:     { color: '#f59e0b', bg: '#1c1a0a', label: 'STATUS' },
+    DAY_TYPE_ALPHA_CHANGED:   { color: '#a78bfa', bg: '#1a1330', label: 'SIZING' },
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 340, overflowY: 'auto' }}>
+      {events.map((e, i) => {
+        const m = meta[e.event_type] || { color: '#94a3b8', bg: '#0f172a', label: e.event_type };
+        return (
+          <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '6px 10px', background: m.bg, border: `1px solid ${m.color}30`, borderRadius: 6 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: m.color, letterSpacing: '0.05em', padding: '1px 6px', borderRadius: 3, background: m.color + '15', flexShrink: 0, marginTop: 1 }}>{m.label}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, color: '#e2e8f0' }}>{e.description}</div>
+              <div style={{ fontSize: 10, color: '#64748b', marginTop: 1 }}>{new Date(e.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -621,6 +661,17 @@ export default function AlphaEngineOverview() {
               ) : t._live ? <EngineAccuracyPanel /> : <div style={S.toolDesc}>{t.desc}</div>}
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* Recent Learning */}
+      <div style={S.section}>
+        <div style={S.sectionTitle}>Recent Learning</div>
+        <div style={S.card}>
+          <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+            New patterns crossing significance, retired ones, and meaningful stop/target/sizing changes since the last run. Updated 4:35 PM ET Mon-Fri, after the day's stop/target and pattern-scan recompute.
+          </div>
+          <LearningDigestPanel />
         </div>
       </div>
 

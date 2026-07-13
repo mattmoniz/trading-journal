@@ -5951,6 +5951,22 @@ export default function createACDRouter(io) {
   });
 
   // ── GET /api/setups/today ──────────────────────────────────────────────────
+  // GET /api/learning-digest/recent — last 14 days of learning_digest_events for the
+  // AlphaEngineOverview "Recent Learning" panel. See server/services/learningDigestService.js.
+  router.get('/learning-digest/recent', async (req, res) => {
+    try {
+      const r = await query(`
+        SELECT event_type, signal_name, old_value, new_value, description, magnitude,
+          created_at::text AS created_at
+        FROM learning_digest_events
+        WHERE created_at >= NOW() - INTERVAL '14 days'
+        ORDER BY created_at DESC
+        LIMIT 100
+      `);
+      res.json({ events: r.rows });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   router.get('/setups/today', async (req, res) => {
     try {
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));

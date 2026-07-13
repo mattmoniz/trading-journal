@@ -452,6 +452,15 @@ function App() {
       setProcessAlertCount(data.count || 0);
     });
 
+    socket.on('learning-digest', (data) => {
+      const newPatterns = (data.events || []).filter(e => e.event_type === 'NEW_PATTERN');
+      if (newPatterns.length > 0) {
+        addToast(`${newPatterns.length} new pattern${newPatterns.length > 1 ? 's' : ''} found — see Alpha Engine → Recent Learning`, 'success', 12000);
+      } else if (data.count > 0) {
+        addToast(`${data.count} update${data.count > 1 ? 's' : ''} to existing setups — see Alpha Engine → Recent Learning`, 'info', 10000);
+      }
+    });
+
     socket.on('dll-status', (data) => {
       setDllStatus(prev => {
         // Reset the dismissal once a new day's status comes in

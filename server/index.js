@@ -58,6 +58,7 @@ import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeOR
 import { scanAndIngestNewBarFiles } from './services/priceBarService.js';
 import { runNightlyUpdate } from './services/patternMemoryUpdate.js';
 import { scanSession, persistScan, mineLevelFades } from './services/patternScannerService.js';
+import { runLearningDigest } from './services/learningDigestService.js';
 import SierraWatcher from './watchers/sierraWatcher.js';
 
 const app = express();
@@ -632,6 +633,18 @@ httpServer.listen(PORT, () => {
         return { count };
       });
     } catch (err) { console.error('[pattern_scan] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // Learning Digest — 4:35 PM ET Mon–Fri (after OPTIMAL_STOP recompute at 4:20 and the
+  // pattern scanner at 4:30 both complete) — surfaces new pattern discoveries and
+  // meaningful stop/target/status drift since the previous run, pushed live via socket.
+  cron.schedule('35 16 * * 1-5', async () => {
+    try {
+      await logProcess('LEARNING_DIGEST', async () => {
+        const result = await runLearningDigest(io);
+        return { count: result.count };
+      });
+    } catch (err) { console.error('[learning_digest] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Daily Coaching — 4:30 PM ET Mon–Fri (runs after trades are imported at 4:00 PM)
