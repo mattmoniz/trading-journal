@@ -23,6 +23,10 @@ fi
 # Scans acd.js and caseEngine.js for patterns that historically introduced
 # hardcoded trading thresholds. None of these should appear without a _opt /
 # _suppressedSetups / performance_audit reference on the same line.
+# Pattern definitions shared with scripts/git-hooks/pre-commit — see that file for
+# single-source-of-truth rationale.
+source "$(git rev-parse --show-toplevel)/scripts/hardcoded-threshold-patterns.sh"
+
 ACD="server/routes/acd.js"
 CE="server/services/caseEngine.js"
 
@@ -31,31 +35,17 @@ hardcoded_hits=()
 for f in "$ACD" "$CE"; do
   [ -f "$f" ] || continue
 
-  # Pattern A: hardcoded suppression set literal  (e.g. new Set(['OR_HIGH_FADE', ...]))
-  if grep -qE "new Set\(\['" "$f" 2>/dev/null; then
-    hits=$(grep -nE "new Set\(\['" "$f" | grep -v '_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES')
-    [ -n "$hits" ] && hardcoded_hits+=("$f — hardcoded Set literal (suppression list?): $hits")
-  fi
+  hits=$(grep -nE "$PATTERN_A" "$f" 2>/dev/null | grep -v "$PATTERN_A_EXCLUDE")
+  [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_A_LABEL: $hits")
 
-  # Pattern B: hardcoded array of setup-type strings (e.g. mondaySkip = ['OR_HIGH_FADE',...])
-  if grep -qE "=\s*\['" "$f" 2>/dev/null; then
-    hits=$(grep -nE "=\s*\['" "$f" | grep -iE 'fade|suppress|skip|monday|setup' | grep -v 'IB_SWEEP_TYPES\|STOP_RANGE\|DOW_NAMES')
-    [ -n "$hits" ] && hardcoded_hits+=("$f — hardcoded setup-type array: $hits")
-  fi
+  hits=$(grep -nE "$PATTERN_B" "$f" 2>/dev/null | grep -iE "$PATTERN_B_FILTER" | grep -v "$PATTERN_B_EXCLUDE")
+  [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_B_LABEL: $hits")
 
-  # Pattern C: bare numeric assignment for STOP or TARGET without _opt reference or Fallback annotation
-  if grep -qE 'const (STOP|TARGET) = [0-9]' "$f" 2>/dev/null; then
-    hits=$(grep -nE 'const (STOP|TARGET) = [0-9]' "$f" | grep -v '_opt\|Fallback\|// sweep\|DEFAULT_\|STOP_RANGE\|MIN_STOP')
-    [ -n "$hits" ] && hardcoded_hits+=("$f — hardcoded STOP/TARGET constant (use _opt or add // Fallback comment): $hits")
-  fi
+  hits=$(grep -nE "$PATTERN_C" "$f" 2>/dev/null | grep -v "$PATTERN_C_EXCLUDE")
+  [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_C_LABEL: $hits")
 
-  # Pattern D: day-of-week ternary with numeric trading threshold values (e.g. isMonday ? 60 : 90)
-  # Exclude: time-of-day minute checks (630=10:30, 960=4pm, 570=9:30), bar counts, date math
-  if grep -qE 'is(Monday|Dow|Tue|Wed|Thu|Fri)\s*\?' "$f" 2>/dev/null; then
-    hits=$(grep -nE 'is(Monday|Dow|Tue|Wed|Thu|Fri)\s*\?.*[0-9]{2,}' "$f" \
-      | grep -v '// data-derived\|etMinNow\|630\|960\|570\|629\|T12:00\|getDay\|post-IB\|10:30\|padEnd\|toFixed')
-    [ -n "$hits" ] && hardcoded_hits+=("$f — DOW-conditional numeric trading threshold (use SETUP_STATUS_DOW pipeline instead): $hits")
-  fi
+  hits=$(grep -nE "$PATTERN_D" "$f" 2>/dev/null | grep -v "$PATTERN_D_EXCLUDE")
+  [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_D_LABEL: $hits")
 done
 
 if [ ${#hardcoded_hits[@]} -gt 0 ]; then

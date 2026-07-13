@@ -4,7 +4,9 @@
 # violations elsewhere don't block unrelated commits — this catches new ones as they're
 # introduced. Same 4 patterns as .claude/hooks/check-docs-drift.sh (that one is a Claude
 # session Stop hook — end-of-session, non-blocking; this one is commit-time and blocking,
-# so it also protects manual `git commit` outside a Claude Code session).
+# so it also protects manual `git commit` outside a Claude Code session). Pattern
+# definitions live in scripts/hardcoded-threshold-patterns.sh — single source of truth
+# for both hooks, don't inline the regexes here again.
 #
 # Escape hatch for a deliberate, reviewed exception: ALLOW_HARDCODED=1 git commit ...
 # (this is a targeted override for this hook only, unlike --no-verify which skips all hooks
@@ -15,6 +17,8 @@ cd "$REPO" || exit 1
 
 [ "$ALLOW_HARDCODED" = "1" ] && exit 0
 
+source "$REPO/scripts/hardcoded-threshold-patterns.sh"
+
 FILES="server/routes/acd.js server/services/caseEngine.js"
 staged_targets="$(git diff --cached --name-only -- $FILES)"
 [ -z "$staged_targets" ] && exit 0
@@ -24,22 +28,17 @@ for f in $staged_targets; do
   added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
   [ -z "$added" ] && continue
 
-  # Pattern A: hardcoded suppression set literal
-  m=$(echo "$added" | grep -E "new Set\(\['" | grep -v '_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES')
-  [ -n "$m" ] && hits+=("$f — new hardcoded Set literal (suppression list?):"$'\n'"$m")
+  m=$(echo "$added" | grep -E "$PATTERN_A" | grep -v "$PATTERN_A_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_A_LABEL:"$'\n'"$m")
 
-  # Pattern B: hardcoded array of setup-type strings
-  m=$(echo "$added" | grep -E "=\s*\['" | grep -iE 'fade|suppress|skip|monday|setup' | grep -v 'IB_SWEEP_TYPES\|STOP_RANGE\|DOW_NAMES')
-  [ -n "$m" ] && hits+=("$f — new hardcoded setup-type array:"$'\n'"$m")
+  m=$(echo "$added" | grep -E "$PATTERN_B" | grep -iE "$PATTERN_B_FILTER" | grep -v "$PATTERN_B_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_B_LABEL:"$'\n'"$m")
 
-  # Pattern C: bare numeric STOP/TARGET assignment without _opt reference or Fallback annotation
-  m=$(echo "$added" | grep -E 'const (STOP|TARGET) = [0-9]' | grep -v '_opt\|Fallback\|// sweep\|DEFAULT_\|STOP_RANGE\|MIN_STOP')
-  [ -n "$m" ] && hits+=("$f — new hardcoded STOP/TARGET constant (use _opt or add // Fallback comment):"$'\n'"$m")
+  m=$(echo "$added" | grep -E "$PATTERN_C" | grep -v "$PATTERN_C_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_C_LABEL:"$'\n'"$m")
 
-  # Pattern D: DOW-conditional numeric trading threshold
-  m=$(echo "$added" | grep -E 'is(Monday|Dow|Tue|Wed|Thu|Fri)\s*\?.*[0-9]{2,}' \
-    | grep -v '// data-derived\|etMinNow\|630\|960\|570\|629\|T12:00\|getDay\|post-IB\|10:30\|padEnd\|toFixed')
-  [ -n "$m" ] && hits+=("$f — new DOW-conditional numeric trading threshold (use SETUP_STATUS_DOW pipeline instead):"$'\n'"$m")
+  m=$(echo "$added" | grep -E "$PATTERN_D" | grep -v "$PATTERN_D_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_D_LABEL:"$'\n'"$m")
 done
 
 if [ ${#hits[@]} -gt 0 ]; then
