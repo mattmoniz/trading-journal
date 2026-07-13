@@ -43,6 +43,17 @@ cleanup_ports() {
 }
 
 echo "Starting Trading Journal..."
+
+# Stop the systemd-managed server before touching ports. Killing its process alone
+# (via cleanup_ports below) isn't enough -- systemd's Restart=on-failure resurrects it
+# 5s later, which then hits EADDRINUSE against the dev server and crash-loops forever
+# every 5s (found 2026-07-13: restart counter was at 9310 when this was diagnosed).
+# systemctl stop actually tells the unit to stop trying, not just kills one process.
+if systemctl --user is-active --quiet trading-journal-server.service 2>/dev/null; then
+  echo "Stopping trading-journal-server.service (dev session takes over port 3002)..."
+  systemctl --user stop trading-journal-server.service
+fi
+
 echo "Checking app ports (${APP_PORTS[*]})..."
 cleanup_ports
 

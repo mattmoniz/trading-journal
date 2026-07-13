@@ -37,4 +37,13 @@ cleanup_ports() {
 echo "Stopping Trading Journal..."
 echo "Checking app ports (${APP_PORTS[*]})..."
 cleanup_ports
+
+# Hand port 3002 back to the systemd-managed server (start.sh stops it on dev-session
+# start — see the comment there). Without this, the app just goes dark until someone
+# manually restarts the service or runs ./start.sh again.
+if systemctl --user is-enabled --quiet trading-journal-server.service 2>/dev/null; then
+  echo "Restarting trading-journal-server.service..."
+  systemctl --user start trading-journal-server.service
+fi
+
 echo "Done."
