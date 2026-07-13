@@ -159,7 +159,20 @@ async function main() {
   for (const r of rows) {
     const p75mae    = parseFloat(r.p75_mae) || DEFAULT_STOP;
     const p75mfe    = Math.round(parseFloat(r.p75_mfe) || DEFAULT_TARGET);
-    const maePercentiles = [r.p25_mae, r.p40_mae, r.p50_mae, r.p60_mae, r.p75_mae, r.p90_mae]
+    // Capped at p75 — NOT p90. Opus audit (2026-07-13) found the EV sim checks `mae > stop`
+    // before checking the target, with no knowledge of chronological order within the trade.
+    // At p90, trades whose real mae landed in the 76th-90th percentile range get "rescued"
+    // into simulated wins whenever mfe happened to clear the target *at any point* in the bar
+    // walk, regardless of whether target was actually reached before the real (tighter,
+    // historical) stop would have triggered. IB_BEARISH: 8 such trades scored as +$100 wins
+    // in the sim, but their real average actual_pnl was -$97.80 (they lost) — this artifact,
+    // not genuine edge, is what pushed IB_BEARISH to a 150pt stop and BRACKET_BREAKOUT_LONG to
+    // 165pt. This is the exact same failure mode sweepOptimalTarget's `maxT` cap already guards
+    // against for targets (see its comment: "high T values saturate to actual_pnl and look
+    // artificially optimal") — p90 just wasn't capped symmetrically for stops when the stop
+    // sweep was added. p75 still isn't perfectly immune (same bias at lower magnitude, per the
+    // audit) but the artifact was concentrated at p90 in practice (7/66 types landed there).
+    const maePercentiles = [r.p25_mae, r.p40_mae, r.p50_mae, r.p60_mae, r.p75_mae]
       .map(parseFloat).filter(v => !isNaN(v) && v > 0);
     const trades    = rawByType[r.setup_type] || [];
     const swept     = sweepOptimalStopAndTarget(trades, maePercentiles, p75mfe);
