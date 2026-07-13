@@ -7,7 +7,8 @@ const AllTradesView = lazy(() => import('./views/AllTradesView.jsx'));
 const RiskView = lazy(() => import('./views/RiskView.jsx'));
 const LongTermStructurePage = lazy(() => import('./views/LongTermStructureView.jsx'));
 const BacktestView = lazy(() => import('./views/BacktestView.jsx'));
-import ACDView, { QuickTradeLog, SystemHealthSummary } from './views/ACDView.jsx';
+const ACDView = lazy(() => import('./views/ACDView.jsx'));
+import { QuickTradeLog, SystemHealthSummary } from './components/dashboard/QuickTradeLog.jsx';
 import PlaybookPage, { LevelConfluenceReference, ConditionBacktestInline, PatternStatsPanel } from './views/PlaybookView.jsx';
 import { io } from 'socket.io-client';
 import './App.css';
@@ -614,7 +615,9 @@ function App() {
         )}
         {currentView === 'acd' && (
           <ErrorBoundary name="Morning Prep">
-            <ACDView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} setCurrentView={setCurrentView} />
+            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+              <ACDView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} setCurrentView={setCurrentView} />
+            </Suspense>
           </ErrorBoundary>
         )}
         {currentView === 'longterm' && (
