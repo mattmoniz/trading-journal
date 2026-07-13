@@ -754,9 +754,12 @@ export async function mineLevelFades() {
      WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - '90 days'::interval
      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY d`);
 
-  const cfg = { target: 20, stop: 25 };
+  // target/stop are derived below (median of actual observed excursions from this scan's own
+  // touches), not hardcoded — a flat 20/25pt pair was previously used, but NQ's average price
+  // roughly doubled between 2022 and 2026 (verified 2026-07-13), so a fixed point value would
+  // silently drift out of calibration with current volatility. Recomputed fresh every scan run.
   const levelNames = ['PD_POC','PD_VAH','PD_VAL','OR_HIGH','OR_LOW','IB_HIGH','IB_LOW','FLOOR_PIVOT','FLOOR_R1','FLOOR_S1','PW_HIGH','PW_LOW','PW_VAH','PW_VAL','1M_VAH','1M_VAL','3M_VAH','3M_VAL'];
-  const allTrades = [];
+  const allTouches = [];
 
   for (const dayRow of days.rows) {
     const d = dayRow.d;
@@ -850,28 +853,59 @@ export async function mineLevelFades() {
         for (let k = 30; k < i; k++) { if (Math.abs(bars[k].close - level) <= 8) touchNum++; }
         const firstTouch = touchNum <= 5;
 
+        // Record the forward excursion path (chronological order preserved) instead of
+        // classifying won/lost immediately — target/stop aren't known yet, they're derived
+        // from the full touch population below. maxFav/maxAdv feed that derivation.
+        const path = [];
         for (let j = i + 1; j < Math.min(i + 31, bars.length); j++) {
-          let won = false, lost = false;
-          if (fadeDir === 'SHORT') {
-            if (entry - bars[j].low >= cfg.target) won = true;
-            if (bars[j].high - entry >= cfg.stop) lost = true;
-          } else {
-            if (bars[j].high - entry >= cfg.target) won = true;
-            if (entry - bars[j].low >= cfg.stop) lost = true;
-          }
-          if (won || lost) {
-            const rangeBucket = rangeDay < 200 ? 'NARROW' : rangeDay < 400 ? 'NORMAL' : rangeDay < 600 ? 'WIDE' : 'EXTREME';
-            allTrades.push({
-              date: d, level: levelName, won, fadeDir, hour, dow, dowName,
-              sessionType, dayType, rangeBucket, overnight, openVsVal, firstTouch
-            });
-            lastTrade = j;
-            break;
-          }
+          const favorable = fadeDir === 'SHORT' ? entry - bars[j].low : bars[j].high - entry;
+          const adverse   = fadeDir === 'SHORT' ? bars[j].high - entry : entry - bars[j].low;
+          path.push({ favorable, adverse });
+        }
+        if (path.length > 0) {
+          const rangeBucket = rangeDay < 200 ? 'NARROW' : rangeDay < 400 ? 'NORMAL' : rangeDay < 600 ? 'WIDE' : 'EXTREME';
+          allTouches.push({
+            date: d, level: levelName, fadeDir, hour, dow, dowName,
+            sessionType, dayType, rangeBucket, overnight, openVsVal, firstTouch,
+            path,
+            maxFav: Math.max(...path.map(p => p.favorable)),
+            maxAdv: Math.max(...path.map(p => p.adverse)),
+          });
         }
         lastTrade = i;
       }
     }
+  }
+
+  // Derive target/stop from the touches actually observed this run (median of each touch's
+  // own max-favorable / max-adverse excursion) instead of a flat point value — see comment
+  // above allTouches declaration. Falls back to a conservative default only if there's no
+  // data at all (shouldn't happen once the 90-day window has any touches).
+  const median = (arr) => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  };
+  const target = Math.round(median(allTouches.map(t => t.maxFav))) || 20;
+  const stop   = Math.round(median(allTouches.map(t => t.maxAdv))) || 25;
+
+  // Classify won/lost by walking each touch's forward path IN CHRONOLOGICAL ORDER, checking
+  // adverse before favorable on each bar (conservative same-bar tie-break, matching the
+  // SAME_BAR_STOP_FIRST convention in acd.js's resolveSetupsByPrice). This is the fix for the
+  // exact bug an independent audit found in update_optimal_stops.mjs on 2026-07-13: checking
+  // max-adverse against a candidate stop with no knowledge of whether target was hit first
+  // silently "rescues" real losers into simulated wins once the stop candidate is wide enough.
+  const allTrades = [];
+  for (const t of allTouches) {
+    let won = false, lost = false;
+    for (const p of t.path) {
+      if (p.adverse >= stop) { lost = true; break; }
+      if (p.favorable >= target) { won = true; break; }
+    }
+    if (!won && !lost) continue; // never resolved within the 30-bar window — exclude, not a win or loss
+    const { path: _path, maxFav: _maxFav, maxAdv: _maxAdv, ...rest } = t;
+    allTrades.push({ ...rest, won });
   }
 
   // Slice every dimension combination
@@ -892,7 +926,7 @@ export async function mineLevelFades() {
     { name: 'level_x_overnight_x_dir', fn: t => `${t.level}×${t.overnight}×${t.fadeDir}` },
   ];
 
-  const MIN_N = 8;
+  const MIN_N = 20; // project-wide hard floor (CLAUDE.md "Never fabricate a stat") — was 8, found 2026-07-13
   const MIN_WR = 0.65;
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const discoveries = [];
@@ -909,7 +943,7 @@ export async function mineLevelFades() {
       const total = r.wins + r.losses;
       if (total < MIN_N) continue;
       const wr = r.wins / total;
-      const netPnl = (r.wins * cfg.target - r.losses * cfg.stop) * 2;
+      const netPnl = (r.wins * target - r.losses * stop) * 2;
       if (wr >= MIN_WR && netPnl > 0) {
         const patternKey = `${dim.name}:${key}`;
         discoveries.push({ patternKey, dimension: dim.name, wr: Math.round(wr * 100), n: total, netPnl });
