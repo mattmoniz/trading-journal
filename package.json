@@ -14,7 +14,8 @@
     "db:seed": "node server/scripts/seedDb.js",
     "start:all": "./start.sh",
     "stop:all": "./stop.sh",
-    "lint": "eslint --format json server/routes/acd.js | node -e \"const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); d.forEach(f=>f.messages.forEach(m=>console.log('line '+m.line+': ['+m.ruleId+'] '+m.message))); if(d.some(f=>f.errorCount>0)) process.exit(1)\""
+    "lint": "eslint --format json server/routes/acd.js | node -e \"const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); d.forEach(f=>f.messages.forEach(m=>console.log('line '+m.line+': ['+m.ruleId+'] '+m.message))); if(d.some(f=>f.errorCount>0)) process.exit(1)\"",
+    "lint:frontend": "eslint --format json 'src/**/*.jsx' 'src/**/*.js' | node -e \"const d=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); d.forEach(f=>f.messages.forEach(m=>console.log(f.filePath.split('trading-journal/')[1]+':'+m.line+': ['+m.ruleId+'] '+m.message))); if(d.some(f=>f.errorCount>0)) process.exit(1)\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",

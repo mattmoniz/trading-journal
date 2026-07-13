@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { fmtP } from '../utils/format.js';
 import { formatTimestamp, latestOf } from '../utils/timestamps.js';
 import { TOOLTIPS } from '../constants/tooltips.js';
+import { SETUP_DISPLAY_LABELS, SETUP_RESOLUTION_TEXT, LR_SLATE } from '../constants/setupDisplay.js';
+import { DIM } from '../constants/uiStyles.js';
 import InfoTooltip from '../components/shared/InfoTooltip.jsx';
 import FetchStamp from '../components/shared/FetchStamp.jsx';
 import CollapsibleSection from '../components/shared/CollapsibleSection.jsx';
@@ -21,6 +23,8 @@ import VolatilityAlertBanner from '../components/dashboard/VolatilityAlertBanner
 import VolatilityRegimeCard from '../components/dashboard/VolatilityRegimeCard.jsx';
 import TeleprinterFeed from '../components/dashboard/TeleprinterFeed.jsx';
 import DayOfWeekPlaybookCard from '../components/dashboard/DayOfWeekPlaybookCard.jsx';
+import LivePlaybookCard from '../components/dashboard/LivePlaybookCard.jsx';
+import ApproachingLevelBanner from '../components/dashboard/ApproachingLevelBanner.jsx';
 import { LevelConfluenceReference, ConditionBacktestInline, PatternStatsPanel } from './PlaybookView.jsx';
 import {
   Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart,
@@ -945,7 +949,7 @@ function ACDSessionTimeline() {
                 </span>
                 {SETUP_DEFINITIONS[baseEvent] && <InfoTooltip text={SETUP_DEFINITIONS[baseEvent]} />}
                 <span style={{ fontFamily: 'monospace', fontSize: 13, color: event.color, opacity: 0.85 }}>
-                  {event.fmtP(price, 2)}
+                  {fmtP(event.signal_price, 2)}
                 </span>
                 <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#94a3b8' }}>
                   {event.time} ET
@@ -2190,9 +2194,9 @@ function AuctionReadCard({ nl, todayData }) {
               <div style={{ fontSize: 13, color: '#e2e8f0', lineHeight: 1.6, marginBottom: (sessionBias.level === 'GREEN' || sessionBias.level === 'AMBER') ? 8 : 4 }}>{sessionBias.text}</div>
               {sessionBias.level === 'RED' && liveCtx && (() => {
                 const isLongBias = p1Direction === 'LONG';
-                const orH = liveCtx.fmtP(orHigh);
-                const orL = liveCtx.fmtP(orLow);
-                const g = liveCtx.gLine ? liveCtx.fmtP(gLine) : null;
+                const orH = fmtP(liveCtx.orHigh);
+                const orL = fmtP(liveCtx.orLow);
+                const g = liveCtx.gLine ? fmtP(liveCtx.gLine) : null;
                 const days = liveCtx.gLineDaysHeld;
                 const cur = liveCtx.currentPrice;
                 const aboveGLine = cur != null && liveCtx.gLine != null && cur > liveCtx.gLine;
@@ -3242,9 +3246,9 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
             {tpo?.available && (
               <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', borderRadius: 7, minWidth: 130 }}>
                 <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 3 }}>5-day composite POC <InfoTooltip text="Point of Control from the last 5 sessions — the price where the market has spent the most TIME. This is the strongest magnet price.\n\nAbove composite VA: buyers accepting prices above multi-session fair value — initiative territory.\nBelow composite VA: sellers pushing below multi-session fair value.\nInside composite VA: market rotating within accepted range — responsive strategies.\n\nPrice consistently returns to the composite POC. It is the center of gravity for the multi-day auction." /></div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: '#e879f9', fontFamily: 'monospace' }}>{tpo.fmtP(poc)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#e879f9', fontFamily: 'monospace' }}>{fmtP(tpo.poc)}</div>
                 <div style={{ fontSize: 13, color: tpo.priceVsVA === 'ABOVE' ? '#22c55e' : tpo.priceVsVA === 'BELOW' ? '#ef4444' : '#fbbf24' }}>
-                  price {tpo.priceVsVA?.toLowerCase()} VA ({tpo.fmtP(val)}–{tpo.fmtP(vah)})
+                  price {tpo.priceVsVA?.toLowerCase()} VA ({fmtP(tpo.val)}–{fmtP(tpo.vah)})
                 </div>
               </div>
             )}
@@ -6333,32 +6337,7 @@ function setupDirection(type) {
 // than fabricating a relationship. Level-touch rates measure bounce/hold-off-the-level,
 // NOT breakout-continuation — the `note` makes that explicit for setups (IB_BULLISH/
 // IB_BEARISH) where the two could be conflated.
-const SETUP_HITRATE_MAP = {
-  IB_BULLISH:                  { levelKey: 'IBH',    note: 'IB High hold/reversal rate — not a breakout-continuation rate' },
-  IB_BEARISH:                  { levelKey: 'IBL',    note: 'IB Low hold/reversal rate — not a breakout-continuation rate' },
-  VALUE_AREA_RESPONSIVE_LONG:  { levelKey: 'PD VAL', note: 'PD VAL bounce rate — directly measures this responsive-long premise' },
-  VALUE_AREA_RESPONSIVE_SHORT: { levelKey: 'PD VAH', note: 'PD VAH bounce rate — directly measures this responsive-short premise' },
-};
-
-// Pulls the tracked hit-rate entry for a setup type from getAllHitRates().levelTouches,
-// using the live session bias as the bias_dir bucket (falls back to NEUTRAL, then any
-// available bucket). Returns { tracked: false } when no unified stat applies to this setup.
-function getSetupConviction(setupType, hitRatesData, bias) {
-  const map = SETUP_HITRATE_MAP[setupType];
-  if (!map || !hitRatesData?.levelTouches) return { tracked: false };
-  const buckets = hitRatesData.levelTouches[map.levelKey];
-  if (!buckets) return { tracked: false };
-  const biasKey = (bias === 'LONG' || bias === 'SHORT') ? bias : 'NEUTRAL';
-  const entry = buckets[biasKey] || buckets.NEUTRAL || buckets.LONG || buckets.SHORT;
-  if (!entry) return { tracked: false };
-  return {
-    tracked: true,
-    n: entry.decisive,
-    hitRate: entry.confident ? entry.hitRate : null,
-    confident: entry.confident,
-    note: map.note,
-  };
-}
+// SETUP_HITRATE_MAP / getSetupConviction now live in utils/setupConviction.js (shared with CalendarView.jsx).
 
 function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });

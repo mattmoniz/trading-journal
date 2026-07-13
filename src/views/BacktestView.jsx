@@ -1,6 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import { formatNumber, fmtP } from '../utils/format.js';
-import { PlaybookWeeklyPatternsSection, ImprovementsBacklogSection } from './PlaybookView.jsx';
+import { PlaybookWeeklyPatternsSection, ImprovementsBacklogSection, default as PlaybookPage } from './PlaybookView.jsx';
+import SetupHistoryView from './SetupHistoryView.jsx';
+import AlphaEngineOverview from '../components/dashboard/AlphaEngineOverview.jsx';
+import ScenarioTesterView from './ScenarioTesterView.jsx';
+const RiskView = lazy(() => import('./RiskView.jsx'));
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, ComposedChart, Scatter,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
@@ -2785,7 +2789,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
                         <span style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)',
                           fontSize: 13, fontWeight: 700, color: 'var(--text-primary)',
                           padding: '1px 6px', borderRadius: 3, whiteSpace: 'nowrap', transform: 'translateY(-50%)' }}>
-                          {vpHover.fmtP(price, 2)}
+                          {fmtP(vpHover.price, 2)}
                         </span>
                       </div>
                     )}

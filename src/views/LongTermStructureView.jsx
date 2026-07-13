@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fmtP } from '../utils/format.js';
-import { isStale } from '../utils/timestamps.js';
+import { isStale, formatTimestamp } from '../utils/timestamps.js';
 import InfoTooltip from '../components/shared/InfoTooltip.jsx';
 import { Line, Area } from 'recharts';
 
@@ -214,9 +214,9 @@ function LongTermStructurePage({ setCurrentView }) {
                 {isHov && (
                   <div style={{ position: 'absolute', left: '50%', top: -70, transform: 'translateX(-50%)', background: '#1a2535', border: '1px solid rgba(100,116,139,0.5)', borderRadius: 6, padding: '6px 10px', fontSize: 13, color: '#94a3b8', zIndex: 10, whiteSpace: 'nowrap', pointerEvents: 'none' }}>
                     <div style={{ color: '#e2e8f0', fontWeight: 700, marginBottom: 3 }}>{d.date}</div>
-                    <div style={{ color: '#22c55e' }}>VAH {d.fmtP(vah)}</div>
-                    <div style={{ color: '#e879f9' }}>POC {d.fmtP(poc)}</div>
-                    <div style={{ color: '#ef4444' }}>VAL {d.fmtP(val)}</div>
+                    <div style={{ color: '#22c55e' }}>VAH {fmtP(d.vah)}</div>
+                    <div style={{ color: '#e879f9' }}>POC {fmtP(d.poc)}</div>
+                    <div style={{ color: '#ef4444' }}>VAL {fmtP(d.val)}</div>
                     <div style={{ color: '#cbd5e1', marginTop: 2, fontSize: 13 }}>Range {(d.vah - d.val)?.toFixed(0)} pts</div>
                   </div>
                 )}

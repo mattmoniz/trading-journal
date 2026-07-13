@@ -61,7 +61,7 @@ function QuickLogModal({ alerts, preDirection, prePrice, preSetups, onClose }) {
   });
 
   const btnOut = (o, color) => ({
-    flex: 1, padding: '7px 0', borderRadius: 5, border: 'none', cursor: 'pointer',
+    flex: 1, padding: '7px 0', borderRadius: 5, cursor: 'pointer',
     fontWeight: 700, fontSize: 12,
     background: outcome === o ? `${color}33` : 'rgba(255,255,255,0.05)',
     color: outcome === o ? color : C.muted, transition: 'all 0.15s',

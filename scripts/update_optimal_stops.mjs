@@ -2,12 +2,26 @@
 // Compute per-setup-type optimal stops AND targets from active_setups MAE/MFE.
 // Run weekly (Sunday) and daily (4:20 PM ET) after backfill_mae_mfe.
 //
-// Stop: p75_mae (statistical) + EV sweep override for IB types
-// Target: EV sweep across 15 candidate values — finds T1 that maximizes EV
-//   EV(T) = hit_rate(T) × T×2 - miss_rate(T) × stop×2
-//   where hit_rate(T) = fraction of trades where MFE ≥ T and MAE ≤ stop
-//   This outperforms mechanical p50_mfe when MFE distribution is bimodal.
-// T2: p75_mfe (runner target — 75% of trades reach this level)
+// Stop + Target: joint EV sweep, per setup_type (2026-07-13). Stop candidates = this
+//   type's own MAE percentiles (p25/p40/p50/p60/p75/p90 — all data-derived, no fixed
+//   point grid); target candidates = TARGET_SWEEP capped at p75_mfe. Picks whichever
+//   (stop, target) pair maximizes:
+//   EV = mean over trades of: -stop*2 if mae>stop; +target*2 if mfe>=target; else actual_pnl.
+//
+//   Previously stop was hardcoded to p75_mae with only target swept, and a separate
+//   special-cased block re-swept stops for just IB_BULLISH/IB_BEARISH. A 2026-07-13 audit
+//   found no setup-agnostic rule holds (p50_mae beats p75_mae for only 28/66 types with the
+//   corrected formula, not 69/70 as an earlier flawed simulation claimed — that run wrongly
+//   counted mae<=stop-but-mfe<target trades as automatic losses instead of actual_pnl) — so
+//   every type now gets its own swept stop instead of a blanket rule or a type-specific carve-out.
+//
+//   First attempt at this swept the stop over a flat 20-150pt grid instead of percentiles.
+//   That let several types (IB_BEARISH, BRACKET_BREAKOUT_LONG, C_STANDALONE_DOWN,
+//   OPEN_TEST_DRIVE_SHORT) jump to stops near the 150pt ceiling — a stop that wide almost
+//   never triggers, so it inflates in-sample EV without actually reducing risk (classic
+//   overfitting to a finite sample). Caught before it stayed live, reverted, and replaced
+//   with this percentile-anchored version: candidates are always tied to that type's real
+//   MAE distribution shape, so the sweep can't wander to a value unrelated to the data.
 //
 // Writes signal_type='OPTIMAL_STOP' rows — one per setup_type direction.
 // The live path reads these via liveStats._opt[setup_type].
@@ -20,7 +34,8 @@ const MIN_N = 20;
 const DEFAULT_STOP = 65;
 const DEFAULT_TARGET = 35;
 
-// Target sweep range (pts) — all setup types, not just IB
+// Target sweep range (pts) — all setup types, not just IB. Always capped at p75_mfe
+// per-type below, so it can't select a target beyond what the type's own MFE data supports.
 const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150];
 
 // Run EV sweep for targets — finds T1 that maximizes expected value given a fixed stop.
@@ -29,7 +44,7 @@ const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 
 // maxT caps the sweep at p75_mfe so we never select a target that >75% of trades can't reach.
 // Without this cap, high T values saturate to actual_pnl and look artificially optimal.
 //
-// Returns the optimal T in points, or null if fewer than MIN_N trades or no candidates ≤ maxT.
+// Returns { target, ev }, or null if fewer than MIN_N trades or no candidates ≤ maxT.
 function sweepOptimalTarget(trades, stop, maxT = 150) {
   if (trades.length < MIN_N) return null;
   const candidates = TARGET_SWEEP.filter(T => T <= maxT);
@@ -46,7 +61,33 @@ function sweepOptimalTarget(trades, stop, maxT = 150) {
     const ev = evSum / trades.length;
     if (ev > bestEV) { bestEV = ev; bestT = T; }
   }
-  return bestT;
+  return { target: bestT, ev: bestEV };
+}
+
+// Joint stop+target sweep. Corrected simulation (2026-07-13 audit): a trade where
+// mae <= stop AND mfe < target never actually got stopped or hit target — it
+// expired/partial — so it falls through to actual_pnl, NOT an automatic loss.
+// (Prior Gemini analysis on 2026-07-10 miscounted that case as a loss, which
+// wrongly favored tighter stops for 69/70 setups; re-derived directly against the
+// DB with this fix, only 28/66 setups actually favor p50_mae over p75_mae — no
+// blanket rule holds, so this must be swept per setup_type, not hardcoded.)
+//
+// Stop candidates are percentiles of THIS TYPE'S OWN mae_points distribution
+// (p25/p40/p50/p60/p75/p90, passed in from the caller's query) — not a fixed point
+// grid. A flat grid let the sweep pick stops unrelated to the actual data (e.g. 150pt
+// for a type whose real MAE tops out around p90≈100), which overfits: a stop that
+// almost never triggers looks great on realized EV without reducing real risk.
+// Percentile-anchoring keeps every candidate tied to that type's real distribution shape.
+function sweepOptimalStopAndTarget(trades, maePercentiles, maxT) {
+  if (trades.length < MIN_N) return null;
+  const stopCandidates = [...new Set(maePercentiles.map(Math.round))].sort((a, b) => a - b);
+  let best = null;
+  for (const S of stopCandidates) {
+    const swept = sweepOptimalTarget(trades, S, maxT);
+    if (!swept) continue;
+    if (!best || swept.ev > best.ev) best = { stop: S, target: swept.target, ev: swept.ev };
+  }
+  return best;
 }
 
 async function main() {
@@ -74,8 +115,12 @@ async function main() {
       COUNT(*)                                                                            AS n,
       ROUND(100.0 * SUM(CASE WHEN actual_pnl > 0 THEN 1 ELSE 0 END)/COUNT(*)::numeric, 1) AS wr,
       ROUND(AVG(actual_pnl)::numeric, 0)                                                 AS ev,
-      ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p75_mae,
+      ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p25_mae,
+      ROUND(PERCENTILE_CONT(0.40) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p40_mae,
       ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p50_mae,
+      ROUND(PERCENTILE_CONT(0.60) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p60_mae,
+      ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p75_mae,
+      ROUND(PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY mae_points)::numeric, 1)       AS p90_mae,
       ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY mfe_points)::numeric, 1)       AS p50_mfe,
       ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY mfe_points)::numeric, 1)       AS p75_mfe
     FROM active_setups
@@ -112,12 +157,15 @@ async function main() {
 
   let upserted = 0;
   for (const r of rows) {
-    const optStop   = Math.round(parseFloat(r.p75_mae) || DEFAULT_STOP);
+    const p75mae    = parseFloat(r.p75_mae) || DEFAULT_STOP;
     const p75mfe    = Math.round(parseFloat(r.p75_mfe) || DEFAULT_TARGET);
+    const maePercentiles = [r.p25_mae, r.p40_mae, r.p50_mae, r.p60_mae, r.p75_mae, r.p90_mae]
+      .map(parseFloat).filter(v => !isNaN(v) && v > 0);
     const trades    = rawByType[r.setup_type] || [];
-    const swept     = sweepOptimalTarget(trades, optStop, p75mfe);
-    const optTarget = swept || Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
-    const targetMethod = swept ? 'EV-sweep' : 'p50_mfe';
+    const swept     = sweepOptimalStopAndTarget(trades, maePercentiles, p75mfe);
+    const optStop   = swept ? swept.stop : Math.round(p75mae);
+    const optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
+    const targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
 
     await query(`
       INSERT INTO performance_audit (
@@ -159,103 +207,7 @@ async function main() {
   }
 
   console.log(`\nDone. ${upserted} rows upserted into performance_audit (signal_type=OPTIMAL_STOP).`);
-
-  // ── Stop sweep for IB_BULLISH / IB_BEARISH ──────────────────────────────────
-  // These setups benefit from tight stops (sweep research 2026-07-05 showed EV
-  // improved dramatically at 50pt vs p75_mae ~113pt for BULLISH). Re-derive the
-  // optimal stop dynamically so it updates as more trade data accumulates.
-  // Uses actual MAE/MFE to simulate each stop candidate: if MAE > S → stopped at -S,
-  // if MFE >= target → +target, else → actual_pnl.
-  const IB_SWEEP_TYPES = ['IB_BULLISH', 'IB_BEARISH'];
-  const STOP_RANGE = [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150];
-
-  console.log('\nRunning stop sweep for IB_BULLISH and IB_BEARISH...');
-  for (const setupType of IB_SWEEP_TYPES) {
-    const tradesQ = await query(`
-      SELECT mae_points::float, mfe_points::float, actual_pnl::float, resolution
-      FROM active_setups
-      WHERE setup_type = $1
-        AND mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
-        AND mae_points <= 300 AND mfe_points <= 300
-        AND status = 'RESOLVED'
-        AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
-    `, [setupType]);
-
-    if (tradesQ.rows.length < MIN_N) {
-      console.log(`  ${setupType} — N=${tradesQ.rows.length} below minimum, skip sweep`);
-      continue;
-    }
-
-    // Stop sweep: simulate each stop candidate using p75_mfe as an approximate target.
-    // We'll then re-run target sweep using the optimal stop to get the true best T1.
-    const mfeValues = tradesQ.rows.map(r => +r.mfe_points).sort((a, b) => a - b);
-    const p75mfe = mfeValues[Math.floor(mfeValues.length * 0.75)] || DEFAULT_TARGET;
-
-    let bestStop = null, bestStopEV = -Infinity;
-    const sweepLog = [];
-    for (const S of STOP_RANGE) {
-      let evSum = 0;
-      for (const r of tradesQ.rows) {
-        const mae = +r.mae_points, mfe = +r.mfe_points;
-        if (mae > S)          evSum += -S * 2;
-        else if (mfe >= p75mfe) evSum += p75mfe * 2;
-        else                  evSum += +r.actual_pnl;
-      }
-      const ev = evSum / tradesQ.rows.length;
-      sweepLog.push({ S, ev });
-      if (ev > bestStopEV) { bestStopEV = ev; bestStop = S; }
-    }
-
-    // Target sweep using the sweep-optimal stop, capped at p75_mfe to avoid ceiling artifact
-    const sweepTarget = sweepOptimalTarget(tradesQ.rows, bestStop, p75mfe) || p75mfe;
-
-    console.log(`  ${setupType} stop-sweep (approx target=${p75mfe}pt, N=${tradesQ.rows.length}):`);
-    sweepLog.forEach(({ S, ev }) => {
-      const marker = S === bestStop ? ' ← OPTIMAL' : '';
-      console.log(`    stop=${S}pt → EV=$${ev.toFixed(0)}${marker}`);
-    });
-    console.log(`  ${setupType} target-sweep (stop=${bestStop}pt) → optimal T1=${sweepTarget}pt`);
-
-    // Upsert with sweep-optimal stop AND sweep-optimal target (overrides main loop row)
-    const base = rows.find(r => r.setup_type === setupType);
-    await query(`
-      INSERT INTO performance_audit (
-        run_date, window_days, signal_type, signal_name,
-        sample_size, win_rate, ev_per_trade,
-        p50_mae, p75_mae, p50_mfe, p75_mfe,
-        optimal_stop, optimal_target
-      ) VALUES (
-        CURRENT_DATE, 9999, 'OPTIMAL_STOP', $1,
-        $2, $3, $4,
-        $5, $6, $7, $8,
-        $9, $10
-      )
-      ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
-        sample_size    = EXCLUDED.sample_size,
-        win_rate       = EXCLUDED.win_rate,
-        ev_per_trade   = EXCLUDED.ev_per_trade,
-        p50_mae        = EXCLUDED.p50_mae,
-        p75_mae        = EXCLUDED.p75_mae,
-        p50_mfe        = EXCLUDED.p50_mfe,
-        p75_mfe        = EXCLUDED.p75_mfe,
-        optimal_stop   = EXCLUDED.optimal_stop,
-        optimal_target = EXCLUDED.optimal_target
-    `, [
-      setupType,
-      base ? parseInt(base.n) : tradesQ.rows.length,
-      base ? parseFloat(base.wr) / 100 : 0,
-      base ? parseFloat(base.ev) : bestStopEV,
-      base ? parseFloat(base.p50_mae) : null,
-      base ? parseFloat(base.p75_mae) : null,
-      base ? parseFloat(base.p50_mfe) : null,
-      base ? parseFloat(base.p75_mfe) : null,
-      bestStop,    // EV-sweep stop (not p75_mae)
-      sweepTarget, // EV-sweep target (not p75_mfe)
-    ]);
-    console.log(`  → Upserted OPTIMAL_STOP for ${setupType}: stop=${bestStop}pt t1=${sweepTarget}pt`);
-  }
-
-  console.log('\nStop sweep complete.');
+  console.log('Every setup_type now gets its own stop swept across its own MAE percentiles (p25/p40/p50/p60/p75/p90), not a blanket p75_mae rule.');
   process.exit(0);
 }
 

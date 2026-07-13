@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { formatNumber, fmtP } from '../utils/format.js';
 import WeeklyReportPanel from '../components/dashboard/WeeklyReportPanel.jsx';
+import { SETUP_DISPLAY_LABELS, CAL_SETUP_SHORT_LABELS, SETUP_RESOLUTION_TEXT } from '../constants/setupDisplay.js';
+import { getSetupConviction } from '../utils/setupConviction.js';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Cell,
@@ -543,7 +545,7 @@ function IntradayChartSection({ dateStr }) {
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '3px 10px' }}>
             <span style={{ color: '#94a3b8' }}>Fired</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fired_time} ET</span>
-            <span style={{ color: '#94a3b8' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{hoveredSetup.fmtP(entryPx, 2)}</span>
+            <span style={{ color: '#94a3b8' }}>Entry</span><span style={{ fontFamily: 'monospace' }}>{fmtP(hoveredSetup.entryPx, 2)}</span>
             {hoveredSetup.stop_level != null && <><span style={{ color: '#94a3b8' }}>Stop</span><span style={{ color: '#f87171', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.stop_level, 2)}</span></>}
             {hoveredSetup.t1_level != null && <><span style={{ color: '#94a3b8' }}>{hoveredSetup.t1_label || 'T1'}</span><span style={{ color: '#4ade80', fontFamily: 'monospace' }}>{fmtP(hoveredSetup.t1_level, 2)}</span></>}
             <span style={{ color: '#94a3b8' }}>Result</span><span style={{ color: hoveredSetup.color }}>{hoveredSetup.resolution || hoveredSetup.status || '—'}</span>

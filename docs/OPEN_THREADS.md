@@ -8,16 +8,9 @@ When an item is finished, delete it (don't mark it done — git history is the r
 
 ## Pending decisions / unconfirmed proposals
 
-- **Stop parameter shift: p50 MAE beats p75 MAE for 69/70 setups (2026-07-10). Implementation pending.** Gemini ran a 3-scenario MAE/MFE simulation. Scenario B (p50 MAE stop + p50 MFE target) beats current Scenario A (p75 MAE stop + p50 MFE target) for every setup except CAM_R3_FADE_SHORT. Headline: current system is over-stopping — p75 MAE loses so much on losses that tighter p50 MAE more than compensates for the lower WR.
-  - Top B improvers by delta EV: BRACKET_BREAKOUT_LONG (+28pt), IB_BULLISH (+27pt), C_STANDALONE_UP (+25pt), PD_VAL_FADE_LONG (+23pt), TRT_SHORT (+21pt).
-  - **Implementation plan**: Modify `update_optimal_stops.mjs` to persist p50_mae alongside p75_mae (new column `p50_mae_stop`). Run side-by-side before switching live. Also update OPEN_TEST_DRIVE_SHORT to use p75_mfe as T1 target. Raw output at `scratch/antigravity_response.md` (2026-07-10 run).
-  - Caveat: Gemini classified `mfe < target` as loss even when `mae < stop` too — relative A→B ranking is valid; absolute EV numbers are pessimistic.
+- **WPP_FADE_SHORT_GAP_UP — monitor at N=50 (live 2026-07-09).** Gap-up subset (historical/retrospective): WR=59.3%, EV=+$8.7, N=27. **Checked 2026-07-13: live N=0** (zero rows with `setup_type='WPP_FADE_SHORT_GAP_UP'` in `active_setups` since going live — only 2 trading days have passed). Re-check when live N reaches 50; suppress via pipeline if EV drops below -$5.
 
-- **WPP_FADE_SHORT_GAP_UP — monitor at N=50 (live 2026-07-09).** Gap-up subset: WR=59.3%, EV=+$8.7, N=27. Re-run backtest when live N reaches 50; suppress via pipeline if EV drops below -$5.
-
-- **First-5-min MAE gate — decision pending (backtest 2026-07-09, N=123).** High MAE (>38pt) in first 5 min: WR=9.8%, avg=-$112.3 (N=41). Proposed: if a first-5-min setup (fired_min < 575) absorbs >38pt MAE before the 9:35 bar closes, exit immediately. Annual benefit ~$400-500 at 1 MNQ. Not yet wired — confirm before implementing.
-
-- **Gemini auth broken (2026-07-09).** "You are not logged into Antigravity" on all `agy` calls. Needs re-auth before Gemini can run autonomous tasks.
+- **OPEN_TEST_DRIVE_SHORT/LONG — deeply net-negative under every tested target scheme (2026-07-13).** N=64-69, WR 28-33%, EV -$38 to -$100/trade (current live `t1Guard` PD-VAL-or-formula-fallback target). Tested switching T1 to `p75_mfe` (the original OPEN_THREADS proposal) — makes it *worse* (EV -$66 vs current -$52 for SHORT), so that change was **not** implemented. Both directions clear N≥20 and stay negative regardless of target logic — candidate for suppression via the standard pipeline (`scripts/backtest_setup_status.mjs`). Not yet suppressed; flagging for review.
 
 - **90-day degradation watch (flagged 2026-07-09).** Three setups with alarming 90d EV vs prior history (not suppressed — all-time EV still positive, auto-suppression will catch them if it continues):
   - `OR_HIGH_FADE_SHORT`: prior=$90/trade → 90d=-$18/trade (N=20).
