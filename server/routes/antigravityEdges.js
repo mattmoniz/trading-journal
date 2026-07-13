@@ -1203,7 +1203,13 @@ async function getLiveEdgesContext() {
       : nl30Val >= 15 ? 'STRONG_BULL' : nl30Val >= 5 ? 'MILD_BULL'
       : nl30Val <= -15 ? 'STRONG_BEAR' : nl30Val <= -5 ? 'MILD_BEAR' : 'NEUTRAL';
 
-    // Gap fill stat — prior close from cache, today's open from cheap fresh query
+    // Gap fill stat — prior close from cache, today's open from cheap fresh query.
+    // Win rate read from performance_audit (signal_type='SESSION_BIAS', written by
+    // scripts/backtest_gap_fill.mjs) — found 2026-07-13 this card hardcoded pct:72/62
+    // and a fabricated "85% in last 30 days" drift claim; real historical fill rate is
+    // ~54-56%, close to a coin flip. Card only shows if a real stat with N>=20 exists.
+    const gapUpStat   = sbQ.rows.find(r => r.signal_name === 'SB_GAP_UP_FILL');
+    const gapDownStat = sbQ.rows.find(r => r.signal_name === 'SB_GAP_DOWN_FILL');
     const open_930 = todayOpenQ.rows[0]?.open_930 ?? null;
     if (cachedPriorClose4PM != null && open_930 != null) {
       const { prior_close: pc, open_930: op } = { prior_close: cachedPriorClose4PM, open_930 };
@@ -1212,20 +1218,19 @@ async function getLiveEdgesContext() {
         const gapPt   = Math.round(Math.abs(op - pc));
         const lastClose = bars.length ? bars[bars.length - 1].close : null;
         const gapFilled = isGapUp ? (lastClose != null && lastClose <= pc) : (lastClose != null && lastClose >= pc);
-        if (!gapFilled) {
+        const stat = isGapUp ? gapUpStat : gapDownStat;
+        if (!gapFilled && stat) {
+          const pct = Math.round(stat.win_rate * 1000) / 10;
           sessionBias.push({
             label:   isGapUp
               ? `Gapped UP ${gapPt}pt at open — gap fill target: ${Math.round(pc)}`
               : `Gapped DOWN ${gapPt}pt at open — gap fill target: ${Math.round(pc)}`,
-            action:  isGapUp
-              ? '72% of gap-up opens fill the gap before close (85% in last 30 days). Most fills happen before noon.'
-              : '62% of gap-down opens fill the gap before close (recent drift lower — less reliable). Watch for morning fade.',
-            pct:     isGapUp ? 72 : 62,
-            n:       isGapUp ? 29 : 21,
+            action:  `${pct}% of gap-${isGapUp ? 'up' : 'down'} opens (N=${stat.sample_size}) fill the gap before close, historically.`,
+            pct,
+            n:       stat.sample_size,
             dir:     isGapUp ? 'SHORT' : 'LONG',
             specificity: 50,
             computed: true,
-            driftWarn: !isGapUp,
           });
         }
       }
@@ -1303,7 +1308,15 @@ async function getLiveEdgesContext() {
     // Sort: more specific first, then by win_rate
     sessionBias.sort((a, b) => b.specificity - a.specificity || b.pct - a.pct);
 
-    // Live IB level re-test detection
+    // Live IB level re-test detection. Win rates are read from performance_audit
+    // (signal_type='SESSION_BIAS', written by scripts/backtest_ib_retest.mjs) rather than
+    // hardcoded — found 2026-07-13 these cards were showing literal pct:73/pct:63 values
+    // that didn't match reality (real backtested retrace rate is ~46% for both, close to
+    // a coin flip, not the 63-73% these cards used to claim). Card is only shown if a
+    // real stat with N>=20 exists; never falls back to a guessed number.
+    const ibHighStat = sbQ.rows.find(r => r.signal_name === 'SB_IB_HIGH_RETEST');
+    const ibLowStat  = sbQ.rows.find(r => r.signal_name === 'SB_IB_LOW_RETEST');
+
     const etNow = bars.length > 0 ? Number(bars[bars.length - 1].et_min) : 0;
     if (bars.length >= 12 && etNow > 630) {
       const ibBars   = bars.filter(b => Number(b.et_min) >= 570 && Number(b.et_min) <= 629);
@@ -1316,12 +1329,13 @@ async function getLiveEdgesContext() {
         const touchTol = 3;
 
         const touchedIbHigh = recentBars.some(b => b.high >= ibHigh - touchTol && b.high <= ibHigh + 15);
-        if (touchedIbHigh && lastBar.close < ibHigh + 5) {
+        if (touchedIbHigh && lastBar.close < ibHigh + 5 && ibHighStat) {
+          const pct = Math.round(ibHighStat.win_rate * 1000) / 10;
           sessionBias.unshift({
             label:    `IB HIGH re-tested (${ibHigh.toFixed(0)}) after 10:30am`,
-            action:   '63% of IB HIGH re-tests retrace (pull back from the level). 37% break through. Watch for rejection.',
-            pct:      63,
-            n:        102,
+            action:   `${pct}% of IB HIGH re-tests retrace (pull back from the level) within ~30min, historically (N=${ibHighStat.sample_size}). ${(100 - pct).toFixed(1)}% break through.`,
+            pct,
+            n:        ibHighStat.sample_size,
             dir:      'SHORT',
             specificity: 98,
             computed:    true,
@@ -1329,22 +1343,27 @@ async function getLiveEdgesContext() {
         }
 
         const touchedIbLow = recentBars.some(b => b.low <= ibLow + touchTol && b.low >= ibLow - 15);
-        if (touchedIbLow && lastBar.close > ibLow - 5) {
+        if (touchedIbLow && lastBar.close > ibLow - 5 && ibLowStat) {
+          const pct = Math.round(ibLowStat.win_rate * 1000) / 10;
           sessionBias.unshift({
             label:    `IB LOW re-tested (${ibLow.toFixed(0)}) after 10:30am`,
-            action:   'DRIFT WARNING: last 30 days 73% broke DOWN through IB LOW (was 44% historically). Fading this level has been losing money recently.',
-            pct:      73,
-            n:        87,
+            action:   `${pct}% of IB LOW re-tests retrace (pull back from the level) within ~30min, historically (N=${ibLowStat.sample_size}). ${(100 - pct).toFixed(1)}% break through.`,
+            pct,
+            n:        ibLowStat.sample_size,
             dir:      'SHORT',
             specificity: 98,
             computed:    true,
-            driftWarn:   true,
           });
         }
       }
     }
 
-    // Live V-pattern detection
+    // Live V-pattern detection. Win rate read from performance_audit
+    // (signal_type='SESSION_BIAS', written by scripts/backtest_v_pattern.mjs) — found
+    // 2026-07-13 this card hardcoded pct:73, n:338 with no computation behind either
+    // number. Card only shows if a real stat with N>=20 exists.
+    const vPatternLongStat  = sbQ.rows.find(r => r.signal_name === 'SB_V_PATTERN_LONG');
+    const vPatternShortStat = sbQ.rows.find(r => r.signal_name === 'SB_V_PATTERN_SHORT');
     if (bars.length >= 12 && etNow < 720) {
       const fhm30 = bars.filter(b => b.et_min >= 570 && b.et_min <= 595);
       const postBars = bars.filter(b => b.et_min > 599 && b.et_min < 720);
@@ -1363,12 +1382,14 @@ async function getLiveEdgesContext() {
             if (fmove > 0 && b.low  <= pbLevel) { pbSeen = true; break; }
             if (fmove < 0 && b.high >= pbLevel) { pbSeen = true; break; }
           }
-          if (pbSeen) {
+          const stat = fmove > 0 ? vPatternLongStat : vPatternShortStat;
+          if (pbSeen && stat) {
+            const pct = Math.round(stat.win_rate * 1000) / 10;
             sessionBias.unshift({
               label:       fmove > 0 ? 'Morning high pulled back' : 'Morning low bounced',
-              action:      'Look for re-entry in the morning direction — 73% chance it re-extends past the first-hour extreme before noon.',
-              pct:         73,
-              n:           338,
+              action:      `Look for re-entry in the morning direction — ${pct}% chance it re-extends past the first-hour extreme before noon, historically (N=${stat.sample_size}).`,
+              pct,
+              n:           stat.sample_size,
               dir:         fmove > 0 ? 'LONG' : 'SHORT',
               specificity: 99,
               computed:    true,
@@ -1416,14 +1437,18 @@ async function getLiveEdgesContext() {
     dynamicEdgesMap[row.setup_type].push(row);
   }
 
-  const SETUP_CONTEXT = {
-    'IB_BEARISH':                   { monAdj: -0.20, tightAdj: -0.09, wideAdj: +0.14, turbAdj: +0.25 },
-    'OPEN_DRIVE_SHORT':             { monAdj: -0.10, tightAdj: -0.14, wideAdj: -0.20, turbAdj: +0.38 },
-    'OPEN_DRIVE_LONG':              { monAdj: +0.19, tightAdj: +0.17, wideAdj: -0.27, turbAdj: +0.06 },
-    'VALUE_AREA_RESPONSIVE_SHORT':  { monAdj: -0.08, tightAdj: -0.05, wideAdj: +0.04, turbAdj: +0.06 },
-    'TRT_LONG':                     { monAdj: 0,     tightAdj: -0.40, wideAdj: 0,     turbAdj: 0 },
-    'C_STANDALONE_DOWN':            { monAdj: -0.08, tightAdj: -0.11, wideAdj: +0.11, turbAdj: +0.26 },
-  };
+  // Found 2026-07-13: this used to also apply a hardcoded SETUP_CONTEXT adjustment
+  // table (static +/-0.05 to +/-0.40 literals per setup type for Monday/tight-OR/
+  // wide-OR/gap conditions) on top of the dynamicEdges mechanism below. Removed —
+  // dynamic_edges_mining (via scripts/edge_miner.mjs, weekly) already covers these same
+  // dimensions (DAY_OF_WEEK, OR_SIZE, TIME_OF_DAY, TREND_ALIGNMENT) per setup type with
+  // a real two-proportion z-test and N>=20 floor, and correctly returns "no adjustment"
+  // (NEUTRAL) for conditions that aren't statistically significant. The hardcoded table
+  // was applying static deltas to almost entirely NEUTRAL conditions — i.e. presenting
+  // noise as signal on top of a mechanism that already does this correctly. Also fixes a
+  // pre-existing bug where the hardcoded copy text ("-0.7% deviation") didn't match the
+  // actual adjustment applied (-0.01 = -1%, not -0.7%) — dynamicReasons below always
+  // derives its text from the real number.
   const processedSetups = [];
   const todayD = new Date(targetDate + 'T12:00:00Z');
   const setupDayOfWeek = todayD.getDay();
@@ -1433,42 +1458,6 @@ async function getLiveEdgesContext() {
     let adjustedWr = base.wr;
     let confidence = 'MEDIUM';
     let rec = '';
-    const ctx = SETUP_CONTEXT[s.setup_type];
-    const reasons = [];
-    const setupType = s.setup_type.toUpperCase();
-    const isBreakout = setupType.includes('BREAKOUT') || setupType.includes('OPEN_DRIVE') || setupType.includes('OPEN_TEST_DRIVE') || setupType.includes('IB_BULLISH') || setupType.includes('IB_BEARISH') || setupType.includes('TRT_');
-    const isMeanReversion = setupType.includes('REVERSAL') || setupType.includes('FAILED') || setupType.includes('RESPONSIVE') || setupType.includes('C_STANDALONE');
-
-    if (ctx) {
-      if (setupDayOfWeek === 1 && isBreakout) {
-        adjustedWr -= 0.01;
-        rec = '✅ Monday Morning Breakout: standard risk profile (39.2% win rate, -0.7% deviation).';
-      } else if (currentOr5Status === 'WIDE' && isBreakout) {
-        adjustedWr -= 0.07;
-        rec = '⚠️ Wide Opening Range: breakout follow-through is degraded (-7.2% deviation). Standard sizing only.';
-      } else if (currentOr5Status === 'TIGHT' && isBreakout) {
-        adjustedWr += 0.06;
-        rec = '✅ Squeezed Opening Range: breakout follow-through edge is elevated (+6.2% deviation).';
-      } else if (currentGapStatus !== 'INSIDE' && isMeanReversion) {
-        adjustedWr -= 0.06;
-        rec = '⚠️ Gap Open: reversal setups have degraded accuracy (-5.9% deviation) due to momentum continuation.';
-      } else {
-        if (setupDayOfWeek === 1 && ctx.monAdj !== 0) {
-          adjustedWr += ctx.monAdj;
-          if (ctx.monAdj <= -0.15) reasons.push(`Monday: ${(ctx.monAdj*100).toFixed(0)}% (reduce size)`);
-          else if (ctx.monAdj <= -0.05) reasons.push(`Monday: mild ${(ctx.monAdj*100).toFixed(0)}% drag`);
-          else if (ctx.monAdj > 0.05) reasons.push(`Monday: +${(ctx.monAdj*100).toFixed(0)}% boost for this setup`);
-        }
-        if (currentOr5Status === 'TIGHT' && ctx.tightAdj !== 0) {
-          adjustedWr += ctx.tightAdj;
-          reasons.push(`Tight OR: ${ctx.tightAdj > 0 ? '+' : ''}${(ctx.tightAdj*100).toFixed(0)}%`);
-        }
-        if (currentOr5Status === 'WIDE' && ctx.wideAdj !== 0) {
-          adjustedWr += ctx.wideAdj;
-          reasons.push(`Wide OR: ${ctx.wideAdj > 0 ? '+' : ''}${(ctx.wideAdj*100).toFixed(0)}%`);
-        }
-      }
-    }
 
     const dynamicEdges = dynamicEdgesMap[s.setup_type] || [];
     let dynamicAdj = 0;
@@ -1519,7 +1508,7 @@ async function getLiveEdgesContext() {
     }
 
     adjustedWr = Math.max(0.05, Math.min(0.95, adjustedWr));
-    if (!rec) rec = reasons.length > 0 ? reasons.join(' · ') : 'Standard context — no significant adjustments.';
+    if (!rec) rec = 'Standard context — no significant adjustments.';
 
     if (adjustedWr >= 0.58) confidence = 'HIGH';
     else if (adjustedWr >= 0.46) confidence = 'MEDIUM';

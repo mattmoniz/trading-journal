@@ -398,8 +398,13 @@ const SESSION_BIAS_ROWS = [
 ];
 
 // ── 30-day rolling drift computation ────────────────────────────────────────
-// Use last 30 calendar trading days from enriched array (already sorted by date)
-const last30e = enriched.slice(-30);
+// Use last 30 / last 252 trading days from enriched array (already sorted by date).
+// Found 2026-07-13: the "252d" fields below used to filter the FULL all-time `enriched`
+// array (no slice), so a label implying "last ~1yr" was actually reporting all-history
+// stats — same mislabeling class as the hardcoded-value bug this fix addresses. Now
+// genuinely windowed to match last30e's convention.
+const last30e  = enriched.slice(-30);
+const last252e = enriched.slice(-252);
 
 // Map a requires object back to a filter on enriched rows
 function reqToFilter(requires) {
@@ -427,15 +432,29 @@ function outcomeForMetric(metric) {
   return null; // pct_pm_above_10am / pct_hi_before_noon can't be derived from enriched
 }
 
-// Augment each row with live-computed 252d and 30d rates
+// Augment each row with live-computed 252d and 30d rates, THEN OVERWRITE win_rate/
+// sample_size with the freshly computed values before writing to the DB. Found
+// 2026-07-13: this loop already computed real s252/sub252.length here, but the INSERT
+// below used to write the ORIGINAL hardcoded win_rate/sample_size from SESSION_BIAS_ROWS
+// instead — meaning every card built from this signal_type displayed frozen, hand-typed
+// numbers from whenever this file was written, re-inserted daily so run_date always
+// looked fresh while the content never actually updated. Rows whose metric can't be
+// derived from `enriched` (efficiency_tier needs a Kaufman ER backtest that doesn't
+// exist yet; pct_pm_above_10am/pct_hi_before_noon need tracking fields not in the base
+// query) are dropped rather than left showing a fabricated number — see
+// docs/OPEN_THREADS.md for what it'd take to compute those for real.
+const liveRows = [];
 for (const row of SESSION_BIAS_ROWS) {
   const req = row.notes.requires || {};
   const hasEffTier = req.efficiency_tier != null;
   const fn = hasEffTier ? null : outcomeForMetric(row.notes.metric);
-  if (!fn) continue;
+  if (!fn) {
+    console.log(`  SKIP ${row.signal_name} — metric '${row.notes.metric}' can't be computed from current data, not writing a stale number`);
+    continue;
+  }
 
   const filterFn = reqToFilter(req);
-  const sub252   = enriched.filter(filterFn);
+  const sub252   = last252e.filter(filterFn);
   const sub30    = last30e.filter(filterFn);
   const wins252  = sub252.filter(fn).length;
   const wins30   = sub30.filter(fn).length;
@@ -448,16 +467,28 @@ for (const row of SESSION_BIAS_ROWS) {
   const s30  = pct30  != null ? (isShort ? 100 - pct30  : pct30)  : null;
   const drift_signal = s252 != null && s30 != null ? s30 - s252 : null;
 
+  if (s252 == null || sub252.length < MIN_N) {
+    console.log(`  SKIP ${row.signal_name} — only N=${sub252.length} currently qualifies (need >=${MIN_N}), not enough to trust live`);
+    continue;
+  }
+
   row.notes.pct_252d = s252;
   row.notes.n_252d   = sub252.length;
   row.notes.pct_30d  = sub30.length >= 10 ? s30 : null; // suppress thin 30d windows
   row.notes.n_30d    = sub30.length;
   row.notes.drift    = sub30.length >= 10 ? drift_signal : null;
 
+  // This is the actual fix: use the freshly computed rate/N, not the original hardcoded
+  // literal from the SESSION_BIAS_ROWS definition above.
+  row.win_rate    = s252 / 100;
+  row.sample_size = sub252.length;
+
   if (drift_signal != null && Math.abs(drift_signal) >= 10 && sub30.length >= 10) {
     const dir = drift_signal > 0 ? '↑' : '↓';
     console.log(`  DRIFT ${dir}${Math.abs(drift_signal)}ppt  ${row.signal_name}: ${s252}% (252d) → ${s30}% (30d, N=${sub30.length})`);
   }
+
+  liveRows.push(row);
 }
 
 console.log('\n── Writing SESSION_BIAS rows to performance_audit ──');
@@ -466,7 +497,7 @@ await query('DELETE FROM performance_audit WHERE signal_type = $1', ['SESSION_BI
 console.log('  Deleted old SESSION_BIAS rows');
 
 let inserted = 0;
-for (const row of SESSION_BIAS_ROWS) {
+for (const row of liveRows) {
   await query(`
     INSERT INTO performance_audit
       (signal_type, signal_name, recommendation, win_rate, sample_size, run_date, window_days, notes)
@@ -478,11 +509,12 @@ for (const row of SESSION_BIAS_ROWS) {
     row.win_rate,
     row.sample_size,
     today,
-    374,
+    row.notes.n_252d,
     JSON.stringify(row.notes),
   ]);
   inserted++;
+  console.log(`  ${row.signal_name.padEnd(28)} ${row.recommendation.padEnd(8)} ${(row.win_rate*100).toFixed(1)}%  N=${row.sample_size}`);
 }
-console.log(`  Inserted ${inserted} SESSION_BIAS rows`);
+console.log(`\nInserted ${inserted} live-computed SESSION_BIAS rows (${SESSION_BIAS_ROWS.length - inserted} skipped — see SKIP lines above).`);
 
 process.exit(0);

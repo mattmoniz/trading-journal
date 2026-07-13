@@ -23,4 +23,13 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/level_fade_audit.mjs
 /usr/bin/node scripts/audit_mae_mfe.mjs
 
+# --- Session-bias / edge-mining pipelines (feed antigravity/edges-context cards) ---
+# mine_session_bias.mjs also runs daily via server/index.js cron; re-running here weekly
+# is harmless (idempotent DELETE+INSERT) and keeps it covered if that cron ever stalls.
+/usr/bin/node scripts/mine_session_bias.mjs
+/usr/bin/node scripts/backtest_ib_retest.mjs
+/usr/bin/node scripts/backtest_gap_fill.mjs
+/usr/bin/node scripts/backtest_v_pattern.mjs
+/usr/bin/node scripts/edge_miner.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

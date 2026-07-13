@@ -6842,21 +6842,30 @@ export default function createACDRouter(io) {
         }
       } catch (_) {}
 
-      // Map signal names to level prices and metadata
+      // Map signal names to level prices and metadata.
+      // bestCtx here is a purely qualitative fallback label (no %/N/$ claims) — used only
+      // when a row has no live win_rate/sample_size/ev_per_trade to describe it from.
+      // Found 2026-07-13: this map used to hardcode specific WR%/N/$ literals per level
+      // (e.g. 'IB_HIGH': '90% WR level fade') that directly violated this file's own
+      // documented hard rule ("Never write a stop, target, or WR claim as a literal
+      // number in acd.js — always read from liveStats._opt[type] or performance_audit")
+      // — and rendered live in BacktestView.jsx's Setups guide/table. describeLevel()
+      // below now builds this text from each row's own live performance_audit fields
+      // instead; the literal numbers here are gone, not just relabeled.
       const levelMap = {
-        'PD_POC':       { price: pdPOC,    bestCtx: '$38/trade, system anchor (22% of P&L)', freq: '~1/day' },
-        '5D_OR_MID':    { price: or5Mid,   bestCtx: 'Rolling composite star — 94% WR', freq: '~0.5/day' },
+        'PD_POC':       { price: pdPOC,    bestCtx: 'System anchor level', freq: '~1/day' },
+        '5D_OR_MID':    { price: or5Mid,   bestCtx: 'Rolling composite', freq: '~0.5/day' },
         'PD_VAL':       { price: pdVAL,    bestCtx: 'Consistent performer, support fade', freq: '~0.8/day' },
-        'PD_VAH':       { price: pdVAH,    bestCtx: 'High frequency, solid WR', freq: '~1.2/day' },
-        'PD_IB_MID':    { price: pdIbMid,  bestCtx: '83% WR, best PD midpoint', freq: '~0.5/day' },
+        'PD_VAH':       { price: pdVAH,    bestCtx: 'High frequency level', freq: '~1.2/day' },
+        'PD_IB_MID':    { price: pdIbMid,  bestCtx: 'PD midpoint fade', freq: '~0.5/day' },
         'FLOOR_PIVOT':  { price: floorP,   bestCtx: 'Structural reference', freq: '~0.8/day' },
         'OR_HIGH':      { price: orH,      bestCtx: 'AM session strong', freq: '~0.7/day' },
         'FLOOR_R1':     { price: floorR1,  bestCtx: 'Thursday 1PM specialist', freq: '~0.5/day' },
         'PD_OR_MID':    { price: pdOrMid,  bestCtx: 'Good midpoint fade', freq: '~0.5/day' },
         // FLOOR_S1 removed from keepLevels 2026-07-03 (12+ backtest runs all negative EV)
         // 'FLOOR_S1':  { price: floorS1,  bestCtx: 'Support level', freq: '~0.5/day' },
-        'IB_HIGH':      { price: ibHigh,   bestCtx: '90% WR level fade', freq: '~0.8/day' },
-        'IB_LOW':       { price: ibLow,    bestCtx: '88% WR level fade', freq: '~0.8/day' },
+        'IB_HIGH':      { price: ibHigh,   bestCtx: 'IB level fade', freq: '~0.8/day' },
+        'IB_LOW':       { price: ibLow,    bestCtx: 'IB level fade', freq: '~0.8/day' },
         'IB_MID':       { price: ibMid,    bestCtx: 'Midpoint reference', freq: '~1/day' },
         'ON_HIGH':      { price: null,     bestCtx: 'Overnight high', freq: '~0.5/day' },
         'PD_IB_LOW':    { price: pdIbLow,  bestCtx: 'PD IB Low', freq: '~0.5/day' },
@@ -6865,26 +6874,38 @@ export default function createACDRouter(io) {
         'PD_OR_LOW':    { price: pdOrLow,  bestCtx: 'PD OR Low', freq: '~0.5/day' },
         'PD_SESSION_MID': { price: pdSessMid, bestCtx: 'PD session midpoint', freq: '~0.5/day' },
         '10D_IB_MID':   { price: null,     bestCtx: '10-day IB composite', freq: '~0.3/day' },
-        'IB_MID_SCALP': { price: ibMid,    bestCtx: '82% WR, tight target', freq: '~1.5/day' },
+        'IB_MID_SCALP': { price: ibMid,    bestCtx: 'Tight-target scalp fade', freq: '~1.5/day' },
         'OR_MID_AFTER_IB': { price: orMid, bestCtx: 'Post-IB OR midpoint', freq: '~1/day' },
-        'TRT_LONG':     { price: null,     bestCtx: 'Trend resumption, high R:R', freq: '~0.3/day' },
+        'TRT_LONG':     { price: null,     bestCtx: 'Trend resumption', freq: '~0.3/day' },
         'IB_BEARISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.4/day' },
         'IB_BULLISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.5/day' },
-        'MONTH_OPEN':  { price: monthOpen,   bestCtx: '72% WR N=39, positive EV both sides', freq: '~1/month' },
-        'PM_VAH':      { price: pmVAHaudit,  bestCtx: '77% WR N=24, $28 EV long side', freq: '~monthly' },
-        'PM_VAL':      { price: pmVALaudit,  bestCtx: 'N=11 (thin)', freq: '~monthly' },
-        'M1_VAH':      { price: m1VAHaudit,  bestCtx: '68% WR N=66, marginal EV', freq: '~daily' },
-        'M1_VAL':      { price: m1VALaudit,  bestCtx: '58% WR N=35, EV negative', freq: '~daily' },
-        'M3_VAH':      { price: m3VAHaudit,  bestCtx: '64% WR N=54, EV negative', freq: '~daily' },
-        'M3_VAL':      { price: null,        bestCtx: 'N=18 (thin)', freq: '~daily' },
+        'MONTH_OPEN':  { price: monthOpen,   bestCtx: 'Monthly open fade', freq: '~1/month' },
+        'PM_VAH':      { price: pmVAHaudit,  bestCtx: 'Prior-month VAH fade', freq: '~monthly' },
+        'PM_VAL':      { price: pmVALaudit,  bestCtx: 'Prior-month VAL fade', freq: '~monthly' },
+        'M1_VAH':      { price: m1VAHaudit,  bestCtx: '1-month rolling VAH fade', freq: '~daily' },
+        'M1_VAL':      { price: m1VALaudit,  bestCtx: '1-month rolling VAL fade', freq: '~daily' },
+        'M3_VAH':      { price: m3VAHaudit,  bestCtx: '3-month rolling VAH fade', freq: '~daily' },
+        'M3_VAL':      { price: null,        bestCtx: '3-month rolling VAL fade', freq: '~daily' },
         // Directional display cards sourced from UNIFIED_BACKTEST (replaces CONTEXT/SCALP legacy orphan types)
         'IB_BULLISH':           { price: null,  bestCtx: 'IB breakout direction context (all-day-type blended)', freq: '~0.4/day' },
         'IB_BEARISH':           { price: null,  bestCtx: 'IB breakdown direction context (all-day-type blended)', freq: '~0.4/day' },
-        'IB_MID_SCALP_LONG':   { price: ibMid, bestCtx: '79% WR scalp fade LONG from IB midpoint', freq: '~1.5/day' },
-        'IB_MID_SCALP_SHORT':  { price: ibMid, bestCtx: '67% WR scalp fade SHORT from IB midpoint', freq: '~1.5/day' },
-        'OR_MID_AFTER_IB_LONG':  { price: orMid, bestCtx: '68% WR scalp fade LONG post-IB OR midpoint', freq: '~1/day' },
-        'OR_MID_AFTER_IB_SHORT': { price: orMid, bestCtx: '51% WR scalp fade SHORT post-IB OR midpoint', freq: '~1/day' },
+        'IB_MID_SCALP_LONG':   { price: ibMid, bestCtx: 'Scalp fade LONG from IB midpoint', freq: '~1.5/day' },
+        'IB_MID_SCALP_SHORT':  { price: ibMid, bestCtx: 'Scalp fade SHORT from IB midpoint', freq: '~1.5/day' },
+        'OR_MID_AFTER_IB_LONG':  { price: orMid, bestCtx: 'Scalp fade LONG post-IB OR midpoint', freq: '~1/day' },
+        'OR_MID_AFTER_IB_SHORT': { price: orMid, bestCtx: 'Scalp fade SHORT post-IB OR midpoint', freq: '~1/day' },
       };
+
+      // Builds the level's context description from its OWN live performance_audit
+      // fields (win_rate/sample_size/ev_per_trade, already fetched into `row` above) —
+      // falls back to the qualitative levelMap label only when no numeric stat exists.
+      function describeLevel(row, fallbackLabel) {
+        const parts = [];
+        if (row.win_rate != null) parts.push(`${Math.round(row.win_rate * 100)}% WR`);
+        if (row.sample_size != null) parts.push(`N=${row.sample_size}`);
+        if (row.ev_per_trade != null) parts.push(`$${Math.round(row.ev_per_trade)}/trade`);
+        if (row.sample_size != null && row.sample_size < 20) parts.push('(thin sample)');
+        return parts.length ? parts.join(', ') : fallbackLabel;
+      }
 
       // Build unified setups array
       const setups = [];
@@ -7018,7 +7039,7 @@ export default function createACDRouter(io) {
           p75mae: row.p75_mae,
           p90mae: row.p90_mae,
           p50mfe: row.p50_mfe,
-          bestContext: meta.bestCtx || row.notes || '',
+          bestContext: describeLevel(row, meta.bestCtx) || row.notes || '',
           regimeFit,
           frequency: ov.freq || meta.freq || null,
           levelPrice,
