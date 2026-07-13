@@ -26,6 +26,7 @@ Trading journal: React frontend (Vite, port 3000) + Express backend (port 3002) 
 
 ## Conventions
 
+- **Benchmarking bundle size across commits (git worktrees):** never symlink `node_modules` between a worktree and the main repo — Vite's dependency-optimizer cache (`node_modules/.vite`) is shared through the symlink and can silently contaminate build output from a different commit's module graph, even after deleting `node_modules/.vite` between runs. Give each worktree its own real `npm install`. Also build each commit in its own fully separate Bash/tool call — chaining `cd worktreeA && npm run build` followed by a second build command in the *same* call risks the shell's cwd silently carrying over to the second build too. Found 2026-07-13: a self-audit of a lazy-loading change reported a "52% bundle regression" that was entirely a benchmarking artifact from these two bugs stacked together; an independent review with a clean `node_modules` install got the correct (and much better) numbers.
 - Backtest scripts live in `scripts/`, named `backtest_<hypothesis>.js`, run manually via `node`, and typically write findings to the `performance_audit` table. They are not imported by the running app.
 - Sierra Chart TAL data is stored as JSONB under `custom_fields->'sierra_data'` rather than typed columns — this lets new TAL columns appear without a migration and lets old Activity Log format rows coexist.
 - Account filter state is lifted to `App.jsx` and shared between Calendar and Dashboard — don't duplicate it locally in a component.
