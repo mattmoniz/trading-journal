@@ -306,7 +306,7 @@ Managed via `systemctl --user [start|stop|restart|status] <name>`. Both enabled 
 
 ## `scripts/` — Ad-hoc Analysis & Backtests
 
-~37 standalone Node scripts run manually (`node scripts/backtest_X.js`) against the live DB via `server/db.js`. They are **not imported by the running app** — each one tests a specific edge hypothesis and most write findings into `performance_audit`. Naming convention is `backtest_<hypothesis>.js`. 87 superseded scripts moved to `scripts/archive/` (2026-07-09) — not maintained.
+~51 standalone Node scripts run manually (`node scripts/backtest_X.js`) against the live DB via `server/db.js`. They are **not imported by the running app** — each one tests a specific edge hypothesis and most write findings into `performance_audit`. Naming convention is `backtest_<hypothesis>.js`; one-time data-repair scripts use `repair_<what>.mjs` (see below). 87 superseded scripts moved to `scripts/archive/` (2026-07-09) — not maintained.
 
 A few scripts ARE wired in as scheduled jobs from `server/index.js` (morning brief, weekly/monthly report, daily coaching, level computation) — check `index.js` cron registrations before assuming a script is dead.
 
@@ -325,6 +325,7 @@ Notable scripts that are scheduled or run after auto-import:
 - `scripts/backfill_mae_mfe.mjs` — backfills mae_points, mfe_points, bars_to_resolution, resolution_bar_time on `active_setups`; shared replay engine: `server/services/maeMfeReplay.js`; **daily** (via `run_daily_calibration.sh`)
 - `scripts/run_daily_calibration.sh` — runs `backfill_mae_mfe.mjs` + `update_optimal_stops.mjs` + `backtest_setup_status.mjs` at 4:20 PM ET Mon-Fri (system crontab); fast pass (~2 min); ensures stops/suppression reflect same-day resolved trades
 - `scripts/backtest_monday_deep.js` — Monday WR/EV overrides per level; writes `MON_BACKTEST` rows read live by `acd.js` keepLevels logic; cron fires Sunday via `run_weekly_backtests.sh`
+- `scripts/repair_*.mjs` (2026-07-14, 7 scripts) — one-time data repairs for the `resolution_method='BACKFILL'` corpus in `active_setups` (the historical output of `scripts/archive/backfill_level_fades.js`), not scheduled/cron, kept for audit trail: `repair_backfill_duplicate_bars.mjs` (re-simulated against clean `price_bars_primary`), `repair_cam_r4_s3_window_mismatch.mjs`/`repair_top8_window_mismatch.mjs`/`repair_remaining_window_mismatch.mjs`/`repair_ib_dependent_window_mismatch.mjs`/`repair_weekly_vwap_window_mismatch.mjs` (re-simulated first-touch-anywhere-in-RTH instead of the archived script's 10:30am-noon window, one wave per level-formation-gate family), `repair_dollars_per_point.mjs` (rescaled `actual_pnl` from $5/pt to the real $2/pt MNQ contract value). Each backs up to a `active_setups_*_backup_20260714` table before writing — see docs/OPEN_THREADS.md for the full incident writeup and docs/KNOWN_ISSUES.md items 8-10 for the underlying bugs. Backup tables are safe to drop once the fixes have held for a few sessions.
 
 ---
 

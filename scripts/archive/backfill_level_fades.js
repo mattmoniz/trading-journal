@@ -16,14 +16,21 @@
 //
 // P&L uses NQ contract value: $5/pt, $5 commission/round-trip
 //
+// ⚠️ WRONG — found 2026-07-14, do not copy this convention into new scripts. This journal
+// actually trades MNQ: $2/pt, $1 commission/round-trip (matches server/routes/acd.js's live
+// resolution path, `const PNL_PER_POINT = 2; // MNQ = $2/point`). $5/pt matches neither MNQ
+// ($2) nor standard NQ ($20) — an uncaught error, not a deliberate choice, confirmed with the
+// user. This propagated into every scripts/repair_*.mjs script before being caught and fixed
+// (scripts/repair_dollars_per_point.mjs rescaled the resulting data). See docs/KNOWN_ISSUES.md.
+//
 // Run: node scripts/backfill_level_fades.js [--dry-run] [--from=YYYY-MM-DD] [--to=YYYY-MM-DD]
 
 import pg from 'pg';
 const pool = new pg.Pool({ host: 'localhost', port: 5432, database: 'trading_journal', user: 'trader', password: 'trader123' });
 const q = (t, p) => pool.query(t, p);
 
-const PT = 5;   // $ per NQ point
-const COMM = 5; // commission per round-trip
+const PT = 5;   // $ per NQ point -- WRONG, see the header note above. Should be 2 (MNQ).
+const COMM = 5; // commission per round-trip -- WRONG, see the header note above. Should be 1.
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
