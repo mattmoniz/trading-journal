@@ -35,5 +35,8 @@ echo "=== Weekly backtest run: $(date) ==="
 
 # --- Independent research scanners (not level-touch based, tracked forward regardless of current profitability) ---
 /usr/bin/node scripts/backtest_minute_bar_scan.mjs
+# Dimensional cross-cut mining for the same scanner families (dow/hour/daytype/session/etc.),
+# same pattern_discoveries table + ACTIVE/DEGRADED lifecycle as mineLevelFades() uses for levels
+/usr/bin/node scripts/mine_minutebar_conditions.mjs
 
 echo "=== Weekly backtest run complete: $(date) ==="
