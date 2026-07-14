@@ -23,6 +23,7 @@
  * only used from bars at/after 10:30 ET (acd_daily_log reclassifies at IB close).
  */
 import { query } from '../server/db.js';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 const THRESHOLD_WINDOW_DAYS = 20;
 const EXTREME_PCTL = 0.20;
@@ -205,27 +206,12 @@ async function mineFamily(familyName, tradeDirFn, evtsRaw) {
   console.log(`\n${familyName}: N=${trades.length}, stop=${stop.toFixed(1)}pt, target=${target.toFixed(1)}pt (derived from this run's own MAE/MFE)`);
 
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  // Same rigor diagnostics added to backtest_setup_status.mjs earlier today (day-clustering +
-  // 3-way chronological EV-sign stability) — applied here too so a discovery's own console
-  // print already tells you whether it's likely real before anyone has to ask. `trades` is in
+  // Centralized 2026-07-14 into server/services/rigorDiagnostics.js — `trades` is already in
   // chronological order (built from `evts`, which `runTest` emits day-by-day in order), so
   // slicing a group's own matching trades preserves that order for the thirds split.
   function rigorDiagnostics(groupTrades) {
-    const perDay = new Map();
-    for (const t of groupTrades) perDay.set(t.day, (perDay.get(t.day) || 0) + 1);
-    const counts = [...perDay.values()].sort((a, b) => b - a);
-    const top5DayPct = +(100 * counts.slice(0, 5).reduce((a, b) => a + b, 0) / groupTrades.length).toFixed(1);
-    const third = Math.floor(groupTrades.length / 3);
-    let stable = null, thirds = null;
-    if (third >= 5) {
-      const g1 = groupTrades.slice(0, third), g2 = groupTrades.slice(third, 2 * third), g3 = groupTrades.slice(2 * third);
-      const evOf = g => g.reduce((s, t) => s + t.pnl, 0) / g.length;
-      const ev1 = evOf(g1), ev2 = evOf(g2), ev3 = evOf(g3);
-      const overallSign = Math.sign(groupTrades.reduce((s, t) => s + t.pnl, 0));
-      stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
-      thirds = { ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
-    }
-    return { distinctDates: perDay.size, top5DayPct, stable, thirds };
+    const rigor = computeRigor(groupTrades, { dateField: 'day', pnlFn: t => t.pnl });
+    return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, stable: rigor.stable, thirds: rigor.thirds };
   }
 
   const discoveries = [];

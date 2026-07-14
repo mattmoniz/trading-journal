@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { computeRigor } from './rigorDiagnostics.js';
 
 // ─── PATTERN DETECTORS ──────────────────────────────────────────────
 // Each detector receives the full day's 1-min bars and returns pattern instances
@@ -931,12 +932,22 @@ export async function mineLevelFades() {
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const discoveries = [];
 
+  // Centralized 2026-07-14 into server/services/rigorDiagnostics.js. Purely additive/
+  // informational: does NOT change win_rate, sample_size, net_pnl_dollars, or ACTIVE/DEGRADED
+  // status below — only adds a `context` field so a stable and an unstable discovery don't
+  // display with equal weight (see ScalpPlaybookCard.jsx's stability dot). `allTouches` is built
+  // day-by-day in ascending date order, so a group's own matching trades stay chronological.
+  function rigorDiagnostics(groupTrades) {
+    return computeRigor(groupTrades, { dateField: 'date', pnlFn: t => t.won ? target * 2 : -stop * 2 });
+  }
+
   for (const dim of dimensions) {
     const groups = {};
     for (const t of allTrades) {
       const key = dim.fn(t);
-      if (!groups[key]) groups[key] = { wins: 0, losses: 0 };
+      if (!groups[key]) groups[key] = { wins: 0, losses: 0, trades: [] };
       groups[key][t.won ? 'wins' : 'losses']++;
+      groups[key].trades.push(t);
     }
 
     for (const [key, r] of Object.entries(groups)) {
@@ -946,7 +957,8 @@ export async function mineLevelFades() {
       const netPnl = (r.wins * target - r.losses * stop) * 2;
       if (wr >= MIN_WR && netPnl > 0) {
         const patternKey = `${dim.name}:${key}`;
-        discoveries.push({ patternKey, dimension: dim.name, wr: Math.round(wr * 100), n: total, netPnl });
+        const rigor = rigorDiagnostics(r.trades);
+        discoveries.push({ patternKey, dimension: dim.name, wr: Math.round(wr * 100), n: total, netPnl, rigor });
       }
     }
   }
@@ -955,17 +967,20 @@ export async function mineLevelFades() {
   const newDiscoveries = [];
   for (const disc of discoveries) {
     const existing = await query(`SELECT id, win_rate, sample_size, notified FROM pattern_discoveries WHERE pattern_key=$1`, [disc.patternKey]);
+    const context = JSON.stringify({
+      rigor: { distinct_dates: disc.rigor.distinctDates, top5_day_pct: disc.rigor.top5DayPct, three_way_stable: disc.rigor.stable, thirds: disc.rigor.thirds },
+    });
     if (existing.rows.length === 0) {
       await query(
-        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated)
-         VALUES ($1,$2,$3,$4,$5,$6,$6)`,
-        [disc.patternKey, disc.dimension, disc.wr / 100, disc.n, disc.netPnl, todayStr]);
+        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, context)
+         VALUES ($1,$2,$3,$4,$5,$6,$6,$7)`,
+        [disc.patternKey, disc.dimension, disc.wr / 100, disc.n, disc.netPnl, todayStr, context]);
       newDiscoveries.push(disc);
     } else {
       const prev = existing.rows[0];
       await query(
-        `UPDATE pattern_discoveries SET win_rate=$2, sample_size=$3, net_pnl_dollars=$4, last_updated=$5 WHERE id=$1`,
-        [prev.id, disc.wr / 100, disc.n, disc.netPnl, todayStr]);
+        `UPDATE pattern_discoveries SET win_rate=$2, sample_size=$3, net_pnl_dollars=$4, last_updated=$5, context=$6 WHERE id=$1`,
+        [prev.id, disc.wr / 100, disc.n, disc.netPnl, todayStr, context]);
       if (disc.n > prev.sample_size + 3 && !prev.notified) {
         newDiscoveries.push({ ...disc, strengthened: true });
       }

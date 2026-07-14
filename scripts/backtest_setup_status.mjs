@@ -19,6 +19,7 @@
 
 import { query } from '../server/db.js';
 import pool from '../server/db.js';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 const SIGNAL_TYPE = 'SETUP_STATUS';
 
@@ -105,24 +106,14 @@ async function run() {
     if (!tradesByType.has(r.setup_type)) tradesByType.set(r.setup_type, []);
     tradesByType.get(r.setup_type).push(r);
   }
+  // Centralized 2026-07-14 into server/services/rigorDiagnostics.js — was one of 3 independent
+  // copies of this same logic written the same day. NOTE: the shared version requires >=5
+  // events per third (was >=3 here) for the stability check to run at all — a deliberate
+  // consistency fix, matching the other 2 callers, slightly stricter than before.
   function rigorDiagnostics(type) {
     const trades = tradesByType.get(type) || [];
-    if (!trades.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null };
-    const perDay = new Map();
-    for (const t of trades) perDay.set(t.trade_date, (perDay.get(t.trade_date) || 0) + 1);
-    const counts = [...perDay.values()].sort((a, b) => b - a);
-    const top5DayPct = +(100 * counts.slice(0, 5).reduce((a, b) => a + b, 0) / trades.length).toFixed(1);
-    const third = Math.floor(trades.length / 3);
-    let stable = null, thirds = null;
-    if (third >= 3) { // need at least a handful per third for the check to mean anything
-      const g1 = trades.slice(0, third), g2 = trades.slice(third, 2 * third), g3 = trades.slice(2 * third);
-      const evOf = g => g.reduce((s, t) => s + t.pnl, 0) / g.length;
-      const ev1 = evOf(g1), ev2 = evOf(g2), ev3 = evOf(g3);
-      const overallSign = Math.sign(trades.reduce((s, t) => s + t.pnl, 0));
-      stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
-      thirds = { n1: g1.length, n2: g2.length, n3: g3.length, ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
-    }
-    return { distinctDates: perDay.size, top5DayPct, stable, thirds };
+    const rigor = computeRigor(trades, { dateField: 'trade_date', pnlFn: t => t.pnl });
+    return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, stable: rigor.stable, thirds: rigor.thirds };
   }
 
   // Automated version of the classification Gemini did by hand 2026-07-14 for the 26 unstable

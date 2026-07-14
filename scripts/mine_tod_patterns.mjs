@@ -20,6 +20,7 @@
  */
 
 import pkg from 'pg';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 const { Pool } = pkg;
 
 const pool = new Pool({
@@ -130,6 +131,14 @@ for (const win of WINDOWS) {
     // Only record directional if rate in that direction ≥60%; reversal/continuation ≥60%
     const signals = [];
 
+    // Rigor added 2026-07-14 (shared server/services/rigorDiagnostics.js — see backtest_setup_
+    // status.mjs / mine_minutebar_conditions.mjs for the same check applied elsewhere). No real
+    // $ EV here (this is a pure hit-rate claim, not a simulated trade), so pnlFn uses a +1/-1
+    // hit/miss proxy per day instead — the sign-stability check works the same way on that as
+    // it does on real PnL. `rows`/`withDir` are already in chronological order (dayStats is
+    // built by iterating dates in ascending order from an ORDER BY trade_date query).
+    const rigorFor = (rowsForCheck, hitFn) => computeRigor(rowsForCheck, { dateField: 'date', pnlFn: r => hitFn(r) ? 1 : -1 });
+
     if (upPct >= 60) {
       signals.push({
         name: `${win.name}_${dtLabel}_DIRECTIONAL`,
@@ -138,6 +147,7 @@ for (const win of WINDOWS) {
         label: `${win.label}${dt ? ' · ' + dt : ''}: closes UP ${upPct}% of days`,
         action: `Favor LONG entries in this window`,
         recommendation: 'LONG',
+        rigor: rigorFor(rows, r => r.win_dir === 'UP'),
       });
     } else if (downPct >= 60) {
       signals.push({
@@ -147,6 +157,7 @@ for (const win of WINDOWS) {
         label: `${win.label}${dt ? ' · ' + dt : ''}: closes DOWN ${downPct}% of days`,
         action: `Fade rallies — bearish pressure in this window`,
         recommendation: 'SHORT',
+        rigor: rigorFor(rows, r => r.win_dir === 'DOWN'),
       });
     }
 
@@ -158,6 +169,7 @@ for (const win of WINDOWS) {
         label: `${win.label}${dt ? ' · ' + dt : ''}: reverses morning ${revPct}% of days`,
         action: `Fade the morning trend — mean reversion window`,
         recommendation: 'REVERSE',
+        rigor: rigorFor(withDir, r => r.is_reversal),
       });
     }
 
@@ -169,6 +181,7 @@ for (const win of WINDOWS) {
         label: `${win.label}${dt ? ' · ' + dt : ''}: continues morning move ${contPct}% of days`,
         action: `Ride the trend — continuation window`,
         recommendation: 'WITH_TREND',
+        rigor: rigorFor(withDir, r => r.is_continuation),
       });
     }
 
@@ -191,6 +204,7 @@ const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_Yo
 await query(`DELETE FROM performance_audit WHERE signal_type = 'TOD_PATTERN'`);
 console.log('Deleted old TOD_PATTERN rows');
 
+let cleanCount = 0, notCleanCount = 0;
 for (const p of patterns) {
   const notes = {
     label: p.label,
@@ -204,6 +218,7 @@ for (const p of patterns) {
       time_window_end: p.win.end,
       time_window_label: p.win.label,
     },
+    rigor: { distinct_dates: p.rigor.distinctDates, top5_day_pct: p.rigor.top5DayPct, three_way_stable: p.rigor.stable, thirds: p.rigor.thirds, clean: p.rigor.clean },
   };
 
   await query(`
@@ -212,8 +227,11 @@ for (const p of patterns) {
     VALUES ($1, 0, 'TOD_PATTERN', $2, $3, $4, 0, $5, $6)
   `, [today, p.name, p.n, p.pct / 100, p.recommendation, JSON.stringify(notes)]);
 
-  console.log(`  ${p.recommendation.padEnd(12)} ${p.name.padEnd(45)} ${p.pct}% N=${p.n}`);
+  if (p.rigor.clean) cleanCount++; else notCleanCount++;
+  const tag = p.rigor.clean ? 'CLEAN' : p.rigor.stable === false ? 'UNSTABLE' : p.rigor.clustered ? 'CLUSTERED' : 'N/A';
+  console.log(`  ${p.recommendation.padEnd(12)} ${p.name.padEnd(45)} ${p.pct}% N=${p.n} [${tag}]`);
 }
+console.log(`\nRigor: ${cleanCount} clean, ${notCleanCount} not clean (informational only, all still written as before)`);
 
 console.log(`\nWrote ${patterns.length} TOD_PATTERN rows for ${today}`);
 await pool.end();
