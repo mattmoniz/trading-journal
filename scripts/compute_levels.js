@@ -307,14 +307,21 @@ async function computeLevelsForDate(date) {
   `, [date]);
   add('RTH_VWAP', rthVwapR.rows[0]?.vwap ? parseFloat(rthVwapR.rows[0].vwap) : null, 'VWAP');
 
-  // Weekly VWAP (Mon open → Friday close for the week containing date)
+  // Weekly VWAP (Mon open → date, week-to-date as of the date being computed)
+  // Fixed 2026-07-14: was `BETWEEN wb.mon AND wb.fri` (the week's Friday, regardless of `date`)
+  // -- a genuine lookahead bug for any date before that week's Friday, since it pulled in
+  // volume/price data from days that hadn't happened yet relative to `date`. Live acd.js reads
+  // lp.WEEKLY_VWAP with no time gate, so in live day-by-day usage this only ever accumulated
+  // through "today" anyway (future bars don't exist yet) -- the bug only bit historical
+  // re-computation (--backfill), where the full week's data already exists. See
+  // docs/KNOWN_ISSUES.md.
   const weekVwapR = await q(`
     SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
     FROM price_bars_primary
     WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
       AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
       AND volume > 0
-  `, [wb.mon, wb.fri]);
+  `, [wb.mon, date]);
   add('WEEKLY_VWAP', weekVwapR.rows[0]?.vwap ? parseFloat(weekVwapR.rows[0].vwap) : null, 'VWAP');
 
   // ── 8. Prior week H/L/VA ─────────────────────────────────────────────────
