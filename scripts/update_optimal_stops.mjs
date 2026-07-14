@@ -33,19 +33,35 @@ import { query } from '../server/db.js';
 const MIN_N = 20;
 const DEFAULT_STOP = 65;
 const DEFAULT_TARGET = 35;
+// Fallback $/pt when a setup_type has too few resolved trades to derive its own (see
+// deriveDollarsPerPoint below) — matches this codebase's dominant convention (the
+// level-fade family, the large majority of setup_types, cleanly resolves to exactly
+// $5.00/pt per the 2026-07-14 audit). Only a fallback for thin-N cases, not a decision
+// threshold — every setup_type with enough data gets its own real, data-derived value.
+const DEFAULT_DPP = 5;
 
 // Target sweep range (pts) — all setup types, not just IB. Always capped at p75_mfe
 // per-type below, so it can't select a target beyond what the type's own MFE data supports.
 const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150];
 
 // Run EV sweep for targets — finds T1 that maximizes expected value given a fixed stop.
-// Simulates: if MAE > stop → -stop, elif MFE >= T → +T, else → actual_pnl (expired/partial).
+// Simulates: if MAE > stop → -stop*stopDpp, elif MFE >= T → +T*targetDpp, else → actual_pnl
+// (expired/partial).
+//
+// stopDpp/targetDpp: real dollars-per-point for this setup_type, derived from its own
+// resolved trades (see deriveDollarsPerPoint) — NOT a flat assumed constant. 2026-07-14
+// audit found the two modeled branches previously used a flat $2/pt while the third
+// (actual_pnl) branch used real dollars — inconsistent units within the same formula,
+// and wrong for most setup_types besides: real $/pt is cleanly bimodal (~$5 for the
+// level-fade family, ~$2 for IB_BULLISH/BEARISH/OPEN_DRIVE/C_STANDALONE/etc.), not a
+// single constant. Independently verified via Gemini mining pass, cross-checked by
+// Claude against direct SQL before trusting.
 //
 // maxT caps the sweep at p75_mfe so we never select a target that >75% of trades can't reach.
 // Without this cap, high T values saturate to actual_pnl and look artificially optimal.
 //
 // Returns { target, ev }, or null if fewer than MIN_N trades or no candidates ≤ maxT.
-function sweepOptimalTarget(trades, stop, maxT = 150) {
+function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP) {
   if (trades.length < MIN_N) return null;
   const candidates = TARGET_SWEEP.filter(T => T <= maxT);
   if (candidates.length === 0) return null;
@@ -54,8 +70,8 @@ function sweepOptimalTarget(trades, stop, maxT = 150) {
     let evSum = 0;
     for (const t of trades) {
       const mae = +t.mae_points, mfe = +t.mfe_points;
-      if (mae > stop)    evSum += -stop * 2;
-      else if (mfe >= T) evSum += T * 2;
+      if (mae > stop)    evSum += -stop * stopDpp;
+      else if (mfe >= T) evSum += T * targetDpp;
       else               evSum += +t.actual_pnl;
     }
     const ev = evSum / trades.length;
@@ -73,17 +89,28 @@ function sweepOptimalTarget(trades, stop, maxT = 150) {
 // blanket rule holds, so this must be swept per setup_type, not hardcoded.)
 //
 // Stop candidates are percentiles of THIS TYPE'S OWN mae_points distribution
-// (p25/p40/p50/p60/p75/p90, passed in from the caller's query) — not a fixed point
-// grid. A flat grid let the sweep pick stops unrelated to the actual data (e.g. 150pt
-// for a type whose real MAE tops out around p90≈100), which overfits: a stop that
-// almost never triggers looks great on realized EV without reducing real risk.
-// Percentile-anchoring keeps every candidate tied to that type's real distribution shape.
-function sweepOptimalStopAndTarget(trades, maePercentiles, maxT) {
+// (p25/p40/p50/p60/p75, passed in from the caller's query as {value, pct} pairs) —
+// not a fixed point grid. A flat grid let the sweep pick stops unrelated to the actual
+// data (e.g. 150pt for a type whose real MAE tops out around p90≈100), which overfits:
+// a stop that almost never triggers looks great on realized EV without reducing real
+// risk. Percentile-anchoring keeps every candidate tied to that type's real
+// distribution shape.
+//
+// Thin-tail gate (2026-07-14 audit): the EV sweep itself always uses all N trades to
+// score a candidate stop, but the STOP VALUE at a high percentile (e.g. p75 of N=20)
+// is only really informed by the ~N*(1-pct) trades whose mae falls in that tail — for
+// p75 at N=20, that's ~5 trades defining where "p75" actually lands, an unstable
+// estimate a single outlier can shift. Require the same MIN_N floor already used
+// elsewhere in this file to apply to that tail count too, not just the type's total N
+// — derived per-candidate as MIN_N/(1-pct), not a new hardcoded number.
+function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, targetDpp) {
   if (trades.length < MIN_N) return null;
-  const stopCandidates = [...new Set(maePercentiles.map(Math.round))].sort((a, b) => a - b);
   let best = null;
-  for (const S of stopCandidates) {
-    const swept = sweepOptimalTarget(trades, S, maxT);
+  for (const { value, pct } of maeCandidates) {
+    const S = Math.round(value);
+    const requiredN = Math.ceil(MIN_N / (1 - pct));
+    if (trades.length < requiredN) continue; // tail too thin to trust this percentile's boundary
+    const swept = sweepOptimalTarget(trades, S, maxT, stopDpp, targetDpp);
     if (!swept) continue;
     if (!best || swept.ev > best.ev) best = { stop: S, target: swept.target, ev: swept.ev };
   }
@@ -139,6 +166,33 @@ async function main() {
   const rows = statsRes.rows;
   console.log(`Found ${rows.length} setup types with N≥${MIN_N}`);
 
+  // 1a2. Real per-setup_type dollars-per-point, derived from resolved trades' actual dollar
+  // P&L vs. their real point distance to stop/target — NOT a flat assumed constant. See the
+  // comment on sweepOptimalTarget for why (2026-07-14 audit: real $/pt is cleanly bimodal
+  // across setup_type families, not a single value). Falls back to DEFAULT_DPP per type/side
+  // when N < MIN_N for that specific branch (stop-hit or target-hit) — same floor used
+  // everywhere else in this file.
+  const dppRes = await query(`
+    SELECT setup_type,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(entry_zone_low - stop_level), 0))
+        FILTER (WHERE replay_resolution = 'STOP_HIT')                                    AS stop_dpp,
+      COUNT(*) FILTER (WHERE replay_resolution = 'STOP_HIT')                             AS n_stop,
+      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(t1_level - entry_zone_low), 0))
+        FILTER (WHERE replay_resolution = 'TARGET_HIT')                                  AS target_dpp,
+      COUNT(*) FILTER (WHERE replay_resolution = 'TARGET_HIT')                           AS n_target
+    FROM active_setups
+    WHERE status = 'RESOLVED' AND entry_zone_low IS NOT NULL
+      AND stop_level IS NOT NULL AND t1_level IS NOT NULL
+      AND actual_pnl IS NOT NULL
+    GROUP BY setup_type
+  `);
+  const dppByType = {};
+  for (const r of dppRes.rows) {
+    const stopDpp   = (+r.n_stop >= MIN_N && r.stop_dpp != null) ? +r.stop_dpp : DEFAULT_DPP;
+    const targetDpp = (+r.n_target >= MIN_N && r.target_dpp != null) ? +r.target_dpp : DEFAULT_DPP;
+    dppByType[r.setup_type] = { stopDpp, targetDpp };
+  }
+
   // 1b. Fetch all raw trades in one query for the target sweep
   const rawRes = await query(`
     SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float
@@ -172,10 +226,14 @@ async function main() {
     // artificially optimal") — p90 just wasn't capped symmetrically for stops when the stop
     // sweep was added. p75 still isn't perfectly immune (same bias at lower magnitude, per the
     // audit) but the artifact was concentrated at p90 in practice (7/66 types landed there).
-    const maePercentiles = [r.p25_mae, r.p40_mae, r.p50_mae, r.p60_mae, r.p75_mae]
-      .map(parseFloat).filter(v => !isNaN(v) && v > 0);
+    const maeCandidates = [
+      { value: r.p25_mae, pct: 0.25 }, { value: r.p40_mae, pct: 0.40 },
+      { value: r.p50_mae, pct: 0.50 }, { value: r.p60_mae, pct: 0.60 },
+      { value: r.p75_mae, pct: 0.75 },
+    ].map(c => ({ ...c, value: parseFloat(c.value) })).filter(c => !isNaN(c.value) && c.value > 0);
     const trades    = rawByType[r.setup_type] || [];
-    const swept     = sweepOptimalStopAndTarget(trades, maePercentiles, p75mfe);
+    const { stopDpp, targetDpp } = dppByType[r.setup_type] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
+    const swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
     const optStop   = swept ? swept.stop : Math.round(p75mae);
     const optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
     const targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
