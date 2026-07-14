@@ -90,6 +90,28 @@ async function run() {
   const currentStatus = {};
   for (const r of currentStatusQ.rows) currentStatus[r.signal_name] = r.recommendation;
 
+  // Per-day-type breakdown for DAY_TYPE_CONDITIONAL types (2026-07-14) — blended EV is
+  // meaningless for these (mixes profitable and unprofitable day-types by design), but
+  // DAY_TYPE_MANAGED isn't a real floor either if EVERY day-type bucket is bad. Found via
+  // the IB_BULLISH incident (docs/OPEN_THREADS.md): fired live at negative blended EV
+  // (-$27.81/trade, N=106) because this block previously skipped the standard SUPPRESS
+  // check unconditionally for these two types. Reuses SUPPRESS_MIN_N/SUPPRESS_MAX_EV —
+  // no new thresholds.
+  const dtConditionalQ = await query(`
+    SELECT s.setup_type, dl.day_type, COUNT(*) AS n, AVG(s.actual_pnl)::float AS ev
+    FROM active_setups s
+    JOIN acd_daily_log dl ON dl.trade_date = s.trade_date
+    WHERE s.setup_type = ANY($1)
+      AND s.resolution IN ('TARGET_HIT','STOP_HIT') AND s.actual_pnl IS NOT NULL
+      AND dl.day_type IS NOT NULL
+    GROUP BY s.setup_type, dl.day_type
+  `, [[...DAY_TYPE_CONDITIONAL]]);
+  const dtBreakdown = {};
+  for (const r of dtConditionalQ.rows) {
+    if (!dtBreakdown[r.setup_type]) dtBreakdown[r.setup_type] = [];
+    dtBreakdown[r.setup_type].push({ dayType: r.day_type, n: +r.n, ev: +r.ev });
+  }
+
   // Rigor diagnostics added 2026-07-14 (same checks applied to the minute-bar scanner):
   // day-clustering (catches N inflated by a handful of sessions — this is exactly the bug
   // found in the CAM_R4/CAM_S3 investigation) and 3-way chronological EV-sign stability.
@@ -148,12 +170,25 @@ async function run() {
     const rec90  = recent[type];
     const wasSuppressed = currentStatus[type] === 'SUPPRESS';
 
-    // Day-type conditional setups: skip global suppress/promote — managed by DAY_TYPE_ALPHA.
-    // Still write a row so the session-start coverage check knows these types are assessed.
+    // Day-type conditional setups: skip the blended-EV suppress/promote check — managed
+    // per-day-type by DAY_TYPE_ALPHA / the dtClass checks in acd.js instead. But still apply
+    // a real floor: if EVERY day-type bucket with enough data (N>=SUPPRESS_MIN_N) is below
+    // breakeven, there's no good day-type left for this setup to fire on, so fall through to
+    // the standard SUPPRESS — same bar as everything else, just computed per-bucket first.
     if (DAY_TYPE_CONDITIONAL.has(type)) {
-      const rec = wasSuppressed ? 'ACTIVE' : 'DAY_TYPE_MANAGED'; // clear stale SUPPRESS if any
-      results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation: rec, rec90 });
-      unchanged++;
+      const buckets = dtBreakdown[type] || [];
+      const bucketsWithData = buckets.filter(b => b.n >= SUPPRESS_MIN_N);
+      const anyGoodBucket = bucketsWithData.some(b => b.ev >= SUPPRESS_MAX_EV);
+      let rec;
+      if (bucketsWithData.length > 0 && !anyGoodBucket) {
+        rec = 'SUPPRESS';
+        suppressed++;
+        console.log(`  SUPPRESS ${type.padEnd(38)} all day-type buckets below bar: ${bucketsWithData.map(b => `${b.dayType} N=${b.n} EV=$${b.ev.toFixed(0)}`).join(', ')}`);
+      } else {
+        rec = wasSuppressed ? 'ACTIVE' : 'DAY_TYPE_MANAGED'; // clear stale SUPPRESS if any
+        unchanged++;
+      }
+      results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation: rec, rec90, dayTypeBreakdown: buckets });
       continue;
     }
 
@@ -201,6 +236,7 @@ async function run() {
       total_pnl:   +r.totalPnl.toFixed(2),
       recent_90d:  r.rec90 ? { n: +r.rec90.n, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
       rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
+      ...(r.dayTypeBreakdown ? { day_type_breakdown: r.dayTypeBreakdown.map(b => ({ day_type: b.dayType, n: b.n, ev: +b.ev.toFixed(2) })) } : {}),
     });
     await query(`
       INSERT INTO performance_audit

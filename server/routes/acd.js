@@ -22,6 +22,7 @@ import {
 import { runParameterSearch } from '../services/acdBacktest.js';
 import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboRate } from '../services/engineReadHitRates.js';
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
+import { matchPermissionSlips } from '../services/permissionSlip.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -3340,10 +3341,53 @@ export default function createACDRouter(io) {
       const dtClassRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
       const dtClass = dtClassRow.rows[0]?.day_type || null;
 
+      // Session-bias conflict check (2026-07-14) — see docs/OPEN_THREADS.md's IB_BULLISH
+      // incident writeup: today's IB_BULLISH fired LONG while every session-bias signal on
+      // the dashboard (Permission Slip, session signals) read SHORT, and nothing cross-checked
+      // that before firing. Reuses the exact same PERMISSION_SLIP matching antigravityEdges.js
+      // uses for the dashboard banner (server/services/permissionSlip.js, shared, not a second
+      // copy). Cached via setCached the same way liveStats escapes this block's scoping, so the
+      // candidates-array section (~line 5300) can read it without re-querying.
+      let sessionBiasMatch = getCached(todayET, 'permissionSlipMatch');
+      if (!sessionBiasMatch) {
+        const openBar = ibBars[0], closeBar = ibBars[ibBars.length - 1];
+        const firstHourDir = (openBar && closeBar)
+          ? (closeBar.close > openBar.open ? 'UP' : closeBar.close < openBar.open ? 'DOWN' : 'FLAT')
+          : null;
+        const permSlipRows = await query(`
+          SELECT signal_name, sample_size, win_rate::float, recommendation, notes
+          FROM performance_audit
+          WHERE signal_type = 'PERMISSION_SLIP'
+            AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'PERMISSION_SLIP')
+        `).catch(() => ({ rows: [] }));
+        sessionBiasMatch = matchPermissionSlips(
+          { dayType: dtClass, aUpFired, aDownFired, cUpConfirmed: cUpConf, cDownConfirmed: cDownConf, firstHourDir },
+          permSlipRows.rows
+        );
+        setCached(todayET, 'permissionSlipMatch', sessionBiasMatch);
+      }
+      // MIN_PCT=0.65 matches backtest_permission_slips.mjs's own bar for what counts as a
+      // real permission slip — only flag a conflict against a signal that clears that bar,
+      // not any thin/weak match.
+      const sessionConflictFor = (direction) => {
+        const opposing = direction === 'LONG' ? sessionBiasMatch.SHORT : direction === 'SHORT' ? sessionBiasMatch.LONG : null;
+        return (opposing && opposing.winRate >= 0.65) ? opposing : null;
+      };
+
       // ── SETUP 3: IB CONFIRMATION ──────────────────────────────────────────────
-      // Detect after 30-min IB period completes (after 10:00 AM ET)
+      // ibBars itself is still the 30-min window (9:30-10:00, spec) — only the fire
+      // gate moved to 10:30 (etMin>=630). Found 2026-07-14: gating fire at 10:00
+      // meant dtClass (line 3341) was always null at decision time (day_type isn't
+      // classified until IB close at 10:30 — see CLAUDE.md's day-type classifier
+      // timing fix), so the day-type suppression checks below (dtClass==='BALANCE'
+      // etc.) were a guaranteed no-op every single time this fired — confirmed live:
+      // IB_BULLISH fired blind at 09:58 ET with dtClass=null, went on to lose
+      // (-$159), and its all-time blended EV is -$27.81/trade (N=106) specifically
+      // because the BALANCE-day case this check exists to filter out was never
+      // actually being filtered. Moving the gate here (not changing the 30-min
+      // level definition) lets the existing checks below actually run.
       let ibSetup = null;
-      if (etMin >= 10 * 60 && ibBars.length >= 3) {
+      if (etMin >= 630 && ibBars.length >= 3) {
         const ibHigh = Math.max(...ibBars.map(b => b.high));
         const ibLow  = Math.min(...ibBars.map(b => b.low));
         const ibMid  = (ibHigh + ibLow) / 2;
@@ -3363,6 +3407,12 @@ export default function createACDRouter(io) {
             const aUpTestedInIB   = aUpLevel   && ibBars.some(b => b.high >= aUpLevel);
             const aDownTestedInIB = aDownLevel  && ibBars.some(b => b.low  <= aDownLevel);
             const conflicting = isBull ? (aUpTestedInIB && !aUpFired) : (aDownTestedInIB && !aDownFired);
+
+            // Session-bias conflict (2026-07-14) — see the sessionConflictFor definition above.
+            // Informational flag only, does not suppress; full suppression of a mechanical
+            // fade based on this is a bigger, unvalidated behavior change reserved for a future
+            // pass (docs/OPEN_THREADS.md tracks it as still-open).
+            const sessionConflict = sessionConflictFor(isBull ? 'LONG' : 'SHORT');
 
             // Stop geometry: data-derived via stop sweep in update_optimal_stops.mjs → performance_audit.
             // Read from liveStats._opt[type].stop (sweep-optimal, not p75_mae).
@@ -3397,12 +3447,25 @@ export default function createACDRouter(io) {
                   ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${(() => { const r = _ibLS?._opt?.IB_BULLISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~64% WR'; })()} overall. TREND days: strongest. BALANCE: suppressed (below breakeven). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target PD VAH or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
                   : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${(() => { const r = _ibLS?._opt?.IB_BEARISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~55% WR'; })()} overall. TURBULENT: strongest. BALANCE: suppressed. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
-              // IB_BULLISH: TREND 68.8% WR +$20 EV (solid). TURBULENT thin data. BALANCE suppressed.
-              // IB_BEARISH: TURBULENT 63.2% WR +$48 EV (solid). BALANCE marginal. TREND thin N=8.
+              // Verified live 2026-07-14 (docs/OPEN_THREADS.md has the incident writeup) — the
+              // previous comment here claiming IB_BULLISH TREND was "+$20 EV solid" was stale/
+              // wrong; real numbers are BALANCE N=53 EV=-$47, TREND N=34 EV=-$16, TURBULENT
+              // N=19 EV=+$4 (thin). No day-type clears the bar — IB_BULLISH is now fully
+              // SUPPRESSed via backtest_setup_status.mjs's DAY_TYPE_CONDITIONAL check, so this
+              // tier label is moot for it (ibSetup gets nulled before use either way).
+              // IB_BEARISH: BALANCE N=53 EV=-$15, TREND N=18 EV=-$64, TURBULENT N=30 EV=+$78
+              // (genuinely strong) — correctly gated to fire only on TURBULENT.
               tier: isBull
                 ? (dtClass === 'TREND' ? 'SOLID' : dtClass === 'TURBULENT' ? 'MARGINAL' : 'WEAK')
                 : (dtClass === 'TURBULENT' ? 'SOLID' : dtClass === 'TREND' ? 'WEAK' : 'MARGINAL'),
             };
+            // Session-bias conflict flag — appended post-construction rather than woven into
+            // the description ternary above, to avoid touching that already-complex string
+            // logic. Informational only (see sessionConflictFor definition, ~line 3355).
+            if (sessionConflict) {
+              ibSetup.sessionConflict = sessionConflict;
+              ibSetup.description = `⚠ SESSION-BIAS CONFLICT: "${sessionConflict.label}" reads ${sessionConflict.direction} at ${(sessionConflict.winRate * 100).toFixed(0)}% (N=${sessionConflict.n}) — opposite this setup's direction. Not suppressed, but weigh this before sizing.\n\n${ibSetup.description}`;
+            }
           }
         }
       }
@@ -3737,9 +3800,15 @@ export default function createACDRouter(io) {
         }
       }
 
-      // IB setup day-type precision gate — Opus Audit 2 2026-07-07 (N per cell ≥18):
-      // IB_BULLISH: TREND 75.0% WR +$16 EV N=32 ✓ | TURBULENT 55.0% WR -$45 EV N=20 ✗ | BALANCE 58.5% -$47 ✗
-      // IB_BEARISH: TURBULENT 74.2% WR +$65 EV N=31 ✓ | TREND 55.6% WR -$35 EV N=18 ✗ | BALANCE 49.0% -$18 ✗
+      // IB setup day-type precision gate — originally Opus Audit 2 2026-07-07, numbers below
+      // re-verified 2026-07-14 and found stale/drifted (exactly the silent-drift pattern this
+      // codebase has hit before — see docs/OPEN_THREADS.md for the incident). IB_BULLISH's
+      // TREND bucket had gone from +$16 EV (N=32, 2026-07-07) to -$16 EV (N=34) by 2026-07-14 —
+      // no bucket clears the bar anymore, so IB_BULLISH is now fully SUPPRESSed by
+      // backtest_setup_status.mjs's DAY_TYPE_CONDITIONAL check (see that script), independent
+      // of the per-day-type nulling below. Current (2026-07-14) real numbers:
+      // IB_BULLISH: BALANCE N=53 EV=-$47 | TREND N=34 EV=-$16 | TURBULENT N=19 EV=+$4 (thin)
+      // IB_BEARISH: BALANCE N=53 EV=-$15 | TREND N=18 EV=-$64 | TURBULENT N=30 EV=+$78 (strong)
       if (dtClass === 'BALANCE' && ibSetup) ibSetup = null;
       if (dtClass === 'TURBULENT' && ibSetup?.type === 'IB_BULLISH') ibSetup = null;
       if (dtClass === 'TREND' && ibSetup?.type === 'IB_BEARISH') ibSetup = null;
@@ -5266,9 +5335,16 @@ export default function createACDRouter(io) {
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
         levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
-        // IB_BULLISH / IB_BEARISH — TREND 71.7% WR, TURBULENT 70.0%. BALANCE suppressed (51.9% < breakeven).
-        // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27, Fri×IB_BULLISH EV=-$51 N=25 suppressed as of 2026-07-09.
-        (ibSetup && !getCached(todayET, 'levelFadeStats')?._dowSuppressToday?.has(ibSetup.type)) ? ibSetup : null,
+        // IB_BULLISH is now fully SUPPRESSed (2026-07-14, backtest_setup_status.mjs) — every
+        // day-type bucket is below breakeven, see docs/OPEN_THREADS.md for the incident. Checked
+        // via _suppressedSetups the same way level-fade setup_types are, alongside the existing
+        // DOW-specific check. IB_BEARISH remains DAY_TYPE_MANAGED (TURBULENT bucket is genuinely
+        // strong) — see the day-type nulling above this candidates array for its per-type gate.
+        // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27 suppressed as of 2026-07-09.
+        (ibSetup
+          && !getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(ibSetup.type)
+          && !getCached(todayET, 'levelFadeStats')?._dowSuppressToday?.has(ibSetup.type)
+        ) ? ibSetup : null,
       ];
       // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
       // These persist to active_setups with status='SHADOW', resolve against price,

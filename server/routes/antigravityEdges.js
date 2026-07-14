@@ -2,6 +2,7 @@ import express from 'express';
 import https from 'https';
 import { query } from '../db.js';
 import { getTrailingVwapStd } from '../services/queries.js';
+import { matchPermissionSlips } from '../services/permissionSlip.js';
 
 const edgesHistoryCache = new Map();
 let tradeBacktestCache = null;
@@ -1149,7 +1150,8 @@ async function getLiveEdgesContext() {
   }
 
   // Step 5: Build session permission slips from pre-fetched data
-  const permConditions = [];
+  // Matching logic shared with acd.js's level-fade session-bias-conflict check —
+  // see server/services/permissionSlip.js (extracted 2026-07-14).
   const dayType    = acdToday?.day_type || null;
   const aUpFired   = !!acdToday?.a_up_fired;
   const aDownFired = !!acdToday?.a_down_fired;
@@ -1157,36 +1159,14 @@ async function getLiveEdgesContext() {
   const cDown      = !!acdToday?.c_down_confirmed;
   const firstHourDir = liveStatus.firstHourDir || null;
 
-  const _permMatches = req => {
-    if (req.day_type         && dayType       !== req.day_type)   return false;
-    if (req.a_up_fired       && !aUpFired)                        return false;
-    if (req.a_down_fired     && !aDownFired)                      return false;
-    if (req.c_up_confirmed   && !cUp)                             return false;
-    if (req.c_down_confirmed && !cDown)                           return false;
-    if (req.fh_dir           && firstHourDir  !== req.fh_dir)     return false;
-    return true;
-  };
-  const _permSpecificity = req => Object.values(req).filter(v => v !== null).length;
-
-  for (const dir of ['LONG', 'SHORT']) {
-    const best = permSlipsQ.rows
-      .filter(r => r.recommendation === dir)
-      .map(r => { try { return { ...r, meta: JSON.parse(r.notes) }; } catch { return null; } })
-      .filter(r => r && _permMatches(r.meta.requires))
-      .sort((a, b) => {
-        const ds = _permSpecificity(b.meta.requires) - _permSpecificity(a.meta.requires);
-        return ds !== 0 ? ds : b.win_rate - a.win_rate;
-      })[0];
-
-    if (best) {
-      permConditions.push({
-        label: best.meta.label,
-        pct:   Math.round(best.win_rate * 1000) / 10,
-        n:     best.sample_size,
-        dir:   best.recommendation,
-      });
-    }
-  }
+  const _permMatched = matchPermissionSlips(
+    { dayType, aUpFired, aDownFired, cUpConfirmed: cUp, cDownConfirmed: cDown, firstHourDir },
+    permSlipsQ.rows
+  );
+  const permConditions = ['LONG', 'SHORT']
+    .map(dir => _permMatched[dir])
+    .filter(Boolean)
+    .map(m => ({ label: m.label, pct: Math.round(m.winRate * 1000) / 10, n: m.n, dir: m.direction }));
 
   const sessionPermissions = { dayType, aUpFired, aDownFired, cUpConfirmed: cUp, cDownConfirmed: cDown, firstHourDir, conditions: permConditions };
 

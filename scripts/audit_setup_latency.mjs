@@ -63,7 +63,26 @@ async function run(targetDate) {
         s.entry_zone_low::numeric AS level_price,
         -- classify RTH vs pre-market
         CASE WHEN s.fired_at >= (s.trade_date + TIME '09:30:00')
-             THEN 'RTH' ELSE 'PREMARKET' END AS session
+             THEN 'RTH' ELSE 'PREMARKET' END AS session,
+        -- Formation-gate floor: OR_HIGH_FADE/OR_LOW_FADE use the live 5-min OR
+        -- (acdService.js computes or_high/or_low from bars 570-574 et_min, i.e.
+        -- closes 9:35 ET); IB_HIGH_FADE/IB_LOW_FADE/IB_MID_SCALP_FADE/
+        -- OR_MID_AFTER_IB_FADE all read a level that's explicitly null until
+        -- etMinNow >= 630 (10:30 ET) in acd.js. A touch before these times isn't
+        -- a detection failure — the level doesn't exist yet. Verified against
+        -- acd.js/acdService.js 2026-07-14, do not guess new gates without
+        -- checking the actual level source the same way.
+        -- NOT included here despite similar naming: PD_IB_HIGH/LOW/MID_FADE and
+        -- 10D_IB_MID_FADE use prior-day/historical levels (known before the
+        -- open) — a touch-before-fire lag on those IS real and should still count.
+        CASE
+          WHEN s.setup_type LIKE 'OR_HIGH_FADE%' OR s.setup_type LIKE 'OR_LOW_FADE%'
+            THEN s.trade_date + TIME '09:35:00'
+          WHEN s.setup_type LIKE 'IB_HIGH_FADE%' OR s.setup_type LIKE 'IB_LOW_FADE%'
+            OR s.setup_type LIKE 'IB_MID_SCALP_FADE%' OR s.setup_type LIKE 'OR_MID_AFTER_IB_FADE%'
+            THEN s.trade_date + TIME '10:30:00'
+          ELSE NULL
+        END AS formation_ready_ts
       FROM active_setups s
       WHERE s.trade_date = $1
         AND s.setup_type LIKE '%FADE%'
@@ -93,6 +112,7 @@ async function run(targetDate) {
       s.resolution,
       s.level_price,
       s.session,
+      s.formation_ready_ts,
       fb.first_bar_ts,
       fb.lag_s
     FROM setups s
@@ -110,7 +130,26 @@ async function run(targetDate) {
 
   // Classify each row
   const classified = rows.map(r => {
-    const lag = r.lag_s != null ? parseInt(r.lag_s) : null;
+    let lag = r.lag_s != null ? parseInt(r.lag_s) : null;
+    let formationAdjusted = false;
+
+    // Formation-gate correction: OR_HIGH_FADE/OR_LOW_FADE/IB_HIGH_FADE/IB_LOW_FADE/
+    // IB_MID_SCALP_FADE/OR_MID_AFTER_IB_FADE read a level that doesn't exist until
+    // the OR (9:35 ET) or IB (10:30 ET) closes (see formation_ready_ts in the SQL
+    // above — verified against acd.js/acdService.js 2026-07-14). A raw touch before
+    // that time isn't a real detection delay. Only adjust when fired_at is AT/AFTER
+    // formation (a genuine live fire) — early-touch BACKFILL rows intentionally set
+    // fired_at to the original pre-formation touch by design (that's what
+    // "early-touch backfill" means), and forcing those through this adjustment would
+    // produce a nonsensical negative lag. Leave those alone; they're already
+    // correctly caught by the RETROACTIVE threshold below.
+    if (r.formation_ready_ts != null && r.first_bar_ts != null && lag != null
+        && new Date(r.first_bar_ts) < new Date(r.formation_ready_ts)
+        && new Date(r.fired_at) >= new Date(r.formation_ready_ts)) {
+      lag = Math.round((new Date(r.fired_at) - new Date(r.formation_ready_ts)) / 1000);
+      formationAdjusted = true;
+    }
+
     let cls;
     if (r.session === 'PREMARKET') {
       // Pre-market setups: don't classify against RTH latency standards.
@@ -123,6 +162,7 @@ async function run(targetDate) {
     else if (lag > CRIT_THRESH_S)  cls = 'CRITICAL';
     else if (lag > SLOW_THRESH_S)  cls = 'SLOW';
     else                           cls = 'OK';
+    if (formationAdjusted) cls += '*'; // flag: lag measured from formation-ready time, not raw touch
     return { ...r, lag, cls };
   });
 

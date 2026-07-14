@@ -1,0 +1,159 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-07-12  (2026-07-06 – 2026-07-12)
+Generated   : 2026-07-12T22:00:10.879Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 4
+Total P&L     : -$358.00
+Daily avg     : -$89.50
+Win days      : 2 / 4 (50%)
+Best day      : 2026-07-06  +$310.50
+Worst day     : 2026-07-07  -$789.00
+
+  2026-07-06  +$310.50
+  2026-07-07  -$789.00
+  2026-07-08  +$223.00
+  2026-07-10  -$102.50
+
+SETUP STATISTICS
+----------------------------------------
+10D_IB_MID_FADE_LONG           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$87.00
+10D_IB_MID_FADE_SHORT          fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$145.00
+3M_POC_FADE_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$83.00
+3M_POC_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$149.00
+5D_OR_MID_FADE_LONG            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$67.00
+A_DOWN_WEAK                    fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+CAM_R1_FADE_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$81.00
+CAM_R2_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+CAM_S1_FADE_SHORT              fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+CAM_S2_FADE_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$87.00
+CAM_S2_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$149.00
+CAM_S4_FADE_LONG               fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+CAM_S4_FADE_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$87.00
+C_PAIRED_LONG                  fired: 4 | wins: 0 | losses: 1 | expired: 3 | wr: 0% | avg -$23.00
+C_PAIRED_SHORT                 fired: 2 | wins: 1 | losses: 0 | expired: 1 | wr: 100% | avg +$85.00
+DAILY_OPEN_FADE_LONG           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$71.00
+FAILED_AUCTION_LONG            fired: 3 | wins: 0 | losses: 1 | expired: 2 | wr: 0% | avg -$163.00
+FLOOR_PIVOT_FADE_LONG          fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+FLOOR_PIVOT_FADE_SHORT         fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$105.00
+FLOOR_R1_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$69.00
+FLOOR_S1_FADE_LONG             fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+IB_BEARISH                     fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$209.00
+IB_BULLISH                     fired: 3 | wins: 0 | losses: 1 | expired: 1 | wr: 0% | avg -$101.00
+IB_HIGH_FADE_LONG              fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$106.00
+IB_LOW_FADE_LONG               fired: 4 | wins: 4 | losses: 0 | expired: 0 | wr: 100% | avg +$72.00
+IB_LOW_FADE_SHORT              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+IB_MID_SCALP_FADE_LONG         fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$119.00
+OPEN_DRIVE_LONG                fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$233.00
+OR_HIGH_FADE_LONG              fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$85.00
+OR_HIGH_FADE_SHORT             fired: 4 | wins: 3 | losses: 1 | expired: 0 | wr: 75% | avg +$36.50
+OR_LOW_FADE_LONG               fired: 4 | wins: 4 | losses: 0 | expired: 0 | wr: 100% | avg +$76.00
+OR_LOW_FADE_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$77.00
+OR_MID_AFTER_IB_FADE_LONG      fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$65.00
+PD_CLOSE_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$81.00
+PD_CLOSE_FADE_SHORT            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$81.00
+PD_IB_LOW_FADE_SHORT           fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$91.00
+PD_IB_MID_FADE_LONG            fired: 1 | wins: 0 | losses: 0 | expired: 0 | wr: unresolved
+PD_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$183.00
+PD_OR_MID_FADE_LONG            fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+PD_POC_FADE_LONG               fired: 2 | wins: 0 | losses: 1 | expired: 1 | wr: 0% | avg -$145.50
+PD_POC_FADE_SHORT              fired: 3 | wins: 1 | losses: 1 | expired: 1 | wr: 50% | avg -$33.19
+PD_SESSION_MID_FADE_SHORT      fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$99.00
+PD_VAH_FADE_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+PD_VAH_FADE_SHORT              fired: 4 | wins: 1 | losses: 1 | expired: 2 | wr: 50% | avg -$24.75
+PD_VAL_FADE_LONG               fired: 4 | wins: 2 | losses: 1 | expired: 1 | wr: 67% | avg -$7.67
+PD_VAL_FADE_SHORT              fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$105.00
+PW_LOW_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$163.00
+PW_VAL_FADE_LONG               fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$97.00
+PW_VAL_FADE_SHORT              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$163.00
+STOP_SWEEP_LONG                fired: 5 | wins: 1 | losses: 1 | expired: 3 | wr: 50% | avg +$3.25
+STOP_SWEEP_SHORT               fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$59.00
+TRT_SHORT                      fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved
+VALUE_AREA_RESPONSIVE_LONG     fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$155.00
+WS1_FADE_LONG                  fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$85.00
+WS1_FADE_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$143.00
+
+DYNAMIC MINED EDGES (Statistical shifts)
+----------------------------------------
+  🚀 Active Boosters (Size Up / Confirm):
+    · TRT_SHORT                    | Thursday               | WR: 60.0% vs Base: 33.3% (+26.7%) (p=0.0404)
+    · VALUE_AREA_RESPONSIVE_SHORT  | Thursday               | WR: 50.0% vs Base: 27.1% (+22.9%) (p=0.0136)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · BRACKET_BREAKOUT_LONG        | Tight OR               | WR: 35.7% vs Base: 17.2% (+18.5%) (p=0.0376)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+
+  🛑 Active Drags (Size Down / Filter):
+    · TRT_SHORT                    | Monday                 | WR: 0.0% vs Base: 33.3% (-33.3%) (p=0.0104)
+    · C_STANDALONE_UP              | Wide OR                | WR: 23.8% vs Base: 37.1% (-13.3%) (p=0.0078)
+    · BRACKET_BREAKOUT_LONG        | Normal OR              | WR: 8.6% vs Base: 17.2% (-8.6%) (p=0.0447)
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 4 day(s) | C confirm: 4 (100%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +12
+Day types     : BALANCE: 4, TREND: 1
+
+  2026-07-06  score: +4  A↑ C↑  [BALANCE]
+  2026-07-07  score: -4  A↓ C↓  [BALANCE]
+  2026-07-08  score: +4  A↑ C↑  [TREND]
+  2026-07-09  score: +4  A↑ C↑  [BALANCE]
+  2026-07-10  score: +4  A↑ C↑  [BALANCE]
+
+TRADE QUALITY
+----------------------------------------
+Total fills   : 86
+Avg R:R       : not calculated (stop_loss not set on auto-imported trades)
+Commissions   : $0.00
+
+By setup type:
+  untagged                   fills:  86 | wr: 37% | avg fill pnl: -$4.16
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+Days w/ give-back : 4 / 4
+Total give-back   : -$1964
+Avg give-back     : 182% of peak
+Worst day         : 2026-07-08  351% given back
+
+  2026-07-06  peak: +$396  close: +$326.00  give-back: -$70 (18% of peak)
+  2026-07-07  peak: +$509  close: -$378.00  give-back: -$887 (174% of peak)
+  2026-07-08  peak: +$172  close: -$431.00  give-back: -$603 (351% of peak)
+  2026-07-10  peak: $0  close: -$404.00  give-back: -$404 (0% of peak)
+
+FLAGS (auto-detected)
+----------------------------------------
+DOWN WEEK: Net -$358.00 on 4 trading day(s)
+High avg give-back: 182% of peak returned to market (target <20%)
+Extreme give-back on 2026-07-08: 351% of peak
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-07-12 — Performance Flag Interpretation
+
+The 182% average give-back ratio is the dominant concern here — this isn't a directional problem, it's an execution and exit discipline problem. You're consistently finding the right side of the trade but surrendering profits beyond the original peak, meaning winners are being held through full reversals and turned into losers or breakevens. The 351% give-back on July 8th is a textbook example of a trade that likely hit a clean profit target zone, reversed hard, and was held with the expectation of recovery that never materialized. The net loss of -$358 across four days is almost certainly masking gross winning days that were given back, making this a trade management failure rather than a signal quality failure.
+
+**Actionable adjustment for next week:** Implement a hard trailing stop rule — once a trade reaches 1.5x your initial risk in profit, move the stop to breakeven and trail at 50% of peak open profit with no discretionary override. Remove the option to hold through full reversals entirely until give-back ratios return below 30%.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : D
+
+WEEK SUMMARY:
+Four trading days, -$358 net, but the P&L understates the damage. Avg give-back of 182% of daily peak with -$1,964 total give-back means you built equity and systematically destroyed it every day this week. Best day was +$310.50; worst was -$789.00.
+
+STRONGEST MOMENT:
+July 9 signal alignment was the clearest edge of the week — BIAS_LONG correct (75% all-time, n=32), A_UP correct — and four documented setups resolved to target. That's the data. The problem: zero fills recorded means you either didn't trade it or the pipeline failed. Either outcome makes it impossible to credit any execution decision.
+
+BIGGEST LEAK:
+Zero of 86 fills annotated across all four days. This is not new — flagged in 15 of your last 30 sessions, including four consecutive sessions heading into this week. Without annotations, the -$1,964 give-back pattern cannot be diagnosed, the against-signal entries on July 7 (late long cluster vs. valid A_DOWN) and July 8 (gut_read short vs. 64% A_UP) cannot be assessed for repeatability, and REACTION's 74% all-time win rate cannot be applied to your actual decisions. Every untagged fill is dead data.
+
+PROCESS GRADE: D
+Annotation failure was total (0/86), give-back exceeded peak profit every day, and two sessions show against-signal entries with no documented thesis.
+
+FOCUS FOR NEXT WEEK:
+Annotate every fill before end of session — minimum: setup name, signal alignment (with or against), and one-line thesis. Track your own compliance rate daily.
+
+============================================================
