@@ -164,13 +164,18 @@ async function computeLevelsForDate(date) {
   }
 
   // ── 2. Prior day IB ──────────────────────────────────────────────────────
+  // Window fixed 2026-07-14: was BETWEEN 570 AND 599 (30min, 9:30-10:00), which didn't match
+  // the 60min IB (570-629, 9:30-10:30) live acd.js has used since this codebase's earliest
+  // commit (2026-06-01) and docs/daytype_classifier_v2_candidate.md's documented convention
+  // ("Initial Balance closes" at 10:30 ET) -- a real definitional mismatch, not just a timing
+  // one. See docs/KNOWN_ISSUES.md item 11.
   const priorDay = await priorBusinessDay(date);
   if (priorDay) {
     const pdIbR = await q(`
       SELECT MAX(high)::float AS h, MIN(low)::float AS l
       FROM price_bars_primary
       WHERE symbol = 'NQ' AND ts::date = $1
-        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 629
     `, [priorDay]);
     const pib = pdIbR.rows[0];
     if (pib?.h && pib?.l) {
@@ -221,12 +226,14 @@ async function computeLevelsForDate(date) {
   const or5 = or5R.rows[0];
   if (or5?.hi && or5?.lo) add('5D_OR_MID', (or5.hi + or5.lo) / 2, 'CURRENT');
 
-  // ── 5. IB high/low/mid (9:30–10:00 current day) ─────────────────────────
+  // ── 5. IB high/low/mid (9:30–10:30 current day) ──────────────────────────
+  // Window fixed 2026-07-14: was BETWEEN 570 AND 599 (30min, 9:30-10:00) -- see the matching
+  // note on the prior-day IB block above for the full explanation.
   const ibR = await q(`
     SELECT MAX(high)::float AS h, MIN(low)::float AS l
     FROM price_bars_primary
     WHERE symbol = 'NQ' AND ts::date = $1
-      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 629
   `, [date]);
   const ib = ibR.rows[0];
   if (ib?.h && ib?.l) {
