@@ -75,6 +75,33 @@ export default function ScalpPlaybookCard({ date }) {
             </div>
           )}
 
+          {data.contextSpecific?.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>
+                Context-Specific Patterns {data.dayType ? `(${data.dayType} day)` : ''}
+              </div>
+              {data.contextSpecific.slice(0, 6).map((p, i) => {
+                const label = p.pattern.slice(p.pattern.indexOf(':') + 1).replace(/×/g, ' · ');
+                // stable: true/false/null (null = no stability check run for this pattern yet,
+                // e.g. older level-fade discoveries predating the 2026-07-14 rigor diagnostics)
+                const stabilityDot = p.stable === true ? { c: '#4ade80', t: 'Passed 3-way chronological stability check' }
+                  : p.stable === false ? { c: '#f87171', t: 'Failed stability check — may be a recent regime shift or a fluke, verify before trusting' }
+                  : null;
+                return (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontFamily: 'monospace', fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {stabilityDot && <span title={stabilityDot.t} style={{ width: 6, height: 6, borderRadius: '50%', background: stabilityDot.c, display: 'inline-block', flexShrink: 0 }} />}
+                      {label}
+                    </span>
+                    <span style={{ fontSize: 11 }}>
+                      <span style={{ color: p.wr >= 75 ? '#4ade80' : '#fbbf24', fontWeight: 700 }}>{p.wr}%</span> · <span style={{ color: confidenceTier(p.n).color }} title={confidenceTier(p.n).title}>{confidenceTier(p.n).label}</span> · ${p.pnl}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {data.pipelineSetups?.length > 0 && (
             <div style={{ marginBottom: 8 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: '#f472b6', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 3 }}>

@@ -244,7 +244,13 @@ async function mineFamily(familyName, tradeDirFn, evtsRaw) {
       const wr = r.wins / total;
       if (wr >= MIN_WR && r.pnl > 0) {
         const rigor = rigorDiagnostics(r.trades);
-        discoveries.push({ patternKey: `${familyName}:${dim.name}:${key}`, dimension: dim.name, wr, n: total, netPnl: r.pnl, rigor });
+        // Format matches the established level-fade convention exactly: {dimension}:{name}×{value}
+        // (e.g. level_x_dow:OR_LOW×Thu) — NOT {family}:{dimension}:{value}. morningBrief.js's
+        // scalp-playbook endpoint finds today-relevant patterns via substring checks like
+        // pattern_key.includes('×' + dowName), which only work with this exact shape. Found
+        // 2026-07-14: an earlier format (family:dimension:value) meant these discoveries would
+        // never surface on the real daily-facing ScalpPlaybookCard.jsx despite being ACTIVE.
+        discoveries.push({ patternKey: `${dim.name}:${familyName}×${key}`, dimension: dim.name, wr, n: total, netPnl: r.pnl, rigor });
       }
     }
   }
@@ -278,9 +284,11 @@ async function mineFamily(familyName, tradeDirFn, evtsRaw) {
   }
   console.log(`  Rigor: ${stableCount} STABLE, ${unstableCount} UNSTABLE (informational only — does not exclude a discovery from ACTIVE status)`);
 
-  // Mark this family's patterns that fell below threshold as degraded (same lifecycle as mineLevelFades)
+  // Mark this family's patterns that fell below threshold as degraded (same lifecycle as
+  // mineLevelFades). familyName is now in the middle of pattern_key (dimension:family×value),
+  // not a prefix, so match on context->>'family' instead of a pattern_key LIKE prefix.
   const activeKeys = new Set(discoveries.map(d => d.patternKey));
-  const allActive = await query(`SELECT id, pattern_key FROM pattern_discoveries WHERE status='ACTIVE' AND pattern_key LIKE $1`, [`${familyName}:%`]);
+  const allActive = await query(`SELECT id, pattern_key FROM pattern_discoveries WHERE status='ACTIVE' AND context->>'family' = $1`, [familyName]);
   for (const row of allActive.rows) {
     if (!activeKeys.has(row.pattern_key)) {
       await query(`UPDATE pattern_discoveries SET status='DEGRADED', last_updated=$2 WHERE id=$1`, [row.id, todayStr]);

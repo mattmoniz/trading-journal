@@ -196,10 +196,16 @@ router.get('/scalp-playbook/:date', async (req, res) => {
     const tomorrowName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][tomorrowDow];
 
     // Get active pattern discoveries relevant to today's day-of-week
+    // minutebar_* dimensions added 2026-07-14 (scripts/mine_minutebar_conditions.mjs) — same
+    // {dimension}:{name}×{value} pattern_key format as the level_x_* ones, so the DOW/day-type
+    // substring matching below works unmodified once the dimension name is recognized here.
     const todayPatterns = await query(
-      `SELECT pattern_key, dimension, win_rate, sample_size, net_pnl_dollars
+      `SELECT pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, context
        FROM pattern_discoveries WHERE status='ACTIVE'
-       AND (pattern_key LIKE $1 OR pattern_key LIKE $2 OR dimension IN ('level_x_hour','session_x_hour','level_x_daytype','level_x_session','level_x_overnight','level_x_range','level_x_touch'))
+       AND (pattern_key LIKE $1 OR pattern_key LIKE $2 OR dimension IN (
+         'level_x_hour','session_x_hour','level_x_daytype','level_x_session','level_x_overnight','level_x_range','level_x_touch',
+         'minutebar_dow','minutebar_hour','minutebar_session','minutebar_daytype','minutebar_range','minutebar_overnight','minutebar_openval','minutebar_daytype_x_hour'
+       ))
        ORDER BY net_pnl_dollars DESC`,
       [`%×${dowName}%`, `%×${tomorrowName}%`]);
 
@@ -229,7 +235,7 @@ router.get('/scalp-playbook/:date', async (req, res) => {
 
     // Best hours for today — N≥20 hard floor, sort by EV
     const hourPatterns = generalPatterns
-      .filter(p => p.dimension === 'level_x_hour' && p.sample_size >= 20)
+      .filter(p => (p.dimension === 'level_x_hour' || p.dimension === 'minutebar_hour') && p.sample_size >= 20)
       .sort((a, b) => b.net_pnl_dollars - a.net_pnl_dollars)
       .slice(0, 8);
 
@@ -425,21 +431,25 @@ router.get('/scalp-playbook/:date', async (req, res) => {
        FROM pattern_discoveries WHERE status='DEGRADED' AND last_updated >= CURRENT_DATE - 3
        LIMIT 5`);
 
+    // rigor.three_way_stable/top5_day_pct only exist on discoveries from mine_minutebar_conditions.mjs
+    // (added 2026-07-14) — undefined/null for level-fade patterns, which don't have this check yet.
+    // Surfacing it here so a stable and an unstable pattern don't display with equal weight.
+    const withStability = p => {
+      const rigor = p.context?.rigor;
+      const clustered = rigor?.top5_day_pct != null && rigor.top5_day_pct > 50;
+      const stable = rigor ? (rigor.three_way_stable === true && !clustered) : null; // null = not checked (e.g. level-fade patterns)
+      return { pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars, stable };
+    };
+
     res.json({
       date,
       dayOfWeek: dowName,
       priorSession: prior ? { type: prior.session_type, range: prior.range_pt, closePct: prior.close_pct_of_range } : null,
       overnight: overnight || null,
       dayType,
-      topDowCombos: topDowCombos.map(p => ({
-        pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars
-      })),
-      bestHours: hourPatterns.map(p => ({
-        pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars
-      })),
-      contextSpecific: contextPatterns.map(p => ({
-        pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars
-      })),
+      topDowCombos: topDowCombos.map(withStability),
+      bestHours: hourPatterns.map(withStability),
+      contextSpecific: contextPatterns.map(withStability),
       newDiscoveries: newDiscoveries.rows.map(p => ({
         pattern: p.pattern_key, wr: Math.round(p.win_rate * 100), n: p.sample_size, pnl: p.net_pnl_dollars
       })),
