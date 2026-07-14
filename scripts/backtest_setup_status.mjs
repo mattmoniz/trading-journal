@@ -120,6 +120,27 @@ async function run() {
     return { distinctDates: perDay.size, top5DayPct, stable, thirds };
   }
 
+  // Automated version of the classification Gemini did by hand 2026-07-14 for the 26 unstable
+  // setups (scratch/unstable_active_setups_20260714.json / docs/OPEN_THREADS.md) — the logic
+  // itself was simple rule-based comparison, not real judgment, so it's encoded here to run
+  // every week without a manual dispatch. "Unstable" (3-way sign flip) does NOT mean "losing" —
+  // it can mean genuinely improving. This classifies which is which. Informational only, same
+  // as the rest of `rigor` — does not feed SUPPRESS/PROMOTE.
+  function classifyTrend(overallEv, thirds, rec90) {
+    if (!thirds) return null; // not enough trades for a 3-way split at all
+    const sameSignAsOverall = [thirds.ev1, thirds.ev2, thirds.ev3].every(v => Math.sign(v) === Math.sign(overallEv));
+    if (sameSignAsOverall) return 'STABLE';
+    const rec90N = rec90 ? +rec90.n : 0;
+    const rec90Ev = rec90 ? +rec90.ev : null;
+    if (rec90N < 5) return 'THIN'; // matches Gemini's own N<=5 "too thin to classify" cutoff
+    const trendingDown = thirds.ev1 > 0 && thirds.ev3 < 0;
+    const trendingUp = thirds.ev1 < 0 && thirds.ev3 > 0;
+    if (trendingDown && rec90Ev < 0) return 'DEGRADING';
+    if (trendingUp && rec90Ev > 0) return 'IMPROVING';
+    if (Math.sign(overallEv) === Math.sign(rec90Ev)) return 'NOISY_BUT_STABLE';
+    return 'AMBIGUOUS';
+  }
+
   const results = [];
   let suppressed = 0, promoted = 0, unchanged = 0;
 
@@ -170,17 +191,20 @@ async function run() {
   // Write to performance_audit — always write every evaluated type so the session-start
   // coverage check can verify all active setup_types have been assessed this week.
   let written = 0, flaggedClustered = 0, flaggedUnstable = 0;
+  const trendCounts = { DEGRADING: 0, IMPROVING: 0, NOISY_BUT_STABLE: 0, THIN: 0, AMBIGUOUS: 0 };
   for (const r of results) {
     const rigor = rigorDiagnostics(r.type);
     if (rigor.top5DayPct != null && rigor.top5DayPct > 50) flaggedClustered++;
     if (rigor.stable === false) flaggedUnstable++;
+    const trend = rigor.stable === false ? classifyTrend(r.ev, rigor.thirds, r.rec90) : null;
+    if (trend && trend in trendCounts) trendCounts[trend]++;
     const notes = JSON.stringify({
       all_time_n:  r.n,
       all_time_wr: +(r.wr * 100).toFixed(1),
       all_time_ev: +r.ev.toFixed(2),
       total_pnl:   +r.totalPnl.toFixed(2),
       recent_90d:  r.rec90 ? { n: +r.rec90.n, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
-      rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds },
+      rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
     });
     await query(`
       INSERT INTO performance_audit
@@ -227,6 +251,7 @@ async function run() {
 
   console.log(`\n[backtest_setup_status] ${written} rows written → performance_audit SETUP_STATUS`);
   console.log(`[rigor diagnostics] ${flaggedClustered} setup_types have >50% of N from their top-5 trade dates (day-clustering risk) | ${flaggedUnstable} setup_types fail the 3-way chronological sign-stability check (informational only, not auto-suppressed)`);
+  console.log(`[trend classification] of the ${flaggedUnstable} unstable: ${trendCounts.DEGRADING} DEGRADING | ${trendCounts.IMPROVING} IMPROVING | ${trendCounts.NOISY_BUT_STABLE} NOISY_BUT_STABLE | ${trendCounts.THIN} THIN | ${trendCounts.AMBIGUOUS} AMBIGUOUS`);
 
   // ── Per-DOW suppression (SETUP_STATUS_DOW) ────────────────────────────────
   // For each (DOW, setup_type) with N≥20 and EV<-$5 that isn't ALREADY globally suppressed,
