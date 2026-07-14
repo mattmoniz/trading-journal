@@ -205,40 +205,78 @@ async function mineFamily(familyName, tradeDirFn, evtsRaw) {
   console.log(`\n${familyName}: N=${trades.length}, stop=${stop.toFixed(1)}pt, target=${target.toFixed(1)}pt (derived from this run's own MAE/MFE)`);
 
   const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  // Same rigor diagnostics added to backtest_setup_status.mjs earlier today (day-clustering +
+  // 3-way chronological EV-sign stability) — applied here too so a discovery's own console
+  // print already tells you whether it's likely real before anyone has to ask. `trades` is in
+  // chronological order (built from `evts`, which `runTest` emits day-by-day in order), so
+  // slicing a group's own matching trades preserves that order for the thirds split.
+  function rigorDiagnostics(groupTrades) {
+    const perDay = new Map();
+    for (const t of groupTrades) perDay.set(t.day, (perDay.get(t.day) || 0) + 1);
+    const counts = [...perDay.values()].sort((a, b) => b - a);
+    const top5DayPct = +(100 * counts.slice(0, 5).reduce((a, b) => a + b, 0) / groupTrades.length).toFixed(1);
+    const third = Math.floor(groupTrades.length / 3);
+    let stable = null, thirds = null;
+    if (third >= 5) {
+      const g1 = groupTrades.slice(0, third), g2 = groupTrades.slice(third, 2 * third), g3 = groupTrades.slice(2 * third);
+      const evOf = g => g.reduce((s, t) => s + t.pnl, 0) / g.length;
+      const ev1 = evOf(g1), ev2 = evOf(g2), ev3 = evOf(g3);
+      const overallSign = Math.sign(groupTrades.reduce((s, t) => s + t.pnl, 0));
+      stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
+      thirds = { ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
+    }
+    return { distinctDates: perDay.size, top5DayPct, stable, thirds };
+  }
+
   const discoveries = [];
   for (const dim of dimensions) {
     const groups = {};
     for (const t of trades) {
       const key = dim.fn(t);
-      if (!groups[key]) groups[key] = { wins: 0, losses: 0, pnl: 0 };
+      if (!groups[key]) groups[key] = { wins: 0, losses: 0, pnl: 0, trades: [] };
       groups[key][t.win ? 'wins' : 'losses']++;
       groups[key].pnl += t.pnl;
+      groups[key].trades.push(t);
     }
     for (const [key, r] of Object.entries(groups)) {
       const total = r.wins + r.losses;
       if (total < MIN_N) continue;
       const wr = r.wins / total;
       if (wr >= MIN_WR && r.pnl > 0) {
-        discoveries.push({ patternKey: `${familyName}:${dim.name}:${key}`, dimension: dim.name, wr, n: total, netPnl: r.pnl });
+        const rigor = rigorDiagnostics(r.trades);
+        discoveries.push({ patternKey: `${familyName}:${dim.name}:${key}`, dimension: dim.name, wr, n: total, netPnl: r.pnl, rigor });
       }
     }
   }
 
+  let stableCount = 0, unstableCount = 0;
   for (const disc of discoveries) {
     const existing = await query(`SELECT id, sample_size FROM pattern_discoveries WHERE pattern_key=$1`, [disc.patternKey]);
-    const context = JSON.stringify({ family: familyName, stop: +stop.toFixed(1), target: +target.toFixed(1), source: 'mine_minutebar_conditions.mjs' });
+    const context = JSON.stringify({
+      family: familyName, stop: +stop.toFixed(1), target: +target.toFixed(1), source: 'mine_minutebar_conditions.mjs',
+      rigor: { distinct_dates: disc.rigor.distinctDates, top5_day_pct: disc.rigor.top5DayPct, three_way_stable: disc.rigor.stable, thirds: disc.rigor.thirds },
+    });
+    // Sign-stability alone isn't enough — a pattern can pass the 3-way check while actually
+    // being a handful of sessions counted many times (found 2026-07-14: minutebar_range:EXTREME
+    // passed sign-stability at N=139 but came from only 9 distinct days, 70.5% from the top 5 —
+    // exactly the CAM_R4/CAM_S3-style trap). Both checks must pass to call something clean.
+    const clustered = disc.rigor.top5DayPct != null && disc.rigor.top5DayPct > 50;
+    if (disc.rigor.stable === true && !clustered) stableCount++; else if (disc.rigor.stable === false || clustered) unstableCount++;
+    const stabilityTag = clustered ? (disc.rigor.stable ? 'STABLE-BUT-CLUSTERED' : 'UNSTABLE+CLUSTERED')
+      : disc.rigor.stable === true ? 'STABLE' : disc.rigor.stable === false ? 'UNSTABLE' : 'N/A(thin)';
     if (existing.rows.length === 0) {
       await query(
         `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, status, context)
          VALUES ($1,$2,$3,$4,$5,$6,$6,'ACTIVE',$7)`,
         [disc.patternKey, disc.dimension, disc.wr, disc.n, disc.netPnl, todayStr, context]);
-      console.log(`  NEW  ${disc.patternKey.padEnd(45)} N=${disc.n} WR=${(100*disc.wr).toFixed(1)}% netPnl=$${disc.netPnl.toFixed(0)}`);
+      console.log(`  NEW  ${disc.patternKey.padEnd(45)} N=${disc.n} WR=${(100*disc.wr).toFixed(1)}% netPnl=$${disc.netPnl.toFixed(0)} [${stabilityTag}]`);
     } else {
       await query(
         `UPDATE pattern_discoveries SET win_rate=$2, sample_size=$3, net_pnl_dollars=$4, last_updated=$5, status='ACTIVE', context=$6 WHERE id=$1`,
         [existing.rows[0].id, disc.wr, disc.n, disc.netPnl, todayStr, context]);
     }
   }
+  console.log(`  Rigor: ${stableCount} STABLE, ${unstableCount} UNSTABLE (informational only — does not exclude a discovery from ACTIVE status)`);
 
   // Mark this family's patterns that fell below threshold as degraded (same lifecycle as mineLevelFades)
   const activeKeys = new Set(discoveries.map(d => d.patternKey));
