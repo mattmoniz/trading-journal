@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict x8qb7me0l5ByYRG5OubrsmHCHrpgvyB0Z3qHqrGJmyYJbywtkyqocpvWSWWrmcB
 
 -- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
 -- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
@@ -329,7 +328,14 @@ CREATE TABLE public.active_setups (
     updated_at timestamp without time zone DEFAULT now(),
     invalidation_timing character varying(20),
     resolution_method character varying(20),
-    overnight_bias character varying(20)
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
 );
 
 
@@ -351,6 +357,43 @@ CREATE SEQUENCE public.active_setups_id_seq
 --
 
 ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
+
+
+--
+-- Name: ai_cost_log; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ai_cost_log (
+    id integer NOT NULL,
+    logged_at timestamp with time zone DEFAULT now() NOT NULL,
+    call_type character varying(40) NOT NULL,
+    model character varying(60),
+    input_tokens integer,
+    output_tokens integer,
+    cost_usd numeric(8,5) NOT NULL,
+    session_date date,
+    reference_id integer
+);
+
+
+--
+-- Name: ai_cost_log_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.ai_cost_log_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: ai_cost_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.ai_cost_log_id_seq OWNED BY public.ai_cost_log.id;
 
 
 --
@@ -581,6 +624,48 @@ CREATE SEQUENCE public.custom_field_definitions_id_seq
 --
 
 ALTER SEQUENCE public.custom_field_definitions_id_seq OWNED BY public.custom_field_definitions.id;
+
+
+--
+-- Name: daily_ai_reviews; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_ai_reviews (
+    id integer NOT NULL,
+    review_date date NOT NULL,
+    generated_at timestamp with time zone DEFAULT now() NOT NULL,
+    setups_reviewed jsonb,
+    ai_response text NOT NULL,
+    flags jsonb,
+    stop_target_analysis jsonb,
+    data_requests jsonb,
+    augmented_response text,
+    input_tokens integer,
+    output_tokens integer,
+    cost_usd numeric(8,5),
+    model character varying(60),
+    total_cost_usd numeric(8,5)
+);
+
+
+--
+-- Name: daily_ai_reviews_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.daily_ai_reviews_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: daily_ai_reviews_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.daily_ai_reviews_id_seq OWNED BY public.daily_ai_reviews.id;
 
 
 --
@@ -1022,6 +1107,43 @@ ALTER SEQUENCE public.import_log_id_seq OWNED BY public.import_log.id;
 
 
 --
+-- Name: learning_digest_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.learning_digest_events (
+    id integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    event_type character varying(30) NOT NULL,
+    signal_name character varying(100) NOT NULL,
+    old_value text,
+    new_value text,
+    description text NOT NULL,
+    magnitude numeric,
+    shown boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: learning_digest_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.learning_digest_events_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: learning_digest_events_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.learning_digest_events_id_seq OWNED BY public.learning_digest_events.id;
+
+
+--
 -- Name: level_prices; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1072,6 +1194,55 @@ CREATE SEQUENCE public.level_regime_performance_id_seq
 --
 
 ALTER SEQUENCE public.level_regime_performance_id_seq OWNED BY public.level_regime_performance.id;
+
+
+--
+-- Name: live_reads; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.live_reads (
+    id integer NOT NULL,
+    trade_date date NOT NULL,
+    logged_at timestamp with time zone DEFAULT now() NOT NULL,
+    direction text NOT NULL,
+    entry_price numeric(10,2) NOT NULL,
+    note text,
+    exit_price numeric(10,2),
+    actual_pnl numeric(10,2),
+    nearest_level_name text,
+    nearest_level_value numeric(10,2),
+    nearest_level_dist integer,
+    bar_body_pct integer,
+    bar_dir text,
+    et_min integer,
+    day_type text,
+    cum_delta_at_entry integer,
+    attributed_setups text[],
+    outcome text,
+    pnl_pts numeric(8,2),
+    CONSTRAINT live_reads_direction_check CHECK ((direction = ANY (ARRAY['LONG'::text, 'SHORT'::text]))),
+    CONSTRAINT live_reads_outcome_check CHECK ((outcome = ANY (ARRAY['WIN'::text, 'LOSS'::text, 'SCRATCH'::text, 'OPEN'::text])))
+);
+
+
+--
+-- Name: live_reads_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.live_reads_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: live_reads_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.live_reads_id_seq OWNED BY public.live_reads.id;
 
 
 --
@@ -1440,6 +1611,46 @@ CREATE SEQUENCE public.phase_change_backtest_results_id_seq
 --
 
 ALTER SEQUENCE public.phase_change_backtest_results_id_seq OWNED BY public.phase_change_backtest_results.id;
+
+
+--
+-- Name: playbook_conversations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.playbook_conversations (
+    id integer NOT NULL,
+    session_date date NOT NULL,
+    triggered_at timestamp with time zone DEFAULT now() NOT NULL,
+    intent character varying(10) NOT NULL,
+    market_snapshot jsonb NOT NULL,
+    user_prompt text NOT NULL,
+    ai_response text NOT NULL,
+    input_tokens integer,
+    output_tokens integer,
+    cost_usd numeric(8,5),
+    model character varying(60),
+    CONSTRAINT playbook_conversations_intent_check CHECK (((intent)::text = ANY ((ARRAY['LONG'::character varying, 'SHORT'::character varying, 'UNSURE'::character varying])::text[])))
+);
+
+
+--
+-- Name: playbook_conversations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.playbook_conversations_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: playbook_conversations_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.playbook_conversations_id_seq OWNED BY public.playbook_conversations.id;
 
 
 --
@@ -2829,20 +3040,21 @@ CREATE TABLE public.price_bars_contract_calendar (
 --
 
 CREATE VIEW public.price_bars_primary AS
- SELECT pb.id,
+ SELECT (array_agg(pb.id ORDER BY pb.ts))[1] AS id,
     pb.symbol,
     pb.contract,
-    pb.ts,
-    pb.open,
-    pb.high,
-    pb.low,
-    pb.close,
-    pb.volume,
-    pb.num_trades,
-    pb.bid_volume,
-    pb.ask_volume
+    date_trunc('minute'::text, pb.ts) AS ts,
+    ((array_agg(pb.open ORDER BY pb.ts))[1])::numeric(12,4) AS open,
+    (max(pb.high))::numeric(12,4) AS high,
+    (min(pb.low))::numeric(12,4) AS low,
+    ((array_agg(pb.close ORDER BY pb.ts DESC))[1])::numeric(12,4) AS close,
+    (sum(pb.volume))::integer AS volume,
+    (sum(pb.num_trades))::integer AS num_trades,
+    (sum(pb.bid_volume))::integer AS bid_volume,
+    (sum(pb.ask_volume))::integer AS ask_volume
    FROM (public.price_bars pb
-     JOIN public.price_bars_contract_calendar cc ON (((cc.symbol = pb.symbol) AND (cc.trade_date = (pb.ts)::date) AND (cc.contract = pb.contract))));
+     JOIN public.price_bars_contract_calendar cc ON (((cc.symbol = pb.symbol) AND (cc.trade_date = (pb.ts)::date) AND (cc.contract = pb.contract))))
+  GROUP BY pb.symbol, pb.contract, (date_trunc('minute'::text, pb.ts));
 
 
 --
@@ -4150,6 +4362,13 @@ ALTER TABLE ONLY public.active_setups ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
+-- Name: ai_cost_log id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ai_cost_log ALTER COLUMN id SET DEFAULT nextval('public.ai_cost_log_id_seq'::regclass);
+
+
+--
 -- Name: auction_history id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4175,6 +4394,13 @@ ALTER TABLE ONLY public.condition_memory ALTER COLUMN id SET DEFAULT nextval('pu
 --
 
 ALTER TABLE ONLY public.custom_field_definitions ALTER COLUMN id SET DEFAULT nextval('public.custom_field_definitions_id_seq'::regclass);
+
+
+--
+-- Name: daily_ai_reviews id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_ai_reviews ALTER COLUMN id SET DEFAULT nextval('public.daily_ai_reviews_id_seq'::regclass);
 
 
 --
@@ -4234,10 +4460,24 @@ ALTER TABLE ONLY public.import_log ALTER COLUMN id SET DEFAULT nextval('public.i
 
 
 --
+-- Name: learning_digest_events id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.learning_digest_events ALTER COLUMN id SET DEFAULT nextval('public.learning_digest_events_id_seq'::regclass);
+
+
+--
 -- Name: level_regime_performance id; Type: DEFAULT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.level_regime_performance ALTER COLUMN id SET DEFAULT nextval('public.level_regime_performance_id_seq'::regclass);
+
+
+--
+-- Name: live_reads id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.live_reads ALTER COLUMN id SET DEFAULT nextval('public.live_reads_id_seq'::regclass);
 
 
 --
@@ -4294,6 +4534,13 @@ ALTER TABLE ONLY public.phase_change_alerts ALTER COLUMN id SET DEFAULT nextval(
 --
 
 ALTER TABLE ONLY public.phase_change_backtest_results ALTER COLUMN id SET DEFAULT nextval('public.phase_change_backtest_results_id_seq'::regclass);
+
+
+--
+-- Name: playbook_conversations id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.playbook_conversations ALTER COLUMN id SET DEFAULT nextval('public.playbook_conversations_id_seq'::regclass);
 
 
 --
@@ -4561,6 +4808,14 @@ ALTER TABLE ONLY public.active_setups
 
 
 --
+-- Name: ai_cost_log ai_cost_log_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ai_cost_log
+    ADD CONSTRAINT ai_cost_log_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: auction_history auction_history_date_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4630,6 +4885,22 @@ ALTER TABLE ONLY public.custom_field_definitions
 
 ALTER TABLE ONLY public.custom_field_definitions
     ADD CONSTRAINT custom_field_definitions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: daily_ai_reviews daily_ai_reviews_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_ai_reviews
+    ADD CONSTRAINT daily_ai_reviews_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: daily_ai_reviews daily_ai_reviews_review_date_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.daily_ai_reviews
+    ADD CONSTRAINT daily_ai_reviews_review_date_key UNIQUE (review_date);
 
 
 --
@@ -4761,6 +5032,14 @@ ALTER TABLE ONLY public.import_log
 
 
 --
+-- Name: learning_digest_events learning_digest_events_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.learning_digest_events
+    ADD CONSTRAINT learning_digest_events_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: level_prices level_prices_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4782,6 +5061,14 @@ ALTER TABLE ONLY public.level_regime_performance
 
 ALTER TABLE ONLY public.level_regime_performance
     ADD CONSTRAINT level_regime_performance_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: live_reads live_reads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.live_reads
+    ADD CONSTRAINT live_reads_pkey PRIMARY KEY (id);
 
 
 --
@@ -4886,6 +5173,14 @@ ALTER TABLE ONLY public.phase_change_alerts
 
 ALTER TABLE ONLY public.phase_change_backtest_results
     ADD CONSTRAINT phase_change_backtest_results_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: playbook_conversations playbook_conversations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.playbook_conversations
+    ADD CONSTRAINT playbook_conversations_pkey PRIMARY KEY (id);
 
 
 --
@@ -5731,6 +6026,13 @@ CREATE INDEX idx_as_fired_at ON public.active_setups USING btree (fired_at);
 
 
 --
+-- Name: idx_as_mae_null; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_as_mae_null ON public.active_setups USING btree (trade_date) WHERE ((mae_points IS NULL) AND (entry_zone_low IS NOT NULL) AND (stop_level IS NOT NULL) AND (t1_level IS NOT NULL));
+
+
+--
 -- Name: idx_as_status; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5808,10 +6110,38 @@ CREATE INDEX idx_dpl_trade_date ON public.daily_performance_log USING btree (tra
 
 
 --
+-- Name: idx_learning_digest_created; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_learning_digest_created ON public.learning_digest_events USING btree (created_at DESC);
+
+
+--
+-- Name: idx_learning_digest_shown; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_learning_digest_shown ON public.learning_digest_events USING btree (shown) WHERE (NOT shown);
+
+
+--
+-- Name: idx_live_reads_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_live_reads_date ON public.live_reads USING btree (trade_date);
+
+
+--
 -- Name: idx_pattern_disc_status; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_pattern_disc_status ON public.pattern_discoveries USING btree (status);
+
+
+--
+-- Name: idx_pc_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pc_date ON public.playbook_conversations USING btree (session_date);
 
 
 --
@@ -9960,5 +10290,4 @@ ALTER TABLE ONLY public.trades
 -- PostgreSQL database dump complete
 --
 
-\unrestrict x8qb7me0l5ByYRG5OubrsmHCHrpgvyB0Z3qHqrGJmyYJbywtkyqocpvWSWWrmcB
 

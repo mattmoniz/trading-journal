@@ -32,6 +32,7 @@ import phaseChangeRouter from './routes/phaseChange.js';
 import calendarRouter from './routes/calendar.js';
 import ruleOverridesRouter from './routes/ruleOverrides.js';
 import { detectPhaseChange } from './services/phaseChangeDetector.js';
+import { detectMomentum60Trend } from './services/minuteBarSignalDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
@@ -1221,6 +1222,9 @@ httpServer.listen(PORT, () => {
       // DLL + profit-lock check on every bar cycle
       checkAndEmitDLL(io).catch(() => {});
       checkAndEmitProfitLock(io).catch(() => {});
+      // MOMENTUM_60m_60m_TREND — see server/services/minuteBarSignalDetector.js header for why
+      // this needed its own poller rather than the level-fade candidates array in acd.js
+      detectMomentum60Trend(io).catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 

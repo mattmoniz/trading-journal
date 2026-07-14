@@ -84,6 +84,42 @@ async function run() {
   const currentStatus = {};
   for (const r of currentStatusQ.rows) currentStatus[r.signal_name] = r.recommendation;
 
+  // Rigor diagnostics added 2026-07-14 (same checks applied to the minute-bar scanner):
+  // day-clustering (catches N inflated by a handful of sessions — this is exactly the bug
+  // found in the CAM_R4/CAM_S3 investigation) and 3-way chronological EV-sign stability.
+  // Informational only — does NOT feed into SUPPRESS/PROMOTE logic below, so this doesn't
+  // silently change which setups are live. Surfaces as new fields in `notes` for review.
+  const perTradeQ = await query(`
+    SELECT setup_type, trade_date::text AS trade_date, actual_pnl::float AS pnl, fired_at
+    FROM active_setups
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+    ORDER BY setup_type, fired_at ASC
+  `);
+  const tradesByType = new Map();
+  for (const r of perTradeQ.rows) {
+    if (!tradesByType.has(r.setup_type)) tradesByType.set(r.setup_type, []);
+    tradesByType.get(r.setup_type).push(r);
+  }
+  function rigorDiagnostics(type) {
+    const trades = tradesByType.get(type) || [];
+    if (!trades.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null };
+    const perDay = new Map();
+    for (const t of trades) perDay.set(t.trade_date, (perDay.get(t.trade_date) || 0) + 1);
+    const counts = [...perDay.values()].sort((a, b) => b - a);
+    const top5DayPct = +(100 * counts.slice(0, 5).reduce((a, b) => a + b, 0) / trades.length).toFixed(1);
+    const third = Math.floor(trades.length / 3);
+    let stable = null, thirds = null;
+    if (third >= 3) { // need at least a handful per third for the check to mean anything
+      const g1 = trades.slice(0, third), g2 = trades.slice(third, 2 * third), g3 = trades.slice(2 * third);
+      const evOf = g => g.reduce((s, t) => s + t.pnl, 0) / g.length;
+      const ev1 = evOf(g1), ev2 = evOf(g2), ev3 = evOf(g3);
+      const overallSign = Math.sign(trades.reduce((s, t) => s + t.pnl, 0));
+      stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
+      thirds = { n1: g1.length, n2: g2.length, n3: g3.length, ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
+    }
+    return { distinctDates: perDay.size, top5DayPct, stable, thirds };
+  }
+
   const results = [];
   let suppressed = 0, promoted = 0, unchanged = 0;
 
@@ -133,14 +169,18 @@ async function run() {
 
   // Write to performance_audit — always write every evaluated type so the session-start
   // coverage check can verify all active setup_types have been assessed this week.
-  let written = 0;
+  let written = 0, flaggedClustered = 0, flaggedUnstable = 0;
   for (const r of results) {
+    const rigor = rigorDiagnostics(r.type);
+    if (rigor.top5DayPct != null && rigor.top5DayPct > 50) flaggedClustered++;
+    if (rigor.stable === false) flaggedUnstable++;
     const notes = JSON.stringify({
       all_time_n:  r.n,
       all_time_wr: +(r.wr * 100).toFixed(1),
       all_time_ev: +r.ev.toFixed(2),
       total_pnl:   +r.totalPnl.toFixed(2),
       recent_90d:  r.rec90 ? { n: +r.rec90.n, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
+      rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds },
     });
     await query(`
       INSERT INTO performance_audit
@@ -186,6 +226,7 @@ async function run() {
   }
 
   console.log(`\n[backtest_setup_status] ${written} rows written → performance_audit SETUP_STATUS`);
+  console.log(`[rigor diagnostics] ${flaggedClustered} setup_types have >50% of N from their top-5 trade dates (day-clustering risk) | ${flaggedUnstable} setup_types fail the 3-way chronological sign-stability check (informational only, not auto-suppressed)`);
 
   // ── Per-DOW suppression (SETUP_STATUS_DOW) ────────────────────────────────
   // For each (DOW, setup_type) with N≥20 and EV<-$5 that isn't ALREADY globally suppressed,

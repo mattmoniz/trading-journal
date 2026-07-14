@@ -12,6 +12,7 @@ echo "=== Weekly backtest run: $(date) ==="
 
 # --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
 /usr/bin/node scripts/backtest_wpp_short_gap.mjs
+/usr/bin/node scripts/backtest_momentum60_daytype.mjs
 
 # --- Context + anticipation pipelines ---
 /usr/bin/node scripts/backtest_permission_slips.mjs
@@ -31,5 +32,8 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/backtest_gap_fill.mjs
 /usr/bin/node scripts/backtest_v_pattern.mjs
 /usr/bin/node scripts/edge_miner.mjs
+
+# --- Independent research scanners (not level-touch based, tracked forward regardless of current profitability) ---
+/usr/bin/node scripts/backtest_minute_bar_scan.mjs
 
 echo "=== Weekly backtest run complete: $(date) ==="

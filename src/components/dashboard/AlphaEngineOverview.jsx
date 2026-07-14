@@ -477,6 +477,8 @@ export default function AlphaEngineOverview() {
     { name: 'Globally suppressed setups (pipeline-driven)', reason: 'Auto-suppression engine writes SETUP_STATUS rows weekly — any setup with N≥20 and EV<-$5 fires as SHADOW. Setups flip back to ACTIVE when 90d data recovers. mondaySkip list removed 2026-07-09 — DOW edge handled by SETUP_STATUS_DOW.' },
     { name: 'WPP_FADE_SHORT (general)', reason: 'EV=−$10.8, N=67. Suppressed. ↓ See conditional variant below.' },
     { name: 'WPP_FADE_SHORT_GAP_UP [ACTIVE — conditional variant]', reason: '59.3% WR, EV=+$8.7, N=27 (backtest 2026-07-09). Fires when session 9:30 open is BELOW WPP (gap brought price up into resistance). Separate SETUP_STATUS + OPTIMAL_STOP rows in performance_audit. Maintained by scripts/backtest_wpp_short_gap.mjs on weekly cron. acd.js resolveSetupType() converts WPP_FADE_SHORT → this type when gap-up condition met.' },
+    { name: 'MOMENTUM_60m_60m (unconditioned) / VOLZ_30m_60m / MOMENTUM_60m_60m_BALANCE_FADE', reason: 'From the 2026-07-14 minute-bar scanner (raw momentum/volume-z extreme over trailing 60min, not a level touch — see scratch/claude_minute_bar_scanner.mjs). All 3 looked real on the original time-exit backtest, but turn negative EV (-$15.75, -$18.49, -$3.20/trade) once simulated with a real MAE/MFE-derived stop/target instead of a fixed time exit. Not wired live.' },
+    { name: 'MOMENTUM_60m_60m_TREND [SHADOW — new signal, N<20 live, under evaluation]', reason: '65.3% WR, EV=+$10.72/trade, N=714 (backtest, real stop/target simulated). The one survivor of the 4 candidates above — only fires on TREND days (acd_daily_log.day_type, gated to >=10:30 ET since day-type isn\'t final before IB close). Not a level touch — own poller in server/services/minuteBarSignalDetector.js on the same 60s cycle as the level fade engine. Stop/target read live from performance_audit OPTIMAL_STOP (never hardcoded). SHADOW until N>=20 live resolved trades per the New Setup Type checklist — fires silently, no live alert, until then. Maintained by scripts/backtest_momentum60_daytype.mjs.' },
   ];
 
   const tools = [
@@ -489,6 +491,11 @@ export default function AlphaEngineOverview() {
       name: 'Optimal Stop/Target System',
       color: '#3b82f6',
       desc: 'p75_MAE → stop, p50_MFE → target, p75_MFE → T2 runner. Computed weekly from 3,801+ resolved trades via scripts/update_optimal_stops.mjs. All directional (LONG/SHORT separately). No hardcoded constants remain in the live level fade path.',
+    },
+    {
+      name: 'Minute-Bar Signal Detector',
+      color: '#f472b6',
+      desc: 'Rolling-bar-window statistical extreme detector (momentum/volume-z over a trailing window vs. its own trailing-20-trading-day distribution) — not a level touch, so it has its own poller (server/services/minuteBarSignalDetector.js) modeled on the phase-change detector rather than the level-fade candidates array. Currently one signal live-eligible: MOMENTUM_60m_60m_TREND, SHADOW status pending N≥20 live trades. All combinations (profitable or not) tracked in performance_audit signal_type=\'MINUTE_BAR_SCAN\' via scripts/backtest_minute_bar_scan.mjs on weekly cron.',
     },
     {
       name: 'DAY_TYPE_ALPHA System',

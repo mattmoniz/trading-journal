@@ -26,6 +26,8 @@ Living tracker. Originally compiled 2026-06-07 (see archived `docs/ARCHITECTURE_
 7. **`ACDSessionState` in `App.jsx` (~line 10875) is dead code** — defined with props `{ todayData, nl, pivot }` but never rendered anywhere in the app. The correct vehicle for ACD-related pre-session UI is `SessionForecastPanel.jsx` and the morning prep view. Do not edit `ACDSessionState` expecting users to see the result.
 
 
+8. **Root cause of duplicate sub-minute `price_bars` ingestion not found yet.** Fixed 2026-07-13 at the read layer (`price_bars_primary` now `GROUP BY`s to guaranteed one-row-per-minute — see [ARCHITECTURE.md](../ARCHITECTURE.md)), but the underlying `price_bars` table itself still has ~14.6% of RTH minutes with 2+ sub-minute-resolution rows (up to 25 in one minute, worst cluster Jun–Aug 2025) — looks like a Sierra Chart export/import mixing in a different (possibly volume-based) bar type under the same symbol/contract on certain days, not yet root-caused. The view fix compensates correctly for all current and future reads, but new imports could keep adding more sub-minute rows to the raw table indefinitely unless the ingestion path (`priceBarService.js`) is fixed or a `CHECK`/trigger rejects sub-minute writes.
+
 ## Not re-verified (carried over unconfirmed — check before trusting)
 - "Duplicate pattern-memory trigger" (cron + parallel `setInterval` both calling `runNightlyUpdate`)
 - "Silent error handling" (`catch (e) {}` blocks swallowing errors without logging) throughout `index.js`
