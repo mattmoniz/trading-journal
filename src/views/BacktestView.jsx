@@ -1553,6 +1553,7 @@ function PerformanceAuditPanel() {
     { key: 'wr30d',        label: '30d WR',        w: 52,  tip: 'Win rate over last 30 trading days. Shows if the edge is holding in the current month. Most reliable recent window.' },
     { key: 'wr10d',        label: '10d WR',        w: 52,  tip: 'Win rate over last 10 trading days. Most recent snapshot — small sample, directional only.' },
     { key: 'trend10d',     label: 'Trend',         w: 42,  tip: 'Is the recent 10d WR higher (↑), lower (↓), or flat (→) vs the 180d baseline? ↑ = edge strengthening, ↓ = degrading.' },
+    { key: 'stability',    label: 'Stability',     w: 66,  tip: 'Chronological EV-sign stability check (added 2026-07-14): splits this setup\'s full trade history into 3 non-overlapping thirds and checks if EV keeps the same sign in all 3. STABLE = consistent edge. If unstable, classified as DEGRADING (getting worse), IMPROVING (getting better), NOISY (flips but still net-positive both periods), or THIN (not enough recent data to tell). Informational only — does not affect ACTIVE/CONTEXT/REMOVED status above.' },
     // EV
     { key: 'ev',           label: 'EV/Tr',         w: 50,  tip: 'Expected value per trade. Includes $1 commission. Positive = profitable over many trades.' },
     { key: 'totalPnl',     label: 'P&L',           w: 52,  tip: 'Total P&L contribution over 180 days. Shows which levels carry the system vs dead weight.' },
@@ -1573,7 +1574,13 @@ function PerformanceAuditPanel() {
     { key: 'distFromPrice',label: 'Dist',          w: 44,  tip: 'How far current price is from this level in points. Green=close, yellow=medium, gray=far.' },
     { key: 'next2DayProb', label: '2d Prob',       w: 48,  tip: 'Probability of touching this level in next 2 days. Based on distance vs ATR(20). V.HIGH=within 0.5 ATR.' },
   ];
-  const effectiveColOrder = colOrder || defaultCols.map(c => c.key);
+  // Merge in any default column keys missing from a saved order — otherwise a newly-added
+  // column (like 'stability' added 2026-07-14) would silently never appear for anyone with a
+  // previously-saved column order in localStorage, since a saved order fully overrides
+  // defaultCols rather than extending it.
+  const effectiveColOrder = colOrder
+    ? [...colOrder, ...defaultCols.map(c => c.key).filter(k => !colOrder.includes(k))]
+    : defaultCols.map(c => c.key);
   const columns = effectiveColOrder.map(k => defaultCols.find(c => c.key === k)).filter(Boolean);
 
   const thStyle = (col) => ({
@@ -1697,6 +1704,13 @@ function PerformanceAuditPanel() {
                         case 'wr30d': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: s.wr30d != null ? wrColor(s.wr30d) : '#64748b' }}>{s.wr30d != null ? fmtPct(s.wr30d) : '--'}</td>;
                         case 'wr10d': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: s.wr10d != null ? wrColor(s.wr10d) : '#64748b' }}>{s.wr10d != null ? fmtPct(s.wr10d) : '--'}</td>;
                         case 'trend10d': return <td key={c.key} style={{ ...cs, fontWeight: 800, fontSize: 16, color: s.trend10d === 'UP' ? '#4ade80' : s.trend10d === 'DOWN' ? '#f87171' : '#94a3b8' }}>{s.trend10d === 'UP' ? '↑' : s.trend10d === 'DOWN' ? '↓' : s.trend10d === 'FLAT' ? '→' : '--'}</td>;
+                        case 'stability': {
+                          const stColor = { DEGRADING: '#f87171', IMPROVING: '#4ade80', NOISY_BUT_STABLE: '#94a3b8', THIN: '#64748b', AMBIGUOUS: '#fbbf24' };
+                          const stLabel = { DEGRADING: 'Degrading', IMPROVING: 'Improving', NOISY_BUT_STABLE: 'Noisy', THIN: 'Thin', AMBIGUOUS: 'Mixed' };
+                          const label = s.stabilityStable === true ? 'Stable' : (s.stabilityTrend ? stLabel[s.stabilityTrend] || s.stabilityTrend : '--');
+                          const color = s.stabilityStable === true ? '#4ade80' : (s.stabilityTrend ? stColor[s.stabilityTrend] || '#94a3b8' : '#64748b');
+                          return <td key={c.key} style={{ ...cs, fontWeight: 700, fontSize: 12, color }}>{label}</td>;
+                        }
                         case 'ev': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: evColor(s.ev) }}>{s.ev != null ? '$' + Math.round(s.ev) : '--'}</td>;
                         case 'stop': return <td key={c.key} style={{ ...cs, color: '#f87171' }}>{s.stop ? fmtN(s.stop) + 'pt' : '--'}</td>;
                         case 't1': return <td key={c.key} style={{ ...cs, color: '#4ade80' }}>{s.t1 ? fmtN(s.t1) + 'pt' : '--'}</td>;

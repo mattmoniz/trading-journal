@@ -41,7 +41,12 @@ const DAY_TYPE_CONDITIONAL = new Set([
 
 async function run() {
   console.log('[backtest_setup_status] Starting...');
-  const today = new Date().toISOString().slice(0, 10);
+  // SQL CURRENT_DATE (DB server runs in America/New_York), not JS toISOString() (UTC) — the
+  // two disagree once past 8PM ET, which silently excluded MOMENTUM_60m_60m_TREND from the
+  // /api/performance-audit/unified "latest run" join. Same class of bug Gemini caught in
+  // backtest_minute_bar_scan.mjs 2026-07-14, found here independently the same day while
+  // verifying the Unified Signal Table actually showed the new setup.
+  const { rows: [{ today }] } = await query(`SELECT CURRENT_DATE::text as today`);
 
   // All-time stats per setup_type (includes SHADOW rows — they still resolve)
   const allTimeQ = await query(`

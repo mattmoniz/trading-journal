@@ -6973,11 +6973,11 @@ export default function createACDRouter(io) {
             else if (ev < -5)          status = 'REMOVED';
             else                       status = 'CONTEXT';
           }
-        } else if (row.recommendation === 'KEEP' || row.recommendation === 'ACTIVE') {
+        } else if (row.recommendation === 'KEEP' || row.recommendation === 'ACTIVE' || row.recommendation === 'PROMOTE') {
           status = 'ACTIVE';
-        } else if (row.recommendation === 'DIRECTIONAL' || row.recommendation === 'CONTEXT' || row.recommendation === 'DLL_TRADEABLE' || row.recommendation === 'THIN') {
+        } else if (row.recommendation === 'DIRECTIONAL' || row.recommendation === 'CONTEXT' || row.recommendation === 'DLL_TRADEABLE' || row.recommendation === 'THIN' || row.recommendation === 'THIN_N' || row.recommendation === 'DAY_TYPE_MANAGED') {
           status = 'CONTEXT';
-        } else if (row.recommendation === 'CUT') {
+        } else if (row.recommendation === 'CUT' || row.recommendation === 'SUPPRESS') {
           status = 'REMOVED';
         } else {
           continue; // skip analytical rows with no display status (null, non-standard)
@@ -7008,6 +7008,18 @@ export default function createACDRouter(io) {
 
         // Regime fit
         const regimeFit = regimeFitMap[row.signal_name] || null;
+
+        // Stability/trend classification from backtest_setup_status.mjs's rigor diagnostics
+        // (day-clustering + 3-way chronological EV-sign stability, added 2026-07-14). Only
+        // meaningful for SETUP_STATUS rows — other signal_types don't write this field.
+        let stabilityTrend = null, stabilityStable = null;
+        if (row.signal_type === 'SETUP_STATUS' && row.notes) {
+          try {
+            const parsed = JSON.parse(row.notes);
+            stabilityTrend = parsed.rigor?.trend || null;
+            stabilityStable = parsed.rigor?.three_way_stable;
+          } catch (_) {}
+        }
 
         // Tests applied
         const tests = [];
@@ -7060,6 +7072,8 @@ export default function createACDRouter(io) {
           status,
           recommendation: row.recommendation,
           notes: row.notes,
+          stabilityTrend,
+          stabilityStable,
         });
       }
 
