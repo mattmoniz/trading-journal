@@ -74,6 +74,24 @@ async function getOptimalStop() {
   return rows[0] || null;
 }
 
+// Live status must be computed dynamically, not hardcoded — matches the level-fade engine's
+// own `getCached(...)._suppressedSetups` pattern. Without this, the setup would sit in SHADOW
+// forever even after clearing N>=20 live trades with good EV, since nothing else in the
+// pipeline flips a hardcoded status. Checked against REAL resolved active_setups trades for
+// this family (both LONG/SHORT variants combined), not the backtest N already used to
+// calibrate stop/target.
+async function getLiveStatus() {
+  const { rows } = await query(`
+    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
+    FROM active_setups
+    WHERE setup_type LIKE $1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+  `, [`${SETUP_FAMILY}_%`]);
+  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
+  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
+  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
+  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+}
+
 export async function detectMomentum60Trend(io) {
   try {
     const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -121,21 +139,20 @@ export async function detectMomentum60Trend(io) {
       const target = long ? entry + _cache.optimalStop.target : entry - _cache.optimalStop.target;
       const setupType = `${SETUP_FAMILY}_${long ? 'LONG' : 'SHORT'}`;
 
-      // status='SHADOW', not 'ACTIVE': this is a brand-new signal discovered this session with
-      // zero live-fired trades — CLAUDE.md's New Setup Type checklist requires SHADOW until
-      // N>=20 *live* resolved trades, regardless of backtest N. Shadow rows still resolve
-      // (TARGET_HIT/STOP_HIT) via the same generic resolver, so live data accumulates for
-      // backtest_setup_status.mjs to evaluate — they just don't surface as an actionable
-      // live alert until that bar is cleared.
+      // Status computed dynamically every fire (getLiveStatus), not hardcoded — graduates from
+      // SHADOW to ACTIVE on its own once N>=20 *live* resolved trades clear the same -$5/trade
+      // bar backtest_setup_status.mjs applies everywhere else. Shadow rows still resolve
+      // (TARGET_HIT/STOP_HIT) via the same generic resolver, so live data accumulates either way.
+      const live = await getLiveStatus();
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, suppression_reason
-        ) VALUES ($1,$2,NOW(),'SHADOW',$3,$3,$4,$5,$6,$3,'NEW_SIGNAL_UNDER_LIVE_EVALUATION')
+        ) VALUES ($1,$2,NOW(),$7,$3,$3,$4,$5,$6,$3,$8)
         ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
-      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`]);
+      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason]);
 
       // Every other insert path in acd.js drops a copy into trade_timeline_events — matching
       // that here so this setup type shows up in the timeline the same as any other, once it's
@@ -143,9 +160,11 @@ export async function detectMomentum60Trend(io) {
       // this graduates to ACTIVE, and for any tooling that reads the timeline directly).
       if (ins.rows[0]) { try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
 
-      // No io.emit here — SHADOW rows are not actionable alerts (matches acd.js's own
-      // convention of gating 'setup-fired' emits to status==='ACTIVE' only). This setup type
-      // stays silent-but-tracked until it clears the live N>=20 bar.
+      // Only emit once this has actually graduated to ACTIVE (matches acd.js's own convention
+      // of gating 'setup-fired' emits to status==='ACTIVE' only) — silent-but-tracked until then.
+      if (ins.rows[0] && live.status === 'ACTIVE' && io) {
+        io.emit('setup-fired', { setupId: ins.rows[0].id, setupType, entry, stop, target, direction: long ? 'LONG' : 'SHORT' });
+      }
       _cache.firedToday = true;
     }
     _cache.wasExtreme = isExtreme;
