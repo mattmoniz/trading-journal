@@ -33,7 +33,10 @@ const q = (t, p) => pool.query(t, p);
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
-const PT = 5, COMM = 5;
+// $2/pt, $1 commission -- matches acd.js's live PNL_PER_POINT/COMMISSION (real MNQ contract
+// value). Was PT=5/COMM=5 (copied from the archived script), corrected 2026-07-14 -- see
+// scripts/repair_dollars_per_point.mjs and docs/KNOWN_ISSUES.md.
+const PT = 2, COMM = 1;
 const IB_CLOSE = 630, AM_CUT = 720, SESSION_END = 780;
 
 // Copied verbatim from scripts/archive/backfill_level_fades.js — unchanged, see header note above.
