@@ -6,6 +6,8 @@
 export const SETUP_DISPLAY_LABELS = {
   IB_BULLISH:              'IB Bullish',
   IB_BEARISH:              'IB Bearish',
+  MOMENTUM_60m_60m_TREND_LONG:  '60m Momentum ↑ (Trend)',
+  MOMENTUM_60m_60m_TREND_SHORT: '60m Momentum ↓ (Trend)',
   BRACKET_BREAKOUT_LONG:   'Bracket Break ↑',
   BRACKET_BREAKOUT_SHORT:  'Bracket Break ↓',
   OPEN_TEST_DRIVE_LONG:    'OTD Long ↑',

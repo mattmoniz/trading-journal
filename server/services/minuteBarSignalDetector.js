@@ -19,6 +19,7 @@
 // Stop/target are NEVER hardcoded here — read live from the OPTIMAL_STOP row in
 // performance_audit (per CLAUDE.md's New Setup Type checklist), cached for the trading day.
 import { query } from '../db.js';
+import { dropToTimeline } from '../routes/acd.js';
 
 const SETUP_FAMILY = 'MOMENTUM_60m_60m_TREND';
 const LOOKBACK_MIN = 60;
@@ -133,8 +134,14 @@ export async function detectMomentum60Trend(io) {
           price_at_detection, suppression_reason
         ) VALUES ($1,$2,NOW(),'SHADOW',$3,$3,$4,$5,$6,$3,'NEW_SIGNAL_UNDER_LIVE_EVALUATION')
         ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
-        RETURNING id
+        RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`]);
+
+      // Every other insert path in acd.js drops a copy into trade_timeline_events — matching
+      // that here so this setup type shows up in the timeline the same as any other, once it's
+      // ever surfaced (SHADOW rows aren't shown live, but the row should still exist for when
+      // this graduates to ACTIVE, and for any tooling that reads the timeline directly).
+      if (ins.rows[0]) { try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
 
       // No io.emit here — SHADOW rows are not actionable alerts (matches acd.js's own
       // convention of gating 'setup-fired' emits to status==='ACTIVE' only). This setup type
