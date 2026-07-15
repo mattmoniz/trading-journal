@@ -201,7 +201,7 @@ export async function resolveSetupsByPrice(io) {
       const stop = row.stop_level;
       const t1 = row.t1_level;
       if (entry == null || stop == null) continue;
-      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       const px = currentPxQ.rows[0]?.close;
       if (!px) continue;
       const stopHit = px <= stop;
@@ -226,7 +226,7 @@ export async function resolveSetupsByPrice(io) {
       const t1 = row.t1_level;
       if (entry == null || stop == null || t1 == null) continue;
       const targetDist = Math.abs(t1 - entry);
-      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       const px = currentPxQ.rows[0]?.close;
       if (!px) continue;
       const currentDist = Math.abs(px - t1);
@@ -385,7 +385,7 @@ function nextTradingDay(etDate) {
 async function detectGlobexSetup(sessionDate, io) {
   try {
     const [priceRow, pdRow, auditRow] = await Promise.all([
-      query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+      query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
       query(`SELECT signal_name, p75_mae, p50_mfe FROM performance_audit
              WHERE signal_type='UNIFIED_BACKTEST' AND window_days=9999
@@ -493,7 +493,7 @@ export async function structurallyInvalidateSetups(io) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
   const [priceRow, acdRow] = await Promise.all([
-    query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+    query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
   ]);
 
@@ -1647,7 +1647,7 @@ export default function createACDRouter(io) {
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const monthYear = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`;
       const pivot = await query('SELECT pivot_level FROM acd_monthly_pivot WHERE month_year=$1', [monthYear]);
-      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       const nqClose = latestBar.rows[0]?.close || 0;
       const pivotLevel = parseFloat(pivot.rows[0]?.pivot_level) || null;
       const pivotBias = pivotLevel ? (nqClose > pivotLevel ? 'up' : 'down') : null;
@@ -1736,7 +1736,7 @@ export default function createACDRouter(io) {
   // GET /api/acd/nq/latest
   router.get('/acd/nq/latest', async (req, res) => {
     try {
-      const r = await query(`SELECT ts, close, high, low, open FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const r = await query(`SELECT ts, close, high, low, open FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       if (r.rows.length === 0) return res.json(null);
       const bar = r.rows[0];
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -1851,7 +1851,7 @@ export default function createACDRouter(io) {
       // cacheGet imported at top of file
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       const currentPrice = latestBar.rows[0]?.close;
       if (!currentPrice) return res.json({ levels: [] });
 
@@ -2888,7 +2888,7 @@ export default function createACDRouter(io) {
           ORDER BY ts
         `, [todayET]),
         // Current price + volume + bar timestamp
-        query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
         // 20-bar average volume (last 20 RTH bars)
         query(`
           SELECT AVG(volume)::float as avg_vol
@@ -6731,7 +6731,7 @@ export default function createACDRouter(io) {
           ORDER BY pa.signal_type, pa.ev_per_trade DESC NULLS LAST
         `),
         // 2. Current price
-        query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
         // 3. ATR(20) from daily true ranges
         query(`
           WITH daily AS (
@@ -7514,7 +7514,7 @@ export default function createACDRouter(io) {
 
       // Current price + session bars + live setup + ACD state
       const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
-        query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
         query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
                WHERE symbol='NQ' AND ts::date=$1
                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),

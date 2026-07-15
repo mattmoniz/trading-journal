@@ -207,7 +207,7 @@ router.get('/composite-profile', async (req, res) => {
     if (cached) return res.json(cached);
 
     // Current price for context
-    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
     const currentPrice = latestBar.rows[0]?.close || null;
 
     // Build TPO composite: each 1-min bar contributes 1 count to each price level it spans

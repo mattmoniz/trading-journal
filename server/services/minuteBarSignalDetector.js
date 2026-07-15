@@ -119,7 +119,7 @@ export async function detectMomentum60Trend(io) {
 
     const barsQ = await query(`
       SELECT close::float FROM price_bars_primary
-      WHERE symbol='NQ' ORDER BY ts DESC LIMIT ${LOOKBACK_MIN + 1}
+      WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT ${LOOKBACK_MIN + 1}
     `);
     if (barsQ.rows.length < LOOKBACK_MIN + 1) return;
     const closes = barsQ.rows.map(r => r.close).reverse(); // oldest first

@@ -43,7 +43,7 @@ router.get('/weekly/current', async (req, res) => {
       const ibRange = mh - ml;
       const nlRow = await query(`SELECT COALESCE(SUM(daily_score),0) as nl30 FROM (SELECT daily_score FROM acd_daily_log ORDER BY trade_date DESC LIMIT 30) s`);
       const pivotRow = await query(`SELECT pivot_level FROM acd_monthly_pivot WHERE month_year=$1`, [`${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`]);
-      const latestBar = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+      const latestBar = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
       const nqClose = latestBar.rows[0]?.close;
       const pivotLevel = parseFloat(pivotRow.rows[0]?.pivot_level) || null;
       const pivotBias = pivotLevel ? (nqClose > pivotLevel ? 'ABOVE' : 'BELOW') : null;

@@ -62,7 +62,7 @@ router.get('/confluence/today', async (req, res) => {
     const pivotLevel = pivotQ.rows[0]?.pivot_level ? parseFloat(pivotQ.rows[0].pivot_level) : null;
     const pivotR1    = pivotQ.rows[0]?.pivot_r1 ? parseFloat(pivotQ.rows[0].pivot_r1) : null;
     const pivotS1    = pivotQ.rows[0]?.pivot_s1 ? parseFloat(pivotQ.rows[0].pivot_s1) : null;
-    const currentPriceQ = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    const currentPriceQ = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
     const currentPrice = currentPriceQ.rows[0]?.close || 0;
     const monthlyPivotPos = pivotR1 && pivotS1 && currentPrice
       ? (currentPrice > pivotR1 ? 'ABOVE_PIVOT_RANGE' : currentPrice < pivotS1 ? 'BELOW_PIVOT_RANGE' : 'INSIDE_PIVOT_RANGE')

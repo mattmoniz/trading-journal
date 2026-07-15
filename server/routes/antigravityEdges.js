@@ -1660,7 +1660,7 @@ router.get('/antigravity/exhaustion', async (req, res) => {
     const barsQ = await query(`
       SELECT ts, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
         open::float, high::float, low::float, close::float, volume::bigint as vol
-      FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 15
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 15
     `);
     const bars = barsQ.rows.reverse();
     if (bars.length < 10) return res.json({ signals: [], timestamp });
