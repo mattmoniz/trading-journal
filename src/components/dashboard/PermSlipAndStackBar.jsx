@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSharedPollData } from '../../utils/useSharedPollData';
 
 const API_URL = '/api';
 const MAX_STACK = 7;
@@ -8,23 +9,12 @@ function barColor(n) {
 }
 
 export default function PermSlipAndStackBar() {
-  const [perms,    setPerms]    = useState(null);
-  const [setups,   setSetups]   = useState(null);
+  // Shared with LivePlaybookCard/OvernightContextStrip/EdgeSectionsPanel — was 4
+  // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
+  const [edgesData] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 60000);
+  const perms  = edgesData?.sessionPermissions || null;
+  const setups = edgesData?.setups || null;
   const [resolved, setResolved] = useState([]);
-
-  useEffect(() => {
-    const load = () =>
-      fetch(`${API_URL}/antigravity/edges-context`)
-        .then(r => r.json())
-        .then(d => {
-          setPerms(d.sessionPermissions || null);
-          setSetups(d.setups || null);
-        })
-        .catch(() => {});
-    load();
-    const iv = setInterval(load, 60000);
-    return () => clearInterval(iv);
-  }, []);
 
   useEffect(() => {
     const load = () =>

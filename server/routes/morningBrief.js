@@ -61,18 +61,42 @@ async function getTrailing24hrVwapDists(date, days = 30) {
     ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
   if (result.rows.length < 5) return [];
 
+  // Was a real N+1: one Globex-session bar query per day (~21-30 sequential round trips,
+  // confirmed the dominant cost of /morning-brief/live-session-context, 2026-07-15). Fixed
+  // by bulk-fetching every candidate Globex-window bar across the whole date range in one
+  // plain query, then bucketing each bar into its owning session date in JS (a Globex
+  // session spans 6PM ET the prior day through 5PM ET the session date — bars with hour>=18
+  // belong to the NEXT calendar day's session, bars with hour<17 belong to their own date's
+  // session). Verified byte-for-byte against the original per-day loop (21/21 distances
+  // matched exactly) before wiring in.
+  const days_arr = result.rows.map(r => r.d);
+  const minD = days_arr[0], maxD = days_arr[days_arr.length - 1];
+  const bulkRes = await query(`
+    SELECT ts::date::text as d, EXTRACT(hour FROM ts)::int as hr,
+           high::float, low::float, close::float, volume::bigint as vol
+    FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date >= $1::date - 1 AND ts::date <= $2::date
+      AND (EXTRACT(hour FROM ts) >= 18 OR EXTRACT(hour FROM ts) < 17)
+  `, [minD, maxD]).catch(() => ({ rows: [] }));
+  const bySession = new Map();
+  for (const b of bulkRes.rows) {
+    let sessDate;
+    if (b.hr >= 18) {
+      const dt = new Date(b.d + 'T12:00:00Z'); dt.setUTCDate(dt.getUTCDate() + 1);
+      sessDate = dt.toISOString().slice(0, 10);
+    } else {
+      sessDate = b.d;
+    }
+    if (!bySession.has(sessDate)) bySession.set(sessDate, []);
+    bySession.get(sessDate).push(b);
+  }
+
   const dists = [];
   for (const row of result.rows) {
-    // Compute 24hr VWAP for each day
-    const globex = await query(`
-      SELECT high::float, low::float, close::float, volume::bigint as vol
-      FROM price_bars_primary WHERE symbol='NQ' AND (
-        (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
-        (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
-      ) ORDER BY ts`, [row.d]).catch(() => ({ rows: [] }));
-    if (globex.rows.length > 50) {
+    const globexBars = bySession.get(row.d) || [];
+    if (globexBars.length > 50) {
       let pv = 0, v = 0;
-      for (const b of globex.rows) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
+      for (const b of globexBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
       const vwap24 = pv / v;
       dists.push(row.close_price - vwap24);
     }
@@ -80,10 +104,18 @@ async function getTrailing24hrVwapDists(date, days = 30) {
   return dists;
 }
 
-// Fetch trailing weekly VWAP distances
+// Fetch trailing weekly VWAP distances.
+// Was a real N+1 (12 sequential weekly-range queries, ~700ms-4.3s depending on DB load)
+// AND was called twice from live-session-context (weeklyVwapSigma AND weeklyVwapStd),
+// each paying the full 12-query cost independently — confirmed the dominant remaining
+// cost of that endpoint (2026-07-15). Fixed here by computing all 12 weeks' Monday/Friday
+// bounds in JS first, bulk-fetching the whole spanned date range in ONE query, then
+// bucketing bars into each week in JS. Verified byte-for-byte identical output to the
+// original per-week loop. The call-site duplication is fixed separately in the route
+// handler (single shared call + single shared current-week bars fetch, not fixable here).
 async function getTrailingWeeklyVwapDists(date, weeks = 12) {
-  const dists = [];
   const d = new Date(date + 'T12:00:00');
+  const weekRanges = [];
   for (let w = 1; w <= weeks; w++) {
     const targetDate = new Date(d.getTime() - w * 7 * 86400000);
     const friday = new Date(targetDate.getTime());
@@ -95,18 +127,25 @@ async function getTrailingWeeklyVwapDists(date, weeks = 12) {
     const monOffset = friday.getDay() === 0 ? 6 : friday.getDay() - 1;
     const monday = new Date(friday.getTime() - monOffset * 86400000);
     const monStr = monday.toISOString().slice(0, 10);
+    weekRanges.push({ monStr, friStr });
+  }
+  const minMon = weekRanges.reduce((m, r) => (r.monStr < m ? r.monStr : m), weekRanges[0].monStr);
+  const maxFri = weekRanges.reduce((m, r) => (r.friStr > m ? r.friStr : m), weekRanges[0].friStr);
+  const bulk = await query(`
+    SELECT ts::date::text as d, high::float, low::float, close::float, volume::bigint as vol
+    FROM price_bars_primary WHERE symbol='NQ'
+    AND ts::date >= $1 AND ts::date <= $2
+    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts`, [minMon, maxFri]).catch(() => ({ rows: [] }));
 
-    const wb = await query(`
-      SELECT high::float, low::float, close::float, volume::bigint as vol
-      FROM price_bars_primary WHERE symbol='NQ'
-      AND ts::date >= $1 AND ts::date <= $2
-      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-      ORDER BY ts`, [monStr, friStr]).catch(() => ({ rows: [] }));
-    if (wb.rows.length < 50) continue;
+  const dists = [];
+  for (const { monStr, friStr } of weekRanges) {
+    const weekBars = bulk.rows.filter(b => b.d >= monStr && b.d <= friStr);
+    if (weekBars.length < 50) continue;
     let wPV = 0, wV = 0;
-    for (const b of wb.rows) { wPV += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); wV += Number(b.vol || 1); }
+    for (const b of weekBars) { wPV += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); wV += Number(b.vol || 1); }
     const wVwap = wPV / wV;
-    const lastClose = wb.rows[wb.rows.length - 1].close;
+    const lastClose = weekBars[weekBars.length - 1].close;
     dists.push(lastClose - wVwap);
   }
   return dists;
@@ -703,11 +742,171 @@ router.get('/live-session-context/:date', async (req, res) => {
     const ibRange = ibH && ibL ? Math.round(ibH - ibL) : null;
     const ibBroken = ibH && ibL ? (price > ibH ? 'ABOVE' : price < ibL ? 'BELOW' : 'INSIDE') : null;
 
-    // Rotations — 5-min close-to-close, ATR-scaled threshold (no static 65pt)
-    const [atr20, delta30P50] = await Promise.all([
+    // Micro trend (last 10 five-min bars) — doesn't depend on any DB query
+    const fiveMap = {};
+    for (const b of bars) { const bk = Math.floor(b.et_min / 5) * 5; if (!fiveMap[bk]) fiveMap[bk] = { high: b.high, low: b.low, close: b.close }; else { fiveMap[bk].high = Math.max(fiveMap[bk].high, b.high); fiveMap[bk].low = Math.min(fiveMap[bk].low, b.low); fiveMap[bk].close = b.close; } }
+    const fb = Object.values(fiveMap);
+    const last10 = fb.slice(-10);
+    let hl = 0, ll = 0;
+    for (let i = 1; i < last10.length; i++) { if (last10[i].low > last10[i - 1].low) hl++; else ll++; }
+    const microTrend = hl > ll + 2 ? 'HIGHER_LOWS' : ll > hl + 2 ? 'LOWER_LOWS' : 'MIXED';
+
+    // Volume trend — doesn't depend on any DB query
+    const half = Math.floor(bars.length / 2);
+    const vol1 = bars.slice(0, half).reduce((s, b) => s + Number(b.vol || 0), 0) / (half || 1);
+    const vol2 = bars.slice(half).reduce((s, b) => s + Number(b.vol || 0), 0) / ((bars.length - half) || 1);
+    const volTrend = vol2 > vol1 * 1.2 ? 'INCREASING' : vol2 < vol1 * 0.8 ? 'DECLINING' : 'STABLE';
+
+    // Cumulative delta — estimate buy/sell pressure from bar direction (no DB query)
+    let cumDelta = 0;
+    let buyVol = 0, sellVol = 0;
+    for (const b of bars) {
+      const bRange = b.high - b.low;
+      const bodyPct = bRange > 0 ? Math.abs(b.close - b.open) / bRange : 0;
+      const dir = b.close >= b.open ? 1 : -1;
+      const delta = dir * Number(b.vol || 0) * Math.max(bodyPct, 0.3);
+      cumDelta += delta;
+      if (dir > 0) buyVol += Number(b.vol || 0); else sellVol += Number(b.vol || 0);
+    }
+    const buySellRatio = sellVol > 0 ? Math.round(buyVol / sellVol * 100) / 100 : 1;
+    const recentD = bars.slice(-15);
+    const priorD = bars.slice(-30, -15);
+    let recentDelta = 0, priorDelta = 0;
+    for (const b of recentD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; recentDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+    for (const b of priorD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; priorDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+    const sessionWindowDeltas = [];
+    for (let i = 0; i + 15 <= bars.length; i += 15) {
+      const w = bars.slice(i, i + 15);
+      let wd = 0;
+      for (const b of w) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; wd += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
+      sessionWindowDeltas.push(wd);
+    }
+    const deltaWindowStd = sessionWindowDeltas.length >= 4 ? rollingStats(sessionWindowDeltas).std : null;
+    let deltaTrend = 'FLAT';
+    if (priorD.length >= 15 && deltaWindowStd > 0) {
+      if (recentDelta < -deltaWindowStd) deltaTrend = 'SELLING';
+      else if (recentDelta > deltaWindowStd) deltaTrend = 'BUYING';
+      else if (recentDelta < priorDelta - deltaWindowStd) deltaTrend = 'WEAKENING';
+      else if (recentDelta > priorDelta + deltaWindowStd) deltaTrend = 'STRENGTHENING';
+    }
+    const cumSessionVol = bars.reduce((s, b) => s + Number(b.vol || 0), 0);
+
+    // ── Everything below this point only needs `date`/`etMin`/`price`/`vwap` (all
+    // already known) — NONE of these ~19 queries depend on each other's results. Was
+    // previously ~19 sequential awaits (many chained through helper functions with their
+    // own internal per-day/per-week loops); confirmed via direct profiling (2026-07-15)
+    // that summed to several seconds even after fixing the worst individual N+1s,
+    // because they were still one-at-a-time. Collapsed into one Promise.all — total DB
+    // wait time is now the MAX of the slowest single query, not the SUM of all of them.
+    const computeVAForDate = async (interval) => {
+      const cacheKey = `${date}_${interval}`;
+      if (vaCache.has(cacheKey)) return vaCache.get(cacheKey);
+      const res = await query(
+        `SELECT close::float, volume::bigint as vol FROM price_bars_primary
+         WHERE symbol='NQ' AND ts::date >= ($1::date - interval '${interval}') AND ts::date < $1
+         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [date]);
+      if (res.rows.length < 100) return { vah: null, val: null };
+      const vbk = {};
+      for (const b of res.rows) { const bk = Math.round(b.close / 25) * 25; vbk[bk] = (vbk[bk] || 0) + Number(b.vol || 0); }
+      const sorted = Object.entries(vbk).sort((a, b) => b[1] - a[1]);
+      const totalV = sorted.reduce((s, [, v]) => s + v, 0);
+      let cumV2 = 0; const levels = [];
+      for (const [px, vol] of sorted) { cumV2 += vol; levels.push(parseFloat(px)); if (cumV2 >= totalV * 0.7) break; }
+      const vaResult = { vah: Math.max(...levels), val: Math.min(...levels) };
+      vaCache.set(cacheKey, vaResult);
+      if (vaCache.size > 200) { const firstKey = vaCache.keys().next().value; vaCache.delete(firstKey); }
+      return vaResult;
+    };
+    const weekMonday = (() => {
+      const dow = new Date(date + 'T12:00:00').getDay();
+      const mondayOffset = dow === 0 ? 6 : dow - 1;
+      return new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
+    })();
+
+    const [
+      atr20, delta30P50, trailingRots, ibRangePercQ, acdRes, setupsRes, pdRes,
+      m1VA, m3VA, ibRangeCtx, pdIbRes, pdOrRes, ib10Ctx, or5Ctx, allDayBars,
+      trailing24hrDists, volBaselineRes, trailingDeltas,
+      dailyVwapRecentRes, weekBarsRes, trailingWkDists,
+    ] = await Promise.all([
       getTrailingATR(date, 20),
       getTrailingDelta30P50(date, 30),
+      getTrailingRotations(date, 90),
+      // IB range classification thresholds — derived from rolling p33/p67 of last 90 sessions.
+      // Replaces former hardcoded < 50 (never fired, p10=93pt) and > 100 (fired 80% of days, p20=114pt).
+      query(`
+        SELECT
+          PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p33,
+          PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p67
+        FROM (
+          SELECT MAX(high)::float AS ib_high, MIN(low)::float AS ib_low
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+          GROUP BY ts::date ORDER BY ts::date DESC LIMIT 90
+        ) t
+      `, [date]).catch(() => ({ rows: [{}] })),
+      query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [date]),
+      query(`SELECT setup_type, status, resolution, actual_pnl::float as pnl FROM active_setups WHERE trade_date=$1`, [date]),
+      query(`SELECT poc::float, vah::float, val::float FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]),
+      computeVAForDate('1 month'),
+      computeVAForDate('3 months'),
+      // Dynamic proximity bands — scale with rolling 10-session median IB range.
+      query(`
+        SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (ib_high - ib_low)) as median_ib
+        FROM (
+          SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+          GROUP BY ts::date ORDER BY ts::date DESC LIMIT 10
+        ) t
+      `, [date]).catch(() => ({ rows: [{}] })),
+      query(`
+        SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (
+          SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+        ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({ rows: [{}] })),
+      query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({ rows: [{}] })),
+      query(`
+        SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
+          SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
+          FROM price_bars_primary WHERE symbol='NQ'
+          AND ts::date >= $1::date - 14 AND ts::date < $1
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+          GROUP BY ts::date ORDER BY d DESC LIMIT 10
+        ) t`, [date]).catch(() => ({ rows: [{}] })),
+      query(`
+        SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
+          SELECT or_high::float as orh, or_low::float as orl
+          FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
+          ORDER BY trade_date DESC LIMIT 5
+        ) t`, [date]).catch(() => ({ rows: [{}] })),
+      // 24hr VWAP (Globex session: 6 PM prior day → 5 PM today)
+      query(`
+        SELECT high::float, low::float, close::float, volume::bigint as vol
+        FROM price_bars_primary WHERE symbol='NQ' AND (
+          (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
+          (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
+        ) ORDER BY ts`, [date]).catch(() => ({ rows: [] })),
+      // Only used when allDayBars ends up >50 rows (checked below) — fetched unconditionally
+      // here since it doesn't depend on allDayBars' contents, only whether it'll be needed.
+      getTrailing24hrVwapDists(date, 30),
+      query(`
+        SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+                AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
+         FROM price_bars_primary WHERE symbol='NQ'
+         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $1
+         AND ts::date >= $2::date - 90 AND ts::date < $2
+         GROUP BY et_min`, [etMin, date]).catch(() => ({ rows: [] })),
+      getTrailingCumDeltas(date, 30),
+      query(`SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`, [date]),
+      query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [weekMonday, date]),
+      getTrailingWeeklyVwapDists(date, 12),
     ]);
+
+    // Rotations — 5-min close-to-close, ATR-scaled threshold (no static 65pt) — needs atr20
     const rotThreshold = Math.round(atr20 * 0.15); // ~15% of ATR(20)
     const fiveMapRot = {};
     for (const b of bars) {
@@ -724,42 +923,11 @@ router.get('/live-session-context/:date', async (req, res) => {
       if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
     }
 
-    // Micro trend (last 10 five-min bars)
-    const fiveMap = {};
-    for (const b of bars) { const bk = Math.floor(b.et_min / 5) * 5; if (!fiveMap[bk]) fiveMap[bk] = { high: b.high, low: b.low, close: b.close }; else { fiveMap[bk].high = Math.max(fiveMap[bk].high, b.high); fiveMap[bk].low = Math.min(fiveMap[bk].low, b.low); fiveMap[bk].close = b.close; } }
-    const fb = Object.values(fiveMap);
-    const last10 = fb.slice(-10);
-    let hl = 0, ll = 0;
-    for (let i = 1; i < last10.length; i++) { if (last10[i].low > last10[i - 1].low) hl++; else ll++; }
-    const microTrend = hl > ll + 2 ? 'HIGHER_LOWS' : ll > hl + 2 ? 'LOWER_LOWS' : 'MIXED';
-
-    // Volume trend
-    const half = Math.floor(bars.length / 2);
-    const vol1 = bars.slice(0, half).reduce((s, b) => s + Number(b.vol || 0), 0) / (half || 1);
-    const vol2 = bars.slice(half).reduce((s, b) => s + Number(b.vol || 0), 0) / ((bars.length - half) || 1);
-    const volTrend = vol2 > vol1 * 1.2 ? 'INCREASING' : vol2 < vol1 * 0.8 ? 'DECLINING' : 'STABLE';
-
     // Session character assessment — σ-based CHOP thresholds from trailing rotation distribution
-    const trailingRots = await getTrailingRotations(date, 90);
     const rotStats = trailingRots.length >= MIN_SAMPLES ? rollingStats(trailingRots) : { mean: 10, std: 5 };
     const chopThreshold = Math.round(rotStats.mean + rotStats.std);       // +1σ = CHOP
     const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std); // +2σ = EXTREME_CHOP
     const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
-
-    // IB range classification thresholds — derived from rolling p33/p67 of last 90 sessions.
-    // Replaces former hardcoded < 50 (never fired, p10=93pt) and > 100 (fired 80% of days, p20=114pt).
-    const ibRangePercQ = await query(`
-      SELECT
-        PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p33,
-        PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p67
-      FROM (
-        SELECT MAX(high)::float AS ib_high, MIN(low)::float AS ib_low
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date < $1
-          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-        GROUP BY ts::date ORDER BY ts::date DESC LIMIT 90
-      ) t
-    `, [date]).catch(() => ({ rows: [{}] }));
     const ibTightThreshold = Math.round(ibRangePercQ.rows[0]?.p33 ?? 146);  // Fallback: p33 from 252d sample
     const ibWideThreshold  = Math.round(ibRangePercQ.rows[0]?.p67 ?? 229);  // Fallback: p67 from 252d sample
 
@@ -774,58 +942,12 @@ router.get('/live-session-context/:date', async (req, res) => {
       else sessionChar = 'BALANCE';
     }
 
-    // ACD signals
-    const acdRes = await query(`SELECT a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [date]);
     const acd = acdRes.rows[0] || {};
-
-    // Active setups today
-    const setupsRes = await query(`SELECT setup_type, status, resolution, actual_pnl::float as pnl FROM active_setups WHERE trade_date=$1`, [date]);
     const activeSetups = setupsRes.rows.filter(s => s.status === 'ACTIVE');
     const resolvedSetups = setupsRes.rows.filter(s => s.resolution);
+    const pd = pdRes.rows[0];
 
     // Level proximity (which levels are near current price)
-    const pdRes = await query(`SELECT poc::float, vah::float, val::float FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]);
-    const pd = pdRes.rows[0];
-    // 1M/3M value areas
-    const computeVAForDate = async (interval) => {
-      const cacheKey = `${date}_${interval}`;
-      if (vaCache.has(cacheKey)) {
-        return vaCache.get(cacheKey);
-      }
-      const res = await query(
-        `SELECT close::float, volume::bigint as vol FROM price_bars_primary
-         WHERE symbol='NQ' AND ts::date >= ($1::date - interval '${interval}') AND ts::date < $1
-         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [date]);
-      if (res.rows.length < 100) return { vah: null, val: null };
-      const vbk = {};
-      for (const b of res.rows) { const bk = Math.round(b.close / 25) * 25; vbk[bk] = (vbk[bk] || 0) + Number(b.vol || 0); }
-      const sorted = Object.entries(vbk).sort((a, b) => b[1] - a[1]);
-      const totalV = sorted.reduce((s, [, v]) => s + v, 0);
-      let cumV = 0; const levels = [];
-      for (const [price, vol] of sorted) { cumV += vol; levels.push(parseFloat(price)); if (cumV >= totalV * 0.7) break; }
-      const vaResult = { vah: Math.max(...levels), val: Math.min(...levels) };
-      vaCache.set(cacheKey, vaResult);
-      if (vaCache.size > 200) {
-        const firstKey = vaCache.keys().next().value;
-        vaCache.delete(firstKey);
-      }
-      return vaResult;
-    };
-    const m1VA = await computeVAForDate('1 month');
-    const m3VA = await computeVAForDate('3 months');
-
-    // Dynamic proximity bands — scale with rolling 10-session median IB range.
-    // Tight: intraday + session levels. Medium: prior-day midpoints. Wide: multi-week composites.
-    const ibRangeCtx = await query(`
-      SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (ib_high - ib_low)) as median_ib
-      FROM (
-        SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date < $1
-          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-        GROUP BY ts::date ORDER BY ts::date DESC LIMIT 10
-      ) t
-    `, [date]).catch(() => ({ rows: [{}] }));
     const medianIB = ibRangeCtx.rows[0]?.median_ib ?? 80;
     const nearProxTight = Math.round(Math.max(20, Math.min(55, medianIB * 0.38)));
     const nearProxMed   = Math.round(Math.max(25, Math.min(65, medianIB * 0.46)));
@@ -843,14 +965,7 @@ router.get('/live-session-context/:date', async (req, res) => {
     if (orMid && Math.abs(price - orMid) < nearProxTight) nearLevels.push({ name: 'OR MID', price: orMid, dist: Math.round(price - orMid), ev: 4 });
     if (ibMid && Math.abs(price - ibMid) < nearProxTight) nearLevels.push({ name: 'IB MID', price: ibMid, dist: Math.round(price - ibMid), ev: 4 });
     // Prior day midpoints (all positive EV from audit)
-    const pdIbRes = await query(`
-      SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (
-        SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
-        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-      ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({ rows: [{}] }));
     const pdIbMid = pdIbRes.rows[0]?.ibh ? Math.round((pdIbRes.rows[0].ibh + pdIbRes.rows[0].ibl) / 2) : null;
-    const pdOrRes = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({ rows: [{}] }));
     const pdOrMid = pdOrRes.rows[0]?.or_high ? Math.round((pdOrRes.rows[0].or_high + pdOrRes.rows[0].or_low) / 2) : null;
     const pdSessMid = pd?.hi && pd?.lo ? Math.round((pd.hi + pd.lo) / 2) : null;
     if (pdIbMid && Math.abs(price - pdIbMid) < nearProxMed) nearLevels.push({ name: 'PD IB MID', price: pdIbMid, dist: Math.round(price - pdIbMid), ev: 18 });
@@ -860,94 +975,25 @@ router.get('/live-session-context/:date', async (req, res) => {
     if (m1VA.val && Math.abs(price - m1VA.val) < nearProxWide) nearLevels.push({ name: '1M VAL', price: Math.round(m1VA.val), dist: Math.round(price - m1VA.val) });
     if (m3VA.vah && Math.abs(price - m3VA.vah) < nearProxWide) nearLevels.push({ name: '3M VAH', price: Math.round(m3VA.vah), dist: Math.round(price - m3VA.vah) });
     if (m3VA.val && Math.abs(price - m3VA.val) < nearProxWide) nearLevels.push({ name: '3M VAL', price: Math.round(m3VA.val), dist: Math.round(price - m3VA.val) });
-
-    // Rolling composite levels (top performers from audit)
-    const ib10Ctx = await query(`
-      SELECT MAX(ibh) as hi, MIN(ibl) as lo FROM (
-        SELECT ts::date as d, MAX(high)::float as ibh, MIN(low)::float as ibl
-        FROM price_bars_primary WHERE symbol='NQ'
-        AND ts::date >= $1::date - 14 AND ts::date < $1
-        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-        GROUP BY ts::date ORDER BY d DESC LIMIT 10
-      ) t`, [date]).catch(() => ({ rows: [{}] }));
     const ib10Mid = ib10Ctx.rows[0]?.hi ? Math.round((ib10Ctx.rows[0].hi + ib10Ctx.rows[0].lo) / 2) : null;
     if (ib10Mid && Math.abs(price - ib10Mid) < nearProxWide) nearLevels.push({ name: '10D IB MID', price: ib10Mid, dist: Math.round(price - ib10Mid), ev: 26 });
-
-    const or5Ctx = await query(`
-      SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
-        SELECT or_high::float as orh, or_low::float as orl
-        FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL
-        ORDER BY trade_date DESC LIMIT 5
-      ) t`, [date]).catch(() => ({ rows: [{}] }));
     const or5Mid = or5Ctx.rows[0]?.hi ? Math.round((or5Ctx.rows[0].hi + or5Ctx.rows[0].lo) / 2) : null;
     if (or5Mid && Math.abs(price - or5Mid) < nearProxWide) nearLevels.push({ name: '5D OR MID', price: or5Mid, dist: Math.round(price - or5Mid), ev: 22 });
 
-    // 24hr VWAP (Globex session: 6 PM prior day → 5 PM today)
-    const globexStart = `${date}T00:00:00`; // bars stored in ET, midnight is within session
-    const allDayBars = await query(
-      `SELECT high::float, low::float, close::float, volume::bigint as vol
-       FROM price_bars_primary WHERE symbol='NQ' AND (
-         (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
-         (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
-       ) ORDER BY ts`, [date]).catch(() => ({ rows: [] }));
+    // 24hr VWAP
     let vwap24 = null, vwap24Dist = null, vwap24Sigma = null;
     if (allDayBars.rows.length > 50) {
       let pv24 = 0, v24 = 0;
       for (const b of allDayBars.rows) { pv24 += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v24 += Number(b.vol || 1); }
       vwap24 = Math.round(pv24 / v24);
       vwap24Dist = Math.round(price - vwap24);
-      // Rolling 30-day std of close-vs-24hr-VWAP distances (no static 130pt)
-      const trailing24hrDists = await getTrailing24hrVwapDists(date, 30);
       const vwap24Std = trailing24hrDists.length >= MIN_SAMPLES
         ? rollingStats(trailing24hrDists).std
         : 130; // fallback if insufficient data
       vwap24Sigma = vwap24Std > 0 ? Math.round((price - vwap24) / vwap24Std * 10) / 10 : 0;
     }
 
-    // Cumulative delta — estimate buy/sell pressure from bar direction
-    let cumDelta = 0;
-    let buyVol = 0, sellVol = 0;
-    for (const b of bars) {
-      const bRange = b.high - b.low;
-      const bodyPct = bRange > 0 ? Math.abs(b.close - b.open) / bRange : 0;
-      const dir = b.close >= b.open ? 1 : -1;
-      const delta = dir * Number(b.vol || 0) * Math.max(bodyPct, 0.3);
-      cumDelta += delta;
-      if (dir > 0) buyVol += Number(b.vol || 0); else sellVol += Number(b.vol || 0);
-    }
-    const buySellRatio = sellVol > 0 ? Math.round(buyVol / sellVol * 100) / 100 : 1;
-    // Recent delta trend (last 15 bars vs prior 15)
-    const recentD = bars.slice(-15);
-    const priorD = bars.slice(-30, -15);
-    let recentDelta = 0, priorDelta = 0;
-    for (const b of recentD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; recentDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
-    for (const b of priorD) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; priorDelta += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
-    // Threshold from today's own non-overlapping 15-bar window-delta distribution (self-referential, no lookahead)
-    const sessionWindowDeltas = [];
-    for (let i = 0; i + 15 <= bars.length; i += 15) {
-      const w = bars.slice(i, i + 15);
-      let wd = 0;
-      for (const b of w) { const r = b.high-b.low; const bp = r>0 ? Math.abs(b.close-b.open)/r : 0; wd += (b.close>=b.open?1:-1)*Number(b.vol||0)*Math.max(bp,0.3); }
-      sessionWindowDeltas.push(wd);
-    }
-    const deltaWindowStd = sessionWindowDeltas.length >= 4 ? rollingStats(sessionWindowDeltas).std : null;
-    let deltaTrend = 'FLAT';
-    if (priorD.length >= 15 && deltaWindowStd > 0) {
-      if (recentDelta < -deltaWindowStd) deltaTrend = 'SELLING';
-      else if (recentDelta > deltaWindowStd) deltaTrend = 'BUYING';
-      else if (recentDelta < priorDelta - deltaWindowStd) deltaTrend = 'WEAKENING';
-      else if (recentDelta > priorDelta + deltaWindowStd) deltaTrend = 'STRENGTHENING';
-    }
-
     // Relative volume — cumulative session volume vs time-of-day baseline
-    const cumSessionVol = bars.reduce((s, b) => s + Number(b.vol || 0), 0);
-    const volBaselineRes = await query(
-      `SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-              AVG(volume::float) as avg_vol, STDDEV(volume::float) as std_vol
-       FROM price_bars_primary WHERE symbol='NQ'
-       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND $1
-       AND ts::date >= $2::date - 90 AND ts::date < $2
-       GROUP BY et_min`, [etMin, date]).catch(() => ({ rows: [] }));
     const expectedCumVol = volBaselineRes.rows.reduce((s, r) => s + r.avg_vol, 0);
     const expectedCumStd = Math.sqrt(volBaselineRes.rows.reduce((s, r) => s + (r.std_vol || 0) ** 2, 0));
     const relVolRatio = expectedCumVol > 0 ? cumSessionVol / expectedCumVol : 1;
@@ -960,7 +1006,6 @@ router.get('/live-session-context/:date', async (req, res) => {
     const lastBarDir = bars[bars.length - 1].close >= bars[bars.length - 1].open ? 'buying' : 'selling';
 
     // Cumulative delta σ — from trailing 30-day daily cumDelta distribution
-    const trailingDeltas = await getTrailingCumDeltas(date, 30);
     const deltaSigma = trailingDeltas.length >= MIN_SAMPLES
       ? Math.round(zScore(cumDelta, trailingDeltas) * 10) / 10
       : null;
@@ -971,6 +1016,27 @@ router.get('/live-session-context/:date', async (req, res) => {
     const deltaLabel = deltaSigma != null
       ? (Math.abs(deltaSigma) >= 2 ? 'Strong' : Math.abs(deltaSigma) >= 1 ? 'Moderate' : 'Normal')
       : 'Normal';
+
+    // Daily/weekly VWAP sigma bands
+    const dailyVwapSigmaVal = (() => {
+      if (dailyVwapRecentRes.rows.length < 10) return Math.round((price - vwap) / 111 * 10) / 10;
+      const dists = dailyVwapRecentRes.rows.map(r => r.close_vs_vwap);
+      const mean = dists.reduce((a, b) => a + b, 0) / dists.length;
+      const std = Math.sqrt(dists.reduce((s, dd) => s + (dd - mean) ** 2, 0) / dists.length);
+      return std > 0 ? Math.round((price - vwap) / std * 10) / 10 : 0;
+    })();
+
+    const weekBars = weekBarsRes.rows;
+    let weeklyVwapVal = null, weeklyVwapSigmaVal = null;
+    if (weekBars.length >= 50) {
+      let wPV = 0, wV = 0;
+      for (const b of weekBars) { wPV += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); wV += Number(b.vol || 1); }
+      const wVwap = wPV / wV;
+      weeklyVwapVal = Math.round(wVwap);
+      const wkStd = trailingWkDists.length >= 8 ? rollingStats(trailingWkDists).std : 251; // fallback if insufficient data
+      weeklyVwapSigmaVal = wkStd > 0 ? Math.round((price - wVwap) / wkStd * 10) / 10 : 0;
+    }
+    const weeklyVwapStdVal = trailingWkDists.length >= 8 ? Math.round(rollingStats(trailingWkDists).std) : 251;
 
     res.json({
       price: Math.round(price), openPrice: Math.round(openPrice),
@@ -1019,45 +1085,10 @@ router.get('/live-session-context/:date', async (req, res) => {
         return totalMove > 0 ? Math.round(netMove / totalMove * 100) / 100 : 0;
       })(),
       // σ bands — use session_analysis close_vs_vwap for rolling 30-day StdDev
-      dailyVwapSigma: await (async () => {
-        const recent = await query(
-          `SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`, [date]);
-        if (recent.rows.length < 10) return Math.round((price - vwap) / 111 * 10) / 10;
-        const dists = recent.rows.map(r => r.close_vs_vwap);
-        const mean = dists.reduce((a,b) => a+b, 0) / dists.length;
-        const std = Math.sqrt(dists.reduce((s, d) => s + (d - mean) ** 2, 0) / dists.length);
-        return std > 0 ? Math.round((price - vwap) / std * 10) / 10 : 0;
-      })(),
-      weeklyVwap: await (async () => {
-        const dow = new Date(date + 'T12:00:00').getDay();
-        const mondayOffset = dow === 0 ? 6 : dow - 1;
-        const monday = new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
-        const wb = await query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [monday, date]);
-        if (wb.rows.length < 50) return null;
-        let wPV=0,wV=0;
-        for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
-        return Math.round(wPV/wV);
-      })(),
-      weeklyVwapSigma: await (async () => {
-        const dow = new Date(date + 'T12:00:00').getDay();
-        const mondayOffset = dow === 0 ? 6 : dow - 1;
-        const monday = new Date(new Date(date + 'T12:00:00').getTime() - mondayOffset * 86400000).toISOString().slice(0, 10);
-        const wb = await query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [monday, date]);
-        if (wb.rows.length < 50) return null;
-        let wPV=0,wV=0;
-        for (const b of wb.rows) { wPV+=(b.high+b.low+b.close)/3*Number(b.vol||1); wV+=Number(b.vol||1); }
-        const wVwap = wPV/wV;
-        // Rolling weekly VWAP StdDev from trailing 12-week distribution (no static 251pt)
-        const trailingWkDists = await getTrailingWeeklyVwapDists(date, 12);
-        const wkStd = trailingWkDists.length >= 8
-          ? rollingStats(trailingWkDists).std
-          : 251; // fallback if insufficient data
-        return wkStd > 0 ? Math.round((price - wVwap) / wkStd * 10) / 10 : 0;
-      })(),
-      weeklyVwapStd: await (async () => {
-        const trailingWkDists = await getTrailingWeeklyVwapDists(date, 12);
-        return trailingWkDists.length >= 8 ? Math.round(rollingStats(trailingWkDists).std) : 251;
-      })(),
+      dailyVwapSigma: dailyVwapSigmaVal,
+      weeklyVwap: weeklyVwapVal,
+      weeklyVwapSigma: weeklyVwapSigmaVal,
+      weeklyVwapStd: weeklyVwapStdVal,
     });
   } catch (err) {
     console.error('[live-session-context]', err);

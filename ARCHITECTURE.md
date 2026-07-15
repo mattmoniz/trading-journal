@@ -175,7 +175,11 @@ Fallback to `SUM(t.pnl)` only for older Activity Log format data that lacks CumP
 ```
 server/
 ├── index.js              # Express app entry — mounts all 27 routers, Socket.IO, cron jobs, Sierra watcher init
-├── db.js                 # pg Pool + query() helper; also fixes a timestamp/timezone parsing bug globally
+├── db.js                 # pg Pool (max: 60, connectionTimeoutMillis: 8000 — raised from 20/2000
+│                           2026-07-15 after parallelizing Morning Prep's endpoints internally
+│                           caused real connection-pool exhaustion under concurrent page load;
+│                           Postgres max_connections=100) + query() helper; also fixes a
+│                           timestamp/timezone parsing bug globally
 ├── schema.sql             # Original 5-table schema only (see DB section above)
 ├── sierra.js              # TAL file parser, chokidar watcher
 ├── routes/                # 27 files, one per domain, all mounted under /api
@@ -222,6 +226,7 @@ server/
 | `sessionForecastService.js` | Session bias forecast from prior 30 sessions (balance zone, opening, expected range) |
 | `setupBacktestService.js` | Backtests setups for hit rate, MAE, win rate by day type |
 | `setupEmitter.js` | Real-time setup detection + Socket.IO emission on each bar ingest |
+| `touchQuality.js` | Order-flow "touch-quality" classification (2026-07-15) — was a level touch a real 2-sided fight (`HIGH_VOL_ABSORBED`/`HIGH_VOL_OVERRUN`) or quiet (`QUIET`)? Volume z-score vs. a 90-day trailing per-minute-of-day baseline (reuses the existing VOLUME_SPIKE convention). Shared by `scripts/calibrate_touch_quality.mjs` (historical calibration → `performance_audit` `TOUCH_QUALITY` rows) and `acd.js`'s live `resolveSetupsByPrice()` (classifies open setups once their calibrated reaction window elapses) — informational only, never affects resolution/pnl/stops. Surfaced as a badge in `ACDView.jsx`'s live setup cards via `touchQualityStats` on `/api/antigravity/edges-context`. |
 | `tradeImportService.js` | Sierra Chart export parsing with count-based dedup; tags BP fills via `levelProximityService` after insert |
 | `levelProximityService.js` | Tags BP fills with `AT_LEVEL` (≤5pt), `LATE` (5-15pt), or `CHASING` (>15pt) relative to `level_prices`; stores top-3 nearest levels in `trades.level_proximity`; `tagTradesForDate()` runs after 4 PM auto-import |
 | `volatilityRegimeService.js` | Live read-only volatility regime (morning vol z-score, trend strength) |
@@ -252,14 +257,19 @@ src/
 │   ├── format.js
 │   ├── timestamps.js
 │   └── updateDots.js
-├── views/                 # All top-level views extracted from App.jsx (lazy-loaded except ACDView/PlaybookView)
-│   ├── ACDView.jsx        # 6,556 lines — static import (Sidebar uses named exports)
-│   ├── BacktestView.jsx   # 2,854 lines — lazy
-│   ├── CalendarView.jsx   # 2,303 lines — static import
-│   ├── PlaybookView.jsx   # 1,564 lines — static import (ACDView uses named exports)
+├── views/                 # All top-level views extracted from App.jsx — every one is lazy() + Suspense
+│   ├── ACDView.jsx        # 4,286 lines — lazy (Morning Prep / dashboard tab)
+│   ├── BacktestView.jsx   # 2,872 lines — lazy
+│   ├── CalendarView.jsx   # 2,305 lines — lazy (imported inside the also-lazy AllTradesView.jsx)
+│   ├── PlaybookView.jsx   # 1,564 lines — lazy (2026-07-15: was the last static top-level
+│   │                        import in App.jsx; also imported 3 named exports there —
+│   │                        LevelConfluenceReference/ConditionBacktestInline/PatternStatsPanel
+│   │                        — that went unused in App.jsx itself, since ACDView.jsx already
+│   │                        imports those same 3 directly from PlaybookView.jsx on its own.
+│   │                        Converting to lazy dropped the main bundle 1,122KB→979KB raw
+│   │                        (302KB→273KB gzip); no other file needs a static PlaybookView import)
 │   ├── ScenarioTesterView.jsx, AllTradesView.jsx, LongTermStructureView.jsx
-│   ├── RiskView.jsx, TearsheetView.jsx, SetupHistoryView.jsx, SettingsView.jsx
-│   └── (all lazy-loaded except ACDView, CalendarView, PlaybookView)
+│   └── RiskView.jsx, TearsheetView.jsx, SetupHistoryView.jsx, SettingsView.jsx
 ├── components/shared/
 │   ├── Card.jsx           # Standard card wrapper (var(--card-bg), var(--border-color))
 │   ├── WinChip.jsx        # Win-rate chip: label + WR% + N, highlight/isBaseline props
@@ -325,6 +335,7 @@ Notable scripts that are scheduled or run after auto-import:
 - `scripts/backfill_mae_mfe.mjs` — backfills mae_points, mfe_points, bars_to_resolution, resolution_bar_time on `active_setups`; shared replay engine: `server/services/maeMfeReplay.js`; **daily** (via `run_daily_calibration.sh`)
 - `scripts/run_daily_calibration.sh` — runs `backfill_mae_mfe.mjs` + `update_optimal_stops.mjs` + `backtest_setup_status.mjs` at 4:20 PM ET Mon-Fri (system crontab); fast pass (~2 min); ensures stops/suppression reflect same-day resolved trades
 - `scripts/backtest_monday_deep.js` — Monday WR/EV overrides per level; writes `MON_BACKTEST` rows read live by `acd.js` keepLevels logic; cron fires Sunday via `run_weekly_backtests.sh`
+- `scripts/calibrate_touch_quality.mjs` (2026-07-15) — per-setup_type order-flow touch-quality calibration: reaction window (p25 bars-to-resolution) + high-volume z-score tercile cutoff + per-bucket (`HIGH_VOL_ABSORBED`/`HIGH_VOL_OVERRUN`/`QUIET`) N/WR/EV; writes `TOUCH_QUALITY` rows to `performance_audit`; shares classification logic with `server/services/touchQuality.js` (also used live by `acd.js`'s `resolveSetupsByPrice()`). Added to `run_weekly_backtests.sh`. See docs/OPEN_THREADS.md "Touch-quality" thread for the full derivation (price-action approach tried first, didn't generalize; order-flow approach validated across all 47 N≥50 setup_types, ~45% show `HIGH_VOL_OVERRUN` as the clearly worst bucket, zero day-clustering).
 - `scripts/repair_*.mjs` (2026-07-14, 7 scripts) — one-time data repairs for the `resolution_method='BACKFILL'` corpus in `active_setups` (the historical output of `scripts/archive/backfill_level_fades.js`), not scheduled/cron, kept for audit trail: `repair_backfill_duplicate_bars.mjs` (re-simulated against clean `price_bars_primary`), `repair_cam_r4_s3_window_mismatch.mjs`/`repair_top8_window_mismatch.mjs`/`repair_remaining_window_mismatch.mjs`/`repair_ib_dependent_window_mismatch.mjs`/`repair_weekly_vwap_window_mismatch.mjs` (re-simulated first-touch-anywhere-in-RTH instead of the archived script's 10:30am-noon window, one wave per level-formation-gate family), `repair_dollars_per_point.mjs` (rescaled `actual_pnl` from $5/pt to the real $2/pt MNQ contract value). Each backs up to a `active_setups_*_backup_20260714` table before writing — see docs/OPEN_THREADS.md for the full incident writeup and docs/KNOWN_ISSUES.md items 8-10 for the underlying bugs. Backup tables are safe to drop once the fixes have held for a few sessions.
 
 ---

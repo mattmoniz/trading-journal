@@ -128,32 +128,124 @@ export async function get14DayRthAtr(targetDate) {
  * Generates the complete Session Forecast
  */
 export async function getSessionForecast(targetDate) {
-  // 1. Get ATR
-  const atr = await get14DayRthAtr(targetDate);
+  // Every query below depends only on `targetDate` — none depend on each other's
+  // results. Was 8+ sequential awaits (get14DayRthAtr, getActiveBalanceZone, then 6
+  // more queries one at a time, then a 3-iteration sequential loop for rangePositions)
+  // — confirmed via profiling (2026-07-15) this endpoint cost 2.7-4.2s despite an
+  // earlier partial fix to priorOHLCQ alone. bracketAge's `recentQ` looked like it
+  // depended on rangePositions.d20, but only its JS post-processing loop does — the
+  // query itself only needs targetDate, so it's included in the same batch below.
+  // Collapsed into one Promise.all: total wait is now the max of the slowest single
+  // query, not the sum of all ~11.
+  const [
+    atr, balanceZone, macroQ, priorOHLCQ, priorValueQ, gLineQ, monthlyQ, onQ,
+    rQ5, rQ10, rQ20, recentQ,
+  ] = await Promise.all([
+    get14DayRthAtr(targetDate),
+    getActiveBalanceZone(targetDate),
+    query(`
+      SELECT event_type, event_time::text, impact_level, notes
+      FROM macro_events
+      WHERE event_date = $1 AND impact_level = 'HIGH'
+    `, [targetDate]),
+    // Fixed 2026-07-15: (a) the inner MAX(ts::date) lookback had no lower bound, forcing
+    // price_bars_primary's dedup view to materialize a full GroupAggregate before it could
+    // find the max (same partition-pruning cost found and fixed elsewhere this session —
+    // 1895ms unbounded -> 377ms with a 30-day floor, verified identical result); (b) the
+    // outer query read raw `price_bars` instead of the deduplicated `price_bars_primary`
+    // view (price_bars has up to ~23% duplicate-minute rows on bad days per
+    // docs/KNOWN_ISSUES.md item 8 — this consumer was missed by that migration).
+    query(`
+      SELECT MAX(high)::float as h, MIN(low)::float as l, (array_agg(close ORDER BY ts DESC))[1]::float as c
+      FROM price_bars_primary
+      WHERE symbol='NQ'
+        AND ts::date = (
+          SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30
+        )
+        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    `, [targetDate]),
+    query(`
+      SELECT val::float as val, vah::float as vah, poc::float as poc
+      FROM developing_value_log
+      WHERE trade_date < $1
+      ORDER BY trade_date DESC LIMIT 1
+    `, [targetDate]),
+    query(`
+      SELECT (array_agg(open ORDER BY ts ASC))[1]::float as g_line
+      FROM price_bars_primary WHERE symbol='NQ'
+        AND ts::date = date_trunc('week', ($1::text)::date) - INTERVAL '1 day'
+        AND EXTRACT(hour FROM ts) >= 18
+    `, [targetDate]),
+    query(`
+      SELECT pivot_level::float as pivot, pivot_r1::float as r1, pivot_s1::float as s1, prior_month_high::float as pm_high, prior_month_low::float as pm_low
+      FROM acd_monthly_pivot
+      ORDER BY month_year DESC LIMIT 1
+    `),
+    query(`
+      SELECT MAX(high) as on_high, MIN(low) as on_low FROM (
+        SELECT high, low FROM price_bars_primary WHERE symbol='NQ'
+          AND ts::date = ($1::date - INTERVAL '1 day')::date
+          AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) >= 960
+        UNION ALL
+        SELECT high, low FROM price_bars_primary WHERE symbol='NQ'
+          AND ts::date = $1::date
+          AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) < 570
+      ) x
+    `, [targetDate]),
+    query(`
+      SELECT MAX(h) as hi, MIN(l) as lo FROM (
+        SELECT MAX(high)::float as h, MIN(low)::float as l
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        AND ts::date IN (
+          SELECT DISTINCT ts::date FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1::date
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY ts::date DESC LIMIT 5
+        )
+        GROUP BY ts::date
+      ) x
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    query(`
+      SELECT MAX(h) as hi, MIN(l) as lo FROM (
+        SELECT MAX(high)::float as h, MIN(low)::float as l
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        AND ts::date IN (
+          SELECT DISTINCT ts::date FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1::date
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY ts::date DESC LIMIT 10
+        )
+        GROUP BY ts::date
+      ) x
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    query(`
+      SELECT MAX(h) as hi, MIN(l) as lo FROM (
+        SELECT MAX(high)::float as h, MIN(low)::float as l
+        FROM price_bars_primary WHERE symbol='NQ'
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+        AND ts::date IN (
+          SELECT DISTINCT ts::date FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1::date
+          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY ts::date DESC LIMIT 20
+        )
+        GROUP BY ts::date
+      ) x
+    `, [targetDate]).catch(() => ({ rows: [] })),
+    query(`
+      SELECT ts::date::text as d, MAX(high)::float as h, MIN(low)::float as l
+      FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date BETWEEN ($1::date - 30) AND ($1::date - 1)
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      GROUP BY ts::date ORDER BY ts::date DESC
+    `, [targetDate]).catch(() => ({ rows: [] })),
+  ]);
 
-  // 2. Get Balance Zone
-  const balanceZone = await getActiveBalanceZone(targetDate);
-
-  // 3. Get Macro Events for today
-  const macroQ = await query(`
-    SELECT event_type, event_time::text, impact_level, notes
-    FROM macro_events
-    WHERE event_date = $1 AND impact_level = 'HIGH'
-  `, [targetDate]);
   const macroEvents = macroQ.rows;
   const isMacroDay = macroEvents.length > 0;
 
-  // 4. Get prior day's High, Low, Close for Floor Pivots
-  const priorOHLCQ = await query(`
-    SELECT MAX(high)::float as h, MIN(low)::float as l, (array_agg(close ORDER BY ts DESC))[1]::float as c
-    FROM price_bars
-    WHERE symbol='NQ'
-      AND ts::date = (
-        SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
-      )
-      AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-  `, [targetDate]);
-  
   const prior = priorOHLCQ.rows[0] || {};
   let floorPivots = null;
   if (prior.h != null && prior.l != null && prior.c != null) {
@@ -167,44 +259,10 @@ export async function getSessionForecast(targetDate) {
     floorPivots = { pp, r1, s1, r2, s2, r3, s3 };
   }
 
-  // 5. Get prior day VAH, VAL, POC from developing_value_log
-  const priorValueQ = await query(`
-    SELECT val::float as val, vah::float as vah, poc::float as poc
-    FROM developing_value_log
-    WHERE trade_date < $1
-    ORDER BY trade_date DESC LIMIT 1
-  `, [targetDate]);
   const priorValue = priorValueQ.rows[0] || null;
-
-  // 6. Get G-Line (Weekly Open)
-  const gLineQ = await query(`
-    SELECT (array_agg(open ORDER BY ts ASC))[1]::float as g_line
-    FROM price_bars_primary WHERE symbol='NQ'
-      AND ts::date = date_trunc('week', ($1::text)::date) - INTERVAL '1 day'
-      AND EXTRACT(hour FROM ts) >= 18
-  `, [targetDate]);
   const gLine = gLineQ.rows[0]?.g_line || null;
-
-  // 7. Get Monthly Pivot
-  const monthlyQ = await query(`
-    SELECT pivot_level::float as pivot, pivot_r1::float as r1, pivot_s1::float as s1, prior_month_high::float as pm_high, prior_month_low::float as pm_low
-    FROM acd_monthly_pivot
-    ORDER BY month_year DESC LIMIT 1
-  `);
   const monthly = monthlyQ.rows[0] || null;
 
-  // 8. Overnight High/Low & Inventory
-  const onQ = await query(`
-    SELECT MAX(high) as on_high, MIN(low) as on_low FROM (
-      SELECT high, low FROM price_bars_primary WHERE symbol='NQ'
-        AND ts::date = ($1::date - INTERVAL '1 day')::date
-        AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) >= 960
-      UNION ALL
-      SELECT high, low FROM price_bars_primary WHERE symbol='NQ'
-        AND ts::date = $1::date
-        AND EXTRACT(HOUR FROM ts)*60+EXTRACT(MINUTE FROM ts) < 570
-    ) x
-  `, [targetDate]);
   const onHigh = onQ.rows[0]?.on_high || null;
   const onLow = onQ.rows[0]?.on_low || null;
   const onMid = onHigh && onLow ? (onHigh + onLow) / 2 : null;
@@ -260,24 +318,10 @@ export async function getSessionForecast(targetDate) {
     }))
     .sort((a, b) => a.distance - b.distance);
 
-  // Multi-timeframe range position (5, 10, 20 day)
+  // Multi-timeframe range position (5, 10, 20 day) — queries already fetched above
   const rangePositions = {};
   const qStats = { TOP: { upPct: 59, avgMove: 28, avgRange: 278 }, UPPER: { upPct: 55, avgMove: 3, avgRange: 323 }, MIDDLE: { upPct: 58, avgMove: 63, avgRange: 312 }, LOWER: { upPct: 44, avgMove: -52, avgRange: 473 }, BOTTOM: { upPct: 71, avgMove: 170, avgRange: 474 } };
-  for (const n of [5, 10, 20]) {
-    const rQ = await query(`
-      SELECT MAX(h) as hi, MIN(l) as lo FROM (
-        SELECT MAX(high)::float as h, MIN(low)::float as l
-        FROM price_bars_primary WHERE symbol='NQ'
-        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-        AND ts::date IN (
-          SELECT DISTINCT ts::date FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date < $1::date
-          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-          ORDER BY ts::date DESC LIMIT ${n}
-        )
-        GROUP BY ts::date
-      ) x
-    `, [targetDate]).catch(() => ({ rows: [] }));
+  for (const [n, rQ] of [[5, rQ5], [10, rQ10], [20, rQ20]]) {
     const r = rQ.rows[0];
     if (r?.hi && r?.lo && referencePrice) {
       const range = r.hi - r.lo;
@@ -288,15 +332,10 @@ export async function getSessionForecast(targetDate) {
   }
 
   // Bracket age: how many consecutive days has price stayed inside the 20-day range?
+  // recentQ was fetched unconditionally in the batch above (its query only needs
+  // targetDate, not rangePositions.d20 — only this loop needs the latter).
   let bracketAge = 0;
   if (rangePositions.d20) {
-    const recentQ = await query(`
-      SELECT ts::date::text as d, MAX(high)::float as h, MIN(low)::float as l
-      FROM price_bars_primary WHERE symbol='NQ'
-      AND ts::date BETWEEN ($1::date - 30) AND ($1::date - 1)
-      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-      GROUP BY ts::date ORDER BY ts::date DESC
-    `, [targetDate]).catch(() => ({ rows: [] }));
     for (const day of recentQ.rows) {
       if (day.h <= rangePositions.d20.hi && day.l >= rangePositions.d20.lo) bracketAge++;
       else break;

@@ -10,6 +10,7 @@ import CollapsibleSection from '../components/shared/CollapsibleSection.jsx';
 import WinChip from '../components/shared/WinChip.jsx';
 import { Dot, useDataUpdateDot, useFieldUpdateDots } from '../components/shared/UpdateDot.jsx';
 import { useAcdLive } from '../utils/useAcdLive.js';
+import { useSharedPollData } from '../utils/useSharedPollData.js';
 import ErrorBoundary from '../components/shared/ErrorBoundary.jsx';
 import MarketPulseBar from '../components/dashboard/MarketPulseBar.jsx';
 import SessionForecastPanel from '../components/dashboard/SessionForecastPanel.jsx';
@@ -3471,10 +3472,10 @@ function PhaseChangeMonitor({ phaseState }) {
 // Badge disappears permanently after the user opens then closes the section with that updatedAt.
 // Reappears if updatedAt changes (new data arrives).
 function OvernightContextStrip() {
-  const [data, setData] = React.useState(null);
-  React.useEffect(() => {
-    fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(d => setData(d?.overnightContext)).catch(() => {});
-  }, []);
+  // Shared with PermSlipAndStackBar/LivePlaybookCard/EdgeSectionsPanel — was 4
+  // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
+  const [edgesData] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 60000);
+  const data = edgesData?.overnightContext;
   const inv = data?.overnight_inventory;
   const ovp = data?.open_vs_prior_value;
   const pdp = data?.prior_day_profile;
@@ -3641,8 +3642,10 @@ function SetupFeedbackForm({ setup, existingFeedback, onSaved }) {
 }
 
 function EdgeSectionsPanel() {
-  const [data, setData] = React.useState(null);
-  const [err, setErr] = React.useState(null);
+  // Shared with PermSlipAndStackBar/LivePlaybookCard/OvernightContextStrip — was 4
+  // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
+  // This is the fastest-polling subscriber (30s), so it sets the shared cadence.
+  const [data, err] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 30000);
   const [resolvedSetups, setResolvedSetups] = React.useState([]);
   const [feedback, setFeedback] = React.useState([]);
   const [showClosed, setShowClosed] = React.useState(false);
@@ -3658,13 +3661,6 @@ function EdgeSectionsPanel() {
       if (d.feedback) setFeedback(d.feedback);
     }).catch(() => {});
   };
-
-  React.useEffect(() => {
-    const loadEdges = () => fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).then(d => { setData(d); setErr(null); }).catch(e => setErr(e.message));
-    loadEdges();
-    const iv = setInterval(loadEdges, 30000);
-    return () => clearInterval(iv);
-  }, []);
   React.useEffect(() => { loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET]);
 
   // Must be before early returns — hook call count must be constant across renders
@@ -3803,6 +3799,25 @@ function EdgeSectionsPanel() {
                   </div>
                   <div style={{ fontSize: 12, color: '#a78bfa', marginTop: 4, lineHeight: 1.4, fontStyle: 'italic' }}>{edgeCtx}</div>
                   {s.recommendation && s.recommendation !== 'Execute standard risk parameters.' && <div style={{ fontSize: 12, color: '#cbd5e1', marginTop: 2, lineHeight: 1.4 }}>{s.recommendation}</div>}
+                  {s.touchQualityStats && (() => {
+                    // Mid-trade order-flow signal — only known once this setup's own reaction
+                    // window has elapsed (see server/services/touchQuality.js). Informational
+                    // only, never affects confidence/recommendation above.
+                    const tq = s.touchQualityStats;
+                    const label = { HIGH_VOL_ABSORBED: 'Absorbed', HIGH_VOL_OVERRUN: 'Overrun', QUIET: 'Quiet touch' }[tq.bucket] || tq.bucket;
+                    const icon = tq.bucket === 'HIGH_VOL_OVERRUN' ? '⚠' : tq.bucket === 'HIGH_VOL_ABSORBED' ? '✓' : '•';
+                    const color = tq.ev > 0 ? '#34d399' : tq.ev < 0 ? '#f87171' : '#94a3b8';
+                    // rigor.clean === false means this bucket's history is either day-clustered
+                    // or chronologically unstable (see server/services/rigorDiagnostics.js) — shown
+                    // as a caution dot, not hidden, per that module's own "surface, don't
+                    // auto-suppress" convention.
+                    const rigorFlag = tq.rigor?.clean === false ? ' ⚠︎' : '';
+                    return (
+                      <div style={{ fontSize: 11, color, marginTop: 4, fontWeight: 600 }} title={tq.rigor?.clean === false ? 'This bucket\'s history is day-clustered or chronologically unstable — treat directionally, not decisively' : undefined}>
+                        {icon} Touch quality: {label} — historically {tq.wr.toFixed(0)}% WR / {tq.ev >= 0 ? '+' : ''}${tq.ev.toFixed(0)} EV (N={tq.n}){rigorFlag}
+                      </div>
+                    );
+                  })()}
                   <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={loadFeedback} />
                 </div>
               );

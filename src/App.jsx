@@ -8,8 +8,14 @@ const RiskView = lazy(() => import('./views/RiskView.jsx'));
 const LongTermStructurePage = lazy(() => import('./views/LongTermStructureView.jsx'));
 const BacktestView = lazy(() => import('./views/BacktestView.jsx'));
 const ACDView = lazy(() => import('./views/ACDView.jsx'));
+// Was an eager import (1564-line module always in the main bundle even when this tab
+// was never opened) — converted to lazy 2026-07-15 alongside the other Morning Prep
+// perf work. The named exports here were unused in App.jsx itself (LevelConfluenceReference/
+// ConditionBacktestInline/PatternStatsPanel are consumed directly by ACDView.jsx, which
+// already imports them from PlaybookView.jsx on its own and is separately lazy) — dropped
+// from this import since they added nothing but a reason to keep PlaybookView eager here.
+const PlaybookPage = lazy(() => import('./views/PlaybookView.jsx'));
 import { QuickTradeLog, SystemHealthSummary } from './components/dashboard/QuickTradeLog.jsx';
-import PlaybookPage, { LevelConfluenceReference, ConditionBacktestInline, PatternStatsPanel } from './views/PlaybookView.jsx';
 import { io } from 'socket.io-client';
 import './App.css';
 import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './utils/timestamps.js';
@@ -638,7 +644,9 @@ function App() {
         )}
         {currentView === 'playbook' && (
           <ErrorBoundary name="Playbook">
-            <PlaybookPage />
+            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+              <PlaybookPage />
+            </Suspense>
           </ErrorBoundary>
         )}
         {currentView === 'setup-log' && (

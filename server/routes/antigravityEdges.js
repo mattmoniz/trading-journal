@@ -469,7 +469,8 @@ async function getLiveEdgesContext() {
              s.entry_zone_low::float, s.entry_zone_high::float, s.stop_level::float, s.t1_level::float,
              s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
              s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
-             EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day
+             EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day,
+             s.touch_quality, s.touch_quality_vol_z::float
       FROM active_setups s
       WHERE s.trade_date = $1 AND s.status != 'SHADOW'
       ORDER BY s.fired_at DESC
@@ -1406,6 +1407,23 @@ async function getLiveEdgesContext() {
   } catch (_) {}
 
   // Step 7: Active setups for targetDate (from pre-fetched setupsQ)
+  // Touch-quality calibration lookup (scripts/calibrate_touch_quality.mjs,
+  // signal_type='TOUCH_QUALITY') — kept as its own query rather than added to the
+  // Promise.all array above, deliberately, per that array's own load-bearing-
+  // ordering warning (adding an entry there means reindexing every destructured
+  // name below it). Cheap (~47 rows total), not worth the risk.
+  const touchQualityMap = {};
+  try {
+    const tqRows = await query(`
+      SELECT signal_name, notes FROM performance_audit
+      WHERE signal_type = 'TOUCH_QUALITY'
+        AND run_date = (SELECT MAX(run_date) FROM performance_audit WHERE signal_type = 'TOUCH_QUALITY')
+    `);
+    for (const row of tqRows.rows) {
+      try { touchQualityMap[row.signal_name] = JSON.parse(row.notes); } catch (_) {}
+    }
+  } catch (_) {}
+
   const baselineMap = {};
   for (const row of baselinesQ.rows) {
     baselineMap[row.setup_type] = { wr: row.wr, n: row.n };
@@ -1495,13 +1513,25 @@ async function getLiveEdgesContext() {
     else if (adjustedWr <= 0.38) confidence = 'AVOID';
     else confidence = 'LOW';
 
+    // Touch-quality: informational only, mid-trade signal (only known once the setup's
+    // own reaction window has elapsed — see server/services/touchQuality.js). Never
+    // affects adjustedWr/confidence/recommendation above.
+    const tqCalib = touchQualityMap[s.setup_type];
+    let touchQualityStats = null;
+    if (tqCalib && s.touch_quality) {
+      const bucketKey = { HIGH_VOL_ABSORBED: 'absorbed', HIGH_VOL_OVERRUN: 'overrun', QUIET: 'quiet' }[s.touch_quality];
+      const bucket = bucketKey ? tqCalib[bucketKey] : null;
+      if (bucket && !bucket.thin) touchQualityStats = { bucket: s.touch_quality, ...bucket };
+    }
+
     processedSetups.push({
       ...s,
       baselineWr: base.wr,
       sampleN: base.n,
       adjustedWr: parseFloat(Math.max(0.05, Math.min(0.95, adjustedWr)).toFixed(3)),
       confidence,
-      recommendation: rec
+      recommendation: rec,
+      touchQualityStats,
     });
   }
 

@@ -10,7 +10,13 @@ PATTERN_A_EXCLUDE='_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|S
 PATTERN_A_LABEL='hardcoded Set literal (suppression list?)'
 
 # Pattern B: hardcoded array of setup-type strings (e.g. mondaySkip = ['OR_HIGH_FADE',...])
-PATTERN_B='=\s*\['
+# Requires the array to open directly on a quoted string literal — narrowed 2026-07-15
+# after a false positive: `const firedDates = [...new Set(setupsRes.rows...)]` matched
+# because PATTERN_B_FILTER's `setup` substring matched inside the unrelated variable name
+# `setupsRes`, and the old PATTERN_B ('=\s*\[' alone) matches any array/spread opener, not
+# just a hardcoded string-literal list. Verified: still matches `mondaySkip = ['OR_HIGH_FADE',
+# 'IB_BEARISH']`; no longer matches spread/computed arrays like `[...new Set(...)]`.
+PATTERN_B='=\s*\[\s*['"'"'"]'
 PATTERN_B_FILTER='fade|suppress|skip|monday|setup'
 PATTERN_B_EXCLUDE='IB_SWEEP_TYPES\|STOP_RANGE\|DOW_NAMES'
 PATTERN_B_LABEL='hardcoded setup-type array'

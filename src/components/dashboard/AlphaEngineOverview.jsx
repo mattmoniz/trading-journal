@@ -462,23 +462,20 @@ export default function AlphaEngineOverview() {
     { name: 'Ceiling', effect: '1.50×', stat: 'Hard maximum', color: '#94a3b8' },
   ];
 
-  const suppressed = [
-    { name: 'IB_HIGH_FADE_SHORT', reason: '55.7% WR N=79, EV=−$35 — stop width kills SHORT side' },
-    { name: 'OR_MID_AFTER_IB_FADE_SHORT', reason: '61.7% WR N=60, EV=−$32' },
-    { name: 'PD_POC_FADE_SHORT', reason: '52.9% WR N=34, EV=−$30' },
-    { name: 'IB_MID_SCALP_FADE_SHORT', reason: '63.6% WR N=66, EV=−$16 (stop width)' },
-    { name: 'PD_VAH_FADE_SHORT', reason: '60.0% WR N=45, EV=−$16 — SHORT side fails' },
-    { name: 'CAM_R4_FADE_LONG', reason: '64.3% WR N=28, EV=−$28 — fading extreme resistance' },
-    { name: 'CAM_R1_FADE_LONG / SHORT', reason: '61–62% WR, EV=−$16 to −$17' },
-    { name: 'CAM_S2_FADE_SHORT', reason: '60.0% WR N=30, EV=−$23' },
-    { name: 'IB_MID_SCALP_FADE_LONG', reason: 'BALANCE/TURBULENT only — TREND re-enabled (82% WR)' },
-    { name: 'TREND counter-direction fades', reason: 'SHORT on UP-trend / LONG on DOWN-trend: 55–61% WR, −$28 to −$52 EV, −$17.5K/yr' },
-    { name: 'S2 double-counter', reason: 'Both overnight inventory AND open-vs-value disagree: 54% WR → suppressed' },
+  // Mechanism-level descriptions only — no per-setup_type WR/N/$ literals here (those
+  // drift constantly as SETUP_STATUS recalibrates weekly and are rendered live below
+  // from `setupStatus.suppressed` instead). Found stale 2026-07-14/15 (docs/KNOWN_ISSUES.md
+  // item 11): this array used to hand-type ~10 individual setup_type WR/N/$ entries that
+  // had drifted hard (e.g. claimed IB_HIGH_FADE_SHORT suppressed at 55.7% WR — it's ACTIVE
+  // now; claimed PD_POC_FADE_SHORT suppressed — it's PROMOTE now). Fixed same pattern as
+  // the 2026-07-13 acd.js `describeLevel()` fix: derive from already-fetched live data,
+  // never hand-type a number that a weekly recompute can invalidate.
+  const suppressionMechanisms = [
     { name: 'Globally suppressed setups (pipeline-driven)', reason: 'Auto-suppression engine writes SETUP_STATUS rows weekly — any setup with N≥20 and EV<-$5 fires as SHADOW. Setups flip back to ACTIVE when 90d data recovers. mondaySkip list removed 2026-07-09 — DOW edge handled by SETUP_STATUS_DOW.' },
-    { name: 'WPP_FADE_SHORT (general)', reason: 'EV=−$10.8, N=67. Suppressed. ↓ See conditional variant below.' },
-    { name: 'WPP_FADE_SHORT_GAP_UP [ACTIVE — conditional variant]', reason: '59.3% WR, EV=+$8.7, N=27 (backtest 2026-07-09). Fires when session 9:30 open is BELOW WPP (gap brought price up into resistance). Separate SETUP_STATUS + OPTIMAL_STOP rows in performance_audit. Maintained by scripts/backtest_wpp_short_gap.mjs on weekly cron. acd.js resolveSetupType() converts WPP_FADE_SHORT → this type when gap-up condition met.' },
-    { name: 'MOMENTUM_60m_60m (unconditioned) / VOLZ_30m_60m / MOMENTUM_60m_60m_BALANCE_FADE', reason: 'From the 2026-07-14 minute-bar scanner (raw momentum/volume-z extreme over trailing 60min, not a level touch — see scratch/claude_minute_bar_scanner.mjs). All 3 looked real on the original time-exit backtest, but turn negative EV (-$15.75, -$18.49, -$3.20/trade) once simulated with a real MAE/MFE-derived stop/target instead of a fixed time exit. Not wired live.' },
-    { name: 'MOMENTUM_60m_60m_TREND [SHADOW — new signal, N<20 live, under evaluation]', reason: '65.3% WR, EV=+$10.72/trade, N=714 (backtest, real stop/target simulated). The one survivor of the 4 candidates above — only fires on TREND days (acd_daily_log.day_type, gated to >=10:30 ET since day-type isn\'t final before IB close). Not a level touch — own poller in server/services/minuteBarSignalDetector.js on the same 60s cycle as the level fade engine. Stop/target read live from performance_audit OPTIMAL_STOP (never hardcoded). SHADOW until N>=20 live resolved trades per the New Setup Type checklist — fires silently, no live alert, until then. Maintained by scripts/backtest_momentum60_daytype.mjs.' },
+    { name: 'TREND counter-direction fade filter', reason: 'On TREND days (≥10:30 ET, once day-type is final): fades against the IB break direction are suppressed — IB_BULLISH suppresses SHORT fades, IB_BEARISH suppresses LONG fades, and if IB direction is unknown all fades are suppressed to be safe. isTrendCounterFade() in acd.js, architecturally separate from the SETUP_STATUS pipeline — restored 2026-07-15 after being dropped from this list without a live replacement (docs/KNOWN_ISSUES.md item 11 follow-up).' },
+    { name: 'S2 double-counter suppression', reason: 'Suppresses a fade only when BOTH overnight inventory AND open-vs-prior-value disagree with the fade direction (e.g. LONG fade + overnight LONG_TRAPPED + open BELOW_VALUE) — a stricter bar than either signal disagreeing alone. isS2DoubleCounter() in acd.js, also separate from SETUP_STATUS. Restored 2026-07-15, same reason as above. No live UI currently flags which specific fires were caught by this filter (open item, see the page\'s own pending list below).' },
+    { name: 'WPP_FADE_SHORT_GAP_UP [conditional variant]', reason: 'Fires when session 9:30 open is BELOW WPP (gap brought price up into resistance) — resolveSetupType() in acd.js converts the base WPP_FADE_SHORT into this variant when the gap-up condition is met. Separate SETUP_STATUS + OPTIMAL_STOP rows, maintained by scripts/backtest_wpp_short_gap.mjs on the weekly cron. Live suppression status for both the base type and this variant shown below, not hand-typed here.' },
+    { name: 'MOMENTUM_60m_60m family [minute-bar scanner, not a level touch]', reason: 'From the 2026-07-14 minute-bar scanner (raw momentum/volume-z extreme over a trailing window — see scripts/backtest_minute_bar_scan.mjs). Only MOMENTUM_60m_60m_TREND survived real MAE/MFE-derived stop/target simulation (own poller: server/services/minuteBarSignalDetector.js, SHADOW pending N≥20 live trades); the unconditioned/BALANCE-fade/VOLZ variants did not and stay suppressed. Live WR/EV/N for the suppressed variants shown below, not hand-typed here.' },
   ];
 
   const tools = [
@@ -629,13 +626,26 @@ export default function AlphaEngineOverview() {
       <div style={S.section}>
         <div style={S.sectionTitle}>Suppressed Setups & Filters</div>
         <div style={S.grid2}>
-          {suppressed.map(s => (
+          {suppressionMechanisms.map(s => (
             <div key={s.name} style={S.suppressed}>
               <span style={{ color: '#ef4444', fontWeight: 700 }}>{s.name}</span>
               <span style={{ color: '#94a3b8' }}> — {s.reason}</span>
             </div>
           ))}
         </div>
+        <div style={{ fontSize: 12, color: '#64748b', margin: '14px 0 6px' }}>
+          Individual suppressed setup_types — live from the latest SETUP_STATUS run{setupStatus?.lastRun ? ` (${setupStatus.lastRun})` : ''}, not hand-typed:
+        </div>
+        {setupStatus ? (
+          <div style={S.grid2}>
+            {(setupStatus.suppressed ?? []).map(s => (
+              <div key={s.setup_type} style={S.suppressed}>
+                <span style={{ color: '#ef4444', fontWeight: 700 }}>{s.setup_type}</span>
+                <span style={{ color: '#94a3b8' }}> — WR {(s.win_rate * 100).toFixed(1)}% · EV ${s.ev_per_trade?.toFixed(2)} · N={s.sample_size}</span>
+              </div>
+            ))}
+          </div>
+        ) : <div style={{ fontSize: 12, color: '#475569' }}>Loading…</div>}
       </div>
 
       {/* Tools */}
@@ -652,16 +662,10 @@ export default function AlphaEngineOverview() {
                 <div>
                   <div style={S.toolDesc}>{t.desc}</div>
                   {setupStatus ? (
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>
-                        Last run: {setupStatus.lastRun ?? '—'} · {setupStatus.suppressed?.length ?? 0} suppressed
-                        {setupStatus.promoted?.length > 0 && ` · ${setupStatus.promoted.length} recently promoted`}
-                      </div>
-                      {(setupStatus.suppressed ?? []).map(s => (
-                        <div key={s.setup_type} style={{ fontSize: 11, color: '#ef4444', marginBottom: 2 }}>
-                          ✕ {s.setup_type} — WR {(s.win_rate * 100).toFixed(1)}% · EV ${s.ev_per_trade?.toFixed(0)} · N={s.sample_size}
-                        </div>
-                      ))}
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 8 }}>
+                      Last run: {setupStatus.lastRun ?? '—'} · {setupStatus.suppressed?.length ?? 0} suppressed
+                      {setupStatus.promoted?.length > 0 && ` · ${setupStatus.promoted.length} recently promoted`}
+                      {' — full live list in "Suppressed Setups & Filters" above.'}
                     </div>
                   ) : <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>Loading...</div>}
                 </div>

@@ -335,6 +335,149 @@ CREATE TABLE public.active_setups (
     resolution_bar_time timestamp without time zone,
     replay_resolution character varying(20),
     size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric
+);
+
+
+--
+-- Name: active_setups_backfill_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_backfill_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
+);
+
+
+--
+-- Name: active_setups_cam_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_cam_window_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
+);
+
+
+--
+-- Name: active_setups_ib_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_ib_window_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
     suppression_reason text
 );
 
@@ -357,6 +500,159 @@ CREATE SEQUENCE public.active_setups_id_seq
 --
 
 ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
+
+
+--
+-- Name: active_setups_pnl_rescale_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_pnl_rescale_backup_20260714 (
+    id integer,
+    setup_type character varying(60),
+    resolution character varying(20),
+    actual_pnl numeric
+);
+
+
+--
+-- Name: active_setups_remaining_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_remaining_window_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
+);
+
+
+--
+-- Name: active_setups_top8_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_top8_window_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
+);
+
+
+--
+-- Name: active_setups_weeklyvwap_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_weeklyvwap_window_backup_20260714 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text
+);
 
 
 --
@@ -1153,6 +1449,32 @@ CREATE TABLE public.level_prices (
     price numeric(12,4),
     category text,
     computed_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: level_prices_ib_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_ib_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_weeklyvwap_backup_20260714; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_weeklyvwap_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
 );
 
 

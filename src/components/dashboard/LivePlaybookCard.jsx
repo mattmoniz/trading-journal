@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSharedPollData } from '../../utils/useSharedPollData';
 
 const API_URL = '/api';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -204,7 +205,9 @@ function computePlaybook(ctx, acd, edges) {
 export default function LivePlaybookCard({ date }) {
   const [ctx,          setCtx]          = useState(null);
   const [acd,          setAcd]          = useState(null);
-  const [edges,        setEdges]        = useState(null);
+  // Shared with PermSlipAndStackBar/OvernightContextStrip/EdgeSectionsPanel — was 4
+  // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
+  const [edges] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 30000);
   const [aiResponse,   setAiResponse]   = useState(null);
   const [aiLoading,    setAiLoading]    = useState(false);
   const [aiError,      setAiError]      = useState(null);
@@ -221,8 +224,6 @@ export default function LivePlaybookCard({ date }) {
       .then(r => r.json()).then(c => { if (!c?.noData) setCtx(c); }).catch(() => {});
     fetch(`${API_URL}/acd/today`)
       .then(r => r.json()).then(setAcd).catch(() => {});
-    fetch(`${API_URL}/antigravity/edges-context`)
-      .then(r => r.json()).then(setEdges).catch(() => {});
   };
 
   const loadConversations = () => {

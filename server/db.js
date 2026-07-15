@@ -22,9 +22,23 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'trading_journal',
   user: process.env.DB_USER || 'postgres',
   password: process.env.DB_PASSWORD,
-  max: 20, // Maximum number of clients in the pool
+  // Raised from 20 to 60 (2026-07-15): after parallelizing the Morning Prep endpoints'
+  // internal queries with Promise.all, a single real page load fires ~7 endpoints
+  // concurrently, each now requesting ~15-20 connections at once (~100+ simultaneous
+  // requests, bursty for a second or two) — a 20-connection pool queued most of them,
+  // showing up as ~3.7-4.2s per endpoint under concurrent load despite each being
+  // ~1.3-1.8s in isolation. Postgres max_connections=100 with ~26 in use baseline
+  // (this app + gemini_readonly + manual psql/scripts + the 60s server-autonomous
+  // poller), so 60 leaves headroom without exhausting max_connections.
+  max: 60, // Maximum number of clients in the pool
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  // Raised from 2000 to 8000 (2026-07-15) alongside the pool-size bump above: at
+  // max=20/timeout=2000, the burst of ~100+ simultaneous connection requests from one
+  // real page load caused real "timeout exceeded when trying to connect" errors (seen
+  // in scratch/server_errors.jsonl on auction-read/scalp-playbook during concurrent-load
+  // testing) instead of just queueing. A short burst of contention should make a request
+  // wait, not fail outright.
+  connectionTimeoutMillis: 8000,
 });
 
 // Bump work_mem per-connection so large sorts (e.g. GROUP BY on trades) stay in memory

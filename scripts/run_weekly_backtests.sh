@@ -10,6 +10,11 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/backtest_pulse_score.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 
+# --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
+# classification (informational-only mid-trade flag) and the antigravity/edges-context
+# card badge. See server/services/touchQuality.js and docs/OPEN_THREADS.md. ---
+/usr/bin/node scripts/calibrate_touch_quality.mjs
+
 # --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
 /usr/bin/node scripts/backtest_wpp_short_gap.mjs
 /usr/bin/node scripts/backtest_momentum60_daytype.mjs

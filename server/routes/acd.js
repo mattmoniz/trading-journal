@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
 import { directionFromType } from '../services/maeMfeReplay.js';
+import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd } from '../services/queries.js';
@@ -54,19 +55,59 @@ async function getTrailingORWidths(date, days = 90) {
 let acdJob = { status: 'idle', progress: null, result: null, error: null };
 
 // ── Setup-detection level cache (structural data that changes at most daily) ──
-// Keyed by trade date + cache key. TTL = 60 seconds for intraday stability.
+// Keyed by trade date + cache key. Default TTL = 60 seconds for intraday stability;
+// callers with a naturally-daily-scoped value (already keyed by date, so a stale-day
+// read is impossible) can pass a longer ttl instead of reinventing a second cache —
+// see getTouchQualityCalib/getTouchQualityBaseline below, which used to hand-roll
+// their own module-level date-compare cache next to this one. Found in code review
+// 2026-07-15, consolidated onto this existing helper instead.
 const _levelCache = {};
 const LEVEL_CACHE_TTL = 60000;
+const DAY_CACHE_TTL = 12 * 60 * 60 * 1000; // half a trading day+ — safe since the cache key already includes the date
 function cacheKey(tradeDate, key) { return `${tradeDate}:${key}`; }
-function getCached(tradeDate, key) {
+function getCached(tradeDate, key, ttl = LEVEL_CACHE_TTL) {
   const e = _levelCache[cacheKey(tradeDate, key)];
-  if (e && Date.now() - e.ts < LEVEL_CACHE_TTL) return e.val;
+  if (e && Date.now() - e.ts < ttl) return e.val;
   return null;
 }
 function setCached(tradeDate, key, val) {
   _levelCache[cacheKey(tradeDate, key)] = { val, ts: Date.now() };
   return val;
 }
+
+// Touch-quality (order-flow) calibration + volume-baseline lookups — informational
+// only; see server/services/touchQuality.js and scripts/calibrate_touch_quality.mjs.
+async function getTouchQualityCalib() {
+  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const cached = getCached(todayET, 'touchQualityCalib', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const res = await query(`
+    SELECT signal_name, notes FROM performance_audit
+    WHERE signal_type='TOUCH_QUALITY' AND run_date=(SELECT MAX(run_date) FROM performance_audit WHERE signal_type='TOUCH_QUALITY')
+  `).catch(() => ({ rows: [] }));
+  const map = {};
+  for (const row of res.rows) {
+    try {
+      const n = JSON.parse(row.notes);
+      map[row.signal_name] = { windowBars: n.window_bars, highVolZCutoff: n.high_vol_z_cutoff };
+    } catch (_) {}
+  }
+  return setCached(todayET, 'touchQualityCalib', map);
+}
+
+// tradeDate: the SETUP's own trade_date (not "today") — a SHADOW/overnight setup
+// classified after midnight ET must exclude its own trade date from the 90-day
+// trailing baseline the same way scripts/calibrate_touch_quality.mjs does, not
+// silently fold that date's own volume into its baseline average. Previously this
+// always used wall-clock "today", which only happened to be correct for the common
+// same-day case. Found in code review 2026-07-15.
+async function getTouchQualityBaseline(tradeDate) {
+  const cached = getCached(tradeDate, 'touchQualityBaseline', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const baseline = await getVolumeBaseline(query, tradeDate);
+  return setCached(tradeDate, 'touchQualityBaseline', baseline);
+}
+
 let structuralBackfillJob = { status: 'idle', done: 0, total: 0, eventsAdded: 0, error: null };
 let acdBulkJob = { status: 'idle', done: 0, total: 0, error: null };
 let weeklyBulkJob = { status: 'idle', done: 0, total: 0, error: null };
@@ -142,7 +183,7 @@ export async function resolveSetupsByPrice(io) {
   // (4hrs in EDT), pulling in pre-market bars and causing false STOP_HIT resolutions.
   // Passing the raw text avoids the round-trip entirely. Found 2026-06-30.
   const active = await query(`
-    SELECT id, setup_type, trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
 
@@ -214,7 +255,9 @@ export async function resolveSetupsByPrice(io) {
     if (!long && t1 >= entry) continue;
 
     const bars = await query(`
-      SELECT ts, open::float, high::float, low::float, close::float
+      SELECT ts, open::float, high::float, low::float, close::float,
+             COALESCE(bid_volume,0)::int AS bid_volume, COALESCE(ask_volume,0)::int AS ask_volume,
+             (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod
       FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts
     `, [row.fired_at]);
 
@@ -250,6 +293,54 @@ export async function resolveSetupsByPrice(io) {
         break;
       }
     }
+
+    // Touch-quality (order-flow) — informational only, side-effect UPDATE, never
+    // influences resolution/pnl above or below. Fires once per setup, once its
+    // calibrated reaction window has elapsed (or the setup resolves first,
+    // whichever comes first). See server/services/touchQuality.js and
+    // docs/OPEN_THREADS.md "Touch-quality" thread. Wrapped defensively — this is
+    // non-critical, must never block real setup resolution if it throws.
+    if (!row.touch_quality) {
+      try {
+        const calib = (await getTouchQualityCalib())[row.setup_type];
+        const availableBars = resolution ? barCount : bars.rows.length;
+        // Classify once the full calibrated window has elapsed, OR once the setup
+        // resolves early (using whatever bars it actually got) — matches
+        // scripts/calibrate_touch_quality.mjs's own windowing exactly. Previously
+        // required availableBars >= calib.windowBars even when resolution had
+        // already happened, so any trade resolving faster than its own type's
+        // calibrated window (~25% of trades by construction, since the window is
+        // that type's own p25 bars-to-resolution) got skipped this cycle, then
+        // flipped to status='RESOLVED' and dropped out of the `active` query
+        // forever — touch_quality stayed permanently NULL. Found in code review
+        // 2026-07-15.
+        if (calib && (resolution || availableBars >= calib.windowBars)) {
+          const win = bars.rows.slice(0, Math.min(calib.windowBars, availableBars));
+          let mae = 0, maeAtBar1 = null, maeAtWindowEnd = 0;
+          win.forEach((bar, i) => {
+            const adverse = long ? entry - bar.low : bar.high - entry;
+            mae = Math.max(mae, adverse);
+            if (i === 0) maeAtBar1 = mae;
+            maeAtWindowEnd = mae;
+          });
+          const gaveFurtherGround = maeAtWindowEnd > (maeAtBar1 ?? 0) + 0.01;
+          const baseline = await getTouchQualityBaseline(row.trade_date);
+          const tq = classifyTouch({
+            windowBars: win, direction: long ? 'LONG' : 'SHORT', baseline,
+            highVolZCutoff: calib.highVolZCutoff, gaveFurtherGround,
+          });
+          if (tq) {
+            await query(
+              `UPDATE active_setups SET touch_quality=$2, touch_quality_vol_z=$3 WHERE id=$1 AND touch_quality IS NULL`,
+              [row.id, tq.bucket, Math.round(tq.maxVolZ * 100) / 100]
+            );
+          }
+        }
+      } catch (e) {
+        console.error('touch-quality classification error (non-critical):', e.message);
+      }
+    }
+
     if (!resolution) continue;
 
     const pnl = resolution === 'TARGET_HIT'
@@ -4373,7 +4464,11 @@ export default function createACDRouter(io) {
 
           let pdIbMid = null;
           try {
-            const pdIbQ = await query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]);
+            // Bounded lower end (2026-07-15, matches the same fix applied elsewhere this
+            // session) — an unbounded ts::date < $1 lookback in the inner MAX(ts::date)
+            // subquery forces price_bars_primary's dedup view to consider far more history
+            // than needed before it can find the max; 288ms -> 126ms, identical result.
+            const pdIbQ = await query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]);
             if (pdIbQ.rows[0]?.ibh) pdIbMid = (pdIbQ.rows[0].ibh + pdIbQ.rows[0].ibl) / 2;
           } catch(_) {}
 
@@ -4385,13 +4480,16 @@ export default function createACDRouter(io) {
 
           let ib10Mid = null;
           try {
+            // Bounded lower end (2026-07-15, same fix as pdIbQ above) — unbounded
+            // ts::date < $1 in the inner DISTINCT lookback forces a full historical scan
+            // before the ORDER BY...LIMIT 10 can apply.
             const ib10Q = await query(`
               SELECT AVG((ibh + ibl) / 2.0)::float as mid FROM (
                 SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
                 FROM price_bars_primary
                 WHERE symbol='NQ' AND ts::date IN (
                   SELECT DISTINCT ts::date FROM price_bars_primary
-                  WHERE symbol='NQ' AND ts::date < $1
+                  WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30
                     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
                   ORDER BY ts::date DESC LIMIT 10
                 ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
@@ -6050,32 +6148,54 @@ export default function createACDRouter(io) {
       // After 6 PM ET Globex starts — include both today's RTH setups AND next day's Globex setups
       const dates = [todayET];
       if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
-      const r = await query(`
+
+      const setupsRes = await query(`
         SELECT s.*,
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
           TO_CHAR(s.expires_at, 'YYYY-MM-DD HH24:MI:SS') as expires_at_str,
-          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str,
-          b.body_pct, b.bar_dir
+          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
         FROM active_setups s
-        LEFT JOIN LATERAL (
-          SELECT
-            CASE WHEN (pb.high - pb.low) > 0
-              THEN ROUND(ABS(pb.close - pb.open) / (pb.high - pb.low) * 100)::int
-              ELSE NULL END AS body_pct,
-            CASE WHEN pb.close > pb.open THEN 'UP'
-                 WHEN pb.close < pb.open THEN 'DOWN' ELSE 'FLAT' END AS bar_dir
-          FROM price_bars pb
-          WHERE pb.symbol = 'NQ'
-            AND pb.ts::date = s.fired_at::date
-            AND EXTRACT(HOUR   FROM pb.ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
-              = EXTRACT(HOUR   FROM s.fired_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
-            AND EXTRACT(MINUTE FROM pb.ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
-              = EXTRACT(MINUTE FROM s.fired_at AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')
-          ORDER BY pb.ts LIMIT 1
-        ) b ON s.fired_at IS NOT NULL
         WHERE s.trade_date = ANY($1) ORDER BY s.fired_at
       `, [dates]);
-      res.json({ setups: r.rows });
+
+      // body_pct/bar_dir of the exact 1-min bar matching each setup's fired_at — was a
+      // correlated LATERAL subquery against `price_bars` (raw, partitioned) per row, ~35
+      // rows × full partition scan each (confirmed via EXPLAIN ANALYZE: loops=35 across
+      // every monthly partition — the same partition-pruning trap found and fixed elsewhere
+      // in this codebase 2026-07-15) — also reading the un-deduplicated table instead of
+      // `price_bars_primary` (missed by the 2026-07-13 dedup-view migration that fixed 23
+      // other consumers, per docs/KNOWN_ISSUES.md item 8). Fixed by bulk-fetching bars once
+      // (plain WHERE ts::date = ANY(...), fully partition-prunable) and matching in JS.
+      // Bar-fetch dates are derived from each setup's own fired_at calendar date, NOT
+      // `dates` (trade_date) — verified this matters: a Globex setup firing at 6pm ET has
+      // trade_date = next session but fired_at's own calendar date is still "today," and
+      // the original query's bar lookup was always anchored to fired_at::date, not
+      // trade_date. Verified byte-for-byte against the original LATERAL query (0 mismatches
+      // across today's 35 setups, including this exact overnight edge case) before wiring in.
+      const firedDates = [...new Set(setupsRes.rows.filter(s => s.fired_at).map(s => new Date(s.fired_at).toISOString().slice(0, 10)))];
+      const barByMinute = new Map();
+      if (firedDates.length) {
+        const barsRes = await query(`
+          SELECT ts, open::float, high::float, low::float, close::float
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date = ANY($1::date[])
+        `, [firedDates]);
+        for (const b of barsRes.rows) barByMinute.set(Math.floor(new Date(b.ts).getTime() / 60000), b);
+      }
+
+      const setups = setupsRes.rows.map(s => {
+        let body_pct = null, bar_dir = null;
+        if (s.fired_at) {
+          const bar = barByMinute.get(Math.floor(new Date(s.fired_at).getTime() / 60000));
+          if (bar) {
+            const range = bar.high - bar.low;
+            body_pct = range > 0 ? Math.round(Math.abs(bar.close - bar.open) / range * 100) : null;
+            bar_dir = bar.close > bar.open ? 'UP' : bar.close < bar.open ? 'DOWN' : 'FLAT';
+          }
+        }
+        return { ...s, body_pct, bar_dir };
+      });
+
+      res.json({ setups });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -6576,38 +6696,44 @@ export default function createACDRouter(io) {
     try {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-      // 1. Latest results per signal_type — each signal type has its own run cadence,
-      // so a single global MAX(run_date) hides older signal types whenever any
-      // fast-cycling type (e.g. ON_INVENTORY) runs and bumps the global max.
-      const latestRunQ = await query(`SELECT MAX(run_date)::text as d FROM performance_audit`);
-      const runDate = latestRunQ.rows[0]?.d;
-      if (!runDate) return res.json({ setups: [], runDate: null, currentPrice: null });
-
-      const auditQ = await query(`
-        WITH latest_per_type AS (
-          SELECT signal_type, MAX(run_date) as latest_date
-          FROM performance_audit GROUP BY signal_type
-        )
-        SELECT pa.signal_type, pa.signal_name, pa.sample_size,
-               pa.win_rate::float, pa.ev_per_trade::float, pa.total_pnl::float,
-               pa.avg_mfe::float, pa.p50_mfe::float, pa.p75_mfe::float,
-               pa.avg_mae::float, pa.p50_mae::float, pa.p75_mae::float, pa.p90_mae::float,
-               pa.current_stop::float, pa.current_target::float,
-               pa.optimal_stop::float, pa.optimal_target::float,
-               pa.recommendation, pa.notes
-        FROM performance_audit pa
-        JOIN latest_per_type l ON pa.signal_type = l.signal_type AND pa.run_date = l.latest_date
-        ORDER BY pa.signal_type, pa.ev_per_trade DESC NULLS LAST
-      `);
-
-      // 2. Current price
-      const priceQ = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
-      const currentPrice = priceQ.rows[0]?.close || null;
-
-      // 3. ATR(20) from daily true ranges
-      let atr20 = null;
-      try {
-        const atrQ = await query(`
+      // Every query in this first batch depends only on `todayET` (or nothing at all) —
+      // none depend on each other's results. Was ~18 sequential awaits (several wrapped
+      // in their own try/catch, several inside a for-loop); confirmed via profiling
+      // (2026-07-15) this was the dominant remaining cost of this endpoint even after
+      // the earlier 18s->3.1s fix (which addressed a different bottleneck — the 30-date
+      // replay's N+1/LATERAL-vs-partitioned-view issue, see the comment further below).
+      // Collapsed into one Promise.all with per-query .catch() fallbacks matching each
+      // original try/catch's silent-failure behavior — total wait is now the max of the
+      // slowest single query, not the sum of ~18.
+      const [
+        latestRunQ, auditQ, priceQ, atrQ, pdVaQ, pdDvQ, acdQ, ibQ, pdIbQ, pdOrQ, or5Q,
+        pdSessQ, trQ, last30Days, moQ, pmVaFull, m1VaQ, m3VaQ,
+        pairsBaseQ, pairsSubQ, pairsWinQ,
+      ] = await Promise.all([
+        // 1. Latest results per signal_type — each signal type has its own run cadence,
+        // so a single global MAX(run_date) hides older signal types whenever any
+        // fast-cycling type (e.g. ON_INVENTORY) runs and bumps the global max.
+        query(`SELECT MAX(run_date)::text as d FROM performance_audit`),
+        query(`
+          WITH latest_per_type AS (
+            SELECT signal_type, MAX(run_date) as latest_date
+            FROM performance_audit GROUP BY signal_type
+          )
+          SELECT pa.signal_type, pa.signal_name, pa.sample_size,
+                 pa.win_rate::float, pa.ev_per_trade::float, pa.total_pnl::float,
+                 pa.avg_mfe::float, pa.p50_mfe::float, pa.p75_mfe::float,
+                 pa.avg_mae::float, pa.p50_mae::float, pa.p75_mae::float, pa.p90_mae::float,
+                 pa.current_stop::float, pa.current_target::float,
+                 pa.optimal_stop::float, pa.optimal_target::float,
+                 pa.recommendation, pa.notes
+          FROM performance_audit pa
+          JOIN latest_per_type l ON pa.signal_type = l.signal_type AND pa.run_date = l.latest_date
+          ORDER BY pa.signal_type, pa.ev_per_trade DESC NULLS LAST
+        `),
+        // 2. Current price
+        query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`),
+        // 3. ATR(20) from daily true ranges
+        query(`
           WITH daily AS (
             SELECT ts::date as d, MAX(high)::float as hi, MIN(low)::float as lo
             FROM price_bars_primary WHERE symbol='NQ'
@@ -6618,116 +6744,51 @@ export default function createACDRouter(io) {
             SELECT hi - lo as tr FROM daily ORDER BY d DESC LIMIT 20
           )
           SELECT AVG(tr)::float as atr20 FROM trs
-        `);
-        atr20 = atrQ.rows[0]?.atr20 ? Math.round(atrQ.rows[0].atr20) : null;
-      } catch (_) {}
-
-      // 4. Compute level prices
-      // PD VA levels
-      let pdPOC = null, pdVAH = null, pdVAL = null;
-      const pdVaQ = await query(`
-        SELECT poc::float, vah::float, val::float FROM developing_value_log
-        WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
-      `, [todayET]);
-      if (pdVaQ.rows[0]) {
-        pdPOC = pdVaQ.rows[0].poc;
-        pdVAH = pdVaQ.rows[0].vah;
-        pdVAL = pdVaQ.rows[0].val;
-      }
-
-      // Floor pivots from prior day H/L/C
-      let floorP = null, floorR1 = null, floorS1 = null;
-      const pdDvQ = await query(`
-        SELECT session_high::float as hi, session_low::float as lo, session_close::float as cl
-        FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
-      `, [todayET]);
-      if (pdDvQ.rows[0]) {
-        const pdDv = pdDvQ.rows[0];
-        floorP = (pdDv.hi + pdDv.lo + pdDv.cl) / 3;
-        floorR1 = 2 * floorP - pdDv.lo;
-        floorS1 = 2 * floorP - pdDv.hi;
-      }
-
-      // OR High/Low from today's ACD log
-      let orH = null, orL = null;
-      const acdQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
-      if (acdQ.rows[0]) {
-        orH = acdQ.rows[0].or_high;
-        orL = acdQ.rows[0].or_low;
-      }
-
-      // IB High/Low from today's bars (9:30-10:30)
-      let ibHigh = null, ibLow = null;
-      const ibQ = await query(`
-        SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
-        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
-      `, [todayET]);
-      if (ibQ.rows[0]) {
-        ibHigh = ibQ.rows[0].ib_high;
-        ibLow = ibQ.rows[0].ib_low;
-      }
-
-      // PD IB Mid (and individual PD IB High/Low)
-      let pdIbMid = null, pdIbHigh = null, pdIbLow = null;
-      try {
-        const pdIbQ = await query(`
+        `).catch(() => ({ rows: [] })),
+        // 4. Compute level prices — PD VA levels
+        query(`
+          SELECT poc::float, vah::float, val::float FROM developing_value_log
+          WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
+        `, [todayET]),
+        // Floor pivots from prior day H/L/C
+        query(`
+          SELECT session_high::float as hi, session_low::float as lo, session_close::float as cl
+          FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
+        `, [todayET]),
+        // OR High/Low from today's ACD log
+        query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
+        // IB High/Low from today's bars (9:30-10:30)
+        query(`
+          SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+        `, [todayET]),
+        // PD IB Mid (and individual PD IB High/Low) — bounded lower end (2026-07-15,
+        // same fix as the level-fade candidates block's pdIbQ): unbounded ts::date < $1
+        // in the inner MAX(ts::date) lookback forced a full historical scan (288ms->126ms).
+        query(`
           SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
           FROM price_bars_primary WHERE symbol='NQ'
-            AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1
+            AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30
               AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630)
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
-        `, [todayET]);
-        if (pdIbQ.rows[0]?.ibh) {
-          pdIbHigh = pdIbQ.rows[0].ibh;
-          pdIbLow  = pdIbQ.rows[0].ibl;
-          pdIbMid  = (pdIbHigh + pdIbLow) / 2;
-        }
-      } catch (_) {}
-
-      // PD OR Mid (and individual PD OR High/Low)
-      let pdOrMid = null, pdOrHigh = null, pdOrLow = null;
-      try {
-        const pdOrQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
-        if (pdOrQ.rows[0]?.or_high) {
-          pdOrHigh = pdOrQ.rows[0].or_high;
-          pdOrLow  = pdOrQ.rows[0].or_low;
-          pdOrMid  = (pdOrHigh + pdOrLow) / 2;
-        }
-      } catch (_) {}
-
-      // 5D OR Mid (rolling composite)
-      let or5Mid = null;
-      try {
-        const or5Q = await query(`
+        `, [todayET]).catch(() => ({ rows: [] })),
+        // PD OR Mid (and individual PD OR High/Low)
+        query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]).catch(() => ({ rows: [] })),
+        // 5D OR Mid (rolling composite)
+        query(`
           SELECT MAX(orh) as hi, MIN(orl) as lo FROM (
             SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log
             WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5
           ) t
-        `, [todayET]);
-        if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
-      } catch (_) {}
-
-      // IB Mid (today)
-      const ibMid = ibHigh && ibLow ? (ibHigh + ibLow) / 2 : null;
-      // OR Mid (today)
-      const orMid = orH && orL ? (orH + orL) / 2 : null;
-
-      // PD Session Mid
-      let pdSessMid = null;
-      try {
-        const pdSessQ = await query(`
+        `, [todayET]).catch(() => ({ rows: [] })),
+        // PD Session Mid
+        query(`
           SELECT session_high::float as hi, session_low::float as lo
           FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1
-        `, [todayET]);
-        if (pdSessQ.rows[0]?.hi) pdSessMid = (pdSessQ.rows[0].hi + pdSessQ.rows[0].lo) / 2;
-      } catch (_) {}
-
-      // 5. Current regime (vol/dir/range)
-      let currentRegime = { vol: 'NORMAL', dir: 'NEUTRAL', range: 'NORMAL' };
-      try {
-        // Use the same methodology as the backtest script
-        const trQ = await query(`
+        `, [todayET]).catch(() => ({ rows: [] })),
+        // 5. Current regime raw data (vol/dir/range) — same methodology as the backtest script
+        query(`
           WITH daily AS (
             SELECT ts::date as d,
               MAX(high)::float as hi, MIN(low)::float as lo, MAX(close)::float as cl
@@ -6736,7 +6797,164 @@ export default function createACDRouter(io) {
             GROUP BY ts::date ORDER BY d DESC LIMIT 25
           )
           SELECT d, hi - lo as tr, cl FROM daily ORDER BY d ASC
-        `);
+        `).catch(() => ({ rows: [] })),
+        // 7. Last 30 trading dates (drives the replay batch below)
+        query(`
+          SELECT DISTINCT ts::date::text as d FROM price_bars_primary
+          WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          ORDER BY d DESC LIMIT 30
+        `).catch(() => ({ rows: [] })),
+        // Monthly levels
+        query(`
+          SELECT open::float as mo FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date = (
+            SELECT MIN(ts::date) FROM price_bars_primary
+            WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+          ) ORDER BY ts LIMIT 1
+        `).catch(() => ({ rows: [] })),
+        query(`
+          WITH vp AS (
+            SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY 1
+          ), tot AS (SELECT SUM(vol)::float as t FROM vp),
+          cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
+          SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
+                 MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
+        `).catch(() => ({ rows: [] })),
+        query(`
+          WITH vp AS (
+            SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND ts::date >= ($1::date - 30 * INTERVAL '1 day') AND ts::date < $1
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY 1
+          ), tot AS (SELECT SUM(vol)::float as t FROM vp),
+          cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
+          SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
+                 MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
+        `, [todayET]).catch(() => ({ rows: [] })),
+        query(`
+          WITH vp AS (
+            SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND ts::date >= ($1::date - 90 * INTERVAL '1 day') AND ts::date < $1
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            GROUP BY 1
+          ), tot AS (SELECT SUM(vol)::float as t FROM vp),
+          cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
+          SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
+                 MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
+        `, [todayET]).catch(() => ({ rows: [] })),
+        // Confluence pairs (base/sub/rolling-window) — independent reads of performance_audit
+        query(`
+          SELECT signal_name, sample_size,
+            ROUND(win_rate*100, 2)::float AS wr_pct,
+            ROUND(ev_per_trade::numeric, 2)::float AS ev,
+            recommendation
+          FROM performance_audit
+          WHERE signal_type='CONTEXT_ANALYSIS'
+            AND signal_name LIKE 'PAIR_%'
+            AND window_days = 9999
+            AND signal_name NOT LIKE '%_DOW_%'
+            AND signal_name NOT LIKE '%_TOD_%'
+            AND signal_name NOT LIKE '%_DT_%'
+          ORDER BY ev_per_trade DESC NULLS LAST
+        `),
+        query(`
+          SELECT signal_name,
+            ROUND(win_rate*100, 2)::float AS wr_pct,
+            ROUND(ev_per_trade::numeric, 2)::float AS ev,
+            sample_size, recommendation
+          FROM performance_audit
+          WHERE signal_type='CONTEXT_ANALYSIS'
+            AND window_days = 9999
+            AND (signal_name LIKE 'PAIR_%_DOW_%'
+              OR signal_name LIKE 'PAIR_%_TOD_%'
+              OR signal_name LIKE 'PAIR_%_DT_%')
+          ORDER BY signal_name, ev_per_trade DESC NULLS LAST
+        `),
+        query(`
+          SELECT signal_name, window_days,
+            sample_size,
+            ROUND(win_rate*100, 2)::float AS wr_pct,
+            ROUND(ev_per_trade::numeric, 2)::float AS ev
+          FROM performance_audit
+          WHERE signal_type='CONTEXT_ANALYSIS'
+            AND signal_name LIKE 'PAIR_%'
+            AND window_days IN (365, 182, 20)
+            AND signal_name NOT LIKE '%_DOW_%'
+            AND signal_name NOT LIKE '%_TOD_%'
+            AND signal_name NOT LIKE '%_DT_%'
+          ORDER BY signal_name, window_days
+        `),
+      ]);
+
+      const runDate = latestRunQ.rows[0]?.d;
+      if (!runDate) return res.json({ setups: [], runDate: null, currentPrice: null });
+
+      const currentPrice = priceQ.rows[0]?.close || null;
+
+      let atr20 = atrQ.rows[0]?.atr20 ? Math.round(atrQ.rows[0].atr20) : null;
+
+      let pdPOC = null, pdVAH = null, pdVAL = null;
+      if (pdVaQ.rows[0]) {
+        pdPOC = pdVaQ.rows[0].poc;
+        pdVAH = pdVaQ.rows[0].vah;
+        pdVAL = pdVaQ.rows[0].val;
+      }
+
+      let floorP = null, floorR1 = null, floorS1 = null;
+      if (pdDvQ.rows[0]) {
+        const pdDv = pdDvQ.rows[0];
+        floorP = (pdDv.hi + pdDv.lo + pdDv.cl) / 3;
+        floorR1 = 2 * floorP - pdDv.lo;
+        floorS1 = 2 * floorP - pdDv.hi;
+      }
+
+      let orH = null, orL = null;
+      if (acdQ.rows[0]) {
+        orH = acdQ.rows[0].or_high;
+        orL = acdQ.rows[0].or_low;
+      }
+
+      let ibHigh = null, ibLow = null;
+      if (ibQ.rows[0]) {
+        ibHigh = ibQ.rows[0].ib_high;
+        ibLow = ibQ.rows[0].ib_low;
+      }
+
+      let pdIbMid = null, pdIbHigh = null, pdIbLow = null;
+      if (pdIbQ.rows[0]?.ibh) {
+        pdIbHigh = pdIbQ.rows[0].ibh;
+        pdIbLow  = pdIbQ.rows[0].ibl;
+        pdIbMid  = (pdIbHigh + pdIbLow) / 2;
+      }
+
+      let pdOrMid = null, pdOrHigh = null, pdOrLow = null;
+      if (pdOrQ.rows[0]?.or_high) {
+        pdOrHigh = pdOrQ.rows[0].or_high;
+        pdOrLow  = pdOrQ.rows[0].or_low;
+        pdOrMid  = (pdOrHigh + pdOrLow) / 2;
+      }
+
+      let or5Mid = null;
+      if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
+
+      // IB Mid (today)
+      const ibMid = ibHigh && ibLow ? (ibHigh + ibLow) / 2 : null;
+      // OR Mid (today)
+      const orMid = orH && orL ? (orH + orL) / 2 : null;
+
+      let pdSessMid = null;
+      if (pdSessQ.rows[0]?.hi) pdSessMid = (pdSessQ.rows[0].hi + pdSessQ.rows[0].lo) / 2;
+
+      // 5. Current regime (vol/dir/range)
+      let currentRegime = { vol: 'NORMAL', dir: 'NEUTRAL', range: 'NORMAL' };
+      try {
         const days = trQ.rows;
         if (days.length >= 21) {
           const trs = days.map(d => d.tr);
@@ -6759,34 +6977,85 @@ export default function createACDRouter(io) {
         }
       } catch (_) {}
 
-      // 6. Regime fit from level_regime_performance
-      const regimeQ = await query(`
-        SELECT level_name, vs_overall, sample_size, win_rate::float, ev_per_trade::float
-        FROM level_regime_performance
-        WHERE vol_regime = $1 AND dir_regime = $2 AND range_regime = $3
-          AND sample_size >= 5
-      `, [currentRegime.vol, currentRegime.dir, currentRegime.range]);
+      const all30Dates = last30Days.rows.map(r => r.d);
+      const recentDates = all30Dates.slice(0, 10);
+
+      // 6. Regime fit + 7. recent replay batch — both independent of each other, and only
+      // depend on values computed synchronously above (currentRegime, recentDates/all30Dates).
+      const replayEligible = recentDates.length >= 5;
+      const [regimeQ, recentSetups, priorAsOfQ, allBarsQ] = await Promise.all([
+        query(`
+          SELECT level_name, vs_overall, sample_size, win_rate::float, ev_per_trade::float
+          FROM level_regime_performance
+          WHERE vol_regime = $1 AND dir_regime = $2 AND range_regime = $3
+            AND sample_size >= 5
+        `, [currentRegime.vol, currentRegime.dir, currentRegime.range]),
+        replayEligible ? query(`
+          SELECT setup_type, resolution FROM active_setups
+          WHERE trade_date = ANY($1::date[]) AND resolution IN ('TARGET_HIT','STOP_HIT')
+        `, [recentDates]) : Promise.resolve({ rows: [] }),
+        // 2026-07-15: was an N+1 pattern (4 sequential queries × 30 dates ≈ 120 round
+        // trips, the confirmed dominant cost of this endpoint's ~18s response time). A
+        // first batching attempt (LATERAL join for ALL of dv/ib/or against
+        // price_bars_primary) was reverted the same session — EXPLAIN ANALYZE showed
+        // ~114s, because the correlated IB lookback against price_bars_primary (a view
+        // over ~40 monthly partitions) defeated partition pruning under LATERAL and
+        // forced a sequential scan of every partition per outer date row. Fixed properly
+        // below by sourcing IB high/low from `level_prices` instead — precomputed nightly
+        // by scripts/compute_levels.js (already using the canonical 60-min IB window,
+        // corrected in an earlier session), on a plain non-partitioned indexed table, so
+        // no partition-pruning risk. Independently verified via Gemini (EXPLAIN ANALYZE:
+        // <1ms; full 30-date correctness check) before wiring in — Gemini's pass also
+        // caught a real, pre-existing gap (level_prices had zero rows for 2026-06-18,
+        // a silent compute_levels.js --backfill skip under load, same known failure mode
+        // documented elsewhere in this codebase) — backfilled that date before trusting
+        // this as the new source. developing_value_log/acd_daily_log lookups were never
+        // the slow part (neither is partitioned) — batched here too since it's free once
+        // the dangerous IB lookup no longer forces a per-date correlated subquery. See
+        // docs/OPEN_THREADS.md for the full incident writeup.
+        replayEligible ? query(`
+          WITH d AS (SELECT unnest($1::date[]) as dt)
+          SELECT d.dt::text as date,
+                 dv.trade_date as dv_found,
+                 dv.poc::float, dv.vah::float, dv.val::float,
+                 dv.session_high::float as hi, dv.session_low::float as lo, dv.session_close::float as cl,
+                 ib.h::float as ib_h, ib.l::float as ib_l,
+                 o.or_high::float as or_h, o.or_low::float as or_l
+          FROM d
+          LEFT JOIN LATERAL (
+            SELECT trade_date, poc, vah, val, session_high, session_low, session_close
+            FROM developing_value_log WHERE trade_date < d.dt ORDER BY trade_date DESC LIMIT 1
+          ) dv ON true
+          LEFT JOIN LATERAL (
+            SELECT MAX(price) FILTER (WHERE level_name='IB_HIGH') as h,
+                   MAX(price) FILTER (WHERE level_name='IB_LOW') as l
+            FROM level_prices
+            WHERE trade_date = (SELECT MAX(trade_date) FROM level_prices WHERE trade_date < d.dt AND level_name IN ('IB_HIGH','IB_LOW'))
+              AND level_name IN ('IB_HIGH','IB_LOW')
+          ) ib ON true
+          LEFT JOIN LATERAL (
+            SELECT or_high, or_low FROM acd_daily_log WHERE trade_date < d.dt ORDER BY trade_date DESC LIMIT 1
+          ) o ON true
+        `, [all30Dates]) : Promise.resolve({ rows: [] }),
+        replayEligible ? query(`
+          SELECT ts::date::text as date,
+                 (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+                 close::float, high::float, low::float
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date = ANY($1::date[])
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 720
+          ORDER BY ts
+        `, [all30Dates]) : Promise.resolve({ rows: [] }),
+      ]);
       const regimeFitMap = {};
       for (const r of regimeQ.rows) {
         regimeFitMap[r.level_name] = r.vs_overall;
       }
 
-      // 7. Recent 10-day and 30-day per-level performance (quick replay)
+      // Recent 10-day and 30-day per-level performance (quick replay)
       const recent10d = {}, recent30d = {};
       try {
-        const last30Days = await query(`
-          SELECT DISTINCT ts::date::text as d FROM price_bars_primary
-          WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-          ORDER BY d DESC LIMIT 30
-        `);
-        const all30Dates = last30Days.rows.map(r => r.d);
-        const recentDates = all30Dates.slice(0, 10);
-        if (recentDates.length >= 5) {
-          // Get all resolved setups from the last 10 days
-          const recentSetups = await query(`
-            SELECT setup_type, resolution FROM active_setups
-            WHERE trade_date = ANY($1::date[]) AND resolution IN ('TARGET_HIT','STOP_HIT')
-          `, [recentDates]);
+        if (replayEligible) {
           // Group by setup_type
           for (const r of recentSetups.rows) {
             const name = r.setup_type.replace(/_FADE_(LONG|SHORT)$/, '').replace(/_FADE$/, '');
@@ -6794,16 +7063,23 @@ export default function createACDRouter(io) {
             recent10d[name].total++;
             if (r.resolution === 'TARGET_HIT') recent10d[name].wins++;
           }
-          // Replay ALL levels for each of the last 30 days (10d is a subset)
+          // Replay ALL levels for each of the last 30 days (10d is a subset).
+          // priorAsOfQ/allBarsQ already fetched in the Promise.all batch above (see the
+          // comment there for the 2026-07-15 N+1/LATERAL-vs-partitioned-view incident
+          // this replay design fixed) — no re-query needed here.
+          const priorAsOfByDate = {};
+          for (const r of priorAsOfQ.rows) priorAsOfByDate[r.date] = r;
+
+          const barsByDate = {};
+          for (const r of allBarsQ.rows) {
+            if (!barsByDate[r.date]) barsByDate[r.date] = [];
+            barsByDate[r.date].push(r);
+          }
+
           for (const date of all30Dates) {
-            const dvQ = await query(`SELECT poc::float, vah::float, val::float, session_high::float as hi, session_low::float as lo, session_close::float as cl FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]);
-            const dv = dvQ.rows[0];
-            if (!dv) continue;
-            const dayBars = await query(`
-              SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min, close::float, high::float, low::float FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 720
-              ORDER BY ts
-            `, [date]);
+            const dv = priorAsOfByDate[date];
+            if (!dv || !dv.dv_found) continue; // no prior developing_value_log row — matches original dvQ.rows[0] undefined check
+            const dayBars = { rows: barsByDate[date] || [] };
             if (dayBars.rows.length < 30) continue;
 
             // Compute all levels for this day
@@ -6815,10 +7091,8 @@ export default function createACDRouter(io) {
             const ibBars10 = dayBars.rows.filter(b => b.et_min < 630);
             const ibH10 = ibBars10.length ? Math.max(...ibBars10.map(b => b.high)) : null;
             const ibL10 = ibBars10.length ? Math.min(...ibBars10.map(b => b.low)) : null;
-            const pdIbQ10 = await query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [date]).catch(() => ({rows:[{}]}));
-            const pdIbMid10 = pdIbQ10.rows[0]?.h ? (pdIbQ10.rows[0].h + pdIbQ10.rows[0].l) / 2 : null;
-            const pdOrQ10 = await query(`SELECT or_high::float as h, or_low::float as l FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [date]).catch(() => ({rows:[{}]}));
-            const pdOrMid10 = pdOrQ10.rows[0]?.h ? (pdOrQ10.rows[0].h + pdOrQ10.rows[0].l) / 2 : null;
+            const pdIbMid10 = dv.ib_h ? (dv.ib_h + dv.ib_l) / 2 : null;
+            const pdOrMid10 = dv.or_h ? (dv.or_h + dv.or_l) / 2 : null;
             const pdSessMid10 = dv.hi && dv.lo ? (dv.hi + dv.lo) / 2 : null;
 
             const allLevels = {
@@ -6826,8 +7100,8 @@ export default function createACDRouter(io) {
               FLOOR_PIVOT: fp, FLOOR_R1: fr1, FLOOR_S1: fs1,
               OR_HIGH: orH10, IB_HIGH: ibH10, IB_LOW: ibL10,
               PD_IB_MID: pdIbMid10, PD_OR_MID: pdOrMid10, PD_SESSION_MID: pdSessMid10,
-              PD_OR_HIGH: pdOrQ10.rows[0]?.h, PD_OR_LOW: pdOrQ10.rows[0]?.l,
-              PD_IB_HIGH: pdIbQ10.rows[0]?.h, PD_IB_LOW: pdIbQ10.rows[0]?.l,
+              PD_OR_HIGH: dv.or_h, PD_OR_LOW: dv.or_l,
+              PD_IB_HIGH: dv.ib_h, PD_IB_LOW: dv.ib_l,
             };
 
             const isIn10d = recentDates.includes(date);
@@ -6868,55 +7142,14 @@ export default function createACDRouter(io) {
         }
       } catch (_) {}
 
-      // Monthly levels
-      let monthOpen = null, pmVAHaudit = null, pmVALaudit = null;
-      let m1VAHaudit = null, m1VALaudit = null, m3VAHaudit = null, m3VALaudit = null;
-      try {
-        const moQ = await query(`
-          SELECT open::float as mo FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date = (
-            SELECT MIN(ts::date) FROM price_bars_primary
-            WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-          ) ORDER BY ts LIMIT 1
-        `);
-        monthOpen = moQ.rows[0]?.mo || null;
-      } catch (_) {}
-      try {
-        const pmVaFull = await query(`
-          WITH vp AS (
-            SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
-            FROM price_bars_primary WHERE symbol='NQ'
-              AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-            GROUP BY 1
-          ), tot AS (SELECT SUM(vol)::float as t FROM vp),
-          cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
-          SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
-                 MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
-        `);
-        pmVAHaudit = pmVaFull.rows[0]?.vah || null;
-        pmVALaudit = pmVaFull.rows[0]?.val || null;
-      } catch (_) {}
-      try {
-        // Rolling 1M and 3M VA — using same volume-profile method
-        for (const [days, setter] of [[30, 'm1'], [90, 'm3']]) {
-          const vaQ = await query(`
-            WITH vp AS (
-              SELECT ROUND(close::float / 25)::int * 25 as bk, SUM(volume)::float as vol
-              FROM price_bars_primary WHERE symbol='NQ'
-                AND ts::date >= ($1::date - $2 * INTERVAL '1 day') AND ts::date < $1
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-              GROUP BY 1
-            ), tot AS (SELECT SUM(vol)::float as t FROM vp),
-            cum AS (SELECT bk, vol, SUM(vol) OVER (ORDER BY vol DESC) as cv, t FROM vp, tot)
-            SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
-                   MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
-          `, [todayET, days]);
-          if (setter === 'm1') { m1VAHaudit = vaQ.rows[0]?.vah || null; m1VALaudit = vaQ.rows[0]?.val || null; }
-          else                  { m3VAHaudit = vaQ.rows[0]?.vah || null; m3VALaudit = vaQ.rows[0]?.val || null; }
-        }
-      } catch (_) {}
+      // Monthly levels — moQ/pmVaFull/m1VaQ/m3VaQ already fetched in the batch above
+      const monthOpen = moQ.rows[0]?.mo || null;
+      const pmVAHaudit = pmVaFull.rows[0]?.vah || null;
+      const pmVALaudit = pmVaFull.rows[0]?.val || null;
+      const m1VAHaudit = m1VaQ.rows[0]?.vah || null;
+      const m1VALaudit = m1VaQ.rows[0]?.val || null;
+      const m3VAHaudit = m3VaQ.rows[0]?.vah || null;
+      const m3VALaudit = m3VaQ.rows[0]?.val || null;
 
       // Map signal names to level prices and metadata.
       // bestCtx here is a purely qualitative fallback label (no %/N/$ claims) — used only
@@ -7021,6 +7254,16 @@ export default function createACDRouter(io) {
       for (const row of auditQ.rows) {
         if (row.signal_type === 'SYSTEM_SUMMARY') continue;
         if (row.signal_type === 'ROLLING_IB_AUDIT') continue;
+        // TOUCH_QUALITY: a secondary per-setup_type dimension (order-flow classification of
+        // HOW a touch resolved), not a tradeability verdict on its own — the setup_type's real
+        // ACTIVE/CONTEXT/REMOVED status already comes from its SETUP_STATUS row above. Forcing
+        // OVERRUN_BAD/ABSORBED_BEST/QUIET_BEST/NO_CLEAR_PATTERN into that status vocabulary would
+        // misrepresent it as a suppression signal. Deliberately excluded (was previously an
+        // undocumented silent fallthrough to the generic `else continue` below — the exact class
+        // of bug CLAUDE.md's "New setup type checklist" item 8 exists to prevent). Shown instead
+        // via the live ACDView.jsx badge (touchQualityStats on /api/antigravity/edges-context).
+        // Found in code review 2026-07-15.
+        if (row.signal_type === 'TOUCH_QUALITY') continue;
         // UNIFIED_BACKTEST: only show the specific signal_names above; everything else feeds keepLevels only
         if (row.signal_type === 'UNIFIED_BACKTEST' && !UNIFIED_DISPLAY.has(row.signal_name)) continue;
         // SYSTEM_BACKTEST is fallback only when no primary source (LEVEL_FADE etc.) exists
@@ -7172,36 +7415,8 @@ export default function createACDRouter(io) {
       });
 
       // ── Confluence pairs ──────────────────────────────────────────────
-      // Base pairs (all-time, N≥10, distinct_dates≥5)
-      const pairsBaseQ = await query(`
-        SELECT signal_name, sample_size,
-          ROUND(win_rate*100, 2)::float AS wr_pct,
-          ROUND(ev_per_trade::numeric, 2)::float AS ev,
-          recommendation
-        FROM performance_audit
-        WHERE signal_type='CONTEXT_ANALYSIS'
-          AND signal_name LIKE 'PAIR_%'
-          AND window_days = 9999
-          AND signal_name NOT LIKE '%_DOW_%'
-          AND signal_name NOT LIKE '%_TOD_%'
-          AND signal_name NOT LIKE '%_DT_%'
-        ORDER BY ev_per_trade DESC NULLS LAST
-      `);
-
-      // Best DOW/TOD/DT per pair (highest EV sub-condition)
-      const pairsSubQ = await query(`
-        SELECT signal_name,
-          ROUND(win_rate*100, 2)::float AS wr_pct,
-          ROUND(ev_per_trade::numeric, 2)::float AS ev,
-          sample_size, recommendation
-        FROM performance_audit
-        WHERE signal_type='CONTEXT_ANALYSIS'
-          AND window_days = 9999
-          AND (signal_name LIKE 'PAIR_%_DOW_%'
-            OR signal_name LIKE 'PAIR_%_TOD_%'
-            OR signal_name LIKE 'PAIR_%_DT_%')
-        ORDER BY signal_name, ev_per_trade DESC NULLS LAST
-      `);
+      // pairsBaseQ/pairsSubQ/pairsWinQ already fetched in the batch above (all-time
+      // reads of performance_audit, no dependency on anything else in this handler).
 
       // Index sub-conditions: pick best and worst per category per pair
       const subBest = {}, subWorst = {};
@@ -7223,20 +7438,6 @@ export default function createACDRouter(io) {
       });
 
       // Build rolling windows index
-      const pairsWinQ = await query(`
-        SELECT signal_name, window_days,
-          sample_size,
-          ROUND(win_rate*100, 2)::float AS wr_pct,
-          ROUND(ev_per_trade::numeric, 2)::float AS ev
-        FROM performance_audit
-        WHERE signal_type='CONTEXT_ANALYSIS'
-          AND signal_name LIKE 'PAIR_%'
-          AND window_days IN (365, 182, 20)
-          AND signal_name NOT LIKE '%_DOW_%'
-          AND signal_name NOT LIKE '%_TOD_%'
-          AND signal_name NOT LIKE '%_DT_%'
-        ORDER BY signal_name, window_days
-      `);
       const pairWins = {};
       pairsWinQ.rows.forEach(r => {
         if (!pairWins[r.signal_name]) pairWins[r.signal_name] = {};

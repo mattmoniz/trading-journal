@@ -19,10 +19,28 @@ REQUEST="$REPO/scratch/claude_request.md"
 RESPONSE="$REPO/scratch/antigravity_response.md"
 LOCKFILE="$REPO/scratch/.invoke_gemini.lock"
 TIMEOUT="${1:-15m}"
+SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
 
 if [ ! -f "$REQUEST" ]; then
   echo "ERROR: $REQUEST not found" >&2
   exit 1
+fi
+
+# Refuse to run on a Flash-tier model — this config has silently reverted to the
+# Flash default before (see docs/OPEN_THREADS.md / feedback_gemini_rabbit_holing
+# memory), and Flash is prone to going off-task (process/PID tracing, hunting for
+# log files) instead of executing the requested queries, wasting real time. Deliberate
+# exception: ALLOW_FLASH=1 ./scripts/invoke_gemini.sh (mirrors ALLOW_HARDCODED=1 for
+# the pre-commit hook's own override convention).
+if [ -f "$SETTINGS" ]; then
+  CURRENT_MODEL="$(jq -r '.model // "unknown"' "$SETTINGS")"
+  if [[ "$CURRENT_MODEL" != *"Pro"* ]] && [ "${ALLOW_FLASH:-0}" != "1" ]; then
+    echo "ERROR: antigravity-cli model is '$CURRENT_MODEL', not a Pro-tier model." >&2
+    echo "Flash-tier models have a history of rabbit-holing off-task instead of running the requested queries." >&2
+    echo "Fix: set \"model\" to a Pro-tier model in $SETTINGS, or override with ALLOW_FLASH=1 if this is deliberate." >&2
+    exit 1
+  fi
+  echo "[invoke_gemini] Model: $CURRENT_MODEL"
 fi
 
 # Refuse to start a second run against the same output file — a prior session let two
