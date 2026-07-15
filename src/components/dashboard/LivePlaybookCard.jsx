@@ -205,7 +205,6 @@ function computePlaybook(ctx, acd, edges) {
 
 export default function LivePlaybookCard({ date }) {
   const isViewActive = useViewActive();
-  const [ctx,          setCtx]          = useState(null);
   const [acd,          setAcd]          = useState(null);
   // Shared with PermSlipAndStackBar/OvernightContextStrip/EdgeSectionsPanel — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
@@ -221,9 +220,14 @@ export default function LivePlaybookCard({ date }) {
 
   const todayDate = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
+  // live-session-context was an independent fetch here too — found alongside 5
+  // other components doing the exact same thing (2026-07-15). Deduped onto the
+  // shared subscription hook; ctx now derives from it directly instead of its own
+  // state, so it no longer needs to be part of loadCtx's socket/interval refresh.
+  const [liveCtxShared] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${todayDate}` : null, 30000);
+  const ctx = liveCtxShared?.noData ? null : liveCtxShared;
+
   const loadCtx = () => {
-    fetch(`${API_URL}/morning-brief/live-session-context/${todayDate}`)
-      .then(r => r.json()).then(c => { if (!c?.noData) setCtx(c); }).catch(() => {});
     fetch(`${API_URL}/acd/today`)
       .then(r => r.json()).then(setAcd).catch(() => {});
   };

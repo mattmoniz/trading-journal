@@ -362,16 +362,7 @@ function App() {
     setVisitedViews(prev => (prev.has(g) ? prev : new Set(prev).add(g)));
   }, [currentView]);
   const [quickStatsOpen, setQuickStatsOpen] = useState(false);
-  const [currentDate, setCurrentDate] = useState(new Date().toLocaleDateString('en-CA'));
-  const [forecast, setForecast] = useState(null);
   const [stats, setStats] = useState({});
-
-  useEffect(() => {
-    fetch(`${API_URL}/morning-brief/forecast/${currentDate}`)
-      .then(r => r.json())
-      .then(d => setForecast(d))
-      .catch(() => {});
-  }, [currentDate]);
 
   useEffect(() => {
     const handler = (e) => {

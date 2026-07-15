@@ -4158,7 +4158,66 @@ export default function createACDRouter(io) {
       // Previously defined at line ~4392 — caused silent TDZ ReferenceError on every level
       // fade call. Outer try{} at line 2545 caught it; fades appeared to work but sizeMultiplier
       // and isS2DoubleCounter suppression were both non-functional. Fixed 2026-07-05.
-      const _lfArRow = await query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
+      // Batched 2026-07-15 — these 7 queries only depend on todayET (or nothing at
+      // all, for the two bar-derived ones below), none on each other's results, but
+      // were awaited one at a time. Profiling confirmed this exact section
+      // ("Pre-fetch: overnight reads + prior setups") as the single dominant
+      // contributor to /api/acd/setup-detection's remaining latency (1.8-6.7s of a
+      // ~9-15s total, see docs/OPEN_THREADS.md) — collapsed into one Promise.all,
+      // same pattern already applied to the Unified Level Fade Setups section above.
+      const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
+      const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ, _lfTurbRangeQ] = await Promise.all([
+        query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
+        query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] })),
+        query(
+          `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
+                  COUNT(*) as cnt
+           FROM active_setups WHERE trade_date=$1 AND status IN ('ACTIVE','RESOLVED')
+           GROUP BY 1`,
+          [todayET]
+        ).catch(() => ({ rows: [] })),
+        query(`
+          SELECT COALESCE(SUM(COALESCE(daily_score, 0)), 0)::int AS nl30
+          FROM (SELECT daily_score FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 30) sub
+        `, [todayET]).catch(() => ({ rows: [{ nl30: 0 }] })),
+        _cachedVwapSigmaPre ? Promise.resolve(null) : query(`
+          WITH svwap AS (
+            SELECT close::float as c,
+              SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float * close::float) OVER (PARTITION BY ts::date ORDER BY ts) /
+              NULLIF(SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) OVER (PARTITION BY ts::date ORDER BY ts), 0) AS vwap
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND ts::date IN (SELECT DISTINCT ts::date FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 ORDER BY ts::date DESC LIMIT 20)
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+          )
+          SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
+          FROM svwap WHERE vwap IS NOT NULL
+        `, [todayET]).catch(() => ({ rows: [{}] })),
+        query(`
+          SELECT
+            REGEXP_REPLACE(setup_type, '_(LONG|SHORT)$', '') AS level_base,
+            MAX(trade_date)::text AS last_date
+          FROM active_setups
+          WHERE trade_date >= $1::date - INTERVAL '21 days' AND trade_date < $1
+            AND status = 'RESOLVED'
+          GROUP BY level_base
+        `, [todayET]).catch(() => ({ rows: [] })),
+        query(`
+          SELECT AVG(daily_range)::float AS avg_first15_range
+          FROM (
+            SELECT ts::date AS dt, MAX(high) - MIN(low) AS daily_range
+            FROM price_bars_primary
+            WHERE symbol = 'NQ'
+              AND ts::date IN (
+                SELECT DISTINCT ts::date FROM price_bars_primary
+                WHERE symbol = 'NQ' AND ts::date < $1
+                ORDER BY ts::date DESC LIMIT 20
+              )
+              AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
+            GROUP BY ts::date
+          ) sub
+        `, [todayET]).catch(() => ({ rows: [] })),
+      ]);
       const _lfOvInv  = _lfArRow.rows[0]?.overnight_inventory;
       const _lfOvOpen = _lfArRow.rows[0]?.open_vs_prior_value;
       const isOvernightAligned = (dir) =>
@@ -4174,7 +4233,6 @@ export default function createACDRouter(io) {
         (dir === 'SHORT' && _lfOvInv === 'SHORT_TRAPPED' && _lfOvOpen === 'ABOVE_VALUE');
       // Prior completed setups — streak depth sizing.
       // Research 2026-07-05: 1×loss=47% WR, 2×loss=31.6%, 3+×loss=28.4%; 1×win=76.6%, 2×win=79.7%, 3+×win=87.8%
-      const _lfPriorQ = await query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] }));
       const lfFirstOfDay = !_lfPriorQ.rows[0];
       let lfConsecLosses = 0, lfConsecWins = 0;
       for (const r of _lfPriorQ.rows) {
@@ -4186,21 +4244,10 @@ export default function createACDRouter(io) {
       const lfPriorWin  = lfConsecWins  >= 1;
       // Stacking count: same-direction setups fired today (ACTIVE or RESOLVED).
       // Verified 2026-07-05: 1-6 setups = 80-86% WR solid; 7+ = 62.4% WR -$15.7 EV (N=1922) suppress.
-      const _lfSameDirCountQ = await query(
-        `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
-                COUNT(*) as cnt
-         FROM active_setups WHERE trade_date=$1 AND status IN ('ACTIVE','RESOLVED')
-         GROUP BY 1`,
-        [todayET]
-      ).catch(() => ({ rows: [] }));
       const _lfSameDirCounts = Object.fromEntries(_lfSameDirCountQ.rows.map(r => [r.direction, parseInt(r.cnt)]));
       // NL30: rolling 30-day sum of daily ACD scores — conditions fade edge by market regime.
       // Verified 2026-07-05 (N=229-429 per bucket): MILD trend = SHORT fades penalized (-$17 to -$19 EV);
       // STRONG regime boosts both extremes; prior-day only (< today) to avoid lookahead.
-      const _lfNl30Q = await query(`
-        SELECT COALESCE(SUM(COALESCE(daily_score, 0)), 0)::int AS nl30
-        FROM (SELECT daily_score FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 30) sub
-      `, [todayET]).catch(() => ({ rows: [{ nl30: 0 }] }));
       const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
       const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
         _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
@@ -4212,59 +4259,21 @@ export default function createACDRouter(io) {
         acc.pv += b.close * vol; acc.vol += vol; return acc;
       }, { pv: 0, vol: 0 });
       const _lfVwap = _lfVwapData.vol > 0 ? _lfVwapData.pv / _lfVwapData.vol : null;
-      const _cachedVwapSigma = getCached(todayET, 'lfVwapSigma');
-      let _lfVwapMean = _cachedVwapSigma?.mean ?? null;
-      let _lfVwapStd  = _cachedVwapSigma?.std  ?? null;
-      if (_lfVwapMean == null) {
-        const _lfVwapSigmaQ = await query(`
-          WITH svwap AS (
-            SELECT close::float as c,
-              SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float * close::float) OVER (PARTITION BY ts::date ORDER BY ts) /
-              NULLIF(SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) OVER (PARTITION BY ts::date ORDER BY ts), 0) AS vwap
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND ts::date IN (SELECT DISTINCT ts::date FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 ORDER BY ts::date DESC LIMIT 20)
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-          )
-          SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
-          FROM svwap WHERE vwap IS NOT NULL
-        `, [todayET]).catch(() => ({ rows: [{}] }));
+      let _lfVwapMean = _cachedVwapSigmaPre?.mean ?? null;
+      let _lfVwapStd  = _cachedVwapSigmaPre?.std  ?? null;
+      if (_lfVwapMean == null && _lfVwapSigmaQ) {
         _lfVwapMean = _lfVwapSigmaQ.rows[0]?.mean_dist ?? null;
         _lfVwapStd  = _lfVwapSigmaQ.rows[0]?.std_dist  ?? null;
         if (_lfVwapMean != null) setCached(todayET, 'lfVwapSigma', { mean: _lfVwapMean, std: _lfVwapStd });
       }
       // Level recency: last test date per level base name (past 21 days).
       // Research 2026-07-05: 1-2d ago = 65.9% WR $22 EV, 21d+ fresh = 60.5% WR -$5 EV.
-      const _lfRecencyQ = await query(`
-        SELECT
-          REGEXP_REPLACE(setup_type, '_(LONG|SHORT)$', '') AS level_base,
-          MAX(trade_date)::text AS last_date
-        FROM active_setups
-        WHERE trade_date >= $1::date - INTERVAL '21 days' AND trade_date < $1
-          AND status = 'RESOLVED'
-        GROUP BY level_base
-      `, [todayET]).catch(() => ({ rows: [] }));
       const lfRecencyMap = Object.fromEntries(_lfRecencyQ.rows.map(r => [r.level_base, r.last_date]));
 
       // TURBULENT intraday range confirmation: first-15-min range vs rolling 20-day average.
       // Research 2026-07-05: range >= avg → 79.99% WR N=39 (56% of TURBULENT days pass);
       //                       range < avg → 67.67% WR N=21 (44% false calls).
       // Threshold is the rolling mean itself — no hardcoded number.
-      const _lfTurbRangeQ = await query(`
-        SELECT AVG(daily_range)::float AS avg_first15_range
-        FROM (
-          SELECT ts::date AS dt, MAX(high) - MIN(low) AS daily_range
-          FROM price_bars_primary
-          WHERE symbol = 'NQ'
-            AND ts::date IN (
-              SELECT DISTINCT ts::date FROM price_bars_primary
-              WHERE symbol = 'NQ' AND ts::date < $1
-              ORDER BY ts::date DESC LIMIT 20
-            )
-            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
-          GROUP BY ts::date
-        ) sub
-      `, [todayET]).catch(() => ({ rows: [] }));
       const _lfAvgFirst15Range = _lfTurbRangeQ.rows[0]?.avg_first15_range ?? null;
       const _lfFirst15Bars = allRthBarsRow.rows.filter(b => b.et_min >= 570 && b.et_min <= 584);
       const _lfFirst15Range = _lfFirst15Bars.length >= 3
@@ -4498,34 +4507,29 @@ export default function createACDRouter(io) {
           const TARGET = 40; // Fallback — only fires when _opt[type] is null AND lv.mfe is null
 
           // Compute rolling composite levels
-          let or5Mid = null;
-          try {
-            const or5Q = await query(`SELECT MAX(orh) as hi, MIN(orl) as lo FROM (SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5) t`, [todayET]);
-            if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
-          } catch(_) {}
-
-          let pdIbMid = null;
-          try {
+          // Batched 2026-07-15 — these 7 lookups only depend on todayET/etMinNow, none
+          // on each other's results, but were awaited one at a time (each in its own
+          // try/catch). Confirmed via server-side profiling this section was a real
+          // contributor to /api/acd/setup-detection's ~8-10s per-call cost (see
+          // docs/OPEN_THREADS.md). Collapsed into one Promise.all; per-query .catch()
+          // preserves the exact original fault-isolation (one failing leaves only its
+          // own variable null, same as before). The two cache-backed ones (lpQ, poc2Q)
+          // skip their query entirely on a cache hit, matching antigravityEdges.js's
+          // existing `isCached ? Promise.resolve(...) : query(...)` convention.
+          const cachedLP = getCached(todayET, 'lpAll');
+          const cached2DPOC = getCached(todayET, '2dPOC');
+          const [or5Q, pdIbQ, pdOrQ, ib10Q, ibTodayQ, lpQ, poc2Q] = await Promise.all([
+            query(`SELECT MAX(orh) as hi, MIN(orl) as lo FROM (SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5) t`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, matches the same fix applied elsewhere this
             // session) — an unbounded ts::date < $1 lookback in the inner MAX(ts::date)
             // subquery forces price_bars_primary's dedup view to consider far more history
             // than needed before it can find the max; 288ms -> 126ms, identical result.
-            const pdIbQ = await query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]);
-            if (pdIbQ.rows[0]?.ibh) pdIbMid = (pdIbQ.rows[0].ibh + pdIbQ.rows[0].ibl) / 2;
-          } catch(_) {}
-
-          let pdOrMid = null;
-          try {
-            const pdOrQ = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
-            if (pdOrQ.rows[0]?.or_high) pdOrMid = (pdOrQ.rows[0].or_high + pdOrQ.rows[0].or_low) / 2;
-          } catch(_) {}
-
-          let ib10Mid = null;
-          try {
+            query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]).catch(() => ({ rows: [] })),
+            query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, same fix as pdIbQ above) — unbounded
             // ts::date < $1 in the inner DISTINCT lookback forces a full historical scan
             // before the ORDER BY...LIMIT 10 can apply.
-            const ib10Q = await query(`
+            query(`
               SELECT AVG((ibh + ibl) / 2.0)::float as mid FROM (
                 SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
                 FROM price_bars_primary
@@ -4537,75 +4541,77 @@ export default function createACDRouter(io) {
                 ) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
                 GROUP BY ts::date
               ) t
-            `, [todayET]);
-            if (ib10Q.rows[0]?.mid) ib10Mid = ib10Q.rows[0].mid;
-          } catch(_) {}
+            `, [todayET]).catch(() => ({ rows: [] })),
+            // Today's IB high/low — only valid after IB closes at 10:30 (etMinNow >= 630)
+            etMinNow >= 630 ? query(`
+              SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
+              FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date = $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            // All static levels from level_prices — single batch query, cached daily.
+            // Replaces individual PW_HIGH/PW_LOW, PM_VAH, etc. queries.
+            // OR_HIGH/OR_LOW/IB_HIGH/IB_LOW/IB_MID/OR_MID stay as real-time bar values
+            // because compute_levels.js may not have run yet during the live session.
+            cachedLP ? Promise.resolve(null) : query(
+              `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1`,
+              [todayET]
+            ).catch(() => ({ rows: [] })),
+            // 2-day composite POC (POC of combined last-2-session RTH volume profile)
+            cached2DPOC !== undefined ? Promise.resolve(null) : query(`
+              WITH last2 AS (
+                SELECT DISTINCT ts::date as d FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date < $1
+                  AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                ORDER BY d DESC LIMIT 2
+              ),
+              vp AS (
+                SELECT ROUND(low::numeric/0.25)*0.25 as px, SUM(volume::numeric) as vol
+                FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date IN (SELECT d FROM last2)
+                  AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+                GROUP BY ROUND(low::numeric/0.25)*0.25
+              )
+              SELECT px::float as poc FROM vp ORDER BY vol DESC LIMIT 1
+            `, [todayET]).catch(() => ({ rows: [] })),
+          ]);
+
+          let or5Mid = null;
+          if (or5Q.rows[0]?.hi) or5Mid = (or5Q.rows[0].hi + or5Q.rows[0].lo) / 2;
+
+          let pdIbMid = null;
+          if (pdIbQ.rows[0]?.ibh) pdIbMid = (pdIbQ.rows[0].ibh + pdIbQ.rows[0].ibl) / 2;
+
+          let pdOrMid = null;
+          if (pdOrQ.rows[0]?.or_high) pdOrMid = (pdOrQ.rows[0].or_high + pdOrQ.rows[0].or_low) / 2;
+
+          let ib10Mid = null;
+          if (ib10Q.rows[0]?.mid) ib10Mid = ib10Q.rows[0].mid;
 
           // Today's IB high/low — only valid after IB closes at 10:30 (etMinNow >= 630)
           let ibHighToday = null, ibLowToday = null;
-          if (etMinNow >= 630) {
-            try {
-              const ibTodayQ = await query(`
-                SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
-                FROM price_bars_primary
-                WHERE symbol='NQ' AND ts::date = $1
-                  AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
-              `, [todayET]);
-              if (ibTodayQ.rows[0]?.ibh) {
-                ibHighToday = ibTodayQ.rows[0].ibh;
-                ibLowToday  = ibTodayQ.rows[0].ibl;
-              }
-            } catch(_) {}
+          if (etMinNow >= 630 && ibTodayQ.rows[0]?.ibh) {
+            ibHighToday = ibTodayQ.rows[0].ibh;
+            ibLowToday  = ibTodayQ.rows[0].ibl;
           }
 
           // Today's IB mid and OR mid (usable after IB closes at 10:30)
           const ibMid = (ibHighToday && ibLowToday) ? (ibHighToday + ibLowToday) / 2 : null;
           const orMid = (orH && orL) ? (orH + orL) / 2 : null;
 
-          // All static levels from level_prices — single batch query, cached daily.
-          // Replaces individual PW_HIGH/PW_LOW, PM_VAH, etc. queries.
-          // OR_HIGH/OR_LOW/IB_HIGH/IB_LOW/IB_MID/OR_MID stay as real-time bar values
-          // because compute_levels.js may not have run yet during the live session.
-          const cachedLP = getCached(todayET, 'lpAll');
           let lp = cachedLP || {};
           if (!cachedLP) {
-            try {
-              const lpQ = await query(
-                `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1`,
-                [todayET]
-              );
-              for (const r of lpQ.rows) lp[r.level_name] = r.price;
-            } catch(_) {}
+            for (const r of lpQ.rows) lp[r.level_name] = r.price;
             setCached(todayET, 'lpAll', lp);
           }
           const pwHigh = lp.PW_HIGH ?? null;
           const pwLow  = lp.PW_LOW  ?? null;
 
-          // 2-day composite POC (POC of combined last-2-session RTH volume profile)
           let twoDayPOC = null;
-          const cached2DPOC = getCached(todayET, '2dPOC');
           if (cached2DPOC !== undefined) {
             twoDayPOC = cached2DPOC;
           } else {
-            try {
-              const poc2Q = await query(`
-                WITH last2 AS (
-                  SELECT DISTINCT ts::date as d FROM price_bars_primary
-                  WHERE symbol='NQ' AND ts::date < $1
-                    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                  ORDER BY d DESC LIMIT 2
-                ),
-                vp AS (
-                  SELECT ROUND(low::numeric/0.25)*0.25 as px, SUM(volume::numeric) as vol
-                  FROM price_bars_primary
-                  WHERE symbol='NQ' AND ts::date IN (SELECT d FROM last2)
-                    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                  GROUP BY ROUND(low::numeric/0.25)*0.25
-                )
-                SELECT px::float as poc FROM vp ORDER BY vol DESC LIMIT 1
-              `, [todayET]);
-              if (poc2Q.rows[0]) twoDayPOC = poc2Q.rows[0].poc;
-            } catch(_) {}
+            if (poc2Q.rows[0]) twoDayPOC = poc2Q.rows[0].poc;
             setCached(todayET, '2dPOC', twoDayPOC ?? null);
           }
 
@@ -6079,8 +6085,20 @@ export default function createACDRouter(io) {
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };
 
+  // Short-lived (20s) full-response cache, on top of the in-flight coalescing lock
+  // below. server/index.js already runs an autonomous poller hitting this exact
+  // endpoint every 15s during RTH (9:30-4 PM ET), independent of any open browser
+  // — that pre-computation was being thrown away before, so a real page load still
+  // paid the full ~7-10s cost even though a near-identical result had just been
+  // computed seconds earlier. 20s (slightly over the 15s autonomous-poll cadence)
+  // means a real request almost always lands inside a still-fresh window. This is
+  // a real-time detection endpoint, not day-stable data, hence the short TTL vs.
+  // the 12h/5min conventions used elsewhere (see CLAUDE.md).
+  const SETUP_DETECTION_CACHE_TTL = 20000;
   let setupDetectionInFlight = null;
   router.get('/acd/setup-detection', async (req, res) => {
+    const cached = cacheGet('setup-detection-response');
+    if (cached) return res.status(cached.status).json(cached.body);
     if (setupDetectionInFlight) {
       const result = await setupDetectionInFlight;
       return res.status(result.status).json(result.body);
@@ -6094,6 +6112,7 @@ export default function createACDRouter(io) {
       .then(() => ({ status: capturedStatus, body: capturedBody }));
     try {
       const result = await setupDetectionInFlight;
+      if (result.status === 200) cacheSet('setup-detection-response', result, SETUP_DETECTION_CACHE_TTL);
       res.status(result.status).json(result.body);
     } finally {
       setupDetectionInFlight = null;

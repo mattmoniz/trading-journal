@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
 import { API_URL } from '../../constants/api.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 
 const DIR_STYLE = {
   LONG:       { color: '#4ade80', bg: 'rgba(34,197,94,0.15)',  label: 'LONG'    },
@@ -88,18 +90,22 @@ function conditionChips(req, ctx) {
 }
 
 export default function BehavioralPatternsCard() {
+  const isViewActive = useViewActive();
   const [patterns, setPatterns] = useState([]);
   const [ctx, setCtx]           = useState({});
   const [minWr, setMinWr]       = useState(75);
   const [loading, setLoading]   = useState(true);
 
+  // edges-context was an independent fetch here too — found alongside several other
+  // components doing the exact same thing (2026-07-15). Deduped onto the shared
+  // subscription hook; ctx derivation moved to its own effect reacting to it.
+  const [ctxRes] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
+
   const load = useCallback(async () => {
     try {
-      // min_wr=0 so we always get all patterns — we filter client-side and show everything
-      const [pRes, todRes, ctxRes, arRes] = await Promise.all([
+      const [pRes, todRes, arRes] = await Promise.all([
         fetch(`${API_URL}/behavioral-patterns?min_wr=0`).then(r => r.json()),
         fetch(`${API_URL}/behavioral-patterns?min_wr=0&signal_type=TOD_PATTERN`).then(r => r.json()).catch(() => ({ patterns: [] })),
-        fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()),
         fetch(`${API_URL}/auction-read/today`).then(r => r.json()).catch(() => ({})),
       ]);
 
@@ -146,7 +152,7 @@ export default function BehavioralPatternsCard() {
       });
     } catch (_) {}
     setLoading(false);
-  }, []);
+  }, [ctxRes]);
 
   useEffect(() => { load(); const iv = setInterval(load, 120000); return () => clearInterval(iv); }, [load]);
 

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 
 import { API_URL } from '../../constants/api.js';
 
@@ -529,11 +531,12 @@ function PredictiveStats({ data, btStats }) {
 }
 
 export default function VolatilityRegimeCard() {
+  const isViewActive = useViewActive();
   const [data, setData] = useState(null);
   const [btStats, setBtStats] = useState(null);
-  const [liveCtx, setLiveCtx] = useState(null);
 
   useEffect(() => {
+    if (!isViewActive) return;
     let cancelled = false;
     const load = () => {
       fetch(`${API_URL}/acd/volatility-regime`)
@@ -554,7 +557,7 @@ export default function VolatilityRegimeCard() {
         sock.off('price-sync-progress', load);
       }
     };
-  }, []);
+  }, [isViewActive]);
 
   useEffect(() => {
     fetch(`${API_URL}/acd/vol-backtest-stats`)
@@ -563,23 +566,12 @@ export default function VolatilityRegimeCard() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const load = () => {
-      const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      fetch(`${API_URL}/morning-brief/live-session-context/${d}`)
-        .then(r => r.json())
-        .then(c => { if (!c?.noData) setLiveCtx(c); })
-        .catch(() => {});
-    };
-    load();
-    const id = setInterval(load, 30000);
-    const sock = window._tradingSocket;
-    if (sock) sock.on('price-sync-progress', load);
-    return () => {
-      clearInterval(id);
-      if (sock) sock.off('price-sync-progress', load);
-    };
-  }, []);
+  // Was an independent 30s poll of live-session-context — found alongside 5 other
+  // components doing the exact same thing (2026-07-15). Deduped onto the shared
+  // subscription hook.
+  const todayDateVRC = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const [liveCtxRaw] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${todayDateVRC}` : null, 30000);
+  const liveCtx = liveCtxRaw?.noData ? null : liveCtxRaw;
 
   if (!data) {
     return (

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { usePollData } from '../../utils/usePollData.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const fmtTime = (iso) => {
   if (!iso) return null;
@@ -186,7 +187,12 @@ function FeedItem({ item }) {
 }
 
 export default function TeleprinterFeed({ maxHeight = 480 }) {
-  const data = usePollData(`${API_URL}/antigravity/edges-context`, 30000);
+  // Was a 5th independent fetcher of this exact endpoint — PermSlipAndStackBar,
+  // LivePlaybookCard, OvernightContextStrip, and EdgeSectionsPanel were already
+  // deduped onto useSharedPollData 2026-07-15; this one was missed. Found while
+  // investigating why Morning Prep fires ~118 concurrent requests on mount.
+  const isViewActive = useViewActive();
+  const [data] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
   const scrollRef = useRef(null);
 
   useEffect(() => {

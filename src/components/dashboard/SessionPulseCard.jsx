@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 
 import { API_URL } from '../../constants/api.js';
 
@@ -116,26 +118,15 @@ const CHIP_DETAIL = {
 };
 
 export default function SessionPulseCard() {
-  const [ctx, setCtx]   = useState(null);
+  // Was an independent 30s poll of live-session-context — found alongside 5 other
+  // components doing the exact same thing (2026-07-15, while investigating why
+  // Morning Prep fires ~118 concurrent requests on mount). Deduped onto the shared
+  // subscription hook.
+  const isViewActive = useViewActive();
+  const todayDate = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const [ctxRaw] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${todayDate}` : null, 30000);
+  const ctx = ctxRaw?.noData ? null : ctxRaw;
   const [sel, setSel]   = useState(null);
-
-  useEffect(() => {
-    const load = () => {
-      const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      fetch(`${API_URL}/morning-brief/live-session-context/${d}`)
-        .then(r => r.json())
-        .then(c => { if (!c?.noData) setCtx(c); })
-        .catch(() => {});
-    };
-    load();
-    const id = setInterval(load, 30000);
-    const sock = window._tradingSocket;
-    if (sock) sock.on('price-sync-progress', load);
-    return () => {
-      clearInterval(id);
-      if (sock) sock.off('price-sync-progress', load);
-    };
-  }, []);
 
   if (!ctx) return null;
 

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
 import { API_URL } from '../../constants/api.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 
 const DIR_STYLE = {
   LONG:     { color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   label: 'LONG'     },
@@ -35,7 +37,11 @@ function DriftBadge({ drift, pct, pct_30d, n_30d, driftWarn }) {
 }
 
 export default function SessionBiasPanel() {
-  const [data,   setData]   = useState(null);
+  const isViewActive = useViewActive();
+  // Was an independent 60s poll of edges-context — found alongside several other
+  // components doing the exact same thing (2026-07-15). Deduped onto the shared
+  // subscription hook.
+  const [data] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 60000);
   const [traded, setTraded] = useState(new Set()); // signal labels traded today
 
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -54,16 +60,6 @@ export default function SessionBiasPanel() {
       .catch(() => {});
   }, [dateStr]);
 
-  useEffect(() => {
-    const load = () =>
-      fetch(`${API_URL}/antigravity/edges-context`)
-        .then(r => r.json())
-        .then(d => setData(d))
-        .catch(() => {});
-    load();
-    const iv = setInterval(load, 60000);
-    return () => clearInterval(iv);
-  }, []);
 
   const logTraded = useCallback(async (label, dir) => {
     // Optimistic update

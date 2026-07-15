@@ -10,19 +10,22 @@ import { useState, useEffect } from 'react';
 // If subscribers ask for different poll intervals on the same url, the fastest one
 // wins (matches the most demanding subscriber's freshness need; the others get data
 // at least as fresh as they asked for, for free).
-const _cache = new Map(); // url -> { data, error, subscribers: Set<setter>, intervalId, intervalMs }
+const _cache = new Map(); // url -> { data, error, subscribers: Set<setter>, intervalId, intervalMs, loading }
 
 function load(url) {
   const entry = _cache.get(url);
-  if (!entry) return;
+  if (!entry || entry.loading) return; // in-flight guard — see subscribe() below
+  entry.loading = true;
   fetch(url)
     .then(r => r.json())
     .then(d => {
+      entry.loading = false;
       entry.data = d;
       entry.error = null;
       entry.subscribers.forEach(fn => fn(d, null));
     })
     .catch(e => {
+      entry.loading = false;
       entry.error = e.message;
       entry.subscribers.forEach(fn => fn(entry.data, e.message));
     });
@@ -31,7 +34,7 @@ function load(url) {
 function subscribe(url, intervalMs, setter) {
   let entry = _cache.get(url);
   if (!entry) {
-    entry = { data: null, error: null, subscribers: new Set(), intervalId: null, intervalMs };
+    entry = { data: null, error: null, subscribers: new Set(), intervalId: null, intervalMs, loading: false };
     _cache.set(url, entry);
   }
   entry.subscribers.add(setter);
@@ -40,8 +43,16 @@ function subscribe(url, intervalMs, setter) {
     if (entry.intervalId) clearInterval(entry.intervalId);
     entry.intervalId = setInterval(() => load(url), entry.intervalMs);
   }
-  if (entry.data !== null || entry.error !== null) setter(entry.data, entry.error);
   else load(url);
+  // ^ Real bug fixed 2026-07-15: every subscriber mounting before the first fetch
+  // resolved saw entry.data still null and called load() itself here, firing N
+  // redundant requests for the same url in the same tick (measured: 8 real
+  // subscribers x React StrictMode's 2x dev-mode effect invocation = 16 requests
+  // for one URL on a single page load). load() now no-ops while already in
+  // flight (see its own `entry.loading` guard above), so this call site didn't
+  // need to change — any subscriber can safely call load(), and the eventual
+  // response still reaches every subscriber in entry.subscribers, including ones
+  // that joined after the fetch started.
 
   return () => {
     entry.subscribers.delete(setter);

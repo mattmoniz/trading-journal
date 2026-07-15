@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { confidenceTier } from '../../utils/confidenceTier.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
 
 import { API_URL } from '../../constants/api.js';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -110,62 +112,42 @@ function DailyRecap({ date }) {
 }
 
 export default function SessionForecastPanel({ date, section = 'all' }) {
-  const [forecast, setForecast] = useState(null);
-  const [edgeData, setEdgeData] = useState(null);
+  const isViewActive = useViewActive();
   const [loading, setLoading] = useState(true);
   const [volatilityForecast, setVolatilityForecast] = useState(null);
   const [setupAnticipation, setSetupAnticipation] = useState(null);
   const [confluencePairs, setConfluencePairs] = useState(null);
 
   const [scalpPlaybook, setScalpPlaybook] = useState(null);
-  const [liveCtx, setLiveCtx] = useState(null);
-  const [trendWatch, setTrendWatch] = useState(null);
+
+  // edges-context and live-session-context were each independently fetched by 4-6
+  // other Morning Prep components (found 2026-07-15 investigating ~118 concurrent
+  // requests on mount) — deduped onto the shared subscription hook, which also
+  // replaces the two dedicated 60s-refresh effects these used to need below.
+  const [edgeData] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
+  const [liveCtxRaw] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${date}` : null, 60000);
+  const liveCtx = liveCtxRaw?.noData ? null : liveCtxRaw;
+  const [trendWatchRaw] = useSharedPollData(isViewActive ? `${API_URL}/acd/trend-watch` : null, 60000);
+  const trendWatch = trendWatchRaw?.error ? null : trendWatchRaw;
+  // Was independently fetched here too — ACDView.jsx (this component's parent) and
+  // (formerly) App.jsx each fetched this same endpoint separately (found 2026-07-15,
+  // 6 requests/load for one endpoint). Deduped onto the shared subscription hook —
+  // same cache key as ACDView.jsx's own copy, so this is a cache hit, not a new call.
+  const [forecast] = useSharedPollData(`${API_URL}/morning-brief/forecast/${date}`, 60000);
 
   useEffect(() => {
     setLoading(true);
     Promise.all([
-      fetch(`${API_URL}/morning-brief/forecast/${date}`).then(r => r.json()).catch(() => null),
-      fetch(`${API_URL}/antigravity/edges-context`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/morning-brief/scalp-playbook/${date}`).then(r => r.json()).catch(() => null),
-      fetch(`${API_URL}/morning-brief/live-session-context/${date}`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/volatility-forecast`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/level-approach/today`).then(r => r.json()).catch(() => null),
       fetch(`${API_URL}/confluence-near-price`).then(r => r.json()).catch(() => null),
-      fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).catch(() => null),
-    ]).then(([fc, ed, sp, lc, vf, sa, cp, tw]) => {
-      setForecast(fc);
-      setEdgeData(ed);
+    ]).then(([sp, vf, sa, cp]) => {
       setScalpPlaybook(sp);
-      setLiveCtx(lc?.noData ? null : lc);
       setVolatilityForecast(vf?.error ? null : vf);
       setSetupAnticipation(sa?.setups?.length ? sa : null);
       setConfluencePairs(cp?.pairs?.length ? cp : null);
-      setTrendWatch(tw?.error ? null : tw);
     }).finally(() => setLoading(false));
-  }, [date]);
-
-  // Auto-refresh live context every 60 seconds during RTH
-  useEffect(() => {
-    const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
-    if (etH < 9 || etH >= 16) return;
-    const interval = setInterval(() => {
-      fetch(`${API_URL}/morning-brief/live-session-context/${date}`).then(r => r.json()).then(lc => {
-        if (!lc?.noData) setLiveCtx(lc);
-      }).catch(() => {});
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [date]);
-
-  // Auto-refresh trend watch every 60 seconds during RTH
-  useEffect(() => {
-    const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
-    if (etH < 9 || etH >= 16) return;
-    const interval = setInterval(() => {
-      fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).then(tw => {
-        if (!tw?.error) setTrendWatch(tw);
-      }).catch(() => {});
-    }, 60000);
-    return () => clearInterval(interval);
   }, [date]);
 
   if (loading) return <div style={{ fontSize: 12, color: '#94a3b8', padding: '10px 0' }}>Loading forecast...</div>;

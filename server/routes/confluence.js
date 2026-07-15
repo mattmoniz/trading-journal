@@ -3,6 +3,7 @@
 
 import express from 'express';
 import { query } from '../db.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const router = express.Router();
 
@@ -369,8 +370,17 @@ const runConfluenceToday = async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 };
 
+// Short-lived (30s) full-response cache on top of the coalescing lock below —
+// helps the common case of reloading the page or re-mounting Morning Prep within
+// a short window (not just truly-concurrent requests, which the lock alone
+// handles). No autonomous server-side poller hits this one (unlike
+// setup-detection), so 30s is a judgment call on staleness vs. hit rate, not tied
+// to a known external poll cadence.
+const CONFLUENCE_TODAY_CACHE_TTL = 30000;
 let confluenceTodayInFlight = null;
 router.get('/confluence/today', async (req, res) => {
+  const cached = cacheGet('confluence-today-response');
+  if (cached) return res.status(cached.status).json(cached.body);
   if (confluenceTodayInFlight) {
     const result = await confluenceTodayInFlight;
     return res.status(result.status).json(result.body);
@@ -384,6 +394,7 @@ router.get('/confluence/today', async (req, res) => {
     .then(() => ({ status: capturedStatus, body: capturedBody }));
   try {
     const result = await confluenceTodayInFlight;
+    if (result.status === 200) cacheSet('confluence-today-response', result, CONFLUENCE_TODAY_CACHE_TTL);
     res.status(result.status).json(result.body);
   } finally {
     confluenceTodayInFlight = null;

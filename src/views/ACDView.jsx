@@ -4130,12 +4130,11 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   const [pivot, setPivot] = React.useState(null);
   const [loadedAt, setLoadedAt] = React.useState(null);
 
-  const [forecast, setForecast] = React.useState(null);
-
-  React.useEffect(() => {
-    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    fetch(`${API_URL}/morning-brief/forecast/${todayET}`).then(r => r.json()).then(setForecast).catch(() => {});
-  }, []);
+  // Was 1 of 3 independent fetchers of this exact endpoint (App.jsx's copy turned
+  // out to be dead code — fetched but never read, removed; SessionForecastPanel.jsx
+  // had its own too) — found 2026-07-15 investigating why this fires 6x per page
+  // load. Deduped onto the shared subscription hook.
+  const [forecast] = useSharedPollData(`${API_URL}/morning-brief/forecast/${todayET}`, 60000);
 
 
   const loadAll = React.useCallback(() => {
