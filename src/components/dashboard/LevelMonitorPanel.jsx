@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 const CATEGORY_ORDER = ['CURRENT', 'PRIOR_DAY', 'OVERNIGHT', 'OPENS', 'VWAP', 'PIVOT', 'WEEKLY', 'MONTHLY', 'QUARTERLY'];
 const CATEGORY_LABELS = {

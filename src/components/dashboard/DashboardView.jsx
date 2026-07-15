@@ -6,7 +6,7 @@ import PnlCharts from './PnlCharts.jsx';
 import DevelopingValueCard from './DevelopingValueCard.jsx';
 import LevelMonitorPanel from './LevelMonitorPanel.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 export default function DashboardView({
   accounts,

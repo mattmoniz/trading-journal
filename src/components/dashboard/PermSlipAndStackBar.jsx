@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSharedPollData } from '../../utils/useSharedPollData';
+import { useViewActive } from '../../utils/useViewActive.js';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 const MAX_STACK = 7;
 
 function barColor(n) {
@@ -11,12 +12,14 @@ function barColor(n) {
 export default function PermSlipAndStackBar() {
   // Shared with LivePlaybookCard/OvernightContextStrip/EdgeSectionsPanel — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
-  const [edgesData] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 60000);
+  const isViewActive = useViewActive();
+  const [edgesData] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 60000);
   const perms  = edgesData?.sessionPermissions || null;
   const setups = edgesData?.setups || null;
   const [resolved, setResolved] = useState([]);
 
   useEffect(() => {
+    if (!isViewActive) return;
     const load = () =>
       fetch(`${API_URL}/setups/today`)
         .then(r => r.json())
@@ -28,7 +31,7 @@ export default function PermSlipAndStackBar() {
     load();
     const iv = setInterval(load, 60000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   const hasPerms = perms?.conditions?.length > 0;
   if (!hasPerms && !setups) return null;

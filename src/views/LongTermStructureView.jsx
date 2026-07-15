@@ -4,7 +4,7 @@ import { isStale, formatTimestamp } from '../utils/timestamps.js';
 import InfoTooltip from '../components/shared/InfoTooltip.jsx';
 import { Line, Area } from 'recharts';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function CompositeProfileCard() {
   const [tpo, setTpo] = React.useState(null);

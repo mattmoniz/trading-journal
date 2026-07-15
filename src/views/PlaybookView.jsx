@@ -2,7 +2,7 @@ import React from 'react';
 import InfoTooltip from '../components/shared/InfoTooltip.jsx';
 import FetchStamp from '../components/shared/FetchStamp.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 const PLAYBOOK_SECTIONS = [
   {
@@ -382,7 +382,7 @@ export function LevelConfluenceReference() {
   const [rerunning, setRerunning] = React.useState(false);
 
   React.useEffect(() => {
-    fetch('/api/stats/combo-stats')
+    fetch(`${API_URL}/stats/combo-stats`)
       .then(r => r.json())
       .then(rows => { if (Array.isArray(rows) && rows.length) setLiveStats(rows); })
       .catch(() => {});
@@ -414,11 +414,11 @@ export function LevelConfluenceReference() {
 
   const handleRerun = () => {
     setRerunning(true);
-    fetch('/api/stats/combo-stats/rerun', { method: 'POST' })
+    fetch(`${API_URL}/stats/combo-stats/rerun`, { method: 'POST' })
       .then(r => r.json())
       .then(() => {
         setTimeout(() => {
-          fetch('/api/stats/combo-stats').then(r => r.json()).then(rows => {
+          fetch(`${API_URL}/stats/combo-stats`).then(r => r.json()).then(rows => {
             if (Array.isArray(rows) && rows.length) setLiveStats(rows);
             setRerunning(false);
           }).catch(() => setRerunning(false));

@@ -10,6 +10,7 @@ export function cacheGet(key) {
 
 export function cacheSet(key, val, ttlMs = 120_000) {
   _cache.set(key, { val, exp: Date.now() + ttlMs });
+  return val;
 }
 
 export function cacheDelete(key) { _cache.delete(key); }

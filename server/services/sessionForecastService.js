@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 /**
  * Calculates the active balance zone using developing_value_log.
@@ -128,6 +129,14 @@ export async function get14DayRthAtr(targetDate) {
  * Generates the complete Session Forecast
  */
 export async function getSessionForecast(targetDate) {
+  // Cached 2026-07-15 (5min TTL, not the 12h day-cache convention used elsewhere —
+  // `onQ` below includes targetDate's own pre-9:30-ET premarket bars, which are still
+  // accumulating for a same-day call, so a long TTL could freeze overnight H/L on
+  // stale partial data. 5min is enough to absorb Morning Prep's own concurrent-fetch
+  // burst on mount without a real staleness risk. See docs/OPEN_THREADS.md.
+  const ck = `sessionForecast:${targetDate}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   // Every query below depends only on `targetDate` — none depend on each other's
   // results. Was 8+ sequential awaits (get14DayRthAtr, getActiveBalanceZone, then 6
   // more queries one at a time, then a 3-iteration sequential loop for rangePositions)
@@ -344,7 +353,7 @@ export async function getSessionForecast(targetDate) {
 
   const rangePosition = rangePositions.d20 || null;
 
-  return {
+  return cacheSet(ck, {
     date: targetDate,
     atr14: atr,
     balanceZone: balanceZone ? {
@@ -366,5 +375,5 @@ export async function getSessionForecast(targetDate) {
     rangePosition,
     rangePositions,
     bracketAge,
-  };
+  }, 5 * 60 * 1000);
 }

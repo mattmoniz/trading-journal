@@ -8,7 +8,7 @@ const fmtTime = (iso) => {
   } catch { return null; }
 };
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 function buildFeed({ liveStatus, setups, limits, tradeBacktest }) {
   const feed = [];

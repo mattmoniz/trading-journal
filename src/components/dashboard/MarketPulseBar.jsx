@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useViewActive } from '../../utils/useViewActive.js';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 const POLL_MS = 30000;
 
 const C = {
@@ -110,11 +111,13 @@ function DataChip({ label, value, sub, subColor, color, flash, flashColor, extra
 
 // ── Size chip ──────────────────────────────────────────────────────────────────
 function SizeChip() {
+  const isViewActive = useViewActive();
   const [setup,   setSetup]   = useState(null);
   const [base,    setBase]    = useState(() => parseInt(localStorage.getItem('baseContracts') || '2'));
   const [editing, setEditing] = useState(false);
 
   useEffect(() => {
+    if (!isViewActive) return;
     const load = () =>
       fetch(`${API_URL}/acd/setup-detection`).then(r => r.json()).then(d => {
         const s = d.setup;
@@ -123,7 +126,7 @@ function SizeChip() {
     load();
     const iv = setInterval(load, 15000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   const changeBase = (val) => {
     const n = Math.max(1, Math.min(50, parseInt(val) || 1));
@@ -180,6 +183,7 @@ function SizeChip() {
 
 // ── All context chips — inline, each clickable for full detail ─────────────────
 function ContextChips({ date }) {
+  const isViewActive = useViewActive();
   const [ctx,        setCtx]        = useState(null);
   const [flush,      setFlush]      = useState(null);
   const [ovn,        setOvn]        = useState(null);
@@ -187,6 +191,7 @@ function ContextChips({ date }) {
   const [popover,    setPopover]    = useState(null); // { key, rect, content }
 
   useEffect(() => {
+    if (!isViewActive) return;
     const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const load = async () => {
       const [ctxR, flushR, autoR, twR] = await Promise.all([
@@ -205,7 +210,7 @@ function ContextChips({ date }) {
     load();
     const iv = setInterval(load, POLL_MS);
     return () => clearInterval(iv);
-  }, [date]);
+  }, [date, isViewActive]);
 
   const openPop = (key, e, content) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -532,6 +537,7 @@ export function LiveReadModal({ onClose, suggestedPrice }) {
 
 // ── Main bar ───────────────────────────────────────────────────────────────────
 export default function MarketPulseBar() {
+  const isViewActive = useViewActive();
   const [pulse,     setPulse]     = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [pop,       setPop]       = useState(null);
@@ -542,6 +548,7 @@ export default function MarketPulseBar() {
   };
 
   useEffect(() => {
+    if (!isViewActive) return;
     const load = async () => {
       try {
         const d = await fetch(`${API_URL}/market/pulse`).then(r => r.json());
@@ -551,7 +558,7 @@ export default function MarketPulseBar() {
     load();
     const iv = setInterval(load, POLL_MS);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   if (!pulse) return null;
 

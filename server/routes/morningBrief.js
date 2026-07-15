@@ -2,8 +2,22 @@ import express from 'express';
 import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
 import { getTrailingVwapStd } from '../services/queries.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const router = express.Router();
+
+// The 7 "trailing as of `date`" helpers below all bound their queries strictly
+// `< date` — day-stable by construction, the result for a given (date, lookback)
+// pair never changes once that date is in the past. They were being recomputed
+// from scratch on every single poll/page load (profiled 2026-07-15, see
+// docs/OPEN_THREADS.md) even though only ~3 of Morning Prep's ~16 queries are
+// genuinely live. Cached here on the existing shared `lib/cache.js` helper
+// (already used by acd.js/auctionRead.js/keyLevels.js/etc. — reused rather than
+// reimplemented, per this codebase's own "share modules" convention). 12h TTL
+// matches acd.js's own day-cache convention: long enough to absorb a full trading
+// session's worth of polling, short enough to self-heal if a backfill/repair
+// script retroactively corrects the underlying price_bars data.
+const MB_DAY_CACHE_TTL = 12 * 60 * 60 * 1000;
 
 // ── Rolling distribution helpers (σ-based, no static thresholds) ──────────
 function rollingStats(arr) {
@@ -20,20 +34,23 @@ const MIN_SAMPLES = 20;
 
 // Fetch trailing daily cumDeltas from price bars (30-day window)
 async function getTrailingCumDeltas(date, days = 30) {
+  const ck = `mb:cumDeltas:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   const dailyBars = await query(`
     SELECT ts::date::text as d, open::float, high::float, low::float, close::float, volume::bigint as vol
     FROM price_bars_primary WHERE symbol='NQ'
     AND ts::date >= $1::date - $2::int AND ts::date < $1
     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     ORDER BY ts`, [date, days]).catch(() => ({ rows: [] }));
-  if (!dailyBars.rows.length) return [];
+  if (!dailyBars.rows.length) return cacheSet(ck, [], MB_DAY_CACHE_TTL);
   // Group by date, compute cumDelta per day
   const byDate = {};
   for (const b of dailyBars.rows) {
     if (!byDate[b.d]) byDate[b.d] = [];
     byDate[b.d].push(b);
   }
-  return Object.values(byDate).map(bars => {
+  return cacheSet(ck, Object.values(byDate).map(bars => {
     let cd = 0;
     for (const b of bars) {
       const bRange = b.high - b.low;
@@ -42,11 +59,14 @@ async function getTrailingCumDeltas(date, days = 30) {
       cd += dir * Number(b.vol || 0) * Math.max(bodyPct, 0.3);
     }
     return cd;
-  });
+  }), MB_DAY_CACHE_TTL);
 }
 
 // Fetch trailing 24hr VWAP distances (30-day window)
 async function getTrailing24hrVwapDists(date, days = 30) {
+  const ck = `mb:24hrVwapDists:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   const result = await query(`
     WITH day_list AS (
       SELECT DISTINCT ts::date as d FROM price_bars_primary
@@ -59,7 +79,7 @@ async function getTrailing24hrVwapDists(date, days = 30) {
     WHERE symbol='NQ' AND EXTRACT(hour FROM pb.ts)*60+EXTRACT(minute FROM pb.ts) BETWEEN 570 AND 959
     GROUP BY d
     ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
-  if (result.rows.length < 5) return [];
+  if (result.rows.length < 5) return cacheSet(ck, [], MB_DAY_CACHE_TTL);
 
   // Was a real N+1: one Globex-session bar query per day (~21-30 sequential round trips,
   // confirmed the dominant cost of /morning-brief/live-session-context, 2026-07-15). Fixed
@@ -101,7 +121,7 @@ async function getTrailing24hrVwapDists(date, days = 30) {
       dists.push(row.close_price - vwap24);
     }
   }
-  return dists;
+  return cacheSet(ck, dists, MB_DAY_CACHE_TTL);
 }
 
 // Fetch trailing weekly VWAP distances.
@@ -114,6 +134,9 @@ async function getTrailing24hrVwapDists(date, days = 30) {
 // original per-week loop. The call-site duplication is fixed separately in the route
 // handler (single shared call + single shared current-week bars fetch, not fixable here).
 async function getTrailingWeeklyVwapDists(date, weeks = 12) {
+  const ck = `mb:weeklyVwapDists:${date}:${weeks}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   const d = new Date(date + 'T12:00:00');
   const weekRanges = [];
   for (let w = 1; w <= weeks; w++) {
@@ -148,34 +171,43 @@ async function getTrailingWeeklyVwapDists(date, weeks = 12) {
     const lastClose = weekBars[weekBars.length - 1].close;
     dists.push(lastClose - wVwap);
   }
-  return dists;
+  return cacheSet(ck, dists, MB_DAY_CACHE_TTL);
 }
 
 // Fetch trailing rotation counts from session_analysis (90-day window)
 async function getTrailingRotations(date, days = 90) {
+  const ck = `mb:rotations:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   const res = await query(
     `SELECT rotations_65pt FROM session_analysis
      WHERE trade_date >= $1::date - $2::int AND trade_date < $1
      AND rotations_65pt IS NOT NULL
      ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  return res.rows.map(r => r.rotations_65pt);
+  return cacheSet(ck, res.rows.map(r => r.rotations_65pt), MB_DAY_CACHE_TTL);
 }
 
 // Fetch trailing OR widths from acd_daily_log (90-day window)
 async function getTrailingORWidths(date, days = 90) {
+  const ck = `mb:orWidths:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
   const res = await query(
     `SELECT or_high::float - or_low::float as or_width
      FROM acd_daily_log
      WHERE trade_date >= $1::date - $2::int AND trade_date < $1
      AND or_high IS NOT NULL AND or_low IS NOT NULL
      ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  return res.rows.map(r => r.or_width).filter(w => w > 0);
+  return cacheSet(ck, res.rows.map(r => r.or_width).filter(w => w > 0), MB_DAY_CACHE_TTL);
 }
 
 // Fetch rolling p50 of 30-bar net-delta magnitude (same formula as divergence alert).
 // p10 of |delta30| ≈ 500 (old hardcoded value — fired 90% of the time, useless).
 // p50 ≈ 2100, p67 ≈ 3400. Using p50 means "notable net flow" = above-median pressure.
 async function getTrailingDelta30P50(date, days = 30) {
+  const ck = `mb:delta30p50:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached != null) return cached;
   const res = await query(`
     WITH recent_bars AS (
       SELECT open::float, high::float, low::float, close::float, volume::float, ts
@@ -199,11 +231,14 @@ async function getTrailingDelta30P50(date, days = 30) {
     FROM delta30_windows
     WHERE abs_delta30 IS NOT NULL
   `, [date, days]).catch(() => ({ rows: [{}] }));
-  return Math.round(res.rows[0]?.p50 ?? 2100);  // Fallback: p50 from 90d analysis 2026-07-09
+  return cacheSet(ck, Math.round(res.rows[0]?.p50 ?? 2100), MB_DAY_CACHE_TTL);  // Fallback: p50 from 90d analysis 2026-07-09
 }
 
 // Fetch trailing ATR(20) for rotation threshold
 async function getTrailingATR(date, days = 20) {
+  const ck = `mb:atr:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached != null) return cached;
   const res = await query(`
     SELECT (MAX(high) - MIN(low))::float as range
     FROM price_bars_primary
@@ -211,8 +246,8 @@ async function getTrailingATR(date, days = 20) {
     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     GROUP BY ts::date
     ORDER BY ts::date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  if (res.rows.length < 5) return 400; // reasonable NQ default
-  return res.rows.reduce((s, r) => s + r.range, 0) / res.rows.length;
+  if (res.rows.length < 5) return cacheSet(ck, 400, MB_DAY_CACHE_TTL); // reasonable NQ default
+  return cacheSet(ck, res.rows.reduce((s, r) => s + r.range, 0) / res.rows.length, MB_DAY_CACHE_TTL);
 }
 
 router.get('/forecast/:date', async (req, res) => {

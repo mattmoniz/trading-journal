@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 export default function VolatilityAlertBanner() {
   const [data, setData] = useState(null);

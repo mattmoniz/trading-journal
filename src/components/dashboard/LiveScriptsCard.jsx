@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 // etMin = minutes since midnight ET of the most recent bar this card's data was computed from —
 // reflects data freshness (last bar ingested), not browser render/fetch time.

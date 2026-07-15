@@ -8,7 +8,7 @@ import {
   ResponsiveContainer, ReferenceLine, Cell,
 } from 'recharts';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
   const [dailyLogs, setDailyLogs] = useState([]);

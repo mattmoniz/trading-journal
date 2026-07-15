@@ -4,7 +4,7 @@
 // lived in the same file, defeating any lazy() wrapper on ACDView's default export.
 import React from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 function TradeLogRow({ log, onUpdate }) {
   const [mode, setMode] = React.useState(null); // 'close' | 'note' | 'edit'

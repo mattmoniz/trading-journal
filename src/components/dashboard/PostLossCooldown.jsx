@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 // Single source of truth for the cooldown duration label shown to the user.
 // The actual countdown is driven by the server-stored end_time (server/routes/cooldown.js

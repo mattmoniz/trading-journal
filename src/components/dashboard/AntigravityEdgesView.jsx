@@ -2,7 +2,7 @@ const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US',
 import React, { useState, useEffect } from 'react';
 import { confidenceTier } from '../../utils/confidenceTier.js';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 function InfoTooltip({ text }) {
   const [visible, setVisible] = useState(false);

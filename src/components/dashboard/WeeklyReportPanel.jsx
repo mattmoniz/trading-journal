@@ -2,7 +2,7 @@ const fmtP = (n, d = 0) => n == null ? '—' : Number(n).toLocaleString('en-US',
 import React, { useState, useEffect } from 'react';
 import DevelopingValueCard from './DevelopingValueCard.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 const GRADE_COLOR = (g) => {
   if (!g) return 'var(--text-muted)';

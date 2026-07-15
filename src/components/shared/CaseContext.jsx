@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 export function useLiveCase() {
   const [caseData, setCaseData] = React.useState(null);

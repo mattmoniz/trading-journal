@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 const DIR_STYLE = {
   LONG:     { color: '#4ade80', bg: 'rgba(34,197,94,0.1)',   label: 'LONG'     },

@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function ProcessHealthDashboard() {
   const [data, setData] = React.useState(null);

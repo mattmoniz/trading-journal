@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { confidenceTier } from '../../utils/confidenceTier.js';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
 // DOW_PLAYBOOKS removed — replaced by live backtested data from /api/morning-brief/scalp-playbook

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 // Parse direction + entry price out of an alert message
 function parseAlertMsg(msg) {

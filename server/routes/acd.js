@@ -187,6 +187,41 @@ export async function resolveSetupsByPrice(io) {
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
 
+  // Was a real N+1: one "bars since fired_at" query per unresolved setup (up to ~20
+  // on a normal day), each independently re-scanning price_bars_primary's full
+  // partition set (its ts column is a date_trunc() expression, not the raw
+  // partition key, so partition pruning doesn't trigger even though the row-level
+  // filter does) — measured 2026-07-15 as the dominant cost of /api/acd/setup-detection
+  // (13-24s). Every setup's needed bars are a suffix of the earliest setup's own
+  // range (all queries run "from fired_at through now"), so fetching once from the
+  // single earliest fired_at and filtering per-setup in JS is both correct (same
+  // exact rows each setup would have gotten) and eliminates the redundant re-scans.
+  // ts is fetched as ::text (not a Date object) to match fired_at's own ::text
+  // convention above — avoids the exact ET/UTC Date-parsing landmine documented
+  // where this function reads fired_at, since string comparison here needs to match
+  // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
+  const needsBars = active.rows.filter(row => {
+    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE')) return false;
+    const long = isLongSetup(row.setup_type);
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const { stop_level: stop, t1_level: t1 } = row;
+    if (entry == null || stop == null || t1 == null) return false;
+    if (long && t1 <= entry) return false;
+    if (!long && t1 >= entry) return false;
+    return true;
+  });
+  let sharedBarsRows = [];
+  if (needsBars.length) {
+    const earliestFiredAt = needsBars.reduce((min, r) => (r.fired_at < min ? r.fired_at : min), needsBars[0].fired_at);
+    const sharedBars = await query(`
+      SELECT ts::text as ts, open::float, high::float, low::float, close::float,
+             COALESCE(bid_volume,0)::int AS bid_volume, COALESCE(ask_volume,0)::int AS ask_volume,
+             (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod
+      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts
+    `, [earliestFiredAt]);
+    sharedBarsRows = sharedBars.rows;
+  }
+
   let count = 0;
   for (const row of active.rows) {
     const long = isLongSetup(row.setup_type);
@@ -254,12 +289,7 @@ export async function resolveSetupsByPrice(io) {
     if (long && t1 <= entry) continue;
     if (!long && t1 >= entry) continue;
 
-    const bars = await query(`
-      SELECT ts, open::float, high::float, low::float, close::float,
-             COALESCE(bid_volume,0)::int AS bid_volume, COALESCE(ask_volume,0)::int AS ask_volume,
-             (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod
-      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts
-    `, [row.fired_at]);
+    const bars = { rows: sharedBarsRows.filter(b => b.ts > row.fired_at) };
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
@@ -2822,7 +2852,19 @@ export default function createACDRouter(io) {
   // GET /api/acd/setup-detection — detect the highest-priority intraday setup
   // Returns one setup card at a time. Priority: IB_CONFIRMATION > OPEN_DRIVE_CONT >
   // FAILED_AUCTION > BRACKET_BREAKOUT > VALUE_AREA_RESP
-      router.get('/acd/setup-detection', async (req, res) => {
+  //
+  // Genuinely expensive (~5-8s of real DB/CPU work, profiled 2026-07-15 — see
+  // docs/OPEN_THREADS.md) yet polled every 15s by SizeChip (MarketPulseBar.jsx) plus
+  // fetched by several other Morning Prep cards on mount. A response slower than the
+  // poll interval means overlapping requests pile up indefinitely — each new one
+  // competes with still-running ones for the same DB connections, making every one
+  // progressively slower (this project's own OPEN_THREADS already flagged "no lock
+  // against overlapping invocations" as a known risk here, never fixed until now).
+  // runSetupDetection is unchanged from before; only the request-coalescing wrapper
+  // below is new. Only `res.json`/`res.status` are called anywhere in this handler
+  // (checked), so a minimal fake res capturing just those two is a safe substitute
+  // for concurrent callers that share this same in-flight computation.
+  const runSetupDetection = async (req, res) => {
     try {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -6035,6 +6077,27 @@ export default function createACDRouter(io) {
         cascadeBreaker,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
+  };
+
+  let setupDetectionInFlight = null;
+  router.get('/acd/setup-detection', async (req, res) => {
+    if (setupDetectionInFlight) {
+      const result = await setupDetectionInFlight;
+      return res.status(result.status).json(result.body);
+    }
+    let capturedStatus = 200, capturedBody = null;
+    const fakeRes = {
+      status(code) { capturedStatus = code; return this; },
+      json(body) { capturedBody = body; return this; },
+    };
+    setupDetectionInFlight = runSetupDetection(req, fakeRes)
+      .then(() => ({ status: capturedStatus, body: capturedBody }));
+    try {
+      const result = await setupDetectionInFlight;
+      res.status(result.status).json(result.body);
+    } finally {
+      setupDetectionInFlight = null;
+    }
   });
 
   // ── Replayed baseline stats (replaces hardcoded SETUP_BASELINES) ──────────

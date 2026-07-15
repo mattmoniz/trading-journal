@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useSharedPollData } from '../../utils/useSharedPollData';
+import { useViewActive } from '../../utils/useViewActive.js';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 const fmtP = (n) => n == null ? '—' : Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
 
 function computePlaybook(ctx, acd, edges) {
@@ -203,11 +204,12 @@ function computePlaybook(ctx, acd, edges) {
 }
 
 export default function LivePlaybookCard({ date }) {
+  const isViewActive = useViewActive();
   const [ctx,          setCtx]          = useState(null);
   const [acd,          setAcd]          = useState(null);
   // Shared with PermSlipAndStackBar/OvernightContextStrip/EdgeSectionsPanel — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
-  const [edges] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 30000);
+  const [edges] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
   const [aiResponse,   setAiResponse]   = useState(null);
   const [aiLoading,    setAiLoading]    = useState(false);
   const [aiError,      setAiError]      = useState(null);
@@ -243,8 +245,12 @@ export default function LivePlaybookCard({ date }) {
   };
 
   useEffect(() => {
-    loadCtx();
     loadConversations();
+  }, [date]);
+
+  useEffect(() => {
+    if (!isViewActive) return;
+    loadCtx();
     const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
     if (etH < 8 || etH >= 17) return;
     const iv = setInterval(loadCtx, 30000);
@@ -254,7 +260,7 @@ export default function LivePlaybookCard({ date }) {
       clearInterval(iv);
       if (sock) { sock.off('price-sync-progress', loadCtx); sock.off('setup-detected', loadCtx); }
     };
-  }, [date]);
+  }, [date, isViewActive]);
 
   const triggerAssess = async (intent) => {
     setAiLoading(true);

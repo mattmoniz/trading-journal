@@ -31,7 +31,7 @@ const S = {
   todoIcon: { fontSize: 13, marginTop: 1, flexShrink: 0 },
 };
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 function EngineAccuracyPanel() {
   const [data, setData] = useState(null);
@@ -159,7 +159,7 @@ function EngineAccuracyPanel() {
 function SetupCalibrationPanel() {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch('/api/playbook/setup-calibration').then(r => r.json()).then(setData).catch(() => {});
+    fetch(`${API_URL}/playbook/setup-calibration`).then(r => r.json()).then(setData).catch(() => {});
   }, []);
 
   if (!data || !data.items?.length) {
@@ -211,7 +211,7 @@ function SetupCalibrationPanel() {
 function BehavioralStatsPanel() {
   const [data, setData] = useState(null);
   useEffect(() => {
-    fetch('/api/playbook/behavioral-stats').then(r => r.json()).then(setData).catch(() => {});
+    fetch(`${API_URL}/playbook/behavioral-stats`).then(r => r.json()).then(setData).catch(() => {});
   }, []);
 
   if (!data || !data.items?.length) {
@@ -258,7 +258,7 @@ function PipelineHealthPanel() {
   const [filter, setFilter] = useState('All');
 
   useEffect(() => {
-    fetch('/api/playbook/pipeline-status').then(r => r.json()).then(setData).catch(() => {});
+    fetch(`${API_URL}/playbook/pipeline-status`).then(r => r.json()).then(setData).catch(() => {});
   }, []);
 
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
@@ -357,7 +357,7 @@ function LearningDigestPanel() {
   const [data, setData] = useState(null);
 
   useEffect(() => {
-    fetch('/api/learning-digest/recent').then(r => r.json()).then(setData).catch(() => {});
+    fetch(`${API_URL}/learning-digest/recent`).then(r => r.json()).then(setData).catch(() => {});
   }, []);
 
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
@@ -418,8 +418,8 @@ export default function AlphaEngineOverview() {
   const [setupStatus, setSetupStatus] = useState(null);
 
   useEffect(() => {
-    fetch('/api/acd/engine-summary').then(r => r.json()).then(setLiveStats).catch(() => {});
-    fetch('/api/acd/setup-status').then(r => r.json()).then(setSetupStatus).catch(() => {});
+    fetch(`${API_URL}/acd/engine-summary`).then(r => r.json()).then(setLiveStats).catch(() => {});
+    fetch(`${API_URL}/acd/setup-status`).then(r => r.json()).then(setSetupStatus).catch(() => {});
   }, []);
 
   const tiers = [

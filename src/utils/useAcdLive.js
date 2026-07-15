@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 /**
  * Polls /api/acd/live every `intervalMs` ms.

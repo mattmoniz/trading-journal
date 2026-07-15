@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 function fmtP(p) { return p != null ? p.toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—'; }
 

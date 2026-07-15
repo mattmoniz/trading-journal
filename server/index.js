@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import { createServer } from 'http';
 import { Server as SocketIO } from 'socket.io';
 import { fileURLToPath } from 'url';
@@ -94,6 +95,12 @@ function recordError(type, message, detail) {
 }
 
 app.use(cors());
+// Found 2026-07-15: /api/trades (unbounded "All Trades" list, 40k+ rows) was returning
+// a 51MB uncompressed JSON response on every load — no compression middleware existed
+// at all (confirmed: no Content-Encoding header on any response before this). gzip on
+// JSON text typically compresses 5-10x; this is a pure transport-layer win, zero
+// behavior change for any route. See docs/OPEN_THREADS.md.
+app.use(compression());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 

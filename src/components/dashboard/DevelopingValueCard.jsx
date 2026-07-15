@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 // Shared, descriptive-only "where is value building" card.
 // Reads from /api/developing-value/context — ONE source for morning prep,

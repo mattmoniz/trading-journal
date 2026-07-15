@@ -1,5 +1,6 @@
 import pool from '../db.js';
 import { tagTradeProximity } from './levelProximityService.js';
+import { cacheDelete } from '../lib/cache.js';
 
 export async function importSierraTrades(trades) {
   const client = await pool.connect();
@@ -94,6 +95,10 @@ export async function importSierraTrades(trades) {
     }
 
     await client.query('COMMIT');
+    // Invalidate here (the actual insert point), not just at the route level —
+    // sierraWatcher.js's automatic file-watch import calls this function directly,
+    // bypassing the manual /api/sierra/import route's own invalidation.
+    if (imported > 0) cacheDelete('all-trades-list');
 
     return { imported, skipped, errors, total: trades.length };
 

@@ -7,7 +7,7 @@ import {
 import { formatNumber } from '../utils/format.js';
 import { SectionUpdateDot } from '../components/shared/UpdateDot.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function fmtDur(secs) {
   if (!secs) return '—';

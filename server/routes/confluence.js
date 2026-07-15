@@ -10,7 +10,14 @@ const router = express.Router();
 // Full implementation: lines 8066-8435 of original index.js
 // This route is very large (370 lines) — extracted verbatim
 
-router.get('/confluence/today', async (req, res) => {
+// Genuinely slow (~5-6s, 8 sequential queries) and fetched independently by several
+// Morning Prep components (StructureInline, ConfluenceScore, AuctionReadCard) on
+// mount — a page load fires several concurrent identical requests. Coalesced the
+// same way /api/acd/setup-detection was 2026-07-15 (see docs/OPEN_THREADS.md):
+// only res.json/res.status are used in this handler (checked), so concurrent
+// callers safely share one in-flight computation instead of each paying the full
+// cost. Does not reduce the per-call cost itself — see OPEN_THREADS for that.
+const runConfluenceToday = async (req, res) => {
   try {
     const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -360,6 +367,27 @@ router.get('/confluence/today', async (req, res) => {
       nl30, nl10, valueMigration,
     });
   } catch(e) { res.status(500).json({ error: e.message }); }
+};
+
+let confluenceTodayInFlight = null;
+router.get('/confluence/today', async (req, res) => {
+  if (confluenceTodayInFlight) {
+    const result = await confluenceTodayInFlight;
+    return res.status(result.status).json(result.body);
+  }
+  let capturedStatus = 200, capturedBody = null;
+  const fakeRes = {
+    status(code) { capturedStatus = code; return this; },
+    json(body) { capturedBody = body; return this; },
+  };
+  confluenceTodayInFlight = runConfluenceToday(req, fakeRes)
+    .then(() => ({ status: capturedStatus, body: capturedBody }));
+  try {
+    const result = await confluenceTodayInFlight;
+    res.status(result.status).json(result.body);
+  } finally {
+    confluenceTodayInFlight = null;
+  }
 });
 
 export default router;

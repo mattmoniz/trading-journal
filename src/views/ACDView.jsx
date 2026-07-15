@@ -11,6 +11,7 @@ import WinChip from '../components/shared/WinChip.jsx';
 import { Dot, useDataUpdateDot, useFieldUpdateDots } from '../components/shared/UpdateDot.jsx';
 import { useAcdLive } from '../utils/useAcdLive.js';
 import { useSharedPollData } from '../utils/useSharedPollData.js';
+import { ViewActiveProvider, useViewActive } from '../utils/useViewActive.js';
 import ErrorBoundary from '../components/shared/ErrorBoundary.jsx';
 import MarketPulseBar from '../components/dashboard/MarketPulseBar.jsx';
 import SessionForecastPanel from '../components/dashboard/SessionForecastPanel.jsx';
@@ -31,7 +32,7 @@ import {
   Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ComposedChart,
 } from 'recharts';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 // ==================== ACD COMPONENTS ====================
 
@@ -641,6 +642,7 @@ function TradeTimelinePanel() {
   const [events, setEvents] = React.useState([]);
   const [filter, setFilter] = React.useState('significant');
   const [loading, setLoading] = React.useState(false);
+  const isViewActive = useViewActive();
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -652,6 +654,7 @@ function TradeTimelinePanel() {
   }, [filter]);
 
   React.useEffect(() => {
+    if (!isViewActive) return;
     load();
     const iv = setInterval(load, 60000);
     // Socket: refresh on resolution/expiry
@@ -662,7 +665,7 @@ function TradeTimelinePanel() {
       clearInterval(iv);
       if (sock) { sock.off('setup-expired', refresh); sock.off('setup-resolved', refresh); sock.off('timeline-updated', refresh); }
     };
-  }, [load]);
+  }, [load, isViewActive]);
 
   const RESOLUTION_STYLE = {
     TARGET_HIT:  { color: '#22c55e', label: '✓ Target Hit' },
@@ -1592,6 +1595,7 @@ function computeContractRec(tpRec, setupStats, setupCard, conf, isCounterTrend) 
 }
 
 function AuctionReadCard({ nl, todayData }) {
+  const isViewActive = useViewActive();
   const [read, setRead] = React.useState({});
   const [openPhases, setOpenPhases] = React.useState(new Set([]));
   const [expandedRows, setExpandedRows] = React.useState(new Set());
@@ -1612,14 +1616,18 @@ function AuctionReadCard({ nl, todayData }) {
     fetch(`${API_URL}/longterm/summary`).then(r => r.json()).then(d => { if (!d.error) setLtSummary(d); }).catch(() => {});
     fetch(`${API_URL}/acd/setup-detection`).then(r => r.json()).then(d => setSetupCard(d.setup || null)).catch(() => {});
     fetch(`${API_URL}/engine-reads/hit-rates`).then(r => r.json()).then(d => { if (!d.error) { setHitRates(d.rates); setLevelTouches(d.levelTouches); } }).catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    if (!isViewActive) return;
     const loadConf = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setConfluenceData(d); }).catch(() => {});
     loadConf();
     const confIv = setInterval(loadConf, 5 * 60 * 1000);
     const loadLive = () => fetch(`${API_URL}/acd/live`).then(r => r.json()).then(setLiveCtx).catch(() => {});
     loadLive();
-    const iv = setInterval(loadLive, 60000);
-    return () => { clearInterval(iv); clearInterval(confIv); };
-  }, []);
+    const liveIv = setInterval(loadLive, 60000);
+    return () => { clearInterval(confIv); clearInterval(liveIv); };
+  }, [isViewActive]);
 
   React.useEffect(() => {
     if (!setupCard?.type) { setSetupStats(null); return; }
@@ -2101,6 +2109,7 @@ function AuctionReadCard({ nl, todayData }) {
 }
 
 function MidDaySection({ hitRates, levelTouches }) {
+  const isViewActive = useViewActive();
   const [snap, setSnap] = React.useState(null);
   const [open, setOpen] = React.useState(false);
 
@@ -2115,14 +2124,14 @@ function MidDaySection({ hitRates, levelTouches }) {
   }, []);
 
   React.useEffect(() => {
-    if (!isAfter145) return;
+    if (!isAfter145 || !isViewActive) return;
     load();
     // Refresh every 15 min from 1:45 until 4 PM
     if (isBefore4) {
       const iv = setInterval(load, 15 * 60 * 1000);
       return () => clearInterval(iv);
     }
-  }, [isAfter145]);
+  }, [isAfter145, isViewActive]);
 
   const biasColor = { LONG: '#22c55e', SHORT: '#ef4444', NEUTRAL: '#94a3b8' };
   const dirColor  = { BULLISH: '#22c55e', BEARISH: '#ef4444', NEUTRAL: '#94a3b8' };
@@ -2318,6 +2327,7 @@ function MidDaySection({ hitRates, levelTouches }) {
 }
 
 function EODReadSection() {
+  const isViewActive = useViewActive();
   const [eod, setEod] = React.useState(null);
   const [loading, setLoading] = React.useState(false);
   const [generatedAt, setGeneratedAt] = React.useState(null);
@@ -2337,11 +2347,11 @@ function EODReadSection() {
 
   // Auto-load once after 4 PM, refresh every 15 min until close
   React.useEffect(() => {
-    if (!isAfter4pm) return;
+    if (!isAfter4pm || !isViewActive) return;
     load();
     const iv = setInterval(load, 15 * 60 * 1000);
     return () => clearInterval(iv);
-  }, [isAfter4pm]);
+  }, [isAfter4pm, isViewActive]);
 
   const outcomeColor = { CORRECT: '#22c55e', WRONG: '#ef4444', NEUTRAL: '#94a3b8' };
   const outcomeIcon  = { CORRECT: '✓', WRONG: '✗', NEUTRAL: '—' };
@@ -2590,15 +2600,17 @@ function ConditionRow({ c }) {
 
 // ─── StructureInline: alignment + score summary + key conditions + one expand ──
 function StructureInline({ defaultOpen = false }) {
+  const isViewActive = useViewActive();
   const [data,     setData]     = React.useState(null);
   const [expanded, setExpanded] = React.useState(defaultOpen);
 
   React.useEffect(() => {
+    if (!isViewActive) return;
     const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
     load();
     const iv = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   if (!data) return null;
 
@@ -2672,25 +2684,28 @@ function StructureInline({ defaultOpen = false }) {
 }
 
 function ConfluenceScore() {
+  const isViewActive = useViewActive();
   const [data, setData]         = React.useState(null);
   const [patternCtx, setPatternCtx] = React.useState(null);
   const [openS, setOpenS]       = React.useState(true);
   const [openSess, setOpenSess] = React.useState(false);
 
   React.useEffect(() => {
+    if (!isViewActive) return;
     const load = () => fetch(`${API_URL}/confluence/today`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
     load();
     const iv = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   React.useEffect(() => {
+    if (!isViewActive) return;
     const loadPattern = () => fetch(`${API_URL}/pattern/today-combination?days=0`)
       .then(r => r.json()).then(setPatternCtx).catch(() => {});
     loadPattern();
     const iv = setInterval(loadPattern, 5 * 60 * 1000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   if (!data) return null;
 
@@ -2878,6 +2893,7 @@ function CounterTrendPanel({ ct }) {
 }
 
 function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = null }) {
+  const isViewActive = useViewActive();
   const [lt, setLt] = React.useState(initialLt);
   const [tpo, setTpo] = React.useState(null);
   const [loading, setLoading] = React.useState(!initialLt);
@@ -2885,6 +2901,7 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
   const [fetchedAt, setFetchedAt] = React.useState(null);
 
   React.useEffect(() => {
+    if (!isViewActive) return;
     const load = () => {
       Promise.all([
         fetch(`${API_URL}/longterm/summary`).then(r => r.json()).then(d => { if (!d.error) { setLt(d); setLoading(false); } }).catch(() => { setLoading(false); }),
@@ -2894,7 +2911,7 @@ function BigPictureSnapshot({ setCurrentView, defaultOpen = false, initialLt = n
     load();
     const iv = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(iv);
-  }, []);
+  }, [isViewActive]);
 
   const [updateUnseen, clearUpdateSeen] = useDataUpdateDot('acd-dash-big-picture', 'acd', JSON.stringify({ lt, tpo }));
 
@@ -3474,7 +3491,8 @@ function PhaseChangeMonitor({ phaseState }) {
 function OvernightContextStrip() {
   // Shared with PermSlipAndStackBar/LivePlaybookCard/EdgeSectionsPanel — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
-  const [edgesData] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 60000);
+  const isViewActive = useViewActive();
+  const [edgesData] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 60000);
   const data = edgesData?.overnightContext;
   const inv = data?.overnight_inventory;
   const ovp = data?.open_vs_prior_value;
@@ -3645,7 +3663,8 @@ function EdgeSectionsPanel() {
   // Shared with PermSlipAndStackBar/LivePlaybookCard/OvernightContextStrip — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
   // This is the fastest-polling subscriber (30s), so it sets the shared cadence.
-  const [data, err] = useSharedPollData(`${API_URL}/antigravity/edges-context`, 30000);
+  const isViewActive = useViewActive();
+  const [data, err] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
   const [resolvedSetups, setResolvedSetups] = React.useState([]);
   const [feedback, setFeedback] = React.useState([]);
   const [showClosed, setShowClosed] = React.useState(false);
@@ -3661,7 +3680,7 @@ function EdgeSectionsPanel() {
       if (d.feedback) setFeedback(d.feedback);
     }).catch(() => {});
   };
-  React.useEffect(() => { loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET]);
+  React.useEffect(() => { if (!isViewActive) return; loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET, isViewActive]);
 
   // Must be before early returns — hook call count must be constant across renders
   const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
@@ -4099,7 +4118,7 @@ function PhaseChangeBacktestPanel() {
 }
 
 // ==================== PHASE 3: CASE VIEW (MAIN DASHBOARD) ====================
-function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView }) {
+function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentView, isActive = true }) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const [tab, setTab] = React.useState(() => {
     return sessionStorage.getItem('acd-dash-tab') || 'dashboard';
@@ -4138,6 +4157,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   });
 
   return (
+    <ViewActiveProvider value={isActive}>
     <div style={{ fontFamily: 'Arial, sans-serif', fontSize: 13, color: '#94a3b8' }}>
 
       {/* ── Market Pulse Bar — always on top ── */}
@@ -4276,6 +4296,7 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
       </div>
       </div>{/* end padding wrapper */}
     </div>
+    </ViewActiveProvider>
   );
 }
 

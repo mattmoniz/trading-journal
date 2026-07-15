@@ -10,7 +10,7 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 // ==================== KEY LEVEL BACKTEST MULTI-TIMEFRAME VIEW ====================
 

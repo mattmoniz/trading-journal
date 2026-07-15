@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { API_URL } from '../../constants/api.js';
 
 const S = {
   wrap: { background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 20, marginBottom: 16 },
@@ -34,7 +35,7 @@ export default function CaptureRatioPanel() {
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
-    fetch('/api/stats/capture-ratio').then(r => r.json()).then(setData).catch(() => {});
+    fetch(`${API_URL}/stats/capture-ratio`).then(r => r.json()).then(setData).catch(() => {});
   }, []);
 
   if (!data) return null;

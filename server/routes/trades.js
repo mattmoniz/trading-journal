@@ -4,6 +4,18 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
+import { cacheGet, cacheSet, cacheDelete } from '../lib/cache.js';
+
+// /api/trades (unbounded "All Trades" list) is genuinely expensive: 40k+ rows, a
+// disk-spilling GROUP BY/ORDER BY under default work_mem, and CPU-bound JS-side
+// JSON serialization of the whole result — measured 2026-07-15 at ~5s per request,
+// the dominant cost being server-side work, not network transfer (gzip alone only
+// cut 5.0s->4.3s despite a 51MB->2.6MB payload drop). The data only actually
+// changes on a trade sync/create/update/delete/screenshot-upload — cached here and
+// invalidated explicitly on all of those, with a 10min TTL as a backstop in case an
+// invalidation point is ever missed. See docs/OPEN_THREADS.md.
+const ALL_TRADES_CACHE_KEY = 'all-trades-list';
+const ALL_TRADES_CACHE_TTL = 10 * 60 * 1000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -63,6 +75,12 @@ router.get('/trades/:date', async (req, res) => {
 // Fetch all trades at once (for All Trades view) — sierra_data stripped to keep payload small
 router.get('/trades', async (req, res) => {
   try {
+    // Cache the pre-serialized JSON string, not just the JS array — res.json() re-runs
+    // JSON.stringify on every call regardless of whether the underlying data is cached,
+    // and for a 40k-row/51MB payload that stringify cost alone is ~1s. Sending the
+    // string directly skips it on every cache hit after the first.
+    const cached = cacheGet(ALL_TRADES_CACHE_KEY);
+    if (cached) { res.type('application/json'); return res.send(cached); }
     const result = await query(`
       SELECT
         t.id, t.log_date, t.entry_time, t.exit_time, t.symbol, t.direction,
@@ -89,7 +107,10 @@ router.get('/trades', async (req, res) => {
       GROUP BY t.id
       ORDER BY t.entry_time DESC
     `);
-    res.json(result.rows);
+    const json = JSON.stringify(result.rows);
+    cacheSet(ALL_TRADES_CACHE_KEY, json, ALL_TRADES_CACHE_TTL);
+    res.type('application/json');
+    res.send(json);
   } catch (error) {
     console.error('Error fetching all trades:', error);
     res.status(500).json({ error: 'Failed to fetch trades' });
@@ -136,6 +157,7 @@ router.post('/trades', async (req, res) => {
       risk_reward_ratio, tags, custom_fields
     ]);
 
+    cacheDelete(ALL_TRADES_CACHE_KEY);
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error creating trade:', error);
@@ -159,6 +181,7 @@ router.put('/trades/:id', async (req, res) => {
       [...values, id]
     );
 
+    cacheDelete(ALL_TRADES_CACHE_KEY);
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error updating trade:', error);
@@ -171,6 +194,7 @@ router.delete('/trades/:id', async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM trades WHERE id = $1', [id]);
+    cacheDelete(ALL_TRADES_CACHE_KEY);
     res.json({ message: 'Trade deleted successfully' });
   } catch (error) {
     console.error('Error deleting trade:', error);
@@ -192,6 +216,7 @@ router.post('/trades/:tradeId/screenshots', upload.single('screenshot'), async (
       [tradeId, filename, filePath, caption]
     );
 
+    cacheDelete(ALL_TRADES_CACHE_KEY);
     res.json(result.rows[0]);
   } catch (error) {
     console.error('Error uploading screenshot:', error);

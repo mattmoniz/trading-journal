@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 const SETUP_LOG_COLS = [
   { key: 'trade_date',          label: 'Date',       sortable: true,  tip: 'Trade date (ET)' },

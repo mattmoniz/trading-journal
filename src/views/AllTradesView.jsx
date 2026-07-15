@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { formatNumber } from '../utils/format.js';
 import CalendarView from './CalendarView.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function AllTradesView({ addToast, syncing, onSyncTrades, accounts: calendarAccounts, selectedAccounts: calendarSelectedAccounts, setSelectedAccounts: calendarSetSelectedAccounts, initialTab = 'trades', setCurrentView }) {
   const [tradesTab, setTradesTab] = useState(initialTab);

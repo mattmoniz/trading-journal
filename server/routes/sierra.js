@@ -45,6 +45,8 @@ export default function createSierraRouter(io, sierraWatcher) {
 
     try {
       const result = await manualImportFromFile(filePath);
+      // Cache invalidation lives in tradeImportService.js's importSierraTrades()
+      // itself (the actual insert point) — see that file, not here.
       io.emit('trades-updated', { ...result, timestamp: new Date() });
       checkAndEmitDLL(io).catch(() => {});
       checkAndEmitProfitLock(io).catch(() => {});

@@ -6,7 +6,7 @@ import {
 } from 'recharts';
 import { fmtP } from '../utils/format.js';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function ScenarioPatBar({ data, dataKey = 'avgPnl', nameKey = 'label', height = 160 }) {
   return (

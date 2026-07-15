@@ -60,7 +60,7 @@ import {
   ComposedChart, Scatter
 } from 'recharts';
 
-const API_URL = '/api';
+import { API_URL } from './constants/api.js';
 const SOCKET_URL = window.location.origin;
 
 
@@ -342,8 +342,25 @@ function DLLBlockingBanner({ hits, allAccounts, onDismiss }) {
   );
 }
 
+// 'all-trades' and 'calendar' are two tabs of the same underlying AllTradesView instance
+// (see initialTab below) — group them so switching between the two doesn't count as a
+// new view for mount-tracking purposes.
+const TRADES_GROUP_VIEWS = new Set(['all-trades', 'calendar']);
+function viewGroupOf(view) {
+  return TRADES_GROUP_VIEWS.has(view) ? 'trades' : view;
+}
+
 function App() {
   const [currentView, setCurrentView] = useState('acd');
+  // Every view a user has visited this session stays mounted (CSS-hidden when inactive)
+  // instead of being torn down on every tab switch — switching tabs was re-running each
+  // view's 10-20+ useEffect-driven fetches from zero every single time. See
+  // docs/OPEN_THREADS.md "frontend render/navigation architecture" for the investigation.
+  const [visitedViews, setVisitedViews] = useState(() => new Set([viewGroupOf('acd')]));
+  useEffect(() => {
+    const g = viewGroupOf(currentView);
+    setVisitedViews(prev => (prev.has(g) ? prev : new Set(prev).add(g)));
+  }, [currentView]);
   const [quickStatsOpen, setQuickStatsOpen] = useState(false);
   const [currentDate, setCurrentDate] = useState(new Date().toLocaleDateString('en-CA'));
   const [forecast, setForecast] = useState(null);
@@ -578,83 +595,105 @@ function App() {
       <QuickStatsModal open={quickStatsOpen} onClose={() => setQuickStatsOpen(false)} />
       <main className="main-content">
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
-        {currentView === 'dashboard' && (
-          <ErrorBoundary name="Dashboard">
-            <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} />
-          </ErrorBoundary>
+        {visitedViews.has('dashboard') && (
+          <div style={{ display: currentView === 'dashboard' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Dashboard">
+              <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} />
+            </ErrorBoundary>
+          </div>
         )}
-        {(currentView === 'all-trades' || currentView === 'calendar') && (
-          <ErrorBoundary name="Trades">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <AllTradesView addToast={addToast} syncing={syncing} onSyncTrades={() => handleSyncTrades(true)}
-                accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts}
-                initialTab={currentView === 'calendar' ? 'calendar' : 'trades'}
-                setCurrentView={setCurrentView} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('trades') && (
+          <div style={{ display: (currentView === 'all-trades' || currentView === 'calendar') ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Trades">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <AllTradesView addToast={addToast} syncing={syncing} onSyncTrades={() => handleSyncTrades(true)}
+                  accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts}
+                  initialTab={currentView === 'calendar' ? 'calendar' : 'trades'}
+                  setCurrentView={setCurrentView} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'scenario' && (
-          <ErrorBoundary name="Scenario Tester">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <ScenarioTesterView />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('scenario') && (
+          <div style={{ display: currentView === 'scenario' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Scenario Tester">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <ScenarioTesterView />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'backtest' && (
-          <ErrorBoundary name="Backtest">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <BacktestView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} priceSyncProgress={priceSyncProgress} onDismissPriceSync={() => setPriceSyncProgress(null)} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('backtest') && (
+          <div style={{ display: currentView === 'backtest' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Backtest">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <BacktestView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} priceSyncProgress={priceSyncProgress} onDismissPriceSync={() => setPriceSyncProgress(null)} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'tearsheet' && (
-          <ErrorBoundary name="Tearsheet">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <TearsheetView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('tearsheet') && (
+          <div style={{ display: currentView === 'tearsheet' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Tearsheet">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <TearsheetView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'settings' && (
-          <ErrorBoundary name="Settings">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <SettingsView />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('settings') && (
+          <div style={{ display: currentView === 'settings' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Settings">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <SettingsView />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'risk' && (
-          <ErrorBoundary name="Risk">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <RiskView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('risk') && (
+          <div style={{ display: currentView === 'risk' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Risk">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <RiskView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'acd' && (
-          <ErrorBoundary name="Morning Prep">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <ACDView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} setCurrentView={setCurrentView} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('acd') && (
+          <div style={{ display: currentView === 'acd' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Morning Prep">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <ACDView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} setCurrentView={setCurrentView} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'longterm' && (
-          <ErrorBoundary name="Structure">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <LongTermStructurePage setCurrentView={setCurrentView} />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('longterm') && (
+          <div style={{ display: currentView === 'longterm' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Structure">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <LongTermStructurePage setCurrentView={setCurrentView} />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'playbook' && (
-          <ErrorBoundary name="Playbook">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <PlaybookPage />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('playbook') && (
+          <div style={{ display: currentView === 'playbook' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Playbook">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <PlaybookPage />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
-        {currentView === 'setup-log' && (
-          <ErrorBoundary name="Setup Log">
-            <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
-              <SetupHistoryView />
-            </Suspense>
-          </ErrorBoundary>
+        {visitedViews.has('setup-log') && (
+          <div style={{ display: currentView === 'setup-log' ? 'contents' : 'none' }}>
+            <ErrorBoundary name="Setup Log">
+              <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}>
+                <SetupHistoryView />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
         )}
       </main>
     </div>

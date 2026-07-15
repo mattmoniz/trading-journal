@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { fmtP } from '../utils/format.js';
 import AccountSelector from '../components/shared/AccountSelector.jsx';
 
-const API_URL = '/api';
+import { API_URL } from '../constants/api.js';
 
 function useRiskSettings() {
   const [settings, setSettings] = React.useState(null);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-const API_URL = '/api';
+import { API_URL } from '../../constants/api.js';
 
 const VOL_CARD_TOOLTIP = `HOW THIS CARD WORKS
 
