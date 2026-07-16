@@ -4544,7 +4544,17 @@ export default function createACDRouter(io) {
             // session) — an unbounded ts::date < $1 lookback in the inner MAX(ts::date)
             // subquery forces price_bars_primary's dedup view to consider far more history
             // than needed before it can find the max; 288ms -> 126ms, identical result.
-            query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630`, [todayET]).catch(() => ({ rows: [] })),
+            // BETWEEN 570 AND 629 (not 630) — found 2026-07-16 via Gemini + independently
+            // verified: this fallback used to include bar 630 (10:30:00-10:30:59, one
+            // minute PAST the true 60-min IB close), while scripts/compute_levels.js's
+            // canonical PD_IB_MID (the value level_prices actually gets populated with)
+            // correctly stops at 629. The mismatch meant this live fallback's pdIbMid could
+            // differ slightly from the real level, and when level_prices.PD_IB_MID loaded
+            // mid-session and superseded the fallback (lp.PD_IB_MID ?? pdIbMid, ~line 4825),
+            // the level value could shift, firing what looked like a "new" setup with a
+            // fake 50-60min retroactive detection lag (root cause of PD_IB_MID_FADE_SHORT's
+            // recurring lag in docs/OPEN_THREADS.md's execution-quality thread).
+            query(`SELECT MAX(high)::float as ibh, MIN(low)::float as ibl FROM price_bars_primary WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629) AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629`, [todayET]).catch(() => ({ rows: [] })),
             query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, same fix as pdIbQ above) — unbounded
             // ts::date < $1 in the inner DISTINCT lookback forces a full historical scan
@@ -6984,12 +6994,15 @@ export default function createACDRouter(io) {
         // PD IB Mid (and individual PD IB High/Low) — bounded lower end (2026-07-15,
         // same fix as the level-fade candidates block's pdIbQ): unbounded ts::date < $1
         // in the inner MAX(ts::date) lookback forced a full historical scan (288ms->126ms).
+        // BETWEEN 570 AND 629 (not 630) — this copy inherited the same off-by-one-minute
+        // bug as the original pdIbQ (see that query's comment, ~line 4547, for the full
+        // writeup); fixed both together 2026-07-16.
         query(`
           SELECT MAX(high)::float as ibh, MIN(low)::float as ibl
           FROM price_bars_primary WHERE symbol='NQ'
             AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND ts::date >= $1::date - 30
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630)
-            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629)
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
         `, [todayET]).catch(() => ({ rows: [] })),
         // PD OR Mid (and individual PD OR High/Low)
         query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]).catch(() => ({ rows: [] })),
