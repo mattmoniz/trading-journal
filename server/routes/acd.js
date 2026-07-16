@@ -6368,14 +6368,43 @@ export default function createACDRouter(io) {
       const totalR = await query(`SELECT COUNT(*)::int as total FROM active_setups ${where}`, params);
       const total = totalR.rows[0]?.total || 0;
       params.push(parseInt(limit)); params.push(parseInt(offset));
+      // current.win_rate/sample_size/ev_per_trade come from the live SETUP_STATUS pipeline
+      // (recalibrated weekly/daily, server/scripts/backtest_setup_status.mjs) -- distinct from
+      // historical_win_rate/historical_sessions below, which are a frozen snapshot written once
+      // at fire time and never updated. Surfacing both, clearly labeled, instead of letting the
+      // frozen one masquerade as current (found 2026-07-16: this table had no live-current stat
+      // at all, only the frozen one, with nothing distinguishing them to the viewer).
+      // matched_trade_* reuses the exact time-proximity LATERAL join already used by
+      // /timeline/today (same file, ~line 6425) rather than reimplementing it -- this is the
+      // only place in this table that reconciles the user's own executed trades against a
+      // system-detected setup; previously there was none.
       const r = await query(`
-        SELECT id, trade_date::text, setup_type,
-          TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
-          entry_zone_low, stop_level, t1_level, t1_label, status, resolution, actual_pnl,
-          historical_win_rate, historical_sessions, price_at_detection,
-          TO_CHAR(resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
-        FROM active_setups ${where}
-        ORDER BY trade_date DESC, fired_at DESC
+        SELECT s.id, s.trade_date::text, s.setup_type,
+          TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
+          s.entry_zone_low, s.stop_level, s.t1_level, s.t1_label, s.status, s.resolution, s.actual_pnl,
+          s.historical_win_rate, s.historical_sessions, s.price_at_detection,
+          s.mae_points, s.mfe_points, s.resolution_method, s.bars_to_resolution,
+          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str,
+          cur.win_rate as current_win_rate, cur.sample_size as current_sample_size, cur.ev_per_trade as current_ev,
+          tr.pnl as matched_trade_pnl, tr.quantity as matched_trade_qty,
+          TO_CHAR(tr.entry_time, 'HH24:MI:SS') as matched_trade_time
+        FROM active_setups s
+        LEFT JOIN LATERAL (
+          SELECT win_rate, sample_size, ev_per_trade
+          FROM performance_audit
+          WHERE signal_type = 'SETUP_STATUS' AND signal_name = s.setup_type
+          ORDER BY run_date DESC LIMIT 1
+        ) cur ON true
+        LEFT JOIN LATERAL (
+          SELECT pnl, quantity, entry_time FROM trades
+          WHERE log_date = s.trade_date
+            AND ABS(EXTRACT(EPOCH FROM (entry_time - s.fired_at))) < 300
+            AND pnl IS NOT NULL
+          ORDER BY ABS(EXTRACT(EPOCH FROM (entry_time - s.fired_at))) ASC
+          LIMIT 1
+        ) tr ON true
+        ${where.replace(/\b(trade_date|setup_type|status|resolution)\b/g, 's.$1')}
+        ORDER BY s.trade_date DESC, s.fired_at DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}
       `, params);
       const shadowSet = new Set(shadowTypes);

@@ -11,7 +11,10 @@ const SETUP_LOG_COLS = [
   { key: 't1_level',            label: 'T1',         sortable: false, tip: 'First target — scale half position here' },
   { key: 'resolution',          label: 'Outcome',    sortable: true,  tip: 'T1 ✓ = target hit, Stop ✗ = stopped out, Expired/Closed = timed out without resolution' },
   { key: 'actual_pnl',          label: 'P&L',        sortable: true,  tip: 'P&L for this setup ($20/pt per contract, net commission)' },
-  { key: 'historical_win_rate', label: 'WR at Fire', sortable: false, tip: 'Historical win rate for this setup type at the moment it fired. Only shown when N≥20.' },
+  { key: 'mae_mfe',             label: 'MAE / MFE',  sortable: false, tip: 'Max adverse / favorable excursion in points, once resolved' },
+  { key: 'historical_win_rate', label: 'WR at Fire', sortable: false, tip: 'FROZEN snapshot: this setup type\'s win rate at the exact moment this row fired. Never updated afterward — can be badly stale. Only shown when N≥20.' },
+  { key: 'current_win_rate',    label: 'WR Now',     sortable: false, tip: 'LIVE current win rate for this setup type, from the weekly-recalibrated SETUP_STATUS pipeline. Compare against "WR at Fire" to see how much this setup has drifted since this row fired.' },
+  { key: 'matched_trade_pnl',   label: 'Your Trade',  sortable: false, tip: 'Your own executed trade matched to this setup by time proximity (within 5 min of fire). Blank means no trade of yours was found near this fire — most trades are discretionary and don\'t match any system-detected setup.' },
 ];
 
 export default function SetupHistoryView() {
@@ -93,6 +96,39 @@ export default function SetupHistoryView() {
       case 'resolution':     return <td key={col.key} style={tdStyle}><span style={{ color: resColor(s.resolution), fontWeight: 600 }}>{resLabel(s.resolution)}</span></td>;
       case 'actual_pnl':     return <td key={col.key} style={{ ...tdStyle, fontFamily: 'monospace', color: hasPnl ? (pnl >= 0 ? '#22c55e' : '#ef4444') : '#64748b', fontWeight: hasPnl ? 700 : 400 }}>{hasPnl ? `${pnl >= 0 ? '+' : ''}$${Math.round(pnl).toLocaleString()}` : '—'}</td>;
       case 'historical_win_rate': return <td key={col.key} style={{ ...tdStyle, color: '#94a3b8' }}>{s.historical_win_rate != null && s.historical_sessions >= 20 ? `${Math.round(s.historical_win_rate * 100)}% · N=${s.historical_sessions}` : '—'}</td>;
+      case 'mae_mfe': {
+        if (s.mae_points == null && s.mfe_points == null) return <td key={col.key} style={tdStyle}>—</td>;
+        return (
+          <td key={col.key} style={{ ...tdStyle, fontFamily: 'monospace' }}>
+            {s.mae_points != null && <span style={{ color: '#f87171' }}>{Math.round(parseFloat(s.mae_points))}</span>}
+            {s.mae_points != null && s.mfe_points != null && <span style={{ color: '#64748b' }}> / </span>}
+            {s.mfe_points != null && <span style={{ color: '#4ade80' }}>{Math.round(parseFloat(s.mfe_points))}</span>}
+          </td>
+        );
+      }
+      case 'current_win_rate': {
+        if (s.current_win_rate == null || s.current_sample_size < 20) return <td key={col.key} style={tdStyle}>—</td>;
+        const evNeg = parseFloat(s.current_ev) < 0;
+        // Flag when live-current WR has drifted meaningfully (>=8pp) from the frozen at-fire snapshot,
+        // so a stale-looking "WR at Fire" number doesn't sit next to a silently-different current one.
+        const drifted = s.historical_win_rate != null && Math.abs(s.current_win_rate - s.historical_win_rate) >= 0.08;
+        return (
+          <td key={col.key} style={{ ...tdStyle, color: evNeg ? '#f87171' : '#94a3b8', fontWeight: drifted ? 700 : 400 }}
+            title={drifted ? `Drifted ${Math.round(Math.abs(s.current_win_rate - s.historical_win_rate) * 100)}pp from WR at Fire` : undefined}>
+            {Math.round(s.current_win_rate * 100)}% · N={s.current_sample_size}{drifted ? ' ⚠' : ''}
+          </td>
+        );
+      }
+      case 'matched_trade_pnl': {
+        if (s.matched_trade_pnl == null) return <td key={col.key} style={{ ...tdStyle, color: '#475569' }}>—</td>;
+        const tpnl = parseFloat(s.matched_trade_pnl);
+        return (
+          <td key={col.key} style={{ ...tdStyle, fontFamily: 'monospace', color: tpnl >= 0 ? '#22c55e' : '#ef4444' }}
+            title={`${s.matched_trade_qty} lot(s) @ ${s.matched_trade_time}`}>
+            {tpnl >= 0 ? '+' : ''}${Math.round(tpnl).toLocaleString()}
+          </td>
+        );
+      }
       default: return <td key={col.key} style={tdStyle}>—</td>;
     }
   };
