@@ -77,6 +77,21 @@ ORDER BY (p.notes::json->>'next_recheck_due')::date;
 SQLEOF
 )
 
+# trade_feedback setup_id coverage — 2026-07-16. The execution-quality audit
+# (docs/OPEN_THREADS.md, RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution)
+# concluded fill/slippage and stop/target-discipline can't be measured because
+# trade_feedback (the table built specifically to link a real trade to a fired setup)
+# had 0 rows with setup_id populated -- the UI component to populate it (TradeFeedbackBar)
+# existed but was never mounted. Fixed same day (wired into App.jsx's LiveSessionPanel).
+# This check is the other half of closing that loop: once real data exists, say so, so a
+# future session actually goes back and re-runs the audit instead of the row count sitting
+# unnoticed the same way the component itself sat unmounted.
+export FEEDBACK_COVERAGE
+FEEDBACK_COVERAGE=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+SELECT COUNT(*) FILTER (WHERE setup_id IS NOT NULL), COUNT(*) FROM trade_feedback;
+SQLEOF
+)
+
 # Fragile DAY_TYPE_MANAGED bucket watch — built 2026-07-16 after the IB_BULLISH regression
 # (docs/OPEN_THREADS.md): IB_BULLISH silently un-suppressed from SUPPRESS back to a live
 # status on 2026-07-15 because ITS OWN TREND bucket ticked from EV=-$16.24 to EV=-$2.94
@@ -118,6 +133,8 @@ const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
+const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
+const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -196,6 +213,10 @@ const lines = [
   dtmLines.length > 0
     ? `${dtmFragile > 0 ? '⚠️ ' : '✅'} DAY_TYPE_MANAGED WATCH — live per-day-type-carve-out types, not gated by the standard SUPPRESS check:\n${dtmLines.join('\n')}${dtmFragile > 0 ? `\n  ${dtmFragile} type(s) have ⚠️ flagged buckets — only reason not SUPPRESSed is a bucket within $10 of the bar or N<50. Re-read before trusting; this is exactly how IB_BULLISH regressed 2026-07-15 (docs/OPEN_THREADS.md).` : ''}`
     : '',
+  '',
+  feedbackWithSetupId >= 20
+    ? `🟢 TRADE_FEEDBACK COVERAGE — ${feedbackWithSetupId} rows now have setup_id populated (N≥20 floor cleared). ACTION: re-run the execution-quality audit (fill/slippage, stop/target discipline) — was blocked on this exact gap, see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution.`
+    : `📊 trade_feedback setup_id coverage: ${feedbackWithSetupId}/${feedbackTotal} rows linked to a fired setup (N≥20 needed before the execution-quality audit can re-run — see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution).`,
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

@@ -15,7 +15,7 @@ const ACDView = lazy(() => import('./views/ACDView.jsx'));
 // already imports them from PlaybookView.jsx on its own and is separately lazy) — dropped
 // from this import since they added nothing but a reason to keep PlaybookView eager here.
 const PlaybookPage = lazy(() => import('./views/PlaybookView.jsx'));
-import { QuickTradeLog, SystemHealthSummary } from './components/dashboard/QuickTradeLog.jsx';
+import { QuickTradeLog, SystemHealthSummary, TradeFeedbackBar } from './components/dashboard/QuickTradeLog.jsx';
 import { io } from 'socket.io-client';
 import './App.css';
 import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './utils/timestamps.js';
@@ -1267,6 +1267,13 @@ function LiveSessionPanel() {
                 ⏰ 9 AM
               </div>
             )}
+            {/* Was built (server/routes/acd.js's /acd/feedback already maps setupId ->
+                trade_feedback.setup_id correctly) but never actually mounted anywhere --
+                found 2026-07-16 while investigating why trade_feedback had 13 rows total,
+                0 with setup_id populated: this is the real fix for that gap, not a query
+                change. key=setupId forces a remount (and local state reset) each time a
+                new setup fires, since TradeFeedbackBar keeps its own TAKEN/PASSED state. */}
+            <TradeFeedbackBar key={active.setupId ?? active.type} setupCard={active} />
           </>
         ) : (
           <div style={{ fontSize: 12, color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', height: 36 }}>

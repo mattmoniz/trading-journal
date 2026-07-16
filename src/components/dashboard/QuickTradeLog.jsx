@@ -497,4 +497,4 @@ function SystemHealthSummary({ onNavigate }) {
   );
 }
 
-export { QuickTradeLog, SystemHealthSummary };
+export { QuickTradeLog, SystemHealthSummary, TradeFeedbackBar };
