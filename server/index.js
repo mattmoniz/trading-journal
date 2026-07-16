@@ -1136,17 +1136,26 @@ httpServer.listen(PORT, () => {
     } catch (_) {}
   }, 3600000); // every hour
 
-  // Server-autonomous detection: poll /api/acd/setup-detection every 15s during RTH (9:30-4 PM ET, Mon-Fri).
-  // This is the correct endpoint — it runs the full level-fade detection and INSERTs to active_setups
-  // (idempotent — ON CONFLICT DO NOTHING). Polling at 15s instead of 60s cuts the detection window
-  // from up to 60s to at most 15s, closing the gap for static levels that should fire within one cycle.
+  // Server-autonomous detection: poll /api/acd/setup-detection every 15s across real CME
+  // Globex hours (Sun 6PM ET -> Fri 5PM ET, with the daily 5-6PM ET maintenance break),
+  // not just RTH. Extended 2026-07-16 per user request — level types that only make sense
+  // during RTH (OR/IB-dependent ones) self-gate on their own etMin checks inside acd.js's
+  // candidates array and simply return a null level outside RTH (filtered out before
+  // insert); level types anchored to prior-day/week/month reference points or overnight
+  // levels (ONH/ONL) are legitimately checkable at any hour. This is the correct endpoint —
+  // it runs the full level-fade detection and INSERTs to active_setups (idempotent — ON
+  // CONFLICT DO NOTHING). Polling at 15s instead of 60s cuts the detection window from up
+  // to 60s to at most 15s, closing the gap for static levels that should fire within one cycle.
   setInterval(async () => {
     try {
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const day = etNow.getDay();
-      if (day === 0 || day === 6) return; // skip weekends
+      const day = etNow.getDay(); // 0=Sun ... 6=Sat
       const etMin = etNow.getHours() * 60 + etNow.getMinutes();
-      if (etMin < 570 || etMin >= 960) return; // 9:30–4:00 PM ET only
+      const isSaturday = day === 6;
+      const isSundayBeforeOpen = day === 0 && etMin < 1080; // Globex reopens 6:00 PM ET Sunday
+      const isFridayAfterClose = day === 5 && etMin >= 1020; // Globex closes 5:00 PM ET Friday
+      const isDailyMaintenanceBreak = etMin >= 1020 && etMin < 1080; // 5:00-6:00 PM ET, Mon-Thu
+      if (isSaturday || isSundayBeforeOpen || isFridayAfterClose || isDailyMaintenanceBreak) return;
       const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection`, { signal: AbortSignal.timeout(14000) });
       if (!res.ok) console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);
       else await res.text(); // drain body

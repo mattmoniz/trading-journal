@@ -64,23 +64,18 @@ const CHIP_DETAIL = {
         <DetailRow label="Class" value={relVol?.label || tier.label} color={tier.color} />
         <div style={{ height: 1, background: 'rgba(255,255,255,0.08)', margin: '6px 0' }} />
         <div style={{ fontSize: 11, color: C.dim, lineHeight: 1.6 }}>
-          Time-adjusted vs 90-day same-minute baseline.{' '}
-          {tier.label === 'SPIKE' || tier.label === 'EXTREME'
-            ? 'Elevated participation — confirms directional moves. High RVol on A signal bar = stronger follow-through.'
-            : tier.label === 'ELEVATED'
-            ? 'Above average — watch for follow-through confirmation.'
-            : 'Normal participation. Moves less reliable without volume expansion.'}
+          Time-adjusted vs 90-day same-minute baseline. No backtested edge behind this reading alone — descriptive, not a signal to act on.
         </div>
       </>
     );
   },
   delta: (delta) => {
     const notes = {
-      BUYING:        'Net buyers dominant. Supports long fades and upside setups. Watch for weakening.',
-      SELLING:       'Net sellers dominant. Supports short fades and downside setups. Watch for weakening.',
-      STRENGTHENING: 'Flow accelerating in current direction — institutional conviction growing.',
-      WEAKENING:     'Flow reversing direction. Possible exhaustion — counter-move risk elevated.',
-      FLAT:          'No net conviction. Market in discovery — fade edges carefully, quick profits.',
+      BUYING:        'Net buyers dominant right now. No backtested edge behind this reading alone — descriptive, not a signal to act on.',
+      SELLING:       'Net sellers dominant right now. No backtested edge behind this reading alone — descriptive, not a signal to act on.',
+      STRENGTHENING: 'Buy/sell flow accelerating vs. the prior 15-bar window. No backtested edge behind this reading alone.',
+      WEAKENING:     'Buy/sell flow decelerating vs. the prior 15-bar window. No backtested edge behind this reading alone.',
+      FLAT:          'No net directional conviction in order flow right now.',
     };
     const c = delta?.trend === 'BUYING' || delta?.trend === 'STRENGTHENING' ? C.green
       : delta?.trend === 'SELLING' || delta?.trend === 'WEAKENING' ? C.red : C.dim;
@@ -100,11 +95,11 @@ const CHIP_DETAIL = {
   },
   structure: (microTrend, ctx) => {
     const notes = {
-      HIGHER_LOWS: 'Buyers absorbing every pullback. Lean long — add on dips, not breakouts. Shorts covering = fuel.',
-      LOWER_HIGHS: 'Sellers defending every bounce. Lean short — fade rallies. Longs stopping out = fuel.',
-      MIXED:       'No structural edge. Both directions in play — responsive fades at extremes. Avoid trend entries.',
+      HIGHER_LOWS: 'Lows have been rising over the last 10 five-min bars — bullish micro-structure. No backtested edge behind this reading yet; treat as descriptive, not a signal to act on alone.',
+      LOWER_LOWS:  'Lows have been falling over the last 10 five-min bars — bearish micro-structure. No backtested edge behind this reading yet; treat as descriptive, not a signal to act on alone.',
+      MIXED:       'No consistent structure — lows are neither reliably rising nor falling over the last 10 five-min bars.',
     };
-    const c = microTrend === 'HIGHER_LOWS' ? C.green : microTrend === 'LOWER_HIGHS' ? C.red : C.dim;
+    const c = microTrend === 'HIGHER_LOWS' ? C.green : microTrend === 'LOWER_LOWS' ? C.red : C.dim;
     return (
       <>
         <DetailRow label="Pattern" value={microTrend?.replace('_', ' ') || '—'} color={c} />
@@ -137,21 +132,32 @@ export default function SessionPulseCard() {
   const volExtreme     = (relVol?.sigma || 0) >= 1.5;
   const deltaFading    = delta?.trend === 'WEAKENING' || delta?.trend === 'FLAT' || delta?.trend === 'BUYING';
   const higherLows     = microTrend === 'HIGHER_LOWS';
-  const lowerHighs     = microTrend === 'LOWER_HIGHS';
-  const exhaustionScore = [isDirectional, volExtreme, deltaFading, higherLows || lowerHighs].filter(Boolean).length;
+  const lowerLows      = microTrend === 'LOWER_LOWS';
+  const exhaustionScore = [isDirectional, volExtreme, deltaFading, higherLows || lowerLows].filter(Boolean).length;
 
   const isDownSession = (closeVsOpen || 0) < -80;
   const isUpSession   = (closeVsOpen || 0) > 80;
   const sessionOpen   = open || (isDownSession ? (price - closeVsOpen) : null);
 
+  // Retracement percentiles from scripts/backtest_countermove_retracement.mjs (2026-07-16,
+  // Gemini-mined, Claude-audited — N=241 days with an >80pt open extension, last year,
+  // rigor-clean: not day-clustered, stable across chronological thirds). Replaces the
+  // originally hardcoded, unsourced 0.46/0.68/0.88 introduced in commit 2a69377. P75 is
+  // >100% because in the top quartile of cases price doesn't just retrace the move, it
+  // reverses through the open and keeps going.
+  const RETRACE_P25 = 0.31, RETRACE_P50 = 0.65, RETRACE_P75 = 1.47;
+  // Headroom past P75 so the bar/label don't clip on the (real, ~25% of the time) cases
+  // that overshoot it.
+  const RETRACE_SCALE_MAX = 200;
+
   let retraceDisplay = null;
   if (sessionOpen && range && rangePct != null && Math.abs(closeVsOpen || 0) > 80) {
     const morningDrop = Math.abs(closeVsOpen);
-    const p25Target   = isDownSession ? (sessionOpen - morningDrop + morningDrop * 0.46) : (sessionOpen + morningDrop - morningDrop * 0.46);
-    const medTarget   = isDownSession ? (sessionOpen - morningDrop + morningDrop * 0.68) : (sessionOpen + morningDrop - morningDrop * 0.68);
-    const p75Target   = isDownSession ? (sessionOpen - morningDrop + morningDrop * 0.88) : (sessionOpen + morningDrop - morningDrop * 0.88);
+    const p25Target   = isDownSession ? (sessionOpen - morningDrop + morningDrop * RETRACE_P25) : (sessionOpen + morningDrop - morningDrop * RETRACE_P25);
+    const medTarget   = isDownSession ? (sessionOpen - morningDrop + morningDrop * RETRACE_P50) : (sessionOpen + morningDrop - morningDrop * RETRACE_P50);
+    const p75Target   = isDownSession ? (sessionOpen - morningDrop + morningDrop * RETRACE_P75) : (sessionOpen + morningDrop - morningDrop * RETRACE_P75);
     const counterMove = isDownSession ? (price - (sessionOpen - morningDrop)) : ((sessionOpen + morningDrop) - price);
-    const retracePct  = Math.max(0, Math.min(105, counterMove / morningDrop * 100));
+    const retracePct  = Math.max(0, Math.min(RETRACE_SCALE_MAX, counterMove / morningDrop * 100));
     if (counterMove > 20) {
       retraceDisplay = { morningDrop: Math.round(morningDrop), counterMove: Math.round(counterMove), retracePct: Math.round(retracePct), p25Target: Math.round(p25Target), medTarget: Math.round(medTarget), p75Target: Math.round(p75Target), isDown: isDownSession };
     }
@@ -161,7 +167,7 @@ export default function SessionPulseCard() {
   const rotColor   = (rots ?? 0) <= 1 ? C.red : (rots ?? 0) <= 2 ? C.amber : C.green;
   const deltaColor = delta?.trend === 'BUYING' || delta?.trend === 'STRENGTHENING' ? C.green
     : delta?.trend === 'WEAKENING' ? C.amber : delta?.trend === 'FLAT' ? C.dim : C.red;
-  const mtColor    = higherLows ? C.green : lowerHighs ? C.red : C.dim;
+  const mtColor    = higherLows ? C.green : lowerLows ? C.red : C.dim;
   const exhaustBorderColor = exhaustionScore >= 3 ? '#f59e0b' : exhaustionScore >= 2 ? '#475569' : C.border;
 
   const toggle = (key) => setSel(s => s === key ? null : key);
@@ -180,7 +186,7 @@ export default function SessionPulseCard() {
         <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'center' }}>
           Session Pulse
           <InfoTooltip tooltip={{
-            text: 'A live read of how today\'s session is behaving, updated continuously.\n\n• ROTATIONS — how many meaningful back-and-forth swings so far. Low = trending/one-directional. High = choppy, range-bound.\n• VOLUME — today\'s volume vs. a normal session (1.0x = average).\n• DELTA — net buying vs. selling pressure right now (FLAT/BUYING/SELLING).\n• STRUCTURE — the shape price is tracing (e.g. higher lows, lower highs, mixed).\n\nClick any of the 4 boxes below for a fuller explanation of what that specific reading means right now.',
+            text: 'A live read of how today\'s session is behaving, updated continuously.\n\n• ROTATIONS — how many meaningful back-and-forth swings so far. Low = trending/one-directional. High = choppy, range-bound.\n• VOLUME — today\'s volume vs. a normal session (1.0x = average).\n• DELTA — net buying vs. selling pressure right now (FLAT/BUYING/SELLING).\n• STRUCTURE — whether swing lows are rising, falling, or mixed over the last 10 five-min bars.\n\nNone of these 4 readings have a backtested edge behind them yet — they describe what\'s happening right now, not a validated signal to trade on. Click any of the 4 boxes below for a fuller explanation.',
           }} />
         </div>
         <div style={{ fontSize: 12, color: C.dim }}>
@@ -200,11 +206,8 @@ export default function SessionPulseCard() {
               volExtreme && `vol ${relVol?.sigma?.toFixed(1)}σ`,
               deltaFading && `delta ${delta?.trend?.toLowerCase()}`,
               higherLows && 'higher lows',
-              lowerHighs && 'lower highs',
+              lowerLows && 'lower lows',
             ].filter(Boolean).join(' · ')}
-          </div>
-          <div style={{ fontSize: 12, color: C.dim, marginTop: 3 }}>
-            Median counter-move: <span style={{ color: C.amber, fontWeight: 700 }}>374pt</span> when delta diverges · 89% had 150pt+ bounce
           </div>
         </div>
       )}
@@ -232,19 +235,25 @@ export default function SessionPulseCard() {
               Counter-Move Tracker
             </div>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
-              {retraceDisplay.counterMove}pt · <span style={{ color: retraceDisplay.retracePct >= 88 ? C.amber : retraceDisplay.retracePct >= 68 ? C.green : C.dim }}>{retraceDisplay.retracePct}%</span>
+              {retraceDisplay.counterMove}pt · <span style={{ color: retraceDisplay.retracePct >= RETRACE_P75*100 ? C.amber : retraceDisplay.retracePct >= RETRACE_P50*100 ? C.green : C.dim }}>{retraceDisplay.retracePct}%</span>
             </div>
           </div>
           <div style={{ position: 'relative', height: 6, background: 'rgba(51,65,85,0.5)', borderRadius: 3, marginBottom: 6 }}>
-            <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${Math.min(retraceDisplay.retracePct, 100)}%`, background: retraceDisplay.retracePct >= 88 ? C.amber : retraceDisplay.retracePct >= 68 ? C.green : '#60a5fa', borderRadius: 3, transition: 'width 0.5s' }} />
-            <div style={{ position: 'absolute', left: '46%', top: -2, width: 1, height: 10, background: '#475569' }} />
-            <div style={{ position: 'absolute', left: '68%', top: -2, width: 1, height: 10, background: '#64748b' }} />
-            <div style={{ position: 'absolute', left: '88%', top: -2, width: 1, height: 10, background: C.dim }} />
+            <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${Math.min(retraceDisplay.retracePct, RETRACE_SCALE_MAX) / RETRACE_SCALE_MAX * 100}%`, background: retraceDisplay.retracePct >= RETRACE_P75*100 ? C.amber : retraceDisplay.retracePct >= RETRACE_P50*100 ? C.green : '#60a5fa', borderRadius: 3, transition: 'width 0.5s' }} />
+            <div style={{ position: 'absolute', left: `${RETRACE_P25*100/RETRACE_SCALE_MAX*100}%`, top: -2, width: 1, height: 10, background: '#475569' }} />
+            <div style={{ position: 'absolute', left: `${RETRACE_P50*100/RETRACE_SCALE_MAX*100}%`, top: -2, width: 1, height: 10, background: '#64748b' }} />
+            <div style={{ position: 'absolute', left: `${RETRACE_P75*100/RETRACE_SCALE_MAX*100}%`, top: -2, width: 1, height: 10, background: C.dim }} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 2, fontSize: 12 }}>
-            <div style={{ color: retraceDisplay.retracePct >= 46 ? C.green : C.dim }}>P25 {fmtP(retraceDisplay.p25Target)}</div>
-            <div style={{ color: retraceDisplay.retracePct >= 68 ? C.green : C.dim, textAlign: 'center' }}>MED {fmtP(retraceDisplay.medTarget)}</div>
-            <div style={{ color: retraceDisplay.retracePct >= 88 ? C.amber : C.dim, textAlign: 'right' }}>P75 {fmtP(retraceDisplay.p75Target)}</div>
+            <div style={{ color: retraceDisplay.retracePct >= RETRACE_P25*100 ? C.green : C.dim }}>P25 {fmtP(retraceDisplay.p25Target)}</div>
+            <div style={{ color: retraceDisplay.retracePct >= RETRACE_P50*100 ? C.green : C.dim, textAlign: 'center' }}>MED {fmtP(retraceDisplay.medTarget)}</div>
+            <div style={{ color: retraceDisplay.retracePct >= RETRACE_P75*100 ? C.amber : C.dim, textAlign: 'right' }}>P75 {fmtP(retraceDisplay.p75Target)}</div>
+          </div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>
+            All-time (N=241, rigor-clean): median bounce 156pt, 51.5% saw a 150pt+ bounce.{' '}
+            {retraceDisplay.isDown
+              ? 'Down moves snap back harder historically (median 216pt, 62.6% > 150pt).'
+              : 'Up moves are more subdued historically (median 126pt, 41.3% > 150pt).'}
           </div>
         </div>
       )}

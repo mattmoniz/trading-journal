@@ -11,6 +11,7 @@
 
 import { query } from '../server/db.js';
 import * as ss from 'simple-statistics';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 const PNL_PER_POINT = 2;   // NQ micro: $2/pt
 const COMMISSION    = 1;    // $1 round-trip
@@ -774,6 +775,16 @@ async function run() {
 
     const bestWR = group.filter(t => t.mfe >= bestTarget && t.mae < bestStop).length / group.length;
 
+    // Day-clustering + chronological stability check on the exact win/loss definition
+    // used for wr/ev above (mfe>=30 & mae<FADE_STOP = win, mae>=FADE_STOP = loss, else 0) —
+    // this is the gap Opus flagged 2026-07-16: TRIPLE-zone EV has swung wildly across
+    // different window/target re-tests in past sessions with nothing to explain why.
+    const rigor = computeRigor(group, {
+      dateField: 'date',
+      pnlFn: t => (t.mfe >= 30 && t.mae < FADE_STOP) ? (30 * PNL_PER_POINT - COMMISSION)
+        : (t.mae >= FADE_STOP ? -(FADE_STOP * PNL_PER_POINT + COMMISSION) : 0),
+    });
+
     await query(`
       INSERT INTO performance_audit (
         run_date, window_days, signal_type, signal_name, sample_size,
@@ -803,7 +814,7 @@ async function run() {
       bestStop, bestTarget, bestScalpEV,
       l / group.length,
       wrImprovement > 0.05 ? 'TRADE_CONFLUENCE_ONLY' : wrImprovement > 0.02 ? 'PREFER_CONFLUENCE' : 'SINGLE_SUFFICIENT',
-      `WR@30pt: ${(wr*100).toFixed(1)}%, MAE P50: ${fmt(maeS.p50)}, MFE P50: ${fmt(mfeS.p50)}, Optimal: ${bestTarget}/${bestStop}`
+      `WR@30pt: ${(wr*100).toFixed(1)}%, MAE P50: ${fmt(maeS.p50)}, MFE P50: ${fmt(mfeS.p50)}, Optimal: ${bestTarget}/${bestStop}, Rigor: ${JSON.stringify(rigor)}`
     ]);
   }
 

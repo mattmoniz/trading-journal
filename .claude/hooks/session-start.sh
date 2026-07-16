@@ -51,6 +51,32 @@ WHERE NOT EXISTS (
 SQLEOF
 )
 
+# Check for orphaned git worktrees — isolation:"worktree" Agent dispatches only get
+# auto-cleaned by the harness if the agent made NO changes; otherwise a human/session
+# has to explicitly resolve (merge/commit or discard) it. Nothing else in this repo's
+# workflow surfaces an orphaned one, so it can sit silently for weeks (found 2026-07-16:
+# a 2026-07-01 worktree with ~3,100 uncommitted lines went unnoticed until stumbled on
+# by accident during an unrelated dead-code check).
+export STRAY_WORKTREES
+STRAY_WORKTREES=$(git -C "$REPO" worktree list --porcelain 2>/dev/null | awk -v main="$REPO" '
+  /^worktree / { path=$2 }
+  /^branch / { if (path != main) print path "|" $2 }
+')
+
+# Check RESEARCH_CLAIM ledger (scripts/record_claim.mjs) for claims past their
+# next_recheck_due date — the same staleness idea as SETUP_STATUS above, but for
+# exploratory/research findings instead of setup calibration.
+export OVERDUE_CLAIMS
+OVERDUE_CLAIMS=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+SELECT p.signal_name, (p.notes::json->>'next_recheck_due') as next_recheck_due, (p.notes::json->>'status') as status
+FROM performance_audit p
+WHERE p.signal_type = 'RESEARCH_CLAIM'
+  AND p.run_date = (SELECT MAX(run_date) FROM performance_audit p2 WHERE p2.signal_type='RESEARCH_CLAIM' AND p2.signal_name = p.signal_name)
+  AND (p.notes::json->>'next_recheck_due')::date < CURRENT_DATE
+ORDER BY (p.notes::json->>'next_recheck_due')::date;
+SQLEOF
+)
+
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -58,6 +84,8 @@ const n = process.env.ALERT_COUNT || '0';
 const last = process.env.LAST_ALERT || '';
 const miningRaw = process.env.MINING_STATUS || '';
 const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
+const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
+const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -73,6 +101,18 @@ const miningStale = miningRaw.split('\n').filter(Boolean).some(line => {
 
 // Pipeline coverage: setup types with no fresh SETUP_STATUS row
 const uncovered = uncoveredRaw.split('\n').filter(Boolean);
+
+// RESEARCH_CLAIM ledger: claims past their next_recheck_due date
+const overdueClaims = overdueClaimsRaw.split('\n').filter(Boolean).map(line => {
+  const [slug, dueDate, status] = line.split('|');
+  return `  ${(slug||'').padEnd(35)} due ${dueDate||'?'} (${status||'?'})`;
+});
+
+// Orphaned worktrees: any worktree besides the main repo checkout
+const strayWorktrees = strayWorktreesRaw.split('\n').filter(Boolean).map(line => {
+  const [path, branch] = line.split('|');
+  return `  ${path} (${branch||'?'})`;
+});
 
 const lines = [
   '=== SESSION START PROTOCOL ===',
@@ -93,6 +133,14 @@ const lines = [
   uncovered.length > 0
     ? `🔴 PIPELINE COVERAGE GAP — setup types with trades in last 30d but NO fresh SETUP_STATUS row:\n  ${uncovered.join(', ')}\n  ACTION: run node scripts/backtest_setup_status.mjs && node scripts/update_optimal_stops.mjs`
     : '✅ Pipeline coverage: all active setup types have fresh SETUP_STATUS rows',
+  '',
+  overdueClaims.length > 0
+    ? `🔴 RESEARCH_CLAIM LEDGER — ${overdueClaims.length} claim(s) past their recheck date:\n${overdueClaims.join('\n')}\n  ACTION: re-verify each against its source, then node scripts/record_claim.mjs --add '{...}' with the refreshed numbers`
+    : '✅ RESEARCH_CLAIM ledger: no claims currently overdue for recheck',
+  '',
+  strayWorktrees.length > 0
+    ? `🔴 ORPHANED WORKTREE(S) — ${strayWorktrees.length} besides the main checkout:\n${strayWorktrees.join('\n')}\n  ACTION: investigate (git -C <path> status / git log), then commit+merge or discard — don't let it sit`
+    : '✅ No orphaned worktrees',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

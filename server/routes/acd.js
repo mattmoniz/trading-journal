@@ -4595,7 +4595,8 @@ export default function createACDRouter(io) {
             ibLowToday  = ibTodayQ.rows[0].ibl;
           }
 
-          // Today's IB mid and OR mid (usable after IB closes at 10:30)
+          // Today's IB mid (usable after IB closes at 10:30) and OR mid (usable once the
+          // 5min OR itself forms, ~9:35 — not IB-dependent, see comment at the candidates entry below)
           const ibMid = (ibHighToday && ibLowToday) ? (ibHighToday + ibLowToday) / 2 : null;
           const orMid = (orH && orL) ? (orH + orL) / 2 : null;
 
@@ -4879,9 +4880,20 @@ export default function createACDRouter(io) {
             { name: 'PW_HIGH_FADE',      level: pwHigh,                  ...(ls('PW_HIGH')      || {}) },
             { name: 'PW_LOW_FADE',       level: pwLow,                   ...(ls('PW_LOW')       || {}) },
             { name: '2D_POC_FADE',       level: twoDayPOC,               ...(ls('2D_POC')       || {}) },
-            // IB mid and OR mid — only valid after IB closes at 10:30
+            // IB mid — only valid after IB (60min) closes at 10:30. OR mid forms with the
+            // 5min OR itself (~9:35) and is NOT IB-dependent — gating it to 630 was a
+            // copy-paste of the IB_MID_SCALP_FADE line below (both added same commit,
+            // bf65b47, 2026-07-02) rather than a deliberate finding that the OR mid fade
+            // only works post-IB. Fixed 2026-07-16 per live user report. NOTE: the existing
+            // SETUP_STATUS calibration for OR_MID_AFTER_IB_FADE (N=121/97, EV=-$5.90/-$5.12,
+            // SUPPRESS) was computed entirely from >=10:30 touches (230/235 active_setups rows
+            // are BACKFILL-sourced, fired_at >= 10:30) — it says nothing about touches in the
+            // newly-eligible 9:35-10:29 window. Don't treat this setup as validated for that
+            // window until a dedicated recalibration backtest re-runs against the wider
+            // first-touch-anywhere population, same lesson as the CAM_R4/CAM_S3 window-mismatch
+            // fix (docs/OPEN_THREADS.md).
             { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
-            { name: 'OR_MID_AFTER_IB_FADE', level: etMinNow >= 630 ? orMid : null, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
+            { name: 'OR_MID_AFTER_IB_FADE', level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
           ].filter(l => l.level != null);
           const keepLevels = keepLevelsAll;
 
@@ -5940,9 +5952,22 @@ export default function createACDRouter(io) {
         return fmtETStr(byWindow < sessionEndET ? byWindow : sessionEndET);
       };
 
+      // status filter is load-bearing, not cosmetic: without it, this picks up ANY row
+      // for the setup_type today by fired_at DESC — including one already
+      // EXPIRED/RESOLVED/INVALIDATED earlier the same session. A later genuine re-touch
+      // of the same level then gets misreported as "still" the old resolved instance
+      // (stale fired_at/entry/stop/target echoed back) instead of starting a real new
+      // row via the INSERT branch below. Found live 2026-07-16: OR_LOW_FADE_LONG
+      // invalidated at 09:36 was still being shown as the "active" card at 10:25 with
+      // "fired 09:34 ET" when price re-touched OR low. ACTIVE and SHADOW are the two
+      // still-open (not yet resolved) statuses this INSERT ever assigns — only those
+      // represent "this is genuinely the same ongoing instance, don't re-fire." The
+      // unique index is (trade_date, setup_type, COALESCE(status,'')), so a fresh
+      // ACTIVE/SHADOW row for the same setup_type/day does not conflict with an
+      // already-closed EXPIRED/RESOLVED one.
       const existingSetup = await query(`
         SELECT id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
-        FROM active_setups WHERE trade_date=$1 AND setup_type=$2
+        FROM active_setups WHERE trade_date=$1 AND setup_type=$2 AND status IN ('ACTIVE','SHADOW')
         ORDER BY fired_at DESC LIMIT 1
       `, [todayET, active.type]);
 

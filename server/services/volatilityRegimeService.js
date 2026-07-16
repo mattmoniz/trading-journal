@@ -24,7 +24,7 @@ const LOW_THRESH = -1.0;
 const TREND_STR_THRESH = 0.50;
 const TREND_LOOKBACK_BARS = 3; // 3 x 5-min = 15 min
 
-function fiveMinBars(oneMinBars) {
+export function fiveMinBars(oneMinBars) {
   const buckets = {};
   for (const b of oneMinBars) {
     const bucket = Math.floor(b.et_min / 5) * 5;
@@ -39,7 +39,7 @@ function fiveMinBars(oneMinBars) {
   return Object.values(buckets).sort((a, b) => a.et_min - b.et_min);
 }
 
-function stdevLogReturns(bars) {
+export function stdevLogReturns(bars) {
   if (bars.length < 3) return null;
   const rets = [];
   for (let i = 1; i < bars.length; i++) {
@@ -52,7 +52,7 @@ function stdevLogReturns(bars) {
   return Math.sqrt(variance);
 }
 
-function getPercentile(arr, p) {
+export function getPercentile(arr, p) {
   if (!arr || arr.length === 0) return null;
   const sorted = [...arr].sort((a, b) => a - b);
   const index = (sorted.length - 1) * p;
@@ -62,7 +62,7 @@ function getPercentile(arr, p) {
   return sorted[lower] * (1 - weight) + sorted[upper] * weight;
 }
 
-function classifyRegime(morningVol, baseline, trendStr, isMorningComplete) {
+export function classifyRegime(morningVol, baseline, trendStr, isMorningComplete) {
   if (morningVol == null || !baseline || baseline.pct80 == null || baseline.pct20 == null) return null;
 
   if (morningVol >= baseline.pct80) {
@@ -75,7 +75,7 @@ function classifyRegime(morningVol, baseline, trendStr, isMorningComplete) {
 }
 
 // Kaufman efficiency ratio, reversal rate, choppiness index on 1-min bars.
-function computeTextureMetrics(bars) {
+export function computeTextureMetrics(bars) {
   if (!bars || bars.length < 3) return null;
   const sorted = [...bars].sort((a, b) => a.et_min - b.et_min);
 
@@ -109,7 +109,7 @@ function computeTextureMetrics(bars) {
 }
 
 // Trailing-20-session baseline of morning vol AND avg 1-min bar range, ending before `todayET`.
-async function getMorningVolBaseline(todayET) {
+export async function getMorningVolBaseline(todayET) {
   if (baselineCache.has(todayET)) {
     return baselineCache.get(todayET);
   }

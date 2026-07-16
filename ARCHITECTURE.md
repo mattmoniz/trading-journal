@@ -258,7 +258,15 @@ src/
 │   ├── timestamps.js
 │   └── updateDots.js
 ├── views/                 # All top-level views extracted from App.jsx — every one is lazy() + Suspense
-│   ├── ACDView.jsx        # 4,286 lines — lazy (Morning Prep / dashboard tab)
+│   ├── ACDView.jsx        # 1,585 lines — lazy (Morning Prep / dashboard tab). Was 4,310
+│   │                        lines until 2026-07-16: removed ~2,725 lines of dead code
+│   │                        (AuctionReadCard/BigPictureSnapshot/ConfluenceScore/
+│   │                        PhaseChangeMonitor/TradeTimelinePanel and everything only they
+│   │                        called) orphaned by e8946e5's "Remove 1,788 lines of dead code"
+│   │                        commit, which deleted SessionStatusBar and DashboardPanels
+│   │                        (both genuinely dead) but didn't transitively check whether
+│   │                        removing them orphaned anything those two used to call — they
+│   │                        did, twice over. See docs/OPEN_THREADS.md for the full account.
 │   ├── BacktestView.jsx   # 2,872 lines — lazy
 │   ├── CalendarView.jsx   # 2,305 lines — lazy (imported inside the also-lazy AllTradesView.jsx)
 │   ├── PlaybookView.jsx   # 1,564 lines — lazy (2026-07-15: was the last static top-level
@@ -288,10 +296,10 @@ Views routed inside `App.jsx` → `src/views/`: `dashboard`, `all-trades`, `cale
 
 | Group | Components |
 |---|---|
-| Pre-market context | `PreSessionChecklist`, `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard` |
+| Pre-market context | `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard` |
 | Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map |
-| Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `BalanceZonePanel`, `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `LiveScriptsCard`, `TradeCalibrationCard`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `PostLossCooldown` |
-| Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `ScalpPlaybookCard`, `LevelMonitorPanel` |
+| Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `PostLossCooldown` |
+| Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `LevelMonitorPanel` |
 | Performance viz | `PnlCharts`, `StatsGrid` |
 | Utility | `SyncProgressPanel`, `RecapDatePicker`, `DashboardFilters`, `DashboardView` |
 
@@ -337,6 +345,10 @@ Notable scripts that are scheduled or run after auto-import:
 - `scripts/backtest_monday_deep.js` — Monday WR/EV overrides per level; writes `MON_BACKTEST` rows read live by `acd.js` keepLevels logic; cron fires Sunday via `run_weekly_backtests.sh`
 - `scripts/calibrate_touch_quality.mjs` (2026-07-15) — per-setup_type order-flow touch-quality calibration: reaction window (p25 bars-to-resolution) + high-volume z-score tercile cutoff + per-bucket (`HIGH_VOL_ABSORBED`/`HIGH_VOL_OVERRUN`/`QUIET`) N/WR/EV; writes `TOUCH_QUALITY` rows to `performance_audit`; shares classification logic with `server/services/touchQuality.js` (also used live by `acd.js`'s `resolveSetupsByPrice()`). Added to `run_weekly_backtests.sh`. See docs/OPEN_THREADS.md "Touch-quality" thread for the full derivation (price-action approach tried first, didn't generalize; order-flow approach validated across all 47 N≥50 setup_types, ~45% show `HIGH_VOL_OVERRUN` as the clearly worst bucket, zero day-clustering).
 - `scripts/repair_*.mjs` (2026-07-14, 7 scripts) — one-time data repairs for the `resolution_method='BACKFILL'` corpus in `active_setups` (the historical output of `scripts/archive/backfill_level_fades.js`), not scheduled/cron, kept for audit trail: `repair_backfill_duplicate_bars.mjs` (re-simulated against clean `price_bars_primary`), `repair_cam_r4_s3_window_mismatch.mjs`/`repair_top8_window_mismatch.mjs`/`repair_remaining_window_mismatch.mjs`/`repair_ib_dependent_window_mismatch.mjs`/`repair_weekly_vwap_window_mismatch.mjs` (re-simulated first-touch-anywhere-in-RTH instead of the archived script's 10:30am-noon window, one wave per level-formation-gate family), `repair_dollars_per_point.mjs` (rescaled `actual_pnl` from $5/pt to the real $2/pt MNQ contract value). Each backs up to a `active_setups_*_backup_20260714` table before writing — see docs/OPEN_THREADS.md for the full incident writeup and docs/KNOWN_ISSUES.md items 8-10 for the underlying bugs. Backup tables are safe to drop once the fixes have held for a few sessions.
+- `scripts/repair_trades_timezone_shift.mjs` + `repair_trades_dedupe_20260609_batch.mjs` / `repair_trades_dedupe_20260422_batch.mjs` / `repair_trades_dedupe_remaining.mjs` (2026-07-16) — one-time repair of the `trades` table (not `active_setups`) for the ambient-timezone ingestion bug in `sierraParser.js` — see CLAUDE.md's "Never parse a naive... timestamp" convention for the full mechanism. Corrected 35,813 pre-2026-06-09 `entry_time`/`exit_time` values (date-aware +4h EDT / +5h EST, not a flat shift) and removed 9,037 duplicate rows across three distinct causes (a 2026-06-09 re-import, an unrelated 2026-04-22 re-import, and a structural multi-line-per-position Sierra TAL quirk present across the full history). Backs up to `trades_backup_20260716` before writing. `trades`: 40,453 → 31,416 rows.
+- `scripts/backfill_volatility_regime_history.mjs` (2026-07-16) — canonical historical backfill of `volatilityRegimeService.js`'s live regime classification (LOW-VOL/NORMAL-VOL/HIGH-VOL-DIRECTIONAL/HIGH-VOL-CHOP), one row per trading day; writes `VOL_REGIME_HIST` rows to `performance_audit`. Imports the real live functions (`fiveMinBars`, `stdevLogReturns`, `getPercentile`, `classifyRegime`, `getMorningVolBaseline` — all exported from `volatilityRegimeService.js` for this reuse) rather than reimplementing the math, after two Gemini hand-reimplementations of the same logic produced internally inconsistent EV comparisons. Not on any cron yet — re-run manually as more days accumulate.
+- `scripts/record_claim.mjs` (2026-07-16) — canonical way to persist an exploratory/research finding (not a setup-calibration one — those already have SETUP_STATUS/OPTIMAL_STOP/etc.) as a durable, re-checkable row instead of leaving it only as prose in docs/OPEN_THREADS.md. Writes/reads `RESEARCH_CLAIM` rows in `performance_audit` (`notes` holds `{claim_text, source_file, source_date, rigor_status, status, last_verified_date, next_recheck_due}` as JSON text). Exports `recordClaim()`/`listClaims()` for reuse by other scripts; `node scripts/record_claim.mjs --list` shows all claims and flags any past their 30-day recheck date. Seeded with 7 audited claims from a 2026-07-16 session; caught a genuine cross-run discrepancy in the TRIPLE-zone confluence number the same day (see `backtest_confluence.js` entry below) — a live example of exactly the drift this ledger exists to catch.
+- `scripts/backtest_confluence.js` (weekly, Sun cron per `run_weekly_backtests.sh`'s job list — not itself listed there by name but confirmed live via `playbook.js`'s `CONFLUENCE_AUDIT` metadata row) — tests SINGLE/DOUBLE/TRIPLE/QUAD_PLUS level-confluence tiers for fade WR/MAE/MFE/EV improvement; writes `CONFLUENCE_AUDIT` rows to `performance_audit`, consumed live by `SessionForecastPanel`. **2026-07-16: added a `computeRigor()` call per tier** (imported from `rigorDiagnostics.js`, not reimplemented) — this script had zero rigor checking despite being the source of the TRIPLE-zone confluence numbers that had swung significantly across past ad hoc re-tests (an Opus-consultation-flagged gap). Re-run the same day surfaced a real discrepancy against an older scratch-file number for the same claim — see `docs/OPEN_THREADS.md` and the `triple_zone_confluence_alltime` `RESEARCH_CLAIM` row.
 
 ---
 

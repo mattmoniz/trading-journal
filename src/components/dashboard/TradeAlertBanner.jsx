@@ -217,9 +217,9 @@ export default function TradeAlertBanner() {
           for (const a of (data.alerts || [])) {
             const existing = updated.findIndex(x => x.id === a.id);
             if (existing >= 0) {
-              updated[existing] = { ...a, firstSeen: updated[existing].firstSeen, expired: false };
+              updated[existing] = { ...a, expired: false };
             } else {
-              updated.push({ ...a, firstSeen: new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }), expired: false });
+              updated.push({ ...a, expired: false });
             }
           }
           for (const a of updated) {
@@ -309,7 +309,7 @@ export default function TradeAlertBanner() {
                   {a.type.replace(/_/g, ' ')}
                 </span>
                 <span style={{ fontSize: 11, color: '#94a3b8', fontFamily: 'monospace', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {a.firstSeen}
+                  {a.time}
                   {a.expired && <span style={{ fontSize: 11, fontWeight: 800, color: '#ef4444', background: 'rgba(239,68,68,0.15)', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.04em' }}>EXPIRED {a.expiredAt}</span>}
                 </span>
               </div>

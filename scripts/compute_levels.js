@@ -343,6 +343,7 @@ async function computeLevelsForDate(date) {
   const pwL = pwHlR.rows[0]?.l;
   add('PW_HIGH', pwH, 'WEEKLY');
   add('PW_LOW',  pwL, 'WEEKLY');
+  if (pwH != null && pwL != null) add('PW_MID', (pwH + pwL) / 2, 'WEEKLY');
 
   const pwVA = await computeValueArea(pwMonStr, pwFriStr);
   if (pwVA) {

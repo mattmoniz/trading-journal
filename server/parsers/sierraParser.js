@@ -263,6 +263,31 @@ function mapSierraTradeToSchema(sierraRow, rowNumber, headers) {
   }
 }
 
+// Sierra Chart export strings carry no timezone marker but are always America/New_York
+// wall-clock time. `new Date(naiveString).toISOString()` is WRONG here — it interprets
+// the naive string using the ambient process/system timezone, not explicitly ET, so the
+// same input produces different output depending on what environment the import happens
+// to run under. Found 2026-07-16: this system's ambient timezone is America/New_York,
+// which caused every import since 2026-06-09 to be stored 4 hours off from every import
+// before it (which coincidentally ran under an environment where ambient TZ resolved to
+// UTC). Full account: docs/OPEN_THREADS.md / CLAUDE.md's timestamp-handling convention.
+function etNaiveStringToUtcIso(y, mo, d, h, mi, s) {
+  const utcGuess = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const parts = fmt.formatToParts(utcGuess).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+  const etWallClockOfGuess = Date.UTC(
+    +parts.year, +parts.month - 1, +parts.day,
+    parts.hour === '24' ? 0 : +parts.hour, +parts.minute, +parts.second
+  );
+  const targetWallClock = Date.UTC(y, mo - 1, d, h, mi, s);
+  const diffMs = targetWallClock - etWallClockOfGuess;
+  return new Date(utcGuess.getTime() + diffMs).toISOString();
+}
+
 function parseDateTime(dateTimeStr) {
   if (!dateTimeStr) return null;
 
@@ -270,14 +295,15 @@ function parseDateTime(dateTimeStr) {
     // Sierra Chart format: "2025-01-08  09:40:16.024149" or "2025-01-08  09:40:16.024149 BP"
     // Remove suffixes like BP (Best Price), EP (Exit Position), etc.
     let cleanDateTime = dateTimeStr.replace(/\s+(BP|EP|SP|MP)$/i, '').replace(/\s+/g, ' ').trim();
-    const date = new Date(cleanDateTime);
 
-    if (isNaN(date.getTime())) {
+    const m = cleanDateTime.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (!m) {
       console.warn(`⚠️ Invalid date format: ${dateTimeStr}`);
       return null;
     }
+    const [, y, mo, d, h, mi, s] = m.map(Number);
 
-    return date.toISOString();
+    return etNaiveStringToUtcIso(y, mo, d, h, mi, s);
   } catch (error) {
     console.error(`❌ Error parsing date: ${dateTimeStr}`, error);
     return null;
