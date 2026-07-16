@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import { query } from '../db.js';
 import { computeDLLStatus } from './dll.js';
+import { getDetectionHeartbeat } from '../services/detectionHeartbeat.js';
 
 const SIERRA_TAL_DIR = '/mnt/c/SierraChart/SavedTradeActivity/';
 
@@ -161,16 +162,24 @@ router.get('/settings/process-health', async (req, res) => {
       }
     }
 
-    // Live process checks — both use MAX(ts) from price_bars
-    // SETUP_DETECTION runs on every bar insert, so bar freshness = detection freshness
+    // BAR_INGEST has no better signal than bar freshness — it IS the bar arriving.
     const barQ = await query(
       `SELECT MAX(ts)::text as last_bar FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1`, [todayET]
     );
     const lastBar = barQ.rows[0]?.last_bar || null;
 
+    // SETUP_DETECTION used to reuse bar freshness as a proxy ("runs on every bar insert,
+    // so bar freshness = detection freshness") — but that can't tell "detection stopped"
+    // from "no new bar yet" apart, which is exactly the kind of gap that left the real
+    // 2026-07-13 ~1-hour detection gap with no root cause. Reads the direct poll
+    // heartbeat now (server/services/detectionHeartbeat.js, 2026-07-16) instead.
+    const hb = getDetectionHeartbeat();
     const liveData = {
       BAR_INGEST:      { lastRun: lastBar, lastStatus: lastBar ? 'SUCCESS' : null },
-      SETUP_DETECTION: { lastRun: lastBar, lastStatus: lastBar ? 'SUCCESS' : null },
+      SETUP_DETECTION: {
+        lastRun: hb.lastSuccessAt ? new Date(hb.lastSuccessAt).toISOString() : null,
+        lastStatus: hb.consecutiveFailures >= 3 ? 'FAILED' : hb.lastSuccessAt ? 'SUCCESS' : null,
+      },
     };
 
     const processes = PROCESS_SCHEDULE.map(proc => {

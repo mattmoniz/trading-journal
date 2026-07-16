@@ -150,7 +150,7 @@ export async function detectMomentum60Trend(io) {
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, suppression_reason
         ) VALUES ($1,$2,NOW(),$7,$3,$3,$4,$5,$6,$3,$8)
-        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
       `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason]);
 

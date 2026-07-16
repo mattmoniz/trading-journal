@@ -462,13 +462,28 @@ async function detectGlobexSetup(sessionDate, io) {
       expDate.setHours(9, 30, 0, 0);
       const expiresAt = `${expDate.getFullYear()}-${String(expDate.getMonth()+1).padStart(2,'0')}-${String(expDate.getDate()).padStart(2,'0')} 09:30:00`;
 
+      // idx_as_unique_setup is a PARTIAL unique index (WHERE status IN ('ACTIVE','SHADOW'))
+      // as of 2026-07-16 -- was a blanket index on every status value, which meant a
+      // re-touch's second row (the fix that lets a genuine re-touch open a fresh ACTIVE
+      // row after an earlier one on the same day already closed, see docs/OPEN_THREADS.md)
+      // could never itself resolve: its UPDATE to status='RESOLVED'/'EXPIRED' collided
+      // with the FIRST row already occupying that exact (trade_date, setup_type, status)
+      // slot, throwing "duplicate key value violates unique constraint" on every single
+      // 15s poll for any type that had re-touched that day. Confirmed live via
+      // journalctl -- three call sites (resolveSetupsByPrice, expireStaleSetups,
+      // structurallyInvalidateSetups) were all hitting it. Scoping the index to only
+      // ACTIVE/SHADOW preserves the original anti-duplicate-insert guarantee (still only
+      // one open row per type per day) while allowing unlimited RESOLVED/EXPIRED rows to
+      // accumulate, which is what real re-touches actually produce. Every ON CONFLICT
+      // clause against this table must repeat the same WHERE predicate as an inference
+      // clause (Postgres requires this to match a partial index) -- all 6 updated together.
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions
         ) VALUES ($1,$2,NOW(),$3,'ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
-        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
         RETURNING id, entry_zone_low, stop_level, t1_level
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry]);
 
@@ -4920,7 +4935,7 @@ export default function createACDRouter(io) {
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
                 VALUES ($1,$2,NOW(),$3,'SHADOW','CASCADE_BREAKER')
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [todayET, lv.name, currentPrice]).catch(() => {});
             }
           }
@@ -5157,7 +5172,7 @@ export default function createACDRouter(io) {
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
                 VALUES ($1,$2,NOW(),$3,'SHADOW',$4)
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [todayET, type, currentPrice, suppressReason]).catch(() => {});
             }
           }
@@ -5913,7 +5928,7 @@ export default function createACDRouter(io) {
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
                   status, resolution_method)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','EARLY_TOUCH_BACKFILL')
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
@@ -6042,7 +6057,7 @@ export default function createACDRouter(io) {
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason
           ) VALUES ($1,$2,$3,$4,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
-          ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
+          ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
           active.entry, active.entry, active.stop, safeT1Level, safeT1Label,
@@ -6116,7 +6131,7 @@ export default function createACDRouter(io) {
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                 status)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW')
-              ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) DO NOTHING
+              ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,

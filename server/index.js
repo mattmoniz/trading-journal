@@ -56,6 +56,7 @@ import { runDailyCoaching } from '../scripts/daily_coaching.js';
 
 import { query } from './db.js';
 import { logProcess } from './lib/processLog.js';
+import { recordDetectionPollResult } from './services/detectionHeartbeat.js';
 import { computeACDFromBars, getBestACDParams, scanAndSaveSetupEvents, computeORLevelsOnly } from './services/acdService.js';
 import { scanAndIngestNewBarFiles } from './services/priceBarService.js';
 import { runNightlyUpdate } from './services/patternMemoryUpdate.js';
@@ -1157,10 +1158,22 @@ httpServer.listen(PORT, () => {
       const isDailyMaintenanceBreak = etMin >= 1020 && etMin < 1080; // 5:00-6:00 PM ET, Mon-Thu
       if (isSaturday || isSundayBeforeOpen || isFridayAfterClose || isDailyMaintenanceBreak) return;
       const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection`, { signal: AbortSignal.timeout(14000) });
-      if (!res.ok) console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);
-      else await res.text(); // drain body
+      if (!res.ok) {
+        console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);
+        await recordDetectionPollResult(false, `HTTP ${res.status}`);
+      } else {
+        await res.text(); // drain body
+        await recordDetectionPollResult(true, null);
+      }
     } catch (err) {
       if (err.name !== 'TimeoutError') console.error('[detection-poll] Error:', err.message);
+      // Direct heartbeat, not a proxy — added 2026-07-16 (docs/OPEN_THREADS.md) after
+      // finding /api/settings/process-health's SETUP_DETECTION entry only ever inferred
+      // health from bar freshness, which can't tell "detection stopped" from "no new bar
+      // yet" apart. This records the poll's own actual success/failure, durably, so a
+      // future gap like the unexplained 2026-07-13 ~1-hour one has a real record instead
+      // of relying on journal logs that didn't survive.
+      await recordDetectionPollResult(false, err.message).catch(() => {});
     }
   }, 15000);
 
