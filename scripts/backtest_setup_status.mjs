@@ -185,7 +185,21 @@ async function run() {
         suppressed++;
         console.log(`  SUPPRESS ${type.padEnd(38)} all day-type buckets below bar: ${bucketsWithData.map(b => `${b.dayType} N=${b.n} EV=$${b.ev.toFixed(0)}`).join(', ')}`);
       } else {
-        rec = wasSuppressed ? 'ACTIVE' : 'DAY_TYPE_MANAGED'; // clear stale SUPPRESS if any
+        // Found 2026-07-16 (long-tail setup-type audit, docs/OPEN_THREADS.md): this used to
+        // set 'ACTIVE' when recovering from a prior SUPPRESS (wasSuppressed=true), which
+        // silently bypasses the whole point of DAY_TYPE_CONDITIONAL -- these types are NEVER
+        // actually unconditional, they're always gated per-day-type by the hardcoded nulling
+        // in acd.js (~line 3945: BALANCE nulls both, TURBULENT nulls IB_BULLISH, TREND nulls
+        // IB_BEARISH). Confirmed live regression: IB_BULLISH flipped SUPPRESS (2026-07-14,
+        // correct, see the incident writeup) -> ACTIVE (2026-07-15) purely because its TREND
+        // bucket's EV ticked from -$16.24 to -$2.94 (still negative, still N=33, just barely
+        // above the -$5 bar) -- a single noisy recalibration, not a real recovery, yet the
+        // 'ACTIVE' label told the Unified Signal Table (and anyone reading it) this was a
+        // fully-vetted, unconditionally-firing setup at blended EV=-$29/trade. Always
+        // 'DAY_TYPE_MANAGED' now, matching IB_BEARISH's (never-suppressed) label -- accurately
+        // reflects that the per-day-type carve-out, not this script, is what's actually gating
+        // it, and that carve-out's own bucket EVs still need reading before trusting the fire.
+        rec = 'DAY_TYPE_MANAGED';
         unchanged++;
       }
       results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation: rec, rec90, dayTypeBreakdown: buckets });

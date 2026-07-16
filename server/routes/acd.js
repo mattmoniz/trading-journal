@@ -5087,6 +5087,19 @@ export default function createACDRouter(io) {
                 // Weekly backtest_pulse_score.mjs continues to accumulate data; revisit when N is larger.
                 const _psDeltaDiv  = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
                 const _pulseScore  = (_pulseHighVol ? 1 : 0) + (_psDeltaDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
+                // Session-bias conflict (2026-07-16, scripts/backtest_session_bias_conflict.mjs):
+                // firing a mechanical fade against a strongly one-sided PERMISSION_SLIP session
+                // read (>=65% WR opposing direction, same threshold sessionConflictFor already
+                // uses for IB_BULLISH/IB_BEARISH's flag-only version, ~line 3505) costs real EV.
+                // CONFLICT N=4037 WR=58.6% EV=-$14.93 vs NO_CONFLICT N=1887 WR=78.1% EV=+$28.62
+                // (z=-8.25, far past the -2.0 SUPPRESS bar this codebase uses elsewhere) — checked
+                // for a day-type confound before trusting it (this codebase has been burned by
+                // exactly that shape of false signal before, see the "rotation as sizing factor"
+                // thread in docs/OPEN_THREADS.md): holds up independently within BALANCE
+                // (-$6/+$46), TREND (-$24/+$5), and TURBULENT (-$28/+$12) — not a re-labeled
+                // day-type effect. User decision 2026-07-16: extend the existing IB-only flag to
+                // level-fades and fold into sizeMultiplier, not suppress outright.
+                if (sessionConflictFor(dir)) mult = Math.max(mult - 0.25, 0.25);
                 // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
                 // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
                 if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
@@ -5111,6 +5124,9 @@ export default function createACDRouter(io) {
               } : null,
               streakWarn: lfConsecLosses >= 2 ? { losses: lfConsecLosses } : null,
               streakBoost: lfConsecWins >= 2 ? { wins: lfConsecWins } : null,
+              // Same field shape/threshold as ibSetup.sessionConflict (~line 3598) -- backtest
+              // and full writeup at the sizeMultiplier factor above (~line 5085).
+              sessionConflict: sessionConflictFor(dir),
               // STAND DOWN: filter out (don't just size down) when conditions are clearly -EV.
               // Opus audit 2026-07-07: after-loss 31.6% WR, TREND day 58.6% WR, TREND+loss compounding.
               standDown: lfConsecLosses >= 2 || (dtClass === 'TREND' && lfConsecLosses >= 1),
@@ -5852,7 +5868,22 @@ export default function createACDRouter(io) {
 
           if (hasLossToday) brief.unshift(`⚠️ **A prior setup failed today — size reduced 50% (Death Sequence protection).**`);
 
-          active.sizeMultiplier = sizeMult;
+          // Death Sequence protection (hasLossToday, cross-setup-type "any loss today") is
+          // a different signal than the level-fade sizeMultiplier IIFE's own same-type
+          // lfConsecLosses ceiling (~line 5090). This line used to unconditionally
+          // overwrite active.sizeMultiplier with sizeMult, silently discarding the entire
+          // ~20-factor IIFE result levelScalpSetup already computed (~line 5018) and
+          // replacing it with this binary 0.5/1.0 value -- confirmed live: every persisted
+          // active_setups.size_multiplier row was exactly 0.500 or 1.000, and the live
+          // /api/acd/setup-detection response (read directly by MarketPulseBar.jsx) carried
+          // the same wrong value. Found 2026-07-16 auditing sizing-multiplier adherence
+          // (docs/OPEN_THREADS.md). Fixed: hasLossToday now applies as an additional ceiling
+          // on top of the real IIFE value (never exceeding 0.5x after any loss today),
+          // instead of replacing it outright -- preserves size-up signals (up to 1.5x) on
+          // clean days, still enforces Death Sequence protection on loss days.
+          active.sizeMultiplier = hasLossToday
+            ? Math.min(active.sizeMultiplier ?? 1.0, 0.5)
+            : (active.sizeMultiplier ?? 1.0);
           active.tradeBrief = brief.join('\n\n');
           active.overnightAlignment = aligned ? 'ALIGNED' : counter ? 'COUNTER' : 'NEUTRAL';
           active.paceProfile = prof.style;
@@ -6378,6 +6409,19 @@ export default function createACDRouter(io) {
       // /timeline/today (same file, ~line 6425) rather than reimplementing it -- this is the
       // only place in this table that reconciles the user's own executed trades against a
       // system-detected setup; previously there was none.
+      //
+      // Direction + price-proximity guards added 2026-07-16 (execution-quality audit,
+      // docs/OPEN_THREADS.md): the original time-only 5-min match had no direction check and
+      // matched ANY nearby trade regardless of price. Verified directly against raw rows --
+      // 34% of same-window matches were the wrong direction, and even direction-matched rows
+      // included entries hundreds of points from price_at_detection (e.g. MR1_FADE_LONG fired
+      // at 21224.5, matched to an unrelated trade at 22323.25 -- 1098pt away, clearly a
+      // different trade, not slippage). SETUP_TYPE_DIR mirrors inferDirection() in
+      // server/config/setupTypes.js (strip _GAP_UP/_GAP_DOWN suffix, then LONG/BULLISH/_UP vs
+      // SHORT/BEARISH/_DOWN, then UP/DOWN endswith fallback) -- can't import the JS function
+      // into raw SQL, so this is a deliberate one-time port, not a reimplementation of new
+      // logic. 30pt price window matches this codebase's existing "near a level" convention
+      // (audit_setup_latency.mjs's PROXIMITY_PT=15, the live approach-alert 15-30pt zone).
       const r = await query(`
         SELECT s.id, s.trade_date::text, s.setup_type,
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
@@ -6396,11 +6440,22 @@ export default function createACDRouter(io) {
           ORDER BY run_date DESC LIMIT 1
         ) cur ON true
         LEFT JOIN LATERAL (
-          SELECT pnl, quantity, entry_time FROM trades
-          WHERE log_date = s.trade_date
-            AND ABS(EXTRACT(EPOCH FROM (entry_time - s.fired_at))) < 300
-            AND pnl IS NOT NULL
-          ORDER BY ABS(EXTRACT(EPOCH FROM (entry_time - s.fired_at))) ASC
+          SELECT pnl, quantity, entry_time FROM trades t
+          WHERE t.log_date = s.trade_date
+            AND ABS(EXTRACT(EPOCH FROM (t.entry_time - s.fired_at))) < 300
+            AND t.pnl IS NOT NULL
+            AND t.direction = (CASE
+              WHEN s.setup_type ~ '_GAP_(UP|DOWN)$' THEN
+                CASE WHEN regexp_replace(s.setup_type, '_GAP_(UP|DOWN)$', '') ~* '(LONG|BULLISH|_UP)' THEN 'LONG'
+                     WHEN regexp_replace(s.setup_type, '_GAP_(UP|DOWN)$', '') ~* '(SHORT|BEARISH|_DOWN)' THEN 'SHORT'
+                     ELSE NULL END
+              WHEN s.setup_type ~* '(LONG|BULLISH|_UP)' THEN 'LONG'
+              WHEN s.setup_type ~* '(SHORT|BEARISH|_DOWN)' THEN 'SHORT'
+              WHEN s.setup_type ~* 'UP$' THEN 'LONG'
+              WHEN s.setup_type ~* 'DOWN$' THEN 'SHORT'
+              ELSE NULL END)
+            AND ABS(t.entry_price - COALESCE(s.entry_zone_low, s.price_at_detection)) <= 30
+          ORDER BY ABS(EXTRACT(EPOCH FROM (t.entry_time - s.fired_at))) ASC
           LIMIT 1
         ) tr ON true
         ${where.replace(/\b(trade_date|setup_type|status|resolution)\b/g, 's.$1')}
@@ -6454,11 +6509,18 @@ export default function createACDRouter(io) {
         FROM trade_timeline_events t
         LEFT JOIN active_setups s ON t.setup_id = s.id
         LEFT JOIN LATERAL (
-          SELECT pnl, entry_time FROM trades
-          WHERE log_date = t.trade_date
-            AND ABS(EXTRACT(EPOCH FROM (entry_time - t.event_time))) < 300
-            AND pnl IS NOT NULL
-          ORDER BY ABS(EXTRACT(EPOCH FROM (entry_time - t.event_time))) ASC
+          SELECT pnl, entry_time FROM trades tr2
+          WHERE tr2.log_date = t.trade_date
+            AND ABS(EXTRACT(EPOCH FROM (tr2.entry_time - t.event_time))) < 300
+            AND tr2.pnl IS NOT NULL
+            -- Direction + price-proximity guards added 2026-07-16 (execution-quality
+            -- audit, docs/OPEN_THREADS.md) -- same fix as /setups/history's identical
+            -- LATERAL join just above; t.direction/t.entry_zone are already stored on
+            -- this row (dropToTimeline() sets them at insert time), so no re-derivation
+            -- needed here. See /setups/history's comment for the full incident writeup.
+            AND (t.direction IS NULL OR tr2.direction = t.direction)
+            AND (t.entry_zone IS NULL OR ABS(tr2.entry_price - t.entry_zone) <= 30)
+          ORDER BY ABS(EXTRACT(EPOCH FROM (tr2.entry_time - t.event_time))) ASC
           LIMIT 1
         ) tr ON true
         WHERE t.trade_date = $1

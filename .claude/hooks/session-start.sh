@@ -77,6 +77,37 @@ ORDER BY (p.notes::json->>'next_recheck_due')::date;
 SQLEOF
 )
 
+# Fragile DAY_TYPE_MANAGED bucket watch — built 2026-07-16 after the IB_BULLISH regression
+# (docs/OPEN_THREADS.md): IB_BULLISH silently un-suppressed from SUPPRESS back to a live
+# status on 2026-07-15 because ITS OWN TREND bucket ticked from EV=-$16.24 to EV=-$2.94
+# (N=33) -- still negative, still thin, but just barely above the -$5 SUPPRESS_MAX_EV bar,
+# so the code's own logic correctly (per its threshold) let it through. A pure
+# recompute-and-compare consistency check would NOT have caught this -- the stored value
+# matched what the code would derive; the code's own bar was just too blunt for a
+# borderline bucket. Nobody noticed for two days because nothing surfaced it. This section
+# doesn't re-judge SUPPRESS/live status (that stays backtest_setup_status.mjs's job) -- it
+# just makes every DAY_TYPE_MANAGED type's bucket breakdown impossible to miss at the start
+# of every session, and calls out any bucket that's the ONLY thing keeping the type off
+# SUPPRESS while sitting within $10 of the bar or under N=50 -- both signs of "technically
+# passing, not actually trustworthy yet."
+export DTM_WATCH
+DTM_WATCH=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+WITH latest AS (
+  SELECT DISTINCT ON (signal_name) signal_name, recommendation, ev_per_trade, sample_size, notes::jsonb as notes
+  FROM performance_audit
+  WHERE signal_type='SETUP_STATUS'
+    AND notes ~ '^\{' AND notes ~ '\}$'
+    AND notes::jsonb ? 'day_type_breakdown'
+    AND recommendation != 'SUPPRESS'
+  ORDER BY signal_name, run_date DESC
+)
+SELECT l.signal_name, l.ev_per_trade, l.sample_size,
+  b->>'day_type' as day_type, (b->>'n')::int as n, (b->>'ev')::float as ev
+FROM latest l, jsonb_array_elements(l.notes->'day_type_breakdown') b
+ORDER BY l.signal_name, (b->>'ev')::float DESC;
+SQLEOF
+)
+
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -86,6 +117,7 @@ const miningRaw = process.env.MINING_STATUS || '';
 const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
+const dtmRaw = process.env.DTM_WATCH || '';
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -114,6 +146,25 @@ const strayWorktrees = strayWorktreesRaw.split('\n').filter(Boolean).map(line =>
   return `  ${path} (${branch||'?'})`;
 });
 
+// DAY_TYPE_MANAGED bucket watch: group rows by signal_name, flag any type whose ONLY
+// bucket(s) clearing the -$5 bar are fragile (within $10 of the bar, or N<50).
+const dtmRowsByType = {};
+for (const line of dtmRaw.split('\n').filter(Boolean)) {
+  const [type, blendedEv, blendedN, dayType, n, ev] = line.split('|');
+  if (!dtmRowsByType[type]) dtmRowsByType[type] = { blendedEv: parseFloat(blendedEv), blendedN: parseInt(blendedN, 10), buckets: [] };
+  dtmRowsByType[type].buckets.push({ dayType, n: parseInt(n, 10), ev: parseFloat(ev) });
+}
+const dtmLines = [];
+let dtmFragile = 0;
+for (const [type, data] of Object.entries(dtmRowsByType)) {
+  const goodBuckets = data.buckets.filter(b => b.ev >= -5);
+  const fragileGood = goodBuckets.filter(b => b.ev < 5 || b.n < 50);
+  const isFragile = goodBuckets.length > 0 && fragileGood.length === goodBuckets.length;
+  if (isFragile) dtmFragile++;
+  const bucketStr = data.buckets.map(b => `${b.dayType} N=${b.n} EV=$${b.ev.toFixed(2)}${fragileGood.some(f => f.dayType === b.dayType) ? ' ⚠️' : ''}`).join(', ');
+  dtmLines.push(`  ${isFragile ? '⚠️ ' : '   '}${type.padEnd(15)} blended EV=$${data.blendedEv.toFixed(2)} N=${data.blendedN}  [${bucketStr}]`);
+}
+
 const lines = [
   '=== SESSION START PROTOCOL ===',
   '',
@@ -141,6 +192,10 @@ const lines = [
   strayWorktrees.length > 0
     ? `🔴 ORPHANED WORKTREE(S) — ${strayWorktrees.length} besides the main checkout:\n${strayWorktrees.join('\n')}\n  ACTION: investigate (git -C <path> status / git log), then commit+merge or discard — don't let it sit`
     : '✅ No orphaned worktrees',
+  '',
+  dtmLines.length > 0
+    ? `${dtmFragile > 0 ? '⚠️ ' : '✅'} DAY_TYPE_MANAGED WATCH — live per-day-type-carve-out types, not gated by the standard SUPPRESS check:\n${dtmLines.join('\n')}${dtmFragile > 0 ? `\n  ${dtmFragile} type(s) have ⚠️ flagged buckets — only reason not SUPPRESSed is a bucket within $10 of the bar or N<50. Re-read before trusting; this is exactly how IB_BULLISH regressed 2026-07-15 (docs/OPEN_THREADS.md).` : ''}`
+    : '',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

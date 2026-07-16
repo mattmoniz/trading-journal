@@ -458,6 +458,7 @@ export default function AlphaEngineOverview() {
     { name: 'VWAP Extension (>mean+σ)', effect: '+0.15', stat: '76.2% WR +$59.7 EV z=+2.95 N=600 — fade + reversion stacked', color: '#22c55e' },
     { name: 'OR Expansion: no breach yet (BALANCE/TURBULENT)', effect: '+0.10', stat: 'BALANCE 78.9% WR N=161 z=2.03; TURBULENT 96.2% N=26 z=2.77 — liquidity intact', color: '#22c55e' },
     { name: 'Regime Persistence: TURBULENT 3-day streak (non-NEUTRAL NL30)', effect: '+0.10', stat: '84.1% WR N=157 z=3.45 (+8.9pp lift) — confirmed regime momentum', color: '#22c55e' },
+    { name: 'Session-bias conflict (opposing PERMISSION_SLIP ≥65% WR)', effect: '−0.25', stat: 'CONFLICT 58.6% WR -$14.93 EV N=4,037 vs NO_CONFLICT 78.1% WR +$28.62 EV N=1,887 (z=-8.25) — holds within every day_type independently, added 2026-07-16', color: '#ef4444' },
     { name: 'Floor', effect: '0.25×', stat: 'Hard minimum', color: '#94a3b8' },
     { name: 'Ceiling', effect: '1.50×', stat: 'Hard maximum', color: '#94a3b8' },
   ];
