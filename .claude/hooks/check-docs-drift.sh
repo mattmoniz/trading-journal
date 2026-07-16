@@ -48,6 +48,19 @@ for f in "$ACD" "$CE"; do
   [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_D_LABEL: $hits")
 done
 
+# Pattern E scans broadly (not just acd.js/caseEngine.js) — found 2026-07-16 in a
+# frontend modal and a table tooltip, neither of which the above file scope covers.
+# server/config/instruments.js / src/constants/contract.js are the canonical definition
+# files (SUPPOSED to contain "$20/pt") and excluded by path, same reasoning as pre-commit.
+# See hardcoded-threshold-patterns.sh for why this one isn't scoped like the others.
+while IFS= read -r -d '' f; do
+  case "$f" in
+    server/config/instruments.js|src/constants/contract.js) continue ;;
+  esac
+  hits=$(grep -nE "$PATTERN_E" "$f" 2>/dev/null | grep -v "$PATTERN_E_EXCLUDE")
+  [ -n "$hits" ] && hardcoded_hits+=("$f — $PATTERN_E_LABEL: $hits")
+done < <(find server src -type f \( -name '*.js' -o -name '*.jsx' \) -print0 2>/dev/null)
+
 if [ ${#hardcoded_hits[@]} -gt 0 ]; then
   joined=$(printf ' | %s' "${hardcoded_hits[@]}")
   warnings+=("HARDCODED THRESHOLD ALERT — review before ending: ${joined:3}")

@@ -3,6 +3,7 @@ import { fmtP } from '../utils/format.js';
 import AccountSelector from '../components/shared/AccountSelector.jsx';
 
 import { API_URL } from '../constants/api.js';
+import { INSTRUMENTS } from '../constants/contract.js';
 
 function useRiskSettings() {
   const [settings, setSettings] = React.useState(null);
@@ -185,7 +186,10 @@ function PositionSizingPanel({ stats, settings, onSaveSettings }) {
   const kelly = b > 0 ? Math.max(0, (p * b - (1 - p)) / b) : 0;
   const halfKelly = kelly / 2;
 
-  const pointValue = instrument === 'NQ' ? 20 : 2;
+  // src/constants/contract.js is the single source of truth for this — found 2026-07-16
+  // this exact instrument === 'NQ' ? 20 : 2 shape (correct here, but duplicated) is the
+  // same pattern that drifted wrong in 2 other places in this codebase the same session.
+  const pointValue = (INSTRUMENTS[instrument] || INSTRUMENTS.MNQ).dollarsPerPoint;
   const dollarRisk = accountSize * (localRiskPct / 100);
   const contracts = Math.max(1, Math.floor(dollarRisk / (stopPoints * pointValue)));
   const halfKellyContracts = halfKelly > 0 ? Math.max(1, Math.floor(accountSize * halfKelly / (stopPoints * pointValue))) : 1;
@@ -203,8 +207,7 @@ function PositionSizingPanel({ stats, settings, onSaveSettings }) {
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 4 }}>Instrument</div>
           <select value={instrument} onChange={e => setInstrument(e.target.value)}
             style={{ background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: 6, color: 'var(--text-primary)', fontSize: 13, padding: '5px 10px' }}>
-            <option value="MNQ">MNQ ($2/pt)</option>
-            <option value="NQ">NQ ($20/pt)</option>
+            {Object.values(INSTRUMENTS).map(i => <option key={i.symbol} value={i.symbol}>{i.label}</option>)}
           </select>
         </div>
         <div style={{ flex: 1 }}>

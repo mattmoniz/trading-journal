@@ -24,6 +24,7 @@ import { runParameterSearch } from '../services/acdBacktest.js';
 import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboRate } from '../services/engineReadHitRates.js';
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
+import { LIVE_INSTRUMENT } from '../config/instruments.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -228,8 +229,12 @@ export async function resolveSetupsByPrice(io) {
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const statusMatch = row.status; // 'ACTIVE' or 'SHADOW'
 
-    const PNL_PER_POINT = 2; // MNQ = $2/point
-  const COMMISSION = 1; // $1 round trip per contract
+    // server/config/instruments.js is the single source of truth for this — found
+    // 2026-07-16 that a wrong $/pt constant had independently drifted into 3 separate
+    // places in this codebase (a backend script, a frontend modal, and this file's own
+    // TRT_LONG trade-brief text), so this is deliberately imported, not redeclared.
+    const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+    const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
   // Custom resolution for ABSORPTION_LONG: "did price move up meaningfully?"
     if (row.setup_type === 'ABSORPTION_LONG') {
@@ -5699,7 +5704,7 @@ export default function createACDRouter(io) {
               style: 'grinder',
               stats: 'WR: 56% | Avg Win: $111 | Avg Loss: ~$0 (expired) | R:R high',
               stop: 'Stop: ~117pt (very wide). This is a reversal — trapped shorts are unwinding. You need room for the rotation.',
-              target: 'Target: opposite side of OR (avg winner +55pt at $5/pt). Do not take profit early — the edge is at 20 bars, NOT 10.',
+              target: 'Target: opposite side of OR (avg winner +55pt at $2/pt). Do not take profit early — the edge is at 20 bars, NOT 10.',
               pace: 'SLOW. This takes 1-2 hours to play out. A+C failed and price pushes through OR — the reversal grinds, it does not spike. Be patient.',
               hold: 'DO NOT CUT EARLY. 120 min expiry. If you exit at +10pt, you leave 75% of the edge on the table. The whole point of this setup is that it takes time to resolve.',
               bestWR: 'BALANCE 83%, TUE 83%',

@@ -77,6 +77,28 @@ ORDER BY (p.notes::json->>'next_recheck_due')::date;
 SQLEOF
 )
 
+# Untracked-instrument watch — 2026-07-16, user request: "if you detect new products…
+# this table needs to be updated." server/config/instruments.js / src/constants/
+# contract.js are the single source of truth for $/pt math (see the DTM/pattern-E work
+# above the same session — a wrong $/pt constant has independently drifted into this
+# codebase 3+ times). Extracts the root symbol from trades.symbol (strips the trailing
+# month-code+year, e.g. MNQZ4 -> MNQ) and flags any root that isn't a key in
+# INSTRUMENTS, so a genuinely new instrument being traded gets noticed at the start of
+# the very next session instead of silently defaulting to wrong/missing $/pt math
+# somewhere the way MNQ/NQ's constant did.
+export UNTRACKED_SYMBOLS
+UNTRACKED_SYMBOLS=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A 2>/dev/null <<'SQLEOF'
+-- 'MNQ','NQ' here must match INSTRUMENTS' keys in server/config/instruments.js /
+-- src/constants/contract.js exactly -- this SQL can't import that JS module directly,
+-- so if a new instrument is ever added there, add its root here too (and vice versa:
+-- if this ever flags a real new symbol, that's the signal to add it to both JS files).
+SELECT DISTINCT regexp_replace(symbol, '[A-Z][0-9]+$', '') as root
+FROM trades
+WHERE regexp_replace(symbol, '[A-Z][0-9]+$', '') NOT IN ('MNQ', 'NQ')
+ORDER BY root;
+SQLEOF
+)
+
 # trade_feedback setup_id coverage — 2026-07-16. The execution-quality audit
 # (docs/OPEN_THREADS.md, RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution)
 # concluded fill/slippage and stop/target-discipline can't be measured because
@@ -135,6 +157,7 @@ const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
 const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
+const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -217,6 +240,10 @@ const lines = [
   feedbackWithSetupId >= 20
     ? `🟢 TRADE_FEEDBACK COVERAGE — ${feedbackWithSetupId} rows now have setup_id populated (N≥20 floor cleared). ACTION: re-run the execution-quality audit (fill/slippage, stop/target discipline) — was blocked on this exact gap, see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution.`
     : `📊 trade_feedback setup_id coverage: ${feedbackWithSetupId}/${feedbackTotal} rows linked to a fired setup (N≥20 needed before the execution-quality audit can re-run — see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution).`,
+  '',
+  untrackedSymbols.length > 0
+    ? `🔴 UNTRACKED INSTRUMENT(S) — ${untrackedSymbols.join(', ')} appear in trades but are NOT in server/config/instruments.js / src/constants/contract.js's INSTRUMENTS table. ACTION: add real $/pt + commission for ${untrackedSymbols.join(', ')} to both files before trusting any dollar figure involving them, and add the root(s) to this hook's own SQL whitelist.`
+    : '✅ No untracked instruments — every symbol root in trades matches a known INSTRUMENTS entry.',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

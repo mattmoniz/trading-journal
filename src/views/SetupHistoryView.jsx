@@ -10,7 +10,7 @@ const SETUP_LOG_COLS = [
   { key: 'stop_level',          label: 'Stop',       sortable: false, tip: 'Stop loss level (P75 MAE from backtest)' },
   { key: 't1_level',            label: 'T1',         sortable: false, tip: 'First target — scale half position here' },
   { key: 'resolution',          label: 'Outcome',    sortable: true,  tip: 'T1 ✓ = target hit, Stop ✗ = stopped out, Expired/Closed = timed out without resolution' },
-  { key: 'actual_pnl',          label: 'P&L',        sortable: true,  tip: 'P&L for this setup ($20/pt per contract, net commission)' },
+  { key: 'actual_pnl',          label: 'P&L',        sortable: true,  tip: 'P&L for this setup ($2/pt per contract, MNQ, net commission)' },
   { key: 'mae_mfe',             label: 'MAE / MFE',  sortable: false, tip: 'Max adverse / favorable excursion in points, once resolved' },
   { key: 'historical_win_rate', label: 'WR at Fire', sortable: false, tip: 'FROZEN snapshot: this setup type\'s win rate at the exact moment this row fired. Never updated afterward — can be badly stale. Only shown when N≥20.' },
   { key: 'current_win_rate',    label: 'WR Now',     sortable: false, tip: 'LIVE current win rate for this setup type, from the weekly-recalibrated SETUP_STATUS pipeline. Compare against "WR at Fire" to see how much this setup has drifted since this row fired.' },

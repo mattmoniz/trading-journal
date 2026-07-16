@@ -16,6 +16,7 @@ const ACDView = lazy(() => import('./views/ACDView.jsx'));
 // from this import since they added nothing but a reason to keep PlaybookView eager here.
 const PlaybookPage = lazy(() => import('./views/PlaybookView.jsx'));
 import { QuickTradeLog, SystemHealthSummary, TradeFeedbackBar } from './components/dashboard/QuickTradeLog.jsx';
+import { MNQ_DOLLARS_PER_POINT } from './constants/contract.js';
 import { io } from 'socket.io-client';
 import './App.css';
 import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './utils/timestamps.js';
@@ -979,8 +980,14 @@ function CaseSetupDetailModal({ setup, onClose }) {
   const riskPts   = entry != null && stop   != null ? Math.abs(entry - stop)   : null;
   const rewardPts = entry != null && target != null ? Math.abs(target - entry) : null;
   const rr = riskPts && rewardPts && riskPts > 0 ? (rewardPts / riskPts).toFixed(1) : null;
-  const riskDollar   = riskPts   != null ? Math.round(riskPts   * 5) : null;
-  const rewardDollar = rewardPts != null ? Math.round(rewardPts * 5) : null;
+  // Found 2026-07-16: this was hardcoded * 5 -- the exact wrong $/pt constant CLAUDE.md
+  // already documents once for a backend script (matches neither MNQ's real $2 nor
+  // standard NQ's $20). A resolved setup's real actual_pnl (server-computed, correct)
+  // sat right next to this on the same card, silently disagreeing with it -- e.g. a
+  // 44pt TARGET_HIT showed both "$220" (this bug, 44*5) and the real "+$87" (44*2-$1
+  // commission) on the same screen. See src/constants/contract.js.
+  const riskDollar   = riskPts   != null ? Math.round(riskPts   * MNQ_DOLLARS_PER_POINT) : null;
+  const rewardDollar = rewardPts != null ? Math.round(rewardPts * MNQ_DOLLARS_PER_POINT) : null;
 
   const resolution = setup.resolution || setup._resolution;
   const resInfo = resolution ? SETUP_RESOLUTION_TEXT[resolution] : null;

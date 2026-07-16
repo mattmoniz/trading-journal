@@ -21,7 +21,6 @@ source "$REPO/scripts/hardcoded-threshold-patterns.sh"
 
 FILES="server/routes/acd.js server/services/caseEngine.js"
 staged_targets="$(git diff --cached --name-only -- $FILES)"
-[ -z "$staged_targets" ] && exit 0
 
 hits=()
 for f in $staged_targets; do
@@ -40,6 +39,24 @@ for f in $staged_targets; do
   m=$(echo "$added" | grep -E "$PATTERN_D" | grep -v "$PATTERN_D_EXCLUDE")
   [ -n "$m" ] && hits+=("$f — new $PATTERN_D_LABEL:"$'\n'"$m")
 done
+
+# Pattern E scans broadly (not just acd.js/caseEngine.js) — found 2026-07-16 in a
+# frontend modal and a table tooltip, neither of which patterns A-D's file scope covers.
+# See hardcoded-threshold-patterns.sh for why this one isn't scoped like the others.
+# instruments.js/contract.js are the canonical definition files -- they're SUPPOSED to
+# contain "$20/pt" (NQ's real value) and may reference "$5/pt" in a comment describing
+# the historical bug this pattern exists to catch. Excluded by path, not content, since
+# no content-level exclude can tell "the correct definition" from "a wrong copy" apart.
+e_targets="$(git diff --cached --name-only -- 'server/**/*.js' 'src/**/*.jsx' 'src/**/*.js' \
+  ':(exclude)server/config/instruments.js' ':(exclude)src/constants/contract.js')"
+for f in $e_targets; do
+  added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
+  [ -z "$added" ] && continue
+  m=$(echo "$added" | grep -E "$PATTERN_E" | grep -v "$PATTERN_E_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_E_LABEL:"$'\n'"$m")
+done
+
+[ ${#hits[@]} -eq 0 ] && exit 0
 
 if [ ${#hits[@]} -gt 0 ]; then
   echo "❌ pre-commit: hardcoded trading-threshold anti-pattern(s) detected in this commit:" >&2
