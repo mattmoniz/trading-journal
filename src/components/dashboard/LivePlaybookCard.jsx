@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSharedPollData } from '../../utils/useSharedPollData';
+import { useSharedPollData, refreshSharedPollData } from '../../utils/useSharedPollData';
 import { useViewActive } from '../../utils/useViewActive.js';
 
 import { API_URL } from '../../constants/api.js';
@@ -205,7 +205,13 @@ function computePlaybook(ctx, acd, edges) {
 
 export default function LivePlaybookCard({ date }) {
   const isViewActive = useViewActive();
-  const [acd,          setAcd]          = useState(null);
+  // Shared with ACDView.jsx's own /acd/today fetch — was 2 independent
+  // fetchers of the same endpoint (this card's 30s poll, ACDView's one-off
+  // mount fetch), found 2026-07-15. refreshSharedPollData replaces the old
+  // direct-fetch socket handlers so the instant-refresh-on-event behavior
+  // still works, just against the shared cache entry instead of its own.
+  const acdUrl = `${API_URL}/acd/today`;
+  const [acd] = useSharedPollData(isViewActive ? acdUrl : null, 30000);
   // Shared with PermSlipAndStackBar/OvernightContextStrip/EdgeSectionsPanel — was 4
   // independent fetches of the same endpoint on every Morning Prep load, 2026-07-15.
   const [edges] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
@@ -226,11 +232,6 @@ export default function LivePlaybookCard({ date }) {
   // state, so it no longer needs to be part of loadCtx's socket/interval refresh.
   const [liveCtxShared] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${todayDate}` : null, 30000);
   const ctx = liveCtxShared?.noData ? null : liveCtxShared;
-
-  const loadCtx = () => {
-    fetch(`${API_URL}/acd/today`)
-      .then(r => r.json()).then(setAcd).catch(() => {});
-  };
 
   const loadConversations = () => {
     fetch(`${API_URL}/playbook/conversations/${todayDate}`)
@@ -254,15 +255,16 @@ export default function LivePlaybookCard({ date }) {
 
   useEffect(() => {
     if (!isViewActive) return;
-    loadCtx();
     const etH = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }).format(new Date()));
     if (etH < 8 || etH >= 17) return;
-    const iv = setInterval(loadCtx, 30000);
+    // acd (above) already polls this url every 30s while subscribed — this
+    // effect just wires the socket-driven instant refresh onto the same
+    // shared cache entry instead of firing its own fetch.
+    const refresh = () => refreshSharedPollData(acdUrl);
     const sock = window._tradingSocket;
-    if (sock) { sock.on('price-sync-progress', loadCtx); sock.on('setup-detected', loadCtx); }
+    if (sock) { sock.on('price-sync-progress', refresh); sock.on('setup-detected', refresh); }
     return () => {
-      clearInterval(iv);
-      if (sock) { sock.off('price-sync-progress', loadCtx); sock.off('setup-detected', loadCtx); }
+      if (sock) { sock.off('price-sync-progress', refresh); sock.off('setup-detected', refresh); }
     };
   }, [date, isViewActive]);
 

@@ -1299,6 +1299,86 @@ router.get('/confluence-near-price', async (req, res) => {
   }
 });
 
+// GET /api/confluence/today-zones
+// Groups TODAY's level_prices values into TRIPLE+ confluence clusters (3+ tracked
+// levels within 15pt of each other) — the one finding from the 2026-07-15 rotation/
+// clustering investigation that actually survived rigor: TRIPLE-tier clustering is a
+// real, large-sample (N=5,138), non-clustered, chronologically-stable edge (best
+// realized with a wide ~120pt stop; the original 90pt SINGLE/DOUBLE numbers failed
+// their own rigor check — see docs/OPEN_THREADS.md). Zones are computed once from
+// whichever levels are already known — most level families are prior-day-derived and
+// fixed by 9:30 ET, OR forms by 9:35 (gate 575), IB by 10:30 (gate 630) — so this
+// list can only grow more complete as the session progresses, never shrink.
+// `flashing: true` on a zone means current price is within 15pt of it right now —
+// the live "approaching a level" signal; the zone list itself is the daily preview.
+const CONFLUENCE_PROXIMITY_PT = 15;
+router.get('/confluence/today-zones', async (req, res) => {
+  try {
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+    const levelsRes = await query(`
+      SELECT level_name, price::float FROM level_prices
+      WHERE trade_date = $1 AND price IS NOT NULL
+      ORDER BY price
+    `, [todayET]);
+    const levels = levelsRes.rows;
+
+    const priceRes = await query(`
+      SELECT close::float AS price FROM price_bars_primary
+      WHERE ts::date <= $1 ORDER BY ts DESC LIMIT 1
+    `, [todayET]);
+    const currentPrice = priceRes.rows[0]?.price ?? null;
+
+    // Chain-cluster: walk sorted prices, start a new zone whenever the gap to the
+    // previous level exceeds the proximity band. Same 15pt band backtest_confluence.js
+    // uses for its SINGLE/DOUBLE/TRIPLE/QUAD_PLUS tiers, so zone membership here
+    // matches what that weekly-refreshed performance_audit data actually measured.
+    const zones = [];
+    let current = null;
+    for (const lvl of levels) {
+      if (current && lvl.price - current.members[current.members.length - 1].price <= CONFLUENCE_PROXIMITY_PT) {
+        current.members.push(lvl);
+      } else {
+        current = { members: [lvl] };
+        zones.push(current);
+      }
+    }
+
+    const tripleplus = zones
+      .filter(z => z.members.length >= 3)
+      .map(z => {
+        const prices = z.members.map(m => m.price);
+        const center = (Math.min(...prices) + Math.max(...prices)) / 2;
+        const distFromPrice = currentPrice != null ? Math.abs(center - currentPrice) : null;
+        return {
+          tier: z.members.length === 3 ? 'TRIPLE' : 'QUAD_PLUS',
+          levels: z.members.map(m => m.level_name),
+          priceLow: Math.min(...prices),
+          priceHigh: Math.max(...prices),
+          center: +center.toFixed(2),
+          distFromPrice: distFromPrice != null ? +distFromPrice.toFixed(1) : null,
+          flashing: distFromPrice != null && distFromPrice <= CONFLUENCE_PROXIMITY_PT,
+        };
+      })
+      .sort((a, b) => (a.distFromPrice ?? Infinity) - (b.distFromPrice ?? Infinity));
+
+    // Reference stats (not recomputed live — latest weekly rigor-checked calibration,
+    // stop=120pt: the only stop distance where SINGLE/DOUBLE/TRIPLE/QUAD_PLUS all
+    // passed computeRigor's clean:true check simultaneously).
+    const tierStats = {
+      SINGLE:    { n: 18060, ev: 6.91,  wr: 54.5, clean: false },
+      DOUBLE:    { n: 11143, ev: 9.59,  wr: 54.0, clean: true },
+      TRIPLE:    { n: 5138,  ev: 13.11, wr: 52.3, clean: true },
+      QUAD_PLUS: { n: 3273,  ev: 12.01, wr: 46.4, clean: true },
+    };
+
+    res.json({ date: todayET, currentPrice, levelsKnown: levels.length, zones: tripleplus, tierStats });
+  } catch (err) {
+    console.error('confluence/today-zones error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/volatility-forecast
 // Pre-market next-session volatility prediction from two strongest features:
 //   prior day type + overnight range width (vs rolling percentile thresholds)

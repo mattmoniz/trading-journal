@@ -12,6 +12,7 @@ export default function DashboardView({
   accounts,
   selectedAccounts,
   setSelectedAccounts,
+  hasTradesToday,
   addToast,
   syncing,
   syncProgress,
@@ -37,22 +38,14 @@ export default function DashboardView({
     dateTo: '',
   });
 
-  // On mount: if no trades today, switch date filter to the last trading day
+  // If no trades today, switch date filter to the last trading day. Reuses
+  // App.jsx's own accounts?days=0 check (via the hasTradesToday prop) instead
+  // of independently re-fetching the exact same query — found 2026-07-15,
+  // this was a real duplicate of App.jsx's fetchAccounts() and a violation of
+  // the "account state is lifted to App.jsx" convention.
   useEffect(() => {
-    const todayStr = new Date().toLocaleDateString('en-CA');
-    fetch(`${API_URL}/accounts?days=0`)
-      .then(r => r.json())
-      .then(todayAccts => {
-        if (Array.isArray(todayAccts) && todayAccts.length > 0) return null; // trades today — keep 'today' filter
-        return fetch(`${API_URL}/accounts/last-day`).then(r => r.json());
-      })
-      .then(lastDay => {
-        if (lastDay?.accounts?.length > 0) {
-          setFilters(f => ({ ...f, dateRange: 'week' }));
-        }
-      })
-      .catch(() => {});
-  }, []);
+    if (hasTradesToday === false) setFilters(f => ({ ...f, dateRange: 'week' }));
+  }, [hasTradesToday]);
 
 
   const fetchKeyLevels = useCallback(async (baseParams) => {

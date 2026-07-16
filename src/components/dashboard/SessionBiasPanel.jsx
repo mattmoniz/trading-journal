@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 
 import { API_URL } from '../../constants/api.js';
 import { useSharedPollData } from '../../utils/useSharedPollData.js';
@@ -46,19 +46,23 @@ export default function SessionBiasPanel() {
 
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  // Load today's session signal trades to restore "Traded" state after refresh
+  // Shared with EdgeSectionsPanel's own acd/feedback poll — was 2 independent
+  // fetchers of the same endpoint (this one-time mount fetch, EdgeSectionsPanel's
+  // 60s poll), found 2026-07-15. Only applies the FIRST response after mount
+  // (initializedRef), matching the original "restore Traded state once on load"
+  // intent — later shared-poll refreshes must not clobber logTraded's optimistic
+  // updates that haven't round-tripped to the backend yet.
+  const [feedbackData] = useSharedPollData(isViewActive ? `${API_URL}/acd/feedback?days=1` : null, 60000);
+  const initializedRef = useRef(false);
   useEffect(() => {
-    fetch(`${API_URL}/acd/feedback?days=1`)
-      .then(r => r.json())
-      .then(d => {
-        const labels = (d.feedback || [])
-          .filter(f => f.setup_type === 'SESSION_SIGNAL' && f.trade_date === dateStr)
-          .map(f => f.note)
-          .filter(Boolean);
-        if (labels.length) setTraded(new Set(labels));
-      })
-      .catch(() => {});
-  }, [dateStr]);
+    if (!feedbackData || initializedRef.current) return;
+    initializedRef.current = true;
+    const labels = (feedbackData.feedback || [])
+      .filter(f => f.setup_type === 'SESSION_SIGNAL' && f.trade_date === dateStr)
+      .map(f => f.note)
+      .filter(Boolean);
+    if (labels.length) setTraded(new Set(labels));
+  }, [feedbackData, dateStr]);
 
 
   const logTraded = useCallback(async (label, dir) => {

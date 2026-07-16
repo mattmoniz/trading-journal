@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { useSharedPollData } from '../../utils/useSharedPollData';
 import { useViewActive } from '../../utils/useViewActive.js';
 
@@ -16,22 +16,13 @@ export default function PermSlipAndStackBar() {
   const [edgesData] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 60000);
   const perms  = edgesData?.sessionPermissions || null;
   const setups = edgesData?.setups || null;
-  const [resolved, setResolved] = useState([]);
 
-  useEffect(() => {
-    if (!isViewActive) return;
-    const load = () =>
-      fetch(`${API_URL}/setups/today`)
-        .then(r => r.json())
-        .then(d => {
-          if (Array.isArray(d.setups))
-            setResolved(d.setups.filter(s => ['RESOLVED', 'EXPIRED'].includes(s.status)));
-        })
-        .catch(() => {});
-    load();
-    const iv = setInterval(load, 60000);
-    return () => clearInterval(iv);
-  }, [isViewActive]);
+  // Shared with EdgeSectionsPanel/App.jsx's LiveSessionPanel — was 3 independent
+  // fetches of the same endpoint on every Morning Prep load, found 2026-07-15.
+  const [setupsTodayData] = useSharedPollData(isViewActive ? `${API_URL}/setups/today` : null, 60000);
+  const resolved = Array.isArray(setupsTodayData?.setups)
+    ? setupsTodayData.setups.filter(s => ['RESOLVED', 'EXPIRED'].includes(s.status))
+    : [];
 
   const hasPerms = perms?.conditions?.length > 0;
   if (!hasPerms && !setups) return null;

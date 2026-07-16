@@ -61,6 +61,7 @@ import {
 } from 'recharts';
 
 import { API_URL } from './constants/api.js';
+import { useSharedPollData, refreshSharedPollData } from './utils/useSharedPollData.js';
 const SOCKET_URL = window.location.origin;
 
 
@@ -378,6 +379,12 @@ function App() {
 
   const [accounts, setAccounts] = useState([]);
   const [selectedAccounts, setSelectedAccounts] = useState([]);
+  // null = not yet known. Set alongside selectedAccounts in fetchAccounts()
+  // below so DashboardView doesn't need its own independent accounts?days=0
+  // fetch just to answer the same "any trades today?" question (found
+  // 2026-07-15 — violated the existing "account state is lifted to App.jsx"
+  // convention, not just a generic duplicate-fetch bug).
+  const [hasTradesToday, setHasTradesToday] = useState(null);
   const [toasts, setToasts] = useState([]);
   const toastIdRef = useRef(0);
   const [syncing, setSyncing] = useState(false);
@@ -541,7 +548,9 @@ function App() {
 
       // Select accounts that traded today; fall back to last trading day
       const todayAccts = await fetch(`${API_URL}/accounts?days=0`).then(r => r.json()).catch(() => []);
-      if (Array.isArray(todayAccts) && todayAccts.length > 0) {
+      const tradedToday = Array.isArray(todayAccts) && todayAccts.length > 0;
+      setHasTradesToday(tradedToday);
+      if (tradedToday) {
         setSelectedAccounts(todayAccts);
         return;
       }
@@ -589,7 +598,7 @@ function App() {
         {visitedViews.has('dashboard') && (
           <div style={{ display: currentView === 'dashboard' ? 'contents' : 'none' }}>
             <ErrorBoundary name="Dashboard">
-              <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} />
+              <DashboardView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} hasTradesToday={hasTradesToday} addToast={addToast} syncing={syncing} syncProgress={syncProgress} syncLog={syncLog} onSyncTrades={() => handleSyncTrades(false)} onDismissSync={() => { setSyncProgress(null); setSyncLog([]); }} />
             </ErrorBoundary>
           </div>
         )}
@@ -1100,15 +1109,20 @@ function LiveSessionPanel() {
 
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  const loadSetup = React.useCallback(() => {
-    fetch(`${API_URL}/acd/setup-detection`)
-      .then(r => r.json())
-      .then(d => {
-        setSetupCard(d.setup || null);
-        if (d.sessionClosed) setSessionClosed(true);
-      })
-      .catch(() => {});
-  }, []);
+  // Shared with MarketPulseBar.jsx's SizeChip (canonical 15s poller — see there
+  // for the ?date= param note; both used to fire independent fetches of this
+  // endpoint, found 2026-07-15). Kept as separate local setupCard state rather
+  // than deriving directly from setupPollData, since the onDetected socket
+  // handler below sets it from a differently-shaped payload (the raw socket
+  // event, not this endpoint's {setup, sessionClosed} response) — merging both
+  // sources into one state var still needs the fetch-shaped path kept distinct.
+  const setupUrl = `${API_URL}/acd/setup-detection`;
+  const [setupPollData] = useSharedPollData(setupUrl, 60000);
+  React.useEffect(() => {
+    if (!setupPollData) return;
+    setSetupCard(setupPollData.setup || null);
+    if (setupPollData.sessionClosed) setSessionClosed(true);
+  }, [setupPollData]);
 
   const loadEvents = React.useCallback(() => {
     fetch(`${API_URL}/acd/setup-events/day?date=${todayET}`)
@@ -1117,12 +1131,13 @@ function LiveSessionPanel() {
       .catch(() => {});
   }, [todayET]);
 
-  const loadActiveSetups = React.useCallback(() => {
-    fetch(`${API_URL}/setups/today`)
-      .then(r => r.json())
-      .then(d => setActiveSetups(Array.isArray(d.setups) ? d.setups : []))
-      .catch(() => {});
-  }, []);
+  // Shared with PermSlipAndStackBar/ACDView.jsx's EdgeSectionsPanel — was 3
+  // independent fetches of the same endpoint, found 2026-07-15.
+  const setupsTodayUrl = `${API_URL}/setups/today`;
+  const [setupsTodayData] = useSharedPollData(setupsTodayUrl, 60000);
+  React.useEffect(() => {
+    setActiveSetups(Array.isArray(setupsTodayData?.setups) ? setupsTodayData.setups : []);
+  }, [setupsTodayData]);
 
   const loadEval = React.useCallback(() => {
     fetch(`${API_URL}/eval/progress`)
@@ -1132,18 +1147,17 @@ function LiveSessionPanel() {
   }, []);
 
   React.useEffect(() => {
-    loadSetup();
     loadEvents();
     loadEval();
-    loadActiveSetups();
-    // 60s fallback poll; primary updates come from socket events
-    const iv = setInterval(() => { loadSetup(); loadEvents(); loadEval(); loadActiveSetups(); forceRender(); }, 60000);
+    // 60s fallback poll; primary updates come from socket events.
+    // setup-detection/setups-today are covered by the shared poll subscriptions above.
+    const iv = setInterval(() => { loadEvents(); loadEval(); forceRender(); }, 60000);
 
     const sock = window._tradingSocket;
     const onDetected  = (d) => { setSetupCard(d); loadEvents(); };
     const onState     = (d) => { setSetupCard(d.setup || null); if (d.sessionClosed) setSessionClosed(true); };
-    const onExpired   = () => { setTimeout(loadSetup, 600); setTimeout(loadActiveSetups, 700); };
-    const onResolved  = () => { loadSetup(); loadActiveSetups(); };
+    const onExpired   = () => { setTimeout(() => refreshSharedPollData(setupUrl), 600); setTimeout(() => refreshSharedPollData(setupsTodayUrl), 700); };
+    const onResolved  = () => { refreshSharedPollData(setupUrl); refreshSharedPollData(setupsTodayUrl); };
     // Reload eval after trade import
     const onImport    = () => loadEval();
     if (sock) {
@@ -1165,7 +1179,7 @@ function LiveSessionPanel() {
         sock.off('trades-updated',     onImport);
       }
     };
-  }, [loadSetup, loadEvents, loadEval]);
+  }, [loadEvents, loadEval, setupUrl, setupsTodayUrl]);
 
   const nowET  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etMin  = nowET.getHours() * 60 + nowET.getMinutes();
@@ -1669,20 +1683,33 @@ const MODAL_TITLES = {
 
 // ==================== SIDEBAR ====================
 function SidebarVerdictChip() {
-  const [verdict,    setVerdict]    = React.useState(null);
-  const [verdictDir, setVerdictDir] = React.useState(null);
-  const [pulse,      setPulse]      = React.useState(null);
-  const [open,       setOpen]       = React.useState(false);
-
-  React.useEffect(() => {
-    const load = () =>
-      fetch(`${API_URL}/market/pulse`).then(r => r.json())
-        .then(d => { setVerdict(d.verdict ?? null); setVerdictDir(d.verdictDir ?? null); setPulse(d); })
-        .catch(() => {});
-    load();
-    const iv = setInterval(load, 30000);
-    return () => clearInterval(iv);
-  }, []);
+  // Shares its poll cycle with MarketPulseBar.jsx's default export (same URL,
+  // same 30s interval) instead of firing an independent fetch — the sidebar is
+  // always mounted regardless of active tab, so this used to double the
+  // request count on every load (docs/OPEN_THREADS.md, dedup pass 2026-07-15).
+  const [pulseData] = useSharedPollData(`${API_URL}/market/pulse`, 30000);
+  // TRIPLE+ level-confluence zones for today — the one finding from the
+  // 2026-07-15 rotation/clustering investigation that survived rigor (real,
+  // large-sample, chronologically stable at a wide stop; see
+  // docs/OPEN_THREADS.md). `flashing` on a zone means price is within 15pt of
+  // it right now. Not gating the ENGAGE/WAIT verdict itself with this — that's
+  // a real-time signal, this is slower/structural — shown as adjacent context.
+  const [zonesData] = useSharedPollData(`${API_URL}/confluence/today-zones`, 30000);
+  const flashingZone = zonesData?.zones?.find(z => z.flashing);
+  // Already-live, already-validated regime classifier (server/services/volatilityRegimeService.js,
+  // "Phase 1 report-only backtest confirmed setups perform meaningfully better in
+  // HIGH-VOL-DIRECTIONAL mornings and flat-to-worse in HIGH-VOL-CHOP"). HIGH-VOL-CHOP is
+  // exactly the "wide-swinging, non-committal" signature the 2026-07-15 investigation found
+  // driving the recent confluence-zone losses — so this is the right existing tool to gate
+  // the flash badge's confidence with, not a new GARCH build. Read-only context, does not
+  // change the flash detection itself.
+  const [regimeData] = useSharedPollData(`${API_URL}/acd/volatility-regime`, 60000);
+  const regime = regimeData?.available ? regimeData.regime : null;
+  const regimeIsBad = regime === 'HIGH-VOL-CHOP';
+  const [open, setOpen] = React.useState(false);
+  const verdict    = pulseData?.error ? null : (pulseData?.verdict ?? null);
+  const verdictDir = pulseData?.verdictDir ?? null;
+  const pulse      = pulseData?.error ? null : pulseData;
 
   if (!verdict) return null;
   const color = verdict === 'ENGAGE' ? '#4ade80' : verdict === 'STAND_ASIDE' ? '#f87171' : '#94a3b8';
@@ -1713,9 +1740,22 @@ function SidebarVerdictChip() {
     <div style={{ position: 'relative' }}>
       <div
         onClick={() => setOpen(o => !o)}
-        style={{ padding: '7px 10px', borderRadius: 5, background: `${color}11`, border: `1px solid ${open ? color + '66' : color + '33'}`, display: 'flex', justifyContent: 'center', cursor: 'pointer', transition: 'border-color 0.15s' }}
+        style={{ padding: '7px 10px', borderRadius: 5, background: `${color}11`, border: `1px solid ${open ? color + '66' : color + '33'}`, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer', transition: 'border-color 0.15s' }}
       >
         <span style={{ fontSize: 13, fontWeight: 800, color, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{label}</span>
+        {flashingZone && (
+          // Amber, not purple/green — checked 2026-07-15, the last 22 sessions show
+          // this signal deeply EV-negative despite a real all-time edge (see the
+          // caution note in the expanded panel below). Escalates to red specifically
+          // on HIGH-VOL-CHOP — the exact "wide, non-committal swings" regime already
+          // validated (separately, pre-existing) as bad for fades, and the same
+          // signature behind the recent-month losses. Not a confident buy signal
+          // either way; click the chip for the full context and tooltips.
+          <span title={`Price near a ${flashingZone.tier} confluence zone: ${flashingZone.levels.join(' + ')}${regimeIsBad ? ' — AND today is classified HIGH-VOL-CHOP, the regime already validated as bad for fades' : ''} — click for details`}
+            style={{ fontSize: 11, fontWeight: 800, color: regimeIsBad ? '#f87171' : '#f59e0b', animation: 'pulse 1.2s ease-in-out infinite' }}>
+            ◆ {flashingZone.tier}{regimeIsBad ? ' ⚠' : ''}
+          </span>
+        )}
       </div>
       {open && (
         <div style={{ marginTop: 4, padding: '10px 12px', background: '#111827', border: `1px solid ${color}33`, borderRadius: 6, fontSize: 12 }}>
@@ -1728,6 +1768,71 @@ function SidebarVerdictChip() {
             </div>
           )}
           <div style={{ fontSize: 11, color: '#64748b', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 6, marginTop: 4, lineHeight: 1.5 }}>{ctx.note}</div>
+
+          {/* Today's TRIPLE+ confluence zones — the one rigor-surviving finding from
+              2026-07-15's rotation/clustering work. Reference stats shown so this is
+              auditable, not a black-box flag — see docs/OPEN_THREADS.md for the full
+              rigor breakdown (stable at a 120pt stop; 90pt SINGLE/DOUBLE failed rigor). */}
+          {zonesData?.zones?.length > 0 && (
+            <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 6, marginTop: 6 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#a78bfa', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.04em', display: 'flex', alignItems: 'center' }}>
+                Today's Confluence Zones ({zonesData.levelsKnown} levels known)
+                <InfoTooltip tooltip={{
+                  text: 'A "zone" is a spot where 3 or more of your tracked price levels (pivots, camarilla, IB, prior-day/week/month highs & lows, VWAP, etc. — 64 total) land within 15 points of each other. Price tends to react at these spots more than at a random level, checked and confirmed multiple ways. "TRIPLE" = exactly 3 levels stacked; "QUAD+" = 4 or more.',
+                  example: 'A TRIPLE zone at 29450-29465 might mean the Camarilla S2, the Floor Pivot, and yesterday’s VAL all happen to sit within 15pt of each other there.',
+                }} />
+              </div>
+              {zonesData.zones.map((z, i) => (
+                <div key={i} style={{ marginBottom: 4, padding: '4px 6px', borderRadius: 4, background: z.flashing ? 'rgba(167,139,250,0.12)' : 'transparent' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: z.flashing ? '#a78bfa' : '#cbd5e1', fontWeight: z.flashing ? 700 : 600 }}>
+                    <span>{z.tier} — {z.priceLow.toFixed(0)}–{z.priceHigh.toFixed(0)}</span>
+                    <span>{z.distFromPrice != null ? `${z.distFromPrice.toFixed(0)}pt away` : ''}</span>
+                  </div>
+                  <div style={{ color: '#64748b', fontSize: 10.5 }}>{z.levels.join(' + ')}</div>
+                </div>
+              ))}
+              <div style={{ fontSize: 10.5, color: '#64748b', marginTop: 4, display: 'flex', alignItems: 'center' }}>
+                All-time (stop=120pt): TRIPLE {zonesData.tierStats.TRIPLE.wr}% WR / +${zonesData.tierStats.TRIPLE.ev}/tr (N={zonesData.tierStats.TRIPLE.n}) ·
+                {' '}QUAD+ {zonesData.tierStats.QUAD_PLUS.wr}% WR / +${zonesData.tierStats.QUAD_PLUS.ev}/tr (N={zonesData.tierStats.QUAD_PLUS.n})
+                <InfoTooltip tooltip={{
+                  text: 'WR = win rate, how often price reversed at the zone instead of blowing through it. EV = expected value per trade — the average dollar result if you’d taken every single one of these zones over its full history, using a 120-point stop and $2/point (this journal trades MNQ). N = sample size (how many times this was actually tested). These numbers are years of history, not last week.',
+                }} />
+              </div>
+              {/* Checked 2026-07-15: last 22 trading days are NOT consistent with the
+                  all-time numbers above — WR went up but EV went deeply negative
+                  (TRIPLE -$24.98/tr, QUAD+ -$18.04/tr, N=209/329), and over half the
+                  touches came from just 5 heavily-trending days (top5DayPct 60%/54%,
+                  the exact day-clustering computeRigor() exists to catch). Small
+                  window (22 days) so not proof the edge is dead, but real enough to
+                  surface rather than hide behind the flattering all-time stats — same
+                  "surface, don't auto-suppress" convention as the touch-quality
+                  rigor flag. See docs/OPEN_THREADS.md for the full breakdown. */}
+              <div style={{ fontSize: 10.5, color: '#f59e0b', marginTop: 3, fontWeight: 600, display: 'flex', alignItems: 'center' }}>
+                ⚠ Last 22 sessions: EV went negative (TRIPLE -$25/tr, QUAD+ -$18/tr) — heavily clustered in 5 trend days that blew through stops. All-time edge may not be currently active.
+                <InfoTooltip tooltip={{
+                  text: 'The win rate actually went UP recently, but the losses got much bigger — the market has been swinging in wider ranges than normal lately, so the usual stop size hasn’t been wide enough. This doesn’t mean the idea is fake, it means the last month specifically has been a rough stretch for it. See "Today’s Regime" below for whether that rough-stretch condition is active right now.',
+                }} />
+              </div>
+
+              {/* Already-live, already-validated regime classifier — see the useSharedPollData
+                  call above for why this specific tool was chosen (HIGH-VOL-CHOP is the
+                  documented bad regime for fades, matches the recent-month failure signature). */}
+              {regimeData?.available && (
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 5, marginTop: 5, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ fontSize: 10.5, color: '#94a3b8' }}>Today's regime:</span>
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 700,
+                    color: regime === 'HIGH-VOL-CHOP' ? '#f87171' : regime === 'HIGH-VOL-DIRECTIONAL' ? '#4ade80' : '#94a3b8',
+                  }}>
+                    {regime === 'HIGH-VOL-CHOP' ? 'HIGH VOL — CHOPPY' : regime === 'HIGH-VOL-DIRECTIONAL' ? 'HIGH VOL — DIRECTIONAL' : regime === 'LOW-VOL' ? 'LOW VOL' : 'NORMAL'}
+                  </span>
+                  <InfoTooltip tooltip={{
+                    text: 'How today’s first hour of trading compares to a normal morning (last 60 sessions). Not a forecast for tomorrow — a read on today, updated live.\n\n• NORMAL / LOW VOL — an ordinary morning. No special caution.\n• HIGH VOL, DIRECTIONAL — bigger moves than usual, but committing to one direction. Already confirmed to be a GOOD morning for fades.\n• HIGH VOL, CHOPPY — bigger moves than usual with NO clear direction, just wide swings back and forth. This is the exact condition behind last month’s confluence-zone losses. Treat the flash badge above with extra caution when you see this.',
+                  }} />
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

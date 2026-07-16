@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useViewActive } from '../../utils/useViewActive.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
 
 import { API_URL } from '../../constants/api.js';
 const POLL_MS = 30000;
@@ -54,7 +56,12 @@ function ChipPopover({ rect, content, onClose }) {
   const popWidth = 340;
   const centered = rect.left + rect.width / 2 - popWidth / 2;
   const left = Math.max(8, Math.min(centered, window.innerWidth - popWidth - 8));
-  return (
+  // Portaled to document.body — found 2026-07-16 (user screenshot) rendering far
+  // off-position when nested inside the sticky, flex-wrapping chip row (ContextChips'
+  // own copy in particular). position:fixed should be viewport-relative regardless of
+  // DOM nesting, but portaling sidesteps any ancestor stacking-context quirk (transform/
+  // filter/contain on something in that tree) rather than chasing the exact cause.
+  return createPortal(
     <div ref={ref} style={{
       position: 'fixed', top: rect.bottom + 6, left,
       background: '#111827', border: '1px solid rgba(255,255,255,0.22)',
@@ -62,7 +69,8 @@ function ChipPopover({ rect, content, onClose }) {
       boxShadow: '0 12px 40px rgba(0,0,0,0.75)', minWidth: 250, maxWidth: 340,
     }}>
       {content}
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -112,21 +120,16 @@ function DataChip({ label, value, sub, subColor, color, flash, flashColor, extra
 // ── Size chip ──────────────────────────────────────────────────────────────────
 function SizeChip() {
   const isViewActive = useViewActive();
-  const [setup,   setSetup]   = useState(null);
   const [base,    setBase]    = useState(() => parseInt(localStorage.getItem('baseContracts') || '2'));
   const [editing, setEditing] = useState(false);
 
-  useEffect(() => {
-    if (!isViewActive) return;
-    const load = () =>
-      fetch(`${API_URL}/acd/setup-detection`).then(r => r.json()).then(d => {
-        const s = d.setup;
-        setSetup(s && !s.isExpired ? s : null);
-      }).catch(() => {});
-    load();
-    const iv = setInterval(load, 15000);
-    return () => clearInterval(iv);
-  }, [isViewActive]);
+  // Canonical (fastest, 15s) shared poller for /acd/setup-detection — App.jsx's
+  // LiveSessionPanel and TradeAlertBanner's health check both subscribe to this
+  // same cache entry now instead of firing their own fetches (found 2026-07-15;
+  // the ?date= param some of them used has no effect server-side — the endpoint's
+  // own response cache is keyed by a constant string, not the query string).
+  const [setupData] = useSharedPollData(isViewActive ? `${API_URL}/acd/setup-detection` : null, 15000);
+  const setup = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
 
   const changeBase = (val) => {
     const n = Math.max(1, Math.min(50, parseInt(val) || 1));
@@ -184,33 +187,36 @@ function SizeChip() {
 // ── All context chips — inline, each clickable for full detail ─────────────────
 function ContextChips({ date }) {
   const isViewActive = useViewActive();
-  const [ctx,        setCtx]        = useState(null);
-  const [flush,      setFlush]      = useState(null);
   const [ovn,        setOvn]        = useState(null);
-  const [trendWatch, setTrendWatch] = useState(null);
   const [popover,    setPopover]    = useState(null); // { key, rect, content }
+  const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+
+  // live-session-context and acd/trend-watch were independent fetches here too —
+  // this component was missed by the 2026-07-15 sweep that deduped everywhere
+  // else, found while re-measuring 2026-07-15. flush-risk and auction-read/auto
+  // don't have another subscriber elsewhere yet, so they stay a local poll.
+  const [ctxRaw]     = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${d}` : null, 30000);
+  const ctx = ctxRaw?.noData ? null : ctxRaw;
+  const [trendWatchRaw] = useSharedPollData(isViewActive ? `${API_URL}/acd/trend-watch` : null, 60000);
+  const trendWatch = trendWatchRaw?.error ? null : trendWatchRaw;
+  const [flush,      setFlush]      = useState(null);
 
   useEffect(() => {
     if (!isViewActive) return;
-    const d = date || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const load = async () => {
-      const [ctxR, flushR, autoR, twR] = await Promise.all([
-        fetch(`${API_URL}/morning-brief/live-session-context/${d}`).then(r => r.json()).catch(() => ({})),
+      const [flushR, autoR] = await Promise.all([
         fetch(`${API_URL}/morning-brief/flush-risk/${d}`).then(r => r.json()).catch(() => ({})),
         fetch(`${API_URL}/auction-read/auto`).then(r => r.json()).catch(() => ({})),
-        fetch(`${API_URL}/acd/trend-watch`).then(r => r.json()).catch(() => null),
       ]);
-      if (!ctxR?.noData) setCtx(ctxR);
       if (!flushR?.error) setFlush(flushR);
       const { overnight_inventory: inv, open_vs_prior_value: ovp, prior_day_profile: pdp,
               value_area_high: vah, value_area_low: val_, poc, inventory_reason: invReason } = autoR || {};
       if (inv || ovp || pdp) setOvn({ inv, ovp, pdp, vah, val: val_, poc, invReason });
-      if (twR && !twR.error) setTrendWatch(twR);
     };
     load();
     const iv = setInterval(load, POLL_MS);
     return () => clearInterval(iv);
-  }, [date, isViewActive]);
+  }, [d, isViewActive]);
 
   const openPop = (key, e, content) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -538,7 +544,6 @@ export function LiveReadModal({ onClose, suggestedPrice }) {
 // ── Main bar ───────────────────────────────────────────────────────────────────
 export default function MarketPulseBar() {
   const isViewActive = useViewActive();
-  const [pulse,     setPulse]     = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [pop,       setPop]       = useState(null);
   const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -547,18 +552,11 @@ export default function MarketPulseBar() {
     setPop(prev => prev?.key === key ? null : { key, rect, content });
   };
 
-  useEffect(() => {
-    if (!isViewActive) return;
-    const load = async () => {
-      try {
-        const d = await fetch(`${API_URL}/market/pulse`).then(r => r.json());
-        if (!d.error) setPulse(d);
-      } catch {}
-    };
-    load();
-    const iv = setInterval(load, POLL_MS);
-    return () => clearInterval(iv);
-  }, [isViewActive]);
+  // Shares its poll cycle with App.jsx's always-mounted SidebarVerdictChip
+  // (same URL/interval) instead of an independent fetch — see
+  // docs/OPEN_THREADS.md, dedup pass 2026-07-15.
+  const [pulseData] = useSharedPollData(isViewActive ? `${API_URL}/market/pulse` : null, POLL_MS);
+  const pulse = pulseData?.error ? null : pulseData;
 
   if (!pulse) return null;
 

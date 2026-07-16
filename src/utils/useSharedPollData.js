@@ -82,3 +82,11 @@ export function useSharedPollData(url, intervalMs = 60000) {
   }, [url, intervalMs]);
   return [state.data, state.error];
 }
+
+// For socket-driven "refresh now" call sites (e.g. a setup-detected event)
+// that used to fire their own imperative fetch instead of waiting out the
+// poll interval. Only refreshes an already-subscribed url — no-ops otherwise,
+// since firing a fetch nobody is listening to would just be a wasted request.
+export function refreshSharedPollData(url) {
+  if (_cache.has(url)) load(url);
+}

@@ -92,6 +92,7 @@ function conditionChips(req, ctx) {
 export default function BehavioralPatternsCard() {
   const isViewActive = useViewActive();
   const [patterns, setPatterns] = useState([]);
+  const [arData, setArData]     = useState({});   // overnight_inventory/open_vs_prior_value from auction-read/today
   const [ctx, setCtx]           = useState({});
   const [minWr, setMinWr]       = useState(75);
   const [loading, setLoading]   = useState(true);
@@ -101,6 +102,13 @@ export default function BehavioralPatternsCard() {
   // subscription hook; ctx derivation moved to its own effect reacting to it.
   const [ctxRes] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
 
+  // Was `useCallback(..., [ctxRes])` — meant load() only needed ctxRes to compute
+  // ctx, but the dependency made the whole 3-fetch Promise.all re-run every time
+  // ctxRes's shared poll ticked (every 30s), not just once on mount. Found
+  // 2026-07-15 while tracing why behavioral-patterns/auction-read/today were
+  // firing 3x per load instead of the expected StrictMode-only 2x. Split the
+  // fetch (below, no ctxRes dependency) from the ctx derivation (separate effect
+  // further down, which only recomputes — never refetches).
   const load = useCallback(async () => {
     try {
       const [pRes, todRes, arRes] = await Promise.all([
@@ -125,36 +133,42 @@ export default function BehavioralPatternsCard() {
         return true;
       });
       setPatterns(merged);
-
-      const sp  = ctxRes?.sessionPermissions || {};
-      const acd = ctxRes?.acd || {};
-      const now = new Date();
-      const etMin = (now.getUTCHours() - 4) * 60 + now.getUTCMinutes();
-
-      // IB break: if price closed above OR high at IB close → IB_ABOVE, below OR low → IB_BELOW
-      let ibBreak = null;
-      if (etMin >= 630) { // after 10:30 AM IB close
-        if (sp.ibBreakDir === 'ABOVE' || acd.ib_break === 'IB_ABOVE') ibBreak = 'IB_ABOVE';
-        else if (sp.ibBreakDir === 'BELOW' || acd.ib_break === 'IB_BELOW') ibBreak = 'IB_BELOW';
-      }
-
-      setCtx({
-        dayType:             sp.dayType || null,
-        aUpFired:            sp.aUpFired || false,
-        aDownFired:          sp.aDownFired || false,
-        firstHourDir:        sp.firstHourDir || null,
+      setArData({
         overnight_inventory: arRes.overnight_inventory || null,
         open_vs_prior_value: arRes.open_vs_prior_value || null,
-        ibBreak,
-        efficiencyTier:      sp.efficiencyTier || null,
-        dow:                 now.getDay(),
-        etMin,
       });
     } catch (_) {}
     setLoading(false);
-  }, [ctxRes]);
+  }, []);
 
   useEffect(() => { load(); const iv = setInterval(load, 120000); return () => clearInterval(iv); }, [load]);
+
+  useEffect(() => {
+    const sp  = ctxRes?.sessionPermissions || {};
+    const acd = ctxRes?.acd || {};
+    const now = new Date();
+    const etMin = (now.getUTCHours() - 4) * 60 + now.getUTCMinutes();
+
+    // IB break: if price closed above OR high at IB close → IB_ABOVE, below OR low → IB_BELOW
+    let ibBreak = null;
+    if (etMin >= 630) { // after 10:30 AM IB close
+      if (sp.ibBreakDir === 'ABOVE' || acd.ib_break === 'IB_ABOVE') ibBreak = 'IB_ABOVE';
+      else if (sp.ibBreakDir === 'BELOW' || acd.ib_break === 'IB_BELOW') ibBreak = 'IB_BELOW';
+    }
+
+    setCtx({
+      dayType:             sp.dayType || null,
+      aUpFired:            sp.aUpFired || false,
+      aDownFired:          sp.aDownFired || false,
+      firstHourDir:        sp.firstHourDir || null,
+      overnight_inventory: arData.overnight_inventory,
+      open_vs_prior_value: arData.open_vs_prior_value,
+      ibBreak,
+      efficiencyTier:      sp.efficiencyTier || null,
+      dow:                 now.getDay(),
+      etMin,
+    });
+  }, [ctxRes, arData]);
 
   const filtered = patterns.filter(p => Math.round((p.win_rate || 0) * 100) >= minWr);
 

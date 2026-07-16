@@ -10,7 +10,7 @@ import CollapsibleSection from '../components/shared/CollapsibleSection.jsx';
 import WinChip from '../components/shared/WinChip.jsx';
 import { Dot, useDataUpdateDot, useFieldUpdateDots } from '../components/shared/UpdateDot.jsx';
 import { useAcdLive } from '../utils/useAcdLive.js';
-import { useSharedPollData } from '../utils/useSharedPollData.js';
+import { useSharedPollData, refreshSharedPollData } from '../utils/useSharedPollData.js';
 import { ViewActiveProvider, useViewActive } from '../utils/useViewActive.js';
 import ErrorBoundary from '../components/shared/ErrorBoundary.jsx';
 import MarketPulseBar from '../components/dashboard/MarketPulseBar.jsx';
@@ -3665,22 +3665,22 @@ function EdgeSectionsPanel() {
   // This is the fastest-polling subscriber (30s), so it sets the shared cadence.
   const isViewActive = useViewActive();
   const [data, err] = useSharedPollData(isViewActive ? `${API_URL}/antigravity/edges-context` : null, 30000);
-  const [resolvedSetups, setResolvedSetups] = React.useState([]);
-  const [feedback, setFeedback] = React.useState([]);
   const [showClosed, setShowClosed] = React.useState(false);
-  const todayET = React.useMemo(() => new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }), []);
 
-  const loadResolved = () => {
-    fetch(`${API_URL}/setups/today`).then(r => r.json()).then(d => {
-      if (Array.isArray(d.setups)) setResolvedSetups(d.setups.filter(s => ['RESOLVED','EXPIRED'].includes(s.status)));
-    }).catch(() => {});
-  };
-  const loadFeedback = () => {
-    fetch(`${API_URL}/acd/feedback?days=1`).then(r => r.json()).then(d => {
-      if (d.feedback) setFeedback(d.feedback);
-    }).catch(() => {});
-  };
-  React.useEffect(() => { if (!isViewActive) return; loadResolved(); loadFeedback(); const iv = setInterval(() => { loadResolved(); loadFeedback(); }, 60000); return () => clearInterval(iv); }, [todayET, isViewActive]);
+  // Shared with PermSlipAndStackBar/App.jsx's LiveSessionPanel — was 3
+  // independent fetches of the same endpoint, found 2026-07-15.
+  const [setupsTodayData] = useSharedPollData(isViewActive ? `${API_URL}/setups/today` : null, 60000);
+  const resolvedSetups = Array.isArray(setupsTodayData?.setups)
+    ? setupsTodayData.setups.filter(s => ['RESOLVED', 'EXPIRED'].includes(s.status))
+    : [];
+
+  // Shared with SessionBiasPanel's own acd/feedback mount fetch — was 2
+  // independent fetchers of the same endpoint, found 2026-07-15. This one stays
+  // the canonical 60s poller since SessionBiasPanel only needs one snapshot.
+  const feedbackUrl = `${API_URL}/acd/feedback?days=1`;
+  const [feedbackData] = useSharedPollData(isViewActive ? feedbackUrl : null, 60000);
+  const feedback = feedbackData?.feedback || [];
+  const refreshFeedback = () => refreshSharedPollData(feedbackUrl);
 
   // Must be before early returns — hook call count must be constant across renders
   const feedbackBySetupId = React.useMemo(() => Object.fromEntries(feedback.map(f => [f.setup_id, f])), [feedback]);
@@ -3837,7 +3837,7 @@ function EdgeSectionsPanel() {
                       </div>
                     );
                   })()}
-                  <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={loadFeedback} />
+                  <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={refreshFeedback} />
                 </div>
               );
             })}
@@ -3888,7 +3888,7 @@ function EdgeSectionsPanel() {
                       <span style={{ color: '#ef4444' }}>Stop {fmtP(s.stop_level, 0)}</span>
                       <span style={{ color: '#34d399' }}>T1 {fmtP(s.t1_level, 0)}</span>
                     </div>
-                    <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={loadFeedback} />
+                    <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={refreshFeedback} />
                   </div>
                 );
               })}
@@ -4124,7 +4124,6 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
     return sessionStorage.getItem('acd-dash-tab') || 'dashboard';
   });
   React.useEffect(() => { sessionStorage.setItem('acd-dash-tab', tab); }, [tab]);
-  const [todayData, setTodayData] = React.useState(null);
   const [nl, setNl] = React.useState(null);
   const [logs, setLogs] = React.useState([]);
   const [pivot, setPivot] = React.useState(null);
@@ -4136,10 +4135,13 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
   // load. Deduped onto the shared subscription hook.
   const [forecast] = useSharedPollData(`${API_URL}/morning-brief/forecast/${todayET}`, 60000);
 
+  // Shared with LivePlaybookCard.jsx's own /acd/today poll — was 2 independent
+  // fetchers of the same endpoint, found 2026-07-15 in the same duplicate-fetch
+  // sweep as forecast above.
+  const [todayData] = useSharedPollData(isActive ? `${API_URL}/acd/today` : null, 30000);
 
   const loadAll = React.useCallback(() => {
     Promise.all([
-      fetch(`${API_URL}/acd/today`).then(r => r.json()).then(setTodayData).catch(console.error),
       fetch(`${API_URL}/acd/numberline`).then(r => r.json()).then(setNl).catch(console.error),
       fetch(`${API_URL}/acd/daily?days=60`).then(r => r.json()).then(setLogs).catch(console.error),
       fetch(`${API_URL}/acd/pivot/current`).then(r => r.json()).then(setPivot).catch(console.error),
@@ -4194,9 +4196,11 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
 
               {/* Col 1: Live market data — updates every bar */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 12, background: 'rgba(8,12,24,0.7)', borderRadius: 8, padding: 10 }}>
-                <ErrorBoundary name="Session Pulse">
-                  <SessionPulseCard />
-                </ErrorBoundary>
+                {/* SessionPulseCard removed from here 2026-07-16 — was rendering
+                    twice simultaneously with App.jsx's always-visible sidebar copy
+                    whenever this tab was open (found via screenshot, user report).
+                    The sidebar copy already covers every view, so this one was pure
+                    duplication, not a distinct instance. */}
                 <ErrorBoundary name="Volatility Regime" compact>
                   <VolatilityRegimeCard />
                 </ErrorBoundary>

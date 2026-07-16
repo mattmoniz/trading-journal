@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSharedPollData } from '../../utils/useSharedPollData.js';
 import { useViewActive } from '../../utils/useViewActive.js';
+import InfoTooltip from '../shared/InfoTooltip.jsx';
 
 import { API_URL } from '../../constants/api.js';
 
@@ -176,8 +177,11 @@ export default function SessionPulseCard() {
 
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.blue, textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'center' }}>
           Session Pulse
+          <InfoTooltip tooltip={{
+            text: 'A live read of how today\'s session is behaving, updated continuously.\n\n• ROTATIONS — how many meaningful back-and-forth swings so far. Low = trending/one-directional. High = choppy, range-bound.\n• VOLUME — today\'s volume vs. a normal session (1.0x = average).\n• DELTA — net buying vs. selling pressure right now (FLAT/BUYING/SELLING).\n• STRUCTURE — the shape price is tracing (e.g. higher lows, lower highs, mixed).\n\nClick any of the 4 boxes below for a fuller explanation of what that specific reading means right now.',
+          }} />
         </div>
         <div style={{ fontSize: 12, color: C.dim }}>
           {sessionChar?.replace(/_/g, ' ') || '—'}

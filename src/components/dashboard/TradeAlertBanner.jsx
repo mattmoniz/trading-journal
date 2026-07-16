@@ -1,6 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useContext } from 'react';
 
 import { API_URL } from '../../constants/api.js';
+import { useSharedPollData } from '../../utils/useSharedPollData.js';
+import { useViewActive } from '../../utils/useViewActive.js';
+import { CaseContext } from '../shared/CaseContext.jsx';
 
 // Parse direction + entry price out of an alert message
 function parseAlertMsg(msg) {
@@ -178,29 +181,36 @@ function QuickLogModal({ alerts, preDirection, prePrice, preSetups, onClose }) {
 
 // ── Main banner component ──────────────────────────────────────────────────────
 export default function TradeAlertBanner() {
+  const isViewActive = useViewActive();
   const [alerts, setAlerts]       = useState([]);
   const [dismissed, setDismissed] = useState(new Set());
   const [apiErrors, setApiErrors] = useState([]);
   const [logModal, setLogModal]   = useState(null); // { direction, price, preSetups }
 
+  // Setup-detection and live-session-context health checks reuse the same
+  // shared cache entries MarketPulseBar/SessionPulseCard/etc. already poll,
+  // instead of firing their own independent fetches every 15s (found
+  // 2026-07-15 — the ?date= param the old setup-detection check used has no
+  // effect server-side, so it's safe to share the plain-URL cache entry).
+  const todayDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const [, setupErr]   = useSharedPollData(isViewActive ? `${API_URL}/acd/setup-detection` : null, 15000);
+  const [, liveCtxErr] = useSharedPollData(isViewActive ? `${API_URL}/morning-brief/live-session-context/${todayDateStr}` : null, 30000);
+  // Case-engine health check reuses CaseProvider's own always-on poll (App.jsx
+  // wraps the whole app in it) instead of a separate fixed-asOf=09:30 fetch —
+  // same dedup pass, found 2026-07-15.
+  const { error: caseErr } = useContext(CaseContext);
+
   const fetchAlerts = useCallback(() => {
     const d = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
     const errors = [];
-    const checks = [
-      { name: 'Setup detection',   url: `${API_URL}/acd/setup-detection?date=${d}` },
-      { name: 'Trade alerts',      url: `${API_URL}/morning-brief/trade-alerts/${d}` },
-      { name: 'Live session',      url: `${API_URL}/morning-brief/live-session-context/${d}` },
-      { name: 'Case engine',       url: `${API_URL}/case?date=${d}&asOf=09:30` },
-    ];
-    Promise.all(checks.map(c =>
-      fetch(c.url).then(r => r.json()).then(data => {
-        if (data.error && !data.noData && !data.isWeekend) errors.push(`${c.name}: ${data.error}`);
-      }).catch(() => errors.push(`${c.name}: unreachable`))
-    )).then(() => setApiErrors(errors));
 
-    fetch(`${API_URL}/morning-brief/trade-alerts/${d}`)
+    // Trade-alerts response is reused for both the alerts list itself and its
+    // own health-check entry — this used to be two separate fetches of the
+    // same URL every 15s (see docs/OPEN_THREADS.md, dedup pass 2026-07-15).
+    const tradeAlertsPromise = fetch(`${API_URL}/morning-brief/trade-alerts/${d}`)
       .then(r => r.json())
       .then(data => {
+        if (data.error && !data.noData && !data.isWeekend) errors.push(`Trade alerts: ${data.error}`);
         const activeIds = new Set((data.alerts || []).map(a => a.id));
         setAlerts(prev => {
           const updated = [...prev];
@@ -221,7 +231,9 @@ export default function TradeAlertBanner() {
           return updated;
         });
       })
-      .catch(() => {});
+      .catch(() => errors.push('Trade alerts: unreachable'));
+
+    tradeAlertsPromise.then(() => setApiErrors(errors));
   }, []);
 
   useEffect(() => {
@@ -252,12 +264,18 @@ export default function TradeAlertBanner() {
   };
 
   const visible = alerts.filter(a => !dismissed.has(a.id) && !a.expired);
-  if (visible.length === 0 && apiErrors.length === 0) return null;
+  const allApiErrors = [
+    ...apiErrors,
+    ...(setupErr ? [`Setup detection: ${setupErr}`] : []),
+    ...(liveCtxErr ? [`Live session: ${liveCtxErr}`] : []),
+    ...(caseErr ? [`Case engine: ${caseErr}`] : []),
+  ];
+  if (visible.length === 0 && allApiErrors.length === 0) return null;
 
   return (
     <>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        {apiErrors.map((err, i) => (
+        {allApiErrors.map((err, i) => (
           <div key={`err-${i}`} style={{
             padding: '8px 12px', background: 'rgba(239,68,68,0.15)',
             border: '1px solid rgba(239,68,68,0.4)', borderLeft: '4px solid #ef4444',

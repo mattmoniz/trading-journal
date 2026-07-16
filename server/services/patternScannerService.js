@@ -661,7 +661,14 @@ export async function persistScan(tradeDate, result) {
 }
 
 // ─── CROSS-DAY PATTERN MINING ───────────────────────────────────────
-
+// ⚠️ DO NOT WIRE THIS UP AS-IS. Confirmed 2026-07-15: zero callers anywhere in
+// server/ or src/ (already dead — this quarantine doesn't change live behavior).
+// Violates two hard rules from CLAUDE.md simultaneously: hardcoded static
+// thresholds (gap_pt > 30, rotations_65pt >= 15, close_pct_of_range > 75/25 below)
+// instead of rolling-distribution-derived cutoffs, and N as low as 3
+// (highRot.length >= 3) instead of the N≥20 floor. Needs a real rewrite — reusing
+// computeRigor() from rigorDiagnostics.js and dynamic thresholds like every other
+// mining script in this codebase — before it's a candidate for any live surface.
 export async function minePatterns() {
   const days = await query(`SELECT * FROM session_analysis ORDER BY trade_date`);
   if (days.rows.length < 10) return { insights: ['Not enough data yet — need 10+ days'] };
