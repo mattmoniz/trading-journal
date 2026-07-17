@@ -281,7 +281,14 @@ src/
 │   │                        Converting to lazy dropped the main bundle 1,122KB→979KB raw
 │   │                        (302KB→273KB gzip); no other file needs a static PlaybookView import)
 │   ├── ScenarioTesterView.jsx, AllTradesView.jsx, LongTermStructureView.jsx
-│   └── RiskView.jsx, TearsheetView.jsx, SetupHistoryView.jsx, SettingsView.jsx
+│   ├── RiskView.jsx, TearsheetView.jsx, SetupHistoryView.jsx
+│   └── SettingsView.jsx (`ProcessHealthDashboard` — live status table for every
+│                        backfill/mining/calibration cron, driven by
+│                        /api/settings/process-health; `HowTheSystemLearns`, added
+│                        2026-07-17, moved here from AlphaEngineOverview after the user
+│                        pointed out this is the literal "system health" page and it
+│                        directly tracks the same scripts the diagram references — a
+│                        plain-language visual map of the closed-loop learning mechanism)
 ├── components/shared/
 │   ├── WinChip.jsx        # Win-rate chip: label + WR% + N, highlight/isBaseline props
 │   ├── ErrorBoundary.jsx
@@ -300,7 +307,7 @@ Views routed inside `App.jsx` → `src/views/`: `dashboard`, `all-trades`, `cale
 | Group | Components |
 |---|---|
 | Pre-market context | `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard` |
-| Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map, and (added 2026-07-17) a "How The System Learns" section with a plain-language visual map of the closed-loop mechanism (detection → resolution → weekly recalibration → SHADOW_VALIDATION, plus the parallel pattern-discovery loop and the data-sanity safety net) |
+| Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map |
 | Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `LevelMonitorPanel` |
 | Performance viz | `PnlCharts`, `StatsGrid` |

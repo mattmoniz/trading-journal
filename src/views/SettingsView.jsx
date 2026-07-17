@@ -172,6 +172,98 @@ function ProcessHealthDashboard() {
   );
 }
 
+// Added 2026-07-17 -- a plain-language, visual map of the actual learning mechanism
+// this Process Health table above tracks the machinery of. Originally placed on the
+// Alpha Engine Overview tab, moved here after the user pointed out this page (not that
+// one) is the literal "system health" page, and it directly tracks the same scripts
+// this diagram references (backtest_setup_status.mjs, update_optimal_stops.mjs,
+// data_sanity_audit.mjs, the pattern miners) -- a much more natural pairing than a
+// conceptual/narrative page. No diagram library exists in this codebase; built with
+// plain boxes + arrows using this file's own CSS-variable convention (theme-aware,
+// unlike AlphaEngineOverview's hardcoded dark-only hex palette).
+function LearningLoopStep({ title, desc, color, badge }) {
+  return (
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderLeft: `3px solid ${color}`, borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+        {badge && <span style={{ fontSize: 11, fontWeight: 700, color, background: color + '15', border: `1px solid ${color}40`, borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap' }}>{badge}</span>}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>{desc}</div>
+    </div>
+  );
+}
+
+function LearningLoopArrow({ label }) {
+  return (
+    <div style={{ textAlign: 'center', padding: '2px 0' }}>
+      <div style={{ color: 'var(--text-muted)', fontSize: 16, lineHeight: 1 }}>↓</div>
+      {label && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 1 }}>{label}</div>}
+    </div>
+  );
+}
+
+function LearningLoopDiagram() {
+  return (
+    <div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+        <LearningLoopStep
+          color="#3b82f6"
+          title="1. Live Detection"
+          desc="A setup fires on real price action and gets tagged origin_status: ACTIVE if the system currently trusts this setup_type, SHADOW if it's currently suppressed but still tracked in the background (so the suppression call can be checked later)."
+        />
+        <LearningLoopArrow />
+        <LearningLoopStep
+          color="#3b82f6"
+          title="2. Resolution"
+          desc="The trade hits target, stop, or times out — a real dollar P&L gets recorded. origin_status is locked in permanently at this point; nothing downstream is ever allowed to overwrite it."
+        />
+        <LearningLoopArrow label="accumulates over weeks" />
+        <LearningLoopStep
+          color="#f59e0b"
+          title="3. Recalibration (weekly)"
+          desc="SETUP_STATUS, OPTIMAL_STOP, and DAY_TYPE_ALPHA re-derive fresh from every real resolved trade — never a fixed number. A setup_type can flip SUPPRESS ↔ ACTIVE ↔ PROMOTE as real evidence accumulates."
+          badge="scripts/backtest_setup_status.mjs"
+        />
+        <LearningLoopArrow />
+        <LearningLoopStep
+          color="#22c55e"
+          title="4. Closed-Loop Validation"
+          desc="For every currently-suppressed setup_type, did its real SHADOW-origin trades actually keep losing money since the day it was suppressed? If forward data disagrees with the decision, it gets flagged for re-examination — not just trusted forever."
+          badge="SHADOW_VALIDATION"
+        />
+      </div>
+      <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: 11, marginTop: 6, marginBottom: 20 }}>
+        ↑ feeds directly into next week's recalibration — the loop is closed, not one-directional ↑
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderTop: '2px solid #a78bfa', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Parallel loop — Pattern Discovery</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>Two scanners (rolling 90-day + all-time) continuously mine cross-cutting patterns and keep an ACTIVE/DEGRADED lifecycle — a pattern that stops working gets retired automatically, not left to look valid forever. Each pattern's win rate at discovery is now snapshotted permanently, so a future check can compare what it claimed against what it actually did.</div>
+        </div>
+        <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderTop: '2px solid #64748b', borderRadius: 8, padding: '12px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Safety net — Data Sanity Audit</div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>A weekly automated check for the kind of silent data-corruption that can poison every step above — impossible values, a wrong constant masquerading as a real one — so a future error gets caught by a standing check, not another manual deep-dive.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HowTheSystemLearns() {
+  return (
+    <div style={{ marginTop: 24, marginBottom: 24 }}>
+      <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 6px 0', color: 'var(--text-primary)' }}>How The System Learns</h2>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16, lineHeight: 1.6 }}>
+        Every suppress/promote decision the processes above compute is derived from real resolved trades, re-checked weekly, and — as of 2026-07-17 — validated against its own forward outcome instead of just being trusted once and left alone. The loop is genuinely closed: a suppression decision that turns out wrong gets flagged, not silently kept forever.
+      </div>
+      <LearningLoopDiagram />
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 14 }}>
+        Honest caveat: the closed-loop tracking above only started 2026-07-09 — real (non-backfill) trade data is still thin (well under the N≥20 floor this system requires before trusting a number), so the validation step won't have much to say yet. That's expected, not a gap — it takes real calendar time to accumulate, not more code.
+      </div>
+    </div>
+  );
+}
+
 export default function SettingsView() {
   return (
     <div className="settings-view">
@@ -181,6 +273,7 @@ export default function SettingsView() {
 
       <div style={{ maxWidth: 1000 }}>
         <ProcessHealthDashboard />
+        <HowTheSystemLearns />
       </div>
 
       <div className="settings-card" style={{ marginTop: 24 }}>
