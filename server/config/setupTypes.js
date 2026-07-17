@@ -76,3 +76,28 @@ export const CONDITIONAL_VARIANTS = {
     monitorAtN: 50,
   },
 };
+
+/**
+ * Legacy hardcoded fallback for setup_types that don't yet have a SETUP_STATUS row at all
+ * (server/routes/acd.js's getShadowSetupTypes() only knows about types WITH a row --
+ * a query can't distinguish "confirmed fine to show" from "never assessed"). Hides
+ * brand-new/experimental types from the default Setup Log view until their first real
+ * calibration run.
+ *
+ * PRUNED 2026-07-17: this list previously had 27 entries; querying SETUP_STATUS directly
+ * showed 22 of them already had real rows (all correctly SUPPRESS/THIN_N today, so no
+ * visible bug yet) -- meaning the list had quietly become 81% dead weight, AND a live
+ * landmine: several of the redundant entries are THIN_N purely on small sample size with
+ * positive EV (e.g. C_PAIRED_SHORT N=6 EV=+$320, A_DOWN_WEAK N=5 EV=+$208.60) -- if any
+ * earns enough trades to hit PROMOTE later, this hardcoded list would keep hiding it
+ * forever, the exact same staleness bug SHADOW_SETUP_TYPES was replaced for. Pruned to
+ * only the 5 types confirmed to have zero SETUP_STATUS row at prune time.
+ *
+ * scripts/test_invariants.mjs check [6] re-verifies every entry here against live
+ * SETUP_STATUS on each run and fails if one has picked up a real row -- so this can't
+ * silently drift stale again the way the pruned version did. When that check fails,
+ * remove the flagged entry from this Set; do not just silence the check.
+ */
+export const UNCALIBRATED_SHADOW_TYPES = new Set([
+  'GAP_FILL_LONG', 'TRT_LONG_V2', 'TRT_SHORT_V2', 'A_UP_WEAK', 'A_DOWN_STRONG',
+]);

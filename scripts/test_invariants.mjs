@@ -39,12 +39,19 @@
  *    number labeled as describing it (ev_per_trade), that pairing needs its own standing
  *    check -- a code review catches "does this line look right," not "does this field's
  *    long-declared meaning still hold after a later feature was bolted on."
+ *
+ * 6. UNCALIBRATED_SHADOW_TYPES entries genuinely have no SETUP_STATUS row
+ *    Re-checks every entry in server/config/setupTypes.js's UNCALIBRATED_SHADOW_TYPES
+ *    against live SETUP_STATUS. Catches an entry that's picked up a real row since it was
+ *    added -- if left in place, it would keep hiding that type forever even after a
+ *    PROMOTE recommendation, since nothing else ever prunes a hardcoded Set. Pruned this
+ *    list from 27 to 5 entries 2026-07-17 after finding 22 were already stale.
  */
 
 import pg from 'pg';
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES } from '../server/config/setupTypes.js';
+import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 
 config();
@@ -302,6 +309,33 @@ async function main() {
       ok(`all ${evChecked} OPTIMAL_STOP rows' ev_per_trade match a fresh re-simulation of their own stop/target`);
     } else if (evChecked === 0) {
       warn('no OPTIMAL_STOP rows had enough matching trade data to re-verify ev_per_trade this run');
+    }
+
+    // ── 6. UNCALIBRATED_SHADOW_TYPES hasn't quietly picked up a real SETUP_STATUS row ──
+    console.log('\n[6] UNCALIBRATED_SHADOW_TYPES still genuinely uncalibrated');
+    // This list (server/config/setupTypes.js) exists only for setup_types with NO
+    // SETUP_STATUS row at all -- once a type is calibrated, getShadowSetupTypes()'s live
+    // query already handles it correctly (SUPPRESS/THIN_N hidden, PROMOTE/ACTIVE shown).
+    // An entry left here after calibration is dead weight at best; at worst it permanently
+    // hides a type that later earns PROMOTE, since nothing else ever removes an entry from
+    // a hardcoded Set. Found 2026-07-17: 22 of 27 entries already had real rows (all
+    // correctly SUPPRESS/THIN_N that day, so no visible bug then) -- pruned to 5. This
+    // check exists so the pruned version can't silently regress the same way.
+    {
+      const { rows: statusRows } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, recommendation
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const calibrated = new Map(statusRows.map(r => [r.signal_name, r.recommendation]));
+      const stale = [...UNCALIBRATED_SHADOW_TYPES].filter(t => calibrated.has(t));
+      if (stale.length === 0) {
+        ok(`all ${UNCALIBRATED_SHADOW_TYPES.size} UNCALIBRATED_SHADOW_TYPES entries genuinely have no SETUP_STATUS row`);
+      } else {
+        for (const t of stale) {
+          fail(`UNCALIBRATED_SHADOW_TYPES has '${t}' but it now has a real SETUP_STATUS row (recommendation=${calibrated.get(t)}) — remove it from server/config/setupTypes.js's UNCALIBRATED_SHADOW_TYPES; the live getShadowSetupTypes() query already covers it correctly`);
+        }
+      }
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────

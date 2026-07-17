@@ -26,6 +26,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange } from '../services/developingValueService.js';
+import { UNCALIBRATED_SHADOW_TYPES } from '../config/setupTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -6340,20 +6341,10 @@ export default function createACDRouter(io) {
   }
   // Legacy hardcoded fallback for setup_types that don't yet have a SETUP_STATUS row at all
   // (e.g. brand-new/shadow-only types never calibrated) — still shown as shadow so they
-  // don't leak into the default view before their first calibration run.
-  const UNCALIBRATED_SHADOW_TYPES = new Set([
-    'TRT_LONG','TRT_SHORT','TRT_LONG_V2','TRT_SHORT_V2','TRT_MAH_SHORT','TRT_MAH_LONG',
-    'STOP_SWEEP_LONG','STOP_SWEEP_SHORT',
-    'VWAP_MAGNET_LONG','VWAP_MAGNET_SHORT',
-    'ZONE_EDGE_FADE',
-    'A_DOWN_WEAK','A_UP_WEAK','A_UP_STRONG','A_DOWN_STRONG',
-    'OPEN_TEST_DRIVE_LONG','OPEN_TEST_DRIVE_SHORT',
-    'C_STANDALONE_UP','C_STANDALONE_DOWN',
-    'C_PAIRED_LONG','C_PAIRED_SHORT',
-    'FAILED_AUCTION_LONG','FAILED_AUCTION_SHORT',
-    'BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
-    'GAP_FILL_LONG','GAP_FILL_SHORT',
-  ]);
+  // don't leak into the default view before their first calibration run. Defined in
+  // server/config/setupTypes.js (not inline here) so scripts/test_invariants.mjs can import
+  // the real list and verify none of its entries have quietly picked up a real SETUP_STATUS
+  // row — see that file's comment for the 2026-07-17 prune (27 entries -> 5) this replaced.
 
   // ── GET /api/setups/history ───────────────────────────────────────────────
   router.get('/setups/history', async (req, res) => {
