@@ -52,4 +52,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # ~194s for 417 RTH trading days (2026-07-17) -- cheap enough for weekly, not nightly.
 /usr/bin/node scripts/mine_level_fades_alltime.mjs
 
+# Standing data-sanity audit (2026-07-17) -- catches the class of bug found manually this
+# session (impossible MAE/MFE values, a non-uniform $/pt constant defended by a false
+# "verified" comment) automatically instead of requiring another multi-hour deep-dive to
+# find the next instance. Non-zero exit is expected right now (1 known/standing flag: ES
+# symbol data in price_bars_primary) -- not a failure, don't treat this script's exit
+# code as a build-breaking signal in this cron; read its output instead.
+/usr/bin/node scripts/data_sanity_audit.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

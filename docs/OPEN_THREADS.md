@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## 🆕 2026-07-17: standing data-sanity audit built (item 4 of the reflection pass) — institutionalizes today's manual bug-catching
+
+Follow-on to the day's real findings (MAE/MFE ES-contamination, `DEFAULT_DPP=5`) — both were caught by manually re-deriving numbers from scratch, which shouldn't require another multi-hour session for the next occurrence. Built `scripts/data_sanity_audit.mjs`, wired into `run_weekly_backtests.sh`:
+1. **MAE/MFE outliers** — self-calibrating (flags anything >10x the table's own p95), not a hardcoded point threshold.
+2. **`$/pt` uniformity** — implied `$/pt` per setup_type (same method used to catch `DEFAULT_DPP=5`) compared against `LIVE_INSTRUMENT.dollarsPerPoint` (±10% tolerance).
+3. **`price_bars_primary` symbol check** — flags any symbol beyond the known set (`NQ`). Would have caught the ES-contamination bug immediately, before any downstream MAE/MFE computation touched it.
+4. **`performance_audit` bounds sanity** — win_rate/sample_size can't be genuinely impossible values.
+
+**Found something building check 4**: `performance_audit.win_rate` is not uniformly scaled — `RESEARCH_CLAIM` and `LEVEL_FADE_AUDIT` store it as 0-100 percentage, everything else as 0-1 decimal, in the same column. Real inconsistency (anyone averaging `win_rate` across signal_types without normalizing gets nonsense), but out of scope for this check to fix — flagged as informational output, not treated as an anomaly (the check itself was initially too strict and produced false positives on this before being corrected).
+
+**Current state**: exit code 1, one standing flag — the `ES` symbol data is still physically present in `price_bars_primary` (2023-11-15 to 2023-12-15). The MAE/MFE fix corrected the *queries* that read it (added `symbol='NQ'` filters), not the underlying data — deliberately left in place rather than deleted, since it's not itself wrong data, just a landmine for any *future* query over that date range that forgets the filter. This is expected, not a regression — the check exists specifically to keep reminding future sessions of this risk.
+
 ## 🆕 2026-07-17: closed-loop learning gap fixed — `origin_status` column, historical reconstruction, `expireStaleSetups()` fix, `SHADOW_VALIDATION` hook section
 
 Full implementation of Opus Audit #3's recommendation (`scratch/opus_audit_3_results.md`, dispatched after investigating "can we tell if the system is learning" surfaced that suppression decisions had no way to be validated against their own forward outcomes).
