@@ -160,15 +160,26 @@ async function main() {
 
   console.log(`Mined ${minedEdges.length} setup segments (N>=${MIN_N} both baseline and slice). Saving to cache table...`);
 
-  await query('DELETE FROM dynamic_edges_mining');
+  // FIXED 2026-07-17 (Opus Audit #3 finding 3.3): this used to `DELETE FROM
+  // dynamic_edges_mining` before every weekly run, unconditionally destroying all prior
+  // weeks' history -- meaning "did this edge's WR at discovery actually hold going
+  // forward" was structurally unanswerable, the mining-table analogue of the
+  // active_setups origin_status defect. Now append-only, one row per (setup_type,
+  // dimension, segment, run_date) -- ON CONFLICT handles a same-day re-run without
+  // creating duplicates. Live reads (server/routes/antigravityEdges.js) must scope to
+  // the latest run_date per combo, not the whole table -- see that file's own comment.
+  const todayStr = new Date().toISOString().slice(0, 10);
   for (const e of minedEdges) {
     await query(`
-      INSERT INTO dynamic_edges_mining (setup_type, dimension, segment, tested_n, wins, win_rate, baseline_n, baseline_win_rate, deviation, z_score, p_value, status, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
+      INSERT INTO dynamic_edges_mining (setup_type, dimension, segment, tested_n, wins, win_rate, baseline_n, baseline_win_rate, deviation, z_score, p_value, status, run_date, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+      ON CONFLICT (setup_type, dimension, segment, run_date) DO UPDATE SET
+        tested_n=$4, wins=$5, win_rate=$6, baseline_n=$7, baseline_win_rate=$8,
+        deviation=$9, z_score=$10, p_value=$11, status=$12, updated_at=NOW()
     `, [
       e.setupType, e.dimension, e.segment, e.n, e.wins, Math.round(e.winRate * 1000) / 10,
       e.baselineN, Math.round(e.baselineWinRate * 1000) / 10, Math.round(e.deviation * 1000) / 10,
-      Math.round(e.zScore * 100) / 100, Math.round(e.pValue * 10000) / 10000, e.status
+      Math.round(e.zScore * 100) / 100, Math.round(e.pValue * 10000) / 10000, e.status, todayStr
     ]);
   }
 

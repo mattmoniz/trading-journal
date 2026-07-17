@@ -1316,7 +1316,8 @@ CREATE TABLE public.dynamic_edges_mining (
     z_score numeric(5,2) NOT NULL,
     p_value numeric(5,4) NOT NULL,
     status text NOT NULL,
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    run_date date NOT NULL
 );
 
 
@@ -1702,7 +1703,11 @@ CREATE TABLE public.pattern_discoveries (
     status character varying(20) DEFAULT 'ACTIVE'::character varying,
     notified boolean DEFAULT false,
     context jsonb DEFAULT '{}'::jsonb,
-    window_type character varying(20) DEFAULT 'ROLLING_90D'::character varying
+    window_type character varying(20) DEFAULT 'ROLLING_90D'::character varying,
+    win_rate_at_first_seen double precision,
+    sample_size_at_first_seen integer,
+    net_pnl_at_first_seen double precision,
+    degraded_on date
 );
 
 
@@ -6242,11 +6247,11 @@ ALTER TABLE ONLY public.trading_sessions
 
 
 --
--- Name: dynamic_edges_mining uniq_edge; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: dynamic_edges_mining uniq_edge_run; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.dynamic_edges_mining
-    ADD CONSTRAINT uniq_edge UNIQUE (setup_type, dimension, segment);
+    ADD CONSTRAINT uniq_edge_run UNIQUE (setup_type, dimension, segment, run_date);
 
 
 --

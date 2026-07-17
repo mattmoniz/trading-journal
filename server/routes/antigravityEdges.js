@@ -481,11 +481,16 @@ async function getLiveEdgesContext() {
       FROM setup_daytype_winrates
       WHERE day_type = 'OVERALL' AND computed_date = (SELECT MAX(computed_date) FROM setup_daytype_winrates)
     `),
-    // Dynamic overnight mined edges
+    // Dynamic overnight mined edges -- 2026-07-17: dynamic_edges_mining became append-only
+    // (one row per run_date, was previously wiped+rebuilt every run) so this must scope to
+    // each (setup_type,dimension,segment)'s LATEST run_date, or a stale prior week's row
+    // would double up with the current one instead of being superseded by it.
     query(`
-      SELECT setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
+      SELECT DISTINCT ON (setup_type, dimension, segment)
+        setup_type, dimension, segment, win_rate::float as wr, baseline_win_rate::float as base_wr, deviation::float as deviation, status, p_value::float as p_value
       FROM dynamic_edges_mining
       WHERE status IN ('POSITIVE_BOOSTER', 'NEGATIVE_DRAG')
+      ORDER BY setup_type, dimension, segment, run_date DESC
     `).catch(err => { console.error('Error fetching dynamic_edges_mining:', err); return { rows: [] }; }),
     // Confluence levels (3 prior days) — also used for vaAtIb check (replaces separate pvQ)
     query(`

@@ -991,9 +991,14 @@ export async function mineLevelFades({ windowDays = 90, windowType = 'ROLLING_90
       rigor: { distinct_dates: disc.rigor.distinctDates, top5_day_pct: disc.rigor.top5DayPct, three_way_stable: disc.rigor.stable, thirds: disc.rigor.thirds },
     });
     if (existing.rows.length === 0) {
+      // win_rate_at_first_seen/sample_size_at_first_seen/net_pnl_at_first_seen (added
+      // 2026-07-17, Opus Audit #3 finding 3.2): set ONCE here, never touched by the
+      // UPDATE branch below -- preserves what this pattern actually claimed at
+      // discovery, so a future check can compare it against real forward performance
+      // instead of only ever seeing the latest re-scan's numbers.
       await query(
-        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, context, window_type)
-         VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8)`,
+        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, context, window_type, win_rate_at_first_seen, sample_size_at_first_seen, net_pnl_at_first_seen)
+         VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8,$3,$4,$5)`,
         [disc.patternKey, disc.dimension, disc.wr / 100, disc.n, disc.netPnl, todayStr, context, windowType]);
       newDiscoveries.push(disc);
     } else {
@@ -1014,7 +1019,9 @@ export async function mineLevelFades({ windowDays = 90, windowType = 'ROLLING_90
   const activeKeys = new Set(discoveries.map(d => d.patternKey));
   for (const row of allActive.rows) {
     if (!activeKeys.has(row.pattern_key)) {
-      await query(`UPDATE pattern_discoveries SET status='DEGRADED', last_updated=$2 WHERE id=$1`, [row.id, todayStr]);
+      // degraded_on set once here (2026-07-17) -- never touched again, unlike
+      // last_updated which would move if a DEGRADED pattern's row were ever revisited.
+      await query(`UPDATE pattern_discoveries SET status='DEGRADED', last_updated=$2, degraded_on=$2 WHERE id=$1`, [row.id, todayStr]);
     }
   }
 
