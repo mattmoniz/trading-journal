@@ -899,8 +899,16 @@ router.get('/pipeline-status', async (req, res) => {
     PERMISSION_SLIP:     { cat: 'Context', desc: 'Session bias hit rates by context combo: A Up+NL30 72.1% N=140. Used in SessionBiasPanel for directional sizing confidence.', schedule: 'Sun (weekly)', scripts: 'backtest_permission_slips.mjs', maxAge: 8 },
     SETUP_ANTICIPATION:  { cat: 'Context', desc: 'P(setup fires | day_type, DOW) × avg_pnl. Powers top-3 forecast in SessionForecastPanel. Top: BALANCE→OR_HIGH_FADE_SHORT 29% fire rate / 84% WR.', schedule: 'Sun 8:30 PM ET', scripts: 'backtest_level_approach.js', maxAge: 8 },
     PULSE_SCORE_AUDIT:   { cat: 'Context', desc: 'Pulse score (composite market-read: delta, volume, range, momentum) calibration vs next-day outcomes. Validates the scoring model.', schedule: 'Sun (weekly)', scripts: 'backtest_pulse_score.mjs', maxAge: 8 },
-    TOD_ALPHA:           { cat: 'Context', desc: 'Time-of-day alpha per setup type: which setups outperform at which hours of the RTH session.', schedule: 'Sun (weekly)', scripts: 'mine_tod_patterns.mjs', maxAge: 8 },
-    DOW_TOD_ALPHA:       { cat: 'Context', desc: 'DOW × time-of-day cross-analysis (e.g. Friday morning fades vs Thursday afternoon setups).', schedule: 'Sun (weekly)', scripts: 'mine_tod_patterns.mjs', maxAge: 8 },
+    // TOD_ALPHA/DOW_TOD_ALPHA corrected 2026-07-16 (self-recalibration audit) — traced via
+    // `git log --all -S"TOD_ALPHA"`: both came from a one-off scratch/calculate_dow_tod.mjs
+    // run (Jul 8, never committed to git, not a real pipeline script) whose output got
+    // written to performance_audit once. The next day's commit (de3e407, which built this
+    // whole META table) guessed mine_tod_patterns.mjs was the source by name-similarity
+    // without checking — it only ever writes TOD_PATTERN (a separate, real, still-weekly
+    // signal listed below). Neither signal_type is read anywhere outside this dashboard
+    // (grep-verified), so this was a display-accuracy bug, not a live-decision one.
+    TOD_ALPHA:           { cat: 'Context', desc: 'Time-of-day alpha per setup type: which setups outperform at which hours of the RTH session. One-off manual analysis (Jul 2026) — no recurring script produces this; will never refresh unless promoted to a real pipeline.', schedule: 'One-off (no script) — data frozen', scripts: 'none (was scratch/calculate_dow_tod.mjs, never committed)', maxAge: 9999 },
+    DOW_TOD_ALPHA:       { cat: 'Context', desc: 'DOW × time-of-day cross-analysis (e.g. Friday morning fades vs Thursday afternoon setups). One-off manual analysis (Jul 2026) — no recurring script produces this; will never refresh unless promoted to a real pipeline.', schedule: 'One-off (no script) — data frozen', scripts: 'none (was scratch/calculate_dow_tod.mjs, never committed)', maxAge: 9999 },
     CONFLUENCE_AUDIT:    { cat: 'Context', desc: 'Level pair confluence at 15pt proximity: 108 TRADE-rated pairs. Top: CAM_S2+PD_IB_HIGH 75.5% EV=$55. Used in SessionForecastPanel.', schedule: 'Sun (weekly)', scripts: 'backtest_confluence.js', maxAge: 8 },
     AI_SETUP_REVIEW:     { cat: 'Coaching', desc: 'Per-session AI review of each trade: stop/entry/T1 quality rating (1–5⭐). Raw input for AI_SETUP_AGG.', schedule: 'Daily 4:35 PM ET', scripts: 'daily_coaching.js', maxAge: 2 },
     AI_SETUP_AGG:        { cat: 'Coaching', desc: 'Aggregated AI ratings per setup type — flags NEEDS_ADJUST when avg<3.5⭐ N≥20. Shown in Setup Calibration panel.', schedule: 'Daily 4:35 PM ET', scripts: 'aggregate_ai_setup_reviews.js', maxAge: 2 },
@@ -908,10 +916,22 @@ router.get('/pipeline-status', async (req, res) => {
     BEHAVIORAL_PATTERN:  { cat: 'Coaching', desc: 'Specific behavioral patterns mined from coaching history text. Input to BEHAVIORAL_STATS.', schedule: 'Sun (weekly)', scripts: 'mine_behavioral_patterns.mjs', maxAge: 8 },
     LEVEL_FADE_AUDIT:    { cat: 'Specialized', desc: 'Per-level fade edge audit: EV/WR/N for each of the 50+ key levels. Identifies which levels are worth tracking vs noise.', schedule: 'Sun 9:22 PM ET', scripts: 'level_fade_audit.mjs', maxAge: 8 },
     MAE_MFE_AUDIT:       { cat: 'Specialized', desc: 'MAE/MFE distribution health: verifies backfill completeness and that stop/target distributions are well-formed and not skewed by outliers.', schedule: 'Sun 8:00 PM ET', scripts: 'audit_mae_mfe.mjs', maxAge: 8 },
-    SYSTEM_BACKTEST:     { cat: 'Specialized', desc: 'Full system-level backtest across all trade types and regime conditions. Broader than UNIFIED_BACKTEST — includes combo and contextual signals.', schedule: 'Weekly', scripts: 'backtest_full_system.js', maxAge: 10 },
+    // SYSTEM_BACKTEST's script corrected 2026-07-16 (self-recalibration audit) --
+    // backtest_full_system.js was archived 2026-07-09 (scripts/archive/); the real,
+    // current writer is backtest_unified.js (confirmed via grep + it's genuinely fresh,
+    // 7 distinct run_dates) -- this entry's schedule/freshness claim was already
+    // accidentally correct, only the script name was stale.
+    SYSTEM_BACKTEST:     { cat: 'Specialized', desc: 'Full system-level backtest across all trade types and regime conditions. Broader than UNIFIED_BACKTEST — includes combo and contextual signals.', schedule: 'Sun 9:10 PM ET', scripts: 'backtest_unified.js', maxAge: 10 },
     LEVEL_PATTERN:       { cat: 'Specialized', desc: 'Pattern recognition at key levels (absorption bars, volume spikes, reclaim patterns). Feeds into sizeMultiplier confluence factor.', schedule: 'Weekly', scripts: 'backtest_level_patterns.mjs', maxAge: 10 },
     TOD_PATTERN:         { cat: 'Specialized', desc: 'Time-of-day pattern mining: recurring price behavior at specific intraday times.', schedule: 'Weekly', scripts: 'mine_tod_patterns.mjs', maxAge: 10 },
-    LEVEL_FADE_DELTA:    { cat: 'Specialized', desc: 'Delta confirmation at level fades — net buyer/seller imbalance at approach validates +0.15 sizeMultiplier factor.', schedule: 'Weekly', scripts: 'backtest_level_patterns.mjs', maxAge: 10 },
+    // LEVEL_FADE_DELTA corrected 2026-07-16 (self-recalibration audit) -- traced via
+    // `git log --all -S"LEVEL_FADE_DELTA"`: real original writer was
+    // scripts/backtest_session_delta.mjs, archived in the SAME commit (de3e407) that
+    // built this META table -- unlike MIDPOINT_FADE_AUDIT/PD_IB_AUDIT below (correctly
+    // marked frozen in that same commit), this one was pointed at backtest_level_patterns.mjs
+    // instead, which only ever writes LEVEL_PATTERN (above), never this signal_type. Not
+    // read anywhere outside this dashboard (grep-verified) -- display-accuracy bug only.
+    LEVEL_FADE_DELTA:    { cat: 'Specialized', desc: 'Delta confirmation at level fades — net buyer/seller imbalance at approach; informed the live +0.15 sizeMultiplier "buyersAtLevel/sellersAtLevel" factor (acd.js ~line 5061), which is computed fresh from live bars, not read from this table. Script archived 2026-07-09 (scripts/archive/backtest_session_delta.mjs) — data frozen.', schedule: 'Historical (script archived 2026-07-09)', scripts: 'backtest_session_delta.mjs (archived)', maxAge: 9999 },
     MIDPOINT_FADE_AUDIT: { cat: 'Specialized', desc: 'High-N historical baseline (N=293–483/level) for IB_MID, OR_MID, OR_MID_AFTER_IB, PD_MID, SESSION_MID, VWAP. Script archived — data is frozen 2024 reference. UNIFIED_BACKTEST covers directional splits for active levels.', schedule: 'Historical (script archived 2026-07-09)', scripts: 'midpoint_fade_audit.mjs', maxAge: 9999 },
     PD_IB_AUDIT:         { cat: 'Specialized', desc: 'High-N historical baseline (N=167–297/level) for PD_IB_HIGH/LOW/MID, PD_OR_HIGH/LOW, PD_OR_MID, PD_SESSION_MID. Script archived — data frozen. PD_OR_HIGH and PD_OR_LOW have no UNIFIED_BACKTEST directional equivalent yet.', schedule: 'Historical (script archived 2026-07-09)', scripts: 'pd_ib_or_fade_audit.mjs', maxAge: 9999 },
   };

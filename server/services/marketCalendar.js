@@ -91,9 +91,9 @@ export function getMarketStatus(dateStr) {
   return null;
 }
 
-export function isHoliday(dateStr) {
-  return HOLIDAYS.has(dateStr);
-}
+// isHoliday() removed 2026-07-16 (dead-ends audit) -- exported, zero callers anywhere
+// in the repo (grep-verified). HOLIDAYS itself is still used by getMarketStatus() above.
+// git history has it if ever needed again.
 
 export function getEarlyCloseMinute(dateStr) {
   return EARLY_CLOSES.has(dateStr) ? 780 : null; // 780 = 1:00 PM ET; null = normal 4 PM close

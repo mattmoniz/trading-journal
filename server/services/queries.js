@@ -30,59 +30,9 @@ export async function getNL({ asOf = null } = {}) {
 
 // ── Value area (VAH / VAL / POC) from price bars ────────────────────────────
 
-/**
- * Compute VAH, VAL, POC for a single RTH session date.
- * Uses standard 70% value area (35% each side of POC).
- */
-export async function getValueArea(date) {
-  const r = await query(`
-    WITH vp AS (
-      SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
-        AND EXTRACT(hour FROM ts) < 16
-      GROUP BY ROUND(low/0.25)*0.25
-    ), total AS (SELECT SUM(vol) as t FROM vp),
-    poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-    SELECT p.poc_px::float as poc,
-      (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x
-        WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-      (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x
-        WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-    FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-  `, [date]);
-  const row = r.rows[0];
-  return row ? { poc: row.poc, vah: row.vah, val: row.val } : null;
-}
-
-/**
- * Compute prior month's value area (VAH/VAL/POC).
- * Used for PM VAH/VAL reference levels.
- */
-export async function getPriorMonthValueArea(forDate) {
-  const [yr, mo] = forDate.split('-').map(Number);
-  const pmStart = new Date(Date.UTC(yr, mo - 2, 1)).toISOString().split('T')[0];
-  const pmEnd   = new Date(Date.UTC(yr, mo - 1, 1)).toISOString().split('T')[0];
-  const r = await query(`
-    WITH vp AS (
-      SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-      FROM price_bars_primary WHERE symbol='NQ'
-        AND ts >= $1::date AND ts < $2::date
-        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
-        AND EXTRACT(hour FROM ts) < 16
-      GROUP BY ROUND(low/0.25)*0.25
-    ), total AS (SELECT SUM(vol) as t FROM vp),
-    poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-    SELECT p.poc_px::float as poc,
-      (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x
-        WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-      (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x
-        WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-    FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-  `, [pmStart, pmEnd]);
-  const row = r.rows[0];
-  return row ? { poc: row.poc, vah: row.vah, val: row.val } : null;
-}
+// getValueArea() and getPriorMonthValueArea() removed 2026-07-16 (dead-ends audit) --
+// both exported, zero callers anywhere in the repo (grep-verified). git history has
+// them if ever needed again -- e.g. for a real PM VAH/VAL reference level feature.
 
 // ── RTH bar query helper ─────────────────────────────────────────────────────
 
@@ -264,19 +214,12 @@ export function computeDynamicConviction(base, levelKey, { nl30 = 0, structuralS
   };
 }
 
-/**
- * Derive NL30 bucket used by condition_memory keys.
- */
-export function nl30ToBucket(nl30) {
-  return nl30 > 15 ? 'STRONG_BULL' : nl30 > 9 ? 'BULL' : nl30 < -15 ? 'STRONG_BEAR' : nl30 < -9 ? 'BEAR' : 'RANGING';
-}
-
-/**
- * Derive NL30 trend label.
- */
-export function nl30ToTrend(nl30) {
-  return nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
-}
+// nl30ToBucket()/nl30ToTrend() removed 2026-07-16 (dead-ends audit) -- both exported,
+// zero callers anywhere in the repo (grep-verified). Superseded by the live NL30
+// bucketing in acd.js's sizeMultiplier IIFE (_lfNl30Bucket: MILD_BULL/STRONG_BULL/
+// MILD_BEAR/STRONG_BEAR/NEUTRAL), a different scheme with different bucket names --
+// these two used static 9/15 literal thresholds, also a "no static thresholds" hard-
+// rule violation, moot now that they're gone. git history has them if ever needed.
 
 /**
  * Rolling VWAP distance std — single source of truth for VWAP_MAGNET threshold.

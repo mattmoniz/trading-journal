@@ -5,9 +5,13 @@
  * did price hit T1 or stop first after the setup fired?
  *
  * Called by:
- *   POST /api/setups/backtest/run   (API)
- *   scripts/backtest_setups.js      (standalone CLI)
+ *   POST /api/setups/backtest/run   (API, server/routes/setups.js — not currently
+ *     called from any frontend, reachable via curl/admin use only, confirmed 2026-07-16)
+ *
+ * scripts/backtest_setups.js (the standalone CLI this docstring used to also list) was
+ * archived 2026-07-09 (scripts/archive/) -- corrected here 2026-07-16, was stale for a week.
  */
+import { LIVE_INSTRUMENT } from '../config/instruments.js';
 
 function isLong(setupType) {
   return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
@@ -139,12 +143,16 @@ export async function runSetupBacktest(db, { verbose = false, setupIds = null } 
 
       const hitT1First = hitT1 && !hitStop;
 
-      // P&L: NQ full contract = $5/point, $5 round-trip commission
+      // server/config/instruments.js is the single source of truth for this — found
+      // 2026-07-16 (SSOT audit) this line hardcoded $5/point + $5 commission, doubly
+      // wrong: it's not even real NQ's $20/pt, and this journal trades MNQ ($2/pt) live
+      // anyway. Overstated every computed_pnl_1contract row from this pipeline ~2.5x.
+      const { dollarsPerPoint: PNL_PER_POINT, commissionPerRoundTrip: COMMISSION } = LIVE_INSTRUMENT;
       let pnl = null;
       if (hitT1First) {
-        pnl = (long ? (t1 - entry) : (entry - t1)) * 5 - 5;
+        pnl = (long ? (t1 - entry) : (entry - t1)) * PNL_PER_POINT - COMMISSION;
       } else if (hitStop) {
-        pnl = (long ? (stop - entry) : (entry - stop)) * 5 - 5;
+        pnl = (long ? (stop - entry) : (entry - stop)) * PNL_PER_POINT - COMMISSION;
       }
 
       await db.query(`
@@ -231,22 +239,5 @@ export async function getBacktestEdge(db, { minSamples = 1 } = {}) {
   return rows;
 }
 
-/**
- * Get measured win rate for a specific setup_type (all conditions pooled).
- * Returns null when fewer than minSamples resolved trades exist.
- */
-export async function getMeasuredWinRate(db, setupType, { minSamples = 10 } = {}) {
-  const { rows } = await db.query(`
-    SELECT
-      COUNT(*) FILTER (WHERE hit_t1_first)               as wins,
-      COUNT(*) FILTER (WHERE hit_stop AND NOT COALESCE(hit_t1_first,false)) as losses
-    FROM setup_outcome_backtest
-    WHERE setup_type = $1
-  `, [setupType]);
-
-  if (!rows.length) return null;
-  const { wins, losses } = rows[0];
-  const resolved = Number(wins) + Number(losses);
-  if (resolved < minSamples) return null;
-  return Number(wins) / resolved;
-}
+// getMeasuredWinRate() removed 2026-07-16 (dead-ends audit) -- exported, zero callers
+// anywhere in the repo (grep-verified). git history has it if ever needed again.

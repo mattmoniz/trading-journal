@@ -70,23 +70,8 @@ export async function tagTradesForDate(logDate) {
   return tagged;
 }
 
-export async function tagAllHistorical() {
-  const dates = await query(`
-    SELECT DISTINCT log_date::text AS d
-    FROM trades
-    WHERE custom_fields->'sierra_data'->>'Entry DateTime' LIKE '% BP'
-      AND level_proximity IS NULL
-      AND entry_price IS NOT NULL
-    ORDER BY d
-  `);
-
-  let total = 0;
-  for (const { d } of dates.rows) {
-    const n = await tagTradesForDate(d);
-    if (n > 0) {
-      console.log(`  ${d}: tagged ${n} trades`);
-      total += n;
-    }
-  }
-  return total;
-}
+// tagAllHistorical() removed 2026-07-16 (dead-ends audit) -- exported, zero callers
+// anywhere in the repo, no scripts/ CLI entry point either (grep-verified) -- unlike
+// e.g. replay_all_setups.js/populate_setup_daytype_winrates.js (a genuine deliberate
+// manual-backfill pair, kept), this one has no driver at all. git history has it if a
+// real bulk-retag-historical-trades need comes up.
