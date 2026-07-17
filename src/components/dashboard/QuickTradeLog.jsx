@@ -461,6 +461,65 @@ function TradeFeedbackBar({ setupCard }) {
   );
 }
 
+// Deliberately hard-to-miss, unlike the passive dot below — built 2026-07-16 per
+// explicit user request: a quiet badge is too easy to miss, and it "cant be something
+// is a minute late... it has to be a day late or more". Keys off criticallyStaleProcesses
+// (server/routes/settings.js's isCriticallyStale()), which is intentionally a much
+// higher, schedule-aware bar than the badge's own redCount. Dismissal is per the exact
+// set of stale process names (sessionStorage) -- dismissing today's alert won't hide a
+// DIFFERENT process going stale tomorrow, and reappears in a fresh browser session.
+function CriticalHealthModal({ processes, onNavigate }) {
+  const key = processes.map(p => p.name).sort().join(',');
+  const [dismissedKey, setDismissedKey] = React.useState(() => {
+    try { return sessionStorage.getItem('critical-health-dismissed') || ''; } catch { return ''; }
+  });
+
+  if (!processes.length || key === dismissedKey) return null;
+
+  const dismiss = () => {
+    try { sessionStorage.setItem('critical-health-dismissed', key); } catch {}
+    setDismissedKey(key);
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100000, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div style={{ background: '#0f172a', border: '1.5px solid #ef4444', borderRadius: 12, padding: '24px 28px', width: '100%', maxWidth: 480, boxShadow: '0 24px 64px rgba(0,0,0,0.85)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+          <span style={{ fontSize: 20 }}>🔴</span>
+          <span style={{ fontSize: 16, fontWeight: 800, color: '#ef4444' }}>System check needed</span>
+        </div>
+        <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 14, lineHeight: 1.5 }}>
+          {processes.length === 1 ? 'This process has' : `These ${processes.length} processes have`} been stale for over a day, not just running late:
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+          {processes.map(p => (
+            <div key={p.name} style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{p.label}</div>
+              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>
+                Expected: {p.schedule} — Last run: {p.lastRun || 'never'}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={() => { onNavigate('settings'); dismiss(); }}
+            style={{ flex: 2, padding: '10px 0', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', border: '1px solid #ef4444', background: 'rgba(239,68,68,0.15)', color: '#f87171' }}
+          >
+            View Process Health →
+          </button>
+          <button
+            onClick={dismiss}
+            style={{ flex: 1, padding: '10px 0', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer', border: '1px solid #334155', background: 'transparent', color: '#94a3b8' }}
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SystemHealthSummary({ onNavigate }) {
   const [data, setData] = React.useState(null);
 
@@ -484,16 +543,21 @@ function SystemHealthSummary({ onNavigate }) {
   const label = !data ? 'Checking...' : redCount > 0 ? `⚠ ${redCount} process${redCount > 1 ? 'es' : ''} need attention` : 'All processes running';
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, padding: '8px 14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 8, fontSize: 13 }}>
-      <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-      <span style={{ color: dotColor === '#22c55e' ? '#22c55e' : dotColor === '#ef4444' ? '#ef4444' : 'var(--text-muted)' }}>{label}</span>
-      <button
-        onClick={() => onNavigate('settings')}
-        style={{ marginLeft: 'auto', fontSize: 12, padding: '3px 10px', borderRadius: 5, background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', cursor: 'pointer' }}
-      >
-        Process Health →
-      </button>
-    </div>
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, padding: '8px 14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 8, fontSize: 13 }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        <span style={{ color: dotColor === '#22c55e' ? '#22c55e' : dotColor === '#ef4444' ? '#ef4444' : 'var(--text-muted)' }}>{label}</span>
+        <button
+          onClick={() => onNavigate('settings')}
+          style={{ marginLeft: 'auto', fontSize: 12, padding: '3px 10px', borderRadius: 5, background: 'transparent', border: '1px solid var(--border-color)', color: 'var(--text-muted)', cursor: 'pointer' }}
+        >
+          Process Health →
+        </button>
+      </div>
+      {data?.criticallyStaleProcesses?.length > 0 && (
+        <CriticalHealthModal processes={data.criticallyStaleProcesses} onNavigate={onNavigate} />
+      )}
+    </>
   );
 }
 

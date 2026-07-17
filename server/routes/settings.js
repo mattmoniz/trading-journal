@@ -95,6 +95,33 @@ function statusColor(proc, lastRun, lastStatus, nowET) {
   return 'green';
 }
 
+// Deliberately separate from statusColor()'s red/amber/gray (which already fires on
+// much shorter windows -- some `critical: true` processes have maxAgeHours as low as
+// 2). Built 2026-07-16 per explicit user request: "it cant be something is a minute
+// late... it has to be a day late or more" -- this drives a genuinely interruptive
+// modal, so it needs a much higher bar than the passive sidebar badge. Piggybacks on
+// statusColor()'s already-correct per-process-schedule "is this actually overdue"
+// logic (DOW-aware, respects weekly/monthly cadences) rather than reimplementing that
+// -- only ADDS a flat 24h-since-last-success floor on top of it, so a weekly Sunday
+// job doesn't get flagged red-and-modal every Mon-Sat just for being "old", and a
+// critical daily job doesn't interrupt the user over a 2-3 hour delay.
+function isCriticallyStale(proc, lastRun, lastStatus, nowET) {
+  if (!proc.critical) return false;
+  const color = statusColor(proc, lastRun, lastStatus, nowET);
+  if (color !== 'red') return false;
+  if (lastRun) {
+    const ageHours = (nowET - new Date(lastRun)) / 3600000;
+    return ageHours > 24;
+  }
+  // Never ran at all -- statusColor's `red` here only means "today's/this cycle's
+  // scheduled time has passed", which could be minutes ago, not a day. Compare against
+  // today's own scheduled due-time instead of just trusting the boolean.
+  if (proc.scheduledHour == null) return false; // no fixed time to measure lateness from
+  const dueToday = new Date(nowET);
+  dueToday.setHours(proc.scheduledHour, 0, 0, 0);
+  return (nowET - dueToday) / 3600000 > 24;
+}
+
 function fmtDuration(startedAt, completedAt) {
   if (!startedAt || !completedAt) return null;
   const ms = new Date(completedAt) - new Date(startedAt);
@@ -226,6 +253,7 @@ router.get('/settings/process-health', async (req, res) => {
         recordsAffected,
         errorMessage,
         statusColor: statusColor(proc, lastRun, lastStatus, nowET),
+        criticallyStale: isCriticallyStale(proc, lastRun, lastStatus, nowET),
         statusNote: null,
         history: proc.isLive ? [] : (detailByName[proc.name] || []).map(r => ({
           startedAt: fmtTime(r.started_at, nowET),
@@ -294,12 +322,16 @@ router.get('/settings/process-health', async (req, res) => {
     }
 
     const redCount = processes.filter(p => p.statusColor === 'red' && p.critical).length;
+    // Deliberately separate from redCount above (which already fires on much shorter
+    // windows) -- see isCriticallyStale()'s own comment. This is what the frontend's
+    // hard-to-miss modal should key off, not redCount/statusColor.
+    const criticallyStaleProcesses = processes.filter(p => p.criticallyStale);
 
     // DLL status
     let dllStatus = null;
     try { dllStatus = await computeDLLStatus(); } catch (_) {}
 
-    res.json({ processes, checkedAt: fmtTime(nowET, nowET) || 'now', redCount, dllStatus });
+    res.json({ processes, checkedAt: fmtTime(nowET, nowET) || 'now', redCount, criticallyStaleProcesses, dllStatus });
   } catch (err) {
     console.error('[process-health]', err.message);
     res.status(500).json({ error: err.message });

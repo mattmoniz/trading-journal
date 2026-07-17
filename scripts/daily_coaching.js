@@ -725,56 +725,71 @@ export async function runDailyCoaching(targetDate, io) {
       }
     } catch (dtErr) { console.error('[daily_coaching] daytype truth log failed:', dtErr.message); }
 
-    // Seed premarket walkthrough for next trading day (DO NOTHING if already filled in)
+    // Seed premarket walkthrough for next trading day (DO NOTHING if already filled in).
+    // Wrapped in its own logProcess() call (2026-07-16, after the ev_per_trade bug below
+    // silently killed this step for 8 days while the outer DAILY_COACHING kept reporting
+    // SUCCESS every night — root-caused via Gemini + independently verified) so a future
+    // silent failure here gets its own visible, independently-monitorable process_log
+    // row instead of being swallowed by only the outer try/catch's console.error.
     try {
-      const nextDay = (() => {
-        const d = new Date(targetDate + 'T12:00:00Z');
-        d.setUTCDate(d.getUTCDate() + 1);
-        while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
-        return d.toISOString().slice(0, 10);
-      })();
+      await logProcess('WALKTHROUGH_SEED', async () => {
+        const nextDay = (() => {
+          const d = new Date(targetDate + 'T12:00:00Z');
+          d.setUTCDate(d.getUTCDate() + 1);
+          while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
+          return d.toISOString().slice(0, 10);
+        })();
 
-      const tomorrowWatch = coachingText.match(/TOMORROW'S WATCH:\s*([\s\S]+?)(?:\n\n|$)/)?.[1]?.trim() || null;
+        const tomorrowWatch = coachingText.match(/TOMORROW'S WATCH:\s*([\s\S]+?)(?:\n\n|$)/)?.[1]?.trim() || null;
 
-      const regime = (() => {
-        const n = ctx.nl30 || 0;
-        if (n >= 60) return 'STRONG_BULL';
-        if (n >= 20) return 'MILD_BULL';
-        if (n >= -20) return 'NEUTRAL';
-        if (n >= -60) return 'MILD_BEAR';
-        return 'STRONG_BEAR';
-      })();
+        const regime = (() => {
+          const n = ctx.nl30 || 0;
+          if (n >= 60) return 'STRONG_BULL';
+          if (n >= 20) return 'MILD_BULL';
+          if (n >= -20) return 'NEUTRAL';
+          if (n >= -60) return 'MILD_BEAR';
+          return 'STRONG_BEAR';
+        })();
 
-      const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const nextDow = DOW_NAMES[new Date(nextDay + 'T12:00:00Z').getUTCDay()];
+        const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const nextDow = DOW_NAMES[new Date(nextDay + 'T12:00:00Z').getUTCDay()];
 
-      const patternsQ = await query(`
-        SELECT pattern_key, ROUND(win_rate::numeric * 100, 1) as wr_pct, sample_size,
-               ROUND(ev_per_trade::numeric, 0) as ev
-        FROM pattern_discoveries
-        WHERE status='ACTIVE' AND sample_size >= 20
-          AND pattern_key ILIKE $1
-        ORDER BY ev_per_trade DESC NULLS LAST LIMIT 8
-      `, [`%×${nextDow}%`]);
+        // Found 2026-07-16 (Gemini root-cause investigation + independently verified via
+        // \d pattern_discoveries): this query referenced ev_per_trade, a column that has
+        // never existed on this table (real column is net_pnl_dollars, a total not a
+        // per-trade figure) -- threw on every single run, silently swallowed below,
+        // which is why premarket_walkthroughs stopped getting new rows after 2026-07-07.
+        // Fixed to derive real per-trade EV (net_pnl_dollars / sample_size), matching
+        // what this code's own `ev` variable name and the WR/N/EV format always intended.
+        const patternsQ = await query(`
+          SELECT pattern_key, ROUND(win_rate::numeric * 100, 1) as wr_pct, sample_size,
+                 ROUND((net_pnl_dollars / NULLIF(sample_size, 0))::numeric, 0) as ev
+          FROM pattern_discoveries
+          WHERE status='ACTIVE' AND sample_size >= 20
+            AND pattern_key ILIKE $1
+          ORDER BY (net_pnl_dollars / NULLIF(sample_size, 0)) DESC NULLS LAST LIMIT 8
+        `, [`%×${nextDow}%`]);
 
-      const signalsNotes = patternsQ.rows.length > 0
-        ? patternsQ.rows.map(p => `${p.pattern_key}: ${p.wr_pct}% WR N=${p.sample_size} EV=${p.ev}`).join('\n')
-        : null;
+        const signalsNotes = patternsQ.rows.length > 0
+          ? patternsQ.rows.map(p => `${p.pattern_key}: ${p.wr_pct}% WR N=${p.sample_size} EV=${p.ev}`).join('\n')
+          : null;
 
-      const openNotes = [
-        ctx.structuralState ? `Structural: ${ctx.structuralState}` : null,
-        ctx.dayType && ctx.dayType !== 'N/A' ? `Today type: ${ctx.dayType}` : null,
-        ctx.confluenceScore != null ? `Confluence: ${ctx.confluenceScore}/12` : null,
-        ctx.nl30 != null ? `NL30: ${ctx.nl30}` : null,
-      ].filter(Boolean).join(' | ') || null;
+        const openNotes = [
+          ctx.structuralState ? `Structural: ${ctx.structuralState}` : null,
+          ctx.dayType && ctx.dayType !== 'N/A' ? `Today type: ${ctx.dayType}` : null,
+          ctx.confluenceScore != null ? `Confluence: ${ctx.confluenceScore}/12` : null,
+          ctx.nl30 != null ? `NL30: ${ctx.nl30}` : null,
+        ].filter(Boolean).join(' | ') || null;
 
-      await query(`
-        INSERT INTO premarket_walkthroughs (trade_date, regime, open_notes, signals_notes, committed_plan)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (trade_date) DO NOTHING
-      `, [nextDay, regime, openNotes, signalsNotes, tomorrowWatch]);
+        await query(`
+          INSERT INTO premarket_walkthroughs (trade_date, regime, open_notes, signals_notes, committed_plan)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (trade_date) DO NOTHING
+        `, [nextDay, regime, openNotes, signalsNotes, tomorrowWatch]);
 
-      console.log(`[daily_coaching] Walkthrough seeded for ${nextDay} (${regime}, DOW=${nextDow})`);
+        console.log(`[daily_coaching] Walkthrough seeded for ${nextDay} (${regime}, DOW=${nextDow})`);
+        return { count: 1 };
+      });
     } catch (wtErr) { console.error('[daily_coaching] Walkthrough seed failed:', wtErr.message); }
 
     console.log(`[daily_coaching] Saved to DB for ${targetDate}`);
