@@ -527,57 +527,14 @@ export async function updateSetupMoveStats(tradeDate) {
   console.log(`[pattern] ${tradeDate}: setup_move_stats updated for ${SETUP_TYPES.length} setup types`);
 }
 
-// ── Backfill session_outcome for rule_overrides ────────────────────────────────
-
-async function backfillOverrideOutcomes(tradeDate) {
-  try {
-    // Find overrides for this date that don't yet have a session_outcome
-    const overrideQ = await query(`
-      SELECT id FROM rule_overrides
-      WHERE override_date = $1 AND session_outcome IS NULL
-    `, [tradeDate]);
-    if (overrideQ.rows.length === 0) return;
-
-    // Calculate session P&L using CumPL diff (same pattern as daily-logs)
-    const pnlQ = await query(`
-      WITH ep_fills AS (
-        SELECT (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric as cum_pl,
-               custom_fields->>'account' as account,
-               exit_time
-        FROM trades
-        WHERE log_date = $1
-          AND custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
-          AND custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
-      ),
-      last_ep AS (
-        SELECT DISTINCT ON (account) account, cum_pl
-        FROM ep_fills ORDER BY account, exit_time DESC
-      ),
-      prev_ep AS (
-        SELECT DISTINCT ON (custom_fields->>'account') custom_fields->>'account' as account,
-          (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric as cum_pl
-        FROM trades
-        WHERE log_date < $1
-          AND custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
-          AND custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\\.[0-9]+)?$'
-        ORDER BY custom_fields->>'account', exit_time DESC
-      )
-      SELECT COALESCE(SUM(l.cum_pl - COALESCE(p.cum_pl, 0)), 0) as session_pnl
-      FROM last_ep l LEFT JOIN prev_ep p USING (account)
-    `, [tradeDate]);
-
-    const sessionPnl = parseFloat(pnlQ.rows[0]?.session_pnl) || 0;
-
-    await query(`
-      UPDATE rule_overrides SET session_outcome = $1
-      WHERE override_date = $2 AND session_outcome IS NULL
-    `, [sessionPnl, tradeDate]);
-
-    console.log(`[pattern] Override outcomes backfilled for ${tradeDate}: ${sessionPnl.toFixed(2)}`);
-  } catch (err) {
-    console.error(`[pattern] backfillOverrideOutcomes error:`, err.message);
-  }
-}
+// backfillOverrideOutcomes() + the rule_overrides table removed 2026-07-16 (dead-ends
+// audit): the only route that could ever INSERT a new override (POST /rule-overrides)
+// had zero callers anywhere in the app, so this nightly UPDATE was processing a table
+// that could never grow past its one-time historical backfill (21 rows, all from
+// 2026-05-26 to 2026-06-16, all auto-tagged 'PHASE1_NOT_LOGGED' -- not organic manual
+// use). Backed up to rule_overrides_backup_20260716 before dropping. git history has
+// this function if the underlying "log when you consciously stand aside from a
+// signaled rule violation" feature is ever built with a real UI trigger.
 
 // ── Main nightly runner ────────────────────────────────────────────────────────
 
@@ -590,7 +547,6 @@ export async function runNightlyUpdate(tradeDate, io = null) {
     await updateConditionMemory(tradeDate);
     await recalculatePatternStats(tradeDate);
     await updateSetupMoveStats(tradeDate);
-    await backfillOverrideOutcomes(tradeDate);
 
     const degradingQ = await query(`
       SELECT structural_state FROM pattern_stats

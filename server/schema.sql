@@ -3512,38 +3512,18 @@ ALTER SEQUENCE public.risk_settings_id_seq OWNED BY public.risk_settings.id;
 
 
 --
--- Name: rule_overrides; Type: TABLE; Schema: public; Owner: -
+-- Name: rule_overrides_backup_20260716; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.rule_overrides (
-    id integer NOT NULL,
-    override_date date NOT NULL,
-    override_time timestamp without time zone NOT NULL,
+CREATE TABLE public.rule_overrides_backup_20260716 (
+    id integer,
+    override_date date,
+    override_time timestamp without time zone,
     rule_violated character varying(50),
     confluence_score integer,
     session_outcome numeric,
-    created_at timestamp without time zone DEFAULT now()
+    created_at timestamp without time zone
 );
-
-
---
--- Name: rule_overrides_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.rule_overrides_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: rule_overrides_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.rule_overrides_id_seq OWNED BY public.rule_overrides.id;
 
 
 --
@@ -3941,37 +3921,17 @@ ALTER SEQUENCE public.trade_feedback_id_seq OWNED BY public.trade_feedback.id;
 
 
 --
--- Name: trade_screenshots; Type: TABLE; Schema: public; Owner: -
+-- Name: trade_screenshots_backup_20260716; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.trade_screenshots (
-    id integer NOT NULL,
-    trade_id integer NOT NULL,
-    filename character varying(255) NOT NULL,
-    file_path text NOT NULL,
-    upload_time timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+CREATE TABLE public.trade_screenshots_backup_20260716 (
+    id integer,
+    trade_id integer,
+    filename character varying(255),
+    file_path text,
+    upload_time timestamp without time zone,
     caption text
 );
-
-
---
--- Name: trade_screenshots_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.trade_screenshots_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: trade_screenshots_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.trade_screenshots_id_seq OWNED BY public.trade_screenshots.id;
 
 
 --
@@ -4025,6 +3985,44 @@ CREATE SEQUENCE public.trade_timeline_events_id_seq
 --
 
 ALTER SEQUENCE public.trade_timeline_events_id_seq OWNED BY public.trade_timeline_events.id;
+
+
+--
+-- Name: trades_backup_20260716; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.trades_backup_20260716 (
+    id integer,
+    log_date date,
+    entry_time timestamp without time zone,
+    exit_time timestamp without time zone,
+    symbol character varying(20),
+    direction character varying(10),
+    quantity integer,
+    entry_price numeric(10,2),
+    exit_price numeric(10,2),
+    stop_loss numeric(10,2),
+    target numeric(10,2),
+    pnl numeric(10,2),
+    fees numeric(10,2),
+    setup_type character varying(100),
+    trade_notes text,
+    mistakes text,
+    emotional_state character varying(50),
+    risk_reward_ratio numeric(5,2),
+    tags text[],
+    custom_fields jsonb,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    acd_signal character varying(20),
+    acd_number_line_at_entry integer,
+    acd_monthly_bias character varying(20),
+    wyckoff_setup character varying(30),
+    spring_volume_type character varying(10),
+    support_resistance_level numeric,
+    follow_through boolean,
+    level_proximity jsonb
+);
 
 
 --
@@ -4915,13 +4913,6 @@ ALTER TABLE ONLY public.risk_settings ALTER COLUMN id SET DEFAULT nextval('publi
 
 
 --
--- Name: rule_overrides id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.rule_overrides ALTER COLUMN id SET DEFAULT nextval('public.rule_overrides_id_seq'::regclass);
-
-
---
 -- Name: session_analysis id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4982,13 +4973,6 @@ ALTER TABLE ONLY public.trade_annotations ALTER COLUMN id SET DEFAULT nextval('p
 --
 
 ALTER TABLE ONLY public.trade_feedback ALTER COLUMN id SET DEFAULT nextval('public.trade_feedback_id_seq'::regclass);
-
-
---
--- Name: trade_screenshots id; Type: DEFAULT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.trade_screenshots ALTER COLUMN id SET DEFAULT nextval('public.trade_screenshots_id_seq'::regclass);
 
 
 --
@@ -6082,14 +6066,6 @@ ALTER TABLE ONLY public.risk_settings
 
 
 --
--- Name: rule_overrides rule_overrides_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.rule_overrides
-    ADD CONSTRAINT rule_overrides_pkey PRIMARY KEY (id);
-
-
---
 -- Name: session_analysis session_analysis_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6215,14 +6191,6 @@ ALTER TABLE ONLY public.trade_feedback
 
 ALTER TABLE ONLY public.trade_feedback
     ADD CONSTRAINT trade_feedback_trade_date_setup_type_setup_id_key UNIQUE (trade_date, setup_type, setup_id);
-
-
---
--- Name: trade_screenshots trade_screenshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.trade_screenshots
-    ADD CONSTRAINT trade_screenshots_pkey PRIMARY KEY (id);
 
 
 --
@@ -6372,7 +6340,7 @@ CREATE INDEX idx_as_trade_date ON public.active_setups USING btree (trade_date);
 -- Name: idx_as_unique_setup; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX idx_as_unique_setup ON public.active_setups USING btree (trade_date, setup_type, COALESCE(status, ''::character varying));
+CREATE UNIQUE INDEX idx_as_unique_setup ON public.active_setups USING btree (trade_date, setup_type, COALESCE(status, ''::character varying)) WHERE ((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'SHADOW'::character varying])::text[]));
 
 
 --
@@ -10582,14 +10550,6 @@ ALTER TABLE ONLY public.setup_outcome_backtest
 
 ALTER TABLE ONLY public.trade_feedback
     ADD CONSTRAINT trade_feedback_setup_id_fkey FOREIGN KEY (setup_id) REFERENCES public.active_setups(id);
-
-
---
--- Name: trade_screenshots trade_screenshots_trade_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.trade_screenshots
-    ADD CONSTRAINT trade_screenshots_trade_id_fkey FOREIGN KEY (trade_id) REFERENCES public.trades(id) ON DELETE CASCADE;
 
 
 --

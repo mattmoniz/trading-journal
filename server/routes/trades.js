@@ -1,8 +1,4 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import multer from 'multer';
 import { query } from '../db.js';
 import { cacheGet, cacheSet, cacheDelete } from '../lib/cache.js';
 
@@ -11,42 +7,16 @@ import { cacheGet, cacheSet, cacheDelete } from '../lib/cache.js';
 // JSON serialization of the whole result — measured 2026-07-15 at ~5s per request,
 // the dominant cost being server-side work, not network transfer (gzip alone only
 // cut 5.0s->4.3s despite a 51MB->2.6MB payload drop). The data only actually
-// changes on a trade sync/create/update/delete/screenshot-upload — cached here and
-// invalidated explicitly on all of those, with a 10min TTL as a backstop in case an
-// invalidation point is ever missed. See docs/OPEN_THREADS.md.
+// changes on a trade sync/create/update/delete — cached here and invalidated
+// explicitly on all of those, with a 10min TTL as a backstop in case an invalidation
+// point is ever missed. See docs/OPEN_THREADS.md. (screenshot-upload dropped from
+// this list 2026-07-16 -- that invalidation point no longer exists, see below;
+// fs/path/fileURLToPath/multer imports removed the same day, only ever used by the
+// now-deleted screenshot-upload routes.)
 const ALL_TRADES_CACHE_KEY = 'all-trades-list';
 const ALL_TRADES_CACHE_TTL = 10 * 60 * 1000;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const router = express.Router();
-
-// Multer for trade screenshots
-const uploadsDir = path.join(__dirname, '../uploads');
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (mimetype && extname) {
-      return cb(null, true);
-    }
-    cb(new Error('Only image files are allowed!'));
-  }
-});
 
 // ==================== TRADES ROUTES ====================
 
@@ -56,10 +26,8 @@ router.get('/trades/:date', async (req, res) => {
     const { date } = req.params;
     const result = await query(`
       SELECT t.*,
-             array_agg(json_build_object('id', ts.id, 'filename', ts.filename, 'file_path', ts.file_path, 'caption', ts.caption))
-             FILTER (WHERE ts.id IS NOT NULL) as screenshots
+             NULL::json[] as screenshots
       FROM trades t
-      LEFT JOIN trade_screenshots ts ON t.id = ts.trade_id
       WHERE t.log_date = $1
       GROUP BY t.id
       ORDER BY t.entry_time DESC
@@ -99,10 +67,8 @@ router.get('/trades', async (req, res) => {
             'Entry Price','Exit Price'
           ]
         ) AS custom_fields,
-        array_agg(json_build_object('id', ts.id, 'filename', ts.filename, 'file_path', ts.file_path, 'caption', ts.caption))
-             FILTER (WHERE ts.id IS NOT NULL) as screenshots
+        NULL::json[] as screenshots
       FROM trades t
-      LEFT JOIN trade_screenshots ts ON t.id = ts.trade_id
       WHERE t.exit_time IS NOT NULL
       GROUP BY t.id
       ORDER BY t.entry_time DESC
@@ -202,48 +168,13 @@ router.delete('/trades/:id', async (req, res) => {
   }
 });
 
-// ==================== SCREENSHOTS ROUTES ====================
-
-// Upload screenshot for a trade
-router.post('/trades/:tradeId/screenshots', upload.single('screenshot'), async (req, res) => {
-  try {
-    const { tradeId } = req.params;
-    const { caption } = req.body;
-    const { filename, path: filePath } = req.file;
-
-    const result = await query(
-      'INSERT INTO trade_screenshots (trade_id, filename, file_path, caption) VALUES ($1, $2, $3, $4) RETURNING *',
-      [tradeId, filename, filePath, caption]
-    );
-
-    cacheDelete(ALL_TRADES_CACHE_KEY);
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('Error uploading screenshot:', error);
-    res.status(500).json({ error: 'Failed to upload screenshot' });
-  }
-});
-
-// Delete screenshot
-router.delete('/screenshots/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Get file path before deleting
-    const screenshot = await query('SELECT file_path FROM trade_screenshots WHERE id = $1', [id]);
-
-    if (screenshot.rows.length > 0) {
-      // Delete file from filesystem
-      fs.unlinkSync(screenshot.rows[0].file_path);
-    }
-
-    await query('DELETE FROM trade_screenshots WHERE id = $1', [id]);
-    res.json({ message: 'Screenshot deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting screenshot:', error);
-    res.status(500).json({ error: 'Failed to delete screenshot' });
-  }
-});
+// Screenshot upload routes + trade_screenshots table removed 2026-07-16 (dead-ends
+// audit): zero UI ever called POST /trades/:tradeId/screenshots (no upload button
+// anywhere), table was genuinely empty (0 rows, verified before dropping -- no backup
+// needed). The two GET /trades queries above kept their `screenshots` field in the
+// response (now always NULL) rather than removing it, in case anything downstream
+// still reads it defensively. git history has the multer pipeline if a real
+// attach-a-chart-screenshot-to-a-trade feature is ever built with a real UI.
 
 // ==================== ACCOUNTS ROUTE ====================
 
