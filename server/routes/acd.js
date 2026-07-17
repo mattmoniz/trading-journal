@@ -2309,7 +2309,6 @@ export default function createACDRouter(io) {
       // Get today's post-OR bars — RTH only (9:35–16:00)
       // After-hours bars would give false signals since ACD is a morning-session framework
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const isRTH = nowET.getHours() < 16 || (nowET.getHours() === 16 && nowET.getMinutes() === 0);
       const rthEndMin = 16 * 60; // 16:00
 
       const bars = await query(`
