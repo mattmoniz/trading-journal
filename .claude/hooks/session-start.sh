@@ -215,6 +215,25 @@ ORDER BY COUNT(a.id) DESC;
 SQLEOF
 )
 
+# test_invariants.mjs FAIL watch — 2026-07-17. Wired into run_daily_calibration.sh the same
+# day (previously manual-only: "run after any change touching acd.js..."), which meant a
+# real invariant break (e.g. check [6]'s UNCALIBRATED_SHADOW_TYPES staleness) could sit
+# undetected in scratch/daily_calibration.log indefinitely unless someone happened to open
+# it. Extracts just the MOST RECENT day's calibration block (the log accumulates every
+# weekday run in one file) and greps it for FAIL lines, so a break surfaces here instead of
+# silently in a log nobody reads — same "nothing gets buried" philosophy as OPEN_DECISIONS.
+export INVARIANT_FAILURES
+INVARIANT_FAILURES=""
+if [ -f "$REPO/scratch/daily_calibration.log" ]; then
+  LAST_RUN_BLOCK=$(tac "$REPO/scratch/daily_calibration.log" | awk '/=== Daily calibration: /{print; exit} {print}' | tac)
+  # Match test_invariants.mjs's exact fail() output ("  FAIL  <msg>") -- a naive grep for
+  # "FAIL" also matches unrelated log lines like "FAILED_AUCTION_LONG" (a setup_type name
+  # from backtest_setup_status.mjs's own output earlier in the same block), which would
+  # have produced false-positive 🔴s every single day. Caught by testing against the real
+  # log before shipping, not assumed correct from reading the pattern alone.
+  INVARIANT_FAILURES=$(echo "$LAST_RUN_BLOCK" | grep -E "^  FAIL  " || true)
+fi
+
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -230,6 +249,7 @@ const shadowValRaw = process.env.SHADOW_VALIDATION || '';
 const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
+const invariantFailures = (process.env.INVARIANT_FAILURES || '').split('\n').filter(Boolean);
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -351,6 +371,10 @@ const lines = [
   untrackedSymbols.length > 0
     ? `🔴 UNTRACKED INSTRUMENT(S) — ${untrackedSymbols.join(', ')} appear in trades but are NOT in server/config/instruments.js / src/constants/contract.js's INSTRUMENTS table. ACTION: add real $/pt + commission for ${untrackedSymbols.join(', ')} to both files before trusting any dollar figure involving them, and add the root(s) to this hook's own SQL whitelist.`
     : '✅ No untracked instruments — every symbol root in trades matches a known INSTRUMENTS entry.',
+  '',
+  invariantFailures.length > 0
+    ? `🔴 test_invariants.mjs FAILED in the most recent daily calibration run:\n${invariantFailures.join('\n')}\n  ACTION: run node scripts/test_invariants.mjs directly to see full context, then fix the underlying drift.`
+    : '✅ test_invariants.mjs: no FAILs in the most recent daily calibration run.',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',
