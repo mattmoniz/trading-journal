@@ -85,7 +85,8 @@ async function computeMaeMfe(queryFn, setupRow) {
   const barsResult = await queryFn(`
     SELECT ts, open::float, high::float, low::float, close::float
     FROM price_bars_primary
-    WHERE ts::date = $1
+    WHERE symbol = 'NQ'
+      AND ts::date = $1
       AND ts >= $2
       AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
     ORDER BY ts

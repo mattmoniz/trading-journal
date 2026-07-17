@@ -46,7 +46,8 @@ async function main() {
     const res = await query(`
       SELECT ts, open::float, high::float, low::float, close::float
       FROM price_bars_primary
-      WHERE ts::date = $1
+      WHERE symbol = 'NQ'
+        AND ts::date = $1
         AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 960
       ORDER BY ts
     `, [d]);
