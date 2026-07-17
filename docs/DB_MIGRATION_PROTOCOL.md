@@ -60,7 +60,10 @@ silently corrupted trade times for over a month before being caught).
    data, any `DELETE`): `CREATE TABLE x_backup_YYYYMMDD AS SELECT ... FROM x WHERE
    <affected rows>;` — matches the existing convention (`dead_tables_backup_20260630`,
    `active_setups_maemfe_backup_20260717`). Cheap, and the one thing that makes a
-   migration reversible if the logic turns out wrong after the fact.
+   migration reversible if the logic turns out wrong after the fact. **Add an entry to
+   [docs/DB_BACKUP_CATALOG.md](DB_BACKUP_CATALOG.md) in the same commit** — what it's a
+   snapshot of, why, source script. 13 backup tables existed with no index anywhere
+   before this was built; don't let a 14th join them unindexed.
 3. **If dispatching the reconstruction logic to Gemini** (appropriate for genuinely
    mining/reconstruction-shaped work, per CLAUDE.md's Gemini-for-mining convention):
    Gemini gets read-only access and writes a script; Claude independently re-verifies
