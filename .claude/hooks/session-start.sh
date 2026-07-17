@@ -145,6 +145,40 @@ ORDER BY l.signal_name, (b->>'ev')::float DESC;
 SQLEOF
 )
 
+# SHADOW validation watch — built 2026-07-17 after Opus Audit #3 found the closed loop that
+# should prove suppression decisions are correct didn't exist: `active_setups.status` gets
+# overwritten to RESOLVED/EXPIRED on resolution, permanently destroying whether a trade fired
+# ACTIVE (real) or SHADOW (suppressed, background-only). Fixed with an immutable
+# `origin_status` column (set once at insert, never touched by any resolution UPDATE) plus a
+# one-time backfill (BACKFILL for synthetic historical rows, reconstructed via point-in-time
+# SETUP_STATUS for 2026-07-09+, UNKNOWN before that -- no SETUP_STATUS snapshot history exists
+# further back to reconstruct against). This section is the actual closed loop: for every
+# setup_type currently SUPPRESS/THIN_N, what did its real forward SHADOW trades do AFTER the
+# decision that suppressed it? Same "put the fragile state in front of a human every session"
+# pattern as DTM_WATCH above -- don't let a wrong suppression sit unnoticed the way IB_BULLISH
+# did. N will be thin for a long time (origin_status only tracks forward from 2026-07-17) --
+# that's expected and reported honestly, not hidden.
+export SHADOW_VALIDATION
+SHADOW_VALIDATION=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+WITH latest_suppress AS (
+  SELECT DISTINCT ON (signal_name) signal_name, recommendation, run_date
+  FROM performance_audit
+  WHERE signal_type='SETUP_STATUS' AND recommendation IN ('SUPPRESS','THIN_N')
+  ORDER BY signal_name, run_date DESC
+)
+SELECT ls.signal_name, ls.recommendation, ls.run_date,
+  COUNT(a.id) as n,
+  COUNT(*) FILTER (WHERE a.actual_pnl > 0) as wins,
+  COALESCE(ROUND(AVG(a.actual_pnl)::numeric, 2), 0) as ev
+FROM latest_suppress ls
+LEFT JOIN active_setups a ON a.setup_type = ls.signal_name AND a.origin_status='SHADOW'
+  AND a.trade_date > ls.run_date AND a.actual_pnl IS NOT NULL
+GROUP BY ls.signal_name, ls.recommendation, ls.run_date
+HAVING COUNT(a.id) > 0
+ORDER BY COUNT(a.id) DESC;
+SQLEOF
+)
+
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -155,6 +189,7 @@ const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
+const shadowValRaw = process.env.SHADOW_VALIDATION || '';
 const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
@@ -205,6 +240,22 @@ for (const [type, data] of Object.entries(dtmRowsByType)) {
   dtmLines.push(`  ${isFragile ? '⚠️ ' : '   '}${type.padEnd(15)} blended EV=$${data.blendedEv.toFixed(2)} N=${data.blendedN}  [${bucketStr}]`);
 }
 
+// SHADOW validation: for every currently-SUPPRESS/THIN_N setup_type, what did its real
+// forward SHADOW trades do since the decision? N<20 is expected for a long time (tracking
+// only starts 2026-07-17) -- reported honestly as "accumulating," not hidden or padded.
+const shadowValLines = [];
+let shadowDisagree = 0, shadowAgree = 0;
+for (const line of shadowValRaw.split('\n').filter(Boolean)) {
+  const [type, rec, runDate, n, wins, ev] = line.split('|');
+  const nInt = parseInt(n, 10), evF = parseFloat(ev), winsInt = parseInt(wins, 10);
+  const wr = nInt > 0 ? (winsInt / nInt * 100).toFixed(1) : '0.0';
+  let flag = '';
+  if (nInt >= 20 && evF > 0) { flag = ' 🔴 DISAGREES with suppression — forward SHADOW EV is positive, re-examine'; shadowDisagree++; }
+  else if (nInt >= 20 && evF < -5) { flag = ' ✅ confirms suppression'; shadowAgree++; }
+  else { flag = ` (N<20, still accumulating — need ${20 - nInt} more)`; }
+  shadowValLines.push(`  ${type.padEnd(30)} ${rec.padEnd(8)} since ${runDate}: N=${nInt} WR=${wr}% EV=$${evF.toFixed(2)}${flag}`);
+}
+
 const lines = [
   '=== SESSION START PROTOCOL ===',
   '',
@@ -236,6 +287,10 @@ const lines = [
   dtmLines.length > 0
     ? `${dtmFragile > 0 ? '⚠️ ' : '✅'} DAY_TYPE_MANAGED WATCH — live per-day-type-carve-out types, not gated by the standard SUPPRESS check:\n${dtmLines.join('\n')}${dtmFragile > 0 ? `\n  ${dtmFragile} type(s) have ⚠️ flagged buckets — only reason not SUPPRESSed is a bucket within $10 of the bar or N<50. Re-read before trusting; this is exactly how IB_BULLISH regressed 2026-07-15 (docs/OPEN_THREADS.md).` : ''}`
     : '',
+  '',
+  shadowValLines.length > 0
+    ? `${shadowDisagree > 0 ? '🔴' : '📊'} SHADOW VALIDATION — real forward outcomes for currently-suppressed setup_types (the actual closed loop, built 2026-07-17):\n${shadowValLines.join('\n')}${shadowDisagree > 0 ? `\n  ${shadowDisagree} type(s) DISAGREE with their own suppression — forward SHADOW data at N≥20 shows positive EV. Re-examine before trusting the SUPPRESS label.` : shadowAgree > 0 ? `\n  ${shadowAgree} type(s) confirmed by forward data (N≥20, EV<-$5) — suppression is validated, not just asserted.` : ''}`
+    : '📊 SHADOW VALIDATION: no forward SHADOW trades yet (origin_status tracking only started 2026-07-17) — nothing to validate yet, check back as data accumulates.',
   '',
   feedbackWithSetupId >= 20
     ? `🟢 TRADE_FEEDBACK COVERAGE — ${feedbackWithSetupId} rows now have setup_id populated (N≥20 floor cleared). ACTION: re-run the execution-quality audit (fill/slippage, stop/target discipline) — was blocked on this exact gap, see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution.`

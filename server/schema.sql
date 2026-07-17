@@ -337,7 +337,8 @@ CREATE TABLE public.active_setups (
     size_multiplier numeric(5,3),
     suppression_reason text,
     touch_quality character varying(20),
-    touch_quality_vol_z numeric
+    touch_quality_vol_z numeric,
+    origin_status character varying(12)
 );
 
 
@@ -500,6 +501,20 @@ CREATE SEQUENCE public.active_setups_id_seq
 --
 
 ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
+
+
+--
+-- Name: active_setups_maemfe_backup_20260717; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_maemfe_backup_20260717 (
+    id integer,
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20)
+);
 
 
 --

@@ -484,10 +484,10 @@ async function detectGlobexSetup(sessionDate, io) {
       // clause (Postgres requires this to match a partial index) -- all 6 updated together.
       const ins = await query(`
         INSERT INTO active_setups (
-          trade_date, setup_type, fired_at, expires_at, status,
+          trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions
-        ) VALUES ($1,$2,NOW(),$3,'ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
+        ) VALUES ($1,$2,NOW(),$3,'ACTIVE','ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
         ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
         RETURNING id, entry_zone_low, stop_level, t1_level
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry]);
@@ -515,12 +515,28 @@ async function detectGlobexSetup(sessionDate, io) {
   }
 }
 
-// Expires any ACTIVE setups past their expires_at; emits socket events.
+// Expires any ACTIVE/SHADOW setups past their expires_at; emits socket events.
 export async function expireStaleSetups(io) {
-  // SHADOW rows from prior dates have no expires_at and accumulate forever, eventually
-  // causing unique-constraint conflicts when the same setup fires again. Purge them.
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  await query(`DELETE FROM active_setups WHERE status = 'SHADOW' AND trade_date < $1`, [todayET]);
+
+  // FIXED 2026-07-17 (Opus Audit #3): this used to unconditionally DELETE every prior-day
+  // SHADOW row, regardless of whether it had real entry/stop/target that just hadn't been
+  // given a chance to resolve to a terminal state -- a second, silent data-destruction point
+  // alongside the resolution UPDATEs overwriting `status`. A SHADOW row's real forward
+  // outcome (did the suppression decision that created it turn out to be right?) is exactly
+  // the data a closed-loop validation needs, and this was destroying it with zero trace.
+  // Fixed: SHADOW rows with real levels now go through the SAME expire-to-EXPIRED path as
+  // ACTIVE rows below (origin_status, added the same day, survives untouched since this
+  // UPDATE never references it). Only rows with no expires_at at all (the CASCADE_BREAKER /
+  // suppressed-near-level-audit inserts, which log a suppressed level touch as evidence with
+  // no entry/stop/target to resolve against -- genuinely un-scoreable) get a terminal mark
+  // instead of physical deletion, per Opus's "prefer a terminal state over delete" recommendation.
+  const abandoned = await query(`
+    UPDATE active_setups
+    SET status = 'EXPIRED', resolution = 'NO_EXPIRY_SET', resolved_at = NOW(), updated_at = NOW()
+    WHERE status = 'SHADOW' AND trade_date < $1 AND expires_at IS NULL
+    RETURNING id
+  `, [todayET]);
 
   const expired = await query(`
     UPDATE active_setups
@@ -534,7 +550,7 @@ export async function expireStaleSetups(io) {
     try { await dropToTimeline(row); } catch (_) {}
     if (io) io.emit('setup-expired', { setupId: row.id, setupType: row.setup_type, tradeDate: row.trade_date });
   }
-  return expired.rows.length;
+  return expired.rows.length + abandoned.rows.length;
 }
 
 // Structural invalidation: expire SHORT setups when price > OR High, LONG when price < OR Low.
@@ -4947,8 +4963,8 @@ export default function createACDRouter(io) {
           if (cascadeBreaker.active && nearLevels.length > 0) {
             for (const lv of nearLevels) {
               await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
-                VALUES ($1,$2,NOW(),$3,'SHADOW','CASCADE_BREAKER')
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER')
                 ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [todayET, lv.name, currentPrice]).catch(() => {});
             }
@@ -5184,8 +5200,8 @@ export default function createACDRouter(io) {
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
               await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, suppression_reason)
-                VALUES ($1,$2,NOW(),$3,'SHADOW',$4)
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4)
                 ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [todayET, type, currentPrice, suppressReason]).catch(() => {});
             }
@@ -5940,8 +5956,8 @@ export default function createACDRouter(io) {
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, resolution_method)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','EARLY_TOUCH_BACKFILL')
+                  status, origin_status, resolution_method)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL')
                 ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
@@ -6064,13 +6080,13 @@ export default function createACDRouter(io) {
         const hist = active.history || {};
         const ins = await query(`
           INSERT INTO active_setups (
-            trade_date, setup_type, fired_at, expires_at, status,
+            trade_date, setup_type, fired_at, expires_at, status, origin_status,
             entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason
-          ) VALUES ($1,$2,$3,$4,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
           ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -6143,8 +6159,8 @@ export default function createACDRouter(io) {
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW')
+                status, origin_status)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW')
               ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
