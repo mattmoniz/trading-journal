@@ -300,7 +300,7 @@ Views routed inside `App.jsx` → `src/views/`: `dashboard`, `all-trades`, `cale
 | Group | Components |
 |---|---|
 | Pre-market context | `SessionForecastPanel`, `DevelopingValueCard`, `VolatilityRegimeCard` |
-| Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map |
+| Edge overview | `AlphaEngineOverview` — Edge → Alpha Engine tab; covers size multiplier stack, setup tiers, suppressions, all 11 supporting tools, pending road map, and (added 2026-07-17) a "How The System Learns" section with a plain-language visual map of the closed-loop mechanism (detection → resolution → weekly recalibration → SHADOW_VALIDATION, plus the parallel pattern-discovery loop and the data-sanity safety net) |
 | Live session | `VolatilityAlertBanner` (polls `/api/vol-alert`, orange σ≥1 / red σ≥2, OR-width alert, dismissible), `DayOfWeekPlaybookCard`, `TradeAlertBanner`, `TeleprinterFeed`, `AntigravityEdgesView` (includes `EdgeSectionsPanel` with `SetupFeedbackForm` on each setup + "Closed Today" collapsible), `PostLossCooldown` |
 | Post-market review | `WeeklyReportPanel`, `MarketRecapPanel`, `LevelMonitorPanel` |
 | Performance viz | `PnlCharts`, `StatsGrid` |
