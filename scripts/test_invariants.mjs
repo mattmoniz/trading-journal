@@ -27,12 +27,25 @@
  * 4. resolveSetupType() self-consistency
  *    For every CONDITIONAL_VARIANTS entry, the baseType must be suppressed in the latest
  *    SETUP_STATUS run (otherwise both the base and the variant would fire simultaneously).
+ *
+ * 5. OPTIMAL_STOP.ev_per_trade actually matches its own optimal_stop/optimal_target
+ *    Re-simulates each row's stored EV using the REAL production formula (imported from
+ *    update_optimal_stops.mjs, not hand-copied here) applied to that row's own stored
+ *    optimal_stop/optimal_target. Catches a stored "derived" field silently drifting from
+ *    the values it's supposed to describe -- the general shape of the 2026-07-17 bug where
+ *    ev_per_trade quietly kept reporting a raw historical average for 8+ days after the
+ *    EV-sweep feature was added on top of it without rewiring that field. General lesson:
+ *    whenever a script both COMPUTES a value (the sweep) and separately STORES/DISPLAYS a
+ *    number labeled as describing it (ev_per_trade), that pairing needs its own standing
+ *    check -- a code review catches "does this line look right," not "does this field's
+ *    long-declared meaning still hold after a later feature was bolted on."
  */
 
 import pg from 'pg';
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES } from '../server/config/setupTypes.js';
+import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 
 config();
 const pool = new pg.Pool({
@@ -169,6 +182,126 @@ async function main() {
       for (const t of orphaned) {
         warn(`${t}: has OPTIMAL_STOP but no SETUP_STATUS — stale calibration data`);
       }
+    }
+
+    // ── 5. ev_per_trade actually matches a fresh re-simulation of its own stop/target ──
+    console.log('\n[5] OPTIMAL_STOP.ev_per_trade matches its own optimal_stop/optimal_target');
+
+    const latestOptRows = await client.query(`
+      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade
+      FROM performance_audit
+      WHERE signal_type = 'OPTIMAL_STOP'
+      ORDER BY signal_name, run_date DESC
+    `);
+
+    // Same trade/percentile/dpp filters as update_optimal_stops.mjs's own statsRes/rawRes/
+    // dppRes queries -- if those ever change, this must change with them, or this check
+    // starts comparing apples to oranges the same way the original bug did. This check
+    // doesn't just spot-check a formula at one point (that had a real blind spot: a bug
+    // that ALWAYS writes the raw average would trivially "match" a loose fallback check
+    // every time) -- it fully re-derives what optimal_stop/optimal_target/ev_per_trade
+    // SHOULD be via the real sweepOptimalStopAndTarget(), and requires an exact match (or
+    // the documented thin-tail-gate fallback, verified as actually null, not assumed).
+    const statsRes5 = await client.query(`
+      SELECT setup_type,
+        ROUND(AVG(actual_pnl)::numeric, 0) AS raw_avg,
+        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY mae_points)::numeric, 1) AS p25_mae,
+        ROUND(PERCENTILE_CONT(0.40) WITHIN GROUP (ORDER BY mae_points)::numeric, 1) AS p40_mae,
+        ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY mae_points)::numeric, 1) AS p50_mae,
+        ROUND(PERCENTILE_CONT(0.60) WITHIN GROUP (ORDER BY mae_points)::numeric, 1) AS p60_mae,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY mae_points)::numeric, 1) AS p75_mae,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY mfe_points)::numeric, 1) AS p75_mfe
+      FROM active_setups
+      WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+        AND mae_points <= 300 AND mfe_points <= 300
+        AND status = 'RESOLVED' AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+      GROUP BY setup_type
+      HAVING COUNT(*) >= 20
+    `);
+    const statsByType = Object.fromEntries(statsRes5.rows.map(r => [r.setup_type, r]));
+
+    const tradesRes = await client.query(`
+      SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float
+      FROM active_setups
+      WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+        AND mae_points <= 300 AND mfe_points <= 300
+        AND status = 'RESOLVED'
+        AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+    `);
+    const tradesByType = {};
+    for (const t of tradesRes.rows) {
+      (tradesByType[t.setup_type] ||= []).push(t);
+    }
+
+    const dppRes = await client.query(`
+      SELECT setup_type,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(entry_zone_low - stop_level), 0))
+          FILTER (WHERE replay_resolution = 'STOP_HIT')   AS stop_dpp,
+        COUNT(*) FILTER (WHERE replay_resolution = 'STOP_HIT')   AS n_stop,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(t1_level - entry_zone_low), 0))
+          FILTER (WHERE replay_resolution = 'TARGET_HIT') AS target_dpp,
+        COUNT(*) FILTER (WHERE replay_resolution = 'TARGET_HIT') AS n_target
+      FROM active_setups
+      WHERE status = 'RESOLVED' AND entry_zone_low IS NOT NULL
+        AND stop_level IS NOT NULL AND t1_level IS NOT NULL AND actual_pnl IS NOT NULL
+      GROUP BY setup_type
+    `);
+    const dppByType = {};
+    for (const r of dppRes.rows) {
+      dppByType[r.setup_type] = {
+        stopDpp:   (+r.n_stop >= 20 && r.stop_dpp != null) ? +r.stop_dpp : DEFAULT_DPP,
+        targetDpp: (+r.n_target >= 20 && r.target_dpp != null) ? +r.target_dpp : DEFAULT_DPP,
+      };
+    }
+
+    const closeEnough = (a, b, tolAbs = 3, tolRel = 0.1) => {
+      const absDiff = Math.abs(a - b);
+      return absDiff <= tolAbs || absDiff <= tolRel * Math.max(Math.abs(a), Math.abs(b));
+    };
+
+    let evChecked = 0, evMismatches = 0;
+    for (const row of latestOptRows.rows) {
+      const trades = tradesByType[row.signal_name];
+      const stats = statsByType[row.signal_name];
+      if (!trades || trades.length < 20 || !stats) continue; // same MIN_N floor as update_optimal_stops.mjs
+      const { stopDpp, targetDpp } = dppByType[row.signal_name] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
+      const stored = { stop: parseFloat(row.optimal_stop), target: parseFloat(row.optimal_target), ev: parseFloat(row.ev_per_trade) };
+
+      const maeCandidates = [
+        { value: stats.p25_mae, pct: 0.25 }, { value: stats.p40_mae, pct: 0.40 },
+        { value: stats.p50_mae, pct: 0.50 }, { value: stats.p60_mae, pct: 0.60 },
+        { value: stats.p75_mae, pct: 0.75 },
+      ].map(c => ({ ...c, value: parseFloat(c.value) })).filter(c => !isNaN(c.value) && c.value > 0);
+      const p75mfe = Math.round(parseFloat(stats.p75_mfe) || 35);
+      const swept = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
+      evChecked++;
+
+      if (swept) {
+        // Sweep succeeded -- stored row must match the REAL sweep result exactly (small
+        // tolerance only for trade-count drift since the OPTIMAL_STOP row was last written).
+        const evOk = closeEnough(stored.ev, swept.ev);
+        const targetOk = stored.target === swept.target;
+        const stopOk = stored.stop === swept.stop;
+        if (!evOk || !targetOk || !stopOk) {
+          fail(`${row.signal_name}: stored stop=${stored.stop}/target=${stored.target}/ev=$${stored.ev.toFixed(2)} but a fresh sweep gives stop=${swept.stop}/target=${swept.target}/ev=$${swept.ev.toFixed(2)} — ev_per_trade (or the sweep itself) may have drifted from production (see docs/OPEN_THREADS.md, 2026-07-17)`);
+          evMismatches++;
+        }
+      } else {
+        // Thin-tail gate rejected every candidate -- the ONLY legitimate fallback: stop/
+        // target = rounded p75_mae/p50_mfe, ev = raw AVG(actual_pnl). Verify against that
+        // exact fallback, not a loose "matches something plausible" check.
+        const rawAvg = parseFloat(stats.raw_avg);
+        const evOk = closeEnough(stored.ev, rawAvg, 1, 0.02);
+        if (!evOk) {
+          fail(`${row.signal_name}: thin-tail fallback case (no sweep candidate had enough trades) but stored ev_per_trade=$${stored.ev.toFixed(2)} doesn't match the raw average $${rawAvg.toFixed(2)} it should have fallen back to — ev_per_trade's write path may have drifted (see docs/OPEN_THREADS.md, 2026-07-17)`);
+          evMismatches++;
+        }
+      }
+    }
+    if (evChecked > 0 && evMismatches === 0) {
+      ok(`all ${evChecked} OPTIMAL_STOP rows' ev_per_trade match a fresh re-simulation of their own stop/target`);
+    } else if (evChecked === 0) {
+      warn('no OPTIMAL_STOP rows had enough matching trade data to re-verify ev_per_trade this run');
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────

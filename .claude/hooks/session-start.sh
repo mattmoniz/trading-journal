@@ -77,6 +77,42 @@ ORDER BY (p.notes::json->>'next_recheck_due')::date;
 SQLEOF
 )
 
+# OPEN_DECISION watch — 2026-07-17, user request: "anything that needs to be reevaluated
+# should [be] flagged with something and actively monitored. Nothing can be buried."
+# Sibling mechanism to RESEARCH_CLAIM above (scripts/flag_decision.mjs), deliberately a
+# separate signal_type since a pending product/architecture decision (wire in or delete
+# this feature? merge this branch?) has no statistical content and no "staleness" the way
+# a research finding does -- it just sits PENDING until a human actually decides. Printed
+# every session, unconditionally, until resolved via `node scripts/flag_decision.mjs
+# --resolve <slug> '<resolution>'` -- that's the whole point, nothing gets to age out
+# silently the way the 5 unrendered dashboard cards or the 55-commits-behind main branch
+# did before anyone happened to notice them.
+export OPEN_DECISIONS
+OPEN_DECISIONS=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F"$(printf '\t')" 2>/dev/null <<'SQLEOF'
+WITH latest AS (
+  SELECT DISTINCT ON (signal_name) signal_name, notes::jsonb as notes
+  FROM performance_audit
+  WHERE signal_type = 'OPEN_DECISION'
+  ORDER BY signal_name, run_date DESC
+)
+-- replace() flattens embedded newlines in decision_text to spaces -- psql's -t -A output
+-- is one ROW per line, so a multi-paragraph decision_text (this tool deliberately writes
+-- rich, multi-paragraph context, not one-liners) would otherwise be misread as several
+-- fake separate decisions by this hook's line-based parsing. Full multi-line text is still
+-- available via `node scripts/flag_decision.mjs --list`, which reads via real JSON parsing
+-- and has no such limit -- this flattening is only for the terminal summary. Found
+-- 2026-07-17: this bug inflated the session-start count from the real 11 to a fake 41.
+SELECT signal_name, replace(replace(notes->>'decision_text', E'\r', ' '), E'\n', ' '),
+  (CURRENT_DATE - (notes->>'first_flagged_date')::date) as age_days,
+  COALESCE(notes->>'priority', 'MEDIUM') as priority
+FROM latest
+WHERE notes->>'status' = 'PENDING'
+ORDER BY
+  CASE COALESCE(notes->>'priority', 'MEDIUM') WHEN 'HIGH' THEN 0 WHEN 'MEDIUM' THEN 1 ELSE 2 END ASC,
+  (notes->>'first_flagged_date')::date ASC;
+SQLEOF
+)
+
 # Untracked-instrument watch — 2026-07-16, user request: "if you detect new products…
 # this table needs to be updated." server/config/instruments.js / src/constants/
 # contract.js are the single source of truth for $/pt math (see the DTM/pattern-E work
@@ -187,6 +223,7 @@ const last = process.env.LAST_ALERT || '';
 const miningRaw = process.env.MINING_STATUS || '';
 const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
+const openDecisionsRaw = process.env.OPEN_DECISIONS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
 const shadowValRaw = process.env.SHADOW_VALIDATION || '';
@@ -213,6 +250,17 @@ const uncovered = uncoveredRaw.split('\n').filter(Boolean);
 const overdueClaims = overdueClaimsRaw.split('\n').filter(Boolean).map(line => {
   const [slug, dueDate, status] = line.split('|');
   return `  ${(slug||'').padEnd(35)} due ${dueDate||'?'} (${status||'?'})`;
+});
+
+// OPEN_DECISION watch: pending product/architecture decisions, sorted HIGH->MEDIUM->LOW
+// priority then oldest-first within each tier (added 2026-07-17, same request that built
+// this whole tool -- "give them a sense of priority"), with age since first flagged so a
+// genuinely-ignored-too-long one stands out over time. Age computed in SQL (CURRENT_DATE -
+// date), not JS Date() -- this codebase's own hard rule against naive local-timezone date
+// arithmetic (see CLAUDE.md's parseDateTime writeup).
+const openDecisions = openDecisionsRaw.split('\n').filter(Boolean).map(line => {
+  const [slug, decisionText, ageDays, priority] = line.split('\t');
+  return `  [${priority || 'MEDIUM'}] [${ageDays || '?'}d] ${slug}\n      ${decisionText || ''}`;
 });
 
 // Orphaned worktrees: any worktree besides the main repo checkout
@@ -279,6 +327,10 @@ const lines = [
   overdueClaims.length > 0
     ? `🔴 RESEARCH_CLAIM LEDGER — ${overdueClaims.length} claim(s) past their recheck date:\n${overdueClaims.join('\n')}\n  ACTION: re-verify each against its source, then node scripts/record_claim.mjs --add '{...}' with the refreshed numbers`
     : '✅ RESEARCH_CLAIM ledger: no claims currently overdue for recheck',
+  '',
+  openDecisions.length > 0
+    ? `🟡 OPEN DECISIONS — ${openDecisions.length} pending, oldest first (nothing gets buried until resolved):\n${openDecisions.join('\n')}\n  ACTION: resolve one via node scripts/flag_decision.mjs --resolve <slug> '<resolution text>', or discuss with the user`
+    : '✅ No open decisions pending.',
   '',
   strayWorktrees.length > 0
     ? `🔴 ORPHANED WORKTREE(S) — ${strayWorktrees.length} besides the main checkout:\n${strayWorktrees.join('\n')}\n  ACTION: investigate (git -C <path> status / git log), then commit+merge or discard — don't let it sit`

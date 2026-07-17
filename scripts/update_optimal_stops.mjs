@@ -49,7 +49,7 @@ const DEFAULT_TARGET = 35;
 // non-trivial blast radius: 25 currently-live setup_types had an OPTIMAL_STOP row
 // computed using this wrong 2.5x-overstated fallback on at least one side (stop or
 // target) before this fix -- their EV sweeps are being recomputed as part of this fix.
-const DEFAULT_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
+export const DEFAULT_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
 
 // Target sweep range (pts) — all setup types, not just IB. Always capped at p75_mfe
 // per-type below, so it can't select a target beyond what the type's own MFE data supports.
@@ -73,6 +73,24 @@ const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 
 // maxT caps the sweep at p75_mfe so we never select a target that >75% of trades can't reach.
 // Without this cap, high T values saturate to actual_pnl and look artificially optimal.
 //
+// The canonical single-point EV formula -- exported so anything that needs to verify
+// "is this stored ev_per_trade actually the EV of this stored stop/target" (e.g.
+// test_invariants.mjs) can call the REAL production formula instead of hand-copying it.
+// A second hand-copied formula would itself be exactly the same bug class this exists to
+// prevent (see docs/OPEN_THREADS.md, 2026-07-17: ev_per_trade silently stopped matching
+// optStop/optTarget for 8 days before anyone caught it) -- import this, don't reimplement it.
+export function computeEvAtStopTarget(trades, stop, target, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP) {
+  if (!trades.length) return null;
+  let evSum = 0;
+  for (const t of trades) {
+    const mae = +t.mae_points, mfe = +t.mfe_points;
+    if (mae > stop)         evSum += -stop * stopDpp;
+    else if (mfe >= target) evSum += target * targetDpp;
+    else                    evSum += +t.actual_pnl;
+  }
+  return evSum / trades.length;
+}
+
 // Returns { target, ev }, or null if fewer than MIN_N trades or no candidates ≤ maxT.
 function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP) {
   if (trades.length < MIN_N) return null;
@@ -80,14 +98,7 @@ function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, tar
   if (candidates.length === 0) return null;
   let bestT = null, bestEV = -Infinity;
   for (const T of candidates) {
-    let evSum = 0;
-    for (const t of trades) {
-      const mae = +t.mae_points, mfe = +t.mfe_points;
-      if (mae > stop)    evSum += -stop * stopDpp;
-      else if (mfe >= T) evSum += T * targetDpp;
-      else               evSum += +t.actual_pnl;
-    }
-    const ev = evSum / trades.length;
+    const ev = computeEvAtStopTarget(trades, stop, T, stopDpp, targetDpp);
     if (ev > bestEV) { bestEV = ev; bestT = T; }
   }
   return { target: bestT, ev: bestEV };
@@ -116,7 +127,7 @@ function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, tar
 // estimate a single outlier can shift. Require the same MIN_N floor already used
 // elsewhere in this file to apply to that tail count too, not just the type's total N
 // — derived per-candidate as MIN_N/(1-pct), not a new hardcoded number.
-function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, targetDpp) {
+export function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, targetDpp) {
   if (trades.length < MIN_N) return null;
   let best = null;
   for (const { value, pct } of maeCandidates) {
@@ -251,6 +262,17 @@ async function main() {
     const optStop   = swept ? swept.stop : Math.round(p75mae);
     const optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
     const targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
+    // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
+    // a raw historical average using whatever stop/target each trade ACTUALLY fired with --
+    // completely disconnected from optStop/optTarget above (the EV-sweep's real chosen pair).
+    // Bug dated to this file's original commit (a04b2fd, 2026-07-05), before the EV-sweep even
+    // existed (optTarget was just p50_mfe back then, so the raw average was a defensible
+    // standalone stat); broke silently on 2026-07-09 (de3e407, "EV-sweep targets") when the
+    // sweep was added without rewiring this field to match. Full writeup + git-history trace:
+    // docs/OPEN_THREADS.md. optEV now reports the EV *of* optStop/optTarget specifically --
+    // falls back to the raw average only when no sweep candidate was valid (thin-tail gate
+    // rejected every percentile candidate), matching optStop/optTarget's own fallback.
+    const optEV     = swept ? swept.ev : parseFloat(r.ev);
 
     await query(`
       INSERT INTO performance_audit (
@@ -278,7 +300,7 @@ async function main() {
       r.setup_type,
       parseInt(r.n),
       parseFloat(r.wr) / 100,
-      parseFloat(r.ev),
+      optEV,
       parseFloat(r.p50_mae),
       parseFloat(r.p75_mae),
       parseFloat(r.p50_mfe),
@@ -288,7 +310,10 @@ async function main() {
     ]);
 
     upserted++;
-    console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${r.ev}`);
+    // Prints both the (now-correct) swept EV and the raw historical average side by side --
+    // deliberately visible so a future divergence this large is caught by eye immediately,
+    // not just by the automated invariant check in test_invariants.mjs.
+    console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${optEV.toFixed(2)}  (raw avg pnl=$${r.ev})`);
   }
 
   console.log(`\nDone. ${upserted} rows upserted into performance_audit (signal_type=OPTIMAL_STOP).`);
@@ -296,4 +321,8 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(err => { console.error('FATAL:', err); process.exit(1); });
+// Guarded so this file can be safely `import`ed (e.g. by test_invariants.mjs for
+// computeEvAtStopTarget/DEFAULT_DPP) without triggering a live DB run as a side effect.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(err => { console.error('FATAL:', err); process.exit(1); });
+}
