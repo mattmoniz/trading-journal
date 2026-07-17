@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { query } from '../db.js';
 import { cacheGet, cacheSet, latestBarDate } from '../lib/cache.js';
+import { computeVolumeProfileForRange } from '../services/developingValueService.js';
 
 const REPORTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../reports');
 
@@ -89,22 +90,13 @@ router.get('/weekly/va-history', async (req, res) => {
       const weekEnd = we.toISOString().split('T')[0];
 
       try {
-        const vp = await query(`
-          WITH vp AS (
-            SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-            FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
-              AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-            GROUP BY ROUND(low / 0.25) * 0.25
-          ),
-          total AS (SELECT SUM(vol) as t FROM vp),
-          poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-          SELECT
-            p.poc_px::float as poc,
-            (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p.poc_px) s WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-            (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p.poc_px) s WHERE cv <= (SELECT t*0.35 FROM total))::float as val,
-            MAX(vp.px)::float as week_high, MIN(vp.px)::float as week_low
-          FROM vp, poc_row p GROUP BY p.poc_px
+        const profile = await computeVolumeProfileForRange(query, { startDate: week_start, endDate: weekEnd });
+        const hlR = await query(`
+          SELECT MAX(high)::float as week_high, MIN(low)::float as week_low
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
+            AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         `, [week_start, weekEnd]);
+        const vp = { rows: profile ? [{ poc: profile.poc, vah: profile.vah, val: profile.val, week_high: hlR.rows[0]?.week_high, week_low: hlR.rows[0]?.week_low }] : [] };
 
         // Monday range
         const mon = await query(`
@@ -162,34 +154,21 @@ router.get('/daily/va-history', async (req, res) => {
     const results = [];
     for (const { date } of tradingDays.rows) {
       try {
-        const vp = await query(`
-          WITH vp AS (
-            SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-            FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-              AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-            GROUP BY ROUND(low / 0.25) * 0.25
-          ),
-          total AS (SELECT SUM(vol) as t FROM vp),
-          poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-          SELECT
-            p.poc_px::float as poc,
-            (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p.poc_px) s WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-            (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p.poc_px) s WHERE cv <= (SELECT t*0.35 FROM total))::float as val,
-            (array_agg(close ORDER BY ts DESC))[1]::float as day_close
-          FROM vp, poc_row p
-          JOIN price_bars_primary ON ts::date=$1 AND symbol='NQ' AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-          GROUP BY p.poc_px LIMIT 1
+        const profile = await computeVolumeProfileForRange(query, { startDate: date, endDate: date });
+        const closeR = await query(`
+          SELECT (array_agg(close ORDER BY ts DESC))[1]::float as day_close
+          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
         `, [date]);
 
         const ah = await query(`SELECT prior_profile, bias_dir FROM auction_history WHERE date=$1`, [date]);
 
-        if (vp.rows[0]?.vah) {
+        if (profile?.vah != null) {
           results.push({
             date,
-            vah: vp.rows[0].vah,
-            poc: vp.rows[0].poc,
-            val: vp.rows[0].val,
-            day_close: vp.rows[0].day_close,
+            vah: profile.vah,
+            poc: profile.poc,
+            val: profile.val,
+            day_close: closeR.rows[0]?.day_close,
             day_type: ah.rows[0]?.prior_profile || null,
             bias_dir: ah.rows[0]?.bias_dir || null,
           });
@@ -229,37 +208,15 @@ router.get('/weekly/bars', async (req, res) => {
       ORDER BY date_trunc('hour', ts)
     `, [week_start, weekEndStr]);
 
-    // Volume profile — 1-point buckets, find POC + 70% value area
-    const vpR = await query(`
-      WITH vp AS (
-        SELECT ROUND(low / 0.25) * 0.25 as px, SUM(volume) as vol
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2
-          AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-        GROUP BY ROUND(low / 0.25) * 0.25
-      ),
-      total AS (SELECT SUM(vol) as t FROM vp),
-      poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-      SELECT
-        p.poc_px::float as poc,
-        (SELECT MAX(px) FROM (
-          SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p.poc_px
-        ) s WHERE cv <= (SELECT t * 0.35 FROM total))::float as vah,
-        (SELECT MIN(px) FROM (
-          SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p.poc_px
-        ) s WHERE cv <= (SELECT t * 0.35 FROM total))::float as val,
-        array_agg(json_build_object('price', vp.px, 'vol', vp.vol) ORDER BY vp.px) as histogram
-      FROM vp, poc_row p
-      GROUP BY p.poc_px
-    `, [week_start, weekEndStr]);
+    // Volume profile — spread-volume method, find POC + 70% value area
+    const profile = await computeVolumeProfileForRange(query, { startDate: week_start, endDate: weekEndStr });
 
-    const vp = vpR.rows[0] || {};
     // Normalise histogram for display (pct of max)
-    const hist = vp.histogram || [];
-    const maxVol = hist.length ? Math.max(...hist.map(h => h.vol)) : 1;
-    const histNorm = hist.map(h => ({ price: h.price, pct: Math.round(h.vol / maxVol * 100) }));
+    const hist = profile?.entries || [];
+    const maxVol = hist.length ? Math.max(...hist.map(h => h.volume)) : 1;
+    const histNorm = hist.map(h => ({ price: h.price, pct: Math.round(h.volume / maxVol * 100) }));
 
-    res.json({ bars: barsR.rows, vp: { poc: vp.poc, vah: vp.vah, val: vp.val, histogram: histNorm } });
+    res.json({ bars: barsR.rows, vp: { poc: profile?.poc, vah: profile?.vah, val: profile?.val, histogram: histNorm } });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

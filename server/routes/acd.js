@@ -25,6 +25,7 @@ import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboR
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
+import { computeVolumeProfileForRange } from '../services/developingValueService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -488,7 +489,7 @@ async function detectGlobexSetup(sessionDate, io) {
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions
         ) VALUES ($1,$2,NOW(),$3,'ACTIVE','ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
-        ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
+        ON CONFLICT DO NOTHING
         RETURNING id, entry_zone_low, stop_level, t1_level
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry]);
 
@@ -1271,25 +1272,11 @@ export default function createACDRouter(io) {
 
             if (!pmVaCache[monthKey]) {
               const pmStart = new Date(Date.UTC(yr, mo - 2, 1)).toISOString().split('T')[0];
-              const pmEnd   = new Date(Date.UTC(yr, mo - 1, 1)).toISOString().split('T')[0];
-              const pmVpQ = await query(`
-                WITH vp AS (
-                  SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-                  FROM price_bars_primary WHERE symbol='NQ'
-                    AND ts >= $1::date AND ts < $2::date
-                    AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= 570
-                    AND EXTRACT(hour FROM ts) < 16
-                  GROUP BY ROUND(low/0.25)*0.25
-                ), total AS (SELECT SUM(vol) as t FROM vp),
-                poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-                SELECT p.poc_px::float as poc,
-                  (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-                  (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-                FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-              `, [pmStart, pmEnd]);
+              const pmEndInclusive = new Date(Date.UTC(yr, mo - 1, 0)).toISOString().split('T')[0];
+              const pmProfile = await computeVolumeProfileForRange(query, { startDate: pmStart, endDate: pmEndInclusive });
               pmVaCache[monthKey] = {
-                pmVAH: pmVpQ.rows[0]?.vah || null,
-                pmVAL: pmVpQ.rows[0]?.val || null,
+                pmVAH: pmProfile?.vah ?? null,
+                pmVAL: pmProfile?.val ?? null,
               };
             }
             const { pmVAH, pmVAL } = pmVaCache[monthKey];
@@ -2045,196 +2032,10 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
-  // GET /api/auction-read/day-setups (moved here as it uses ACD data)
-  router.get('/auction-read/day-setups', async (req, res) => {
-    try {
-      const { date } = req.query;
-      if (!date) return res.status(400).json({ error: 'date required' });
-
-      const barsR = await query(`
-        SELECT ts, open::float, high::float, low::float, close::float, volume::bigint,
-               SUM(close::float * volume::bigint) OVER (ORDER BY ts) /
-               NULLIF(SUM(volume::bigint) OVER (ORDER BY ts), 0) as vwap_running
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date=$1
-          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-        ORDER BY ts
-      `, [date]);
-      const bars = barsR.rows;
-      if (!bars.length) return res.json([]);
-
-      const priorR = await query(`
-        SELECT MAX(ts::date::text) as prior_date FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-      `, [date]);
-      const priorDate = priorR.rows[0]?.prior_date;
-
-      let pdHigh = null, pdLow = null, pdVAH = null, pdVAL = null, onHigh = null, onLow = null;
-      if (priorDate) {
-        const pd = await query(`
-          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-        `, [priorDate]);
-        pdHigh = pd.rows[0]?.h; pdLow = pd.rows[0]?.l;
-
-        const vaR = await query(`
-          SELECT poc::float as poc, vah::float as vah, val::float as val
-          FROM developing_value_log
-          WHERE trade_date = $1
-        `, [priorDate]);
-        if (vaR.rows[0]) {
-          pdVAH = vaR.rows[0].vah;
-          pdVAL = vaR.rows[0].val;
-        } else {
-          // fallback
-          const fallbackQ = await query(`
-            WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
-            total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
-            SELECT p2.px::float as poc,
-              (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-              (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as val
-            FROM vp, poc_row p2 GROUP BY p2.px LIMIT 1
-          `, [priorDate]);
-          pdVAH = fallbackQ.rows[0]?.vah;
-          pdVAL = fallbackQ.rows[0]?.val;
-        }
-
-        const onR = await query(`
-          SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date=$1 AND (EXTRACT(hour FROM ts) >= 16 OR EXTRACT(hour FROM ts) < 9)
-        `, [priorDate]);
-        onHigh = onR.rows[0]?.h; onLow = onR.rows[0]?.l;
-      }
-
-      const acdR = await query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [date]);
-      const ibHigh = acdR.rows[0]?.or_high, ibLow = acdR.rows[0]?.or_low;
-
-      const keyLevels = [
-        { key: 'IBH',    price: ibHigh,  type: 'resistance', desc: 'Initial Balance High' },
-        { key: 'IBL',    price: ibLow,   type: 'support',    desc: 'Initial Balance Low'  },
-        { key: 'PD VAH', price: pdVAH,   type: 'resistance', desc: 'Prior Day Value Area High' },
-        { key: 'PD VAL', price: pdVAL,   type: 'support',    desc: 'Prior Day Value Area Low'  },
-        { key: 'PD High',price: pdHigh,  type: 'resistance', desc: 'Prior Day High' },
-        { key: 'PD Low', price: pdLow,   type: 'support',    desc: 'Prior Day Low'  },
-        { key: 'ON High',price: onHigh,  type: 'resistance', desc: 'Overnight High'  },
-        { key: 'ON Low', price: onLow,   type: 'support',    desc: 'Overnight Low'   },
-      ].filter(l => l.price);
-
-      const TOUCH_RANGE = 8;
-      const MEASURE_BARS = 30;
-      const MIN_MOVE = 15;
-
-      const profitable = [];
-
-      for (const lvl of keyLevels) {
-        const p = parseFloat(lvl.price);
-        for (let i = 10; i < bars.length - MEASURE_BARS; i++) {
-          const bar = bars[i];
-          const touched = lvl.type === 'resistance'
-            ? bar.high >= p - TOUCH_RANGE && bar.high <= p + TOUCH_RANGE
-            : bar.low <= p + TOUCH_RANGE && bar.low >= p - TOUCH_RANGE;
-          if (!touched) continue;
-
-          const futBars = bars.slice(i + 1, i + MEASURE_BARS + 1);
-          const futClose = futBars[futBars.length - 1]?.close;
-          if (!futClose) break;
-
-          const move = lvl.type === 'resistance'
-            ? bar.high - Math.min(...futBars.map(b => b.low))
-            : Math.max(...futBars.map(b => b.high)) - bar.low;
-
-          if (move >= MIN_MOVE) {
-            const time = new Date(bar.ts).toISOString().slice(11, 16);
-            profitable.push({
-              type: 'KEY_LEVEL',
-              setup: lvl.key,
-              desc: lvl.desc,
-              level_type: lvl.type,
-              price: p,
-              time,
-              move_pts: Math.round(move),
-              direction: lvl.type === 'resistance' ? 'SHORT' : 'LONG',
-            });
-          }
-          break;
-        }
-      }
-
-      const acdEvents = await query(`
-        SELECT setup_type, TO_CHAR(fired_time,'HH24:MI') as fired_time, fired_price::float
-        FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time
-      `, [date]);
-
-      for (const ev of acdEvents.rows) {
-        const isLong  = ev.setup_type?.includes('A_UP') && !ev.setup_type?.includes('Failed');
-        const isShort = ev.setup_type?.includes('A_DOWN') && !ev.setup_type?.includes('Failed') ||
-                        ev.setup_type?.includes('Failed_A_Up');
-        const isLong2 = ev.setup_type?.includes('Failed_A_Down');
-        if (!isLong && !isShort && !isLong2) continue;
-
-        const barIdx = bars.findIndex(b => new Date(b.ts).toISOString().slice(11, 16) === ev.fired_time);
-        if (barIdx < 0 || barIdx >= bars.length - MEASURE_BARS) continue;
-
-        const futBars = bars.slice(barIdx + 1, barIdx + MEASURE_BARS + 1);
-        if (!futBars.length) continue;
-
-        const entryPrice = parseFloat(ev.fired_price);
-        let movePts;
-        if (isLong || isLong2) {
-          movePts = Math.max(...futBars.map(b => b.high)) - entryPrice;
-        } else {
-          movePts = entryPrice - Math.min(...futBars.map(b => b.low));
-        }
-
-        if (movePts >= MIN_MOVE) {
-          profitable.push({
-            type: 'ACD',
-            setup: ev.setup_type.replace(/_/g, ' '),
-            desc: '',
-            level_type: (isLong || isLong2) ? 'support' : 'resistance',
-            price: entryPrice,
-            time: ev.fired_time,
-            move_pts: Math.round(movePts),
-            direction: (isLong || isLong2) ? 'LONG' : 'SHORT',
-          });
-        }
-      }
-
-      for (let i = 10; i < bars.length - MEASURE_BARS; i++) {
-        const bar = bars[i];
-        const vwap = bar.vwap_running;
-        if (!vwap) continue;
-        const prev = bars[i - 1];
-        if (!prev?.vwap_running) continue;
-        const crossUp   = prev.close < prev.vwap_running && bar.close > vwap;
-        const crossDown = prev.close > prev.vwap_running && bar.close < vwap;
-        if (!crossUp && !crossDown) continue;
-
-        const futBars = bars.slice(i + 1, i + MEASURE_BARS + 1);
-        const move = crossUp
-          ? Math.max(...futBars.map(b => b.high)) - bar.close
-          : bar.close - Math.min(...futBars.map(b => b.low));
-
-        if (move >= MIN_MOVE) {
-          const time = new Date(bar.ts).toISOString().slice(11, 16);
-          profitable.push({
-            type: 'VWAP',
-            setup: crossUp ? 'VWAP Reclaim' : 'VWAP Break',
-            desc: crossUp ? 'Price crossed above VWAP — buyers taking control' : 'Price crossed below VWAP — sellers taking control',
-            level_type: crossUp ? 'support' : 'resistance',
-            price: parseFloat(vwap.toFixed(2)),
-            time,
-            move_pts: Math.round(move),
-            direction: crossUp ? 'LONG' : 'SHORT',
-          });
-          break;
-        }
-      }
-
-      profitable.sort((a, b) => b.move_pts - a.move_pts);
-      res.json(profitable);
-    } catch(e) { console.error(e); res.status(500).json({ error: e.message }); }
-  });
+  // GET /api/auction-read/day-setups lived here too, unreachable dead code (shadowed by
+  // auctionRead.js's copy, mounted before acd.js) — removed 2026-07-17 dead-routes audit.
+  // The live copy in auctionRead.js has been fixed to use the same corrected
+  // computeVolumeProfileForRange() method this dead copy already had.
 
       router.get('/acd/live', async (req, res) => {
     try {
@@ -2284,23 +2085,11 @@ export default function createACDRouter(io) {
       const pwLow  = pwQ.rows[0]?.pw_low  || null;
 
       // Prior month value area (VAH/POC/VAL from volume profile)
-      const pmVaQ = await query(`
-        WITH vp AS (
-          SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-          FROM price_bars_primary WHERE symbol='NQ'
-            AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
-            AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-          GROUP BY ROUND(low/0.25)*0.25
-        ), total AS (SELECT SUM(vol) as t FROM vp),
-        poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-        SELECT p.poc_px::float as poc,
-          (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p.poc_px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-          (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p.poc_px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as val
-        FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-      `);
-      const pmVAH = pmVaQ.rows[0]?.vah || null;
-      const pmVAL = pmVaQ.rows[0]?.val || null;
-      const pmPOC = pmVaQ.rows[0]?.poc || null;
+      const pmMonthStartQ = await query(`SELECT (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date::text as s, (date_trunc('month', CURRENT_DATE) - INTERVAL '1 day')::date::text as e`);
+      const pmVaProfile = await computeVolumeProfileForRange(query, { startDate: pmMonthStartQ.rows[0].s, endDate: pmMonthStartQ.rows[0].e });
+      const pmVAH = pmVaProfile?.vah ?? null;
+      const pmVAL = pmVaProfile?.val ?? null;
+      const pmPOC = pmVaProfile?.poc ?? null;
 
       // Monthly open: first RTH bar of current calendar month
       let monthOpen = null;
@@ -3013,18 +2802,11 @@ export default function createACDRouter(io) {
             pdPOC = vaQ.rows[0].poc;
           } else {
             // fallback
-            const fallbackQ = await query(`
-              WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
-              total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-              SELECT p.poc_px::float as poc,
-                (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-                (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-              FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-            `, [priorDay]);
-            if (fallbackQ.rows[0]) {
-              pdVAH = fallbackQ.rows[0].vah;
-              pdVAL = fallbackQ.rows[0].val;
-              pdPOC = fallbackQ.rows[0].poc;
+            const fallbackProfile = await computeVolumeProfileForRange(query, { startDate: priorDay, endDate: priorDay });
+            if (fallbackProfile) {
+              pdVAH = fallbackProfile.vah;
+              pdVAL = fallbackProfile.val;
+              pdPOC = fallbackProfile.poc;
             }
           }
         }
@@ -3069,23 +2851,9 @@ export default function createACDRouter(io) {
         ({ pmVAH, pmVAL, pmPOC, monthOpen } = cachedPmVA);
       } else {
         try {
-          const pmVaQ = await query(`
-            WITH vp AS (
-              SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol
-              FROM price_bars_primary
-              WHERE symbol='NQ'
-                AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE) - INTERVAL '1 month'
-                AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-              GROUP BY ROUND(low/0.25)*0.25
-            ),
-            total AS (SELECT SUM(vol) as t FROM vp),
-            poc_row AS (SELECT px as poc_px FROM vp ORDER BY vol DESC LIMIT 1)
-            SELECT p.poc_px::float as poc,
-              (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) cv FROM vp WHERE px>=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as vah,
-              (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) cv FROM vp WHERE px<=p.poc_px) x WHERE cv<=(SELECT t*0.35 FROM total))::float as val
-            FROM vp, poc_row p GROUP BY p.poc_px LIMIT 1
-          `);
-          if (pmVaQ.rows[0]) { pmVAH = pmVaQ.rows[0].vah; pmVAL = pmVaQ.rows[0].val; pmPOC = pmVaQ.rows[0].poc; }
+          const pmMonthBoundsQ = await query(`SELECT (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date::text as s, (date_trunc('month', CURRENT_DATE) - INTERVAL '1 day')::date::text as e`);
+          const pmProfile = await computeVolumeProfileForRange(query, { startDate: pmMonthBoundsQ.rows[0].s, endDate: pmMonthBoundsQ.rows[0].e });
+          if (pmProfile) { pmVAH = pmProfile.vah; pmVAL = pmProfile.val; pmPOC = pmProfile.poc; }
           const moQ = await query(`
             SELECT open::float as mo FROM price_bars_primary
             WHERE symbol='NQ' AND ts::date = (
@@ -3305,28 +3073,38 @@ export default function createACDRouter(io) {
           const otdShortSignaled = upProbe >= 10 && otdBars.some(b => b.close < orL);
           const otdLongSignaled  = downProbe >= 10 && otdBars.some(b => b.close > orH);
 
+          // FIXED 2026-07-17: SHORT's description hand-typed "-5.6% directional edge... 73% WR
+          // (+23%, N=11)... 69% WR" — already known-dead per the comment below (KILL, real EV
+          // -$74 to -$100) so this was actively misleading on an already-suppressed setup. Also
+          // fixed the same "unbounded structural-level target" bug found across this session
+          // (docs/OPEN_THREADS.md) — target/stop now read the real OPTIMAL_STOP calibration.
+          const _otdOpt = getCached(todayET, 'levelFadeStats')?._opt;
           if (otdShortSignaled && currentPrice < orL) {
+            const _otdStopPts = _otdOpt?.OPEN_TEST_DRIVE_SHORT?.stop ?? 89;
+            const _otdTargetPts = _otdOpt?.OPEN_TEST_DRIVE_SHORT?.target ?? 33;
             otdSetup = {
               type: 'OPEN_TEST_DRIVE_SHORT', label: 'OPEN TEST DRIVE (SHORT)',
               direction: 'SHORT',
               entry: +currentPrice.toFixed(0),
-              stop: +probeHigh.toFixed(0),
-              target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80) * 1.5),
-              targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Range Extension',
+              stop: +(currentPrice + _otdStopPts).toFixed(0),
+              target: +(currentPrice - _otdTargetPts).toFixed(0),
+              targetLabel: `T1: ${_otdTargetPts}pt sweep-optimal · Stop: ${_otdStopPts}pt`,
               keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (reversal confirmed)',
-              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} then reversed through OR Low (${orL?.toFixed(0)}).\n\nEDGE: OTD_SHORT has -5.6% directional edge at baseline and is GATED to PD-2 VA confluence only. At PD-2 VA: 73% WR (+23%, N=11). On TURBULENT days: 60% WR (+11%). NL30 aligned: 69% WR. EXECUTION: Short with stop above probe high (${probeHigh.toFixed(0)}). Target PD VAL or OR extension. Only fires when price is near PD-2 VA levels.`,
+              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} then reversed through OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_TEST_DRIVE_SHORT') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
               history: await getHistory('TRANSITIONAL'),
             };
           } else if (otdLongSignaled && currentPrice > orH) {
+            const _otdStopPts = _otdOpt?.OPEN_TEST_DRIVE_LONG?.stop ?? 112;
+            const _otdTargetPts = _otdOpt?.OPEN_TEST_DRIVE_LONG?.target ?? 21;
             otdSetup = {
               type: 'OPEN_TEST_DRIVE_LONG', label: 'OPEN TEST DRIVE (LONG)',
               direction: 'LONG',
               entry: +currentPrice.toFixed(0),
-              stop: +probeLow.toFixed(0),
-              target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80) * 1.5),
-              targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'Composite VAH',
+              stop: +(currentPrice - _otdStopPts).toFixed(0),
+              target: +(currentPrice + _otdTargetPts).toFixed(0),
+              targetLabel: `T1: ${_otdTargetPts}pt sweep-optimal · Stop: ${_otdStopPts}pt`,
               keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (reversal confirmed)',
-              description: `Open Test Drive long. Price probed down ${downProbe.toFixed(0)}pts to ${probeLow.toFixed(0)} in the opening, then reversed through OR High (${orH?.toFixed(0)}) — initiative buyers dominated. Stop below probe low (${probeLow.toFixed(0)}).`,
+              description: `Open Test Drive long. Price probed down ${downProbe.toFixed(0)}pts to ${probeLow.toFixed(0)} in the opening, then reversed through OR High (${orH?.toFixed(0)}) — initiative buyers dominated.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_TEST_DRIVE_LONG') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
               history: await getHistory('TRANSITIONAL'),
             };
           }
@@ -3591,9 +3369,16 @@ export default function createACDRouter(io) {
             const ibOpt = _ibLS?._opt?.[ibTypeName];
             const ibStopPts = ibOpt?.stop ?? 50; // sweep-optimal 50pt for both BULLISH and BEARISH
             const stop = isBull ? +(currentPrice - ibStopPts).toFixed(0) : +(currentPrice + ibStopPts).toFixed(0);
+            // FIXED 2026-07-17 (user noticed an 8:1 R:R / 630pt target on a real STOP_HIT trade and
+            // asked whether targets are actually calibrated — they weren't). Stop already correctly
+            // read the sweep-optimal ibOpt.stop, but target ignored ibOpt.target entirely and used
+            // raw, uncapped PD VAH/VAL structural distance instead — real calibration shows p50-MFE-
+            // sweep-optimal targets of 30.5pt (IB_BULLISH) / 45.8pt (IB_BEARISH), nowhere near the
+            // hundreds of points PD VAH/VAL can sit at. See docs/OPEN_THREADS.md for the full incident.
+            const ibTargetPts = ibOpt?.target ?? 35;
             const target = isBull
-              ? (pdVAH && pdVAH > currentPrice ? Math.round(pdVAH) : Math.round(ibHigh + (orRange || 0) * 0.5))
-              : (pdVAL && pdVAL < currentPrice ? Math.round(pdVAL) : Math.round(ibLow - (orRange || 0) * 0.5));
+              ? +(currentPrice + ibTargetPts).toFixed(0)
+              : +(currentPrice - ibTargetPts).toFixed(0);
             ibSetup = {
               type: isBull ? 'IB_BULLISH' : 'IB_BEARISH',
               label: conflicting
@@ -3604,16 +3389,16 @@ export default function createACDRouter(io) {
               entry: +currentPrice.toFixed(0),
               stop,
               target,
-              targetLabel: isBull ? `T1: PD VAH (half off) · Stop: ${ibStopPts}pt from entry (${stop})` : `T1: PD VAL (half off) · Stop: ${ibStopPts}pt from entry (${stop})`,
+              targetLabel: `T1: ${ibTargetPts}pt sweep-optimal (half off) · Stop: ${ibStopPts}pt from entry (${stop})`,
               keyLevel: +ibMid.toFixed(0),
               keyLevelLabel: 'IB Midpoint',
               description: conflicting
                 ? (isBull
                   ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Half conviction only: smaller size, wider stop tolerance.`
-                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH ${(() => { const r = _ibLS?._opt?.IB_BEARISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~55% WR'; })()} overall. On TURBULENT: strongest. EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`)
+                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. On TURBULENT: strongest. EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`)
                 : (isBull
-                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${(() => { const r = _ibLS?._opt?.IB_BULLISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~64% WR'; })()} overall. TREND days: strongest. BALANCE: suppressed (below breakeven). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target PD VAH or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${(() => { const r = _ibLS?._opt?.IB_BEARISH; return r ? `${(r.wr*100).toFixed(1)}% WR (N=${r.n})` : '~55% WR'; })()} overall. TURBULENT: strongest. BALANCE: suppressed. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target PD VAL or IB extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
+                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${_ibLS?._edgeText?.('IB_BULLISH') ?? 'not yet calibrated'} overall. TREND days: strongest. BALANCE: suppressed (below breakeven). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. TURBULENT: strongest. BALANCE: suppressed. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
               // Verified live 2026-07-14 (docs/OPEN_THREADS.md has the incident writeup) — the
               // previous comment here claiming IB_BULLISH TREND was "+$20 EV solid" was stale/
@@ -3646,6 +3431,13 @@ export default function createACDRouter(io) {
         const isBull = nearOrHigh && nl30State !== 'BEARISH';
         const isBear = nearOrLow  && nl30State !== 'BULLISH';
         if (isBull || isBear) {
+          // FIXED 2026-07-17 (same "unbounded structural-level target" bug found and fixed for
+          // IB_BULLISH/BEARISH — see docs/OPEN_THREADS.md). The OR-measured-move projection
+          // (orH + orRange) has no realistic-distance cap and can sit far past what real MFE data
+          // supports. Now uses the real sweep-optimal OPTIMAL_STOP target instead.
+          const _odTargetPts = isBull
+            ? (getCached(todayET, 'levelFadeStats')?._opt?.OPEN_DRIVE_LONG?.target ?? 50)
+            : (getCached(todayET, 'levelFadeStats')?._opt?.OPEN_DRIVE_SHORT?.target ?? 40);
           openDrive = {
             type: isBull ? 'OPEN_DRIVE_LONG' : 'OPEN_DRIVE_SHORT',
             label: isBull ? 'OPEN DRIVE (LONG)' : 'OPEN DRIVE (SHORT)',
@@ -3653,14 +3445,18 @@ export default function createACDRouter(io) {
             entry: +currentPrice.toFixed(0),
             stop: isBull ? +(orL - (orH - orL)).toFixed(0) : +(orH + 2).toFixed(0),
             target: isBull
-              ? t1Guard('LONG',  currentPrice, orH + (orRange || 0), currentPrice + Math.max(60, orRange || 60))
-              : t1Guard('SHORT', currentPrice, orL - (orRange || 0), currentPrice - Math.max(60, orRange || 60)),
-            targetLabel: isBull ? 'T1: OR Measured Move (half off) · Runner: 70pt' : 'T1: OR Measured Move (half off) · Runner: 65pt',
+              ? +(currentPrice + _odTargetPts).toFixed(0)
+              : +(currentPrice - _odTargetPts).toFixed(0),
+            targetLabel: `T1: ${_odTargetPts}pt sweep-optimal`,
             keyLevel: +(isBull ? orH : orL).toFixed(0),
             keyLevelLabel: isBull ? 'OR High (support)' : 'OR Low (resistance)',
+            // FIXED 2026-07-17: hand-typed "66.7% WR (N=42)"/"68.2% WR (N=22)" — real live SETUP_STATUS
+            // data (N=44-59) shows OPEN_DRIVE_LONG's EV has since flipped negative (-$7 to -$16/trade)
+            // and WR is ~46-47%, ~19pp lower than the hardcoded claim. Same "never fabricate a stat"
+            // violation fixed elsewhere this session (docs/OPEN_THREADS.md).
             description: isBull
-              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG has +15.9% directional edge (66.7% WR at 10 bars, N=42). On TREND days: 83% WR (N=6). NL30 aligned: 60% WR. EXECUTION: Buy the pullback to OR High. Stop below OR Low −1× OR Range (${+(orL - (orH - orL)).toFixed(0)}). Target OR measured move. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT has +18.9% directional edge (68.2% WR at 10 bars, N=22). At VA level: 78% WR. NL30 aligned: 80% WR (N=10). EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target OR measured move or PD VAL.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
+              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_DRIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Buy the pullback to OR High. Stop below OR Low −1× OR Range (${+(orL - (orH - orL)).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_DRIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
             history: await getHistory('TRENDING_UP'),
           };
         }
@@ -3758,40 +3554,53 @@ export default function createACDRouter(io) {
         const lastBarVol     = latestBarRow.rows[0]?.volume || 0;
         const highVolume     = avgVol > 0 && lastBarVol > avgVol * 1.5;
 
+        // FIXED 2026-07-17 (same "unbounded structural-level target" bug found and fixed for
+        // IB_BULLISH/BEARISH, OPEN_DRIVE, VALUE_AREA_RESPONSIVE, BRACKET_BREAKOUT — see
+        // docs/OPEN_THREADS.md): pdVAL/pdVAH picked first via t1Guard regardless of realistic
+        // distance. Both FAILED_AUCTION_LONG/SHORT are THIN_N (N=3/N=9) with no OPTIMAL_STOP row
+        // yet, so there's no per-type sweep to read — using the same conservative generic
+        // fallback distance as other uncalibrated setups instead of an unbounded structural level.
+        const _faOpt = getCached(todayET, 'levelFadeStats')?._opt;
         if (pwHighTested && !pwHighBroken && currentPrice && currentPrice < (orH || currentPrice + 50)) {
+          const _faStopPts = _faOpt?.FAILED_AUCTION_SHORT?.stop ?? 40;
+          const _faTargetPts = _faOpt?.FAILED_AUCTION_SHORT?.target ?? 35;
           failedAuction = {
             type: 'FAILED_AUCTION_SHORT', label: 'FAILED AUCTION — PRIOR WEEK HIGH',
             direction: 'SHORT',
             entry: +currentPrice.toFixed(0),
-            stop: +(currentPrice + (orRange || 50) * 0.3).toFixed(0),
-            target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 50) * 0.5),
-            targetLabel: (pdVAL && pdVAL < currentPrice) ? 'Prior Day VAL' : 'OR Extension',
+            stop: +(currentPrice + _faStopPts).toFixed(0),
+            target: +(currentPrice - _faTargetPts).toFixed(0),
+            targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'Prior Week High',
-            description: `Prior week high was tested but price failed to close above it — supply waiting. Bulls pushed to last week's extreme, found sellers, retreated. Fade the failed breakout.`,
+            description: `Prior week high was tested but price failed to close above it — supply waiting. Bulls pushed to last week's extreme, found sellers, retreated. Fade the failed breakout.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_SHORT') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('BALANCE'),
           };
         } else if (pwLowTested && !pwLowBroken && currentPrice && currentPrice > (orL || currentPrice - 50)) {
+          const _faStopPts = _faOpt?.FAILED_AUCTION_LONG?.stop ?? 40;
+          const _faTargetPts = _faOpt?.FAILED_AUCTION_LONG?.target ?? 35;
           failedAuction = {
             type: 'FAILED_AUCTION_LONG', label: 'FAILED AUCTION — PRIOR WEEK LOW',
             direction: 'LONG',
             entry: +currentPrice.toFixed(0),
-            stop: +(currentPrice - (orRange || 50) * 0.3).toFixed(0),
-            target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 50) * 0.5),
-            targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'OR Extension',
+            stop: +(currentPrice - _faStopPts).toFixed(0),
+            target: +(currentPrice + _faTargetPts).toFixed(0),
+            targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'Prior Week Low',
-            description: `Prior week low tested but price failed to close below — buyers defended. Fade the failed breakdown toward prior day value area.`,
+            description: `Prior week low tested but price failed to close below — buyers defended. Fade the failed breakdown.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('BALANCE'),
           };
         } else if (gLineLost && gLineReclaimed && currentPrice) {
+          const _faStopPts = _faOpt?.FAILED_AUCTION_LONG?.stop ?? 40;
+          const _faTargetPts = _faOpt?.FAILED_AUCTION_LONG?.target ?? 35;
           failedAuction = {
             type: 'FAILED_AUCTION_LONG', label: 'FAILED AUCTION — G-LINE RECLAIM',
             direction: 'LONG',
             entry: +currentPrice.toFixed(0),
-            stop: +(currentPrice - (orRange || 50) * 0.5).toFixed(0),
-            target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 50) * 0.5),
-            targetLabel: (pdVAH && pdVAH > currentPrice) ? 'Prior Day VAH' : 'OR Extension',
+            stop: +(currentPrice - _faStopPts).toFixed(0),
+            target: +(currentPrice + _faTargetPts).toFixed(0),
+            targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'G-Line (weekly open)',
-            description: `G-Line lost then reclaimed — bears failed to hold below weekly open. ${highVolume ? 'High volume on reclaim confirms conviction.' : ''} Long lean toward prior VAH.`,
+            description: `G-Line lost then reclaimed — bears failed to hold below weekly open. ${highVolume ? 'High volume on reclaim confirms conviction.' : ''}\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('TRANSITIONAL'),
           };
         }
@@ -3808,21 +3617,29 @@ export default function createACDRouter(io) {
         const breakingDown = bracketBot && currentPrice < bracketBot - 5 && nl30State === 'BEARISH';
         if (breakingUp || breakingDown) {
           const isBull = breakingUp;
+          // FIXED 2026-07-17: hand-typed "+4.4% directional edge (55.1% WR, N=49)"/"+30.7% directional
+          // edge (80% WR, N=10)" — real live SETUP_STATUS shows BRACKET_BREAKOUT_LONG is SUPPRESS
+          // (N=37, WR=29.7%, EV=-$16.84) and BRACKET_BREAKOUT_SHORT is THIN_N (N=16, WR=6.3%,
+          // EV=-$104.75) — the polar opposite of the hardcoded claim. Same "never fabricate a stat"
+          // violation, plus the same "unbounded structural-level target" bug (raw VA-extension
+          // distance, no cap) fixed elsewhere this session (docs/OPEN_THREADS.md). Stop/target now
+          // read the real sweep-optimal OPTIMAL_STOP calibration.
+          const _bbOpt = getCached(todayET, 'levelFadeStats')?._opt?.[isBull ? 'BRACKET_BREAKOUT_LONG' : 'BRACKET_BREAKOUT_SHORT'];
+          const _bbStopPts = _bbOpt?.stop ?? 80;
+          const _bbTargetPts = _bbOpt?.target ?? 30;
           bracketBreakout = {
             type: isBull ? 'BRACKET_BREAKOUT_LONG' : 'BRACKET_BREAKOUT_SHORT',
             label: isBull ? 'BRACKET BREAKOUT (LONG)' : 'BRACKET BREAKOUT (SHORT)',
             direction: isBull ? 'LONG' : 'SHORT',
             entry: +currentPrice.toFixed(0),
-            stop: +(isBull ? (bracketTop - 5) : (bracketBot + 5)).toFixed(0),
-            target: isBull
-              ? t1Guard('LONG',  currentPrice, pdVAH + (pdVAH - pdVAL), pdVAH, currentPrice + (orRange || 80))
-              : t1Guard('SHORT', currentPrice, pdVAL - (pdVAH - pdVAL), pdVAL, currentPrice - (orRange || 80)),
-            targetLabel: 'Value Area Extension',
+            stop: isBull ? +(currentPrice - _bbStopPts).toFixed(0) : +(currentPrice + _bbStopPts).toFixed(0),
+            target: isBull ? +(currentPrice + _bbTargetPts).toFixed(0) : +(currentPrice - _bbTargetPts).toFixed(0),
+            targetLabel: `T1: ${_bbTargetPts}pt sweep-optimal · Stop: ${_bbStopPts}pt`,
             keyLevel: +(isBull ? bracketTop : bracketBot).toFixed(0),
             keyLevelLabel: isBull ? 'Prior Bracket Top' : 'Prior Bracket Bottom',
             description: isBull
-              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}.\n\nEDGE: BRACKET_BREAKOUT_LONG has +4.4% directional edge (55.1% WR at 10 bars, N=49). At 2D VA: 73% WR (N=11). Best on BALANCE days: 57% WR. EXECUTION: Prior bracket top becomes support. Buy pullbacks to the bracket boundary. Stop 5pt inside bracket (${+(bracketTop - 5).toFixed(0)}). Target value area measured move.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}.\n\nEDGE: BRACKET_BREAKOUT_SHORT has +30.7% directional edge (80% WR at 10 bars, N=10 ⚠small). Strongest setup in the backtest by edge delta. EXECUTION: Prior bracket bottom becomes resistance. Short rallies to bracket boundary. Stop 5pt inside bracket (${+(bracketBot + 5).toFixed(0)}). Target value area extension.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
+              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}.\n\nEDGE: BRACKET_BREAKOUT_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('BRACKET_BREAKOUT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket top becomes support. Buy pullbacks to the bracket boundary. Stop ${_bbStopPts}pt below entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}.\n\nEDGE: BRACKET_BREAKOUT_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('BRACKET_BREAKOUT_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket bottom becomes resistance. Short rallies to bracket boundary. Stop ${_bbStopPts}pt above entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
             history: await getHistory(isBull ? 'TRENDING_UP' : 'TRENDING_DOWN'),
           };
         }
@@ -3835,21 +3652,32 @@ export default function createACDRouter(io) {
         const nearVAL = Math.abs(currentPrice - pdVAL) <= 20;
         if (nearVAH || nearVAL) {
           const isFade = nearVAH;
+          // FIXED 2026-07-17 (same "unbounded structural-level target" bug found and fixed for
+          // IB_BULLISH/BEARISH and OPEN_DRIVE — see docs/OPEN_THREADS.md). Both stop (hardcoded
+          // +18/-8pt, contradicted its own description text which claimed a different "recalibrated"
+          // value) and target (raw PD POC/VAH/VAL distance, unbounded) now read the real sweep-
+          // optimal OPTIMAL_STOP calibration instead.
+          const _varOpt = getCached(todayET, 'levelFadeStats')?._opt?.[isFade ? 'VALUE_AREA_RESPONSIVE_SHORT' : 'VALUE_AREA_RESPONSIVE_LONG'];
+          const _varStopPts = _varOpt?.stop ?? 30;
+          const _varTargetPts = _varOpt?.target ?? 28;
           valueAreaResp = {
             type: isFade ? 'VALUE_AREA_RESPONSIVE_SHORT' : 'VALUE_AREA_RESPONSIVE_LONG',
             label: isFade ? 'VALUE AREA RESPONSIVE (SHORT)' : 'VALUE AREA RESPONSIVE (LONG)',
             direction: isFade ? 'SHORT' : 'LONG',
             entry: +currentPrice.toFixed(0),
-            stop: +(isFade ? (pdVAH + 18) : (pdVAL - 8)).toFixed(0),
-            target: isFade
-              ? t1Guard('SHORT', currentPrice, pdPOC, pdVAL, currentPrice - Math.max(60, (orRange || 80) * 0.5))
-              : t1Guard('LONG',  currentPrice, pdPOC, pdVAH, currentPrice + Math.max(60, (orRange || 80) * 0.5)),
-            targetLabel: isFade ? 'T1: PD POC (half off) · Runner: 95pt' : 'T1: PD POC (half off) · Runner: 100pt',
+            stop: isFade ? +(currentPrice + _varStopPts).toFixed(0) : +(currentPrice - _varStopPts).toFixed(0),
+            target: isFade ? +(currentPrice - _varTargetPts).toFixed(0) : +(currentPrice + _varTargetPts).toFixed(0),
+            targetLabel: `T1: ${_varTargetPts}pt sweep-optimal · Stop: ${_varStopPts}pt`,
             keyLevel: +(isFade ? pdVAH : pdVAL).toFixed(0),
             keyLevelLabel: isFade ? 'Prior Day VAH' : 'Prior Day VAL',
+            // FIXED 2026-07-17: hand-typed "66.7% WR (N=60)... 90% WR (N=10)... 93% WR (N=14)" for
+            // SHORT, and a hardcoded "-5.0% directional edge, SUPPRESSED" claim for LONG that
+            // directly contradicts live data (VALUE_AREA_RESPONSIVE_LONG is actually ACTIVE with
+            // positive EV). Same "never fabricate a stat" violation fixed elsewhere this session
+            // (docs/OPEN_THREADS.md).
             description: isFade
-              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VA_RESP_SHORT is the #1 profitable setup — +17.4% directional edge (66.7% WR at 10 bars, N=60). On TURBULENT days: 90% WR (N=10). On BALANCE: 65% WR. NL30 aligned: 93% WR (N=14). EXECUTION: Stop above VAH +18pt (${+(pdVAH + 18).toFixed(0)}) — recalibrated from +8 (MAE sweep optimal: 27pt from entry, +$26 EV). Target PD POC (${pdPOC?.toFixed(0)}) or PD VAL. The tight stop with large target is WHY this setup is profitable — one win covers 6-8 losses.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
-              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}). NOTE: VA_RESP_LONG has -5.0% directional edge and is SUPPRESSED.`,
+              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('VALUE_AREA_RESPONSIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt above entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
+              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}) — responsive buyers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('VALUE_AREA_RESPONSIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt below entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -4030,6 +3858,11 @@ export default function createACDRouter(io) {
 
               const stopDist = 25;
               const targetDist = 40;
+              // FIXED 2026-07-17: hand-typed "71.4% WR (N=35)... 90.9% WR (N=11)" with zero backing
+              // data (ABSORPTION_LONG has never fired in active_setups) — same "never fabricate a
+              // stat" violation as RSI_DIV above. Now reads liveStats._setupStats honestly.
+              const _absorpStats = getCached(todayET, 'levelFadeStats')?._setupStats?.ABSORPTION_LONG;
+              const _absorpEdge = getCached(todayET, 'levelFadeStats')?._edgeText?.('ABSORPTION_LONG') ?? 'not yet calibrated';
               absorptionSetup = {
                 type: 'ABSORPTION_LONG',
                 direction: 'LONG',
@@ -4037,8 +3870,10 @@ export default function createACDRouter(io) {
                 stop: +(currentPrice - stopDist).toFixed(0),
                 target: +(currentPrice + targetDist).toFixed(0),
                 targetLabel: '40pt Runner (calibrated)',
-                description: `Bullish absorption detected: ${lowCluster} 2-min bars clustering at support (${Math.round(wL)}), RSI rising +${rsiDrift.toFixed(0)} while price flat in ${Math.round(wRange)}pt range.\n\nEDGE: Bullish absorption has 71.4% WR at 5 bars (N=35, +18.4% vs baseline). On BALANCE days: 73.9% WR at 20 bars (+20.9%, N=23). Near 2D VA: 90.9% WR (N=11).\n\nEXECUTION: Price held at support with buyers absorbing selling pressure. RSI confirms hidden bullish momentum. Enter long, stop below support zone (${Math.round(currentPrice - stopDist)}), target ${pdVAH ? 'PD VAH (' + Math.round(pdVAH) + ')' : '2R'}.${atLevel ? '\n\n✅ AT 2D VA LEVEL — highest conviction (90.9% WR).' : ''}${nearPD2VA ? '\n✅ PD-2 VA CONFLUENCE' : ''}`,
-                history: { winRate: 0.714, occurrences: 35, avgPnl: null, t1HitRate: 0.714 },
+                description: `Bullish absorption detected: ${lowCluster} 2-min bars clustering at support (${Math.round(wL)}), RSI rising +${rsiDrift.toFixed(0)} while price flat in ${Math.round(wRange)}pt range.\n\nEDGE: Bullish absorption ${_absorpEdge} overall.\n\nEXECUTION: Price held at support with buyers absorbing selling pressure. RSI confirms hidden bullish momentum. Enter long, stop below support zone (${Math.round(currentPrice - stopDist)}), target ${pdVAH ? 'PD VAH (' + Math.round(pdVAH) + ')' : '2R'}.${atLevel ? '\n\n✅ AT 2D VA LEVEL — historically higher conviction near this confluence.' : ''}${nearPD2VA ? '\n✅ PD-2 VA CONFLUENCE' : ''}`,
+                history: (_absorpStats && _absorpStats.n >= 20)
+                  ? { winRate: _absorpStats.wr, occurrences: _absorpStats.n, avgPnl: _absorpStats.ev, t1HitRate: _absorpStats.wr }
+                  : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
               };
             }
           }
@@ -4089,15 +3924,23 @@ export default function createACDRouter(io) {
           const dayTypeOk = (dtClass === 'TREND' || (isLong && nl30 > 9) || (!isLong && nl30 < -9));
           if (!dayTypeOk) break; // only fire on TREND or NL30-aligned
 
+          // FIXED 2026-07-17: hand-typed "65.3% WR on TREND days (N=49)... Expectancy +$24/trade"
+          // with zero backing data (COIL_SURGE has never fired in active_setups) — same "never
+          // fabricate a stat" violation as RSI_DIV/ABSORPTION_LONG above.
+          const _coilType = isLong ? 'COIL_SURGE_LONG' : 'COIL_SURGE_SHORT';
+          const _coilStats = getCached(todayET, 'levelFadeStats')?._setupStats?.[_coilType];
+          const _coilEdge = getCached(todayET, 'levelFadeStats')?._edgeText?.(_coilType) ?? 'not yet calibrated';
           coilSurgeSetup = {
-            type: isLong ? 'COIL_SURGE_LONG' : 'COIL_SURGE_SHORT',
+            type: _coilType,
             direction: isLong ? 'LONG' : 'SHORT',
             entry: +currentPrice.toFixed(0),
             stop: +(isLong ? currentPrice - stopDist : currentPrice + stopDist).toFixed(0),
             target: +vwap.toFixed(0),
             targetLabel: 'RTH VWAP',
-            description: `Coil detected (${(cHi - cLo).toFixed(0)}pt range, volume ${((Number(cbars[ci].vol)||0)/cBv*100).toFixed(0)}% of baseline) with volume surge (${(lastVol/cBv).toFixed(1)}x baseline). Price is ${Math.abs(dist).toFixed(0)}pt ${dist > 0 ? 'above' : 'below'} VWAP.\n\nEDGE: Coil→surge→VWAP fade has 65.3% WR on TREND days (N=49, +16.1% vs baseline). NL30 aligned: 60% WR. R:R avg 3.08. Expectancy +$24/trade.\n\nEXECUTION: Fade toward VWAP (${Math.round(vwap)}). Stop at coil range extreme (${isLong ? Math.round(cLo - 5) : Math.round(cHi + 5)}). Hold 10 bars max — edge decays after that. Only fires on TREND days or NL30-aligned.${nearPD2VA ? '\n\n✅ PD-2 VA CONFLUENCE' : ''}`,
-            history: { winRate: 0.653, occurrences: 49, avgPnl: null, t1HitRate: 0.653 },
+            description: `Coil detected (${(cHi - cLo).toFixed(0)}pt range, volume ${((Number(cbars[ci].vol)||0)/cBv*100).toFixed(0)}% of baseline) with volume surge (${(lastVol/cBv).toFixed(1)}x baseline). Price is ${Math.abs(dist).toFixed(0)}pt ${dist > 0 ? 'above' : 'below'} VWAP.\n\nEDGE: Coil→surge→VWAP fade ${_coilEdge} overall.\n\nEXECUTION: Fade toward VWAP (${Math.round(vwap)}). Stop at coil range extreme (${isLong ? Math.round(cLo - 5) : Math.round(cHi + 5)}). Hold 10 bars max — edge decays after that. Only fires on TREND days or NL30-aligned.${nearPD2VA ? '\n\n✅ PD-2 VA CONFLUENCE' : ''}`,
+            history: (_coilStats && _coilStats.n >= 20)
+              ? { winRate: _coilStats.wr, occurrences: _coilStats.n, avgPnl: _coilStats.ev, t1HitRate: _coilStats.wr }
+              : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
           };
           break;
         }
@@ -4149,6 +3992,12 @@ export default function createACDRouter(io) {
               if (confirmed && last - confirmIdx <= 2) {
                 const stopDist = Math.max(20, Math.round((fh[curr.idx] - fl[curr.idx]) * 1.5));
                 const rsiDelta = (curr.rsi - prev.rsi).toFixed(1);
+                // FIXED 2026-07-17: this used to hand-type "WR with confirmation: 90.0% (N=20)" and a
+                // matching history{} object with no real backing data at all — RSI_DIV_BULLISH has
+                // zero fired trades in active_setups, a direct "never fabricate a stat" violation
+                // (see CLAUDE.md, docs/OPEN_THREADS.md). Now reads liveStats._setupStats honestly via
+                // _edgeText(), which reports real N/WR or says plainly there's no calibration yet.
+                const _rsiBullStats = getCached(todayET, 'levelFadeStats')?._setupStats?.RSI_DIV_BULLISH;
                 rsiDivSetup = {
                   type: 'RSI_DIV_BULLISH',
                   direction: 'LONG',
@@ -4156,8 +4005,10 @@ export default function createACDRouter(io) {
                   stop: currentPrice - stopDist,
                   target: t1Guard('LONG', currentPrice, currentPrice + stopDist * 2),
                   targetLabel: '2R Target',
-                  description: `15min RSI BULLISH divergence CONFIRMED. Price made lower low (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made higher low (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ+${rsiDelta}). Confirmation bar closed higher — selling exhaustion confirmed. WR with confirmation: 90.0% (N=20). Scalp long — hold 3 bars (45min) max. Take profit at value area midpoint or 2R.`,
-                  history: { winRate: 0.900, occurrences: 20, avgPnl: null, t1HitRate: 0.900 },
+                  description: `15min RSI BULLISH divergence CONFIRMED. Price made lower low (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made higher low (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ+${rsiDelta}). Confirmation bar closed higher — selling exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('RSI_DIV_BULLISH') ?? 'not yet calibrated'}. Scalp long — hold 3 bars (45min) max. Take profit at value area midpoint or 2R.`,
+                  history: (_rsiBullStats && _rsiBullStats.n >= 20)
+                    ? { winRate: _rsiBullStats.wr, occurrences: _rsiBullStats.n, avgPnl: _rsiBullStats.ev, t1HitRate: _rsiBullStats.wr }
+                    : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
                 };
               }
             }
@@ -4172,6 +4023,9 @@ export default function createACDRouter(io) {
               if (confirmed && last - confirmIdx <= 2) {
                 const stopDist = Math.max(20, Math.round((fh[curr.idx] - fl[curr.idx]) * 1.5));
                 const rsiDelta = (prev.rsi - curr.rsi).toFixed(1);
+                // FIXED 2026-07-17: see the matching RSI_DIV_BULLISH comment above — same fabricated-
+                // stat bug, same fix (RSI_DIV_BEARISH also has zero fired trades in active_setups).
+                const _rsiBearStats = getCached(todayET, 'levelFadeStats')?._setupStats?.RSI_DIV_BEARISH;
                 rsiDivSetup = {
                   type: 'RSI_DIV_BEARISH',
                   direction: 'SHORT',
@@ -4179,8 +4033,10 @@ export default function createACDRouter(io) {
                   stop: currentPrice + stopDist,
                   target: t1Guard('SHORT', currentPrice, currentPrice - stopDist * 2),
                   targetLabel: '2R Target',
-                  description: `15min RSI BEARISH divergence CONFIRMED. Price made higher high (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made lower high (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ-${rsiDelta}). Confirmation bar closed lower — buying exhaustion confirmed. WR with confirmation: 86.1% (N=36). On BALANCE days: 84.6%. Scalp short — hold 2-3 bars (30-45min) max. Take profit at value area midpoint or 2R.`,
-                  history: { winRate: 0.861, occurrences: 36, avgPnl: null, t1HitRate: 0.861 },
+                  description: `15min RSI BEARISH divergence CONFIRMED. Price made higher high (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made lower high (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ-${rsiDelta}). Confirmation bar closed lower — buying exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('RSI_DIV_BEARISH') ?? 'not yet calibrated'}. Scalp short — hold 2-3 bars (30-45min) max. Take profit at value area midpoint or 2R.`,
+                  history: (_rsiBearStats && _rsiBearStats.n >= 20)
+                    ? { winRate: _rsiBearStats.wr, occurrences: _rsiBearStats.n, avgPnl: _rsiBearStats.ev, t1HitRate: _rsiBearStats.wr }
+                    : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
                 };
               }
             }
@@ -4514,15 +4370,22 @@ export default function createACDRouter(io) {
           if (Math.abs(vwapDist) >= vwapThreshold) {
             const isLong = vwapDist < 0;
             const t2Dist = Math.min(Math.round(Math.abs(vwapDist) * 0.5), 100);
+            // FIXED 2026-07-17: hand-typed history{winRate:0.62, occurrences:460, avgPnl:24} — real
+            // SETUP_STATUS data is THIN_N with N=2-3, nowhere close to 460. Same "never fabricate a
+            // stat" violation as the other setups fixed this session (docs/OPEN_THREADS.md).
+            const _vwapMagType = isLong ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT';
+            const _vwapMagStats = getCached(todayET, 'levelFadeStats')?._setupStats?.[_vwapMagType];
             vwapMagnetSetup = {
-              type: isLong ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT',
+              type: _vwapMagType,
               direction: isLong ? 'LONG' : 'SHORT',
               entry: currentPrice,
               stop: isLong ? currentPrice - 30 : currentPrice + 30,
               target: isLong ? currentPrice + 20 : currentPrice - 20,
               targetLabel: `T1: 20pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
-              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at 20pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.`,
-              history: { winRate: 0.62, occurrences: 460, avgPnl: 24, t1HitRate: 0.62 },
+              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at 20pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
+              history: (_vwapMagStats && _vwapMagStats.n >= 20)
+                ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
+                : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
             };
           }
         }
@@ -4603,22 +4466,18 @@ export default function createACDRouter(io) {
               [todayET]
             ).catch(() => ({ rows: [] })),
             // 2-day composite POC (POC of combined last-2-session RTH volume profile)
-            cached2DPOC !== undefined ? Promise.resolve(null) : query(`
-              WITH last2 AS (
-                SELECT DISTINCT ts::date as d FROM price_bars_primary
+            cached2DPOC !== undefined ? Promise.resolve(null) : (async () => {
+              const last2Q = await query(`
+                SELECT DISTINCT ts::date::text as d FROM price_bars_primary
                 WHERE symbol='NQ' AND ts::date < $1
                   AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
                 ORDER BY d DESC LIMIT 2
-              ),
-              vp AS (
-                SELECT ROUND(low::numeric/0.25)*0.25 as px, SUM(volume::numeric) as vol
-                FROM price_bars_primary
-                WHERE symbol='NQ' AND ts::date IN (SELECT d FROM last2)
-                  AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-                GROUP BY ROUND(low::numeric/0.25)*0.25
-              )
-              SELECT px::float as poc FROM vp ORDER BY vol DESC LIMIT 1
-            `, [todayET]).catch(() => ({ rows: [] })),
+              `, [todayET]);
+              const dates = last2Q.rows.map(r => r.d);
+              if (dates.length < 2) return { rows: [] };
+              const profile = await computeVolumeProfileForRange(query, { startDate: dates[dates.length - 1], endDate: dates[0] });
+              return { rows: profile ? [{ poc: profile.poc }] : [] };
+            })().catch(() => ({ rows: [] })),
           ]);
 
           let or5Mid = null;
@@ -4729,8 +4588,14 @@ export default function createACDRouter(io) {
               `).catch(() => ({ rows: [] })),
               // Setup-level suppression: N≥20, EV<-$5/trade. No WR gate — catches high-WR structural losers.
               // Promoted back when recent 90-day WR≥52% and EV>$0. Updated weekly by backtest_setup_status.mjs.
+              // sample_size/win_rate/ev_per_trade added 2026-07-17 — this query previously only selected
+              // recommendation, so every live "EDGE: ... WR (N=...)" description string had no real source
+              // to read from and several were hand-typed literals instead (some for setup types with ZERO
+              // real fired trades — a direct "never fabricate a stat" violation). See liveStats._setupStats
+              // below and docs/OPEN_THREADS.md for the full incident writeup.
               query(`
-                SELECT DISTINCT ON (signal_name) signal_name, recommendation
+                SELECT DISTINCT ON (signal_name) signal_name, recommendation,
+                  sample_size, win_rate::float, ev_per_trade::float
                 FROM performance_audit
                 WHERE signal_type = 'SETUP_STATUS'
                 ORDER BY signal_name, run_date DESC
@@ -4823,9 +4688,22 @@ export default function createACDRouter(io) {
             // THIN_N: N<20 — CLAUDE.md rule: insufficient data, must shadow until N≥20
             // Both cause new setups to insert as SHADOW rather than ACTIVE
             liveStats._suppressedSetups = new Set();
+            // Real, live per-setup_type WR/EV/N — the single source every "EDGE: ... WR (N=...)"
+            // description string in this file must read from instead of hand-typing a literal.
+            // See the setupStatusQ comment above for the incident this fixed.
+            liveStats._setupStats = {};
             for (const r of setupStatusQ.rows) {
               if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') liveStats._suppressedSetups.add(r.signal_name);
+              liveStats._setupStats[r.signal_name] = { wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size, recommendation: r.recommendation };
             }
+            // Formats a live edge stat honestly: real N≥20 numbers, or an explicit "not enough
+            // data yet" instead of ever falling back to a hand-typed/approximate literal.
+            liveStats._edgeText = (type) => {
+              const r = liveStats._setupStats?.[type];
+              if (!r || r.n == null) return 'not yet calibrated — no fired trades yet';
+              if (r.n < 20) return `insufficient sample (N=${r.n}) — not yet decisive`;
+              return `${(r.wr * 100).toFixed(1)}% WR (N=${r.n}, EV=$${r.ev?.toFixed(2)})`;
+            };
             // DOW-specific suppression for today — setups negative on this DOW but fine all-time
             // signal_name format: '{SETUP_TYPE}_DOW_{DOW_INT}' — strip the suffix to get setup_type
             liveStats._dowSuppressToday = new Set();
@@ -4965,7 +4843,7 @@ export default function createACDRouter(io) {
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER')
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
+                ON CONFLICT DO NOTHING
               `, [todayET, lv.name, currentPrice]).catch(() => {});
             }
           }
@@ -5202,7 +5080,7 @@ export default function createACDRouter(io) {
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4)
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
+                ON CONFLICT DO NOTHING
               `, [todayET, type, currentPrice, suppressReason]).catch(() => {});
             }
           }
@@ -5378,6 +5256,10 @@ export default function createACDRouter(io) {
             const extension = level.price - recentLow;
             const bounce = currentPrice - recentLow;
             if (brokeBelow && nowAbove && extension > 3 && extension < 50 && bounce > 15) {
+              // FIXED 2026-07-17: hand-typed history{winRate:0.55, occurrences:198} — real SETUP_STATUS
+              // data is THIN_N with N=3-7. Same "never fabricate a stat" violation fixed elsewhere
+              // this session (docs/OPEN_THREADS.md).
+              const _sweepLongStats = getCached(todayET, 'levelFadeStats')?._setupStats?.STOP_SWEEP_LONG;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_LONG',
                 direction: 'LONG',
@@ -5385,8 +5267,10 @@ export default function createACDRouter(io) {
                 stop: Math.round(recentLow - 5),
                 target: Math.round(currentPrice + 30),
                 targetLabel: `${level.name} sweep bounce`,
-                description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).`,
-                history: { winRate: 0.55, occurrences: 198, avgPnl: null, t1HitRate: 0.55 },
+                description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('STOP_SWEEP_LONG') ?? 'not yet calibrated'} overall.`,
+                history: (_sweepLongStats && _sweepLongStats.n >= 20)
+                  ? { winRate: _sweepLongStats.wr, occurrences: _sweepLongStats.n, avgPnl: _sweepLongStats.ev, t1HitRate: _sweepLongStats.wr }
+                  : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
               };
             }
           } else {
@@ -5396,6 +5280,8 @@ export default function createACDRouter(io) {
             const extension = recentHigh - level.price;
             const drop = recentHigh - currentPrice;
             if (brokeAbove && nowBelow && extension > 3 && extension < 50 && drop > 15) {
+              // FIXED 2026-07-17: same fabricated-history fix as STOP_SWEEP_LONG above.
+              const _sweepShortStats = getCached(todayET, 'levelFadeStats')?._setupStats?.STOP_SWEEP_SHORT;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_SHORT',
                 direction: 'SHORT',
@@ -5403,8 +5289,10 @@ export default function createACDRouter(io) {
                 stop: Math.round(recentHigh + 5),
                 target: Math.round(currentPrice - 30),
                 targetLabel: `${level.name} sweep fade`,
-                description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).`,
-                history: { winRate: 0.55, occurrences: 198, avgPnl: null, t1HitRate: 0.55 },
+                description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('STOP_SWEEP_SHORT') ?? 'not yet calibrated'} overall.`,
+                history: (_sweepShortStats && _sweepShortStats.n >= 20)
+                  ? { winRate: _sweepShortStats.wr, occurrences: _sweepShortStats.n, avgPnl: _sweepShortStats.ev, t1HitRate: _sweepShortStats.wr }
+                  : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
               };
             }
           }
@@ -5532,13 +5420,19 @@ export default function createACDRouter(io) {
               const target = isLong ? entry + targetDist : entry - targetDist;
               const edgeLabel = nearTop ? `zone ceiling (${Math.round(zoneHi)})` : `zone floor (${Math.round(zoneLo)})`;
 
+              // FIXED 2026-07-17: hand-typed "45% WR, +$736/yr... zone edges fade back 84% of the
+              // time" — real SETUP_STATUS data is THIN_N with N=1, EV=-$7. Same "never fabricate a
+              // stat" violation fixed elsewhere this session (docs/OPEN_THREADS.md).
+              const _zoneEdgeStats = getCached(todayET, 'levelFadeStats')?._setupStats?.ZONE_EDGE_FADE;
               zoneEdgeFade = {
                 type: 'ZONE_EDGE_FADE',
                 direction: isLong ? 'LONG' : 'SHORT',
                 entry, stop, target,
                 targetLabel: `${targetDist}pt fade (5%×ATR)`,
-                description: `Price at balance ${edgeLabel}. ATR-scaled fade: ${stopDist}pt stop, ${targetDist}pt target. Backtested 45% WR, +$736/yr. High vol days: 55% WR. Zone edges fade back 84% of the time.`,
-                history: { winRate: 0.45, occurrences: 199, avgPnl: null, t1HitRate: 0.45 },
+                description: `Price at balance ${edgeLabel}. ATR-scaled fade: ${stopDist}pt stop, ${targetDist}pt target. EDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('ZONE_EDGE_FADE') ?? 'not yet calibrated'} overall.`,
+                history: (_zoneEdgeStats && _zoneEdgeStats.n >= 20)
+                  ? { winRate: _zoneEdgeStats.wr, occurrences: _zoneEdgeStats.n, avgPnl: _zoneEdgeStats.ev, t1HitRate: _zoneEdgeStats.wr }
+                  : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
               };
             }
           }
@@ -5958,7 +5852,7 @@ export default function createACDRouter(io) {
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
                   status, origin_status, resolution_method)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL')
-                ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
+                ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
@@ -6009,7 +5903,7 @@ export default function createACDRouter(io) {
         C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
         GAP_FILL_LONG: null, GAP_FILL_SHORT: null,
       };
-      // Hard cap: 1:00 PM ET (session end). Use local (ET) time formatting so PostgreSQL
+      // Hard cap: 4:00 PM ET (RTH close). Use local (ET) time formatting so PostgreSQL
       // interprets the stored TIMESTAMP WITHOUT TZ correctly in its session timezone.
       const fmtETStr = (d) => {
         const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'),
@@ -6017,7 +5911,20 @@ export default function createACDRouter(io) {
               h = String(d.getHours()).padStart(2,'0'), m = String(d.getMinutes()).padStart(2,'0');
         return `${y}-${mo}-${day} ${h}:${m}:00`;
       };
-      const sessionEndET = new Date(etNow); sessionEndET.setHours(13, 0, 0, 0);
+      // FIXED 2026-07-17 (Setup Log duplicate-firing bug): this was hardcoded to 1:00 PM ET
+      // since the file's original commit (2026-06-01), from back when the app apparently only
+      // detected setups until 1 PM -- never updated as detection extended to full RTH (4 PM)
+      // and then, 2026-07-16, to full Globex hours. Any setup detected after 1 PM got an
+      // expires_at already in the PAST at the moment of insertion, so the very next 15s poll
+      // instantly expired it (TIME_EXPIRED), and because the existingSetup dedup check only
+      // looks at still-open ACTIVE/SHADOW rows, the NEXT poll re-inserted a fresh duplicate for
+      // the exact same touch -- confirmed live: every IB_HIGH_FADE_SHORT fire after 1 PM today
+      // duplicated this way. Fixed to 4:00 PM (RTH close, matching the BRACKET_BREAKOUT eodET
+      // case just below) and rolled forward a day if that's already passed -- since Globex-hours
+      // firing means "now" can legitimately be evening/overnight, a same-day-only cap would
+      // reintroduce this exact bug for any post-4PM/overnight fire.
+      const sessionEndET = new Date(etNow); sessionEndET.setHours(16, 0, 0, 0);
+      if (sessionEndET <= etNow) sessionEndET.setDate(sessionEndET.getDate() + 1);
       const computeExpiry = (type) => {
         if (type === 'BRACKET_BREAKOUT_LONG' || type === 'BRACKET_BREAKOUT_SHORT') {
           const eodET = new Date(etNow); eodET.setHours(16, 0, 0, 0);
@@ -6038,9 +5945,19 @@ export default function createACDRouter(io) {
       // "fired 09:34 ET" when price re-touched OR low. ACTIVE and SHADOW are the two
       // still-open (not yet resolved) statuses this INSERT ever assigns — only those
       // represent "this is genuinely the same ongoing instance, don't re-fire." The
-      // unique index is (trade_date, setup_type, COALESCE(status,'')), so a fresh
-      // ACTIVE/SHADOW row for the same setup_type/day does not conflict with an
-      // already-closed EXPIRED/RESOLVED one.
+      // partial unique index `idx_as_unique_setup` is (trade_date, setup_type,
+      // COALESCE(status,'')) WHERE status IN ('ACTIVE','SHADOW'), so a fresh ACTIVE/SHADOW
+      // row for the same setup_type/day does not conflict with an already-closed
+      // EXPIRED/RESOLVED one — that's what lets a genuine later re-touch get its own row.
+      // BUT this only blocks two *simultaneously open* rows — it does nothing to stop the
+      // exact same touch instant (identical fired_at) from being re-inserted the moment the
+      // first instance resolves, which is exactly what the sessionEndET bug above was doing
+      // every poll cycle. Fixed 2026-07-17 with a second, unconditional unique index,
+      // `idx_as_unique_touch_instant` on (trade_date, setup_type, fired_at) — this guarantees
+      // the same touch can never produce two rows regardless of status, while still allowing
+      // a later bar's genuinely different fired_at to insert normally. All ON CONFLICT
+      // clauses against this table are now bare `ON CONFLICT DO NOTHING` (catches either
+      // index) rather than targeting one specific constraint.
       const existingSetup = await query(`
         SELECT id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         FROM active_setups WHERE trade_date=$1 AND setup_type=$2 AND status IN ('ACTIVE','SHADOW')
@@ -6087,7 +6004,7 @@ export default function createACDRouter(io) {
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
-          ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
+          ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
           active.entry, active.entry, active.stop, safeT1Level, safeT1Label,
@@ -6161,7 +6078,7 @@ export default function createACDRouter(io) {
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                 status, origin_status)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW')
-              ON CONFLICT (trade_date, setup_type, COALESCE(status, '')) WHERE status IN ('ACTIVE','SHADOW') DO NOTHING
+              ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
@@ -6401,18 +6318,36 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
-  // Setup types currently in shadowCandidates — tracked but not live-traded.
-  // Used by /api/setups/history to let the user filter "shadow type" rows even
-  // when those historical rows pre-date the demotion and still have status='RESOLVED'.
-  const SHADOW_SETUP_TYPES = new Set([
+  // Setup types currently classified SUPPRESS/THIN_N by the live SETUP_STATUS pipeline —
+  // tracked (fires as SHADOW) but not real live-traded. Used by /api/setups/history to let
+  // the user filter these out by default, even for historical rows that pre-date the
+  // demotion and still have status='RESOLVED'.
+  // FIXED 2026-07-17: this used to be a hardcoded setup_type list that never re-synced with
+  // the live pipeline — found stale (OPEN_DRIVE_SHORT, VALUE_AREA_RESPONSIVE_LONG/SHORT were
+  // hardcoded here as permanently "shadow" while the live pipeline had already promoted all
+  // three to ACTIVE), exactly the hardcoded-suppression-list anti-pattern the "unified
+  // suppression pipeline" convention already exists to prevent elsewhere in this file. Now
+  // reads performance_audit SETUP_STATUS fresh every call, matching the identical
+  // recommendation IN ('SUPPRESS','THIN_N') logic as the live candidates array's
+  // liveStats._suppressedSetups (~line 4768) — one definition of "shadow type," not two.
+  async function getShadowSetupTypes() {
+    const r = await query(`
+      SELECT DISTINCT ON (signal_name) signal_name, recommendation
+      FROM performance_audit WHERE signal_type='SETUP_STATUS'
+      ORDER BY signal_name, run_date DESC
+    `);
+    return new Set(r.rows.filter(x => x.recommendation === 'SUPPRESS' || x.recommendation === 'THIN_N').map(x => x.signal_name));
+  }
+  // Legacy hardcoded fallback for setup_types that don't yet have a SETUP_STATUS row at all
+  // (e.g. brand-new/shadow-only types never calibrated) — still shown as shadow so they
+  // don't leak into the default view before their first calibration run.
+  const UNCALIBRATED_SHADOW_TYPES = new Set([
     'TRT_LONG','TRT_SHORT','TRT_LONG_V2','TRT_SHORT_V2','TRT_MAH_SHORT','TRT_MAH_LONG',
     'STOP_SWEEP_LONG','STOP_SWEEP_SHORT',
     'VWAP_MAGNET_LONG','VWAP_MAGNET_SHORT',
     'ZONE_EDGE_FADE',
     'A_DOWN_WEAK','A_UP_WEAK','A_UP_STRONG','A_DOWN_STRONG',
-    'OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT',
     'OPEN_TEST_DRIVE_LONG','OPEN_TEST_DRIVE_SHORT',
-    'VALUE_AREA_RESPONSIVE_LONG','VALUE_AREA_RESPONSIVE_SHORT',
     'C_STANDALONE_UP','C_STANDALONE_DOWN',
     'C_PAIRED_LONG','C_PAIRED_SHORT',
     'FAILED_AUCTION_LONG','FAILED_AUCTION_SHORT',
@@ -6423,18 +6358,34 @@ export default function createACDRouter(io) {
   // ── GET /api/setups/history ───────────────────────────────────────────────
   router.get('/setups/history', async (req, res) => {
     try {
-      const { from, to, type, resolution, shadow = 'hide', limit = 2000, offset = 0 } = req.query;
-      const shadowTypes = [...SHADOW_SETUP_TYPES];
-      // $1 = shadowTypes only when actually used (not for shadow=show)
-      const params = shadow === 'show' ? [] : [shadowTypes];
-      const shadowRef = shadow === 'show' ? null : `$1`;
+      const { from, to, type, resolution, shadow = 'hide', session = 'both', limit = 2000, offset = 0 } = req.query;
+      const liveShadowTypes = await getShadowSetupTypes();
+      const shadowTypes = [...new Set([...liveShadowTypes, ...UNCALIBRATED_SHADOW_TYPES])];
+      // $1 = shadowTypes only when actually used (not for shadow=show/both, which apply no shadow filter at all)
+      const noShadowFilter = shadow === 'show' || shadow === 'both';
+      const params = noShadowFilter ? [] : [shadowTypes];
+      const shadowRef = noShadowFilter ? null : `$1`;
       let conditions;
       if (shadow === 'only') {
         conditions = [`setup_type = ANY(${shadowRef})`];
+      } else if (shadow === 'both') {
+        // Live + Shadow both selected — true union, no shadow-related exclusion at all
+        // (unlike 'show', which still excludes still-open status='SHADOW' rows).
+        conditions = [];
       } else if (shadow === 'show') {
         conditions = ["status != 'SHADOW'"];
       } else {
         conditions = ["status != 'SHADOW'", `setup_type != ALL(${shadowRef})`];
+      }
+      // RTH = 9:30-15:59 ET (570-959 minutes), matching this codebase's standard RTH window
+      // everywhere else. fired_at is stored as naive ET wall-clock time, so EXTRACT needs no
+      // timezone conversion. 'overnight' also has never had any real rows until the Globex-hours
+      // poller fix (2026-07-16) started running — see docs/OPEN_THREADS.md's RTH-filter-blocked
+      // note — so an empty overnight bucket right now is expected, not a bug.
+      if (session === 'rth') {
+        conditions.push(`(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) BETWEEN 570 AND 959`);
+      } else if (session === 'overnight') {
+        conditions.push(`(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) NOT BETWEEN 570 AND 959`);
       }
       if (from) { params.push(from); conditions.push(`trade_date >= $${params.length}`); }
       if (to)   { params.push(to);   conditions.push(`trade_date <= $${params.length}`); }
@@ -6503,7 +6454,7 @@ export default function createACDRouter(io) {
           ORDER BY ABS(EXTRACT(EPOCH FROM (t.entry_time - s.fired_at))) ASC
           LIMIT 1
         ) tr ON true
-        ${where.replace(/\b(trade_date|setup_type|status|resolution)\b/g, 's.$1')}
+        ${where.replace(/\b(trade_date|setup_type|status|resolution|fired_at)\b/g, 's.$1')}
         ORDER BY s.trade_date DESC, s.fired_at DESC
         LIMIT $${params.length - 1} OFFSET $${params.length}
       `, params);
@@ -6912,25 +6863,9 @@ export default function createACDRouter(io) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
-  // Regime-Adaptive Level Performance
-  router.get('/level-regime-performance', async (req, res) => {
-    try {
-      const { vol, dir, range } = req.query;
-      let where = 'WHERE sample_size >= 5';
-      const params = [];
-      if (vol) { params.push(vol); where += ` AND vol_regime = $${params.length}`; }
-      if (dir) { params.push(dir); where += ` AND dir_regime = $${params.length}`; }
-      if (range) { params.push(range); where += ` AND range_regime = $${params.length}`; }
-      const results = await query(`
-        SELECT level_name as level, vol_regime, dir_regime, range_regime,
-               sample_size, win_rate::float, ev_per_trade::float,
-               avg_mfe::float, avg_mae::float, vs_overall
-        FROM level_regime_performance ${where}
-        ORDER BY ev_per_trade DESC NULLS LAST
-      `, params);
-      res.json({ levels: results.rows });
-    } catch (err) { res.status(500).json({ error: err.message }); }
-  });
+  // Regime-Adaptive Level Performance lived here too, unreachable dead code (shadowed by
+  // keyLevels.js's richer copy, mounted before acd.js) — removed 2026-07-17 dead-routes
+  // audit. See server/routes/keyLevels.js for the live implementation.
 
   // ═══════════════════════════════════════════════════════════════════════
   // Unified Setup/Edge Table — single source of truth for all tradeable signals

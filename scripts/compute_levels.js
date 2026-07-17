@@ -28,6 +28,7 @@
 
 import pg from 'pg';
 import dotenv from 'dotenv';
+import { computeVolumeProfileForRange } from '../server/services/developingValueService.js';
 dotenv.config();
 
 const pool = new pg.Pool({
@@ -39,32 +40,14 @@ const pool = new pg.Pool({
 });
 const q = (sql, params) => pool.query(sql, params);
 
-// ─── Volume Profile: 35% value area (same logic as acd.js / replay scripts) ──
+// ─── Volume Profile: 70% value area, spread-volume method ─────────────────
+// Reuses developingValueService.js's computeProfile() (the proven-correct
+// reference implementation) via computeVolumeProfileForRange — see
+// docs/OPEN_THREADS.md's value-area bucketing bug writeup for why this no
+// longer buckets by each bar's low price.
 async function computeValueArea(startDate, endDate) {
-  const r = await q(`
-    WITH bars AS (
-      SELECT ROUND(low::numeric / 0.25) * 0.25 AS px,
-             SUM(volume)::numeric AS vol
-      FROM price_bars_primary
-      WHERE symbol = 'NQ'
-        AND ts::date BETWEEN $1 AND $2
-        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-      GROUP BY ROUND(low::numeric / 0.25) * 0.25
-    ),
-    total AS (SELECT SUM(vol) AS t FROM bars),
-    poc_row AS (SELECT px AS poc_px FROM bars ORDER BY vol DESC LIMIT 1)
-    SELECT
-      poc_row.poc_px::float                                                    AS poc,
-      (SELECT MAX(px) FROM (
-         SELECT px, SUM(vol) OVER (ORDER BY px DESC) AS cv FROM bars WHERE px >= poc_row.poc_px
-       ) x WHERE cv <= (SELECT t * 0.35 FROM total))::float                   AS vah,
-      (SELECT MIN(px) FROM (
-         SELECT px, SUM(vol) OVER (ORDER BY px ASC) AS cv FROM bars WHERE px <= poc_row.poc_px
-       ) x WHERE cv <= (SELECT t * 0.35 FROM total))::float                   AS val
-    FROM poc_row, total
-    LIMIT 1
-  `, [startDate, endDate]);
-  return r.rows[0] || null;
+  const profile = await computeVolumeProfileForRange(q, { startDate, endDate });
+  return profile ? { poc: profile.poc, vah: profile.vah, val: profile.val } : null;
 }
 
 // ─── Get prior business day ────────────────────────────────────────────────

@@ -23,7 +23,6 @@ import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './util
 import { TOOLTIPS } from './constants/tooltips.js';
 import { SETUP_DISPLAY_LABELS, SETUP_RESOLUTION_TEXT, CAL_SETUP_SHORT_LABELS, LR_TEAL, LR_CORAL, LR_AMBER, LR_SLATE, dirClr } from './constants/setupDisplay.js';
 import DashboardView from './components/dashboard/DashboardView.jsx';
-import AntigravityEdgesView from './components/dashboard/AntigravityEdgesView.jsx';
 import AlphaEngineOverview from './components/dashboard/AlphaEngineOverview.jsx';
 import WeeklyReportPanel from './components/dashboard/WeeklyReportPanel.jsx';
 import SessionForecastPanel from './components/dashboard/SessionForecastPanel.jsx';
@@ -1108,6 +1107,16 @@ function LiveSessionPanel() {
   const [selectedSignal, setSelectedSignal] = React.useState(null);
   const [selectedCaseSetup, setSelectedCaseSetup] = React.useState(null);
   const [, forceRender]                 = React.useReducer(n => n + 1, 0);
+  // RTH/Non-RTH/Both filter for the Session Timeline sidebar — added 2026-07-17.
+  // This widget was hardcoded to RTH-only (see the isRTH filter below) since before the
+  // Globex-hours poller extension (2026-07-16); that hardcode meant any overnight-fired
+  // setup would be invisible here regardless of whether detection ever produces one.
+  const [timelineSession, setTimelineSession] = React.useState(() => {
+    try { return sessionStorage.getItem('session-timeline-filter') || 'both'; } catch (_) { return 'both'; }
+  });
+  React.useEffect(() => {
+    try { sessionStorage.setItem('session-timeline-filter', timelineSession); } catch (_) {}
+  }, [timelineSession]);
 
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
@@ -1346,34 +1355,40 @@ function LiveSessionPanel() {
           _sessions: s.historical_sessions,
           _isCaseEngine: true,
         }));
-        // Session Timeline: resolved/expired setups only, RTH hours only (no pre/post-market)
+        // Session Timeline: resolved/expired setups, filtered by the RTH/Non-RTH/Both toggle
+        // (timelineSession state) — was hardcoded RTH-only until 2026-07-17, see the comment
+        // on timelineSession's declaration above.
+        const isRTH = (t) => {
+          if (!t) return false;
+          const [h, m] = t.split(':').map(Number);
+          return (h > 9 || (h === 9 && m >= 30)) && h < 16;
+        };
+        const matchesSessionFilter = (t) => {
+          if (timelineSession === 'rth') return isRTH(t);
+          if (timelineSession === 'overnight') return !isRTH(t);
+          return true; // 'both'
+        };
         const allEvents = caseEvents
           .filter(e => {
             if (!e.fired_time || e._status === 'SHADOW' || e._status === 'ACTIVE') return false;
-            const [h, m] = e.fired_time.split(':').map(Number);
-            return (h > 9 || (h === 9 && m >= 30)) && h < 16;
+            return matchesSessionFilter(e.fired_time);
           })
           .sort((a, b) => {
             if (!a.fired_time) return 1;
             if (!b.fired_time) return -1;
             return b.fired_time.localeCompare(a.fired_time); // most recent first
           });
-        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW').length;
+        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e.fired_time)).length;
 
-        // Calculate running tally stats — RTH only (09:30–16:00 ET), exclude Globex pre-market detections
-        const isRTH = (t) => {
-          if (!t) return false;
-          const [h, m] = t.split(':').map(Number);
-          return (h > 9 || (h === 9 && m >= 30)) && h < 16;
-        };
+        // Running tally stats — respects the same session filter as the timeline list above.
         let wins = 0;
         let losses = 0;
         let totalPnl = 0;
         allEvents.forEach(ev => {
-          if (ev._isCaseEngine && isRTH(ev.fired_time)) {
+          if (ev._isCaseEngine) {
             if (ev._resolution === 'TARGET_HIT') wins++;
             if (ev._resolution === 'STOP_HIT') losses++;
-            
+
             let pval = ev._pnl;
             if (pval !== null && pval !== undefined) {
               if (typeof pval === 'string') {
@@ -1409,6 +1424,18 @@ function LiveSessionPanel() {
             <div style={{ fontSize: 12, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <span>Session Timeline <span style={{ color: '#94a3b8', fontWeight: 600, textTransform: 'none', letterSpacing: 0 }}>({sigCount})</span></span>
               <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
+            </div>
+
+            <div style={{ display: 'flex', gap: 1, marginBottom: 8, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)', width: 'fit-content' }}
+              title="Filter by session: RTH = 9:30-4:00 PM ET, Non-RTH = overnight/Globex hours" onClick={e => e.stopPropagation()}>
+              {[['rth', 'RTH'], ['overnight', 'Non-RTH'], ['both', 'Both']].map(([val, label]) => (
+                <button key={val} onClick={(e) => { e.stopPropagation(); setTimelineSession(val); }}
+                  style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, cursor: 'pointer', border: 'none',
+                    background: timelineSession === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
+                    color: timelineSession === val ? '#e2e8f0' : '#64748b' }}>
+                  {label}
+                </button>
+              ))}
             </div>
 
             {/* Session Stats Running Tally */}

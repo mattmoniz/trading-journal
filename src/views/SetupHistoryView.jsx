@@ -21,7 +21,15 @@ export default function SetupHistoryView() {
   const [setups, setSetups] = React.useState([]);
   const [total, setTotal] = React.useState(0);
   const [loading, setLoading] = React.useState(true);
-  const [filters, setFilters] = React.useState({ type: '', resolution: '', from: '', to: '', shadow: 'hide' });
+  const [filters, setFilters] = React.useState(() => {
+    let session = 'both';
+    try { session = sessionStorage.getItem('setup-log-session-filter') || 'both'; } catch (_) {}
+    return { type: '', resolution: '', from: '', to: '', shadow: 'hide', session };
+  });
+
+  React.useEffect(() => {
+    try { sessionStorage.setItem('setup-log-session-filter', filters.session); } catch (_) {}
+  }, [filters.session]);
   const [sort, setSort] = React.useState({ col: 'trade_date', dir: 'desc' });
   const [colOrder, setColOrder] = React.useState(() => {
     try { const s = localStorage.getItem('setup-log-col-order'); return s ? JSON.parse(s) : null; } catch { return null; }
@@ -45,6 +53,7 @@ export default function SetupHistoryView() {
     if (filters.from) p.set('from', filters.from);
     if (filters.to) p.set('to', filters.to);
     if (filters.shadow !== 'hide') p.set('shadow', filters.shadow);
+    if (filters.session !== 'both') p.set('session', filters.session);
     fetch(`${API_URL}/setups/history?${p}`)
       .then(r => r.json())
       .then(d => { setSetups(d.setups || []); setTotal(d.total || d.count || 0); setLoading(false); })
@@ -173,19 +182,44 @@ export default function SetupHistoryView() {
         </select>
         <input type="date" style={inputStyle} value={filters.from} onChange={e => setFilters(f => ({ ...f, from: e.target.value }))} />
         <input type="date" style={inputStyle} value={filters.to} onChange={e => setFilters(f => ({ ...f, to: e.target.value }))} />
-        <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)' }}>
-          {[['hide', 'No Shadow'], ['show', '+ Shadow'], ['only', 'Shadow Only']].map(([val, label]) => (
-            <button key={val} onClick={() => setFilters(f => ({ ...f, shadow: val }))}
+        <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)' }} title="Live = real, non-suppressed setup types. Shadow = tracked in the background (suppressed/thin-N), not live-traded. Click either or both.">
+          {(() => {
+            const liveOn = filters.shadow === 'hide' || filters.shadow === 'both';
+            const shadowOn = filters.shadow === 'only' || filters.shadow === 'both';
+            const setShadowState = (newLive, newShadow) => {
+              if (!newLive && !newShadow) return; // always keep at least one selected
+              setFilters(f => ({ ...f, shadow: newLive && newShadow ? 'both' : newLive ? 'hide' : 'only' }));
+            };
+            return (
+              <>
+                <button onClick={() => setShadowState(!liveOn, shadowOn)}
+                  style={{ padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                    background: liveOn ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
+                    color: liveOn ? '#e2e8f0' : '#64748b' }}>
+                  Live
+                </button>
+                <button onClick={() => setShadowState(liveOn, !shadowOn)}
+                  style={{ padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                    background: shadowOn ? 'rgba(139,92,246,0.3)' : 'rgba(15,23,42,0.8)',
+                    color: shadowOn ? '#a78bfa' : '#64748b' }}>
+                  Shadow
+                </button>
+              </>
+            );
+          })()}
+        </div>
+        <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)' }} title="Filter by session: RTH = 9:30-4:00 PM ET, Non-RTH = overnight/Globex hours">
+          {[['rth', 'RTH'], ['overnight', 'Non-RTH'], ['both', 'Both']].map(([val, label]) => (
+            <button key={val} onClick={() => setFilters(f => ({ ...f, session: val }))}
               style={{ padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
-                background: filters.shadow === val ? (val === 'only' ? 'rgba(139,92,246,0.3)' : 'rgba(51,65,85,0.6)') : 'rgba(15,23,42,0.8)',
-                color: filters.shadow === val ? (val === 'only' ? '#a78bfa' : '#e2e8f0') : '#64748b',
-              }}>
+                background: filters.session === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
+                color: filters.session === val ? '#e2e8f0' : '#64748b' }}>
               {label}
             </button>
           ))}
         </div>
-        {(filters.type || filters.resolution || filters.from || filters.to || filters.shadow !== 'hide') && (
-          <button onClick={() => setFilters({ type: '', resolution: '', from: '', to: '', shadow: 'hide' })} style={{ ...inputStyle, color: '#94a3b8', cursor: 'pointer' }}>Clear</button>
+        {(filters.type || filters.resolution || filters.from || filters.to || filters.shadow !== 'hide' || filters.session !== 'both') && (
+          <button onClick={() => setFilters({ type: '', resolution: '', from: '', to: '', shadow: 'hide', session: 'both' })} style={{ ...inputStyle, color: '#94a3b8', cursor: 'pointer' }}>Clear</button>
         )}
       </div>
 

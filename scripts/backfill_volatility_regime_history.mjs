@@ -14,6 +14,16 @@
 // No lookahead: getMorningVolBaseline(d) is strictly `ts::date < d` by construction, and
 // this script only uses each day's own 9:30-10:30 ET bars for that day's own classification —
 // exactly what would have been available live at 10:30 ET that morning.
+//
+// Ongoing table, not a one-shot snapshot (decided 2026-07-17, see OPEN_DECISION
+// vol_regime_history_cron_undecided): the whole point of persisting this canonical
+// history was so future comparisons never have to reimplement classifyRegime() by hand
+// again — that guarantee only holds if the table keeps growing past the original backfill
+// cutoff. Wired into server/index.js's nightly Mon-Fri cron. Default mode is incremental
+// (skips trading days already present in performance_audit) so the nightly run only does
+// ~1 day of work (a full-history rerun takes ~3.5min, too slow to repeat every night as
+// history grows); pass --full to force a complete rebuild (e.g. after a classifyRegime()
+// logic change that should retroactively reclassify every historical day).
 import { query } from '../server/db.js';
 import {
   fiveMinBars, stdevLogReturns, getPercentile, classifyRegime, getMorningVolBaseline,
@@ -22,18 +32,25 @@ import {
 const RTH_START_MIN = 570;
 const MORNING_END_MIN = 630;
 const N_BASELINE = 60;
+const FULL = process.argv.includes('--full');
 
 async function run() {
   const { rows: today } = await query(`SELECT CURRENT_DATE::text as d`);
-  console.log(`Running as of ${today[0].d}`);
+  console.log(`Running as of ${today[0].d}${FULL ? ' (--full rebuild)' : ' (incremental)'}`);
 
   const { rows: dateRows } = await query(`
     SELECT DISTINCT ts::date::text as d FROM price_bars_primary
     WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN ${RTH_START_MIN} AND 959
     ORDER BY d
   `);
-  const allDates = dateRows.map(r => r.d);
-  console.log(`Found ${allDates.length} candidate trading days.`);
+  let allDates = dateRows.map(r => r.d);
+
+  if (!FULL) {
+    const { rows: doneRows } = await query(`SELECT DISTINCT signal_name as d FROM performance_audit WHERE signal_type='VOL_REGIME_HIST'`);
+    const done = new Set(doneRows.map(r => r.d));
+    allDates = allDates.filter(d => !done.has(d));
+  }
+  console.log(`Found ${allDates.length} candidate trading days${FULL ? '' : ' not yet classified'}.`);
 
   const results = [];
   let skippedThinBaseline = 0, skippedThinMorning = 0;

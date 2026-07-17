@@ -549,6 +549,32 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('Dashboard disconnected:', socket.id));
 });
 
+// Diagnostic instrumentation added 2026-07-17 (overnight_globex_fix_never_ran_uninterrupted
+// OPEN_DECISION): the systemd-managed server unit was bounced ~7 times overnight with no
+// crash/exception in the logs and no evidence of any known trigger (not the watchdog --
+// no WatchdogSec is set --, not gemini_error_watcher.mjs -- its restarts always log a
+// SERVER_DOWN alert first and none appeared --, not a cron/OOM/session event). The restart
+// signature (clean Stopping->Stopped->Started, no failure code) matches an external
+// `systemctl restart`, not Restart=on-failure reacting to a crash -- but nothing pinned down
+// WHO issued it. This logs unambiguously so the next occurrence is diagnosable instead of
+// another forensic dead end: a real SIGTERM (systemd stopping the unit) is now distinguished
+// from an uncaught exception/crash.
+async function logShutdown(reason, extra = {}) {
+  console.log(`[shutdown] ${reason}`, extra);
+  try {
+    await query(
+      `INSERT INTO process_log (process_name, started_at, status, metadata) VALUES ($1, NOW(), $2, $3)`,
+      ['SERVER_SHUTDOWN', reason, JSON.stringify({ uptimeSec: Math.round(process.uptime()), pid: process.pid, ...extra })]
+    );
+  } catch (e) {
+    console.error('[shutdown] failed to log to process_log:', e.message);
+  }
+}
+process.on('SIGTERM', async () => { await logShutdown('SIGTERM'); process.exit(0); });
+process.on('SIGINT', async () => { await logShutdown('SIGINT'); process.exit(0); });
+process.on('uncaughtException', async (err) => { await logShutdown('UNCAUGHT_EXCEPTION', { error: err.message, stack: err.stack?.slice(0, 2000) }); process.exit(1); });
+process.on('unhandledRejection', async (reason) => { await logShutdown('UNHANDLED_REJECTION', { error: String(reason) }); });
+
 const PORT = process.env.PORT || 3001;
 httpServer.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
@@ -613,6 +639,22 @@ httpServer.listen(PORT, () => {
   cron.schedule('5 16 * * 1-5', async () => {
     try { await logProcess('PATTERN_MEMORY', runNightlyUpdate); }
     catch (err) { console.error('[pattern_memory] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // Volatility regime history — 4:10 PM ET Mon-Fri. Decided 2026-07-17 (OPEN_DECISION
+  // vol_regime_history_cron_undecided) that VOL_REGIME_HIST is an ongoing table, not a
+  // one-time snapshot: it exists so future backtests never have to reimplement
+  // classifyRegime() by hand (see the script's own header), which only holds if it keeps
+  // growing. Incremental by default (skips already-classified days), so this is a
+  // sub-second no-op most nights except for classifying the day that just closed.
+  cron.schedule('10 16 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('VOL_REGIME_HIST', async () => {
+        execSync('node scripts/backfill_volatility_regime_history.mjs', { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[vol_regime_history] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Developing Value Tracker — persist today's session profile, 4:05 PM ET Mon-Fri

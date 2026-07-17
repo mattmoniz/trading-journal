@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
+import { INSTRUMENTS } from '../config/instruments.js';
 
 const router = express.Router();
 
@@ -678,7 +679,10 @@ router.get('/risk/sizing', async (req, res) => {
     const instrument = req.query.instrument || 'MNQ';
     const riskPct = parseFloat(req.query.riskPct) || 2;
     const stopPoints = parseFloat(req.query.stopPoints) || 20;
-    const pointValue = instrument === 'NQ' ? 20 : 2;
+    // FIXED 2026-07-17: was a second, independent $/pt literal duplicating instruments.js's
+    // dollarsPerPoint — CLAUDE.md's documented single-source-of-truth for this constant, already
+    // burned once by a copy-pasted-wrong-value bug. Now imports directly instead of re-declaring.
+    const pointValue = (INSTRUMENTS[instrument]?.dollarsPerPoint) ?? INSTRUMENTS.MNQ.dollarsPerPoint;
     const dollarRisk = accountSize * (riskPct / 100);
     const contracts = Math.max(1, Math.floor(dollarRisk / (stopPoints * pointValue)));
     res.json({ accountSize, instrument, riskPct, stopPoints, pointValue, dollarRisk, contracts });

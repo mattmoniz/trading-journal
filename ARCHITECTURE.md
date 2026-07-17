@@ -218,7 +218,7 @@ server/
 | `acdBacktest.js` | Backtests ACD parameters (OR width, bias, NL30) |
 | `caseEngine.js` | The evolving single session "read": opening type, delta confirmation, level hold, volatility — the conviction signal surfaced on Dashboard |
 | `dayTypeReassessmentService.js` | Live day-type reassessment at 11:00+ ET, called from inside `caseEngine` |
-| `developingValueService.js` | Single source of truth for live POC/VAH/VAL — descriptive only, no signals |
+| `developingValueService.js` | Single source of truth for POC/VAH/VAL — `computeProfile(bars)` (spread each bar's volume evenly across its own H-L tick range, then alternate VAH/VAL extension to 70% total volume) backs both the live single-session read (descriptive only, no signals) and, via the exported `computeVolumeProfileForRange(queryFn, opts)` wrapper (added 2026-07-17), every period-range volume-area computation (`scripts/compute_levels.js`'s weekly/monthly/quarterly VA, `acd.js`'s prior-month/2-day-composite VA, `weekly.js`'s VA-history/bars endpoints) — replacing a previously-duplicated bucket-by-low SQL pattern that silently dragged POC/VAH/VAL toward each bar's low price instead of its true traded range. See docs/OPEN_THREADS.md for the bug writeup. |
 | `engineReadHitRates.js` | Historical hit-rate lookups for A_UP/A_DOWN/BIAS signals; requires N≥20 before reporting a rate as decisive |
 | `monteCarloService.js` | Monte Carlo V2 — trade source selection, daily block bootstrapping, MAE-aware stop override |
 | `patternMemoryUpdate.js` | Nightly job populating `daily_performance_log`/`condition_memory`/`pattern_stats` |

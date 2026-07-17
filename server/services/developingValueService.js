@@ -53,7 +53,28 @@ export function computeProfile(bars) {
   }
   const vah = entries[upI-1]?.price ?? entries[pocIdx].price;
   const val = entries[dnI+1]?.price ?? entries[pocIdx].price;
-  return { poc: entries[pocIdx].price, vah, val, maxVol, totalVol };
+  return { poc: entries[pocIdx].price, vah, val, maxVol, totalVol, entries };
+}
+
+// ── Volume profile over an arbitrary date range (week/month/quarter) ───────
+// Canonical replacement for the bucket-by-low SQL pattern that used to be
+// hand-duplicated in scripts/compute_levels.js, server/routes/acd.js, and
+// server/routes/weekly.js (each bucketed 100% of a bar's volume at its LOW
+// price instead of spreading it across the bar's actual H-L range — see
+// docs/OPEN_THREADS.md's value-area bucketing bug writeup). Takes a queryFn
+// so both the server's query() (db.js) and standalone scripts' own pg pool
+// can share this one implementation.
+export async function computeVolumeProfileForRange(queryFn, {
+  symbol = 'NQ', startDate, endDate,
+  sessionStartMin = RTH_START, sessionEndMin = RTH_END - 1,
+} = {}) {
+  const barsQ = await queryFn(`
+    SELECT high::float AS high, low::float AS low, volume::float AS volume
+    FROM price_bars_primary
+    WHERE symbol = $1 AND ts::date BETWEEN $2 AND $3
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN $4 AND $5
+  `, [symbol, startDate, endDate, sessionStartMin, sessionEndMin]);
+  return computeProfile(barsQ.rows);
 }
 
 // ── Migration descriptor vs the prior session's persisted profile ──────────

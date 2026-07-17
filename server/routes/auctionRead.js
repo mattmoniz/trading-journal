@@ -2,6 +2,7 @@ import express from 'express';
 import { query } from '../db.js';
 import { cacheGet, cacheSet, latestBarDate } from '../lib/cache.js';
 import { getGLine } from '../services/queries.js';
+import { computeVolumeProfileForRange } from '../services/developingValueService.js';
 
 const router = express.Router();
 
@@ -41,15 +42,8 @@ router.get('/auction-read/day-setups', async (req, res) => {
       pdHigh = pd.rows[0]?.h; pdLow = pd.rows[0]?.l;
 
       // Prior day VA
-      const vaR = await query(`
-        WITH vp AS (SELECT ROUND(low/0.25)*0.25 as px, SUM(volume) as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16 GROUP BY ROUND(low/0.25)*0.25),
-        total AS (SELECT SUM(vol) as t FROM vp), poc_row AS (SELECT px FROM vp ORDER BY vol DESC LIMIT 1)
-        SELECT p2.px::float as poc,
-          (SELECT MAX(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px DESC) as cv FROM vp WHERE px >= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as vah,
-          (SELECT MIN(px) FROM (SELECT px, SUM(vol) OVER (ORDER BY px ASC) as cv FROM vp WHERE px <= p2.px) x WHERE cv <= (SELECT t*0.35 FROM total))::float as val
-        FROM vp, poc_row p2 GROUP BY p2.px LIMIT 1
-      `, [priorDate]);
-      pdVAH = vaR.rows[0]?.vah; pdVAL = vaR.rows[0]?.val;
+      const vaProfile = await computeVolumeProfileForRange(query, { startDate: priorDate, endDate: priorDate });
+      pdVAH = vaProfile?.vah; pdVAL = vaProfile?.val;
 
       // Overnight range (bars between 16:00 prior and 09:30 today)
       const onR = await query(`
