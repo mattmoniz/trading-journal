@@ -2,12 +2,17 @@
  * instruments.js — single source of truth for contract $/pt and commission.
  *
  * WHY THIS EXISTS: this exact mistake (a wrong $/pt constant) has now been found
- * independently THREE times in this codebase: scripts/archive/backfill_level_fades.js
+ * independently FOUR times in this codebase: scripts/archive/backfill_level_fades.js
  * hardcoded PT=5/COMM=5 and got silently copied into 6 more repair scripts before being
  * caught (see CLAUDE.md's "P&L Formula" hard rule); a frontend modal hardcoded * 5 for
  * risk/reward labels while the same setup card's real resolved P&L sat right next to it
- * using the correct $2/pt (found 2026-07-16); and TRT_LONG's hardcoded trade-brief text
- * in acd.js separately claimed "$5/pt" in its target description (found same session).
+ * using the correct $2/pt (found 2026-07-16); TRT_LONG's hardcoded trade-brief text
+ * in acd.js separately claimed "$5/pt" in its target description (found same session);
+ * and scripts/update_optimal_stops.mjs's DEFAULT_DPP=5 fallback (found 2026-07-17),
+ * defended by a comment claiming a "verified bimodal $5/$2 split" that turned out to be
+ * false on direct re-check against every setup_type -- the most dangerous variant so
+ * far, since it looked audited when it wasn't. 25 live setup_types had OPTIMAL_STOP
+ * rows computed with the wrong fallback before the fix.
  * User request 2026-07-16, verbatim: "Can we have a product table that these views
  * reference so that they are not stale."
  *

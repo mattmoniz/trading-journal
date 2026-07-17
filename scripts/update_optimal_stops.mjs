@@ -28,17 +28,28 @@
 // =============================================================================
 
 import { query } from '../server/db.js';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 
 // Minimum N before we trust a computed optimal stop
 const MIN_N = 20;
 const DEFAULT_STOP = 65;
 const DEFAULT_TARGET = 35;
-// Fallback $/pt when a setup_type has too few resolved trades to derive its own (see
-// deriveDollarsPerPoint below) — matches this codebase's dominant convention (the
-// level-fade family, the large majority of setup_types, cleanly resolves to exactly
-// $5.00/pt per the 2026-07-14 audit). Only a fallback for thin-N cases, not a decision
-// threshold — every setup_type with enough data gets its own real, data-derived value.
-const DEFAULT_DPP = 5;
+// Fallback $/pt when a setup_type has too few resolved trades to derive its own real
+// value (see the dppRes query below). CORRECTED 2026-07-17: this was hardcoded to 5,
+// justified by a comment claiming "real $/pt is cleanly bimodal... ~$5 for the
+// level-fade family" -- that claim was never actually true. Verified directly against
+// every setup_type with N>=20 STOP_HIT trades (54 types checked): EVERY ONE resolves to
+// $2.01-$2.06/pt, matching MNQ's real $2/pt exactly (the ~1-6 cent excess over $2.00 is
+// just the $1 flat commission spread across each trade's point distance) -- there is no
+// bimodal split, no level-fade-family exception. This is the FOURTH independent
+// occurrence of the wrong-$/pt-constant class of bug documented in
+// server/config/instruments.js's own header (backfill_level_fades.js, a frontend modal,
+// TRT_LONG's trade-brief text, now this file) -- now fixed by importing the same
+// canonical LIVE_INSTRUMENT constant instead of a fourth redeclared literal. Real,
+// non-trivial blast radius: 25 currently-live setup_types had an OPTIMAL_STOP row
+// computed using this wrong 2.5x-overstated fallback on at least one side (stop or
+// target) before this fix -- their EV sweeps are being recomputed as part of this fix.
+const DEFAULT_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
 
 // Target sweep range (pts) — all setup types, not just IB. Always capped at p75_mfe
 // per-type below, so it can't select a target beyond what the type's own MFE data supports.
@@ -49,13 +60,15 @@ const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 
 // (expired/partial).
 //
 // stopDpp/targetDpp: real dollars-per-point for this setup_type, derived from its own
-// resolved trades (see deriveDollarsPerPoint) — NOT a flat assumed constant. 2026-07-14
-// audit found the two modeled branches previously used a flat $2/pt while the third
-// (actual_pnl) branch used real dollars — inconsistent units within the same formula,
-// and wrong for most setup_types besides: real $/pt is cleanly bimodal (~$5 for the
-// level-fade family, ~$2 for IB_BULLISH/BEARISH/OPEN_DRIVE/C_STANDALONE/etc.), not a
-// single constant. Independently verified via Gemini mining pass, cross-checked by
-// Claude against direct SQL before trusting.
+// resolved trades (see the dppRes query below) — NOT a flat assumed constant. CORRECTED
+// 2026-07-17: this comment previously claimed real $/pt was "cleanly bimodal (~$5 for
+// the level-fade family, ~$2 for IB_BULLISH/BEARISH/OPEN_DRIVE/C_STANDALONE/etc.)",
+// attributed to a Gemini mining pass "cross-checked by Claude against direct SQL" — that
+// cross-check was wrong (or never actually run against fresh data). Directly re-verified
+// 2026-07-17 against every setup_type with N>=20 STOP_HIT trades: all 54 types checked
+// resolve to $2.01-$2.06/pt, no exceptions, no bimodal split. See DEFAULT_DPP's comment
+// above for the full account — this was the same wrong-$/pt-constant bug class, just
+// dressed up with a false verification claim instead of a naive hardcode.
 //
 // maxT caps the sweep at p75_mfe so we never select a target that >75% of trades can't reach.
 // Without this cap, high T values saturate to actual_pnl and look artificially optimal.
@@ -167,11 +180,12 @@ async function main() {
   console.log(`Found ${rows.length} setup types with N≥${MIN_N}`);
 
   // 1a2. Real per-setup_type dollars-per-point, derived from resolved trades' actual dollar
-  // P&L vs. their real point distance to stop/target — NOT a flat assumed constant. See the
-  // comment on sweepOptimalTarget for why (2026-07-14 audit: real $/pt is cleanly bimodal
-  // across setup_type families, not a single value). Falls back to DEFAULT_DPP per type/side
-  // when N < MIN_N for that specific branch (stop-hit or target-hit) — same floor used
-  // everywhere else in this file.
+  // P&L vs. their real point distance to stop/target — NOT a flat assumed constant, though
+  // in practice every setup_type resolves to the same ~$2.01-2.06/pt (MNQ's real $2/pt plus
+  // the $1 commission spread across the trade's point distance) — see DEFAULT_DPP's comment
+  // above, corrected 2026-07-17. Falls back to DEFAULT_DPP per type/side when N < MIN_N for
+  // that specific branch (stop-hit or target-hit) — same floor used everywhere else in this
+  // file, and now the same real value rather than a wrong 2.5x-inflated one.
   const dppRes = await query(`
     SELECT setup_type,
       PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(entry_zone_low - stop_level), 0))

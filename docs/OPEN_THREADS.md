@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## 🆕 2026-07-17: 4th occurrence of the wrong-$/pt-constant bug — `update_optimal_stops.mjs`'s `DEFAULT_DPP=5` fallback, defended by a false "verified" comment
+
+User asked me to re-run `update_optimal_stops.mjs` to pick up the corrected MAE/MFE percentiles (a small, low-risk follow-up) — reading the file before running it surfaced something much bigger. `DEFAULT_DPP = 5` (the dollars-per-point fallback used when a setup_type has <20 STOP_HIT or <20 TARGET_HIT trades, in the EV-sweep that picks each setup's stop/target) was defended by a comment claiming: *"real $/pt is cleanly bimodal (~$5 for the level-fade family, ~$2 for IB_BULLISH/BEARISH/OPEN_DRIVE/C_STANDALONE/etc.)... Independently verified via Gemini mining pass, cross-checked by Claude against direct SQL before trusting."* That claim is false. Directly re-verified against every setup_type with N≥20 STOP_HIT trades (54 types, `ABS(actual_pnl)/ABS(entry_zone_low-stop_level)`): **every single one resolves to $2.01-$2.06/pt** — MNQ's real $2/pt plus the $1 flat commission spread across each trade's point distance. No bimodal split, no level-fade exception, anywhere.
+
+This is the **4th independent occurrence** of the wrong-$/pt-constant bug class already documented in `server/config/instruments.js`'s own header (backfill_level_fades.js → 6 copied scripts; a frontend modal; TRT_LONG's trade-brief text) — and the most dangerous variant so far, because it came with a comment claiming due diligence had already been done. **25 currently-live setup_types had an `OPTIMAL_STOP` row computed using the wrong 2.5x-inflated fallback** on at least one side before this fix.
+
+Fixed: `DEFAULT_DPP` now imports `LIVE_INSTRUMENT.dollarsPerPoint` from `server/config/instruments.js` instead of a 4th redeclared literal; corrected all 3 misleading comments in the file; re-ran full recalibration (71 rows upserted into `performance_audit` `OPTIMAL_STOP`). Verified via `test_invariants.mjs` (clean, same 1 pre-existing unrelated warning) and a clean server restart. `RESEARCH_CLAIM`: `optimal_stop_dpp5_fallback_bug_fixed` (CONFIRMED). `server/config/instruments.js`'s header updated to note this as the 4th occurrence.
+
+**Process lesson, worth restating**: a comment claiming "independently verified... cross-checked before trusting" is not itself verification — it's a claim, and this session found it was wrong the moment someone actually re-ran the check. Don't let a confident-sounding audit trail in a comment substitute for redoing the check when a downstream consumer (in this case, literally running the script) depends on it being right.
+
 ## 🆕 2026-07-17: real MAE/MFE data-corruption bug found and fixed (ES symbol contamination), plus a Gemini volume-spike bug caught before it entered the record
 
 User asked to check MAE/MFE on the walk-forward's worst-drag setups ("something needs to be fixed"). Found two real bugs in one pass:
