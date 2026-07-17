@@ -756,10 +756,23 @@ export async function minePatterns() {
 // Runs every level × every dimension, finds combos above threshold,
 // persists discoveries, returns newly significant patterns.
 
-export async function mineLevelFades() {
+// windowDays/windowType/keyPrefix added 2026-07-16 per explicit user request: the
+// original 90-day rolling scan re-evaluates fresh every night and DEGRADEs anything
+// that doesn't re-qualify in the CURRENT window -- by design (catches regime change
+// fast), but it structurally can never accumulate enough N for a genuinely rare, large-
+// magnitude pattern that only occurs a few times a year (a 90-day window just doesn't
+// contain enough occurrences to ever clear N>=20). Default params reproduce the exact
+// original behavior byte-for-byte (windowDays=90, windowType='ROLLING_90D', no prefix)
+// -- the nightly caller in server/index.js is unchanged. A second, ALL_TIME caller
+// (scripts/mine_level_fades_alltime.mjs) passes windowDays=null (scans full history)
+// and a distinct keyPrefix so its pattern_keys can never collide with the rolling
+// scan's -- both live in the same pattern_discoveries table, filterable by window_type,
+// with independent ACTIVE/DEGRADED lifecycles (see the DEGRADE query below).
+export async function mineLevelFades({ windowDays = 90, windowType = 'ROLLING_90D', keyPrefix = '' } = {}) {
+  const windowClause = windowDays != null ? `AND ts::date >= CURRENT_DATE - '${windowDays} days'::interval` : '';
   const days = await query(
     `SELECT DISTINCT ts::date as d FROM price_bars_primary
-     WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - '90 days'::interval
+     WHERE symbol='NQ' ${windowClause}
      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY d`);
 
   // target/stop are derived below (median of actual observed excursions from this scan's own
@@ -963,7 +976,7 @@ export async function mineLevelFades() {
       const wr = r.wins / total;
       const netPnl = (r.wins * target - r.losses * stop) * 2;
       if (wr >= MIN_WR && netPnl > 0) {
-        const patternKey = `${dim.name}:${key}`;
+        const patternKey = `${keyPrefix}${dim.name}:${key}`;
         const rigor = rigorDiagnostics(r.trades);
         discoveries.push({ patternKey, dimension: dim.name, wr: Math.round(wr * 100), n: total, netPnl, rigor });
       }
@@ -979,9 +992,9 @@ export async function mineLevelFades() {
     });
     if (existing.rows.length === 0) {
       await query(
-        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, context)
-         VALUES ($1,$2,$3,$4,$5,$6,$6,$7)`,
-        [disc.patternKey, disc.dimension, disc.wr / 100, disc.n, disc.netPnl, todayStr, context]);
+        `INSERT INTO pattern_discoveries (pattern_key, dimension, win_rate, sample_size, net_pnl_dollars, first_seen, last_updated, context, window_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$6,$7,$8)`,
+        [disc.patternKey, disc.dimension, disc.wr / 100, disc.n, disc.netPnl, todayStr, context, windowType]);
       newDiscoveries.push(disc);
     } else {
       const prev = existing.rows[0];
@@ -994,8 +1007,10 @@ export async function mineLevelFades() {
     }
   }
 
-  // Mark patterns that fell below threshold as degraded
-  const allActive = await query(`SELECT id, pattern_key FROM pattern_discoveries WHERE status='ACTIVE'`);
+  // Mark patterns that fell below threshold as degraded -- scoped to this run's own
+  // window_type so a rolling-90-day run can never degrade an all-time discovery (or
+  // vice versa); the two scans have independent ACTIVE/DEGRADED lifecycles by design.
+  const allActive = await query(`SELECT id, pattern_key FROM pattern_discoveries WHERE status='ACTIVE' AND window_type=$1`, [windowType]);
   const activeKeys = new Set(discoveries.map(d => d.patternKey));
   for (const row of allActive.rows) {
     if (!activeKeys.has(row.pattern_key)) {

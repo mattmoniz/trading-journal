@@ -44,4 +44,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # same pattern_discoveries table + ACTIVE/DEGRADED lifecycle as mineLevelFades() uses for levels
 /usr/bin/node scripts/mine_minutebar_conditions.mjs
 
+# All-time (full-history, not rolling-90-day) level-fade pattern scan -- catches rare/
+# low-frequency patterns the 90-day rolling mineLevelFades() call in server/index.js
+# structurally can never accumulate enough N for. Independent ACTIVE/DEGRADED lifecycle
+# (window_type='ALL_TIME', pattern_key prefixed 'ALLTIME:') in the same pattern_discoveries
+# table -- see server/services/patternScannerService.js's mineLevelFades() params. Measured
+# ~194s for 417 RTH trading days (2026-07-17) -- cheap enough for weekly, not nightly.
+/usr/bin/node scripts/mine_level_fades_alltime.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

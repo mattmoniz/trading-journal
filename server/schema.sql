@@ -1686,7 +1686,8 @@ CREATE TABLE public.pattern_discoveries (
     last_updated date NOT NULL,
     status character varying(20) DEFAULT 'ACTIVE'::character varying,
     notified boolean DEFAULT false,
-    context jsonb DEFAULT '{}'::jsonb
+    context jsonb DEFAULT '{}'::jsonb,
+    window_type character varying(20) DEFAULT 'ROLLING_90D'::character varying
 );
 
 
@@ -6425,6 +6426,13 @@ CREATE INDEX idx_live_reads_date ON public.live_reads USING btree (trade_date);
 --
 
 CREATE INDEX idx_pattern_disc_status ON public.pattern_discoveries USING btree (status);
+
+
+--
+-- Name: idx_pattern_disc_window_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pattern_disc_window_type ON public.pattern_discoveries USING btree (window_type);
 
 
 --
