@@ -48,3 +48,36 @@ PATTERN_E='([Pp]ts?|[Pp]oints?)\s*\*\s*(5|10|20)\b|\$(5|10|20)/pt'
 # price_bars_primary only stores symbol='NQ' bars (MNQ isn't separately tracked there).
 PATTERN_E_EXCLUDE='MNQ_DOLLARS_PER_POINT\|PNL_PER_POINT\|NQ session open'
 PATTERN_E_LABEL='wrong $/pt constant (MNQ is $2/pt — see CLAUDE.md hard rule, src/constants/contract.js, or PNL_PER_POINT in acd.js)'
+
+# Pattern F: SUM(pnl)/SUM(t.pnl)/SUM(...FlatToFlat...) — the CumPL-diff hard rule's exact
+# anti-pattern ("must use CumPL diff, not SUM(pnl) or SUM(FlatToFlat) — both overcount").
+# Added 2026-07-18 after a rule-prominence audit found this had zero hook backing despite
+# being one of CLAUDE.md's oldest hard rules. Diff-only (not whole-file) like Pattern E —
+# a whole-file scan found 15 PRE-EXISTING hits across the codebase when this was written,
+# several plausibly legitimate (single-day, non-cumulative uses; dll.js's SUM(pnl) fallback
+# is explicitly documented as intentional, matching the hard rule's own stated exception:
+# "Fallback: COALESCE(cum_daily_pnl, SUM(t.pnl), 0) when no CumPL data"). Fixing/auditing
+# those 15 is real, separate work (flagged as an OPEN_DECISION, not done here) — this
+# pattern's job is only to stop a 16th one from landing silently.
+PATTERN_F='SUM\(\s*t?\.?pnl\s*\)|SUM\([^)]*FlatToFlat'
+# Path-excluded in the two consumers (dailyLogs.js/stats.js are the correct CumPL-diff
+# implementation itself; dll.js's SUM(pnl) is an explicitly documented single-day fallback
+# matching the hard rule's own stated exception) — same reasoning as PATTERN_G_EXCLUDE above.
+PATTERN_F_EXCLUDE='§NOMATCH§'
+PATTERN_F_LABEL='SUM(pnl)/SUM(FlatToFlat) — CumPL-diff hard rule violation (overcounts; see CLAUDE.md P&L rule)'
+
+# Pattern G: new Date().toISOString().slice(0,10) — the exact JS-UTC-vs-SQL-CURRENT_DATE
+# trading-day-date bug CLAUDE.md documents hitting 3 separate scripts on 2026-07-14 alone.
+# Added 2026-07-18, same rule-prominence audit as Pattern F. Also diff-only — a whole-file
+# scan found 20 pre-existing hits (mostly in scripts/, several already in scripts/archive/
+# and therefore dead). The .slice(0,10) requirement narrows this to the specific
+# date-only-truncation signature the hard rule warns about, not toISOString() generally
+# (which has many legitimate non-trading-day uses, e.g. logging a timestamp).
+PATTERN_G='new Date\(\)\.toISOString\(\)\.slice\(0,\s*10\)'
+# No content-level exclude applies here (unlike A-E) — scripts/archive/ is excluded by
+# path in the two consumers instead, same mechanism Pattern E uses for instruments.js/
+# contract.js. PATTERN_G_EXCLUDE is a sentinel that can never match real content, so
+# `grep -v "$PATTERN_G_EXCLUDE"` is a no-op rather than silently dropping every line
+# (an empty string would match everything, excluding all hits).
+PATTERN_G_EXCLUDE='§NOMATCH§'
+PATTERN_G_LABEL='new Date().toISOString().slice(0,10) for a trading-day date — use SQL CURRENT_DATE instead (JS UTC vs DB America/New_York mismatch, see CLAUDE.md)'

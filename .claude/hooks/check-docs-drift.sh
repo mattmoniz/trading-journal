@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Stop hook: three checks, none block.
+# Stop hook: four checks, none block.
 # 1) Structural files changed without a matching ARCHITECTURE.md/CLAUDE.md update
 #    (working tree AND unpushed commits — see note below on why both matter).
-# 2) Hardcoded threshold anti-patterns in acd.js / caseEngine.js.
+# 2) Hardcoded threshold anti-patterns A-E (whole-file) in acd.js/caseEngine.js/broadly.
 # 3) (folded into #1's message) explicit persistence self-check — CLAUDE.md rules
 #    and cross-session auto-memory, not just docs/OPEN_THREADS.md.
+# 4) Patterns F/G (CumPL-diff violation, JS-toISOString date bug), diff-only across
+#    server/scripts — see the note above that section for why this one is diff-only
+#    while #2 is whole-file.
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
@@ -83,6 +86,46 @@ done < <(find server src -type f \( -name '*.js' -o -name '*.jsx' \) -print0 2>/
 if [ ${#hardcoded_hits[@]} -gt 0 ]; then
   joined=$(printf ' | %s' "${hardcoded_hits[@]}")
   warnings+=("HARDCODED THRESHOLD ALERT — review before ending: ${joined:3}")
+fi
+
+# Patterns F/G (CumPL-diff violation, JS-toISOString trading-day-date bug) — added
+# 2026-07-18 in a rule-prominence audit that found both had zero hook backing. Unlike
+# A-E above, these scan the DIFF (unpushed commits + working tree, reusing $upstream
+# from check 1), not the whole file — a whole-file scan found 15/20 pre-existing hits
+# respectively, which would make this hook spam the same legacy findings every single
+# session. Diff-only means only a genuinely NEW instance introduced this session/branch
+# fires. Fixing/auditing the pre-existing hits is real, separate work (not done here).
+fg_targets="$(printf '%s\n%s\n' \
+  "$(git status --porcelain 2>/dev/null | awk '{ $1=""; print substr($0,2) }')" \
+  "$([ -n "$upstream" ] && git diff --name-only "$upstream"...HEAD 2>/dev/null)" \
+  | sed '/^$/d' | sort -u | grep -E '^(server|scripts)/.*\.(js|mjs)$')"
+
+for f in $fg_targets; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    server/routes/dailyLogs.js|server/routes/stats.js|server/routes/dll.js) f_skip=1 ;;
+    *) f_skip=0 ;;
+  esac
+  diff_added="$(git diff "$upstream"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]'; git diff HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]')"
+  [ -z "$diff_added" ] && continue
+
+  if [ "$f_skip" = 0 ]; then
+    m=$(echo "$diff_added" | grep -E "$PATTERN_F" | grep -v "$PATTERN_F_EXCLUDE")
+    [ -n "$m" ] && hardcoded_hits2+=("$f — new $PATTERN_F_LABEL: $m")
+  fi
+
+  case "$f" in
+    scripts/archive/*) ;;
+    *)
+      m=$(echo "$diff_added" | grep -E "$PATTERN_G" | grep -v "$PATTERN_G_EXCLUDE")
+      [ -n "$m" ] && hardcoded_hits2+=("$f — new $PATTERN_G_LABEL: $m")
+      ;;
+  esac
+done
+
+if [ ${#hardcoded_hits2[@]} -gt 0 ]; then
+  joined2=$(printf ' | %s' "${hardcoded_hits2[@]}")
+  warnings+=("NEW HARDCODED ANTI-PATTERN (this session) — review before ending: ${joined2:3}")
 fi
 
 # ── Output ─────────────────────────────────────────────────────────────────────

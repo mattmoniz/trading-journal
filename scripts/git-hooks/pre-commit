@@ -47,13 +47,40 @@ done
 # contain "$20/pt" (NQ's real value) and may reference "$5/pt" in a comment describing
 # the historical bug this pattern exists to catch. Excluded by path, not content, since
 # no content-level exclude can tell "the correct definition" from "a wrong copy" apart.
-e_targets="$(git diff --cached --name-only -- 'server/**/*.js' 'src/**/*.jsx' 'src/**/*.js' \
+# NOTE 2026-07-18: this glob was silently broken since it was written -- a bare '**' in a
+# git pathspec does NOT expand recursively without the :(glob) magic prefix (confirmed:
+# `git diff --cached --name-only -- 'server/**/*.js'` returned nothing against a real
+# staged server/ file; `:(glob)server/**/*.js` returns it correctly). Meaning this whole
+# check has never actually blocked a commit. Fixed here, found while wiring F/G below
+# (same bug class would have made them equally silent).
+e_targets="$(git diff --cached --name-only -- ':(glob)server/**/*.js' ':(glob)src/**/*.jsx' ':(glob)src/**/*.js' \
   ':(exclude)server/config/instruments.js' ':(exclude)src/constants/contract.js')"
 for f in $e_targets; do
   added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
   [ -z "$added" ] && continue
   m=$(echo "$added" | grep -E "$PATTERN_E" | grep -v "$PATTERN_E_EXCLUDE")
   [ -n "$m" ] && hits+=("$f — new $PATTERN_E_LABEL:"$'\n'"$m")
+done
+
+# Patterns F/G scan broadly across server/ and scripts/ (not just acd.js/caseEngine.js),
+# diff-only like pattern E — a whole-file scan found 15/20 pre-existing hits respectively
+# when these were added 2026-07-18, so this only catches new ones from here on.
+f_targets="$(git diff --cached --name-only -- ':(glob)server/**/*.js' ':(glob)scripts/**/*.js' ':(glob)scripts/**/*.mjs' \
+  ':(exclude)server/routes/dailyLogs.js' ':(exclude)server/routes/stats.js' ':(exclude)server/routes/dll.js')"
+for f in $f_targets; do
+  added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
+  [ -z "$added" ] && continue
+  m=$(echo "$added" | grep -E "$PATTERN_F" | grep -v "$PATTERN_F_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_F_LABEL:"$'\n'"$m")
+done
+
+g_targets="$(git diff --cached --name-only -- ':(glob)server/**/*.js' ':(glob)scripts/**/*.js' ':(glob)scripts/**/*.mjs' \
+  ':(exclude)scripts/archive/**')"
+for f in $g_targets; do
+  added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
+  [ -z "$added" ] && continue
+  m=$(echo "$added" | grep -E "$PATTERN_G" | grep -v "$PATTERN_G_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_G_LABEL:"$'\n'"$m")
 done
 
 [ ${#hits[@]} -eq 0 ] && exit 0
