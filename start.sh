@@ -54,6 +54,19 @@ if systemctl --user is-active --quiet trading-journal-server.service 2>/dev/null
   systemctl --user stop trading-journal-server.service
 fi
 
+# Hand port 3002 back to systemd whenever this dev session ends, by any means --
+# Ctrl+C, the script exiting, or (critically) the invoking process just being killed/
+# abandoned outright, e.g. a background Claude Code Bash call whose session ends
+# without ever running ./stop.sh. Found 2026-07-18: exactly that happened -- a prior
+# session's `./start.sh` (nodemon+vite) was left running unsupervised all night,
+# stopped the systemd unit on takeover per the comment above, then was never cleaned
+# up -- so the app silently went dark the moment nodemon's own child eventually died,
+# with nothing left to restart it (systemd had been told to stop, not crash, so its
+# own Restart=on-failure never kicked in either). This trap is the structural fix:
+# it fires on normal exit AND on SIGINT/SIGTERM, so an abandoned/killed session still
+# hands the port back instead of leaving both supervisors dark.
+trap 'echo ""; echo "Dev session ending -- handing port 3002 back to trading-journal-server.service"; pkill -9 -f "concurrently" 2>/dev/null; pkill -9 -f "nodemon" 2>/dev/null; pkill -9 -f "vite" 2>/dev/null; pkill -9 -f "node server/index.js" 2>/dev/null; systemctl --user start trading-journal-server.service 2>/dev/null' EXIT INT TERM
+
 echo "Checking app ports (${APP_PORTS[*]})..."
 cleanup_ports
 

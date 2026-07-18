@@ -350,6 +350,60 @@ function OvernightContextStrip() {
   );
 }
 
+// Read-only display of the nightly-seeded premarket walkthrough content
+// (server/routes/premarketWalkthrough.js, scripts/daily_coaching.js). This backend
+// has been generating real content (regime read, DOW-conditioned pattern signals,
+// forward-looking watch plan) every weeknight since before this session — it just
+// had zero UI ever displaying it (OPEN_DECISION premarket_walkthrough_and_screenshot_upload_orphaned,
+// 2026-07-17). Deliberately read-only: the table also has layer1-4_lean/committed_plan
+// fields meant for a full interactive guided-reasoning workflow, but that's a real,
+// separate UX design decision (how a trader would actually work through 4 reasoning
+// layers before market open) that shouldn't be invented unilaterally — this card only
+// surfaces what's already being generated for free.
+function PremarketWalkthroughCard({ date }) {
+  const [data, setData] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!date) return;
+    setLoaded(false);
+    fetch(`${API_URL}/premarket-walkthrough/${date}`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoaded(true); })
+      .catch(() => setLoaded(true));
+  }, [date]);
+
+  if (!loaded) return null;
+  if (!data) return null; // no seed yet for this date — nothing to show, not an error
+
+  const regimeColor = {
+    STRONG_BULL: '#22c55e', MILD_BULL: '#4ade80', NEUTRAL: '#94a3b8',
+    MILD_BEAR: '#f87171', STRONG_BEAR: '#ef4444',
+  }[data.regime] || '#94a3b8';
+
+  return (
+    <div style={{ padding: '8px 12px', borderRadius: 6, background: 'rgba(56,189,248,0.06)', border: '1px solid rgba(56,189,248,0.2)', borderLeft: '3px solid #38bdf8' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#38bdf8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Premarket Walkthrough</span>
+        {data.regime && <span style={{ fontSize: 11, fontWeight: 700, color: regimeColor }}>{data.regime.replace(/_/g, ' ')}</span>}
+      </div>
+      {data.open_notes && (
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>{data.open_notes}</div>
+      )}
+      {data.signals_notes && (
+        <div style={{ fontSize: 12, color: '#cbd5e1', whiteSpace: 'pre-line', lineHeight: 1.5, marginBottom: 4 }}>
+          <span style={{ color: '#64748b' }}>Historical {new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })} patterns:</span>{'\n'}{data.signals_notes}
+        </div>
+      )}
+      {data.committed_plan && (
+        <div style={{ fontSize: 12, color: '#e2e8f0', marginTop: 4, paddingTop: 4, borderTop: '1px solid rgba(56,189,248,0.15)' }}>
+          <span style={{ color: '#38bdf8', fontWeight: 700 }}>Watch: </span>{data.committed_plan}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SetupFeedbackForm({ setup, existingFeedback, onSaved }) {
   const [open, setOpen] = React.useState(false);
   const [action, setAction] = React.useState(existingFeedback?.action || '');
@@ -769,6 +823,9 @@ function ACDView({ accounts, selectedAccounts, setSelectedAccounts, setCurrentVi
                 </ErrorBoundary>
                 <ErrorBoundary name="Overnight Context">
                   <OvernightContextStrip />
+                </ErrorBoundary>
+                <ErrorBoundary name="Premarket Walkthrough">
+                  <PremarketWalkthroughCard date={todayET} />
                 </ErrorBoundary>
               </div>
 
