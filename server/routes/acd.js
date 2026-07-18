@@ -3687,17 +3687,35 @@ export default function createACDRouter(io) {
       // ── SETUP 9: C STANDALONE ─────────────────────────────────────────────────
       // No A signal today — first C break of OR is the setup
       let cStandalone = null;
+      // RE-ENABLED 2026-07-17 (user directive: shadow every confirmed-losing setup instead of
+      // hard-killing it, so forward data keeps accumulating and it can be reconsidered if it
+      // recovers -- "treat these like the others that go through the motions"). Both branches
+      // were fully disabled since 2026-07-05 (C_STANDALONE_UP: empty branch, C_STANDALONE_DOWN:
+      // `if (false)`), meaning NEITHER fired even in shadow mode -- zero new data collected for
+      // 12 days, unlike every other suppressed setup in this file (OPEN_TEST_DRIVE,
+      // BRACKET_BREAKOUT, IB_BULLISH/BEARISH, the generic level-fade family), which all
+      // continue to construct and rely on the existing dynamic mechanism (shadowCandidates ->
+      // liveStats._suppressedSetups -> status='SHADOW' at insert time, ~line 6018) to keep
+      // them out of live trade recommendations without freezing their data collection. This
+      // restores that same treatment for C_STANDALONE_UP/DOWN -- no change to the suppression
+      // mechanism itself, just removing the two setup_types that had been special-cased out of
+      // it. Both are still SUPPRESS in live SETUP_STATUS as of tonight, so they will insert as
+      // status='SHADOW', not 'ACTIVE' -- they cannot fire as real trades either way.
       if (!aUpFired && !aDownFired && !hasCFiredToday && currentPrice && orH && orL) {
         if (currentPrice > orH) {
-          // C_STANDALONE_UP suppressed 2026-07-05: 53.7% WR N=95 EV=-$60 (KILL).
-          // Needs 67% WR to break even at current avg win/loss. No gate improves it enough.
-          // cStandalone = null (skip creation);
+          cStandalone = {
+            type: 'C_STANDALONE_UP', label: 'C UP (STANDALONE)',
+            direction: 'LONG',
+            entry: +currentPrice.toFixed(0),
+            stop: +(orL - 4).toFixed(0),
+            target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80)),
+            targetLabel: 'T1: PD VAH (half off) · Runner: 45pt',
+            keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High',
+            description: `No A signal today. C Up — price closing above OR High (${orH?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('C_STANDALONE_UP') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
+            history: await getHistory('BALANCE'),
+          };
         } else if (currentPrice < orL && nearPD2VA) {
-          // C_STANDALONE_DOWN suppressed 2026-07-05: N=89 EV=-$39 despite nearPD2VA gate.
-          // Gate showed N=16 81% WR early on — that was small-sample noise. Kill same as C_STANDALONE_UP.
-          // cStandalone = null (skip creation)
-          void 0;
-          if (false) cStandalone = {
+          cStandalone = {
             type: 'C_STANDALONE_DOWN', label: 'C DOWN (STANDALONE)',
             direction: 'SHORT',
             entry: +currentPrice.toFixed(0),
@@ -3705,7 +3723,7 @@ export default function createACDRouter(io) {
             target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
             targetLabel: 'T1: PD VAL (half off) · Runner: 45pt',
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
-            description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: C_STANDALONE_DOWN has -12% directional edge at baseline (37.3% WR) and is GATED to PD-2 VA confluence only. At PD-2 VA: 81% WR (+32%, N=16). On TURBULENT days: 69% WR. This setup ONLY fires when price is within 25pt of PD-2 VAH (${pd2VAH ? Math.round(pd2VAH) : '—'}) or PD-2 VAL (${pd2VAL ? Math.round(pd2VAL) : '—'}). Without PD-2 confluence, the edge is negative — do not trade.`,
+            description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('C_STANDALONE_DOWN') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -5588,9 +5606,11 @@ export default function createACDRouter(io) {
           // acd_profiles_hardcoded_playbook_stats_table). Several had already drifted
           // measurably from real numbers by the time they were checked: VALUE_AREA_RESPONSIVE_
           // SHORT claimed 18% WR (real ~24%, EV actually positive), C_STANDALONE_DOWN claimed
-          // 63% WR while its only construction path (~line 3700, `if (false) cStandalone = ...`)
-          // is confirmed dead/unreachable code — so removed entirely below, not recalibrated,
-          // since PROFILES['C_STANDALONE_DOWN'] could never actually be looked up.
+          // 63% WR while its only construction path was `if (false)`-disabled (dead code at the
+          // time) -- entry removed same session. C_STANDALONE_UP/DOWN were both re-enabled to
+          // construct again later the same night (user directive: shadow every confirmed-
+          // losing setup instead of freezing its data collection entirely), so both have real
+          // PROFILES entries again below.
           const _profLS = getCached(todayET, 'levelFadeStats');
           function liveProfile(setupType, style, pace, hold) {
             const stat = _profLS?._setupStats?.[setupType];
@@ -5652,6 +5672,15 @@ export default function createACDRouter(io) {
             'ZONE_EDGE_FADE': liveProfile('ZONE_EDGE_FADE', 'scalp',
               'FAST. Price hits the zone edge and either bounces within 5-10 bars or breaks through. If no fade in 10 bars, the edge is failing — cut or let it expire.',
               'Do NOT hold for runners — this is a balance-zone rotation trade, targeting the other side of the zone or the first structural level inside.'),
+            // Re-added 2026-07-17 alongside re-enabling both setups' construction (see the
+            // C_STANDALONE block above) -- both are currently SUPPRESS live, so this card will
+            // show the ⚠️ SUPPRESSED conviction note automatically via liveProfile().
+            'C_STANDALONE_UP': liveProfile('C_STANDALONE_UP', 'sniper',
+              'Fast initial move after the C signal confirms. Once price breaks above OR High, trapped shorts can accelerate the rally.',
+              'Only fires when no A signal has fired today and no C has already fired — a standalone break, not a confirmation of an existing signal.'),
+            'C_STANDALONE_DOWN': liveProfile('C_STANDALONE_DOWN', 'sniper',
+              'Fast initial move after the C signal confirms. Once price breaks below OR Low near the PD-2 value area, trapped longs can accelerate the sell-off.',
+              'Only fires near a gated PD-2 VA condition — no A signal fired today, no C already fired, and price within 25pt of PD-2 VAH/VAL.'),
           };
           const prof = PROFILES[active.type] || { style: 'standard', pace: 'Monitor price action at entry zone.', bestWR: '', holdNote: '' };
 

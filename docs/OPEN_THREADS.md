@@ -1,5 +1,32 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-17: C_STANDALONE_UP/DOWN were fully frozen, not shadowed — re-enabled — **Resolved same session**
+
+User asked directly: shadow the confirmed-losing setups instead of hard-killing them, matching how everything else already works. Investigation found 8 of the "worst 10" drain setups (from the earlier pool-quality audit) were already correctly shadow-tracked — any setup_type with `SETUP_STATUS` recommendation `SUPPRESS`/`THIN_N` automatically inserts as `active_setups.status='SHADOW'`, never `'ACTIVE'`, via the existing `liveStats._suppressedSetups` mechanism. No hardcoded list involved for that part; it was already working as designed.
+
+Only `C_STANDALONE_UP` and `C_STANDALONE_DOWN` were genuinely broken — both fully disabled from construction since 2026-07-05 (`C_STANDALONE_UP`: empty `if` branch, `C_STANDALONE_DOWN`: literal `if (false)` guard), meaning neither could fire even in shadow mode — zero forward data collected for 12 days, unlike every other suppressed setup in the file. Fixed by removing both disable gates so they construct normally again and flow through the existing dynamic mechanism. Both are still `SUPPRESS` live as of tonight, so they insert as `SHADOW`, never `ACTIVE` — they cannot fire as real trades either way, they'll just resume accumulating real forward data so the existing `PROMOTE` mechanism can recover them automatically if they improve. Also re-added `PROFILES` entries for both (`C_STANDALONE_DOWN`'s was correctly deleted earlier the same session when it looked like permanently-dead code — now it's live again, so the entry belongs back).
+
+The historical -$9,202/-$1,956 figures found earlier are cumulative damage from *before* these were ever suppressed (most of this system's history predates the 07-05 suppression date) — not ongoing shadow-mode losses, which don't cost anything since shadow trades never fire for real.
+
+Verified: syntax check, server restart clean, `test_invariants.mjs`/`data_sanity_audit.mjs` both clean (only pre-existing unrelated flags).
+
+## 🆕 2026-07-17: Idea (not built) — regime-adaptive setup suppression, layered on top of the existing day-type system
+
+User's idea, explicitly asked to be saved for later rather than built now: the market has an underlying directional/mean-reversion regime at any given time (e.g. confirmed bullish trend, or "stretched too far from the mean and due for a correction"), and the system currently doesn't use that regime to temporarily lean into setups that make sense for it and lean away from setups that fight it. Concretely: if a rolling metric says the market is in a confirmed uptrend, should bearish/counter-trend setups get temporarily de-prioritized (not necessarily fully suppressed, since regimes end) — and vice versa, should a "stretched too far, due for reversion" signal temporarily favor counter-trend/fade setups over trend-following ones?
+
+**This is not a green-field idea — it's an extension of infrastructure that already exists:**
+- `DAY_TYPE_ALPHA` (`scripts/backtest_day_type_alpha.js`) already computes per-`(setup_type × day_type)` z-scores and adjusts sizing weekly — this is the closest existing analog, just scoped to BALANCE/TREND/TURBULENT day-type rather than a directional-bias regime.
+- `volatilityRegimeService.js`'s `classifyRegime()` already classifies morning volatility into a regime label live, and `VOL_REGIME_HIST` (built earlier this session) now persists that classification per day for backtesting — the classification infrastructure partially exists, just not wired to setup suppression.
+- The NL30 (30-day number line) directional-bias indicator is already computed and used elsewhere (e.g. `nl30Counter`/`nl30State` in `monteCarloService.js`'s trade tagging) as a rough "is today's setup aligned with the broader trend" signal.
+- `IB_BULLISH`/`IB_BEARISH`'s `DAY_TYPE_MANAGED` treatment is the closest existing precedent for "this setup's live-fire decision depends on a context classification, not just its own raw historical stats."
+
+**What a real version of this would need before being built (not done tonight, scoping only):**
+1. A real, data-derived definition of "confirmed bullish/bearish regime" and "stretched/due for reversion" — per CLAUDE.md's "No static thresholds" rule, this needs to come from a rolling distribution (e.g. NL30 z-score, or distance from a rolling mean measured in σ), not a hand-picked cutoff.
+2. A real backtest showing setups actually perform differently conditioned on that regime label (the same N≥20-gated, rigor-checked methodology already used for `DAY_TYPE_ALPHA` and every other conditioning dimension in this codebase) — do NOT build the suppression layer first and assume the conditioning helps; prove it the same way every other dimension in this system was proven.
+3. A decision on mechanism: a full suppression (like `DAY_TYPE_MANAGED`) vs. a softer sizing multiplier (like the existing `sizeMultiplier` IIFE's ~20 factors) — a multiplier is more consistent with how this system already treats every other contextual factor, and avoids an all-or-nothing regime call being wrong at the exact moment it flips.
+
+GUNNING FOR: if picked up later, start with the backtest (item 2) before writing any suppression/sizing code — this is exactly the kind of exploratory, multi-condition mining work that should go to Gemini first per the standing convention, not be hand-built on assumption.
+
 ## ✅ 2026-07-17: Open-ended $2k no-DLL prop test — found and fixed a real $/pt bug along the way
 
 User asked for an open-ended $2,000 prop-account Monte Carlo sweep with the daily loss limit (DLL) disabled, to find the best surviving scenarios. Full account, including the diagnostic path, in `scripts/prop_test_2k_no_dll.mjs`'s header comment and `feedback_math_self_audit.md` (memory).
