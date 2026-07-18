@@ -149,7 +149,7 @@ Priority-ordered by cheap-and-high-confidence first, expensive-and-speculative l
 1. **Done, this session**: apply Stages 1-2 to Regime A/B/C, then act on both caveats surfaced (non-overlapping re-test + Regime C placebo test) plus a cheap third check (NL10/NL30 divergence). Results in §7/§7.1 — real progress on the open decision, not a resolution (Stages 3-4 remain), and the outcome is more sobering than §7 alone suggested: see item 3 below.
 2. **Near-term, cheap, high-confidence**: consolidate the already-validated GARCH walk-forward vol-scaled stop out of `scratch/` into one canonical script — it's a real, proven asset currently sitting unpromoted because of 4 inconsistent versions, not because of any remaining doubt about its value. Unaffected by anything in §7.1 — independent thread.
 3. ~~**Near-term, cheap**: now that §7 has separated which of Regime A/B/C's *sub-labels* are actually well-supported (Regime C fully, Regime B's `STRETCHED_LOW` only, Regime A weakly), update `regimeClassificationService.js`'s header comment...~~ **Superseded by §7.1**: Regime C's apparent validation did not survive a placebo test, and Regime A/B's trend/stretch buckets turned out to be underpowered rather than weak-but-measured. None of the three sub-schemes currently clears both Stage 1 and Stage 2 cleanly — there is no per-label distinction left to document as "well-supported" yet. The honest header-comment update is the opposite of what this item originally proposed: state plainly that no sub-label is validated yet, pending Stage 3.
-4. **Promoted to top priority by §7.1**: build the `ruptures`/BOCPD-based retrospective changepoint ground-truth dataset (Stage 3) — no longer just "next in line." Every self-referential test tried on Regime A/B/C so far (EV splits, forward-return predictive power, persistence-vs-placebo) has either failed outright or been too data-thin to evaluate; an independent ground truth is the only remaining path that could actually validate (or further debunk) any of it.
+4. **Promoted to top priority by §7.1, scoped in §8**: build the `ruptures`-based retrospective changepoint ground-truth dataset (Stage 3) — no longer just "next in line." Every self-referential test tried on Regime A/B/C so far (EV splits, forward-return predictive power, persistence-vs-placebo) has either failed outright or been too data-thin to evaluate; an independent ground truth is the only remaining path that could actually validate (or further debunk) any of it. Concrete scope (data source, algorithm, validation methodology, effort phasing, new dependency): §8. Not yet built.
 5. **Medium-term**: extend the per-level Hurst/ADF methodology (§3.5) from "per level" to "whole session, intraday-updating" — a live trend/chop read distinct from and complementary to Regime A.
 6. **Longer-term, higher effort/risk**: a formal Markov-switching model with a fit transition matrix (§3.3) — only after 1-5 are done, and only if Stage-1-style testing shows the existing z-score approach genuinely underperforms.
 7. **Longer-term, flagged not scoped**: order-flow/CVD-based regime tells (§3.7, entirely untested) and options-expiry calendar effects (§3.8, needs new data).
@@ -258,8 +258,47 @@ Section 6's priority order needs updating: Regime C is no longer a promotable ca
 
 ---
 
-## 8. What this spec deliberately does not do
+## 8. Stage 3 Scope — Independent Changepoint Ground Truth (`ruptures`)
 
-- Does not resolve `regime_detection_methodology_needs_validation` — Stages 3-4 are unexecuted; the decision stays open until they are.
+Scoped 2026-07-18, not yet built. This is now the load-bearing next step for the whole thread (§7.1's closing note) — every test tried so far has been self-referential (checking Regime A/B/C against data derived from the same underlying `daily_score` series, or against its own internal consistency). This is the first test that would check them against something genuinely external.
+
+### Why `daily_score`-derived ground truth would NOT be independent (and what to use instead)
+
+Checked `server/services/acdService.js` (~line 92-97): `daily_score` is a discrete conviction score computed by this codebase's own A/C session-read engine — `+4`/`+1` for A-Up (with/without C-confirmation), `-4`/`-1` for A-Down, `0` otherwise. Regime A's z-score is a 30-day rolling sum of *this* — so running a changepoint detector on `daily_score` itself would just be re-deriving Regime A's own input in a different shape, not an independent check.
+
+**Ground truth should instead run on raw NQ price data** (`price_bars_primary`, symbol='NQ') — daily log-returns for trend/mean-shift detection (validates Regime A directly, the metric with the biggest open gap) and, as a lower-priority secondary pass, daily realized volatility for variance-shift detection (validates the vol-regime classifier, which — reminder — is already separately validated via its own Phase 1 backtest, so this is confirmatory rather than filling a real gap).
+
+**Real data-volume upside found while scoping this**: `price_bars_primary` NQ history runs 2022-12-14 to 2026-07-17 (877 distinct trading days) — more than double `acd_daily_log`'s 410-day window (2023-11-16 onward, itself only producing non-default Regime A labels after a further 150-day warmup, so real evaluable overlap is closer to ~260 days). Run the changepoint detector on the full 877-day price history for a statistically stronger ground truth; only the overlapping ~260-day window can actually be used to score Regime A's alignment against it, but the changepoint *detection* itself benefits from the longer series.
+
+### Method
+
+- **Tool**: Python `ruptures` library, PELT (Pruned Exact Linear Time) search — exact (not greedy like BinSeg), efficient enough for an 877-point daily series, and the standard first choice for offline multiple-changepoint detection.
+- **Cost function**: L2/RBF on daily NQ log-returns (mean-shift detection). A separate run on rolling realized volatility (variance-shift) is the optional secondary pass noted above.
+- **Penalty parameter**: PELT needs a penalty controlling how many changepoints it reports — this is itself a hyperparameter, and picking it by feel would just relocate the "arbitrary threshold" problem this whole spec exists to get away from. Use a BIC-derived penalty (`penalty = log(n) * sigma²`, a standard formula-driven default in the `ruptures` literature) rather than hand-tuning, and report how many changepoints it finds at that penalty plus at 0.5x/2x it (a cheap robustness check, same spirit as §5 Stage 2) — if the changepoint count/dates are wildly sensitive to a 2x penalty change, that's worth knowing before trusting the result.
+- **New dependency**: `ruptures` isn't in `scratch/.venv` yet (checked — `arch`/`statsmodels`/`pandas`/`numpy`/`scipy` are already there from the GARCH work, `pip install ruptures` into the same venv rather than creating a second one).
+
+### Validation methodology (how the ground truth actually gets used)
+
+Once `ruptures` produces a set of changepoint dates, independent of Regime A:
+
+1. **Alignment test**: for each Regime A label transition (a day where the label changes from the prior day), check whether an independently-detected changepoint falls within a small tolerance window (e.g. ±3 trading days — matches the kind of lag a 30-day rolling z-score would realistically have in confirming a break after it happened). Compute precision (of Regime A's transitions, what fraction land near a real changepoint) and recall (of real changepoints, what fraction Regime A's label transitions near).
+2. **Significance via permutation** (same technique as the Regime C placebo test in §7.1, applied differently here): randomly redistribute Regime A's transition *dates* (keeping the same count of transitions) across the evaluable window, many times, and recompute precision/recall against the same real changepoint set each time. If the real alignment isn't meaningfully better than this randomized null, Regime A isn't tracking real structural breaks any better than chance would — the same standard of evidence §7.1 held Regime C to.
+3. **Report honestly** even if the ~260-day overlap window turns out too thin to clear N≥20 real transitions for a confident precision/recall read (a real possibility worth flagging now, not discovering after building it) — if so, that's itself a finding (the same "not enough independent data yet" conclusion §7.1 reached for the trend/stretch buckets), not a reason to force a number out of it.
+
+### Effort phasing
+
+1. Install `ruptures`, pull 877-day NQ daily log-return series, run PELT at the BIC-derived penalty + the 0.5x/2x sensitivity check. Cheap, one sitting.
+2. Build the alignment test (precision/recall + permutation significance) against Regime A's transitions over the evaluable ~260-day window. Moderate — the statistical design is already specified above, but this is genuinely new code, not a re-run of an existing script.
+3. Only if 1-2 look promising: extend to the volatility-changepoint / vol-regime-classifier confirmatory pass. Optional, lower priority, can be dropped without weakening the main result.
+
+### What this does NOT do
+
+Does not retroactively validate or invalidate Regime B (`STRETCHED_LOW`/`STRETCHED_HIGH`) or Regime C — those would need their own ground-truth definitions (a "stretch" changepoint and a "run-length" ground truth are different objects than a trend changepoint, and are not scoped here). This phase is deliberately narrow: Regime A only, because it's the one with the biggest unresolved gap and the clearest independent ground-truth analog (a real trend/mean-shift in price).
+
+---
+
+## 9. What this spec deliberately does not do
+
+- Does not resolve `regime_detection_methodology_needs_validation` — Stage 3 is scoped but not built, Stage 4 untouched; the decision stays open until both are done.
 - Does not propose wiring anything new into `acd.js`'s live `sizeMultiplier` IIFE. Per the standing rule already in `CLAUDE.md`, nothing here should be treated as cleared for live until the full validation framework has actually been run against it and passed.
-- Does not attempt to build any of §3's untried methods (changepoint detection, formal Markov-switching, order-flow regime signals, ML classifiers) — this is a spec and a first validation pass, not an implementation session.
+- Does not attempt to build any of §3's other untried methods (formal Markov-switching, order-flow regime signals, ML classifiers) — this is a spec, a validation pass, and now a Stage-3 scope, not a full implementation session.
