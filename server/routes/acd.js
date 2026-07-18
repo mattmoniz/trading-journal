@@ -4632,7 +4632,17 @@ export default function createACDRouter(io) {
             liveStats = { _mon: {} };
             for (const r of statsQ.rows) {
               const isLong = r.signal_name.endsWith('_LONG');
-              const base = r.signal_name.replace(/_(?:LONG|SHORT)$/, '');
+              // FOUND 2026-07-18 (OPEN_DECISION keepLevels_ls_base_key_mismatch_selection_bug):
+              // stripping only _LONG/_SHORT left a trailing _FADE (e.g. PD_HIGH_FADE_LONG ->
+              // PD_HIGH_FADE), but every ls(...) call site in keepLevelsAll below passes the
+              // bare level name without _FADE (ls('PD_HIGH')) -- a key that was never
+              // populated, so ls() always returned null and nearLevels.reduce()'s "highest EV
+              // wins" primary-selection contest silently degenerated to picking whichever
+              // level happened to be listed first in the array, for every level, the whole
+              // time this code has existed. Confirmed via a standalone script replicating this
+              // exact query+lookup against the live DB before touching this line. Also strips
+              // the trailing _FADE now so ls('PD_HIGH')/ls('CAM_R1')/etc. finally resolve.
+              const base = r.signal_name.replace(/_(?:LONG|SHORT)$/, '').replace(/_FADE$/, '');
               if (!liveStats[base]) liveStats[base] = {};
               const dir = isLong ? 'long' : 'short';
               let parsedNotes = {};
