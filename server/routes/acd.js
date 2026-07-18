@@ -3279,7 +3279,7 @@ export default function createACDRouter(io) {
           target: trtLongT1.value,
           targetLabel: trtLongT1.label,
           keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (failed resistance)',
-          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal.\n\nEDGE: TRT_LONG has -4.3% edge at 10 bars but +24% edge at 20 bars (75% WR, N=28) — it's a slow-burn reversal. On TREND days: 100% WR (N small). EXECUTION: This trade needs TIME. Don't cut early. Expiry is 120 min. Target PD VAH or OR measured move. Stop below A Down level (${trtLongStop}).${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction zone.' : ''}`,
+          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal — it's a slow-burn reversal, not a spike.\n\nEDGE: TRT_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('TRT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: This trade needs TIME. Don't cut early. Expiry is 120 min. Target PD VAH or OR measured move. Stop below A Down level (${trtLongStop}).${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction zone.' : ''}`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -5578,78 +5578,80 @@ export default function createACDRouter(io) {
             tripleStack = { conviction: 'MODERATE', wr: '55%', note: 'ALIGNED + TREND. Good combo. Go with the trend, use structure as confirmation.' };
           }
 
-          // Setup profiles with backtested stats (1yr, 6 surviving setups)
+          // Setup profiles — style/pace/hold describe genuine trade MECHANICS (entry timing,
+          // expiry windows, structural gates), which don't go stale the way a backtested WR%
+          // does, so they stay static prose. stats/stop/target/bestWR/conviction are built live
+          // from liveStats._setupStats / liveStats._opt (cached once per day via getCached,
+          // not a fresh query per request — this whole handler is already a hot, expensive
+          // endpoint per CLAUDE.md's data-fetching performance rule) instead of the hand-typed
+          // WR%/$/N literals this object had until 2026-07-17 (OPEN_DECISION
+          // acd_profiles_hardcoded_playbook_stats_table). Several had already drifted
+          // measurably from real numbers by the time they were checked: VALUE_AREA_RESPONSIVE_
+          // SHORT claimed 18% WR (real ~24%, EV actually positive), C_STANDALONE_DOWN claimed
+          // 63% WR while its only construction path (~line 3700, `if (false) cStandalone = ...`)
+          // is confirmed dead/unreachable code — so removed entirely below, not recalibrated,
+          // since PROFILES['C_STANDALONE_DOWN'] could never actually be looked up.
+          const _profLS = getCached(todayET, 'levelFadeStats');
+          function liveProfile(setupType, style, pace, hold) {
+            const stat = _profLS?._setupStats?.[setupType];
+            const opt = _profLS?._opt?.[setupType];
+            const n = stat?.n ?? null;
+            const thin = n != null && n < 20;
+            const wrInt = n != null ? Math.round(stat.wr * 100) : null;
+            const evStr = n != null ? `${stat.ev >= 0 ? '+' : '-'}$${Math.abs(stat.ev).toFixed(2)}` : null;
+
+            const stats = n == null
+              ? 'Not yet calibrated — no fired trades yet.'
+              : `WR: ${wrInt}% | EV: ${evStr}/trade | N=${n}${thin ? ' (thin sample — provisional, not yet decisive)' : ''}`;
+
+            const stop = opt
+              ? `Stop: ~${opt.stop}pt (sweep-optimal, recalibrated weekly by update_optimal_stops.mjs).`
+              : 'Stop: not yet calibrated (no OPTIMAL_STOP row for this setup) — the live entry logic falls back to a structural distance.';
+            const target = opt
+              ? `Target: ~${opt.target}pt (sweep-optimal). R:R ${opt.stop > 0 ? (opt.target / opt.stop).toFixed(2) : '—'}:1.`
+              : 'Target: not yet calibrated for this setup.';
+
+            const bestWR = stat?.recommendation === 'DAY_TYPE_MANAGED'
+              ? 'Day-type-dependent — see the live DAY_TYPE_MANAGED bucket breakdown (Alpha Engine Overview / session-start hook), not duplicated here to avoid a second source of truth.'
+              : 'No live day-type/alignment breakdown currently meets the N≥20 floor for this setup.';
+
+            const statusNote = stat?.recommendation === 'SUPPRESS'
+              ? `⚠️ Currently SUPPRESSED live (N=${n}, EV=${evStr}) — this card is informational only, not an active recommendation.`
+              : thin
+              ? `Sample is still too thin (N=${n}) to trust as a live edge — treat as unproven.`
+              : stat?.recommendation === 'PROMOTE'
+              // PROMOTE is based on recent 90-day performance (N≥15, WR≥52%, EV>$0) clearing
+              // backtest_setup_status.mjs's bar, which can differ from the all-time stats
+              // shown above (e.g. a setup can show negative all-time EV but have genuinely
+              // improved in the last 90 days) — spell that out instead of letting the two
+              // numbers look contradictory.
+              ? `Recently promoted back to live — the last 90 days cleared the bar (N≥15, WR≥52%, EV>$0) even though the all-time stats above can lag that recent improvement.`
+              : stat?.recommendation === 'ACTIVE'
+              ? 'Confirmed live at current calibration.'
+              : '';
+
+            return { style, stats, stop, target, pace, hold, bestWR, conviction: statusNote || 'Standard context.' };
+          }
+
           const PROFILES = {
-            'VALUE_AREA_RESPONSIVE_SHORT': {
-              style: 'sniper',
-              stats: 'WR: 18% | Avg Win: $457 | Avg Loss: $55 | R:R 5.7:1',
-              stop: 'Stop: ~19pt (tight). Cut IMMEDIATELY if price accepts above VAH — no second chances.',
-              target: 'Target: 2D POC or VAL (avg winner +107pt). Do NOT take profit at +20pt — avg winner is 5x your stop.',
-              pace: 'Quick rejection expected at 2D VAH. Price should stall and reverse within 3-5 bars. If it keeps making new highs after your entry, the fade is failing.',
-              hold: 'RUNNER profile. You will lose most of these (~82%) but winners are massive ($457 avg). The math works because R:R is 5.7:1. Let winners run to POC/VAL — that is where the edge lives.',
-              bestWR: 'TURB 90%, NL30 aligned 93%, after NONTREND 75%',
-              conviction: 'Almost always fires counter to overnight (fading VAH when price is above value). That is the point — you are fading. Trust the R:R, not the WR.',
-            },
-            'IB_BEARISH': {
-              style: 'grinder',
-              stats: 'WR: 47% | Avg Win: $202 | Avg Loss: $233 | R:R 0.87:1',
-              stop: 'Stop: ~133pt (wide). This is structural, not a scalp. The wide stop is necessary — IB breaks retest.',
-              target: 'Target: 1x IB extension below (avg winner +88pt). Take partial at IB Mid if offered.',
-              pace: 'Steady selling over 30-60 min. NOT a crash. Expect pullbacks to IB Low — hold through them. If price reclaims IB Low and holds above for 10+ bars, the break is failing.',
-              hold: 'GRINDER. Be patient. This trade needs time to work. When below value with trapped longs (88% WR, N=32), it grinds in your favor all session.',
-              bestWR: 'Below value 88% (N=32), TURB 81%, aligned 77% (N=13)',
-              conviction: 'HIGHEST conviction when aligned (77% WR). When counter: 25% WR — seriously consider skipping unless you see strong volume confirmation.',
-            },
-            'OPEN_DRIVE_SHORT': {
-              style: 'scalp',
-              stats: 'WR: 53% | Avg Win: $112 | Avg Loss: $120 | R:R 0.93:1',
-              stop: 'Stop: ~51pt. Wider than it looks — the opening drive creates a range you are fading.',
-              target: 'Target: OR Low (avg winner +55pt). Take it when offered — this is not a runner.',
-              pace: 'FAST. You know within 15 bars if this works. If no selling follow-through by 10:00 AM, exit. Do not hold past IB close.',
-              hold: 'Morning trade only. If it is working by 10:00, hold to target. If price is churning sideways, the drive is absorbing and you should cut.',
-              bestWR: 'WED 86%, TURB 88%, aligned 71% (N=7)',
-              conviction: 'When aligned: 71% WR — hold with confidence. On Wednesday + TURBULENT, this is one of your best setups.',
-            },
-            'OPEN_DRIVE_LONG': {
-              style: 'scalp',
-              stats: 'WR: 54% | Avg Win: $134 | Avg Loss: $152 | R:R 0.88:1',
-              stop: 'Stop: ~59pt. Entry is on pullback to OR High — stop below OR Low.',
-              target: 'Target: OR measured move up (avg winner +62pt). Similar to drive short — take profits, do not overstay.',
-              pace: 'FAST. Entry on first touch of OR High after pullback. If it bounces, ride. If it slices through OR High, cut immediately.',
-              hold: 'Know within 15 bars. Monday is actually strong for this setup (+19% vs other days). TREND days = 83% WR.',
-              bestWR: 'TREND 83%, tight OR 78%, Monday +19%',
-              conviction: 'Overnight alignment does not significantly change WR here. Use day type — TREND is key.',
-            },
-            'TRT_LONG': {
-              style: 'grinder',
-              stats: 'WR: 56% | Avg Win: $111 | Avg Loss: ~$0 (expired) | R:R high',
-              stop: 'Stop: ~117pt (very wide). This is a reversal — trapped shorts are unwinding. You need room for the rotation.',
-              target: 'Target: opposite side of OR (avg winner +55pt at $2/pt). Do not take profit early — the edge is at 20 bars, NOT 10.',
-              pace: 'SLOW. This takes 1-2 hours to play out. A+C failed and price pushes through OR — the reversal grinds, it does not spike. Be patient.',
-              hold: 'DO NOT CUT EARLY. 120 min expiry. If you exit at +10pt, you leave 75% of the edge on the table. The whole point of this setup is that it takes time to resolve.',
-              bestWR: 'BALANCE 83%, TUE 83%',
-              conviction: 'Small sample on overnight alignment. Rely on day type — BALANCE days are your sweet spot. Suppressed on wide OR.',
-            },
-            'C_STANDALONE_DOWN': {
-              style: 'sniper',
-              stats: 'WR: 63% | Avg Win: $264 | Avg Loss: ~$0 (expired) | R:R high',
-              stop: 'Stop: ~90pt. Only fires near PD-2 VA (gated). Death sequence gate also active — no cascading after a loss.',
-              target: 'Target: 1x OR extension below OR Low (avg winner +93pt). Let it run — trapped longs create a selling cascade.',
-              pace: 'Fast initial move after C signal confirms. Once price breaks below OR Low near PD-2 VA, trapped longs accelerate the sell-off. Reassess at 1x OR extension.',
-              hold: 'If the PD-2 VA gate is met, this is high conviction (63% WR). Let it run. Do not take quick profit — the cascade is the edge.',
-              bestWR: 'TURB 72%, NONTREND prior 75% (N=8)',
-              conviction: 'When counter: 25% WR — consider skipping. When PD-2 VA gate is met + NONTREND prior day: 75% WR. That is your highest conviction C trade.',
-            },
-            'ZONE_EDGE_FADE': {
-              style: 'scalp',
-              stats: 'WR: 45% | Avg Win: ~16pt | Avg Loss: ~10pt | R:R 1.6:1 | +$736/yr backtested',
-              stop: 'Stop: 5%×ATR (ATR-scaled, typically 10-25pt). Tight — this is a scalp, not a runner.',
-              target: 'Target: 5%×ATR (same as stop). Take profit immediately when hit — zone fades are quick rotations.',
-              pace: 'FAST. Price hits the zone edge and either bounces within 5-10 bars or breaks through. If no fade in 10 bars, the edge is failing — cut or let it expire.',
-              hold: 'Do NOT hold for runners. This is a balance zone rotation trade — target the other side of the zone or the first structural level inside. Zone edges fade 84% of the time but the fade is small.',
-              bestWR: 'HIGH VOL 55%, TOP edge 49%, TREND days 54%',
-              conviction: 'Best on HIGH VOL days (55% WR). Zone edges that have held for 3+ days have stronger fade conviction. If price breaks through and stays outside for 15+ bars, the fade has failed — breakout is real.',
-            },
+            'VALUE_AREA_RESPONSIVE_SHORT': liveProfile('VALUE_AREA_RESPONSIVE_SHORT', 'sniper',
+              'Quick rejection expected at 2D VAH. Price should stall and reverse within 3-5 bars. If it keeps making new highs after your entry, the fade is failing.',
+              'This is a fade at a value-area boundary, not a breakout continuation. Let the calibrated target play out rather than taking an early fixed-point partial — the stop/target pair above is already the EV-optimized pair, not a starting guess.'),
+            'IB_BEARISH': liveProfile('IB_BEARISH', 'grinder',
+              'Steady selling over 30-60 min. NOT a crash. Expect pullbacks to IB Low — hold through them. If price reclaims IB Low and holds above for 10+ bars, the break is failing.',
+              'GRINDER. Be patient — this trade needs time to work. Day-type matters a lot here (see the live day-type breakdown below, not a fixed historical number).'),
+            'OPEN_DRIVE_SHORT': liveProfile('OPEN_DRIVE_SHORT', 'scalp',
+              "FAST. You know within 15 bars if this works. If no selling follow-through by 10:00 AM, exit. Do not hold past IB close.",
+              'Morning trade only. If it is working by 10:00, hold to target. If price is churning sideways, the drive is absorbing and you should cut.'),
+            'OPEN_DRIVE_LONG': liveProfile('OPEN_DRIVE_LONG', 'scalp',
+              'FAST. Entry on first touch of OR High after pullback. If it bounces, ride. If it slices through OR High, cut immediately.',
+              'Know within 15 bars whether this is working. Day type matters more than day-of-week here — check the live breakdown, not a fixed claim.'),
+            'TRT_LONG': liveProfile('TRT_LONG', 'grinder',
+              'SLOW. This takes 1-2 hours to play out. A+C failed and price pushes through the OR — the reversal grinds, it does not spike. Be patient.',
+              "DO NOT CUT EARLY. 120-minute expiry by design (see EXPIRY_WINDOW.TRT_LONG below) — the whole point of this setup is that it takes time to resolve. An early partial defeats the setup's own thesis."),
+            'ZONE_EDGE_FADE': liveProfile('ZONE_EDGE_FADE', 'scalp',
+              'FAST. Price hits the zone edge and either bounces within 5-10 bars or breaks through. If no fade in 10 bars, the edge is failing — cut or let it expire.',
+              'Do NOT hold for runners — this is a balance-zone rotation trade, targeting the other side of the zone or the first structural level inside.'),
           };
           const prof = PROFILES[active.type] || { style: 'standard', pace: 'Monitor price action at entry zone.', bestWR: '', holdNote: '' };
 
