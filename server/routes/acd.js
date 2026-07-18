@@ -6807,40 +6807,16 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
-  // ── Monte Carlo API ─────────────────────────────────────────────────
-  router.post('/acd/monte-carlo/run', async (req, res) => {
-    try {
-      const { runMonteCarlo } = await import('../services/monteCarloService.js');
-      const result = await runMonteCarlo(req.body || {});
-      if (result.error) return res.status(400).json(result);
-      const saved = await query(`INSERT INTO monte_carlo_runs (name, config, results, summary) VALUES ($1, $2, $3, $4) RETURNING id`,
-        [req.body.name || `Run ${new Date().toISOString().slice(0,16)}`, JSON.stringify(result.config), JSON.stringify({ equityDistribution: result.equityDistribution, drawdownDistribution: result.drawdownDistribution, sampleCurves: result.sampleCurves }), JSON.stringify(result.summary)]);
-      res.json({ id: saved.rows[0].id, summary: result.summary });
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
-
-  router.post('/acd/monte-carlo/optimize', async (req, res) => {
-    try {
-      const { runOptimizer } = await import('../services/monteCarloService.js');
-      const result = await runOptimizer(req.body || {});
-      res.json(result);
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
-
-  router.get('/acd/monte-carlo/runs', async (req, res) => {
-    try {
-      const r = await query(`SELECT id, name, run_date, summary, notes FROM monte_carlo_runs ORDER BY run_date DESC LIMIT 20`);
-      res.json({ runs: r.rows });
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
-
-  router.get('/acd/monte-carlo/runs/:id', async (req, res) => {
-    try {
-      const r = await query(`SELECT * FROM monte_carlo_runs WHERE id=$1`, [req.params.id]);
-      if (!r.rows.length) return res.status(404).json({ error: 'not found' });
-      res.json(r.rows[0]);
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
+  // Monte Carlo API (/acd/monte-carlo/run, /optimize, /runs, /runs/:id) removed 2026-07-17
+  // -- confirmed zero frontend callers anywhere in src/ across this route's entire git
+  // history (see docs/OPEN_THREADS.md, OPEN_DECISION consolidate_two_monte_carlo_
+  // implementations), the exact duplicate-of-the-live-Scenario-Tester already flagged
+  // earlier. monteCarloService.js itself (runMonteCarlo/runOptimizer/simulateRun/etc) is
+  // KEPT, not deleted -- it's a real, actively-used engine (scripts/prop_test_2k_no_dll.mjs
+  // imports it directly and found a real $/pt bug in it the same night), just no longer
+  // wrapped in a live API route nothing was calling. monte_carlo_runs table left in place
+  // (6 historical dev-test rows from 2026-06-22, harmless) but nothing will insert into it
+  // going forward since this was its only writer.
 
   // Performance Audit — comprehensive setup/edge backtest results
   router.get('/performance-audit', async (req, res) => {
