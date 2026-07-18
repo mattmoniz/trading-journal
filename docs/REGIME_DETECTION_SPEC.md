@@ -1,6 +1,6 @@
 # Market Regime Detection & Anticipation — Research Spec
 
-**Status: RESEARCH SPEC — no regime classifier in this codebase currently validated, not cleared for live.** Written 2026-07-18 directly against `OPEN_DECISION` `regime_detection_methodology_needs_validation` (HIGH priority, still PENDING after this document). First pass (§7) found a differentiated result; a same-day follow-up (§7.1 — a placebo test and a non-overlapping-window re-test) overturned the most promising part of it. Net: Regime A/B/C are **not currently validated by any test run so far**, and the codebase's own history (~410 days) may be too short to validate the trend/stretch buckets through EV-style testing alone — see §7.1's closing note. Read §7.1 before §7, not after.
+**Status: RESEARCH SPEC — `regime_detection_methodology_needs_validation` RESOLVED (negative result), not cleared for live.** Written 2026-07-18. Timeline across one day: §7 found a differentiated first-pass result → §7.1 (placebo test + non-overlapping re-test) overturned the most promising part of it → §8/§8.1 built and ran the independent `ruptures`-based ground truth Stage 3 called for, and Regime A's transitions aligned with real, independently-detected price structural breaks *worse than chance* on the best-tested configuration. **Net: Regime A/B/C, as currently constructed, are not validated by any test run — read §8.1 first, it's the most decisive result and the reason the open decision is now resolved (in the negative).**
 
 ## 1. Purpose & Scope
 
@@ -268,7 +268,9 @@ Checked `server/services/acdService.js` (~line 92-97): `daily_score` is a discre
 
 **Ground truth should instead run on raw NQ price data** (`price_bars_primary`, symbol='NQ') — daily log-returns for trend/mean-shift detection (validates Regime A directly, the metric with the biggest open gap) and, as a lower-priority secondary pass, daily realized volatility for variance-shift detection (validates the vol-regime classifier, which — reminder — is already separately validated via its own Phase 1 backtest, so this is confirmatory rather than filling a real gap).
 
-**Real data-volume upside found while scoping this**: `price_bars_primary` NQ history runs 2022-12-14 to 2026-07-17 (877 distinct trading days) — more than double `acd_daily_log`'s 410-day window (2023-11-16 onward, itself only producing non-default Regime A labels after a further 150-day warmup, so real evaluable overlap is closer to ~260 days). Run the changepoint detector on the full 877-day price history for a statistically stronger ground truth; only the overlapping ~260-day window can actually be used to score Regime A's alignment against it, but the changepoint *detection* itself benefits from the longer series.
+**Correction, found during Phase 1 execution (§8.1) — the "877-day" data-volume upside below did not hold up**: `MIN/MAX(date)` across `price_bars_primary` returns 2022-12-14 to 2026-07-17, but that spans *all* hours including thin overnight/Globex coverage from before this system tracked RTH consistently. Restricted to actual RTH hours (the same 9:30 AM–4 PM ET filter every other script in this codebase uses), real coverage starts 2023-11-16 — essentially the same start date as `acd_daily_log` (418 RTH days vs. 410). The changepoint ground truth ends up built on almost the same window as Regime A itself, not a materially longer independent series. Left the original paragraph below struck through rather than deleted, per this doc's own house style of correcting in place — the lesson (check the *specific* query you'll actually run, not a looser proxy for it) is worth keeping visible.
+
+~~**Real data-volume upside found while scoping this**: `price_bars_primary` NQ history runs 2022-12-14 to 2026-07-17 (877 distinct trading days) — more than double `acd_daily_log`'s 410-day window (2023-11-16 onward, itself only producing non-default Regime A labels after a further 150-day warmup, so real evaluable overlap is closer to ~260 days). Run the changepoint detector on the full 877-day price history for a statistically stronger ground truth; only the overlapping ~260-day window can actually be used to score Regime A's alignment against it, but the changepoint *detection* itself benefits from the longer series.~~
 
 ### Method
 
@@ -297,8 +299,31 @@ Does not retroactively validate or invalidate Regime B (`STRETCHED_LOW`/`STRETCH
 
 ---
 
+## 8.1 Stage 3 Executed (same day, 2026-07-18) — Regime A fails the independent ground-truth test, and does worse than chance on the best-populated configuration
+
+Built and run same session as the scoping above (dispatched to Gemini for the penalty-selection and alignment-test implementation; audited directly before trusting — see the two real issues caught below).
+
+**Penalty selection (Task 1)**: confirmed the scope's predicted risk was real — a BIC-derived penalty computed from `l2` cost's own scale did NOT transfer to `rbf` cost at all (identical 83 changepoints across a 4x penalty range when naively reused). Fixed with a proper elbow-method sweep (12-20 log-spaced penalty values per model, `scratch/regime_changepoints_elbow_sweep.json`). `l2`'s curve declines smoothly with no sharp elbow (66→62→52→41→29→15→9→3→0); two candidate counts (9, 15) were carried forward rather than forcing a single arbitrary pick. `rbf`'s curve is flat at 83 for a wide penalty range (1e-6 to ~0.011) then declines to 0 — genuinely elbow-shaped, though the specific point chosen (26 changepoints, penalty 0.785) sits mid-decline rather than exactly at the flat-to-declining transition (~0.01-0.03); worth knowing the exact count is a soft call even though the curve shape itself is real.
+
+**Alignment test (Task 2)**: Regime A has 33 label transitions in the evaluable window (index≥150). Precision/recall computed against each changepoint set (±3 trading-day tolerance), significance via a 500-iteration permutation null. **Caught and fixed one real bug before trusting the result**: the first version of the permutation script used `shuffledDates.sort(() => 0.5 - Math.random())` — a known-biased shuffle, not a fair permutation. Re-ran with a correct Fisher-Yates shuffle directly (`scratch/validate_regime_stage3_alignment.mjs`); the numbers moved only slightly, the conclusion didn't change.
+
+| Changepoint set | N in window | Real precision | Null mean | Precision percentile | Real recall | Null mean | Recall percentile |
+|---|---|---|---|---|---|---|---|
+| `l2_9` | 4 (too thin) | 9.1% | 9.4% | 61.6th | 75.0% | 63.2% | 81.2th |
+| `l2_15` | 8 (too thin) | 15.2% | 18.3% | 41.8th | 50.0% | 60.1% | 40.6th |
+| `rbf_26` | 17 (closest to usable) | 33.3% | 41.6% | **21.6th** | 47.1% | 61.3% | **13.2th** |
+
+Every changepoint-set N (4/8/17) sits below this codebase's own N≥20 floor, so no single row is individually decisive on its own. But the **direction is consistent across all three, and gets more negative as the changepoint set gets more populated and reliable** — `rbf_26`, the best-supported configuration, shows Regime A's real transitions aligning with independently-detected structural breaks *worse* than 78-87% of random 33-date placements would. That's not noise trending toward zero; it's a real signal, and it points the wrong way.
+
+**Conclusion**: Regime A's label transitions do not correspond to independently-detectable structural breaks in raw NQ price action — on the most-populated test, they align distinctly worse than chance. Combined with the same-day findings that Regime B's trend/stretch buckets are underpowered (§7.1 Test 1) and Regime C's persistence pattern is statistically indistinguishable from a placebo (§7.1 Test 2), **all three components of Regime A/B/C now have a real, tested, negative-or-inconclusive result** — this is no longer just "unvalidated," there is now actual evidence against treating the current z-score construction as meaningful. Recorded as `RESEARCH_CLAIM` `regime_a_fails_independent_changepoint_alignment`.
+
+**Stage 4 (multiple-comparisons correction) is now moot for these three labels** — it exists to correct for false positives among things that appeared to pass; nothing here passed, so there's nothing left to correct for. `OPEN_DECISION` `regime_detection_methodology_needs_validation` has been resolved on this basis — see the decision's own resolution text for the full account and recommendation.
+
+---
+
 ## 9. What this spec deliberately does not do
 
-- Does not resolve `regime_detection_methodology_needs_validation` — Stage 3 is scoped but not built, Stage 4 untouched; the decision stays open until both are done.
-- Does not propose wiring anything new into `acd.js`'s live `sizeMultiplier` IIFE. Per the standing rule already in `CLAUDE.md`, nothing here should be treated as cleared for live until the full validation framework has actually been run against it and passed.
-- Does not attempt to build any of §3's other untried methods (formal Markov-switching, order-flow regime signals, ML classifiers) — this is a spec, a validation pass, and now a Stage-3 scope, not a full implementation session.
+- Does not conclude Regime A/B/C are *permanently* invalid — only that the *current* z-score/tercile construction, on *this* ~410-day history, does not clear real independent validation. More history, a different construction, or a different ground truth could change this; nothing here rules that out.
+- Does not propose wiring anything new into `acd.js`'s live `sizeMultiplier` IIFE — the opposite: the evidence gathered argues against doing so with Regime A/B/C as currently built.
+- Does not attempt to build any of §3's other untried methods (formal Markov-switching, order-flow regime signals, ML classifiers) — those remain real options for a future attempt at regime detection in this codebase, just not exercised in this spec.
+- Does not retest Regime B or Regime C against an independent ground truth of their own — only Regime A got the full Stage 3 treatment; Regime B/C's negative results (§7.1) are self-referential (non-overlapping windows, placebo test), one level short of what Regime A received.

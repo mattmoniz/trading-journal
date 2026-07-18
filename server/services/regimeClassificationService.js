@@ -7,12 +7,17 @@
 // factorial ablation dispatch) — see OPEN_DECISION
 // regime_classification_logic_duplicated_needs_shared_service.
 //
-// IMPORTANT: this module deduplicates the CODE. It does NOT certify the METHODOLOGY.
-// The window lengths (30/120/20/252 days) and cutoffs (+/-1.0 std, 80th/20th
-// percentile, 33rd/66th tercile) were chosen semi-informally and have not been
-// independently validated as meaningful regime detectors — only their downstream EV
-// splits have been checked. See OPEN_DECISION regime_detection_methodology_needs_validation
-// (HIGH priority, unresolved) before trusting any live decision built on these labels.
+// IMPORTANT: this module deduplicates the CODE. The METHODOLOGY was tested the same
+// day and FAILED. Non-overlapping-window re-testing found Regime A/B's trend/stretch
+// buckets underpowered on this codebase's ~410-day history; a 200-permutation placebo
+// test found Regime C's persistence-decay pattern statistically indistinguishable from
+// a shuffled null (very likely a generic run-length artifact, not a real signal); an
+// independent PELT changepoint ground truth on raw NQ price data found Regime A's
+// label transitions align with real structural breaks WORSE than chance on the
+// best-tested configuration. Do NOT build live sizing/suppression logic on these
+// labels as currently constructed — see docs/REGIME_DETECTION_SPEC.md Section 8.1 for
+// the full account and `node scripts/flag_decision.mjs --list-all` for the resolved
+// `regime_detection_methodology_needs_validation` decision.
 //
 // Accepts a queryFn(sql, params) => { rows } so it works with either a raw pg.Client
 // or server/db.js's query() wrapper (same convention as
