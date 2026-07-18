@@ -1,6 +1,6 @@
 # Market Regime Detection & Anticipation — Research Spec
 
-**Status: RESEARCH SPEC — partially validated, not cleared for live.** Written 2026-07-18 directly against `OPEN_DECISION` `regime_detection_methodology_needs_validation` (HIGH priority, still PENDING after this document — see [Section 7](#7-preliminary-validation-results-run-2026-07-18)).
+**Status: RESEARCH SPEC — no regime classifier in this codebase currently validated, not cleared for live.** Written 2026-07-18 directly against `OPEN_DECISION` `regime_detection_methodology_needs_validation` (HIGH priority, still PENDING after this document). First pass (§7) found a differentiated result; a same-day follow-up (§7.1 — a placebo test and a non-overlapping-window re-test) overturned the most promising part of it. Net: Regime A/B/C are **not currently validated by any test run so far**, and the codebase's own history (~410 days) may be too short to validate the trend/stretch buckets through EV-style testing alone — see §7.1's closing note. Read §7.1 before §7, not after.
 
 ## 1. Purpose & Scope
 
@@ -146,10 +146,10 @@ A plausible story is a prior for *which* label to spend Stage 1-4 validation bud
 
 Priority-ordered by cheap-and-high-confidence first, expensive-and-speculative last.
 
-1. **Done, this session**: apply Stages 1-2 to Regime A/B/C. Results in §7 below — this is real progress on the open decision, not a full resolution (Stages 3-4 remain).
-2. **Near-term, cheap, high-confidence**: consolidate the already-validated GARCH walk-forward vol-scaled stop out of `scratch/` into one canonical script — it's a real, proven asset currently sitting unpromoted because of 4 inconsistent versions, not because of any remaining doubt about its value.
-3. **Near-term, cheap**: now that §7 has separated which of Regime A/B/C's *sub-labels* are actually well-supported (Regime C fully, Regime B's `STRETCHED_LOW` only, Regime A weakly), update `regimeClassificationService.js`'s header comment and any future consumer to reflect that per-label distinction rather than treating all three schemes as equally trustworthy.
-4. **Medium-term**: build a `ruptures`/BOCPD-based retrospective changepoint ground-truth dataset — an answer key independent of any existing z-score classifier — and use it for Stage 3 validation of Regime A/B/C and any future classifier, instead of only checking internal consistency.
+1. **Done, this session**: apply Stages 1-2 to Regime A/B/C, then act on both caveats surfaced (non-overlapping re-test + Regime C placebo test) plus a cheap third check (NL10/NL30 divergence). Results in §7/§7.1 — real progress on the open decision, not a resolution (Stages 3-4 remain), and the outcome is more sobering than §7 alone suggested: see item 3 below.
+2. **Near-term, cheap, high-confidence**: consolidate the already-validated GARCH walk-forward vol-scaled stop out of `scratch/` into one canonical script — it's a real, proven asset currently sitting unpromoted because of 4 inconsistent versions, not because of any remaining doubt about its value. Unaffected by anything in §7.1 — independent thread.
+3. ~~**Near-term, cheap**: now that §7 has separated which of Regime A/B/C's *sub-labels* are actually well-supported (Regime C fully, Regime B's `STRETCHED_LOW` only, Regime A weakly), update `regimeClassificationService.js`'s header comment...~~ **Superseded by §7.1**: Regime C's apparent validation did not survive a placebo test, and Regime A/B's trend/stretch buckets turned out to be underpowered rather than weak-but-measured. None of the three sub-schemes currently clears both Stage 1 and Stage 2 cleanly — there is no per-label distinction left to document as "well-supported" yet. The honest header-comment update is the opposite of what this item originally proposed: state plainly that no sub-label is validated yet, pending Stage 3.
+4. **Promoted to top priority by §7.1**: build the `ruptures`/BOCPD-based retrospective changepoint ground-truth dataset (Stage 3) — no longer just "next in line." Every self-referential test tried on Regime A/B/C so far (EV splits, forward-return predictive power, persistence-vs-placebo) has either failed outright or been too data-thin to evaluate; an independent ground truth is the only remaining path that could actually validate (or further debunk) any of it.
 5. **Medium-term**: extend the per-level Hurst/ADF methodology (§3.5) from "per level" to "whole session, intraday-updating" — a live trend/chop read distinct from and complementary to Regime A.
 6. **Longer-term, higher effort/risk**: a formal Markov-switching model with a fit transition matrix (§3.3) — only after 1-5 are done, and only if Stage-1-style testing shows the existing z-score approach genuinely underperforms.
 7. **Longer-term, flagged not scoped**: order-flow/CVD-based regime tells (§3.7, entirely untested) and options-expiry calendar effects (§3.8, needs new data).
@@ -202,11 +202,59 @@ Monotonic decay exactly as the "persistence" framing predicts, all three buckets
 
 Every mismatch in both alternates is a NEUTRAL-vs-TREND boundary dispute (does today count as "trending enough"), never an outright sign flip. **The classifier's directional core is robust to reasonable reparameterization** — this is a genuinely positive, distinct finding from the predictive-power result above, and the two should not be conflated: Regime A computes a *stable* label, it just hasn't been shown to *predict* much beyond the market's baseline drift.
 
-### What this does and does not resolve
+### What this does and does not resolve (as of the initial pass — see §7.1, this was substantially revised same day)
 
-**Does**: gives Regime A/B/C's three sub-schemes real, differentiated evidence for the first time — Regime C is well-supported, Regime B's `STRETCHED_LOW` half is well-supported, Regime A and Regime B's `STRETCHED_HIGH` half are not. That's a real, actionable update from "three equally-unvalidated metrics" to "one validated, one half-validated, one not."
+~~**Does**: gives Regime A/B/C's three sub-schemes real, differentiated evidence for the first time — Regime C is well-supported, Regime B's `STRETCHED_LOW` half is well-supported, Regime A and Regime B's `STRETCHED_HIGH` half are not.~~ **Superseded by §7.1 below — Regime C's apparent validation did not survive a placebo test.**
 
-**Does not**: complete Stage 3 (true out-of-sample / independent-ground-truth validation) or Stage 4 (multiple-comparisons correction across the full regime × setup_type testing surface this session and last night's both represent). **The `OPEN_DECISION` stays PENDING** — this document and its §7 results are real progress, not a clearance to wire any of Regime A/B/C into live sizing.
+**Does not**: complete Stage 3 (true out-of-sample / independent-ground-truth validation) or Stage 4 (multiple-comparisons correction across the full regime × setup_type testing surface this session and last night's both represent). **The `OPEN_DECISION` stays PENDING** — this document and its §7/§7.1 results are real progress, not a clearance to wire any of Regime A/B/C into live sizing.
+
+## 7.1 Phase A Follow-Up (same day, 2026-07-18) — two of §7's caveats turned out to matter, one new negative finding
+
+User asked to act on both caveats flagged in §7 (the overlapping-window autocorrelation issue, and — implicitly, by asking "is deeper research needed" — whether Regime C's clean result should be trusted at face value), plus a third question: is the pre-existing NL10/NL30 divergence flag (`server/services/queries.js` `getNL()`, already live as a "momentum weakening" signal in `confluence.js`/`longterm.js`/`ACDView.jsx`) usable as a regime-transition early-warning signal. All three run directly (`scratch/validate_regime_phase2.mjs`) rather than dispatched to Gemini — two prior dispatches in this thread had both hit the response-file truncation bug and needed a direct re-run anyway, so for a task this precisely specified there was no round-trip left to capture.
+
+### Test 1 — non-overlapping-window re-test: the original N's were inflated by autocorrelation, and there isn't enough independent data to say more
+
+Re-ran §7's Task 1 using windows that start every 5th day instead of every day (no overlap, no shared days between consecutive observations). Every trend/stretch bucket collapses below this codebase's own N≥20 floor:
+
+| Bucket | Original overlapping N | Non-overlapping N | Verdict |
+|---|---|---|---|
+| Regime A NEUTRAL | 287 | 57 | Still clears floor — avg +222.9pt, clean/stable |
+| Regime A BULLISH_TREND | 73 | **16** | Below floor — can't be evaluated |
+| Regime A BEARISH_TREND | 44 | **9** | Below floor, 55.6% day-clustered — can't be evaluated |
+| Regime B NORMAL | 312 | 65 | Still clears floor — avg +163.86pt, clean/stable |
+| Regime B STRETCHED_LOW | 64 | **12** | Below floor — can't be evaluated |
+| Regime B STRETCHED_HIGH | 28 | **5** | Below floor, 100% day-clustered — can't be evaluated |
+
+**This is a more important finding than "Regime A is weak" — it's "we don't have enough independent data to know."** Only the two majority/baseline buckets (which have enough raw days to survive a 5x sample reduction) remain evaluable at all. The original pass's apparent statistical confidence in `BULLISH_TREND`/`BEARISH_TREND`/`STRETCHED_LOW`/`STRETCHED_HIGH` was inflated by non-independent overlapping samples, not a real sample-size advantage — this codebase's ~410-day history simply doesn't contain enough independent trending/stretched days yet to validate or invalidate those specific buckets properly. Recorded as `RESEARCH_CLAIM` `regime_a_b_trend_stretch_buckets_underpowered_nonoverlapping`.
+
+### Test 2 — Regime C permutation/placebo test: the "cleanest" finding in §7 does not survive
+
+The suspicion raised when this spec was first reviewed — that Regime C's fresh→established→extended persistence decay might be a generic run-length/aging statistical artifact rather than a real market-regime finding — was tested directly. Real persistence percentages (index-based reconstruction; N differs slightly from §7's date-keyed version due to warmup-alignment, not a discrepancy worth chasing) were compared against 200 permutations of `daily_score` (randomly shuffled, breaking all real temporal structure, same z-score/tercile construction rebuilt fresh on each shuffle):
+
+| Bucket | Real | Placebo mean (200 permutations) | Placebo 95% range |
+|---|---|---|---|
+| fresh | 71.8% (N=170) | 70.2% | 58.0 – 82.1% |
+| established | 75.7% (N=37) | 73.5% | 41.4 – 100% |
+| extended | 72.9% (N=48) | 71.0% | 25.0 – 97.5% |
+
+**All three real values sit near the center of their placebo null range, not in a tail.** The fresh>established~extended decay pattern shows up just as strongly when the data is randomly shuffled — it is very likely a generic property of run-length statistics under this specific z-score-threshold construction (the "inspection paradox": a state that's already run long is structurally more likely to be near its end, independent of whether the underlying process has any real regime structure), not evidence that Regime A/C tracks anything genuine about the market. **This reverses §7's conclusion that Regime C was the strongest-validated of the three metrics — it is now the least supported, once tested against a proper null, not the most.** Recorded as `RESEARCH_CLAIM` `regime_c_persistence_debunked_placebo_test`; the original `regime_c_persistence_validated_independent_predictor` claim has been updated in place to point here and marked `STALE` — do not cite it as a validated finding.
+
+### Test 3 — NL10/NL30 divergence as a regime-transition leading indicator: no signal found
+
+A cheap, already-computed candidate signal (not built this session — `getNL()`'s `nl30`/`nl10` calendar-day sums have been live for a while, feeding a "momentum weakening" display flag, but its predictive validity as a regime-transition indicator was never itself backtested). Tested whether NL10 diverging from (or "weakening" relative to) the NL30 trend, on a currently-trending day, predicts Regime A flipping within the next 5 trading days:
+
+| Test | Group | N | 5-day flip rate | Avg fwd-5d return |
+|---|---|---|---|---|
+| Divergence | ALIGNED | 102 | 33.3% | -36.19pt (unstable) |
+| Divergence | DIVERGING | 12 | 33.3% | +403.69pt (N too thin, 41.7% clustered) |
+| Weakening | NOT_WEAKENING | 76 | 32.9% | -47.73pt (unstable) |
+| Weakening | WEAKENING | 38 | 34.2% | +125.80pt (unstable) |
+
+Flip rates are essentially identical between diverging/aligned and weakening/not-weakening — **no evidence this flag anticipates an upcoming regime flip.** The forward-return gaps look larger but neither clears this codebase's stability bar, and the `DIVERGING` group is far too thin to trust regardless. Negative finding, recorded as `RESEARCH_CLAIM` `nl_divergence_no_regime_transition_signal` (`status='PROVISIONAL'` — this tests one specific narrow question, it says nothing about NL30's already-separately-validated role in session-bias conditioning per the Permission Slip system, a different question that isn't reopened here).
+
+### Net effect on the roadmap
+
+Section 6's priority order needs updating: Regime C is no longer a promotable candidate as originally described — it was ranked highly in §7/§6 item 3 on the strength of a finding that didn't survive its own placebo test. Nothing from Regime A/B/C currently clears both Stage 1 and Stage 2 cleanly. The most defensible read of everything tested today: this codebase does not yet have a validated regime classifier, full stop — Stage 3 (an independent `ruptures`-based ground truth, §3.2 / §6 item 4) is no longer just "next in line," it's the only remaining path that could actually validate any of this, since every self-referential test tried so far (EV splits, forward-return predictive power, persistence-vs-placebo) has either passed on too-thin data or failed outright.
 
 ---
 
