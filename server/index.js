@@ -1327,7 +1327,7 @@ httpServer.listen(PORT, () => {
       if (io && result?.imported > 0) {
         io.emit('auto-import-complete', {
           trigger: 'AUTO_INTRADAY',
-          file: target.name,
+          file: `TradeActivityLogExport_${todayStr}.txt`,
           imported: result?.imported,
           skipped: result?.skipped,
           time: new Date().toISOString(),

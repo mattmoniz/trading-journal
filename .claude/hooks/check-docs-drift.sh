@@ -31,6 +31,13 @@ else
 fi
 changed_files="$(printf '%s\n%s\n' "$changed_files" "$unpushed_files" | sed '/^$/d' | sort -u)"
 
+# KNOWN LIMITATION (found 2026-07-18 testing this exact change): this only checks
+# whether docs were touched ANYWHERE in the unpushed range, not whether they were
+# touched AFTER the most recent structural change -- a docs commit followed by more
+# undocumented structural commits would still read as "covered." Narrower than the gap
+# this widening originally fixed (which was "goes silent the instant anything is
+# committed, full stop"), but not eliminated. Would need real commit-ordering, not just
+# presence-in-range, to close fully -- not done here, flagging rather than leaving silent.
 if [ -n "$changed_files" ]; then
   structural_patterns='^server/routes/[^/]+\.js$|^server/services/[^/]+\.js$|^server/index\.js$|^server/schema\.sql$|^src/components/dashboard/[^/]+\.jsx$|^src/views/[^/]+\.jsx$|^src/App\.jsx$|^start\.sh$|^stop\.sh$'
   structural_changed="$(echo "$changed_files" | grep -E "$structural_patterns")"
@@ -131,7 +138,17 @@ fi
 # ── Output ─────────────────────────────────────────────────────────────────────
 [ ${#warnings[@]} -eq 0 ] && exit 0
 
+# Found 2026-07-18 (while verifying this session's own additions): the hand-rolled sed
+# escaping here (s/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g, dating to commit de3e407,
+# 2026-07-09) has always mishandled warnings containing REAL embedded newlines (e.g. a
+# multi-line grep hit spanning several source lines, which several Pattern E hits do) --
+# sed processes line-by-line and can't collapse an actual newline inside a value with a
+# plain s/\n/.../ substitution (that only works on a literal 2-char "\n" already in the
+# text, not a real line break, without first N-joining lines). Produced invalid JSON
+# (jq: "Invalid string: control characters...") whenever that happened, silently --
+# nothing surfaces a Stop hook's own malformed output to anyone. jq -n --arg handles
+# all of this correctly by construction (proper JSON string escaping, real newlines
+# included), so build the message that way instead of by hand.
 message="$(printf '%s\n' "${warnings[@]}")"
-escaped="$(printf '%s' "$message" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g')"
-printf '{"systemMessage": "%s"}\n' "$escaped"
+jq -n --arg msg "$message" '{systemMessage: $msg}'
 exit 0

@@ -33,6 +33,23 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-edit-lint.sh 2>/dev/null || true",
+            "statusMessage": "Linting edited file..."
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-edit-filesize.sh 2>/dev/null || true",
+            "statusMessage": "Checking file size..."
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "matcher": "auto",
