@@ -1362,15 +1362,33 @@ router.get('/confluence/today-zones', async (req, res) => {
       })
       .sort((a, b) => (a.distFromPrice ?? Infinity) - (b.distFromPrice ?? Infinity));
 
-    // Reference stats (not recomputed live — latest weekly rigor-checked calibration,
-    // stop=120pt: the only stop distance where SINGLE/DOUBLE/TRIPLE/QUAD_PLUS all
-    // passed computeRigor's clean:true check simultaneously).
-    const tierStats = {
-      SINGLE:    { n: 18060, ev: 6.91,  wr: 54.5, clean: false },
-      DOUBLE:    { n: 11143, ev: 9.59,  wr: 54.0, clean: true },
-      TRIPLE:    { n: 5138,  ev: 13.11, wr: 52.3, clean: true },
-      QUAD_PLUS: { n: 3273,  ev: 12.01, wr: 46.4, clean: true },
-    };
+    // Reference stats — read live from performance_audit's latest CONFLUENCE_AUDIT
+    // calibration (scripts/backtest_confluence.js), stop=120pt. Was a hand-typed
+    // object literal until 2026-07-18 (found while consolidating the GARCH-stop
+    // backtest for this same TRIPLE+/QUAD_PLUS confluence system): compared against
+    // the real 2026-07-16 CONFLUENCE_AUDIT rows and was off by 3-6x on every tier,
+    // SINGLE even wrong-signed (+$6.91 hardcoded vs the real -$3.02) — the exact
+    // "Never hand-type a WR%/N/$ literal into a live-rendered card" anti-pattern
+    // this codebase has already fixed 6 other times (see CLAUDE.md hard rules).
+    const tierStatsCacheKey = 'confluence-tier-stats';
+    let tierStats = cacheGet(tierStatsCacheKey);
+    if (!tierStats) {
+      const tierRes = await query(`
+        SELECT DISTINCT ON (signal_name) signal_name, sample_size, win_rate, ev_per_trade
+        FROM performance_audit
+        WHERE signal_type = 'CONFLUENCE_AUDIT' AND signal_name IN ('SINGLE','DOUBLE','TRIPLE','QUAD_PLUS')
+        ORDER BY signal_name, run_date DESC
+      `);
+      tierStats = {};
+      for (const r of tierRes.rows) {
+        tierStats[r.signal_name] = {
+          n: r.sample_size,
+          ev: r.ev_per_trade != null ? +parseFloat(r.ev_per_trade).toFixed(2) : null,
+          wr: r.win_rate != null ? +(parseFloat(r.win_rate) * 100).toFixed(1) : null,
+        };
+      }
+      cacheSet(tierStatsCacheKey, tierStats, 12 * 60 * 60 * 1000);
+    }
 
     res.json({ date: todayET, currentPrice, levelsKnown: levels.length, zones: tripleplus, tierStats });
   } catch (err) {
