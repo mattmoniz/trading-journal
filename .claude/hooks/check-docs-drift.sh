@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Stop hook: four checks, none block.
-# 1) Structural files changed without a matching ARCHITECTURE.md/CLAUDE.md update
-#    (working tree AND unpushed commits — see note below on why both matter).
+# 1) Structural files changed more recently than the last ARCHITECTURE.md/CLAUDE.md
+#    update, by real commit-ordering (working tree AND unpushed commits, compared via
+#    last-touch epoch timestamps, not just "was either touched somewhere in range" —
+#    see the note above that section for the full reasoning and its own test history).
 # 2) Hardcoded threshold anti-patterns A-E (whole-file) in acd.js/caseEngine.js/broadly.
 # 3) (folded into #1's message) explicit persistence self-check — CLAUDE.md rules
 #    and cross-session auto-memory, not just docs/OPEN_THREADS.md.
@@ -31,20 +33,55 @@ else
 fi
 changed_files="$(printf '%s\n%s\n' "$changed_files" "$unpushed_files" | sed '/^$/d' | sort -u)"
 
-# KNOWN LIMITATION (found 2026-07-18 testing this exact change): this only checks
-# whether docs were touched ANYWHERE in the unpushed range, not whether they were
-# touched AFTER the most recent structural change -- a docs commit followed by more
-# undocumented structural commits would still read as "covered." Narrower than the gap
-# this widening originally fixed (which was "goes silent the instant anything is
-# committed, full stop"), but not eliminated. Would need real commit-ordering, not just
-# presence-in-range, to close fully -- not done here, flagging rather than leaving silent.
+# Real commit-ordering, not just presence-in-range (fixed 2026-07-18, was previously a
+# known, flagged limitation): "was CLAUDE.md/ARCHITECTURE.md touched somewhere in the
+# unpushed range" isn't the same claim as "docs are current for the LATEST structural
+# change" -- a docs commit followed by more undocumented structural commits would have
+# read as "covered" under the old check. Fixed by comparing actual last-touch points:
+# for each changed structural file and for the docs files, find the epoch timestamp of
+# whichever is more recent -- an uncommitted working-tree change (i.e. right now, always
+# the latest possible point) or the most recent commit that touched it within the
+# unpushed range. A structural file is flagged only if ITS last-touch point is strictly
+# after the docs' collective last-touch point (the max across CLAUDE.md/ARCHITECTURE.md/
+# docs/HARDCODED_CONSTANTS.md) -- so a docs update earlier in the same session no longer
+# silently "covers" a structural change made after it.
+last_touch_epoch() {
+  local f="$1"
+  if [ -n "$(git status --porcelain -- "$f" 2>/dev/null)" ]; then
+    date +%s
+    return
+  fi
+  if [ -n "$upstream" ]; then
+    local t
+    t="$(git log -1 --format=%ct "$upstream..HEAD" -- "$f" 2>/dev/null)"
+    [ -n "$t" ] && { echo "$t"; return; }
+  fi
+  echo 0
+}
+
 if [ -n "$changed_files" ]; then
   structural_patterns='^server/routes/[^/]+\.js$|^server/services/[^/]+\.js$|^server/index\.js$|^server/schema\.sql$|^src/components/dashboard/[^/]+\.jsx$|^src/views/[^/]+\.jsx$|^src/App\.jsx$|^start\.sh$|^stop\.sh$'
   structural_changed="$(echo "$changed_files" | grep -E "$structural_patterns")"
-  docs_changed="$(echo "$changed_files" | grep -E '^(ARCHITECTURE\.md|CLAUDE\.md|docs/HARDCODED_CONSTANTS\.md)$')"
-  if [ -n "$structural_changed" ] && [ -z "$docs_changed" ]; then
-    file_list="$(echo "$structural_changed" | tr '\n' ',' | sed 's/,$//' | sed 's/,/, /g')"
-    warnings+=("PERSISTENCE SELF-CHECK — structural files changed ($file_list) with no ARCHITECTURE.md/CLAUDE.md update in the working tree OR unpushed commits. Answer explicitly, don't skip: (1) Did anything this session turn out surprising, hard-to-find, or confirm/correct an approach? If yes, it needs a CLAUDE.md rule now — docs/OPEN_THREADS.md alone won't do, that file tracks unfinished work and a resolved lesson can quietly age out of it. (2) Does anything belong in the cross-session auto-memory system (/home/mmoniz/.claude/projects/-home-mmoniz-trading-journal/memory/) — a user preference, a workflow correction, a project fact? A 'no' to both is fine — but it has to be an answer, not a step that got skipped.")
+
+  docs_epoch=0
+  for d in ARCHITECTURE.md CLAUDE.md docs/HARDCODED_CONSTANTS.md; do
+    e="$(last_touch_epoch "$d")"
+    [ "$e" -gt "$docs_epoch" ] && docs_epoch="$e"
+  done
+
+  stale_files=()
+  if [ -n "$structural_changed" ]; then
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      fe="$(last_touch_epoch "$f")"
+      [ "$fe" -gt "$docs_epoch" ] && stale_files+=("$f")
+    done <<< "$structural_changed"
+  fi
+
+  if [ ${#stale_files[@]} -gt 0 ]; then
+    file_list="$(printf '%s, ' "${stale_files[@]}")"
+    file_list="${file_list%, }"
+    warnings+=("PERSISTENCE SELF-CHECK — structural files changed more recently than the last ARCHITECTURE.md/CLAUDE.md update ($file_list). Answer explicitly, don't skip: (1) Did anything this session turn out surprising, hard-to-find, or confirm/correct an approach? If yes, it needs a CLAUDE.md rule now — docs/OPEN_THREADS.md alone won't do, that file tracks unfinished work and a resolved lesson can quietly age out of it. (2) Does anything belong in the cross-session auto-memory system (/home/mmoniz/.claude/projects/-home-mmoniz-trading-journal/memory/) — a user preference, a workflow correction, a project fact? A 'no' to both is fine — but it has to be an answer, not a step that got skipped.")
   fi
 fi
 
