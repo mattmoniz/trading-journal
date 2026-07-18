@@ -1084,6 +1084,37 @@ async function main() {
   // session-based windows defined per-setup in the aggregation loop below
   const allSetupTypes = [...allTrades.keys()].sort();
 
+  // UNIFIED_BACKTEST rows real recommendation (SUPPRESS/THIN_N/ACTIVE/PROMOTE) --
+  // added 2026-07-18 per OPEN_DECISION unified_display_allowlist_vs_dynamic_criteria.
+  // Same thresholds as scripts/backtest_setup_status.mjs (SUPPRESS_MIN_N/SUPPRESS_MAX_EV/
+  // PROMOTE_MIN_N/PROMOTE_MIN_WR/PROMOTE_MIN_EV) -- reused directly, not re-derived, so
+  // UNIFIED_BACKTEST and SETUP_STATUS never drift to different bars for the "same" verdict.
+  // PROMOTE_MIN_N is measured over the session-based 90-window this file already computes
+  // for everything else (windowStats[90]), not backtest_setup_status.mjs's own calendar-day
+  // 90-day window -- this file's own established convention (see SESSION_WINDOWS' comment
+  // below: "much more meaningful than calendar-day cutoffs for infrequent setups"), not an
+  // inconsistency.
+  const SUPPRESS_MIN_N = 20, SUPPRESS_MAX_EV = -5;
+  const PROMOTE_MIN_N = 15, PROMOTE_MIN_WR = 0.52, PROMOTE_MIN_EV = 0;
+
+  const priorRecRows = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, recommendation
+    FROM performance_audit WHERE signal_type = 'UNIFIED_BACKTEST' AND window_days = 9999
+    ORDER BY signal_name, run_date DESC
+  `);
+  const priorRec = new Map(priorRecRows.rows.map(r => [r.signal_name, r.recommendation]));
+
+  function classifyUnifiedRecommendation(setupType, statsAll, stats90) {
+    if (!statsAll) return null;
+    const wasSuppressed = priorRec.get(setupType) === 'SUPPRESS';
+    if (wasSuppressed && stats90 && stats90.n >= PROMOTE_MIN_N && stats90.wr >= PROMOTE_MIN_WR && stats90.evPerTrade > PROMOTE_MIN_EV) {
+      return 'PROMOTE';
+    }
+    if (statsAll.n >= SUPPRESS_MIN_N && statsAll.evPerTrade < SUPPRESS_MAX_EV) return 'SUPPRESS';
+    if (statsAll.n < SUPPRESS_MIN_N) return 'THIN_N';
+    return 'ACTIVE';
+  }
+
   console.log('\n── UNIFIED BACKTEST RESULTS ───────────────────────────────────────────');
   console.log(`${'SETUP'.padEnd(35)} ${'N'.padStart(4)} ${'WR'.padStart(7)} ${'EV/trade'.padStart(10)} ${'P50 MAE'.padStart(9)} ${'P50 MFE'.padStart(9)}`);
   console.log('─'.repeat(80));
@@ -1105,17 +1136,19 @@ async function main() {
       windowStats[sw] = aggregate(recent);
     }
 
+    const recommendation = classifyUnifiedRecommendation(setupType, statsAll, windowStats[90]);
+
     if (statsAll) {
       const wrStr = statsAll.wr != null ? (statsAll.wr*100).toFixed(1)+'%' : 'N/A';
       const evStr = statsAll.evPerTrade != null ? '$'+statsAll.evPerTrade.toFixed(0) : 'N/A';
       const maeStr = statsAll.p50_mae != null ? statsAll.p50_mae.toFixed(0)+'pt' : 'N/A';
       const mfeStr = statsAll.p50_mfe != null ? statsAll.p50_mfe.toFixed(0)+'pt' : 'N/A';
-      console.log(`${setupType.padEnd(35)} ${String(statsAll.n).padStart(4)} ${wrStr.padStart(7)} ${evStr.padStart(10)} ${maeStr.padStart(9)} ${mfeStr.padStart(9)}`);
+      console.log(`${setupType.padEnd(35)} ${String(statsAll.n).padStart(4)} ${wrStr.padStart(7)} ${evStr.padStart(10)} ${maeStr.padStart(9)} ${mfeStr.padStart(9)} [${recommendation}]`);
     }
 
     if (!DRY_RUN) {
       // Write all-time (window_days=9999)
-      writePromises.push(writeResults(setupType, statsAll, 9999));
+      writePromises.push(writeResults(setupType, statsAll, 9999, 'UNIFIED_BACKTEST', recommendation));
       for (const sw of SESSION_WINDOWS) {
         writePromises.push(writeResults(setupType, windowStats[sw], sw));
       }

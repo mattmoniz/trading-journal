@@ -7415,20 +7415,67 @@ export default function createACDRouter(io) {
         'TRT_LONG':        { stop: 143, t1: 60, t2: 120 },
       };
 
-      // Priority order for dedup: LEVEL_FADE / PD_LEVEL / SCALP / ROLLING > LEVEL_FADE_AUDIT / MIDPOINT_FADE_AUDIT > SYSTEM_BACKTEST
+      // Priority order for dedup: SETUP_STATUS > LEVEL_FADE_AUDIT / MIDPOINT_FADE_AUDIT > SYSTEM_BACKTEST
       // UNIFIED_BACKTEST: shown only for the specific signal_names that replace CONTEXT/SCALP legacy orphan types.
-      const displayPrimary = new Set(['LEVEL_FADE', 'PD_LEVEL', 'SCALP', 'ROLLING']);
-      const hasPrimary = (name) => auditQ.rows.some(r => r.signal_name === name && displayPrimary.has(r.signal_type));
+      //
+      // FOUND 2026-07-18 (while verifying unified_display_allowlist_vs_dynamic_criteria's new
+      // dynamic UNIFIED_BACKTEST filter actually deduplicated anything): displayPrimary listed
+      // signal_types ('LEVEL_FADE', 'PD_LEVEL', 'SCALP', 'ROLLING') that don't exist ANYWHERE in
+      // the live database (confirmed via direct query, 0 rows for all four) -- this codebase's
+      // current primary calibration source is 'SETUP_STATUS', evidently the successor to
+      // whatever produced those four signal_types before a past refactor, which never updated
+      // this Set to match. hasPrimary() has been silently returning false for every call this
+      // whole time, meaning its OTHER two use sites below (SYSTEM_BACKTEST and the 3 audit
+      // types) have also never actually deduplicated against a real primary source, despite
+      // their own comments saying they should. Also fixed a second, independent mismatch found
+      // in the same investigation: SETUP_STATUS's own naming always includes "_FADE" before the
+      // direction suffix (PD_HIGH_FADE_SHORT) while UNIFIED_BACKTEST/SYSTEM_BACKTEST/the audit
+      // types never do (PD_HIGH_SHORT) -- an exact-string match would still fail to find a
+      // SETUP_STATUS row for the same level even with the signal_type fixed. normalizeSetupName
+      // strips "_FADE_" so both conventions compare equal; a name that never had "_FADE" (e.g.
+      // TRT_LONG, IB_BULLISH) is unaffected by the strip.
+      const normalizeSetupName = (name) => name.replace('_FADE_', '_');
+      const displayPrimary = new Set(['SETUP_STATUS']);
+      const hasPrimary = (name) => {
+        const norm = normalizeSetupName(name);
+        return auditQ.rows.some(r => displayPrimary.has(r.signal_type) && normalizeSetupName(r.signal_name) === norm);
+      };
       const hasSystemBacktest = (name) => auditQ.rows.some(r => r.signal_name === name && r.signal_type === 'SYSTEM_BACKTEST');
 
-      // UNIFIED_BACKTEST rows shown in the table (replaces CONTEXT/SCALP/SETUP legacy orphan types).
-      // Recommendation is null for most UNIFIED_BACKTEST rows — status is derived from EV/WR below.
-      const UNIFIED_DISPLAY = new Set([
-        'IB_BULLISH', 'IB_BEARISH',                                        // replaces CONTEXT type
-        'IB_MID_SCALP_LONG', 'IB_MID_SCALP_SHORT',                        // replaces SCALP type
-        'OR_MID_AFTER_IB_LONG', 'OR_MID_AFTER_IB_SHORT',                  // replaces SCALP type
-        // TRT_LONG: WR=33% EV=-$77 N=69 in UNIFIED_BACKTEST — dead setup, not shown
-      ]);
+      // UNIFIED_BACKTEST rows shown in the table (replaces CONTEXT/SCALP/SETUP legacy orphan
+      // types) — dynamic as of 2026-07-18, replacing a hand-curated Set. See OPEN_DECISION
+      // unified_display_allowlist_vs_dynamic_criteria for the full investigation: a naive
+      // "N>=20 and EV>=-$5" filter alone would have flooded this table with dozens of thin/
+      // duplicate directional facets of levels already shown via their own LEVEL_FADE/
+      // SETUP_STATUS row (confirmed directly — 66 of 158 all-time UNIFIED_BACKTEST rows
+      // classify ACTIVE, most of them exactly these duplicates, e.g. CAM_R1_SHORT/
+      // FLOOR_PIVOT_LONG/CAM_R2_LONG). scripts/backtest_unified.js now writes a real
+      // SUPPRESS/THIN_N/ACTIVE/PROMOTE recommendation onto every UNIFIED_BACKTEST row (same
+      // thresholds as backtest_setup_status.mjs, not re-derived) — combined with the
+      // already-existing hasPrimary() check below (previously only used to gate
+      // LEVEL_FADE_AUDIT/SYSTEM_BACKTEST rows), that's enough to replace the hardcoded list:
+      // show a row only if it independently clears the same bar every other setup_type does
+      // AND isn't just re-surfacing a level already shown elsewhere. ACTIVE and PROMOTE both
+      // count as "clears the bar" — PROMOTE is a narrower recovery-from-suppression state in
+      // backtest_setup_status.mjs's own vocabulary, but on a UNIFIED_BACKTEST row's first-ever
+      // classification pass nothing has suppression history yet, so requiring PROMOTE alone
+      // (as literally read from the original decision text) would show almost nothing;
+      // ACTIVE is the correct "good enough to trust, no exception involved" state.
+      // 2D_POC_LONG/SHORT and PD2_VAH_SHORT classify ACTIVE under this backtest_unified.js
+      // pass, but a separate, more rigorous, CONFIRMED-status investigation (RESEARCH_CLAIM
+      // 2d_poc_fade_no_edge, scripts/backtest_pd2_2dpoc_complete.mjs, 2026-07-17) already
+      // settled these as genuinely negative EV after fixing two real bugs this script hasn't
+      // incorporated: an entry-price-realism bug (this script likely still pegs entry to the
+      // exact theoretical level price rather than the touch bar's open) and 2D_POC's own live
+      // price computation having the value-area volume-bucketing bug. Showing these as ACTIVE
+      // here would directly contradict an already-confirmed finding -- excluded until
+      // backtest_unified.js's PD2/2D_POC methodology is updated to match (flagged separately,
+      // not fixed here -- that's real backtest-script work, out of scope for a display filter).
+      const CONFIRMED_NO_EDGE_OVERRIDE = new Set(['2D_POC_LONG', '2D_POC_SHORT', 'PD2_VAH_SHORT', 'PD2_VAH_LONG', 'PD2_VAL_LONG', 'PD2_VAL_SHORT']);
+      const isUnifiedDisplayWorthy = (row) =>
+        (row.recommendation === 'ACTIVE' || row.recommendation === 'PROMOTE')
+        && !hasPrimary(row.signal_name)
+        && !CONFIRMED_NO_EDGE_OVERRIDE.has(row.signal_name);
 
       for (const row of auditQ.rows) {
         if (row.signal_type === 'SYSTEM_SUMMARY') continue;
@@ -7444,7 +7491,7 @@ export default function createACDRouter(io) {
         // Found in code review 2026-07-15.
         if (row.signal_type === 'TOUCH_QUALITY') continue;
         // UNIFIED_BACKTEST: only show the specific signal_names above; everything else feeds keepLevels only
-        if (row.signal_type === 'UNIFIED_BACKTEST' && !UNIFIED_DISPLAY.has(row.signal_name)) continue;
+        if (row.signal_type === 'UNIFIED_BACKTEST' && !isUnifiedDisplayWorthy(row)) continue;
         // SYSTEM_BACKTEST is fallback only when no primary source (LEVEL_FADE etc.) exists
         if (row.signal_type === 'SYSTEM_BACKTEST' && hasPrimary(row.signal_name)) continue;
         // Audit types are suppressed when a primary source or SYSTEM_BACKTEST exists for the same signal
