@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-18 (same day, continued): Order-flow/CVD — first real signal built, tested honestly, weak result
+
+Picked up the order-flow gap flagged in `docs/REGIME_DETECTION_SPEC.md` §3.7 (delta/CVD divergence from price, never computed anywhere in this codebase before now). Verified data first, applying today's own hard-won lesson before building anything: `price_bars_primary`'s `bid_volume`/`ask_volume` columns are 100% populated back to 2022-12-14 including full Globex/overnight hours, and confirmed the same known ES contamination window (2023-11-15 to 2023-12-15) — filtered `symbol='NQ'` from the start this time rather than discovering the bug a third time.
+
+Built `scripts/backfill_cvd_daily_history.mjs` — persists overnight CVD (prior RTH close to today's RTH open) and RTH CVD per day to `performance_audit` (`signal_type='CVD_DAILY'`, 417 days), using the exact same `ask_volume - bid_volume` convention already live in `caseEngine.js`'s `confirmedDeltaDir()` and `touchQuality.js`'s `classifyTouch()` — not reinvented.
+
+**Tested Stage-1-style** (same discipline as the regime-detection work): does overnight CVD extremity predict the same day's RTH session, independent of any setup? **Result: no directional power** — HIGH_POSITIVE/HIGH_NEGATIVE overnight CVD buckets show no meaningful difference in RTH open-to-close return vs. NEUTRAL, and both are chronologically unstable. **A weak but real, clean, stable range-elevation effect does exist**: extreme overnight CVD (either direction) correlates with ~5-6% wider RTH range (327pt neutral vs 343-347pt extreme, N=70/56/232, all rigor-clean) — real, but much smaller than the already-live volatility regime classifier's range spread (216-508pt, a 2.3x range vs this signal's 1.06x). Recorded as `RESEARCH_CLAIM` `overnight_cvd_weak_range_signal_no_directional_power`.
+
+**Not yet tested**: the other order-flow angle from §3.7 — intraday CVD-vs-price divergence (price makes a new high, CVD doesn't confirm) as an exhaustion/reversal tell. Structurally different and bigger-lift (needs real touch/divergence detection, not just a daily aggregate test) — `CVD_DAILY` now exists as a real, persisted, reusable asset either way, so this isn't a dead end regardless of whether the divergence angle gets picked up next.
+
 ## ✅ 2026-07-18 (same day, continued): All-setups GARCH-scaled-stop test — 4 compounding bugs found and fixed, real but modest final result
 
 Attempted to generalize the GARCH-scaled-stop idea from confluence zones to every individual level-fade `setup_type`, and to test whether it reduces EV variance across volatility regimes (user's hypothesis: "they should work good in different regimes"). Dispatched to Gemini; the attempt errored (`Error: timeout waiting for response`) but left a real finding worth taking seriously: when the frozen-baseline bug from the earlier consolidation was "fixed" to a self-consistent same-day denominator (`scale = pred_vol / that day's own unconditional variance`), the scale collapsed to **exactly 1.0000 for every single day** — meaning the fitted GARCH `alpha` (ARCH term) was reading as 0 across the board.
