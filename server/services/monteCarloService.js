@@ -16,8 +16,14 @@ function getDLL(balance) {
 
 // ─── SIMULATION ENGINE ─────────────────────────────────────────────
 
-function simulateRun(tradeDays, config, shuffle = true) {
-  const { startingBalance, pointValue, commission, maxContracts, trailingDrawdown, drawdownFreezeProfit } = config.account;
+// Exported (2026-07-17) so a grid-sweep script can build the trade pool once per
+// sources/dateRange combination via loadAndTagTrades/applyFilters/groupByDay and then run
+// simulateRun many times with different sizing/account params -- without this, a sweep
+// would have to re-run runMonteCarlo (and its DB loads) once per grid cell, or reimplement
+// this function's logic by hand (the exact anti-pattern the "export the real function"
+// convention exists to prevent).
+export function simulateRun(tradeDays, config, shuffle = true) {
+  const { startingBalance, pointValue, commission, maxContracts, trailingDrawdown, drawdownFreezeProfit, noDLL } = config.account;
   let balance = startingBalance, peak = startingBalance, ddFloor = startingBalance - trailingDrawdown;
   let ddFrozen = false, blown = false, maxDD = 0, tradesExec = 0, dllHits = 0;
   const equityCurve = [startingBalance];
@@ -27,7 +33,13 @@ function simulateRun(tradeDays, config, shuffle = true) {
   for (const dayTrades of days) {
     if (blown) break;
     let dayPnl = 0, prevLoss = false;
-    const dll = getDLL(balance);
+    // noDLL (2026-07-17, ad hoc research request): skip the tiered daily-loss-limit
+    // entirely so a bad day isn't cut short mid-sequence -- trailingDrawdown/blown-account
+    // tracking below still applies (that's real prop-firm capital-preservation, a
+    // different constraint from the daily stop). Off by default (getDLL runs as before)
+    // so this doesn't change behavior for the live ScenarioTesterView.jsx / existing
+    // API consumers of runMonteCarlo -- only set when a caller explicitly opts in.
+    const dll = noDLL ? Infinity : getDLL(balance);
 
     for (const trade of dayTrades) {
       if (blown) break;
@@ -159,7 +171,26 @@ export async function loadAndTagTrades(config) {
 
     const stopDist = t.stop ? Math.abs(t.entry - t.stop) : 50;
     const win = t.resolution === 'TARGET_HIT';
-    const winPts = win ? Math.abs(t.pnl / 5) : 0;
+    // FIXED 2026-07-17: was Math.abs(t.pnl / 5) unconditionally -- for real pipeline trades,
+    // t.pnl is genuine dollar P&L from active_setups.actual_pnl (computed at this
+    // instrument's real $2/pt), so dividing by 5 silently assumed $5/pt (matches neither
+    // MNQ's real $2/pt nor standard NQ's real $20/pt -- the exact "$/pt constant matches
+    // neither instrument" bug class documented in CLAUDE.md's P&L hard rule). Net effect: a
+    // real $97 winner was credited as only $38.80 (winPts*pointValue = (97/5)*2 = 38.8) once
+    // simulateRun re-multiplied by the correct pointValue=2 -- every win silently understated
+    // by 60% while losses (computed via stopDist, a real point distance, not a $/pt divide)
+    // stayed correct. Confirmed via 8 real winning trades: buggy winPts was exactly 0.4x the
+    // pnl/2 (real $2/pt) value in every case. Root-caused this whole prop-test sweep's
+    // pervasive "everything blows up" result -- a 65%+ WR, net-positive-avgPnl trade pool
+    // should not show 0% survival at any account size, and after this fix it doesn't (see
+    // scripts/prop_test_2k_no_dll.mjs). Fixed by using the real entry-to-target point
+    // distance (t.t1/t.entry are both real price levels, same source as stopDist above) for
+    // pipeline-sourced trades, which have those levels; the pnl/5 fallback is kept ONLY for
+    // the synthetic edge/level trade generators further down this file, which construct
+    // their own pnl field as an internal points*5 placeholder (pnl: stopDist*5, not real
+    // dollars) and are self-consistent on that convention -- they were never affected by
+    // this bug, only real pipeline trades were.
+    const winPts = win ? (t.t1 != null && t.entry != null ? Math.abs(t.entry - t.t1) : Math.abs(t.pnl / 5)) : 0;
     const lossPts = !win ? stopDist : 0;
 
     // Compute MAE from bars if available
@@ -339,7 +370,7 @@ export function applyFilters(trades, filterConfig) {
 
 // ─── GROUP TRADES INTO DAYS ─────────────────────────────────────────
 
-function groupByDay(trades) {
+export function groupByDay(trades) {
   const byDay = {};
   for (const t of trades) (byDay[t.d] ??= []).push(t);
   return Object.values(byDay);
