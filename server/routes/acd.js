@@ -4632,16 +4632,20 @@ export default function createACDRouter(io) {
             liveStats = { _mon: {} };
             for (const r of statsQ.rows) {
               const isLong = r.signal_name.endsWith('_LONG');
-              // FOUND 2026-07-18 (OPEN_DECISION keepLevels_ls_base_key_mismatch_selection_bug):
-              // stripping only _LONG/_SHORT left a trailing _FADE (e.g. PD_HIGH_FADE_LONG ->
-              // PD_HIGH_FADE), but every ls(...) call site in keepLevelsAll below passes the
-              // bare level name without _FADE (ls('PD_HIGH')) -- a key that was never
-              // populated, so ls() always returned null and nearLevels.reduce()'s "highest EV
-              // wins" primary-selection contest silently degenerated to picking whichever
-              // level happened to be listed first in the array, for every level, the whole
-              // time this code has existed. Confirmed via a standalone script replicating this
-              // exact query+lookup against the live DB before touching this line. Also strips
-              // the trailing _FADE now so ls('PD_HIGH')/ls('CAM_R1')/etc. finally resolve.
+              // CORRECTED 2026-07-18 (OPEN_DECISION keepLevels_ls_base_key_mismatch_selection_bug):
+              // this line originally shipped with a comment claiming statsQ.signal_name values
+              // look like PD_HIGH_FADE_LONG (requiring a _FADE strip here to match ls('PD_HIGH')
+              // call sites below) and that ls() had always returned null as a result. Direct
+              // re-verification against the live DB disproved that: statsQ reads signal_type=
+              // 'UNIFIED_BACKTEST', and backtest_unified.js's own fadeLevels object (its source)
+              // has used bare keys (PD_HIGH, CAM_R1, etc., no _FADE) since it was written
+              // (624df42, 2026-07-01) -- signal_name has only ever been e.g. PD_HIGH_LONG here.
+              // The _FADE-suffixed names that misled the original diagnosis (PD_HIGH_FADE_LONG)
+              // belong to SETUP_STATUS/OPTIMAL_STOP/TOUCH_QUALITY, a different signal_type this
+              // query never reads. So the pre-existing single-line regex was already correct for
+              // real data, and ls() was never actually broken. The .replace(/_FADE$/, '') below
+              // is a no-op against current data; left in only as harmless defense in case
+              // backtest_unified.js's naming convention is ever unified with the live _FADE one.
               const base = r.signal_name.replace(/_(?:LONG|SHORT)$/, '').replace(/_FADE$/, '');
               if (!liveStats[base]) liveStats[base] = {};
               const dir = isLong ? 'long' : 'short';
