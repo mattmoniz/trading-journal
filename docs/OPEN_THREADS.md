@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## 🆕 2026-07-17: No RTH/Non-RTH column anywhere — computed ad hoc, only in one place, and only for `active_setups`
+
+User asked directly: is there a column on `trades` marking RTH vs. non-RTH? Checked `information_schema.columns` directly — **no**, neither `trades` nor `active_setups` has anything (searched for `%rth%`/`%session%`/`%globex%`, zero matches on `trades`; `active_setups` only has an unrelated `historical_sessions` integer).
+
+The only place this classification exists at all is computed live in `App.jsx`'s sidebar Session Timeline (`isRTH()`, ~line 1361 — a plain hour/minute check: `(h > 9 || (h===9 && m>=30)) && h < 16`), applied to `active_setups.fired_at`. The RTH/Non-RTH/Both filter added to `SetupHistoryView.jsx`'s Setup Log table earlier tonight uses the same pattern independently — two separate inline implementations of the identical check, not a shared function, let alone a shared column. `trades.entry_time` has no equivalent classification anywhere, computed or persisted — so filtering real historical trades by RTH/session isn't currently possible without writing a third copy of this same logic.
+
+**Why it might be worth a persisted column, not just another inline computation**: unlike a trading threshold (which CLAUDE.md's "no static thresholds" rule targets), RTH boundaries are a fixed market-structure fact, not a tunable parameter — a persisted `is_rth boolean` (or `session_type` enum for RTH/Globex/overnight) computed once at insert time would let every future consumer (queries, backtests, this session's own rotation analysis, which had to infer AM/PM context from timestamps by hand) filter directly instead of re-deriving the same hour/minute check a third or fourth time. This is the same "shared modules" principle already applied elsewhere in this codebase (`rigorDiagnostics.js`, `setupTypes.js`) — a classification duplicated 2+ times independently is exactly the pattern that's caused real bugs this session.
+
+GUNNING FOR: decide whether to (a) extract the existing duplicated `isRTH()` logic into one shared util both `App.jsx` and `SetupHistoryView.jsx` import, and/or (b) add a persisted `is_rth`/`session_type` column to `trades` (backfilled from `entry_time`, populated at import time going forward) so real trade data can finally be filtered/analyzed by session the same way `active_setups` now can live. Not built tonight — flagging per the standing "save findings, don't let them evaporate" convention.
+
 ## ✅ 2026-07-17: C_STANDALONE_UP/DOWN were fully frozen, not shadowed — re-enabled — **Resolved same session**
 
 User asked directly: shadow the confirmed-losing setups instead of hard-killing them, matching how everything else already works. Investigation found 8 of the "worst 10" drain setups (from the earlier pool-quality audit) were already correctly shadow-tracked — any setup_type with `SETUP_STATUS` recommendation `SUPPRESS`/`THIN_N` automatically inserts as `active_setups.status='SHADOW'`, never `'ACTIVE'`, via the existing `liveStats._suppressedSetups` mechanism. No hardcoded list involved for that part; it was already working as designed.
