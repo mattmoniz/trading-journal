@@ -6399,15 +6399,15 @@ export default function createACDRouter(io) {
       } else {
         conditions = ["status != 'SHADOW'", `setup_type != ALL(${shadowRef})`];
       }
-      // RTH = 9:30-15:59 ET (570-959 minutes), matching this codebase's standard RTH window
-      // everywhere else. fired_at is stored as naive ET wall-clock time, so EXTRACT needs no
-      // timezone conversion. 'overnight' also has never had any real rows until the Globex-hours
-      // poller fix (2026-07-16) started running — see docs/OPEN_THREADS.md's RTH-filter-blocked
-      // note — so an empty overnight bucket right now is expected, not a bug.
+      // RTH = 9:30-15:59 ET, now backed by the persisted is_rth generated column (added
+      // 2026-07-18) instead of a hand-rolled EXTRACT expression — see OPEN_DECISION
+      // no_rth_column_trades_or_active_setups. 'overnight' had no real rows until the
+      // Globex-hours poller fix (2026-07-16) started running, so a thin overnight bucket
+      // is expected, not a bug.
       if (session === 'rth') {
-        conditions.push(`(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) BETWEEN 570 AND 959`);
+        conditions.push(`is_rth = true`);
       } else if (session === 'overnight') {
-        conditions.push(`(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) NOT BETWEEN 570 AND 959`);
+        conditions.push(`is_rth = false`);
       }
       if (from) { params.push(from); conditions.push(`trade_date >= $${params.length}`); }
       if (to)   { params.push(to);   conditions.push(`trade_date <= $${params.length}`); }

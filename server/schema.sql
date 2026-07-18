@@ -338,7 +338,8 @@ CREATE TABLE public.active_setups (
     suppression_reason text,
     touch_quality character varying(20),
     touch_quality_vol_z numeric,
-    origin_status character varying(12)
+    origin_status character varying(12),
+    is_rth boolean GENERATED ALWAYS AS ((((EXTRACT(hour FROM fired_at) > (9)::numeric) OR ((EXTRACT(hour FROM fired_at) = (9)::numeric) AND (EXTRACT(minute FROM fired_at) >= (30)::numeric))) AND (EXTRACT(hour FROM fired_at) < (16)::numeric))) STORED
 );
 
 
@@ -433,6 +434,56 @@ CREATE TABLE public.active_setups_cam_window_backup_20260714 (
     replay_resolution character varying(20),
     size_multiplier numeric(5,3),
     suppression_reason text
+);
+
+
+--
+-- Name: active_setups_duplicate_touch_backup_20260717; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_duplicate_touch_backup_20260717 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12)
 );
 
 
@@ -1110,6 +1161,7 @@ CREATE TABLE public.trades (
     support_resistance_level numeric,
     follow_through boolean,
     level_proximity jsonb,
+    is_rth boolean GENERATED ALWAYS AS ((((EXTRACT(hour FROM ((entry_time AT TIME ZONE 'UTC'::text) AT TIME ZONE 'America/New_York'::text)) > (9)::numeric) OR ((EXTRACT(hour FROM ((entry_time AT TIME ZONE 'UTC'::text) AT TIME ZONE 'America/New_York'::text)) = (9)::numeric) AND (EXTRACT(minute FROM ((entry_time AT TIME ZONE 'UTC'::text) AT TIME ZONE 'America/New_York'::text)) >= (30)::numeric))) AND (EXTRACT(hour FROM ((entry_time AT TIME ZONE 'UTC'::text) AT TIME ZONE 'America/New_York'::text)) < (16)::numeric))) STORED,
     CONSTRAINT trades_direction_check CHECK (((direction)::text = ANY ((ARRAY['LONG'::character varying, 'SHORT'::character varying])::text[])))
 );
 
@@ -1473,6 +1525,19 @@ CREATE TABLE public.level_prices (
 --
 
 CREATE TABLE public.level_prices_ib_backup_20260714 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
+-- Name: level_prices_va_bucketing_backup_20260717; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_va_bucketing_backup_20260717 (
     trade_date date,
     level_name text,
     price numeric(12,4),
@@ -3989,6 +4054,39 @@ CREATE TABLE public.trade_timeline_events (
 
 
 --
+-- Name: trade_timeline_events_duplicate_backup_20260717; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.trade_timeline_events_duplicate_backup_20260717 (
+    id integer,
+    trade_date date,
+    event_time timestamp without time zone,
+    event_type character varying(20),
+    setup_type character varying(60),
+    setup_id integer,
+    direction character varying(5),
+    entry_zone numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level character varying(60),
+    resolution character varying(20),
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    window_duration_minutes integer,
+    signal_type character varying(20),
+    signal_price numeric,
+    signal_quality character varying(10),
+    alert_type character varying(60),
+    conditions_met integer,
+    notes text,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone
+);
+
+
+--
 -- Name: trade_timeline_events_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -4064,6 +4162,26 @@ CREATE SEQUENCE public.trades_id_seq
 --
 
 ALTER SEQUENCE public.trades_id_seq OWNED BY public.trades.id;
+
+
+--
+-- Name: trades_level_proximity_backup_20260717; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.trades_level_proximity_backup_20260717 (
+    id integer,
+    level_proximity jsonb
+);
+
+
+--
+-- Name: trades_level_proximity_backup_20260717_pre_atr_scale; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.trades_level_proximity_backup_20260717_pre_atr_scale (
+    id integer,
+    level_proximity jsonb
+);
 
 
 --
@@ -6362,6 +6480,13 @@ CREATE INDEX idx_as_trade_date ON public.active_setups USING btree (trade_date);
 --
 
 CREATE UNIQUE INDEX idx_as_unique_setup ON public.active_setups USING btree (trade_date, setup_type, COALESCE(status, ''::character varying)) WHERE ((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'SHADOW'::character varying])::text[]));
+
+
+--
+-- Name: idx_as_unique_touch_instant; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_as_unique_touch_instant ON public.active_setups USING btree (trade_date, setup_type, fired_at);
 
 
 --

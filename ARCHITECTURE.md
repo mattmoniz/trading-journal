@@ -54,7 +54,7 @@
 ## Database
 
 ### Schema source of truth
-`server/schema.sql` is a full `pg_dump --schema-only` snapshot of the live DB (137 tables/views, regenerated 2026-07-17 after adding `pattern_discoveries.window_type` — see the "Pattern mining" row in the table cluster list below). There is still no tracked migration history — tables beyond the original 5 (`daily_logs`, `trades`, `custom_field_definitions`, `setup_types`, and originally `trade_screenshots`, dropped 2026-07-16) were created ad hoc directly against the live DB — so `schema.sql` is a point-in-time dump, not hand-maintained DDL, and will drift again as soon as a table is added/altered without regenerating it. Regenerate with:
+`server/schema.sql` is a full `pg_dump --schema-only` snapshot of the live DB (137 tables/views, regenerated 2026-07-18 after adding `trades.is_rth`/`active_setups.is_rth` — see the RTH/session-filter note below). There is still no tracked migration history — tables beyond the original 5 (`daily_logs`, `trades`, `custom_field_definitions`, `setup_types`, and originally `trade_screenshots`, dropped 2026-07-16) were created ad hoc directly against the live DB — so `schema.sql` is a point-in-time dump, not hand-maintained DDL, and will drift again as soon as a table is added/altered without regenerating it. Regenerate with:
 
 ```bash
 PGPASSWORD=$DB_PASSWORD pg_dump --schema-only --no-owner --no-privileges --no-comments \

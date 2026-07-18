@@ -1344,6 +1344,7 @@ function LiveSessionPanel() {
         const caseEvents = activeSetups.filter(Boolean).map(s => ({
           setup_type: s.setup_type,
           fired_time: s.fired_at_str ? s.fired_at_str.slice(11, 16) : null,
+          _isRth: s.is_rth,
           fired_price: s.entry_zone_low,
           _resolution: s.resolution,
           _status: s.status,
@@ -1357,28 +1358,27 @@ function LiveSessionPanel() {
         }));
         // Session Timeline: resolved/expired setups, filtered by the RTH/Non-RTH/Both toggle
         // (timelineSession state) — was hardcoded RTH-only until 2026-07-17, see the comment
-        // on timelineSession's declaration above.
-        const isRTH = (t) => {
-          if (!t) return false;
-          const [h, m] = t.split(':').map(Number);
-          return (h > 9 || (h === 9 && m >= 30)) && h < 16;
-        };
-        const matchesSessionFilter = (t) => {
-          if (timelineSession === 'rth') return isRTH(t);
-          if (timelineSession === 'overnight') return !isRTH(t);
+        // on timelineSession's declaration above. Reads the persisted active_setups.is_rth
+        // column (added 2026-07-18) directly via _isRth rather than recomputing from
+        // fired_time — that recompute was one of 3 independent copies of the same RTH
+        // boundary check across this codebase (see OPEN_DECISION
+        // no_rth_column_trades_or_active_setups), now down to the one DB-side definition.
+        const matchesSessionFilter = (e) => {
+          if (timelineSession === 'rth') return e._isRth === true;
+          if (timelineSession === 'overnight') return e._isRth === false;
           return true; // 'both'
         };
         const allEvents = caseEvents
           .filter(e => {
             if (!e.fired_time || e._status === 'SHADOW' || e._status === 'ACTIVE') return false;
-            return matchesSessionFilter(e.fired_time);
+            return matchesSessionFilter(e);
           })
           .sort((a, b) => {
             if (!a.fired_time) return 1;
             if (!b.fired_time) return -1;
             return b.fired_time.localeCompare(a.fired_time); // most recent first
           });
-        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e.fired_time)).length;
+        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e)).length;
 
         // Running tally stats — respects the same session filter as the timeline list above.
         let wins = 0;
