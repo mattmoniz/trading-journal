@@ -247,13 +247,29 @@ async function main() {
       (tradesByType[t.setup_type] ||= []).push(t);
     }
 
-    // Bars for corrected-resim re-derivation -- only loaded if at least one row actually
-    // needs it, since this check runs frequently (self-check, CI) and most rows won't.
+    // Bars + expanded (TIME_EXPIRED-inclusive) trade population for corrected-resim
+    // re-derivation -- matches update_optimal_stops.mjs's own rawByTypeExpanded exactly
+    // (TIME_EXPIRED trades ARE included here, unlike the replay_resolution-filtered
+    // tradesByType above used for the old EV-sweep check -- a TIME_EXPIRED trade can be
+    // correctly re-evaluated by computeCorrectedTarget's own bar walk). Only loaded if at
+    // least one row actually needs it, since this check runs frequently and most rows won't.
     const needsBars = latestOptRows.rows.some(r => { try { return JSON.parse(r.notes)?.method === 'corrected-resim'; } catch { return false; } });
     let allBars = [];
+    let tradesByTypeExpanded = {};
     if (needsBars) {
       const barsRes5 = await client.query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
       allBars = barsRes5.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+      const expandedRes = await client.query(`
+        SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
+          fired_at, entry_zone_low::float, entry_zone_high::float
+        FROM active_setups
+        WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+          AND mae_points <= 300 AND mfe_points <= 300
+          AND resolution IN ('TARGET_HIT', 'STOP_HIT', 'TIME_EXPIRED')
+          AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
+        ORDER BY fired_at ASC
+      `);
+      for (const t of expandedRes.rows) (tradesByTypeExpanded[t.setup_type] ||= []).push(t);
     }
 
     const dppRes = await client.query(`
@@ -312,8 +328,9 @@ async function main() {
           continue;
         }
         const direction = inferDirection(row.signal_name);
+        const expandedTrades = tradesByTypeExpanded[row.signal_name] || [];
         const corrected = direction ? computeCorrectedTarget({
-          trades, allBars, stop: swept.stop, oldTarget: swept.target,
+          trades: expandedTrades, allBars, stop: swept.stop, oldTarget: swept.target,
           long: direction === 'LONG', pnlPerPoint: DEFAULT_DPP, commission: LIVE_INSTRUMENT.commissionPerRoundTrip,
         }) : { exclusionReason: 'no_direction' };
         if (corrected.exclusionReason) {

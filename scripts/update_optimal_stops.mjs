@@ -244,6 +244,30 @@ async function main() {
   // for any setup_type that doesn't clear every guardrail. This replaces the need for a
   // manually-maintained "which setups get a corrected target" list -- every weekly/daily
   // run re-evaluates all of them automatically, per CLAUDE.md's no-dead-ends rule.
+  //
+  // Deliberately a SEPARATE, wider trade population than rawByType above: rawByType
+  // excludes TIME_EXPIRED (a pre-existing, unrelated convention of the OLD EV-sweep, left
+  // untouched here) but a TIME_EXPIRED trade timed out under whatever SHORTER live
+  // resolution window was in effect when it fired -- computeCorrectedTarget's own 390-bar
+  // walk from entry can correctly re-evaluate it and often finds it actually would have
+  // hit target or stop. Excluding it here would just be a second instance of the exact
+  // truncation problem this whole fix exists to solve. Verified directly (2026-07-19):
+  // CAM_S2_FADE_LONG flips from surviving (oosEv=+$0.23, N=157) to failing (oosEv=-$13.78,
+  // N=154) purely from excluding its 3 TIME_EXPIRED trades -- confirms this isn't a
+  // cosmetic choice.
+  const rawResExpanded = await query(`
+    SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
+      fired_at, entry_zone_low::float, entry_zone_high::float
+    FROM active_setups
+    WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+      AND mae_points <= 300 AND mfe_points <= 300
+      AND resolution IN ('TARGET_HIT', 'STOP_HIT', 'TIME_EXPIRED')
+      AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
+    ORDER BY fired_at ASC
+  `);
+  const rawByTypeExpanded = {};
+  for (const t of rawResExpanded.rows) (rawByTypeExpanded[t.setup_type] ||= []).push(t);
+
   console.log('Loading NQ bars for corrected-target resimulation...');
   const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
   const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
@@ -300,9 +324,10 @@ async function main() {
     // yet. This is what makes the fix durable: every future run re-evaluates every
     // setup_type automatically instead of relying on a manually-maintained list.
     const direction = inferDirection(r.setup_type);
-    if (direction && trades.length >= 20) {
+    const expandedTrades = rawByTypeExpanded[r.setup_type] || [];
+    if (direction && expandedTrades.length >= 20) {
       const corrected = computeCorrectedTarget({
-        trades, allBars, stop: optStop, oldTarget: optTarget,
+        trades: expandedTrades, allBars, stop: optStop, oldTarget: optTarget,
         long: direction === 'LONG', pnlPerPoint: DEFAULT_DPP, commission: LIVE_INSTRUMENT.commissionPerRoundTrip,
       });
       if (!corrected.exclusionReason) {
