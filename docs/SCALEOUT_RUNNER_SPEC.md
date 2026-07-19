@@ -1,98 +1,89 @@
-# Scale-Out + Trailing Runner Execution — Build Spec
+# Breakeven-Then-Trail Execution — Build Spec
 
-Status: **SCOPED, NOT STARTED.** Written 2026-07-19 per user request ("scope it out all of it and document it for the next context") after `promote_scaleout_runner_cam_r4_fade_short` was bumped to HIGH priority (user confirmed intent to wire this up soon). This doc is the handoff — read it before writing any code for this feature.
+Status: **SCOPED, NOT STARTED, methodology finalized.** Originally written 2026-07-19 as a fractional scale-out spec; **fully revised the same day** after the user confirmed a 1-contract execution constraint invalidated the fractional design, and a corrected backtest (2 Gemini rounds, both audited) landed on a different, simpler mechanism with different survivors. This is the current, durable version — the fractional-split design (partial-exit columns, two-leg P&L blending, `_SCALEOUT` variant naming) is fully superseded and should not be built.
 
 ## 1. What's being built and why
 
-The 2026-07-19 scale-out research thread (full account: [TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md), [OPEN_THREADS.md](OPEN_THREADS.md) "START HERE") found that partial-exit-at-T1 + trailing-stop-on-the-remainder beats a single fixed target for exactly one setup, cross-validated and rigor-clean:
+Every setup live in this codebase today resolves via a single fixed stop and single fixed target — `resolveSetupsByPrice()` (`server/routes/acd.js` ~line 180) walks bars from `fired_at` and stops the instant either level is touched. This spec adds one new, genuinely 1-contract-compatible mechanism: **breakeven-then-trail** — stay on the normal stop until price reaches the setup's existing calibrated target; instead of taking profit there, snap the stop to breakeven (worst case from that point becomes a scratch, not a full loss) and trail the stop forward from the running peak-favorable price using a data-derived trail width. No partial exit anywhere — the whole 1-contract position moves together.
 
-**`CAM_R4_FADE_SHORT`**: exit 10% of the position at the existing T1 (40pt), let the remaining 90% ride a 63.8pt trailing stop instead of a second fixed target. Baseline (100% at T1) OOS EV = -$0.58/trade; scale-out OOS EV = +$16.87/trade. N=39. Independently corroborated by `LEVEL_CONTINUATION` (61.9% of this level's failed fades continue 50pt+, avg 84.3pt) and `POST_RES_SEQ` (43.1% favorable-first). `PW_HIGH_FADE_LONG` also clears every guardrail but N=16 is thin — treat as a second candidate once the mechanism exists, not equally confirmed.
+**Origin**: started as a fractional 10%-at-T1/90%-trailing design for `CAM_R4_FADE_SHORT` (see §2 for why that's dead). Reframed the same day once the user confirmed a hard 1-contract live-trading constraint (portfolio-stacking risk, not single-trade risk — sanity-checked: `CAM_R4_FADE_SHORT`'s 16pt stop is only $33/contract against a $400 DLL, nowhere near the edge in isolation; the real risk is many different setups' stops cascading in one session). A fraction can't be executed on 1 contract, so the mechanism had to change from "split the position" to "change how the stop moves."
 
-**Why this needs real engineering, not a config change**: every setup live in this codebase today resolves via a single fixed stop and a single fixed target — `resolveSetupsByPrice()` (`server/routes/acd.js` ~line 180) walks bars from `fired_at` and stops the instant either level is touched. There is no partial-exit concept, no path-dependent trailing level, and no notion of "this position now has two legs with different remaining risk." This is a genuinely new resolution model, not a parameter tweak.
+## 2. RESULT (2026-07-19, final): 6 survivors, `CAM_R4_FADE_SHORT` is NOT one of them
 
-## 2. RESOLVED 2026-07-19: the user trades 1 MNQ micro contract max, live
+Backtested via Gemini, 2 dispatch rounds, both audited by Claude directly against the DB (not trusted from Gemini's own text — its response file was garbled/truncated both times):
 
-Confirmed directly: "I have no idea how to mathematically decide on sizing. Because it seems like i can only trade 1 micro without blowing out the prop account." This is a **portfolio-stacking constraint, not a single-trade risk constraint** — sanity-checked live: `CAM_R4_FADE_SHORT`'s current calibrated stop is 16pt = $33/contract risk (`$2/pt × 16pt + $1 commission`) against a $400 default DLL, so a single trade at 1 contract is nowhere near the DLL edge in isolation. The real threat is cascading stop-outs across *many different setups* stacking in one session (CLAUDE.md's cascade-breaker note: worst historical days saw 17-18 stop-hits across 20-29 setups). Not relitigated — the user's own account risk tolerance stands as-is.
+- **Round 1** (initial dispatch): found 6 survivors including `CAM_R4_FADE_SHORT` (baseline OOS -$0.58 → mechanism OOS +$24.15). Audited before trusting: the population query used `WHERE status = 'RESOLVED'`, silently excluding all `TIME_EXPIRED` trades — the same population-exclusion bug class found and fixed 3 times earlier this session in `update_optimal_stops.mjs`. Confirmed directly: this excluded ~12% of `CAM_R4_FADE_SHORT`'s and `PD_LOW_FADE_LONG`'s trades. Also found the EOD/session-close approximation used UTC-calendar-day rollover instead of the real 4PM ET convention.
+- **Round 2** (correction, both fixes applied and verified on disk): re-run, and independently re-executed the corrected script directly (not just trusted Gemini's re-run) to confirm reproducibility — exact same 6 survivors both times, 0 stale rows. **`CAM_R4_FADE_SHORT` and `PD_LOW_FADE_LONG` no longer survive** — `CAM_R4_FADE_SHORT` specifically fails the 2D-grid plateau-robustness check once the population is complete (its T1-reach count went 39→40, but the surviving trail width's neighbors no longer both hold up). Two new setups qualify: `DAILY_OPEN_FADE_LONG` and `PD_POC_FADE_LONG`.
 
-**Consequence for this spec**: a literal "exit 10% at T1, let 90% ride" is not executable on a 1-lot position — you cannot sell 0.1 of a futures contract, and there is no near-term plan to trade more than 1 contract. Of the three options originally listed here (whole-contract split / blended-price bookkeeping / ask the user), the answer eliminates option 1 entirely (needs 2+ contracts) and makes option 2 the wrong frame too (a "manual decision point" reintroduces discretion into a system built to be mechanical). **The real reframe: with 1 contract, "what fraction to scale out" isn't a sizing question at all — it's a binary per-trade exit-timing decision (take profit at T1, or don't).** That turns this into a new single-position exit-mechanism design problem, not a position-sizing problem.
+**Final 6 survivors** (all rigor-clean — day-clustering under ~4-12%, chronologically stable; all cross-checked directly against `LEVEL_CONTINUATION`/`POST_RES_SEQ`, not just trusted from the backtest's own claim):
 
-**New candidate mechanism, dispatched to Gemini for backtesting 2026-07-19**: "breakeven-then-trail" — stay on the normal stop until price reaches the existing calibrated target; instead of exiting, snap the stop to breakeven (worst case becomes a scratch, not a full loss) and trail it forward from there using the same data-derived trail-width methodology already built for the (now-moot) fractional version. Full request in `scratch/claude_request.md` as dispatched (may be overwritten by a later task — this doc is the durable record). Everything below this section (§3-10) describes the ORIGINAL fractional-scale-out design and is now superseded pending this new backtest's result — do not build the fractional-split schema/resolution-engine changes described below; they assumed an achievable partial fill that doesn't apply here. Once Gemini's result comes back (audit it first, per standing Gemini-output-audit rule), this section will be replaced with the actual single-position mechanism design (likely much simpler than §3-9 below — no partial-exit columns, no two-leg P&L blending, no `CAM_R4_FADE_SHORT_SCALEOUT` two-leg bookkeeping, just a dynamic stop-ratchet on the existing single-position model).
+| Setup | Tier | N (T1 reaches) | Baseline OOS EV | Mechanism OOS EV | Trail width | Scratch rate | LEVEL_CONTINUATION corroboration |
+|---|---|---|---|---|---|---|---|
+| `FLOOR_R1_FADE_SHORT` | A (snug) | 77 | $8.03 | **$11.69** | 15.5pt | 2.7% | 62.5% big-continuation, avg 106.2pt |
+| `DAILY_OPEN_FADE_LONG` | B (wide) | 46 | $7.72 | $10.28 | 18.8pt | 0.0% | 76.1% big-continuation, avg 161.5pt |
+| `FLOOR_S1_FADE_LONG` | B | 44 | $2.61 | $6.57 | 20.3pt | 0.0% | 68.1% big-continuation, avg 167.8pt |
+| `CAM_S2_FADE_LONG` | B | 31 | $0.23 | $2.93 | 40.3pt | 3.6% | 72.3% big-continuation, avg 167.4pt |
+| `PD_POC_FADE_LONG` | B | 30 | $2.00 | $3.58 | 17.3pt | 0.0% | 62.7% big-continuation, avg 180.9pt |
+| `PW_HIGH_FADE_LONG` | B | 16 (thin) | $4.71 | $11.39 | 39pt | 0.0% | none found | 
 
-## 3. Proposed data model
+**Read this correctly — it's a different kind of finding than the retracted one.** Every survivor here already has a *positive* baseline OOS EV without the mechanism — this is a modest, consistent incremental improvement (+$1.60 to +$4/trade OOS on the 5 non-thin setups) layered on already-decent setups, not a dramatic loser-to-winner transformation. The original `CAM_R4_FADE_SHORT` claim (-$0.58 → +$16-24) was more dramatic and more exciting, and it didn't hold up. This is real but modest — size expectations accordingly. `FLOOR_R1_FADE_SHORT` is the strongest candidate to build first (largest N by a wide margin, consistent full/OOS behavior). `PW_HIGH_FADE_LONG` stays thin (N=16, below this codebase's own N≥20 floor) in every version of this analysis run today — treat as suggestive only.
 
-Extend `active_setups` (not a new table — this setup still needs to flow through the existing resolution/display/timeline pipeline) with:
+Recorded: `RESEARCH_CLAIM` `breakeven_then_trail_single_position_2026_07_19` (CONFIRMED). The original `RESEARCH_CLAIM` `scaleout_runner_cam_r4_fade_short` is RETRACTED (full account in its own notes). `OPEN_DECISION` `promote_scaleout_runner_cam_r4_fade_short` updated to reflect this — the slug is now stale-named (kept for history/traceability rather than renamed) but its content points to `FLOOR_R1_FADE_SHORT` as the actual candidate.
+
+Raw data: `performance_audit` `signal_type='BREAKEVEN_TRAIL_TEST'`. Backtest script (real, working, audited): `scripts/backtest_breakeven_trail.mjs` (moved from `scratch/` the same session it was built — not yet added to `run_weekly_backtests.sh`, that's still step 1 of §10).
+
+## 3. Proposed data model — much simpler than the original fractional design
+
+No partial-exit bookkeeping needed. Extend `active_setups` with:
 
 | Column | Type | Purpose |
 |---|---|---|
-| `scaleout_fraction` | `numeric(4,3)` | Fraction exited at T1 (e.g. `0.1`). NULL = normal single-exit setup, unchanged behavior. |
-| `runner_trail_width` | `numeric` | Trail width in points (e.g. `63.8`), sourced live from `performance_audit`, never hardcoded. |
-| `partial_exit_at` | `timestamp` | When T1 was touched and the partial fired. |
-| `partial_exit_price` | `numeric` | Price of the partial exit (= `t1_level` under `PRICE_CLEAN`). |
-| `partial_pnl_contribution` | `numeric` | This leg's weighted P&L contribution (`fraction * (t1_level - entry) * $/pt`), pre-commission-split — see open question in §2 on whether commission is charged once or twice. |
-| `runner_peak_price` | `numeric` | Best favorable price since the partial — the anchor the trail is measured from. Ratchets one direction only, never loosens. |
-| `runner_trail_price` | `numeric` | Current computed stop level for the runner leg (`runner_peak_price ∓ runner_trail_width`). Persisted so it survives across polls without recomputation drift. |
+| `runner_trail_width` | `numeric` | Trail width in points (setup-specific — 15.5 for `FLOOR_R1_FADE_SHORT`, etc.), sourced live from `performance_audit`, never hardcoded. |
+| `breakeven_armed_at` | `timestamp` | When price first reached the calibrated target and the stop snapped to breakeven. NULL = still on the original stop. |
+| `runner_peak_price` | `numeric` | Best favorable price since arming — the anchor the trail is measured from. Ratchets one direction only, never loosens. |
+| `runner_trail_price` | `numeric` | Current computed stop level (`max(entry, peak - trail)` long / `min(entry, peak + trail)` short — never worse than breakeven once armed). Persisted so it survives across polls without recomputation drift. |
 
-`resolution_method` gets two new values: `SCALEOUT_TRAIL_HIT` (runner leg closed on trail) and `SCALEOUT_TIME_EXPIRED` (runner leg still open at session close — see §6 EOD handling). `actual_pnl` becomes the blended total (partial leg + runner leg) once fully resolved.
+`resolution_method` gets one new value: `BREAKEVEN_TRAIL_HIT` (or `BREAKEVEN_TIME_EXPIRED` if still open at session close — §6). `actual_pnl` is just the normal single-leg formula against wherever the (possibly-ratcheted) stop or target closed the trade — no blending, no fraction math. This is a genuinely simpler build than the original fractional design: no `'PARTIAL'` status needed (the row stays `ACTIVE`/`SHADOW` the whole time, just with a dynamically-moving stop), no two-leg P&L formula, no new setup_type variant naming scheme (see §4).
 
-**Why extend the existing table instead of a new one**: `dropToTimeline()`, the frontend trade-brief renderer, `SETUP_DISPLAY_LABELS`, and every downstream `performance_audit`/backtest query already key off `active_setups`. A parallel table would need its own version of all of that — direct violation of the single-source-of-truth rule.
+## 4. Naming/tracking convention — reconsider whether a variant name is even needed
 
-## 4. Naming/tracking convention — new setup_type variant, not an in-place change
-
-`CAM_R4_FADE_SHORT` already fires live today under the single-fixed-target model with its own `SETUP_STATUS` calibration. Silently changing its resolution behavior in place would corrupt that setup's own live-performance history (mixing single-exit and scale-out outcomes under one name) and make the existing SUPPRESS/PROMOTE pipeline meaningless for it.
-
-**Follow the existing Conditional Variant Setup pattern** (CLAUDE.md convention, already used for GAP_UP/direction variants): introduce `CAM_R4_FADE_SHORT_SCALEOUT` as its own `setup_type`, added to `resolveSetupType()` and `CONDITIONAL_VARIANTS` in `server/config/setupTypes.js`, tracked with its own `SETUP_STATUS`/`OPTIMAL_STOP`-equivalent calibration. The base `CAM_R4_FADE_SHORT` keeps firing unchanged; the scale-out variant is a genuinely separate, independently-monitored setup that happens to share a detection trigger. This also means: **both could theoretically fire on the same touch** — needs a decision (mutually exclusive, one suppresses the other? or genuinely parallel, e.g. shown as two rows?). Recommend mutually exclusive (once scale-out variant is live/promoted, it replaces the base type's live firing, same as how any other conditional variant supersedes its base) — but flag this as a decision point, not settled here.
+The original fractional design needed a new setup_type name because it changed the setup's own P&L distribution enough to corrupt its existing SUPPRESS/PROMOTE calibration if mixed in-place. This mechanism is milder — it only changes the OUTCOME once the trade is already a winner (better exits on wins, same losses on losses) — so mixing it into the base setup_type's own live history is a smaller distortion than the fractional version would have caused, but it's still a real distortion (the EV distribution genuinely changes). **Recommend still using a distinct name** (e.g. `FLOOR_R1_FADE_SHORT_TRAIL`) via the existing Conditional Variant Setup pattern (`resolveSetupType()`/`CONDITIONAL_VARIANTS` in `server/config/setupTypes.js`), same reasoning as before: keep the base setup's calibration history clean, track the new mechanism's own live performance independently, SHADOW-first until it proves itself. Both firing on the same touch should be mutually exclusive (the trail variant supersedes the base once promoted), not shown as two parallel rows.
 
 ## 5. Resolution engine changes
 
-Extend `resolveSetupsByPrice()` (`acd.js` ~line 180) with a scale-out branch, reusing its existing conventions (raw-text `fired_at`/bar-ts handling per the documented ET/UTC landmine, the shared-bars-fetch-once optimization, the conservative same-bar-stop-first tie-break):
+Extend `resolveSetupsByPrice()` (`acd.js` ~line 180) — this is now a single-phase extension of the EXISTING per-bar loop, not two separate phases:
 
-**Phase A (pre-partial)**: identical to today's walk — for a scale-out row with `partial_exit_at IS NULL`, walk bars checking `stop_level` (full-position stop, unchanged from today) vs `t1_level` (now the partial trigger, not final). Same-bar tie-break: stop wins (conservative), exactly as today — a full stop-out before partial means no scale-out ever happened, resolve as a normal `STOP_HIT` for the full position.
-  - On `t1_level` touch: don't resolve. Instead `UPDATE ... SET partial_exit_at=$, partial_exit_price=$, partial_pnl_contribution=$, runner_peak_price=t1_level, runner_trail_price = t1_level ∓ runner_trail_width`, row stays `status='ACTIVE'` (or a new intermediate status — see below).
+- Walk bars from `fired_at` exactly as today, checking `stop_level` vs `t1_level`, same conservative same-bar-stop-first tie-break.
+- On a `t1_level` touch (where today's code would resolve `TARGET_HIT`): if the setup_type is trail-eligible, instead of resolving, set `breakeven_armed_at = bar.ts`, `runner_peak_price = bar.high/low` (the touch bar's extreme), `runner_trail_price = entry` (breakeven). Row stays `ACTIVE`/`SHADOW`, keep walking.
+- On every subsequent bar (once armed): update `runner_peak_price` (ratchet only), recompute `runner_trail_price = max(entry, peak - trail)` / `min(entry, peak + trail)`, ratchet `runner_trail_price` forward only (never loosen). If the bar's low/high crosses `runner_trail_price`, resolve `BREAKEVEN_TRAIL_HIT` with `actual_pnl` from entry to `runner_trail_price` — standard single-leg formula, no blending.
+- **Match the backtest's own same-bar edge case**: if the same bar that first touches the target ALSO breaches the fresh breakeven stop (a sharp same-bar reversal), resolve immediately as a scratch (`BREAKEVEN_TRAIL_HIT` at breakeven) rather than letting it ride — this exact case is in `scratch/backtest_breakeven_trail.mjs` (lines ~216-225) and materially affects the reported scratch rates; the live engine must reproduce it exactly or live results won't match the backtest's own numbers.
 
-**Phase B (post-partial, runner active)**: for rows with `partial_exit_at IS NOT NULL` and still unresolved, continue the bar walk **from `partial_exit_at` forward** (not from `fired_at` — the runner's own MFE/trail state only depends on price action after the partial fired):
-  - Each bar: update `runner_peak_price = max(runner_peak_price, bar.high)` (long) or `min(..., bar.low)` (short) — ratchet only.
-  - Recompute `runner_trail_price` from the new peak each time it moves favorably.
-  - Check if the bar's low/high crosses `runner_trail_price` → resolve `SCALEOUT_TRAIL_HIT`, blended `actual_pnl = partial_pnl_contribution + (1-fraction) * (runner_trail_price - entry) * $/pt - commission_share`.
+## 6. EOD / session-close handling
 
-**Status field**: recommend adding `'PARTIAL'` as a new valid `active_setups.status` value (alongside `ACTIVE`/`SHADOW`/`RESOLVED`/`EXPIRED`) rather than overloading `ACTIVE` — the frontend and every `WHERE status IN (...)` query needs a clean way to distinguish "still fully at risk" from "partial locked in, runner active," and this also makes the live UI state (§7) trivial to drive.
-
-## 6. EOD / session-close handling for an open runner
-
-If the runner is still open at session close (no live overnight-hold convention exists for level-fade scalps today — confirm this is still true for `CAM_R4_FADE_SHORT` specifically), it needs a terminal resolution, same as `expireStaleSetups()`'s `TIME_EXPIRED` path does for normal setups today. Recommend: at the same cutoff the existing session-end cap uses (`sessionEndET`, currently 4:00 PM ET per the 2026-07-17 fix), force-resolve the runner leg at the last available close price, `resolution_method='SCALEOUT_TIME_EXPIRED'`. **This must be included in the live-vs-backtest health check (§8)** — the backtest's own trailing-stop simulation should already reflect how often this happens and at what average P&L, so a live rate wildly different from the backtest's own EOD-exit rate is itself a signal something's off.
+If still open (armed or not) at session close, force-resolve at the last close price — reuse the existing `sessionEndET` (4:00 PM ET) convention already in `acd.js`, exactly as the corrected backtest does (§2's round-1→round-2 fix). `resolution_method='BREAKEVEN_TIME_EXPIRED'`.
 
 ## 7. Live wiring — config source and rollout
 
-- **Never hardcode `0.1`/`63.8`.** Read `scaleout_fraction`/`runner_trail_width` live from the `performance_audit` row that validated them (`SCALEOUT_TIERED_TEST`, `signal_name='CAM_R4_FADE_SHORT'`) — same convention as `liveStats._opt[setup_type]` for normal stops/targets. If a future recheck (§8) revises the trail width, live picks it up automatically, no code change.
-- **SHADOW-first**, matching the standing New Setup Type Checklist (CLAUDE.md): insert `CAM_R4_FADE_SHORT_SCALEOUT` as `status='SHADOW'` (well, `'PARTIAL'`-eligible-but-shadow — the PARTIAL status and SHADOW/ACTIVE origin are orthogonal, both need to compose) until N≥20 live-resolved trades clear the same promotion bar the base pipeline uses (WR/EV floor). Since this setup lives inside the standard level-fade candidates array (not a standalone poller), it can likely reuse the existing dynamic `_suppressedSetups` re-check rather than needing its own `getLiveStatus()` — confirm this once `CAM_R4_FADE_SHORT_SCALEOUT` has its own `SETUP_STATUS` row-generating script (a new `scripts/backtest_setup_status_scaleout.mjs`, or an extension of the existing one — TBD at implementation time).
-- **Display**: `SETUP_DISPLAY_LABELS` needs an entry; `AlphaEngineOverview.jsx` needs a line describing the mechanism (this is new enough behavior that a generic label isn't self-explanatory); the trade-brief text needs to render the two-leg structure explicitly (partial target, then "trailing Npt runner" instead of a second fixed target) rather than the existing single-target sentence template — a real UI/copy change, not just a new field.
+- **Never hardcode trail widths.** Read `runner_trail_width` live from `performance_audit` `signal_type='BREAKEVEN_TRAIL_TEST'` for each specific setup_type (15.5 for `FLOOR_R1_FADE_SHORT`, 18.8 for `DAILY_OPEN_FADE_LONG`, etc.) — same convention as `liveStats._opt[setup_type]`. Move `scratch/backtest_breakeven_trail.mjs` into `scripts/` and add it to `run_weekly_backtests.sh` so this stays current automatically.
+- **SHADOW-first**, N≥20 live-resolved trades before promotion, same standing rule as every other new setup type — the backtest's own N (77 for `FLOOR_R1_FADE_SHORT`) is historical/OOS, not live-forward; live promotion needs its own count.
+- **Display**: `SETUP_DISPLAY_LABELS` entry, `AlphaEngineOverview.jsx` line describing the mechanism, and the trade-brief text needs to say "target reached → stop moves to breakeven, trailing Npt" instead of the current single-target sentence once armed — a real UI state change (the setup's own card should visibly show "armed, trailing" vs "at risk").
 
-## 8. Live health instrumentation (closing the "no dead ends" loop)
+## 8. Live health instrumentation
 
-Per CLAUDE.md's standing rule, this can't just go live and sit — needs:
-- A recheck script (weekly, alongside `run_weekly_backtests.sh`) comparing realized live scale-out EV (once N is large enough to say anything) against the backtest's own OOS expectation — same pattern as `RESEARCH_CLAIM`'s 30-day recheck, but specifically flagging if live EV diverges meaningfully from the +$16.87/trade backtest figure (execution slippage on a trailing stop is a real, not-yet-tested risk — OHLC bar data can't fully validate whether a real trail would have triggered at the exact modeled price, same caveat as the bar-noise-floor finding earlier this thread).
-- Register in `docs/ARCHITECTURE.md` once built (new resolution columns, new script) — not yet done since nothing is built.
+Per CLAUDE.md's standing rule: a weekly recheck comparing realized live mechanism EV against the backtest's own OOS expectation per setup — flag if live diverges meaningfully. Register in `ARCHITECTURE.md` once built.
 
-## 9. Cross-reference: New Setup Type Checklist (CLAUDE.md) applied to this specific build
+## 9. Cross-reference: New Setup Type Checklist (CLAUDE.md)
 
-1. `backtest_setup_status.mjs`-equivalent → needs a new script (or extension) since this is tracked as a distinct variant (§4).
-2. `update_optimal_stops.mjs`-equivalent → N/A in the traditional sense (trail width isn't a stop/target sweep) — the existing `SCALEOUT_TIERED_TEST` backtest already serves this role; needs a live-vs-backtest recheck instead (§8).
-3. N<20 → SHADOW only (§7) — currently N=39 in backtest, but that's historical/OOS, not live-forward; live promotion still needs its own N≥20 per the standing rule, not inherited from the backtest sample.
-4. Never hand-type stop/target/trail as a literal → §7, read from `performance_audit` live.
-5. Simulate the real stop/target as an actual bar-by-bar trade → already done (`backtest_scaleout_runner_tiered.mjs`), this is the one item already satisfied going in.
-6. Verify integration (`dropToTimeline()`, display label, direction inference) → explicitly called out in §7, not yet done.
-7. Dynamic SHADOW→ACTIVE promotion → §7, likely reuses the standard candidates-array mechanism (not a standalone poller), confirm at implementation time.
-8. Register any new `SETUP_STATUS` recommendation vocabulary in the Unified Signal Table status-mapping → applies if the new tracking script introduces any new recommendation string.
-9. Fire-gate vs. data-availability timing → N/A, same detection trigger as the existing base setup, no new dependency.
-10. Backfill/backtest population must match live firing window → the tiered backtest already used the TIME_EXPIRED-inclusive, unrestricted population (confirmed during that thread) — should already be consistent, re-verify once live.
+Same as the original spec's §9, condensed: (1) needs its own `SETUP_STATUS`-equivalent tracking per variant name — not built; (2) trail width already backtest-derived, needs the live recheck in §8; (3) SHADOW until N≥20 live, not inherited from backtest N; (4) never hand-type the trail width, read live; (5) already satisfied — the backtest simulates the real bar-by-bar mechanism, not a raw label; (6) integration (`dropToTimeline()`, display label, direction inference) not yet done; (7) confirm the standard candidates-array `_suppressedSetups` re-check applies, or build a `getLiveStatus()` if this ends up wired as a standalone poller; (8)-(9) N/A / no new dependency; (10) population/window match — confirmed via the round-1→round-2 correction in §2, this is the one item that got directly, concretely verified this session rather than assumed.
 
 ## 10. Suggested build sequence
 
-1. **Resolve §2 with the user** (contract-count reality) — this determines whether §3-7 need adjusting before any code is written.
-2. Schema migration: new `active_setups` columns + `'PARTIAL'` status (per `docs/DB_MIGRATION_PROTOCOL.md`).
-3. Resolution engine: Phase A/B bar-walk logic in `resolveSetupsByPrice()`, tested against the existing tiered backtest's own historical trades first (does the live engine's bar-walk reproduce the backtest's own N=39 P&L exactly, trade for trade, before trusting it on new data — same discipline as `test_invariants.mjs` check `[5]`'s re-derivation approach).
-4. `CONDITIONAL_VARIANTS`/`resolveSetupType()` wiring for `CAM_R4_FADE_SHORT_SCALEOUT`, SHADOW-only.
-5. Display/UI (§7 third bullet).
-6. Let SHADOW accumulate to N≥20, then promote per §7.
-7. Build the §8 recheck script once there's enough live data for it to say anything.
+1. `scripts/backtest_breakeven_trail.mjs` already exists (moved from `scratch/` already) — clean it up and add to `run_weekly_backtests.sh` so it stays current automatically.
+2. Schema migration: 4 new `active_setups` columns (§3), no new status value needed (per `docs/DB_MIGRATION_PROTOCOL.md`).
+3. Resolution engine: single-phase extension to `resolveSetupsByPrice()` (§5) — verify it reproduces the backtest's own `FLOOR_R1_FADE_SHORT` trade-for-trade P&L before trusting it on new data, same discipline as `test_invariants.mjs` check `[5]`.
+4. `CONDITIONAL_VARIANTS`/`resolveSetupType()` wiring for `FLOOR_R1_FADE_SHORT_TRAIL` (start with just this one setup, not all 5 at once), SHADOW-only.
+5. Display/UI (§7).
+6. Let SHADOW accumulate to N≥20, promote, THEN consider adding the other 4 non-thin survivors the same way.
+7. Build the §8 recheck script once there's live data.
 
-This is realistically its own multi-session build, not a single sitting — step 3 in particular (getting the resolution engine's bar-walk to exactly match the backtest, including the EOD/session-close edge case in §6) is where most of the real risk lives.
+Smaller build than the original fractional design (no two-leg P&L, no partial-exit state), but still real engineering — a dynamic, path-dependent stop is new to this codebase's resolution engine regardless of mechanism. Start with `FLOOR_R1_FADE_SHORT` alone (largest, cleanest N) before generalizing to the other 4.
