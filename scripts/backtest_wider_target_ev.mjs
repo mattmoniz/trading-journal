@@ -8,9 +8,13 @@
 // before reaching the new, further target. That's the real risk of widening targets,
 // same as the real risk of widening stops was "dig deeper before recovering."
 //
-// Scoped to the TARGET_HIT setups with the highest favorable-first rates from
-// backtest_post_resolution_sequence.mjs (N>=20, need real signal, not the OR_LOW_FADE_SHORT
-// N=20 edge case -- kept the 7 with the most robust samples).
+// v2 (2026-07-19): originally hand-picked "the 7 with the most robust samples" from
+// backtest_post_resolution_sequence.mjs's favorable-first ranking -- an arbitrary cutoff,
+// and a hardcoded list that would go stale the moment POST_RES_SEQ is re-run (exactly the
+// anti-pattern this codebase's own hardcoded-list rule warns about). User asked "why only
+// 7, could more use it" -- fixed by pulling the full setup roster DYNAMICALLY from the
+// live POST_RES_SEQ TARGET_* rows (already gated N>=20 at write time) instead of a fixed
+// list, so this test now covers every qualifying setup, not just a hand-picked subset.
 //
 // Candidate wider targets: 1.5x and 2x current optimal_target, same disclosed-multiple
 // convention as the stop-side test.
@@ -20,14 +24,20 @@ import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { computeEvAtStopTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 
-const TARGET_SETUPS = [
-  'PD_SESSION_MID_FADE_SHORT', 'CAM_R1_FADE_SHORT', 'WEEKLY_VWAP_FADE_SHORT',
-  'WPP_FADE_LONG', 'FLOOR_PIVOT_FADE_SHORT', 'PD_OR_MID_FADE_SHORT', 'CAM_R2_FADE_SHORT',
-];
 const WIDER_MULTIPLIERS = [1.5, 2.0];
 const EXTRA_WINDOW_BARS = 240;
 
+async function loadTargetSetups() {
+  const res = await query(`
+    SELECT signal_name FROM performance_audit
+    WHERE signal_type='POST_RES_SEQ' AND signal_name LIKE 'TARGET_%' AND sample_size >= 20
+  `);
+  return res.rows.map(r => r.signal_name.replace(/^TARGET_/, ''));
+}
+
 async function main() {
+  const TARGET_SETUPS = await loadTargetSetups();
+  console.log(`Loaded ${TARGET_SETUPS.length} TARGET_HIT setup_types (N>=20) from POST_RES_SEQ -- testing all, not a hand-picked subset.`);
   console.log('Loading current OPTIMAL_STOP/TARGET...');
   const optRes = await query(`
     SELECT DISTINCT ON (signal_name) signal_name as setup_type, optimal_stop, optimal_target
