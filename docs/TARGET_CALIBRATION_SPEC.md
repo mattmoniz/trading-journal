@@ -159,4 +159,20 @@ User asked for the complete picture before wiring anything, then to proceed with
 
 **What's still open, deliberately not addressed today**: (a) the old EV-sweep's own dpp approximation (still present for the ~84 setups that don't clear the corrected guardrails) — left untouched as out-of-scope for this specific wiring task; (b) `OPEN_DECISION` `live_setup_status_pipeline_likely_has_same_ev_bugs` — the separate live *suppression* pipeline (`backtest_setup_status.mjs`, different from `update_optimal_stops.mjs`) has not been checked for the same class of bugs, and remains the biggest unexamined risk from this whole thread.
 
+## Live suppression pipeline checked (resolved) → surfaced the real headline-vs-realistic split
+
+Read `backtest_setup_status.mjs` directly. Clean — computes EV straight from `AVG(actual_pnl)` (already commission-exact), no `mae_points`/`mfe_points` sweep at all, neither of today's two bugs apply. But it surfaced a real consequence instead: `actual_pnl` reflects whatever target was live *when each trade fired*, so a setup's SUPPRESS/PROMOTE decision is computed against pre-correction history. Confirmed: `PD_LOW_FADE_LONG` is currently SUPPRESSED despite its corrected target being one of the biggest walk-forward winners; 5 more are borderline. Verified this self-heals (`liveStats._opt` — now holding the corrected target — is read for both ACTIVE and SHADOW candidates), just not instantly. Added `CORRECTED-TARGET-BUT-SUPPRESSED WATCH` to session-start. `OPEN_DECISION` resolved.
+
+## "Should we walk-forward again?" → no, split the existing headline number instead
+
+User asked whether to re-run the comparison now that 19 (not 18) setups are corrected live. Recommended against it — the delta from adding 1 more setup (`IB_BULLISH`, `DAY_TYPE_MANAGED`, handled specially) wouldn't move the number meaningfully. Instead, given the suppression finding above, did something more valuable: **decomposed the existing $7,943.63 headline** into what's realistically available now vs. what depends on suppression recovery.
+
+Matched every setup_type between the OLD and NEW walk-forward's per-setup Regime-A `CUM` tables (`scratch/backtest_prop_2yr_walkforward_FILTERED_RESULTS.md` vs `scratch/backtest_prop_2yr_walkforward_CORRECTED_TARGETS_RESULTS.md`) and computed the true eligibility-filtered delta per setup — verified the sum across ALL setups equals $7,943.63 exactly before trusting the breakdown. Result:
+
+- The 18 corrected setups gain **+$13,026.57** in isolation.
+- Correcting them shifts daily DLL-lockout timing enough to drag **other, untouched setups down -$5,082.94** — a real, unavoidable side effect (bigger wins/losses shift when the day's -$400 lockout triggers, changing how much of other setups' same-day trades get included). Net: $13,026.57 − $5,082.94 = $7,943.63 ✓.
+- Of the 18's own gain, **$5,646.07 (43%) comes from exactly the 6 at-risk setups** flagged in `CORRECTED-TARGET-BUT-SUPPRESSED WATCH` — **71% of the entire headline number**.
+
+**Honest split**: realistic near-term improvement (safe setups + the DLL drag, both already live) ≈ **+$2,298**, not +$7,944. The remaining ≈**+$5,646** is real but pending — contingent on `PD_LOW_FADE_LONG` and the 5 borderline setups clearing suppression via the existing N≥15/90-day recovery mechanism. Recorded as `RESEARCH_CLAIM` `walkforward_headline_split_realistic_vs_pending` — the original `+37.6%` headline should never be cited again without this caveat.
+
 (Design + any preliminary data pulled in this session continues below as the conversation progresses.)

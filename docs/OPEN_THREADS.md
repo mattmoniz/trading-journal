@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-19: Decomposed the walk-forward headline — realistic near-term impact is ~$2,298, not $7,944
+
+User asked whether to re-run the walk-forward now that live has 19 corrected setups (not 18). Recommended against a re-run (the 1-setup delta wouldn't move the number) and instead decomposed the existing $7,943.63 headline, since the suppression finding above meant a real chunk of it wasn't actually realizable soon.
+
+Matched every setup_type between the OLD and NEW walk-forward's per-setup Regime-A totals and computed the true per-setup delta — verified the full sum equals $7,943.63 exactly before trusting anything. Findings: the 18 corrected setups gain **+$13,026.57** in isolation, but correcting them shifts daily DLL-lockout timing enough to drag **other, untouched setups down -$5,082.94** (net: $7,943.63 ✓, a real side effect — bigger wins/losses change when the day's -$400 lockout fires, affecting other setups' same-day trade inclusion). Of the 18's own gain, **$5,646.07 (43%, or 71% of the full headline) comes from exactly the 6 setups flagged as suppressed/borderline** in the previous entry.
+
+**Honest split**: realistic near-term ≈ **+$2,298** (already live, no suppression risk). Pending ≈ **+$5,646** (real, but contingent on `PD_LOW_FADE_LONG` + 5 borderline setups clearing suppression over the coming weeks). Recorded as `RESEARCH_CLAIM` `walkforward_headline_split_realistic_vs_pending` — the original +37.6% headline should not be cited again without this caveat. Full account: [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md).
+
 ## ✅ 2026-07-19: Checked the live suppression pipeline for the same bugs — clean, but found a real staleness consequence instead
 
 Closes `OPEN_DECISION` `live_setup_status_pipeline_likely_has_same_ev_bugs`. Read `backtest_setup_status.mjs` directly rather than leaving it flagged. **It's clean**: EV is computed straight from `AVG(actual_pnl)` (already commission-exact, no dpp approximation) with no `mae_points`/`mfe_points` candidate sweep at all — neither of today's two bugs apply.
