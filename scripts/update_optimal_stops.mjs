@@ -29,6 +29,8 @@
 
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { inferDirection } from '../server/config/setupTypes.js';
+import { computeCorrectedTarget } from '../server/services/targetCalibrationService.js';
 
 // Minimum N before we trust a computed optimal stop
 const MIN_N = 20;
@@ -220,7 +222,8 @@ async function main() {
 
   // 1b. Fetch all raw trades in one query for the target sweep
   const rawRes = await query(`
-    SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float
+    SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
+      fired_at, entry_zone_low::float, entry_zone_high::float
     FROM active_setups
     WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
       AND mae_points <= 300 AND mfe_points <= 300
@@ -234,7 +237,19 @@ async function main() {
   }
   console.log(`Loaded ${rawRes.rows.length} raw trades for EV target sweep`);
 
-  let upserted = 0;
+  // 1c. Corrected target methodology (chronological resimulation, thin-tail/plateau/OOS/
+  // rigor guardrails) -- see server/services/targetCalibrationService.js and
+  // docs/TARGET_CALIBRATION_SPEC.md. Loads real bars once and attempts a corrected target
+  // for every setup_type below; falls back to the existing EV-sweep/p50_mfe methodology
+  // for any setup_type that doesn't clear every guardrail. This replaces the need for a
+  // manually-maintained "which setups get a corrected target" list -- every weekly/daily
+  // run re-evaluates all of them automatically, per CLAUDE.md's no-dead-ends rule.
+  console.log('Loading NQ bars for corrected-target resimulation...');
+  const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+  console.log(`${allBars.length} bars loaded.`);
+
+  let upserted = 0, correctedCount = 0;
   for (const r of rows) {
     const p75mae    = parseFloat(r.p75_mae) || DEFAULT_STOP;
     const p75mfe    = Math.round(parseFloat(r.p75_mfe) || DEFAULT_TARGET);
@@ -260,8 +275,8 @@ async function main() {
     const { stopDpp, targetDpp } = dppByType[r.setup_type] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
     const swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
     const optStop   = swept ? swept.stop : Math.round(p75mae);
-    const optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
-    const targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
+    let optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
+    let targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
     // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
     // a raw historical average using whatever stop/target each trade ACTUALLY fired with --
     // completely disconnected from optStop/optTarget above (the EV-sweep's real chosen pair).
@@ -272,19 +287,44 @@ async function main() {
     // docs/OPEN_THREADS.md. optEV now reports the EV *of* optStop/optTarget specifically --
     // falls back to the raw average only when no sweep candidate was valid (thin-tail gate
     // rejected every percentile candidate), matching optStop/optTarget's own fallback.
-    const optEV     = swept ? swept.ev : parseFloat(r.ev);
+    let optEV     = swept ? swept.ev : parseFloat(r.ev);
+    let correctedNotes = null;
+
+    // Corrected target attempt (2026-07-19): chronologically-resimulated, guardrailed
+    // methodology from server/services/targetCalibrationService.js -- fixes the EV-sweep
+    // above's two structural flaws (truncated MFE, order-blind EV check). Stop stays FIXED
+    // at optStop (this only re-derives the target). If it clears every guardrail (thin-tail,
+    // plateau, chronological OOS beats baseline, rigor-clean), it OVERRIDES the EV-sweep
+    // target above; otherwise falls through to the existing methodology unchanged -- no
+    // regression risk for setup_types that don't have enough data for the stricter check
+    // yet. This is what makes the fix durable: every future run re-evaluates every
+    // setup_type automatically instead of relying on a manually-maintained list.
+    const direction = inferDirection(r.setup_type);
+    if (direction && trades.length >= 20) {
+      const corrected = computeCorrectedTarget({
+        trades, allBars, stop: optStop, oldTarget: optTarget,
+        long: direction === 'LONG', pnlPerPoint: DEFAULT_DPP, commission: LIVE_INSTRUMENT.commissionPerRoundTrip,
+      });
+      if (!corrected.exclusionReason) {
+        optTarget = corrected.bestTarget;
+        optEV = corrected.fullEv;
+        targetMethod = 'corrected-resim';
+        correctedNotes = JSON.stringify({ method: 'corrected-resim', ...corrected });
+        correctedCount++;
+      }
+    }
 
     await query(`
       INSERT INTO performance_audit (
         run_date, window_days, signal_type, signal_name,
         sample_size, win_rate, ev_per_trade,
         p50_mae, p75_mae, p50_mfe, p75_mfe,
-        optimal_stop, optimal_target
+        optimal_stop, optimal_target, notes
       ) VALUES (
         CURRENT_DATE, 9999, 'OPTIMAL_STOP', $1,
         $2, $3, $4,
         $5, $6, $7, $8,
-        $9, $10
+        $9, $10, $11
       )
       ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
         sample_size    = EXCLUDED.sample_size,
@@ -295,7 +335,8 @@ async function main() {
         p50_mfe        = EXCLUDED.p50_mfe,
         p75_mfe        = EXCLUDED.p75_mfe,
         optimal_stop   = EXCLUDED.optimal_stop,
-        optimal_target = EXCLUDED.optimal_target
+        optimal_target = EXCLUDED.optimal_target,
+        notes          = EXCLUDED.notes
     `, [
       r.setup_type,
       parseInt(r.n),
@@ -307,6 +348,7 @@ async function main() {
       parseFloat(r.p75_mfe),
       optStop,
       optTarget,
+      correctedNotes,
     ]);
 
     upserted++;
@@ -316,7 +358,7 @@ async function main() {
     console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${optEV.toFixed(2)}  (raw avg pnl=$${r.ev})`);
   }
 
-  console.log(`\nDone. ${upserted} rows upserted into performance_audit (signal_type=OPTIMAL_STOP).`);
+  console.log(`\nDone. ${upserted} rows upserted into performance_audit (signal_type=OPTIMAL_STOP). ${correctedCount} used the corrected-resim target methodology this run.`);
   console.log('Every setup_type now gets its own stop swept across its own MAE percentiles (p25/p40/p50/p60/p75/p90), not a blanket p75_mae rule.');
   process.exit(0);
 }

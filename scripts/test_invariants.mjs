@@ -39,6 +39,10 @@
  *    number labeled as describing it (ev_per_trade), that pairing needs its own standing
  *    check -- a code review catches "does this line look right," not "does this field's
  *    long-declared meaning still hold after a later feature was bolted on."
+ *    2026-07-19: a row whose `notes` marks it method:'corrected-resim' is re-derived via
+ *    computeCorrectedTarget() (server/services/targetCalibrationService.js) instead of
+ *    sweepOptimalStopAndTarget() -- same principle, different production function, since
+ *    update_optimal_stops.mjs now has two possible target-selection paths.
  *
  * 6. UNCALIBRATED_SHADOW_TYPES entries genuinely have no SETUP_STATUS row
  *    Re-checks every entry in server/config/setupTypes.js's UNCALIBRATED_SHADOW_TYPES
@@ -53,6 +57,8 @@ import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
+import { computeCorrectedTarget } from '../server/services/targetCalibrationService.js';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 
 config();
 const pool = new pg.Pool({
@@ -195,7 +201,7 @@ async function main() {
     console.log('\n[5] OPTIMAL_STOP.ev_per_trade matches its own optimal_stop/optimal_target');
 
     const latestOptRows = await client.query(`
-      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade
+      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade, notes
       FROM performance_audit
       WHERE signal_type = 'OPTIMAL_STOP'
       ORDER BY signal_name, run_date DESC
@@ -228,7 +234,8 @@ async function main() {
     const statsByType = Object.fromEntries(statsRes5.rows.map(r => [r.setup_type, r]));
 
     const tradesRes = await client.query(`
-      SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float
+      SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
+        fired_at, entry_zone_low::float, entry_zone_high::float
       FROM active_setups
       WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
         AND mae_points <= 300 AND mfe_points <= 300
@@ -238,6 +245,15 @@ async function main() {
     const tradesByType = {};
     for (const t of tradesRes.rows) {
       (tradesByType[t.setup_type] ||= []).push(t);
+    }
+
+    // Bars for corrected-resim re-derivation -- only loaded if at least one row actually
+    // needs it, since this check runs frequently (self-check, CI) and most rows won't.
+    const needsBars = latestOptRows.rows.some(r => { try { return JSON.parse(r.notes)?.method === 'corrected-resim'; } catch { return false; } });
+    let allBars = [];
+    if (needsBars) {
+      const barsRes5 = await client.query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+      allBars = barsRes5.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
     }
 
     const dppRes = await client.query(`
@@ -282,6 +298,38 @@ async function main() {
       const p75mfe = Math.round(parseFloat(stats.p75_mfe) || 35);
       const swept = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
       evChecked++;
+
+      // 2026-07-19: if the stored row was produced via the corrected-resim path, re-derive
+      // it via computeCorrectedTarget() instead of trusting the EV-sweep result alone --
+      // matches update_optimal_stops.mjs's own two-step process exactly (EV-sweep first to
+      // get the (stop, anchor-target) pair, THEN the corrected-resim override on top).
+      let usedNotes = null;
+      try { usedNotes = JSON.parse(row.notes); } catch { /* not JSON / no notes -- normal case */ }
+      if (usedNotes?.method === 'corrected-resim') {
+        if (!swept) {
+          fail(`${row.signal_name}: stored notes claim method='corrected-resim' but a fresh EV-sweep returns null (no valid stop/target pair) -- the corrected-resim override should never have been reachable without a swept base to anchor from`);
+          evMismatches++;
+          continue;
+        }
+        const direction = inferDirection(row.signal_name);
+        const corrected = direction ? computeCorrectedTarget({
+          trades, allBars, stop: swept.stop, oldTarget: swept.target,
+          long: direction === 'LONG', pnlPerPoint: DEFAULT_DPP, commission: LIVE_INSTRUMENT.commissionPerRoundTrip,
+        }) : { exclusionReason: 'no_direction' };
+        if (corrected.exclusionReason) {
+          fail(`${row.signal_name}: stored notes claim method='corrected-resim' but a fresh re-derivation now excludes it (${corrected.exclusionReason}) -- either the row is stale (re-run update_optimal_stops.mjs) or the override logic has drifted`);
+          evMismatches++;
+        } else {
+          const evOk = closeEnough(stored.ev, corrected.fullEv);
+          const targetOk = stored.target === corrected.bestTarget;
+          const stopOk = stored.stop === swept.stop;
+          if (!evOk || !targetOk || !stopOk) {
+            fail(`${row.signal_name}: stored (corrected-resim) stop=${stored.stop}/target=${stored.target}/ev=$${stored.ev.toFixed(2)} but a fresh re-derivation gives stop=${swept.stop}/target=${corrected.bestTarget}/ev=$${corrected.fullEv.toFixed(2)}`);
+            evMismatches++;
+          }
+        }
+        continue;
+      }
 
       if (swept) {
         // Sweep succeeded -- stored row must match the REAL sweep result exactly (small
