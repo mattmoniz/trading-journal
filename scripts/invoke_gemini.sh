@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Invoke Gemini (agy CLI) with the task in scratch/claude_request.md
-# Usage: ./scripts/invoke_gemini.sh [--timeout 30m]
+# Usage: ./scripts/invoke_gemini.sh [30m]   (bare positional value, NOT --timeout 30m —
+#   confirmed 2026-07-19: a `--timeout 30m` call gets read as $1="--timeout", silently
+#   passed through to `agy --print-timeout "--timeout"` and failing with exit code 2)
 # Output is written to scratch/antigravity_response.md
 # Claude calls this directly via Bash tool.
 #
