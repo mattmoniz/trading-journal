@@ -244,6 +244,43 @@ ORDER BY (l.method != COALESCE(p.method, l.method)) DESC, l.signal_name;
 SQLEOF
 )
 
+# Corrected-target-but-suppressed watch — 2026-07-19. Found while checking whether
+# backtest_setup_status.mjs (the live SUPPRESS/PROMOTE pipeline, separate from
+# update_optimal_stops.mjs) has the same bugs the target-calibration fix addressed. It
+# doesn't (it uses real actual_pnl directly, already commission-exact, no truncated-MFE
+# candidate sweep) -- but there's a real, structural consequence instead: actual_pnl for
+# historical trades reflects whatever target was live AT THE TIME, so a setup whose target
+# just got corrected (often substantially wider) has its SUPPRESS/PROMOTE decision computed
+# against STALE, pre-correction history. Confirmed concretely: PD_LOW_FADE_LONG is currently
+# SUPPRESSED (EV=-$15.01 under its old 60pt target) despite its corrected 143pt target
+# showing one of the largest walk-forward improvements of all 19 (+$3,480, trade count
+# 11->74) -- it just can't prove that recovery yet because its suppressed SHADOW trades
+# need time to accumulate under the new target (confirmed liveStats._opt is read for BOTH
+# ACTIVE and SHADOW candidates in acd.js, so this DOES self-heal via the existing SHADOW
+# VALIDATION / PROMOTE mechanism above -- just not instantly, gated by the same N>=15
+# anti-fabrication floor as everything else). This section makes that lag visible instead
+# of leaving it to be rediscovered by accident.
+export CORRECTED_BUT_SUPPRESSED
+CORRECTED_BUT_SUPPRESSED=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+WITH corrected AS (
+  SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target
+  FROM performance_audit
+  WHERE signal_type='OPTIMAL_STOP' AND notes ~ '"method":"corrected-resim"'
+  ORDER BY signal_name, run_date DESC
+),
+status AS (
+  SELECT DISTINCT ON (signal_name) signal_name, recommendation, ev_per_trade, sample_size
+  FROM performance_audit
+  WHERE signal_type='SETUP_STATUS'
+  ORDER BY signal_name, run_date DESC
+)
+SELECT c.signal_name, s.recommendation, s.ev_per_trade, s.sample_size, c.optimal_target
+FROM corrected c JOIN status s ON s.signal_name = c.signal_name
+WHERE s.recommendation IN ('SUPPRESS','THIN_N') OR (s.recommendation='ACTIVE' AND s.ev_per_trade < 5)
+ORDER BY (s.recommendation IN ('SUPPRESS','THIN_N')) DESC, s.ev_per_trade ASC;
+SQLEOF
+)
+
 # test_invariants.mjs FAIL watch — 2026-07-17. Wired into run_daily_calibration.sh the same
 # day (previously manual-only: "run after any change touching acd.js..."), which meant a
 # real invariant break (e.g. check [6]'s UNCALIBRATED_SHADOW_TYPES staleness) could sit
@@ -276,6 +313,7 @@ const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
 const shadowValRaw = process.env.SHADOW_VALIDATION || '';
 const targetMethodRaw = process.env.TARGET_METHOD_WATCH || '';
+const correctedSuppressedRaw = process.env.CORRECTED_BUT_SUPPRESSED || '';
 const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
@@ -366,6 +404,24 @@ for (const line of targetMethodRaw.split('\n').filter(Boolean)) {
   else { tmDemotions++; tmLines.push(`  ⬇️  ${type.padEnd(28)} DEMOTED to ev-sweep (was corrected-resim as of ${priorDate}) — its own guardrails no longer pass, re-read before trusting the old ev-sweep number`); }
 }
 
+// Corrected-target-but-blocked-by-stale-suppression watch: setups whose target was just
+// validated/corrected but whose SUPPRESS/PROMOTE decision still reflects pre-correction
+// history. SUPPRESS/THIN_N = fully blocked (fires SHADOW only); borderline ACTIVE = at
+// real risk of flipping to SUPPRESS on the next weekly run despite the fix.
+const csLines = [];
+let csBlocked = 0, csBorderline = 0;
+for (const line of correctedSuppressedRaw.split('\n').filter(Boolean)) {
+  const [type, rec, ev, n, newTarget] = line.split('|');
+  const evF = parseFloat(ev);
+  if (rec === 'SUPPRESS' || rec === 'THIN_N') {
+    csBlocked++;
+    csLines.push(`  🔴 ${type.padEnd(28)} ${rec.padEnd(9)} EV=$${evF.toFixed(2)} N=${n} — fully blocked from live firing despite a validated new target=${newTarget}pt; will only recover once enough SHADOW trades accumulate under the new target (see SHADOW VALIDATION)`);
+  } else {
+    csBorderline++;
+    csLines.push(`  ⚠️  ${type.padEnd(28)} ACTIVE    EV=$${evF.toFixed(2)} N=${n} — borderline, at risk of SUPPRESS on stale pre-correction history despite new target=${newTarget}pt`);
+  }
+}
+
 const lines = [
   '=== SESSION START PROTOCOL ===',
   '',
@@ -409,6 +465,10 @@ const lines = [
   tmLines.length > 0
     ? `${tmDemotions > 0 ? '⚠️ ' : '📈'} TARGET METHOD WATCH — corrected-resim vs. ev-sweep target selection, re-evaluated fresh every scheduled run (built 2026-07-19):\n${tmLines.join('\n')}${tmDemotions > 0 ? `\n  ${tmDemotions} demotion(s) this run — a setup that was using the corrected methodology no longer clears its guardrails. This is the relegation mechanism working as intended, not a bug — but check WHY before assuming the old ev-sweep number is trustworthy.` : ''}${tmPromotions > 0 ? `\n  ${tmPromotions} promotion(s) this run — a setup newly cleared every guardrail (more data, or an anchor/candidate shift).` : ''}`
     : '📈 TARGET METHOD WATCH: no setup_type currently uses the corrected-resim methodology (or update_optimal_stops.mjs hasn\'t run since it was wired in 2026-07-19).',
+  '',
+  csLines.length > 0
+    ? `${csBlocked > 0 ? '🔴' : '⚠️ '} CORRECTED-TARGET-BUT-SUPPRESSED WATCH — setups with a validated new target still blocked by pre-correction suppression history (built 2026-07-19):\n${csLines.join('\n')}${csBlocked > 0 ? `\n  ${csBlocked} fully blocked, ${csBorderline} borderline. Self-heals via SHADOW trades accumulating under the new target (see SHADOW VALIDATION above) -- do not manually override, N>=15 recovery floor is deliberate. Just don't be surprised these setups look "unprofitable" — check here first.` : `\n  ${csBorderline} borderline ACTIVE type(s) at real risk of flipping SUPPRESS on stale history despite a validated new target.`}`
+    : '✅ CORRECTED-TARGET-BUT-SUPPRESSED WATCH: no corrected-target setup is currently blocked or borderline in SETUP_STATUS.',
   '',
   feedbackWithSetupId >= 20
     ? `🟢 TRADE_FEEDBACK COVERAGE — ${feedbackWithSetupId} rows now have setup_id populated (N≥20 floor cleared). ACTION: re-run the execution-quality audit (fill/slippage, stop/target discipline) — was blocked on this exact gap, see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution.`
