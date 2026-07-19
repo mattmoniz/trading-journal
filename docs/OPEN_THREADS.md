@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-19: Scale-out thread finished thoroughly — found and fixed a new overfitting class (bar-noise trails), landed on 1 strongly cross-validated finding
+
+User pointed out the $7,943.63/$2,298 walk-forward numbers had gotten conflated with two OTHER, mostly-unrelated threads: "curbing losses" (wider stops — tested, net loser for 5/7 setups, never promoted) and "letting winners ride" (scale-out — real but only validated for 1 setup, not wired). Asked to finish the scale-out thread properly.
+
+Widening the scale-out grid for thoroughness (fractions 0.1-0.9, trail 25th-95th percentile) surfaced 32/96 "survivors" — but 31 picked a 3-6.8pt trail, and the median 1-min NQ bar range is 6.25pt: those trails sit within normal single-bar noise, which every existing statistical guardrail (thin-tail/plateau/OOS/rigor) passed cleanly since none of them check data resolution. Added a `CLAUDE.md` hard rule for this new failure class, fixed with a data-derived floor.
+
+Dispatched to Gemini to properly separate a "snug" tier from a "real runner" tier and cross-validate against `LEVEL_CONTINUATION`/`POST_RES_SEQ` (the connected threads the user asked to fold in). Audited before trusting: **Tier A (snug) washed out completely — 0/96 survive**, confirming the floor fix. **Tier B: 2 survivors.** `CAM_R4_FADE_SHORT` (N=39, rigor-clean) is now independently corroborated by two separate, previously-persisted signals (`LEVEL_CONTINUATION`: 61.9% of its failed fades continue 50pt+; `POST_RES_SEQ`: 43.1% favorable-first) — verified these numbers directly against the DB, not just Gemini's prose. `PW_HIGH_FADE_LONG` also clears every guardrail but N=16 is thin, reported as suggestive not confirmed. The earlier marginal survivor `FLOOR_S1_FADE_LONG` correctly dropped out under the stricter methodology. `RESEARCH_CLAIM`/`OPEN_DECISION` updated to this final result; superseded `SCALEOUT_RUNNER_TEST` rows cleaned up. Still not wired live. Full account: [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md).
+
 ## ✅ 2026-07-19: Decomposed the walk-forward headline — realistic near-term impact is ~$2,298, not $7,944
 
 User asked whether to re-run the walk-forward now that live has 19 corrected setups (not 18). Recommended against a re-run (the 1-setup delta wouldn't move the number) and instead decomposed the existing $7,943.63 headline, since the suppression finding above meant a real chunk of it wasn't actually realizable soon.
