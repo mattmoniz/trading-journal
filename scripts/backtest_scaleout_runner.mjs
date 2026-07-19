@@ -18,8 +18,15 @@ function exactPnl(entry, exitPrice, long) {
 }
 
 const WALK_WINDOW_BARS = 390;
-const TRAIL_PERCENTILES = [0.50, 0.65, 0.75, 0.85, 0.90];
-const FRACTIONS = [0.5, 0.6, 0.7];
+// Widened 2026-07-19 for real thoroughness -- the original 3-point FRACTIONS grid
+// (0.5/0.6/0.7) and 5-point TRAIL_PERCENTILES were arbitrarily narrow ranges, not
+// justified by anything in the data. Now spans the full plausible range on both axes
+// (10%-90% scale-out fraction, 25th-95th percentile trail width) so the sweep can't miss
+// a real config just because it sat outside a hand-picked window -- same "don't let the
+// candidate grid skip past the region that matters" lesson from target_sweep_v2's own
+// overfitting fix earlier this session.
+const TRAIL_PERCENTILES = [0.25, 0.35, 0.50, 0.65, 0.75, 0.85, 0.90, 0.95];
+const FRACTIONS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
 const MIN_N = 20;
 
 function percentile(sortedArr, p) {
@@ -61,7 +68,22 @@ async function main() {
   console.log('Loading NQ price bars...');
   const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
   const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
-  
+
+  // Minimum trail width floor -- FIXED (Claude audit, 2026-07-19) after widening
+  // TRAIL_PERCENTILES/FRACTIONS surfaced 32/96 "survivors", 31 of which picked f=0.1 with
+  // a 3-6.8pt trail. Checked directly: median 1-min NQ bar range is 6.25pt, 25th percentile
+  // is 3.25pt -- a trail that tight sits WITHIN normal single-bar noise. OHLC bar data can't
+  // reliably represent whether a trail that close would actually trigger in real execution
+  // (we only know a bar's high/low, not the intra-bar path), so a "survivor" whose edge
+  // depends on a sub-bar-noise trail width isn't a validated real edge, it's a data-
+  // resolution artifact -- the exact same class of problem as the earlier float-64
+  // spike-picking bug, just triggered by grid range instead of thin-tail count. Floor is
+  // DATA-DERIVED (median bar range from the same live NQ data, not a hardcoded number) per
+  // the no-static-thresholds rule.
+  const barRangeRes = await query(`SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY high-low) as median_range FROM price_bars_primary WHERE symbol='NQ'`);
+  const MIN_TRAIL_WIDTH = parseFloat(barRangeRes.rows[0].median_range);
+  console.log(`Minimum trail width floor (data-derived, median 1-min NQ bar range): ${MIN_TRAIL_WIDTH.toFixed(2)}pt`);
+
   function firstIndexAfter(t) {
     let lo = 0, hi = allBars.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (allBars[mid].ts <= t) lo = mid + 1; else hi = mid; }
@@ -122,7 +144,7 @@ async function main() {
     pullbacks.sort((a, b) => a - b);
     if (pullbacks.length === 0) { funnel.noPullbackData++; continue; }
 
-    const trailCandidates = [...new Set(TRAIL_PERCENTILES.map(p => +percentile(pullbacks, p).toFixed(1)))].filter(c => c > 0);
+    const trailCandidates = [...new Set(TRAIL_PERCENTILES.map(p => +percentile(pullbacks, p).toFixed(1)))].filter(c => c >= MIN_TRAIL_WIDTH);
     if (trailCandidates.length === 0) { funnel.noPullbackData++; continue; }
 
     // Simulate for each (f, trail) on all walked trades
