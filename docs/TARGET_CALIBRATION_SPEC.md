@@ -1,0 +1,68 @@
+# Target Calibration & Runner Design — Dialogue Log
+
+Started 2026-07-19. This is a running log of an in-progress design conversation, not just a findings summary — per user request ("keep documenting these questions... and dialogue context, not questions"), the reasoning trail matters as much as the conclusions, because the next session (human or Claude) needs to see *why* a design choice was made, not just what it landed on. Update this file as the conversation continues; don't just append a terse Q&A list.
+
+Related: [OPEN_THREADS.md](OPEN_THREADS.md) has the day-by-day chronological findings (the `optimal_target_blind_to_post_resolution_continuation` `OPEN_DECISION`, the two negative Layer-2 trigger tests). This doc is the design narrative that thread grew out of. Also related: `project_scaleout_optimization_parked.md` (memory) — a scale-out/runner brief parked 39+ days ago, directly relevant to the "how do you avoid capping the upside" question below; this conversation revives that thread with actual data behind it now.
+
+## How this started
+
+Session began by auditing a Gemini-dispatched finding (does a large Globex move start near a known level — yes, real but modest, r=0.018 empirical p-value after fixing Gemini's weak single-draw placebo into a proper permutation test). While reviewing the wider-target EV test from the prior day (7 hand-picked setups, all positive), the user asked the obvious next question: **why only 7, could more setups use it?**
+
+Expanding the test to all 90 qualifying setups (not a hand-picked subset — fixed the script to pull its roster dynamically from live data instead of a hardcoded list, since a hardcoded list is exactly the anti-pattern this codebase already has a standing rule against) found **88/90 setups (97.8%) show positive EV at a 1.5x wider target**. That result was too broad to accept as 88 independent discoveries. Root-caused it: `sweepOptimalTarget()` — the function that sets the *live* target — picks its target using `mfe_points`, and `mfe_points` is written by a bar-walk that terminates the instant the original target is hit. Direct spot-check on 6 real `PD_SESSION_MID_FADE_SHORT` trades confirmed it: target distance ~48.5pt, and `mfe_points` was barely past it every single time (50.25, 57.5, 56, 67, 57.5, 65.5pt). **The live target calibration has never seen what happens after price reaches target.** Flagged as `OPEN_DECISION` `optimal_target_blind_to_post_resolution_continuation` (HIGH priority) rather than promoting the arbitrary 1.5x multiplier live.
+
+## "Are we calibrating off the std dev of large extensions?"
+
+User's direct question. Answer, after reading the actual code: **no, not for targets.** Stops ARE already distribution-calibrated — `sweepOptimalStopAndTarget` sweeps candidate stops off that setup_type's own p25/p40/p50/p60/p75 `mae_points` percentiles, genuinely following this codebase's no-static-threshold convention. Targets are not: `sweepOptimalTarget` picks from a fixed point grid (`TARGET_SWEEP = [10,15,20,25,30,35,40,50,60,70,80,90,100,120,150]`), capped at `p75_mfe` — which is exactly the truncated distribution above. The user's instinct (calibrate off σ of the real large-extension distribution) is the right fix and is the same fix the `OPEN_DECISION` already names.
+
+## "Can we monitor for large moves? What's the trigger to recalibrate?"
+
+Split this into two genuinely different problems, since conflating them was the risk:
+- **Layer 1**: batch recalibration — fix what the *static* target should be, using the real (untruncated) extension distribution. No live monitoring needed, this is a periodic recompute like the existing `OPTIMAL_STOP` pipeline.
+- **Layer 2**: a *live* signal that says THIS specific in-progress trade looks like it's going to be one of the big ones, so hold past the normal target for that one instance.
+
+Tested two cheap, already-available Layer 2 candidates (both zero-new-infrastructure, pure joins against existing persisted data):
+- **`GARCH_VOL_SCALE`** (already live) vs. extension size: **negative**, Pearson r=0.0507 (N=4,710). Bucket means barely move (LOW-vol 135.8pt / NORMAL 135.8pt / HIGH-vol 147.7pt).
+- **Distance to next known level beyond target** ("room to run", via `level_prices`) vs. extension size: **negative**, r=0.0476 (N=6,092). Small monotonic trend across quartiles (112.2pt tightest-room → 140.0pt most-room) but too weak/noisy to act on. Side-finding: a quarter of all target-hit trades already have a tracked level within 1-3pt of target — the 65-level universe packs densely, the same density this session's Globex placebo test had to control for.
+
+Both rigor-clean (no day-clustering, stable across chronological thirds) — real, honest negatives, not thin non-results. Untested Layer 2 candidates: time-of-day (the taper-timing data already hints at a real morning/afternoon asymmetry), live momentum/velocity into target (most genuinely "real-time," also most novel/expensive — deprioritized until cheaper candidates were exhausted). **Conclusion at this point: no validated Layer 2 trigger exists yet. Layer 1 is the sure win.**
+
+## "Yes but how'd you determine what the target should be if it's dynamic?"
+
+Sharp follow-up — pressed on whether Layer 1 is actually well-specified, not just "use the corrected distribution" hand-waved.
+
+**Why a naive percentile/σ-multiple of the corrected MFE would be wrong**: favorable-extension distributions are right-skewed — a handful of huge continuation days pull the mean way up, but the median trade doesn't run nearly that far. Set the target off an inflated statistic and most trades never reach it; win rate collapses.
+
+**Why simply feeding the corrected MFE into the EXISTING sweep (`computeEvAtStopTarget`) is also wrong**: that function is order-blind — it checks "did MAE exceed stop" and "did MFE reach target" as two independent facts with no notion of which happened first in time. This is a known, already-documented issue in this codebase (the reason the stop-sweep cap is p75 and not p90 — a comment in `update_optimal_stops.mjs` explains p90 let some IB_BEARISH trades get "rescued" into fake wins by the sim, because it couldn't tell that the real stop would have triggered before the sim's chosen target). Widening the sweep's target range using corrected MFE without a correspondingly corrected, chronologically-aware MAE for that SAME wider window would systematically overstate EV, because holding a trade open longer to chase a bigger target also exposes it to bigger real adverse risk before getting there — risk the old, still-truncated `mae_points` field doesn't capture.
+
+**The actual fix**: reuse the methodology already built and validated in `backtest_wider_target_ev.mjs` — real bar-by-bar chronological resimulation from entry, checking on each bar whether the candidate target or the ORIGINAL stop is hit first, in true time order. That's what made the 88/90 finding trustworthy in the first place (as opposed to the order-blind two-percentile shortcut). So the corrected Layer 1 sweep is:
+1. Per setup_type, generate candidate target distances from percentiles of the real corrected-MFE distribution (data-derived candidates, not a hardcoded list).
+2. For each candidate, chronologically resimulate every trade from entry — same walk as the wider-target test, generalized beyond just 1.5x/2x to a genuine sweep.
+3. Pick whichever candidate maximizes real dollar EV — same "EV-optimal search" philosophy already used for stops today, just made order-aware instead of order-blind.
+
+User approved: "Yes build it and test." — implementation below.
+
+## "If you enter a trade and it turns out to be a big one, how do you prevent [exiting at] the initial target and missing out on the larger move?"
+
+This is a different question from Layer 2 above — not "predict in advance whether this will be a big one" (which the two negative tests already showed is hard), but "structure the exit so you don't need to predict in advance." That reframing matters: instead of a predictive trigger, this is a *reactive/adaptive* exit — once price is already at or past target, don't force a binary exit-or-hold decision; let the position tell you.
+
+This directly revives a parked brief (`project_scaleout_optimization_parked.md`, 39+ days old, never executed) that asked almost this exact question for the discretionary MNQ position: scale out partially at T1, run a remainder with a trailing/structural exit rather than a fixed second target. The parked brief's own guardrail is worth repeating here since it applies just as much to the setup-calibration version of this question: *"Rushing optimization = curve-fit TP traded with real money... 'Best' config must be a plateau, not a lucky spike."* This is genuinely its own focused piece of work, not a quick patch to the sweep above.
+
+## "Yes build it and test" — the fixed-target sweep, and why it failed its own sanity check
+
+Built `scripts/backtest_target_sweep_v2.mjs`: per setup_type, generate candidate target distances from percentiles (40th-95th) of the true (untruncated) MFE distribution, chronologically resimulate every trade from entry for each candidate (real bar-by-bar first-touch-of-target-vs-original-stop, not the order-blind independent-percentile shortcut), pick whichever candidate maximizes real dollar EV. Ran it against 103 setup_types.
+
+**It failed its own sanity check before being reported as a finding.** Auditing the winning picks (the same discipline applied to every other result this session): `PD_LOW_FADE_SHORT` picked T=719.8pt with EV=$14.57 — but `targetHits=1` out of N=38. A single trade's dollar value flipped the average from negative (every smaller, more-often-hit candidate was -$2.83 to -$12.50) to positive. `FLOOR_S1_FADE_SHORT` picked T=657 the same way, also `targetHits=1`. `CAM_S3_FADE_SHORT`'s EV bounced non-monotonically across candidates (+3.77, -3.02, -7.73, then +11.47, +12.32, +17.92, +1.29, -18.22) with hit counts down to 0-2 — noise, not a real signal. This is precisely what the parked scale-out brief already named 39+ days ago: *"'Best' config must be a plateau, not a lucky spike — a spike is curve-fit, reject it."* The sweep as built has no thin-tail gate and a candidate grid that jumps straight past the already-validated sweet spot (the earlier hand-tested 1.5x on `PD_SESSION_MID_FADE_SHORT` was ~75pt; this sweep's smallest tested candidate for that setup was 88.5pt, so it never even re-tested the known-good region).
+
+**Conclusion, not just a bug to patch**: a single static wider target is structurally the wrong tool for this problem. One number can't simultaneously be (a) reliably reached often enough to matter and (b) wide enough to capture a rare huge continuation — those two properties pull in opposite directions, and the spike-picking behavior above is exactly what happens when a sweep is forced to pick one number to do both jobs. `TARGET_SWEEP_V2` rows are persisted (backtest-only, not live) but should NOT be treated as a trustworthy finding as they stand.
+
+## "What do you think about that question i posed" (the runner one) — recommendation
+
+Given the sweep's own failure mode, the answer to "how do you avoid missing the bigger move" isn't a better fixed target — it's **not using a fixed second target at all**. Recommended design, converging independently with the parked `project_scaleout_optimization_parked.md` brief from 39+ days ago (partial at T1, breakeven stop, trailing runner) — two different angles landing on the same shape is a real signal it's structurally right, not a coincidence:
+
+1. Take partial profit at the real, well-calibrated T1 — preserves the existing target's proven reliability.
+2. Let the remainder ride past T1 with a TRAILING stop instead of a second fixed target — sidesteps needing to predict in advance whether a trade is "a big one" (which is exactly what both Layer 2 candidates, GARCH vol scale and next-level distance, already failed to do, r≈0.05 each).
+3. Trail width itself must be data-derived (no static thresholds) — the natural source is the "how far does price pull back before setting a new favorable extreme during a real continuation" distribution, buildable from the same bar-walking machinery already used throughout this thread.
+
+User confirmed: prioritize this over patching the fixed-target sweep, and dispatch the combinatorial exploration (scale fraction × trail width, per setup_type) to Gemini per the standing "Gemini for mining, Claude for implementation" convention. Dispatched 2026-07-19 (`scratch/claude_request.md`) with the sweep's own overfitting failure written into the brief as a required guardrail (thin-tail gate, plateau check against neighboring configs, chronological out-of-sample split) so the same mistake doesn't get repeated. Results pending — check `scratch/antigravity_response.md` / `scripts/backtest_scaleout_runner.mjs` and audit directly before trusting, per standing practice.
+
+(Design + any preliminary data pulled in this session continues below as the conversation progresses.)
