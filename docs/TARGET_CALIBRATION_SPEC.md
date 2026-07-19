@@ -115,4 +115,24 @@ User confirmed: fix `backtest_target_sweep_v2.mjs`'s overfitting problem, and "d
 
 **General lesson, worth stating plainly**: auditing a backtest's core simulation LOGIC is not the same as auditing where its BASELINE comes from. This session's earlier audit of `backtest_scaleout_runner.mjs` checked the Portion A/B chronological simulation carefully and found it sound — but didn't independently verify that the *baseline it was being compared against* was computed the same way. A comparison is only as trustworthy as its least-audited side.
 
+## Walk-forward comparison, finally run — one more stale-data catch first
+
+Before running the comparison, a second data-hygiene bug from the SAME family surfaced: `target_sweep_v2`'s FIRST (broken, spike-picking) run had persisted a `TARGET_SWEEP_V2` row for all 103 tested setup_types unconditionally; the corrected rewrite only inserted/updated the 18 that survived its guardrails, leaving the other 85 setups' original spike-picked rows (e.g. `PD_LOW_FADE_SHORT`'s 719.8pt pick off a single trade) sitting in the table with the same `run_date`, indistinguishable from the 18 legitimate ones by a naive `DISTINCT ON` query. Caught immediately when the walk-forward script logged "103 setup_types have a validated corrected target" instead of the expected 18 — verified by checking which persisted rows had the new fields (`rigor`, `oosEv`) the corrected script writes vs. which didn't, deleted the 85 stale rows. Same root cause, same fix pattern as the earlier `SCALEOUT_RUNNER_TEST` stale-row cleanup — worth naming as its own recurring risk: **whenever a script's guardrails get tightened and re-run, anything that no longer survives needs its OLD row deleted, not just left unrefreshed.**
+
+**Final result** (`scratch/backtest_prop_2yr_walkforward_CORRECTED_TARGETS.mjs`, companion to the existing `scratch/backtest_prop_2yr_walkforward_FILTERED.mjs` — identical DLL/Regime-A day-loop logic, the only change is the 18 corrected setups' trades resimulated under their new target/existing stop instead of their original `actual_pnl`):
+
+| Metric | OLD (live calibration) | NEW (18 corrected targets) | Δ |
+|---|---|---|---|
+| Total P&L (Regime A, 2yr) | $21,152.01 | $30,524.15 | **+$9,372.14 (+44%)** |
+| Trade count | 3,462 | 3,862 | +400 |
+| Win rate | 61.7% | 53.9% | -7.8pp |
+| Max drawdown | $5,299.12 | $5,561.94 | +$262.82 |
+| DLL lockout days | 119 | 123 | +4 |
+
+Win rate dropping is expected, not a red flag — corrected targets are mostly wider, so fewer trades reach target but each win is bigger (the whole point of an EV-optimal search rather than a win-rate-optimal one). Trade count rising is a real second-order effect: the day-loop's rolling-EV eligibility filter recomputes using the corrected P&L in trade history, so some of the 18 setups qualify as eligible on more days than they used to. 17 of 18 corrected setups show a real positive P&L delta; `PD_OR_MID_FADE_SHORT` is a small loser (-$268) once retested at Regime-A eligibility level despite passing its own isolated OOS check — reasonable noise, not concerning. Full per-setup breakdown: `scratch/backtest_prop_2yr_walkforward_CORRECTED_TARGETS_RESULTS.md`.
+
+**Explicit caveat**: this is a retrospective "what if every trade in the 2-year history had used the corrected target" comparison, not a claim this P&L would have been captured live in real time — calibration itself would have evolved differently along the way in reality. Same standing disclosure as every other walk-forward this session: most of `active_setups` is `origin_status='BACKFILL'`, a strategy simulation over reconstructed signals, not a record of real account history.
+
+**Where this thread stands now**: Layer 1 fix is real, audited (including a from-scratch baseline spot-check and a second stale-row cleanup), and quantified end-to-end. Nothing is wired live — the 18 corrected targets are backtest-only findings, same standing caveat as everything else, pending a deliberate promotion decision same as the scale-out thread above.
+
 (Design + any preliminary data pulled in this session continues below as the conversation progresses.)
