@@ -1,5 +1,54 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-18 (same day, continued): Post-resolution research thread resolved into a real, validated "let winners run" finding — plus a new level-continuation finding and a Globex dispatch in flight
+
+Continuation of the post-resolution excursion thread above. Three more pieces, in order:
+
+**1. Corrected the time-of-day test a second time** (`scripts/backtest_post_resolution_sequence.mjs`) — added a `SUBSTANTIAL_EXTENSION_PTS=50` filter (matching the level-continuation script's own "real move, not noise" threshold) so trivial 2-3pt ticks don't count the same as genuine continuations. Result barely changed: **92.7% of morning stop-outs with a real continuation finish extending adverse by 12:00 ET** (N=2,270, down from the uncorrected 3,283). Still concentrated in the "before 10am" bucket (1,718/2,270) — most real continuations complete within the same early-morning window rather than stretching the full ~2 hours the user described, worth keeping in mind rather than treating this as a clean 1:1 confirmation.
+
+**2. Built the wider-TARGET mirror of the wider-stop EV test** (`scripts/backtest_wider_target_ev.mjs`, `signal_type='WIDER_TARGET_EV_TEST'`) — scoped to the 7 `TARGET_HIT` setups with the highest favorable-first sequencing rates. Unlike the stop-side test (net loser for 5/7 setups), **this came back decisively positive for all 7**, properly accounting for the real risk (trades flipping from win to loss when price reverses before the wider target):
+
+| Setup | Current EV | 1.5x Target EV | Flipped-to-loss (of N) |
+|---|---|---|---|
+| FLOOR_PIVOT_FADE_SHORT | $13.91 | $56.62 (+307%) | 4 |
+| WPP_FADE_LONG | $14.11 | $39.99 (+183%) | 9 |
+| PD_SESSION_MID_FADE_SHORT | $22.61 | $49.33 (+118%) | 8 |
+| PD_OR_MID_FADE_SHORT | $18.96 | $39.41 (+108%) | 12 |
+| CAM_R1_FADE_SHORT | $11.57 | $23.88 (+106%) | 19 |
+| CAM_R2_FADE_SHORT | $15.54 | $28.20 (+81%, worse at 2x) | 11 |
+| WEEKLY_VWAP_FADE_SHORT | $1.19 | $19.05 (huge relative) | 25 |
+
+**This is the real, validated version of the "let winners run" hypothesis the user's original MFE observation was pointing at** — not the earlier misleading 300-475% "extra run-up" numbers (which conflated generic 4-hour volatility with a real, capturable pattern), but a proper re-simulation showing genuine EV improvement even after accounting for trades that would flip to losses. **Not yet wired into live `sizeMultiplier`/`OPTIMAL_STOP`** — a real, promising finding sitting ready for a deliberate promotion decision, same standing caveat as everything else from today.
+
+**3. New finding: certain levels disproportionately "kick off" large continuations when their fade fails** (`scripts/backtest_level_continuation_magnitude.mjs`, `signal_type='LEVEL_CONTINUATION'`) — ranked 68 setup_types (N≥20) by how often a failed fade leads to a real (50pt+) continuation. Top: `OR_MID_AFTER_IB_FADE_LONG` (85.3% of failures continue 50pt+, avg 187.8pt extra), `PD_IB_HIGH_FADE_LONG` (81.5%, 182.5pt), `PD_SESSION_MID_FADE_SHORT` (81.5%, 123.7pt), plus the Camarilla S1/S2/S3/R1/R2 family and `DAILY_OPEN_FADE_LONG`. All rigor-clean. A real candidate for an "early warning" signal independent of whether you're trying to fade the level at all.
+
+**4. Dispatched to Gemini, in flight**: does the same "certain levels kick off big moves" pattern hold during the Globex/overnight session — the part of the day this codebase's RTH-only setup roster structurally cannot touch, and which a prior session already found drives 90% of huge (500+pt) rotation days. Full spec written directly into the dispatch (`scratch/claude_request.md`, not yet promoted to a standalone doc): data-derived "large move" threshold (not a hand-picked round number), inflection-point detection for where the move actually begins, a carefully-scoped point-in-time-safe level list (explicitly excluding `IB_*`/`OR_*`/`DAILY_OPEN` as same-day-forming, `ONH`/`ONL` as circular, `WEEKLY_VWAP`/`3M_VAH`/`3M_VAL`/`3M_POC` per their own existing unresolved lookahead-risk `OPEN_DECISION`s), and critically a placebo/null comparison against random Globex timestamps — directly reusing the exact lesson from today's Regime C debunking (a "near a level" claim is meaningless without checking whether random points are "near a level" just as often, given how densely the 65 tracked levels can pack). Results not yet in — check `scratch/antigravity_response.md` / `scripts/backtest_globex_move_levels.mjs` and audit directly before trusting, per standing practice.
+
+## 🆕 2026-07-18 (same day, continued): Post-resolution excursion research — real methodology, one bug ruled out, one real flaw found, not yet rebuilt
+
+Started from a sharp user observation: `active_setups.mae_points`/`mfe_points` correctly survives a retracement WITHIN an open trade (it's a running `Math.max()`), but the bar-walk (`acd.js` `resolveSetupsByPrice`, ~line 299-332) terminates the instant stop or target is hit — so anything that happens AFTER resolution (a stopped-out trade recovering, a winner continuing to run) is structurally invisible to the stored data.
+
+**Built and ran** (`scripts/backtest_post_stop_recovery.mjs`, persisted `signal_type='POST_STOP_RECOVERY'`): re-walked 3,537 `STOP_HIT` trades 240 bars (~4hr) past their stop. **34.3% overall would have reached the original target anyway.** Real per-setup variation, 61.7% (`CAM_S2_FADE_LONG`) down to 3.8% (`BRACKET_BREAKOUT_LONG`) — `C_STANDALONE_DOWN` at 7.3% usefully cross-validates as a genuinely-wrong-not-just-tight-stopped setup, consistent with its already-known SUPPRESS status.
+
+**Correctly did NOT stop there** — recovery rate alone doesn't prove a wider stop is a net win, since a "recovering" trade might dig a deeper hole first (getting stopped at the wider level too, just for more). Built `scripts/backtest_wider_stop_ev.mjs` (persisted `signal_type='WIDER_STOP_EV_TEST'`) to properly re-simulate the 7 highest-recovery setups with 1.5x/2x wider stops, full EV accounting (unaffected trades untouched, recovered trades become wins, still-losing trades become BIGGER losses). **Result: widening the stop is a net loser for 5 of 7 setups** (`PD_IB_MID_FADE_LONG`: -$14 to -$20/trade despite 61.1% recovery rate), only marginally positive within noise for 2. The existing EV-optimized stops were already close to right — the recovery-rate metric alone would have been actively misleading if acted on directly.
+
+**Then tried the winner-side mirror** (`scripts/backtest_post_target_runup.mjs`, persisted `signal_type='POST_TARGET_RUNUP'`) — and this is where a real flaw was caught before being reported as a finding, not after. Raw numbers looked way too good (+300-475% "extra run-up" beyond target across 90 setup_types, every single one "rigor-clean"). Checked the obvious culprit first (an entry-price convention mismatch between the live and backfill MAE/MFE paths, the same bug class documented elsewhere in this file) — ruled out directly, `entry_zone_high - entry_zone_low` is exactly 0 for every row, no discrepancy there.
+
+**The real flaw**: the script only recorded the two EXTREME points (max favorable, max adverse) over the 4-hour window, with no record of which happened FIRST. `post_target_max_adverse` was consistently comparable to or larger than the "extra run-up" itself (e.g. `PD_IB_MID_FADE_LONG`: +116pt extra favorable vs. 133.6pt max adverse) — meaning the numbers can't distinguish "price ran further in our favor, then gave some back" (real, capturable opportunity) from "price dropped hard against us first, and only recovered to a new favorable extreme much later" (you'd have been shaken out or badly drawn-down before ever seeing the upside). Both scenarios produce similar summary statistics with this method. **Not fixed yet** — flagging the finding, not the conclusion; do not cite the +300-475% figures as a "let winners run" case, they don't currently support that claim either way.
+
+### User's domain knowledge, given directly and worth testing rather than assuming true
+
+- **Down moves**: happen quickly, continue for roughly 2 hours, and typically *try* to retrace starting around 11:00 AM-12:00 PM ET — "usually, but sometimes continues." A real, specific, testable time-of-day claim, not yet checked against data.
+- **Up moves**: different character — can grind upward all day with minor retracements along the way; "you need conviction to hold through some retracements" rather than expecting a clean, fast, one-shot move like the downside tends to be.
+- **The reframe that matters most**: instead of an absolute "extra points left on the table" metric (noisy, easily confused by generic volatility as shown above), the right question is an EFFICIENCY ratio — if the real move eventually reaches some true extreme, what fraction of that distance does the current target/stop actually capture? User's own bar: "we want to capture profit within 10% of the actual bottom if we're calibrated properly." A well-calibrated setup should show target_distance / eventual_true_extreme ≳ 90%, not some inflated "we could 4x'd it" framing.
+
+### Next build (not started)
+
+1. Track the actual SEQUENCE of new favorable/adverse extremes bar-by-bar after resolution, not just the two endpoint maxima — need to know order and timing (bar index + ET clock time), not just magnitude.
+2. Test the 11am-noon down-move-retracement claim directly against the sequence data, as a hypothesis, not an assumption.
+3. Compute the efficiency ratio (captured/eventual-true-extreme) as the primary metric instead of raw "extra points."
+4. Likely needs separate treatment for up-moves vs down-moves given the described difference in character (fast-continue-then-retrace vs. grind-with-noise) — a single fixed window size for both directions was already shown to be the wrong assumption.
+
 ## ✅ 2026-07-18 (same day, continued): 2-year walk-forward built, then a real bug flipped the roster's P&L sign entirely
 
 User asked for a 2-year extension of the existing prop walk-forward (`scratch/backtest_prop_1yr_walkforward_FULLYEAR.mjs`), dispatched to Gemini with full stat/MAE-MFE/per-setup/trade-export requirements. It came back showing a dramatic swing from the prior session's -$2,725.07 headline to +$22,768.95 cumulative — surprising enough (per the standing "vet a surprising result before trusting it" rule) to dig into before reporting.
