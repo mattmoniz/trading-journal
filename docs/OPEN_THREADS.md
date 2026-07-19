@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-19: Fixed target_sweep_v2's overfitting, then found and fixed a much bigger baseline bug in the scale-out script — VALUE_AREA_RESPONSIVE_SHORT finding retracted, CAM_R4_FADE_SHORT is the real one
+
+Full narrative in [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md). Short version: fixed `backtest_target_sweep_v2.mjs`'s spike-picking (thin-tail gate + a candidate grid anchored to the current live target, chronological OOS split, plateau check, same methodology already validated in the scale-out script) — 18/103 setups now survive, a believable rate.
+
+While cross-checking that fix against the earlier scale-out finding, found `backtest_scaleout_runner.mjs` had been comparing against the WRONG baseline: it read `OPTIMAL_STOP.ev_per_trade` (the live stored value) instead of resimulating it. That stored value is computed by the old order-blind sweep against `mae_points`/`mfe_points` captured under whatever stop was live when each trade historically fired — for `VALUE_AREA_RESPONSIVE_SHORT`, historical stops ranged 15-28pt+ vs. today's 10pt, so the stored -$1.99 baseline was comparing today's tight stop against MAE data bounded at a much wider historical boundary. A properly self-consistent baseline is actually **+$15.22/trade** — not a loser. **This reverses the finding**: the scale-out config ($17.76 full/$14.81 OOS) actually loses out-of-sample against the true baseline ($15.22/$18.65).
+
+Fixed the script to always resimulate its own baseline, tightened the promotion gate to require beating baseline both full-sample AND OOS, re-ran clean: **4/96 setups survive** (`CAM_R4_FADE_SHORT` — real, strong, N=39, $6.32→$14.27 full / $0.42→$10.10 OOS; `PW_HIGH_FADE_LONG` — thin, N=16; `FLOOR_S1_FADE_LONG` and `CAM_R2_FADE_LONG` — marginal). `VALUE_AREA_RESPONSIVE_SHORT` is no longer a survivor at all. Retracted its `OPEN_DECISION`/`RESEARCH_CLAIM` (with a full account of what was wrong, not silently deleted), recorded new ones for `CAM_R4_FADE_SHORT`. Independently spot-checked `target_sweep_v2`'s own baseline (matched a from-scratch check within rounding) — confirmed it does NOT have the same bug, its 18 survivors are trustworthy on this front.
+
+**General lesson**: auditing a backtest's simulation logic isn't the same as auditing where its baseline comes from — a comparison is only as trustworthy as its least-audited side. Added to CLAUDE.md's hard rules.
+
 ## 🆕 2026-07-19: Scale-out + trailing-runner design — a real, narrow, out-of-sample-validated finding for one setup; full dialogue now tracked in a dedicated spec doc
 
 Continuation of the target-calibration thread below. Full reasoning trail (not just conclusions) now lives in [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md) per explicit user request to keep documenting the dialogue, not just findings — this entry is the short version.

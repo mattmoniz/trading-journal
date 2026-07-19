@@ -8,32 +8,48 @@
 //      optimal_target_blind_to_post_resolution_continuation, 2026-07-19).
 //   2. It's chronologically order-blind: computeEvAtStopTarget checks "did MAE exceed
 //      stop" and "did MFE reach target" as two independent facts with no notion of which
-//      happened first. Already a documented issue for stops (p90 was found to "rescue"
-//      IB_BEARISH trades into fake wins this exact way) -- widening the target range
-//      without fixing this would make it worse, since holding a trade open longer to
-//      chase a bigger target also exposes it to bigger real adverse risk the old,
-//      still-truncated mae_points can't see.
+//      happened first.
 //
 // Fix: candidate targets are drawn from PERCENTILES of the real, untruncated MFE
-// (walked fresh from ENTRY, not read from the truncated column) -- data-derived, not a
-// hardcoded list. Each candidate is scored via genuine bar-by-bar chronological
-// resimulation from entry (same method backtest_wider_target_ev.mjs already validated),
-// not the order-blind independent-percentile shortcut. Stop is held FIXED at the current
-// live OPTIMAL_STOP value -- this script only re-derives the target.
+// (walked fresh from ENTRY) -- data-derived, not a hardcoded list. Each candidate is
+// scored via genuine bar-by-bar chronological resimulation from entry. Stop is held
+// FIXED at the current live OPTIMAL_STOP value -- this script only re-derives the target.
+//
+// v2.1 (2026-07-19, second pass): the FIRST version of this script failed its own
+// sanity check -- several setups picked absurd "best" targets (e.g. 719.8pt) off a
+// SINGLE outlier trade (targetHits=1). Root cause: (a) no thin-tail gate, so a candidate
+// backed by 1-2 trades could "win" purely off one lucky dollar figure; (b) the candidate
+// grid jumped straight to the 40th-95th percentile of true MFE, skipping past the
+// already-validated region near the CURRENT live target entirely (for
+// PD_SESSION_MID_FADE_SHORT, the smallest candidate tested was 88.5pt even though the
+// earlier, properly-guardrailed wider-target test had already found ~75pt (1.5x) to be
+// a real, positive improvement -- the sweep never even looked there).
+//
+// Fixed by applying the SAME guardrail methodology that made
+// scripts/backtest_scaleout_runner.mjs trustworthy (Gemini-authored, Claude-audited,
+// same day): (1) a thin-tail gate requiring a real number of trades to have actually
+// reached a candidate before it's eligible to be picked "best"; (2) a candidate grid
+// ANCHORED to the current live target (1.0x/1.1x/1.25x/1.5x/1.75x/2.0x) unioned with the
+// true-MFE percentiles, so the sweep can't skip past the region that's already known to
+// matter; (3) a genuine chronological out-of-sample split (pick best using only the
+// first 2/3 of each setup's trade history, validate on the held-out last 1/3); (4) a
+// plateau check against the immediate candidate neighbors (both must also be thin-tail-
+// eligible and positive in-sample) so an isolated spike can't win; (5) computeRigor.
 //
 // Writes to signal_type='TARGET_SWEEP_V2' -- a NEW signal_type, deliberately NOT
-// overwriting live OPTIMAL_STOP. This is a comparison/backtest result pending a promotion
-// decision, per this codebase's standing "nothing wired live without a deliberate
-// decision" convention -- same caveat as every other finding from this thread.
+// overwriting live OPTIMAL_STOP. Backtest-only, pending a promotion decision.
 //
 // Run: node scripts/backtest_target_sweep_v2.mjs
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { DEFAULT_DPP } from './update_optimal_stops.mjs';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
-const WALK_WINDOW_BARS = 390; // ~6.5hr from entry -- bounded like the existing mae/mfe<=300pt convention elsewhere in this codebase, generous enough to capture same-session continuation without spilling unboundedly into future sessions.
+const WALK_WINDOW_BARS = 390; // ~6.5hr from entry
 const CANDIDATE_PERCENTILES = [0.40, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
+const ANCHOR_MULTIPLES = [1.0, 1.1, 1.25, 1.5, 1.75, 2.0]; // anchored to the CURRENT live target
 const MIN_N = 20;
+const MIN_TARGET_HITS = 15; // thin-tail gate, matches backtest_scaleout_runner.mjs's own floor
 
 function percentile(sortedArr, p) {
   const idx = Math.min(sortedArr.length - 1, Math.floor(sortedArr.length * p));
@@ -90,20 +106,22 @@ async function main() {
   }
 
   const results = {};
+  const funnel = { total: 0, noWalkedData: 0, noPlateauPass: 0, failedOosOrBaseline: 0, notRigorClean: 0, survived: 0 };
   const setupTypes = Object.keys(byType).filter(st => optMap[st] && byType[st].length >= MIN_N);
+  funnel.total = setupTypes.length;
   console.log(`Sweeping ${setupTypes.length} setup_types with N>=${MIN_N} and a live stop...`);
 
   for (const setupType of setupTypes) {
     const trades = byType[setupType];
     const stop = optMap[setupType].stop;
+    const oldTarget = optMap[setupType].oldTarget;
     const dpp = dppMap[setupType] || DEFAULT_DPP;
     const direction = inferDirection(setupType);
     if (!direction) continue;
     const long = direction === 'LONG';
 
-    // Pass 1: walk from ENTRY (not original resolution) through a bounded window, get
-    // the TRUE max favorable excursion per trade -- used both to build the candidate
-    // grid and as the ground truth for chronological outcome determination below.
+    // Pass 1: walk from ENTRY through a bounded window, get the TRUE max favorable
+    // excursion per trade -- used to build the candidate grid.
     const walked = [];
     for (const t of trades) {
       const entry = t.entry_zone_high ?? t.entry_zone_low;
@@ -112,10 +130,8 @@ async function main() {
       if (startIdx >= endIdx) continue;
       walked.push({ trade: t, entry, startIdx, endIdx });
     }
-    if (walked.length < MIN_N) continue;
+    if (walked.length < MIN_N) { funnel.noWalkedData++; continue; }
 
-    // Candidate targets: percentiles of the real true-MFE distribution for this setup,
-    // data-derived -- not a fixed point list.
     const trueMfes = walked.map(w => {
       let maxFav = -Infinity;
       for (let i = w.startIdx; i < w.endIdx; i++) {
@@ -125,16 +141,24 @@ async function main() {
       }
       return maxFav;
     }).filter(v => v > 0).sort((a, b) => a - b);
-    const candidates = [...new Set(CANDIDATE_PERCENTILES.map(p => +percentile(trueMfes, p).toFixed(1)))].filter(c => c > 0);
+    if (!trueMfes.length) { funnel.noWalkedData++; continue; }
+
+    // Candidate grid: ANCHORED to the current live target (so the sweep can't skip past
+    // the already-validated region) UNIONED with percentiles of the true MFE distribution
+    // (for candidates beyond what's already been tested). Sorted ascending -- needed for
+    // the plateau check below to mean "adjacent in value", not "adjacent in list order".
+    const anchored = ANCHOR_MULTIPLES.map(m => +(oldTarget * m).toFixed(1));
+    const percentileCands = CANDIDATE_PERCENTILES.map(p => +percentile(trueMfes, p).toFixed(1));
+    const candidates = [...new Set([...anchored, ...percentileCands])].filter(c => c > 0).sort((a, b) => a - b);
 
     // Pass 2: for each candidate target, chronologically resimulate every trade from
-    // entry -- first-touch of candidate target vs. the FIXED live stop, in true bar order.
-    let best = null;
-    const candidateResults = [];
-    for (const T of candidates) {
-      let pnlSum = 0, targetHits = 0, stopHits = 0, unresolved = 0;
+    // entry, storing PER-TRADE pnl (chronologically ordered, same order as `walked`) so
+    // we can do a genuine chronological out-of-sample split below.
+    const candidateResults = candidates.map(T => {
+      const targetPrice0 = null; // computed per-trade below (direction-dependent)
+      const events = [];
+      let targetHits = 0, stopHits = 0, unresolved = 0;
       for (const w of walked) {
-        const t = w.trade;
         const targetPrice = long ? w.entry + T : w.entry - T;
         const stopPrice = long ? w.entry - stop : w.entry + stop;
         let outcome = null;
@@ -142,27 +166,75 @@ async function main() {
           const bar = allBars[i];
           const targetHit = long ? bar.high >= targetPrice : bar.low <= targetPrice;
           const stopHit = long ? bar.low <= stopPrice : bar.high >= stopPrice;
-          if (targetHit && stopHit) { outcome = 'STOP'; break; } // conservative same-bar-conflict convention
+          if (targetHit && stopHit) { outcome = 'STOP'; break; }
           if (targetHit) { outcome = 'TARGET'; break; }
           if (stopHit) { outcome = 'STOP'; break; }
         }
-        if (outcome === 'TARGET') { pnlSum += T * dpp; targetHits++; }
-        else if (outcome === 'STOP') { pnlSum -= stop * dpp; stopHits++; }
-        else { pnlSum += t.actual_pnl; unresolved++; } // fell through the window -- fallback to what actually happened, same convention as computeEvAtStopTarget
+        let pnl;
+        if (outcome === 'TARGET') { pnl = T * dpp; targetHits++; }
+        else if (outcome === 'STOP') { pnl = -stop * dpp; stopHits++; }
+        else { pnl = w.trade.actual_pnl; unresolved++; }
+        events.push({ date: w.trade.fired_at.toISOString().slice(0, 10), pnl });
       }
-      const n = walked.length;
-      const ev = pnlSum / n;
-      candidateResults.push({ target: T, ev: +ev.toFixed(2), n, targetHits, stopHits, unresolved, unresolvedPct: +(100 * unresolved / n).toFixed(1) });
-      if (!best || ev > best.ev) best = { target: T, ev };
+      return { target: T, events, targetHits, stopHits, unresolved, n: walked.length };
+    });
+
+    // Thin-tail gate: a candidate is only eligible to be "best" if enough trades ACTUALLY
+    // reached it over the full sample (targetHits >= MIN_TARGET_HITS) -- a candidate
+    // backed by 1-2 lucky trades (the exact bug this rewrite fixes) never becomes eligible.
+    const numWalked = walked.length;
+    const splitIdx = Math.floor(numWalked * (2 / 3));
+    const eligible = candidateResults.filter(c => c.targetHits >= MIN_TARGET_HITS);
+
+    if (!eligible.length) { funnel.noWalkedData++; continue; }
+
+    // Pick best-in-sample among ELIGIBLE candidates only (using first-2/3 EV).
+    let bestInSample = null;
+    for (const c of eligible) {
+      const isSlice = c.events.slice(0, splitIdx);
+      const isEv = isSlice.reduce((s, e) => s + e.pnl, 0) / splitIdx;
+      if (!bestInSample || isEv > bestInSample.isEv) bestInSample = { ...c, isEv };
     }
 
-    const oldEv = candidateResults.length ? null : null; // computed below via old target if present in candidates
+    // Plateau check: the two candidates immediately adjacent BY VALUE must also be
+    // thin-tail-eligible and have positive in-sample EV -- an isolated spike (eligible
+    // itself, but surrounded by thin/negative neighbors) fails this.
+    const idx = candidates.indexOf(bestInSample.target);
+    const neighborTargets = [candidates[idx - 1], candidates[idx + 1]].filter(t => t !== undefined);
+    const neighborResults = neighborTargets.map(t => candidateResults.find(c => c.target === t));
+    const plateauPassed = neighborResults.length > 0 && neighborResults.every(n => {
+      if (n.targetHits < MIN_TARGET_HITS) return false;
+      const isEv = n.events.slice(0, splitIdx).reduce((s, e) => s + e.pnl, 0) / splitIdx;
+      return isEv > 0;
+    });
+
+    if (!plateauPassed) { funnel.noPlateauPass++; continue; }
+
+    const oosSlice = bestInSample.events.slice(splitIdx);
+    const oosEv = oosSlice.reduce((s, e) => s + e.pnl, 0) / (numWalked - splitIdx);
+    const fullEv = bestInSample.events.reduce((s, e) => s + e.pnl, 0) / numWalked;
+
+    // Baseline: the CURRENT live target, resimulated the SAME chronological way (fair
+    // apples-to-apples comparison, not the old order-blind computeEvAtStopTarget number).
+    const baselineCand = candidateResults.find(c => c.target === +oldTarget.toFixed(1))
+      || candidateResults.find(c => Math.abs(c.target - oldTarget) < 0.5);
+    const baselineEv = baselineCand ? baselineCand.events.reduce((s, e) => s + e.pnl, 0) / numWalked : null;
+
+    if (baselineEv === null || !(oosEv > 0 && fullEv > baselineEv)) { funnel.failedOosOrBaseline++; continue; }
+
+    const rigor = computeRigor(bestInSample.events, { pnlFn: e => e.pnl });
+    if (!rigor.clean) { funnel.notRigorClean++; continue; }
+
+    funnel.survived++;
     results[setupType] = {
-      stop, n: walked.length, oldTarget: optMap[setupType].oldTarget,
-      candidates: candidateResults, bestTarget: best.target, bestEv: +best.ev.toFixed(2),
+      stop, n: numWalked, oldTarget, baselineEv: +baselineEv.toFixed(2),
+      bestTarget: bestInSample.target, isEv: +bestInSample.isEv.toFixed(2),
+      oosEv: +oosEv.toFixed(2), fullEv: +fullEv.toFixed(2),
+      targetHits: bestInSample.targetHits, candidatesTested: candidates, rigor,
     };
-    console.log(`${setupType}: stop=${stop} oldTarget=${optMap[setupType].oldTarget} -> NEW bestTarget=${best.target} EV=$${best.ev.toFixed(2)} (N=${walked.length}, candidates tested: ${candidates.join(',')})`);
+    console.log(`${setupType}: stop=${stop} oldTarget=${oldTarget} (baselineEv=$${baselineEv.toFixed(2)}) -> NEW target=${bestInSample.target} fullEv=$${fullEv.toFixed(2)} oosEv=$${oosEv.toFixed(2)} (N=${numWalked}, targetHits=${bestInSample.targetHits})`);
   }
+  console.log('\nGuardrail funnel:', JSON.stringify(funnel));
 
   const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
   for (const [setupType, r] of Object.entries(results)) {
@@ -171,7 +243,7 @@ async function main() {
       VALUES ($1, 0, 'TARGET_SWEEP_V2', $2, $3, $4, $5)
       ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
         SET sample_size=EXCLUDED.sample_size, ev_per_trade=EXCLUDED.ev_per_trade, notes=EXCLUDED.notes
-    `, [today, setupType, r.n, r.bestEv, JSON.stringify(r)]);
+    `, [today, setupType, r.n, r.fullEv, JSON.stringify(r)]);
   }
   console.log(`\nPersisted ${Object.keys(results).length} rows to performance_audit (signal_type='TARGET_SWEEP_V2').`);
   process.exit(0);

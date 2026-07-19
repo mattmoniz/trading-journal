@@ -17,13 +17,17 @@ function percentile(sortedArr, p) {
 
 async function main() {
   console.log('Loading current live OPTIMAL_STOP...');
+  // NOTE: deliberately NOT selecting ev_per_trade here -- that stored value is computed by
+  // the old order-blind sweepOptimalTarget() against historically-mismatched mae/mfe data
+  // (see the baselineEvents comment below). Only stop/target values are trustworthy from
+  // this table; the baseline EV itself is always re-derived by chronological resimulation.
   const optRes = await query(`
-    SELECT DISTINCT ON (signal_name) signal_name as setup_type, optimal_stop, optimal_target, ev_per_trade as baseline_ev
+    SELECT DISTINCT ON (signal_name) signal_name as setup_type, optimal_stop, optimal_target
     FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
     ORDER BY signal_name, run_date DESC
   `);
   const optMap = {};
-  for (const r of optRes.rows) optMap[r.setup_type] = { stop: parseFloat(r.optimal_stop), target: parseFloat(r.optimal_target), baselineEv: parseFloat(r.baseline_ev) };
+  for (const r of optRes.rows) optMap[r.setup_type] = { stop: parseFloat(r.optimal_stop), target: parseFloat(r.optimal_target) };
 
   console.log('Loading eligible trades...');
   const tradesRes = await query(`
@@ -65,7 +69,7 @@ async function main() {
 
   for (const setupType of setupTypes) {
     const trades = byType[setupType];
-    const { stop, target: originalTarget, baselineEv } = optMap[setupType];
+    const { stop, target: originalTarget } = optMap[setupType]; // baselineEv no longer sourced here -- see the properly-resimulated baselineEv computed below
     const direction = inferDirection(setupType);
     if (!direction) continue;
     const long = direction === 'LONG';
@@ -112,6 +116,20 @@ async function main() {
     // Simulate for each (f, trail) on all walked trades
     const simResults = [];
     let t1ReachedTotal = 0;
+    // FIXED (Claude audit, 2026-07-19): the baseline used to come from the STORED live
+    // OPTIMAL_STOP.ev_per_trade -- computed by the OLD order-blind sweepOptimalTarget()
+    // using mae_points/mfe_points captured under whatever stop/target was live when each
+    // trade fired historically, which can differ wildly from the CURRENT live stop/target
+    // (confirmed for VALUE_AREA_RESPONSIVE_SHORT: historical stop distances ranged
+    // 15-28pt+ vs the current live stop of 10pt -- comparing today's stop/target against
+    // MAE/MFE truncated at a DIFFERENT historical boundary silently invalidates the
+    // number). That made the promotion gate (fullEv > baselineEv) an apples-to-oranges
+    // comparison -- caught because VALUE_AREA_RESPONSIVE_SHORT's properly-resimulated true
+    // baseline turned out to be +$15.22, not the stored -$1.99, which reverses whether the
+    // scale-out config actually clears the bar. Fixed by resimulating the SAME
+    // 100%-at-T1 baseline chronologically, from entry, in this same loop (pnlA IS that
+    // computation -- it was already being computed and discarded every iteration).
+    const baselineEvents = [];
 
     for (const w of walked) {
       const entry = w.entry;
@@ -120,13 +138,13 @@ async function main() {
       let outcomeA = null, outcomeB = null;
       let t1Reached = false;
       let pnlA = null, pnlB = null;
-      
+
       let runningFav = -Infinity;
       let trailingStop = null;
 
       for (let i = w.startIdx; i < w.endIdx; i++) {
         const bar = allBars[i];
-        
+
         // Portion A logic (standard)
         if (outcomeA === null) {
           const tHit = long ? bar.high >= targetPrice : bar.low <= targetPrice;
@@ -134,7 +152,7 @@ async function main() {
           if (tHit && sHit) outcomeA = 'STOP';
           else if (tHit) outcomeA = 'TARGET';
           else if (sHit) outcomeA = 'STOP';
-          
+
           if (outcomeA === 'TARGET') { pnlA = originalTarget * dpp; t1Reached = true; runningFav = originalTarget; }
           else if (outcomeA === 'STOP') { pnlA = -stop * dpp; outcomeB = 'STOP'; pnlB = pnlA; }
         }
@@ -148,9 +166,14 @@ async function main() {
           // Trail logic gets applied after we know trail candidates, so we just collect raw path data.
         }
       }
-      
+
       if (t1Reached) t1ReachedTotal++;
+      baselineEvents.push({ date: w.trade.fired_at.toISOString().slice(0, 10), pnl: pnlA === null ? w.trade.actual_pnl : pnlA });
     }
+
+    const baselineSplitIdx = Math.floor(baselineEvents.length * (2 / 3));
+    const baselineEv = baselineEvents.reduce((s, e) => s + e.pnl, 0) / baselineEvents.length;
+    const baselineOosEv = baselineEvents.slice(baselineSplitIdx).reduce((s, e) => s + e.pnl, 0) / (baselineEvents.length - baselineSplitIdx);
 
     if (t1ReachedTotal < 15) { funnel.thinTail++; continue; } // Thin-tail gate
 
@@ -246,11 +269,14 @@ async function main() {
        const oosEv = bestInSample.events.slice(splitIdx).reduce((acc, e) => acc + e.tradeEv, 0) / (numWalked - splitIdx);
        const fullEv = bestInSample.ev;
 
-       if (oosEv > 0 && fullEv > baselineEv) {
+       // Promotion bar now requires beating the baseline BOTH full-sample AND
+       // out-of-sample (apples-to-apples -- both numbers come from the same
+       // chronological resimulation and the same first-2/3/last-1/3 split).
+       if (oosEv > 0 && fullEv > baselineEv && oosEv > baselineOosEv) {
            const rigor = computeRigor(bestInSample.events, { dateField: 'date', pnlFn: e => e.pnl });
            if (rigor.clean) {
-             results[setupType] = { f: bestInSample.f, trail: bestInSample.trail, baselineEv, fullEv, isEv: bestInSample.isEv, oosEv, t1Reached: t1ReachedTotal, rigor };
-             responseMd += `### ${setupType}\n- **T1 Reach Count**: ${t1ReachedTotal}\n- **Best Config**: Fraction=${bestInSample.f}, Trail=${bestInSample.trail}pt\n- **Baseline EV (100% T1)**: $${baselineEv.toFixed(2)}\n- **In-Sample EV (first 2/3)**: $${bestInSample.isEv.toFixed(2)}\n- **OOS EV (last 1/3)**: $${oosEv.toFixed(2)}\n- **Full Blended EV**: $${fullEv.toFixed(2)}\n\n`;
+             results[setupType] = { f: bestInSample.f, trail: bestInSample.trail, baselineEv, baselineOosEv, fullEv, isEv: bestInSample.isEv, oosEv, t1Reached: t1ReachedTotal, rigor };
+             responseMd += `### ${setupType}\n- **T1 Reach Count**: ${t1ReachedTotal}\n- **Best Config**: Fraction=${bestInSample.f}, Trail=${bestInSample.trail}pt\n- **Baseline EV (100% T1, full)**: $${baselineEv.toFixed(2)}\n- **Baseline EV (100% T1, OOS)**: $${baselineOosEv.toFixed(2)}\n- **In-Sample EV (first 2/3)**: $${bestInSample.isEv.toFixed(2)}\n- **OOS EV (last 1/3)**: $${oosEv.toFixed(2)}\n- **Full Blended EV**: $${fullEv.toFixed(2)}\n\n`;
              funnel.survived++;
            } else funnel.notRigorClean++;
        } else funnel.failedOosOrBaseline++;
