@@ -215,6 +215,35 @@ ORDER BY COUNT(a.id) DESC;
 SQLEOF
 )
 
+# Target-method promotion/demotion watch — 2026-07-19. update_optimal_stops.mjs now has two
+# target-selection paths (EV-sweep vs. the corrected-resim methodology in
+# targetCalibrationService.js), and by design it re-evaluates every setup_type from scratch
+# on every scheduled run with no memory of prior status -- a setup that stops clearing the
+# guardrails automatically falls back, one that starts clearing them automatically promotes.
+# That's the mechanism; this is the VISIBILITY layer for it -- since run_date is preserved
+# per-day (not overwritten across days), diff today's latest row against the immediately
+# prior distinct run_date's row for each setup_type and flag any method change so a
+# promotion/demotion is never just a silent diff nobody notices, same "put the fragile state
+# in front of a human every session" pattern as DTM_WATCH/SHADOW_VALIDATION above.
+export TARGET_METHOD_WATCH
+TARGET_METHOD_WATCH=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+WITH ranked AS (
+  SELECT signal_name, run_date,
+    CASE WHEN notes ~ '"method":"corrected-resim"' THEN 'corrected-resim' ELSE 'ev-sweep' END as method,
+    ROW_NUMBER() OVER (PARTITION BY signal_name ORDER BY run_date DESC) as rn
+  FROM performance_audit
+  WHERE signal_type='OPTIMAL_STOP'
+),
+latest AS (SELECT signal_name, run_date, method FROM ranked WHERE rn=1),
+prior AS (SELECT signal_name, run_date, method FROM ranked WHERE rn=2)
+SELECT l.signal_name, l.method as latest_method, p.method as prior_method, l.run_date::text, p.run_date::text
+FROM latest l
+LEFT JOIN prior p ON p.signal_name = l.signal_name
+WHERE l.method = 'corrected-resim' OR p.method = 'corrected-resim'
+ORDER BY (l.method != COALESCE(p.method, l.method)) DESC, l.signal_name;
+SQLEOF
+)
+
 # test_invariants.mjs FAIL watch — 2026-07-17. Wired into run_daily_calibration.sh the same
 # day (previously manual-only: "run after any change touching acd.js..."), which meant a
 # real invariant break (e.g. check [6]'s UNCALIBRATED_SHADOW_TYPES staleness) could sit
@@ -246,6 +275,7 @@ const openDecisionsRaw = process.env.OPEN_DECISIONS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
 const shadowValRaw = process.env.SHADOW_VALIDATION || '';
+const targetMethodRaw = process.env.TARGET_METHOD_WATCH || '';
 const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
@@ -324,6 +354,18 @@ for (const line of shadowValRaw.split('\n').filter(Boolean)) {
   shadowValLines.push(`  ${type.padEnd(30)} ${rec.padEnd(8)} since ${runDate}: N=${nInt} WR=${wr}% EV=$${evF.toFixed(2)}${flag}`);
 }
 
+// Target-method promotion/demotion watch: any setup_type currently using corrected-resim,
+// or that JUST STOPPED using it (a real demotion) or JUST STARTED (a real promotion).
+const tmLines = [];
+let tmPromotions = 0, tmDemotions = 0, tmSteady = 0;
+for (const line of targetMethodRaw.split('\n').filter(Boolean)) {
+  const [type, latestMethod, priorMethod, latestDate, priorDate] = line.split('|');
+  if (!priorMethod) { tmLines.push(`  ${type.padEnd(30)} ${latestMethod} (first run using this methodology, no prior run to compare)`); continue; }
+  if (latestMethod === priorMethod) { tmSteady++; tmLines.push(`  ${type.padEnd(30)} ${latestMethod} (steady since ${priorDate})`); continue; }
+  if (latestMethod === 'corrected-resim') { tmPromotions++; tmLines.push(`  ⬆️  ${type.padEnd(28)} PROMOTED to corrected-resim (was ev-sweep as of ${priorDate})`); }
+  else { tmDemotions++; tmLines.push(`  ⬇️  ${type.padEnd(28)} DEMOTED to ev-sweep (was corrected-resim as of ${priorDate}) — its own guardrails no longer pass, re-read before trusting the old ev-sweep number`); }
+}
+
 const lines = [
   '=== SESSION START PROTOCOL ===',
   '',
@@ -363,6 +405,10 @@ const lines = [
   shadowValLines.length > 0
     ? `${shadowDisagree > 0 ? '🔴' : '📊'} SHADOW VALIDATION — real forward outcomes for currently-suppressed setup_types (the actual closed loop, built 2026-07-17):\n${shadowValLines.join('\n')}${shadowDisagree > 0 ? `\n  ${shadowDisagree} type(s) DISAGREE with their own suppression — forward SHADOW data at N≥20 shows positive EV. Re-examine before trusting the SUPPRESS label.` : shadowAgree > 0 ? `\n  ${shadowAgree} type(s) confirmed by forward data (N≥20, EV<-$5) — suppression is validated, not just asserted.` : ''}`
     : '📊 SHADOW VALIDATION: no forward SHADOW trades yet (origin_status tracking only started 2026-07-17) — nothing to validate yet, check back as data accumulates.',
+  '',
+  tmLines.length > 0
+    ? `${tmDemotions > 0 ? '⚠️ ' : '📈'} TARGET METHOD WATCH — corrected-resim vs. ev-sweep target selection, re-evaluated fresh every scheduled run (built 2026-07-19):\n${tmLines.join('\n')}${tmDemotions > 0 ? `\n  ${tmDemotions} demotion(s) this run — a setup that was using the corrected methodology no longer clears its guardrails. This is the relegation mechanism working as intended, not a bug — but check WHY before assuming the old ev-sweep number is trustworthy.` : ''}${tmPromotions > 0 ? `\n  ${tmPromotions} promotion(s) this run — a setup newly cleared every guardrail (more data, or an anchor/candidate shift).` : ''}`
+    : '📈 TARGET METHOD WATCH: no setup_type currently uses the corrected-resim methodology (or update_optimal_stops.mjs hasn\'t run since it was wired in 2026-07-19).',
   '',
   feedbackWithSetupId >= 20
     ? `🟢 TRADE_FEEDBACK COVERAGE — ${feedbackWithSetupId} rows now have setup_id populated (N≥20 floor cleared). ACTION: re-run the execution-quality audit (fill/slippage, stop/target discipline) — was blocked on this exact gap, see RESEARCH_CLAIM execution_quality_audit_blocked_on_attribution.`
