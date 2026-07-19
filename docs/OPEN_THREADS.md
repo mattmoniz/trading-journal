@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-19: The corrected target methodology is wired LIVE — 19/103 setup_types now use it, durably
+
+Closes the target-calibration thread's last remaining item: `OPEN_DECISION` `promote_18_layer1_corrected_targets` is RESOLVED. Full account in [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md). Short version:
+
+Extracted the corrected methodology (chronological resimulation, thin-tail/plateau/OOS/rigor guardrails) into a new shared service, `server/services/targetCalibrationService.js` — refactored `backtest_target_sweep_v2.mjs` to use it (verified byte-identical results before trusting the refactor), then wired it into `scripts/update_optimal_stops.mjs` itself: every setup_type now gets the corrected target attempted after its stop is computed via the existing EV-sweep, using it when it clears every guardrail (tagged `notes.method='corrected-resim'`) and falling back to the unchanged existing methodology otherwise. This is what makes it durable instead of a one-time patch — every future scheduled run (weekly + daily) re-evaluates every setup_type automatically, so nothing silently reverts and newly-qualifying setups get promoted without a manually-maintained list.
+
+**A real discrepancy surfaced when running it live**: only 17 (not 18) setups survived on the first live run. Root-caused precisely: `CAM_S2_FADE_LONG` flipped from surviving to failing purely from the live pipeline's pre-existing exclusion of `TIME_EXPIRED` trades — itself a second instance of the exact truncation bug this whole thread targets (a `TIME_EXPIRED` trade can be correctly re-evaluated by the corrected methodology's own 390-bar walk). Fixed by giving the corrected-target call its own wider, `TIME_EXPIRED`-inclusive trade population. Re-ran: **19/103 setup_types** now use the corrected path.
+
+Updated `test_invariants.mjs` check `[5]` to re-derive `corrected-resim` rows via the real `computeCorrectedTarget()` function before trusting them (not a hand-copied comparison — matches the standing discipline this check was built with). Full self-check clean: all 103 `OPTIMAL_STOP` rows match a fresh re-derivation (0 mismatches), lint/build clean, no new errors, pre-existing hardcoded-pattern flags verified via `git blame` to predate this session, git status clean.
+
+**Remaining open**: `OPEN_DECISION` `live_setup_status_pipeline_likely_has_same_ev_bugs` (HIGH) — the separate live suppression pipeline (`backtest_setup_status.mjs`) has not been checked for the same class of bugs and is the biggest unexamined risk from this whole thread.
+
 ## ✅ 2026-07-19: Old-vs-new 2yr walk-forward comparison run — Layer 1 fix quantified end-to-end, then found commissions weren't handled exactly
 
 Closes the target-calibration thread's original ask ("once these are fixed and answered can we compare old vs new walkforward"). Before running it, a second stale-data bug from the same family as `SCALEOUT_RUNNER_TEST` was caught: `target_sweep_v2`'s first broken run had persisted all 103 tested setups unconditionally; the corrected rewrite only touched the 18 survivors, leaving 85 setups' original spike-picked rows (including the literal `PD_LOW_FADE_SHORT`=719.8pt garbage) sitting in the table with the same `run_date`. Caught via a sanity-check on the walk-forward's own setup count, deleted the 85 stale rows.
