@@ -1,8 +1,21 @@
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
-import { DEFAULT_DPP } from './update_optimal_stops.mjs';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import fs from 'fs';
+
+// Exact commission formula, not a flat dpp multiplier -- FIXED (Claude audit, 2026-07-19,
+// per user question "are you including commissions"). See backtest_target_sweep_v2.mjs's
+// matching comment for the full account of why a flat dpp approximation drifts from the
+// true formula, worst for tight stops/trails. pnl = signed_points * PNL_PER_POINT -
+// COMMISSION, matching server/routes/acd.js's live resolution path exactly -- this
+// replaces the old `points * DEFAULT_DPP` pattern used throughout this file.
+const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+function exactPnl(entry, exitPrice, long) {
+  const signedPoints = long ? (exitPrice - entry) : (entry - exitPrice);
+  return signedPoints * PNL_PER_POINT - COMMISSION;
+}
 
 const WALK_WINDOW_BARS = 390;
 const TRAIL_PERCENTILES = [0.50, 0.65, 0.75, 0.85, 0.90];
@@ -73,7 +86,6 @@ async function main() {
     const direction = inferDirection(setupType);
     if (!direction) continue;
     const long = direction === 'LONG';
-    const dpp = DEFAULT_DPP; // Using default $2/pt for simplicity as verified
 
     const walked = [];
     for (const t of trades) {
@@ -153,8 +165,8 @@ async function main() {
           else if (tHit) outcomeA = 'TARGET';
           else if (sHit) outcomeA = 'STOP';
 
-          if (outcomeA === 'TARGET') { pnlA = originalTarget * dpp; t1Reached = true; runningFav = originalTarget; }
-          else if (outcomeA === 'STOP') { pnlA = -stop * dpp; outcomeB = 'STOP'; pnlB = pnlA; }
+          if (outcomeA === 'TARGET') { pnlA = exactPnl(entry, targetPrice, long); t1Reached = true; runningFav = originalTarget; }
+          else if (outcomeA === 'STOP') { pnlA = exactPnl(entry, stopPrice, long); outcomeB = 'STOP'; pnlB = pnlA; }
         }
 
         // Portion B logic
@@ -200,8 +212,8 @@ async function main() {
               else if (tHit) outcomeA = 'TARGET';
               else if (sHit) outcomeA = 'STOP';
               
-              if (outcomeA === 'TARGET') { pnlA = originalTarget * dpp; }
-              else if (outcomeA === 'STOP') { pnlA = -stop * dpp; outcomeB = 'STOP'; pnlB = pnlA; }
+              if (outcomeA === 'TARGET') { pnlA = exactPnl(entry, targetPrice, long); }
+              else if (outcomeA === 'STOP') { pnlA = exactPnl(entry, stopPrice, long); outcomeB = 'STOP'; pnlB = pnlA; }
             }
 
             if (outcomeA === 'TARGET' && outcomeB === null) {
@@ -216,7 +228,7 @@ async function main() {
                const trHit = long ? low <= trailingStopPx : high >= trailingStopPx;
                if (trHit) {
                   outcomeB = 'TRAIL_STOP';
-                  pnlB = (long ? trailingStopPx - entry : entry - trailingStopPx) * dpp;
+                  pnlB = exactPnl(entry, trailingStopPx, long);
                }
             }
           }
@@ -305,6 +317,18 @@ async function main() {
         SET sample_size=EXCLUDED.sample_size, ev_per_trade=EXCLUDED.ev_per_trade, notes=EXCLUDED.notes
     `, [today, st, r.t1Reached, r.fullEv, JSON.stringify(r)]);
   }
+  // Self-cleaning (CLAUDE.md hard rule, 2026-07-19): ON CONFLICT DO UPDATE only touches
+  // rows THIS run actually produced -- a setup_type that survived a PRIOR run but no
+  // longer clears the (possibly stricter/different) guardrails this run leaves its old
+  // row sitting untouched, indistinguishable from a fresh one by run_date alone. Bit this
+  // exact script twice in one day (once via the promotion-gate fix, once via the
+  // commission fix). Explicitly delete anything this run didn't produce.
+  const survivorNames = Object.keys(results);
+  const staleRes = await query(`
+    DELETE FROM performance_audit WHERE signal_type='SCALEOUT_RUNNER_TEST' AND NOT (signal_name = ANY($1))
+    RETURNING signal_name
+  `, [survivorNames]);
+  if (staleRes.rows.length) console.log(`Cleaned up ${staleRes.rows.length} stale row(s) no longer surviving: ${staleRes.rows.map(r => r.signal_name).join(', ')}`);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

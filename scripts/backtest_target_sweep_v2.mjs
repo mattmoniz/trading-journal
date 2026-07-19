@@ -42,9 +42,11 @@
 // Run: node scripts/backtest_target_sweep_v2.mjs
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
-import { DEFAULT_DPP } from './update_optimal_stops.mjs';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 
+const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
 const WALK_WINDOW_BARS = 390; // ~6.5hr from entry
 const CANDIDATE_PERCENTILES = [0.40, 0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95];
 const ANCHOR_MULTIPLES = [1.0, 1.1, 1.25, 1.5, 1.75, 2.0]; // anchored to the CURRENT live target
@@ -66,17 +68,6 @@ async function main() {
   const optMap = {};
   for (const r of optRes.rows) optMap[r.setup_type] = { stop: parseFloat(r.optimal_stop), oldTarget: parseFloat(r.optimal_target) };
   console.log(`${Object.keys(optMap).length} setup_types with a live OPTIMAL_STOP row.`);
-
-  console.log('Loading dpp per setup_type...');
-  const dppRes = await query(`
-    SELECT setup_type,
-      PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(actual_pnl) / NULLIF(ABS(entry_zone_low - stop_level), 0))
-        FILTER (WHERE resolution = 'STOP_HIT') AS dpp, COUNT(*) FILTER (WHERE resolution IN ('STOP_HIT','TARGET_HIT')) as n
-    FROM active_setups WHERE entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
-    GROUP BY setup_type
-  `);
-  const dppMap = {};
-  for (const r of dppRes.rows) dppMap[r.setup_type] = (+r.n >= 20 && r.dpp) ? +r.dpp : DEFAULT_DPP;
 
   console.log('Loading eligible trades (entry+stop+resolution known, clean mae/mfe)...');
   const tradesRes = await query(`
@@ -115,7 +106,6 @@ async function main() {
     const trades = byType[setupType];
     const stop = optMap[setupType].stop;
     const oldTarget = optMap[setupType].oldTarget;
-    const dpp = dppMap[setupType] || DEFAULT_DPP;
     const direction = inferDirection(setupType);
     if (!direction) continue;
     const long = direction === 'LONG';
@@ -170,9 +160,18 @@ async function main() {
           if (targetHit) { outcome = 'TARGET'; break; }
           if (stopHit) { outcome = 'STOP'; break; }
         }
+        // Exact commission formula (points*PNL_PER_POINT +/- COMMISSION), not a flat dpp
+        // multiplier -- FIXED (Claude audit, 2026-07-19, per user question "are you
+        // including commissions"). A flat empirically-derived dpp (~1.97-2.06, calibrated
+        // on whatever distance a setup's historical trades typically used) is only an
+        // approximation of the true formula, and drifts further from it the more a
+        // candidate target/stop differs from that calibration distance -- worst for
+        // setups with unusually tight stops (a few pt), where the flat $1 commission is a
+        // much larger fraction of the trade's total point value. The live resolution path
+        // (server/routes/acd.js) always uses the exact formula; this script now matches it.
         let pnl;
-        if (outcome === 'TARGET') { pnl = T * dpp; targetHits++; }
-        else if (outcome === 'STOP') { pnl = -stop * dpp; stopHits++; }
+        if (outcome === 'TARGET') { pnl = T * PNL_PER_POINT - COMMISSION; targetHits++; }
+        else if (outcome === 'STOP') { pnl = -(stop * PNL_PER_POINT + COMMISSION); stopHits++; }
         else { pnl = w.trade.actual_pnl; unresolved++; }
         events.push({ date: w.trade.fired_at.toISOString().slice(0, 10), pnl });
       }
@@ -246,6 +245,17 @@ async function main() {
     `, [today, setupType, r.n, r.fullEv, JSON.stringify(r)]);
   }
   console.log(`\nPersisted ${Object.keys(results).length} rows to performance_audit (signal_type='TARGET_SWEEP_V2').`);
+
+  // Self-cleaning (CLAUDE.md hard rule, 2026-07-19): this exact table needed a manual
+  // 85-row cleanup once already after a guardrail-tightening rewrite left the OLD
+  // (spike-picking) run's rows sitting untouched under the same run_date. Delete anything
+  // this run didn't produce so it can't happen silently again.
+  const survivorNames = Object.keys(results);
+  const staleRes = await query(`
+    DELETE FROM performance_audit WHERE signal_type='TARGET_SWEEP_V2' AND NOT (signal_name = ANY($1))
+    RETURNING signal_name
+  `, [survivorNames]);
+  if (staleRes.rows.length) console.log(`Cleaned up ${staleRes.rows.length} stale row(s) no longer surviving: ${staleRes.rows.map(r => r.signal_name).join(', ')}`);
   process.exit(0);
 }
 
