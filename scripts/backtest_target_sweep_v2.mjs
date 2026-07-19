@@ -98,6 +98,7 @@ async function main() {
 
   const results = {};
   const funnel = { total: 0, noWalkedData: 0, noPlateauPass: 0, failedOosOrBaseline: 0, notRigorClean: 0, survived: 0 };
+  const exclusions = {}; // setupType -> { reason, detail } -- per-setup context, not just aggregate counts
   const setupTypes = Object.keys(byType).filter(st => optMap[st] && byType[st].length >= MIN_N);
   funnel.total = setupTypes.length;
   console.log(`Sweeping ${setupTypes.length} setup_types with N>=${MIN_N} and a live stop...`);
@@ -120,7 +121,11 @@ async function main() {
       if (startIdx >= endIdx) continue;
       walked.push({ trade: t, entry, startIdx, endIdx });
     }
-    if (walked.length < MIN_N) { funnel.noWalkedData++; continue; }
+    if (walked.length < MIN_N) {
+      funnel.noWalkedData++;
+      exclusions[setupType] = { reason: 'insufficient_bar_data', detail: `only ${walked.length} of ${trades.length} trades had bars available within the window (need >=${MIN_N})` };
+      continue;
+    }
 
     const trueMfes = walked.map(w => {
       let maxFav = -Infinity;
@@ -131,7 +136,11 @@ async function main() {
       }
       return maxFav;
     }).filter(v => v > 0).sort((a, b) => a - b);
-    if (!trueMfes.length) { funnel.noWalkedData++; continue; }
+    if (!trueMfes.length) {
+      funnel.noWalkedData++;
+      exclusions[setupType] = { reason: 'no_positive_mfe', detail: 'every walked trade had zero/negative favorable excursion (should not happen for a real setup -- investigate)' };
+      continue;
+    }
 
     // Candidate grid: ANCHORED to the current live target (so the sweep can't skip past
     // the already-validated region) UNIONED with percentiles of the true MFE distribution
@@ -185,7 +194,11 @@ async function main() {
     const splitIdx = Math.floor(numWalked * (2 / 3));
     const eligible = candidateResults.filter(c => c.targetHits >= MIN_TARGET_HITS);
 
-    if (!eligible.length) { funnel.noWalkedData++; continue; }
+    if (!eligible.length) {
+      funnel.noWalkedData++;
+      exclusions[setupType] = { reason: 'no_candidate_cleared_thin_tail', detail: `N=${numWalked}, best candidate targetHits=${Math.max(...candidateResults.map(c => c.targetHits), 0)} (need >=${MIN_TARGET_HITS})` };
+      continue;
+    }
 
     // Pick best-in-sample among ELIGIBLE candidates only (using first-2/3 EV).
     let bestInSample = null;
@@ -207,7 +220,11 @@ async function main() {
       return isEv > 0;
     });
 
-    if (!plateauPassed) { funnel.noPlateauPass++; continue; }
+    if (!plateauPassed) {
+      funnel.noPlateauPass++;
+      exclusions[setupType] = { reason: 'failed_plateau_check', detail: `best candidate T=${bestInSample.target} (isEv=$${bestInSample.isEv.toFixed(2)}) is an isolated spike -- neighbor(s) at T=${neighborTargets.join(',')} are thin or non-positive` };
+      continue;
+    }
 
     const oosSlice = bestInSample.events.slice(splitIdx);
     const oosEv = oosSlice.reduce((s, e) => s + e.pnl, 0) / (numWalked - splitIdx);
@@ -219,10 +236,18 @@ async function main() {
       || candidateResults.find(c => Math.abs(c.target - oldTarget) < 0.5);
     const baselineEv = baselineCand ? baselineCand.events.reduce((s, e) => s + e.pnl, 0) / numWalked : null;
 
-    if (baselineEv === null || !(oosEv > 0 && fullEv > baselineEv)) { funnel.failedOosOrBaseline++; continue; }
+    if (baselineEv === null || !(oosEv > 0 && fullEv > baselineEv)) {
+      funnel.failedOosOrBaseline++;
+      exclusions[setupType] = { reason: baselineEv === null ? 'no_baseline_candidate' : 'failed_oos_or_baseline', detail: baselineEv === null ? 'old live target was not among the candidate set (should not happen -- investigate)' : `T=${bestInSample.target}: oosEv=$${oosEv.toFixed(2)} (need >0), fullEv=$${fullEv.toFixed(2)} vs baselineEv=$${baselineEv.toFixed(2)}` };
+      continue;
+    }
 
     const rigor = computeRigor(bestInSample.events, { pnlFn: e => e.pnl });
-    if (!rigor.clean) { funnel.notRigorClean++; continue; }
+    if (!rigor.clean) {
+      funnel.notRigorClean++;
+      exclusions[setupType] = { reason: 'not_rigor_clean', detail: `T=${bestInSample.target}: ${JSON.stringify(rigor)}` };
+      continue;
+    }
 
     funnel.survived++;
     results[setupType] = {
@@ -234,6 +259,8 @@ async function main() {
     console.log(`${setupType}: stop=${stop} oldTarget=${oldTarget} (baselineEv=$${baselineEv.toFixed(2)}) -> NEW target=${bestInSample.target} fullEv=$${fullEv.toFixed(2)} oosEv=$${oosEv.toFixed(2)} (N=${numWalked}, targetHits=${bestInSample.targetHits})`);
   }
   console.log('\nGuardrail funnel:', JSON.stringify(funnel));
+  console.log('\nPer-setup exclusion reasons:');
+  for (const [st, ex] of Object.entries(exclusions)) console.log(`  ${st}: ${ex.reason} -- ${ex.detail}`);
 
   const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
   for (const [setupType, r] of Object.entries(results)) {
