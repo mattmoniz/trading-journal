@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-19: Checked the live suppression pipeline for the same bugs — clean, but found a real staleness consequence instead
+
+Closes `OPEN_DECISION` `live_setup_status_pipeline_likely_has_same_ev_bugs`. Read `backtest_setup_status.mjs` directly rather than leaving it flagged. **It's clean**: EV is computed straight from `AVG(actual_pnl)` (already commission-exact, no dpp approximation) with no `mae_points`/`mfe_points` candidate sweep at all — neither of today's two bugs apply.
+
+But that check surfaced a real, different consequence: `actual_pnl` for historical trades reflects whatever target was live *when each trade fired* — so a setup whose target just got corrected has its SUPPRESS/PROMOTE decision computed against stale, pre-correction history. Confirmed concretely: **`PD_LOW_FADE_LONG` is currently SUPPRESSED** (EV=-$15.01/trade under its old 60pt target) despite its corrected 143pt target showing one of the *largest* walk-forward improvements of all 19 (+$3,480, trade count 11→74). 5 more are ACTIVE but borderline (within $10 of the -$5 SUPPRESS bar): `PD_POC_FADE_LONG`, `FLOOR_R2_FADE_SHORT`, `PD_IB_HIGH_FADE_LONG`, `CAM_S2_FADE_SHORT`, `IB_MID_SCALP_FADE_LONG`.
+
+**Verified this self-heals, no further bug to fix**: `liveStats._opt` (which now holds the corrected target) is read for both ACTIVE and SHADOW candidate construction in `acd.js` — so `PD_LOW_FADE_LONG`'s SHADOW trades going forward will use the corrected target, and the existing PROMOTE mechanism (N≥15 in the 90-day window, WR≥52%, EV>0 — a deliberate anti-fabrication floor) will recover it automatically once enough data proves the improvement. Not instant, but not a dead end either. Added a session-start hook section (`CORRECTED-TARGET-BUT-SUPPRESSED WATCH`) making this visible every session rather than leaving it to be rediscovered by accident.
+
 ## ✅ 2026-07-19: The corrected target methodology is wired LIVE — 19/103 setup_types now use it, durably
 
 Closes the target-calibration thread's last remaining item: `OPEN_DECISION` `promote_18_layer1_corrected_targets` is RESOLVED. Full account in [docs/TARGET_CALIBRATION_SPEC.md](TARGET_CALIBRATION_SPEC.md). Short version:
