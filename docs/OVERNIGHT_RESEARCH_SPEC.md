@@ -181,3 +181,59 @@ standing convention). `RESEARCH_CLAIM` `OVERNIGHT_OPTIMAL_STOP` recorded (CONFIR
 which remains separate, unstarted follow-on work. The two are complementary: this gives
 overnight levels a real baseline stop/target; the trailing mechanism (once Part 3 step 1's
 sequence-tracking fix lands) would be an additional, move-size-conditional refinement on top.
+
+## Part 5 — Scoping the 1-year Globex-inclusive prop challenge (user request, 2026-07-20)
+
+User wants a full 1-year prop-account walkthrough that includes Globex/overnight trading, now
+that overnight has its own real calibration (Part 4). This closes a real gap: nothing before
+this point had scoped how RTH and Globex actually COMBINE into one challenge — the two sides
+of this codebase's data are fundamentally different in kind, and that difference must be
+disclosed, not glossed over.
+
+**The core asymmetry**: RTH has ~103 setup_types with real (if ~80% `BACKFILL`-tainted) trade
+history in `active_setups`, each with its own live `OPTIMAL_STOP` calibration already computed
+by the scheduled pipeline. Globex/overnight has almost no real fired history — only 4
+dedicated setup_types (`PD_VAH_FADE_SHORT`/`PD_VAL_FADE_LONG`/`PD_POC_FADE_SHORT/LONG` via
+`detectGlobexSetup()`), each with N=4-6 (checked earlier this session, too thin to use as-is).
+**The only way to include "Globex" in a year-long challenge is the simulated 52-level
+population this entire session's overnight thread has been built on** — bar-walked touches
+against real `level_prices` values, using the just-built `OVERNIGHT_OPTIMAL_STOP` calibration
+(Part 4) instead of the flat 90/40 placeholder used in every earlier overnight walkthrough
+today.
+
+**Design, resolved**:
+1. **RTH leg**: real `active_setups` history for the full live-eligible setup roster (same
+   population as the earlier `LEGACY_ROLLING`/`CURRENT_VALIDATED_ROSTER` walkthrough,
+   `scratch/backtest_prop_2yr_walkforward_CORRECTED_TARGETS.mjs`-style — reuse that script's
+   day-loop/DLL structure, don't rewrite it), each trade's real `actual_pnl` as historically
+   resolved.
+2. **Globex leg**: simulated touches from the 52-level wider-window population (reuse
+   `scripts/calibrate_overnight_optimal_stops_20260720.mjs`'s exact window-construction/
+   touch-detection code), each trade PRICED using its own level+direction's
+   `OVERNIGHT_OPTIMAL_STOP` calibrated stop/target where one exists (15 combinations from
+   Part 4), falling back to the flat 90/40 default for the other 87 (same fallback convention
+   `update_optimal_stops.mjs` itself uses for RTH setups that don't clear its own guardrails —
+   consistent, not a new pattern).
+3. **Merge chronologically**: one day-loop over the full 1-year window, combining both legs'
+   trades by `fired_at` timestamp (Globex trades fire overnight/pre-market, RTH trades fire
+   9:30-4:00 — they interleave by calendar day, never by literal minute-of-day collision).
+   Apply DLL/lockout across the COMBINED day (a Globex loss overnight should count against
+   the same day's RTH DLL budget, matching how a real prop account actually works — the
+   day's cumulative P&L doesn't reset at 9:30 AM).
+4. **Eligibility**: RTH trades use the real, already-computed live `SETUP_STATUS`/rolling
+   eligibility (or the same self-computed rolling `n≥20 && ev≥-5` used in the earlier
+   walkthrough, for consistency with that comparison). Globex trades use a freshly
+   self-computed rolling eligibility over the simulated population (can't reuse live
+   `SETUP_STATUS` — nothing Globex-specific is wired there), same as every Globex walkthrough
+   today has already done.
+5. **Mandatory disclosure, prominently, in the output itself** (not buried in a caveat
+   paragraph): this is a HYBRID of real historical account behavior (RTH leg) and a pure
+   price-action simulation that never fired live (Globex leg, except the 4 already-checked
+   thin setups). Report the two legs' contribution to total P&L separately, not just a single
+   blended number, so it's always clear how much of any headline figure depends on simulated
+   vs. real trade outcomes — same spirit as the existing `origin_status` (`BACKFILL` vs
+   `ACTIVE`/`SHADOW`) disclosure already standard for RTH-only walkthroughs.
+
+**Not yet built.** This section is the scoping a fresh context needs to start the build
+immediately — the actual script (day-loop merge, DLL wrapper, dual-leg reporting) is the next
+concrete step, either continuing in this session or picked up fresh.
