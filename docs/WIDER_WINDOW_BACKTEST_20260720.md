@@ -215,3 +215,14 @@ spot-checked on its RTH-only side (`CAM_R4_SHORT`), not its 24hr side. `RESEARCH
 `ib_wider_window_reimpl_disagreement` recorded. `OPEN_DECISION`
 `wider_window_level_fade_backtest_findings_20260720` updated (still PENDING, HIGH) with
 this narrower, corrected scope.
+
+## ⚠️ UPDATE 2026-07-20 (later same day): 59-level table re-checked more thoroughly — 5/6 spot-checked rows now reproduce closely, one real bug found and fixed along the way
+
+Spot-checked `CAM_R1`/`FLOOR_PIVOT`/`PW_HIGH` (both directions, `scripts/verify_prior_period_wider_window_20260720.mjs`) before building a past-year "24hr trading cycle" prop walkthrough on top of this table. Found and fixed two of my own methodology bugs before trusting anything:
+
+1. **Wrong window direction on the first attempt** — extended forward past today's close instead of backward into the overnight session preceding RTH open. Confirmed the correct direction from this doc's own `ONH`/`ONL` caveat above ("activated it at 18:00 same as other prior-period levels").
+2. **A flat 240-bar (4hr) resolution cap was starving overnight-fired trades of the time they need to resolve** — confirmed directly (RTH: 11/238 `EXPIRED`; WIDE: 122/352 `EXPIRED`, same stop/target). Fixed by resolving to the window's own natural end (session close) instead of a fixed clock-time cap.
+
+After both fixes, **5 of 6 spot-checked rows reproduce the original report reasonably closely** (same sign, similar N and EV magnitude) — `CAM_R1_SHORT` remains a real, unexplained outlier (sign-flipped EV, N roughly halved), flagged for a future look but not chased further. **Re-applied the same resolution-cap fix to the earlier `IB_HIGH_SHORT`/`IB_LOW_LONG` same-day-forming-levels check**: N was unchanged (279/249 — ruling out the cap as the cause of *that* disagreement) but EV flipped sign again between attempts (+$2.63 → -$3.75) — this strengthens, not weakens, the "confirmed unreliable" conclusion for the same-day-forming table specifically, since the result is visibly unstable to small, reasonable methodology choices in a way the prior-period table isn't.
+
+**Net effect on trust**: the 59-level prior-period table is now meaningfully more credible than the "spot-checked on one row's RTH side only" caveat implied — not fully validated (1 of 6 spot-checked rows is still an open discrepancy), but no longer in the same "confirmed unreliable" category as the same-day-forming table. Used as the foundation for `scripts/backtest_24hr_prop_walkthrough_1yr_20260720.mjs` (see `docs/OPEN_THREADS.md` for that build, including 3 further rounds of level-list contamination found and fixed along the way — unrelated to the window/resolution-cap fixes here).

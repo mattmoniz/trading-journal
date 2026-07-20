@@ -85,7 +85,14 @@ async function main() {
         if (Math.abs(b.close - lv.IB_HIGH) > 15) continue;
         if (!(prev.close > lv.IB_HIGH)) continue; // must be approaching from above for SHORT
         const entry = b.close;
-        const r = resolve(allBars, i, 'SHORT', entry, entry + STOP, entry - TARGET, 240);
+        // Resolve to the window's own natural end, not a flat 240-bar (4hr) cap -- found
+        // 2026-07-20 (2nd pass) that a fixed clock-time cap starves overnight-fired trades
+        // of the time they need (overnight NQ moves slower), silently deflating WR via
+        // excess artificial EXPIRED outcomes. Re-verified scripts/
+        // verify_prior_period_wider_window_20260720.mjs's numbers moved substantially
+        // closer to the original report after this exact fix -- redoing this script the
+        // same way before trusting the original "confirmed unreliable" conclusion.
+        const r = resolve(allBars, i, 'SHORT', entry, entry + STOP, entry - TARGET, endIdx - i);
         results.IB_HIGH_SHORT.push({ date: d, ...r });
         break; // one fire per window, matches detectLevelFades()'s `fired` set
       }
@@ -96,7 +103,7 @@ async function main() {
       if (Math.abs(b.close - lv.IB_LOW) > 15) continue;
       if (!(prev.close < lv.IB_LOW)) continue; // must be approaching from below for LONG
       const entry = b.close;
-      const r = resolve(allBars, i, 'LONG', entry, entry - STOP, entry + TARGET, 240);
+      const r = resolve(allBars, i, 'LONG', entry, entry - STOP, entry + TARGET, endIdx - i);
       results.IB_LOW_LONG.push({ date: d, ...r });
       break;
     }
