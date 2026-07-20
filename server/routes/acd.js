@@ -7125,6 +7125,52 @@ export default function createACDRouter(io) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Rigor/trend stability coverage — the aggregate answer to "does the live setup
+  // roster's backtested edge actually hold up over time." Reads the SAME computeRigor()/
+  // classifyTrend() output backtest_setup_status.mjs has been writing into every
+  // SETUP_STATUS row's notes.rigor since 2026-07-14 (also already exposed per-row via
+  // /performance-audit/unified's stabilityTrend/stabilityStable fields and shown in
+  // BacktestView.jsx's "Stability" column) — this endpoint just adds the missing
+  // aggregate view (breakdown counts + the DEGRADING setups called out by name) that
+  // nothing surfaced before. No new computation, purely a summary of existing data.
+  router.get('/acd/rigor-stability-coverage', async (req, res) => {
+    try {
+      const r = await query(`
+        SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade, recommendation, notes, run_date
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const live = r.rows.filter(row => !['SUPPRESS', 'THIN_N'].includes(row.recommendation));
+      const tally = {};
+      const degrading = [];
+      for (const row of live) {
+        let n = null;
+        try { n = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes; } catch (_) {}
+        const rigor = n?.rigor;
+        const key = !rigor || rigor.top5_day_pct == null ? 'NO_DATA'
+          : rigor.three_way_stable === true ? 'STABLE'
+          : rigor.trend || 'NO_DATA';
+        tally[key] = (tally[key] || 0) + 1;
+        if (key === 'DEGRADING') {
+          degrading.push({
+            signal_name: row.signal_name, n: row.sample_size,
+            ev: row.ev_per_trade != null ? Math.round(row.ev_per_trade * 100) / 100 : null,
+            thirds: rigor.thirds,
+          });
+        }
+      }
+      degrading.sort((a, b) => b.n - a.n);
+      const lastRunDate = live.reduce((max, row) => (!max || row.run_date > max ? row.run_date : max), null);
+      res.json({
+        total: live.length,
+        tally,
+        degrading,
+        lastRunDate,
+        schedule: 'Re-evaluated weekly (Sun 10:30 PM ET, scripts/run_weekly_backtests.sh) via backtest_setup_status.mjs — every live setup_type, every run.',
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════
   // Unified Setup/Edge Table — single source of truth for all tradeable signals
   // ═══════════════════════════════════════════════════════════════════════

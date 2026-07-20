@@ -477,6 +477,79 @@ function TargetCalibrationCoveragePanel() {
   );
 }
 
+// Aggregate view of computeRigor()/classifyTrend() (server/services/rigorDiagnostics.js,
+// server/routes/acd.js's /acd/rigor-stability-coverage) — has been computed weekly by
+// backtest_setup_status.mjs and shown per-row in BacktestView.jsx's "Stability" column
+// since 2026-07-14, but nothing ever summarized it across the whole live roster in one
+// place until this panel (2026-07-20). Answers "does the live setup roster's backtested
+// edge actually hold up chronologically" without requiring a manual DB query.
+function RigorStabilityPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/acd/rigor-stability-coverage`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+
+  const TREND_LABELS = {
+    STABLE: { label: 'Stable (consistent sign)', color: '#4ade80' },
+    IMPROVING: { label: 'Improving (was worse, now positive)', color: '#4ade80' },
+    NOISY_BUT_STABLE: { label: 'Noisy but net-stable', color: '#94a3b8' },
+    AMBIGUOUS: { label: 'Ambiguous', color: '#fbbf24' },
+    THIN: { label: 'Too thin recently to classify', color: '#64748b' },
+    DEGRADING: { label: 'Degrading (was better, now negative)', color: '#f87171' },
+    NO_DATA: { label: 'No rigor data yet', color: '#475569' },
+  };
+  const orderedKeys = ['STABLE', 'IMPROVING', 'NOISY_BUT_STABLE', 'AMBIGUOUS', 'THIN', 'DEGRADING', 'NO_DATA'];
+  const daysSince = data.lastRunDate ? Math.floor((Date.now() - new Date(data.lastRunDate + 'T12:00:00Z').getTime()) / 86400000) : null;
+
+  return (
+    <div style={S.section}>
+      <div style={S.sectionTitle}>Backtest Stability — Live Roster</div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#f87171' }}>{data.tally.DEGRADING || 0}<span style={{ fontSize: 14, color: '#64748b' }}>/{data.total}</span></div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>setup_types currently degrading (recent EV trend worse than early history, now negative)</div>
+        {daysSince != null && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: daysSince <= 1 ? '#22c55e' : '#f59e0b', background: '#0f172a', border: `1px solid ${daysSince <= 1 ? '#14532d' : '#713f12'}`, borderRadius: 4, padding: '2px 8px' }}>
+            last evaluated {data.lastRunDate} ({daysSince}d ago)
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+        {orderedKeys.filter(k => data.tally[k] > 0).map(k => {
+          const meta = TREND_LABELS[k];
+          return (
+            <div key={k} style={{ ...S.card, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 12, color: '#cbd5e1' }}>{meta.label}</span>
+              <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: meta.color }}>{data.tally[k]}</span>
+            </div>
+          );
+        })}
+      </div>
+      {data.degrading?.length > 0 && (
+        <div style={{ ...S.card, marginBottom: 10, padding: '10px 14px' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>Degrading — worth a look</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {data.degrading.map(d => (
+              <div key={d.signal_name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
+                <span style={{ color: '#cbd5e1' }}>{d.signal_name} (N={d.n})</span>
+                <span style={{ fontFamily: 'monospace', color: '#94a3b8' }}>
+                  {d.thirds ? `$${Math.round(d.thirds.ev1)} → $${Math.round(d.thirds.ev2)} → $${Math.round(d.thirds.ev3)}` : ''}
+                  <span style={{ color: '#f87171', fontWeight: 700 }}> (EV ${d.ev})</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        Splits each setup's full trade history into 3 chronological thirds and checks whether EV keeps the same sign throughout. "Unstable" isn't automatically bad — IMPROVING means the edge is getting better, not worse. Informational only, does not auto-suppress. {data.schedule}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -676,6 +749,9 @@ export default function AlphaEngineOverview() {
 
       {/* Target Calibration Coverage */}
       <TargetCalibrationCoveragePanel />
+
+      {/* Backtest Stability (rigor/trend) */}
+      <RigorStabilityPanel />
 
       {/* Size Multiplier Stack */}
       <div style={S.section}>
