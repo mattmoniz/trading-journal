@@ -54,11 +54,20 @@ async function run() {
   // verifying the Unified Signal Table actually showed the new setup.
   const { rows: [{ today }] } = await query(`SELECT CURRENT_DATE::text as today`);
 
-  // All-time stats per setup_type (includes SHADOW rows — they still resolve)
+  // All-time stats per setup_type (includes SHADOW rows — they still resolve). real_n
+  // counts only ACTIVE/SHADOW-origin trades -- added 2026-07-20 alongside the PROMOTE
+  // fix. n itself blends in BACKFILL (synthetic, never fired live) and UNKNOWN-origin
+  // (pre-2026-07-09, unrecoverable provenance) rows -- confirmed live that of all 9,734
+  // TARGET_HIT/STOP_HIT rows, only 101 (1%) are real. The SUPPRESS_MIN_N=20 floor below
+  // was already being checked against this blended n, silently satisfying this
+  // codebase's own N>=20 hard floor with synthetic data for the vast majority of the
+  // live roster (all 73 non-suppressed setup_types had real_n<20, most had real_n=0).
+  // See CLAUDE.md / OPEN_DECISION setup_status_calibration_ignores_origin_status_backfill.
   const allTimeQ = await query(`
     SELECT
       setup_type,
       COUNT(*) AS n,
+      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
       SUM(actual_pnl)::float AS total_pnl
@@ -176,6 +185,7 @@ async function run() {
   for (const r of allTimeQ.rows) {
     const type   = r.setup_type;
     const n      = +r.n;
+    const realN  = +r.real_n;
     const wr     = +r.wr;
     const ev     = +r.ev;
     const rec90  = recent[type];
@@ -235,11 +245,21 @@ async function run() {
       // Auto-clears when N reaches 20 and EV qualifies (next weekly run).
       recommendation = 'THIN_N';
       console.log(`  THIN_N   ${type.padEnd(38)} N=${n} EV=$${ev.toFixed(0)} — shadow until N≥20`);
+    } else if (realN < SUPPRESS_MIN_N) {
+      // Blended n clears the N>=20 floor, but real_n (ACTIVE/SHADOW-origin only, excluding
+      // BACKFILL/UNKNOWN) doesn't -- the blended count was satisfying this codebase's own
+      // N>=20 hard floor with synthetic data. Found 2026-07-20: all 73 then-non-suppressed
+      // setup_types had real_n<20 (most had real_n=0) despite blended n often being 100+.
+      // Same THIN_N/SHADOW treatment as the low-blended-n case above -- not a harsher
+      // suppression, just honest about what's actually been validated. Auto-clears the
+      // same way once real_n reaches 20 (next weekly run reads fresh origin_status counts).
+      recommendation = 'THIN_N';
+      console.log(`  THIN_N   ${type.padEnd(38)} N=${n} (real=${realN}) EV=$${ev.toFixed(0)} — blended N clears the floor, real N doesn't`);
     } else {
       unchanged++;
     }
 
-    results.push({ type, n, wr, ev, totalPnl: +r.total_pnl, recommendation, rec90 });
+    results.push({ type, n, realN, wr, ev, totalPnl: +r.total_pnl, recommendation, rec90 });
   }
 
   console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged`);
@@ -256,10 +276,11 @@ async function run() {
     if (trend && trend in trendCounts) trendCounts[trend]++;
     const notes = JSON.stringify({
       all_time_n:  r.n,
+      all_time_real_n: r.realN ?? null,
       all_time_wr: +(r.wr * 100).toFixed(1),
       all_time_ev: +r.ev.toFixed(2),
       total_pnl:   +r.totalPnl.toFixed(2),
-      recent_90d:  r.rec90 ? { n: +r.rec90.n, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
+      recent_90d:  r.rec90 ? { n: +r.rec90.n, real_n: r.rec90.real_n != null ? +r.rec90.real_n : null, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
       rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
       ...(r.dayTypeBreakdown ? { day_type_breakdown: r.dayTypeBreakdown.map(b => ({ day_type: b.dayType, n: b.n, ev: +b.ev.toFixed(2) })) } : {}),
     });
