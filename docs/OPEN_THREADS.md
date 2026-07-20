@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-20 (same session, continued): fresh holdout test resolves the whole overnight-calibration thread — real negative, do not wire in
+
+Built the fresh holdout test flagged in the last entry: calibrated `OVERNIGHT_OPTIMAL_STOP` using ONLY touches fired before 2025-07-20 (train), tested those frozen values against ONLY touches fired on/after (test — zero overlap with training or the calibration's own internal OOS check, unlike the earlier full-history version). **Result: the calibration makes things worse on genuinely new data** — held-out year flat P&L $6,357.00 vs calibrated **-$4,717.00** (N=2,618, 32 combos), only 13/32 improve.
+
+Dispatched an independent audit to Gemini (a separate standalone reimplementation, not a re-read of the script) given how much rode on this result: confirmed zero train/test leakage, independently reproduced 5 spot-checked combos exactly, and confirmed via `computeRigor` that the underperformance is broad and consistent across the whole held-out year (284 distinct dates, 4.1% top-5-day concentration, stable across chronological thirds) — not a few bad days masquerading as a real effect.
+
+**Resolved `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`: do not wire any overnight setup type into live detection using this calibration.** The per-level EV-sweep+corrected-resim approach that works for RTH doesn't generalize here with current data volume (27-109 touches per combo). Not a dead end — the existing weekly `SETUP_STATUS` pipeline would pick this up automatically the same way it does for every RTH setup type, the moment there's real data to work with; the honest path forward is more overnight history accumulating naturally, not more engineering. Full account: `docs/OVERNIGHT_RESEARCH_SPEC.md` Part 6.
+
 ## ✅ 2026-07-20 (same session, continued): built and audited the 1-year Globex-inclusive prop challenge — mechanics sound, but the headline number needs a fresh-holdout caveat
 
 Built `scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs` per the Part 5 scoping — merges real RTH `active_setups` history with simulated Globex touches (priced via the 15 `OVERNIGHT_OPTIMAL_STOP` combos, flat fallback otherwise), one shared chronological DLL lockout across both legs. Audited the merge/DLL logic via direct source read — confirmed correct (real chronological interleave, one shared lockout loop, fresh `SETUP_STATUS` query).

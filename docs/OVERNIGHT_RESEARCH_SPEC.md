@@ -265,3 +265,38 @@ isn't pure in-sample refitting, but the AGGREGATE validation window overlaps hea
 was already checked). `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`
 (MEDIUM) flags the clean fix: freeze the calibration using only data through 1 year ago, then
 test purely against the following year, untouched by any part of calibration. Not yet built.
+
+## Part 6 — Fresh holdout run: the calibration does NOT generalize (resolved, 2026-07-20)
+
+Built `scripts/calibrate_overnight_optimal_stops_fresh_holdout_20260720.mjs` — calibrates
+using ONLY touches fired before 2025-07-20 (train), tests the FROZEN stop/target values
+against ONLY touches fired on/after 2025-07-20 (test — genuinely never seen by any part of
+calibration, zero overlap with training or the calibration's own internal OOS check).
+
+**Result: the calibration makes things WORSE, not better.** Held-out year (never touched by
+calibration): flat-default P&L $6,357.00 vs. calibrated P&L **-$4,717.00** (N=2,618, pooled
+across 32 combos that had both a frozen calibration and enough test touches). Only 13 of 32
+combos improve; the rest get worse, several substantially (`PD_LOW_SHORT` $16.03→-$9.54/trade,
+`PD_IB_HIGH_LONG` $22.48→-$2.70/trade, `CAM_S1_LONG` $25.50→-$1.75/trade).
+
+**Independently audited by Gemini** (a genuinely separate standalone reimplementation, not
+just a re-read of the script): confirmed the train/test wall has zero leakage (traced
+`computeCorrectedTarget`'s own 390-bar walk and confirmed it can't reach post-cutoff data from
+a pre-cutoff touch); independently re-derived 5 spot-checked combos (3 that worsened, 2 that
+improved) and matched every one exactly; ran `computeRigor` on all 2,618 test events and
+confirmed the underperformance is broad and consistent across the whole held-out year (284
+distinct dates, top-5-day concentration only 4.1%, stable across chronological thirds:
+-$3.20/-$1.35/-$0.86 per trade — still negative throughout, though trending less bad).
+Also checked RTH context: 68 of 113 RTH setup_types with N≥20 also have N<100, so thin-N
+calibration isn't unique to overnight — but this specific overnight attempt still failed to
+generalize at similar N, suggesting overnight's own noise characteristics (or simply not
+enough real history yet) make per-level calibration at N=27-109 unreliable right now.
+
+**Verdict, resolved**: `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`
+closed. **Do not wire any overnight setup type into live detection using this calibration** —
+the per-level `OPTIMAL_STOP`-equivalent approach (Part 4) does not generalize with current
+data volume. This is not a dead end: the standing weekly `SETUP_STATUS` pipeline would pick up
+any wired-in overnight setup type automatically once real trades accumulate (the same generic
+mechanism already governing every RTH setup type — no new suppression logic needed), so the
+honest path forward is more real overnight history, not more engineering. Revisit once the
+per-combo touch counts are meaningfully larger than the 27-109 range seen here.
