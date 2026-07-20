@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-20 (same session, continued): built and audited the 1-year Globex-inclusive prop challenge — mechanics sound, but the headline number needs a fresh-holdout caveat
+
+Built `scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs` per the Part 5 scoping — merges real RTH `active_setups` history with simulated Globex touches (priced via the 15 `OVERNIGHT_OPTIMAL_STOP` combos, flat fallback otherwise), one shared chronological DLL lockout across both legs. Audited the merge/DLL logic via direct source read — confirmed correct (real chronological interleave, one shared lockout loop, fresh `SETUP_STATUS` query).
+
+**Result**: combined P&L is dramatically higher with Globex included — `LEGACY_ROLLING` $47.1k/$42.1k/$35.6k (vs $21.6k/$14.7k/$9.8k RTH-only) at $200/$400/$600 DLL; `CURRENT_VALIDATED_ROSTER` $32.1k/$32.2k/$31.6k (vs flat -$954.50 RTH-only). The Globex leg contributes ~$32.7k-$33.3k independently, consistent across both RTH scenarios (confirmed as expected, not a bug — Globex always fires before that day's RTH trades chronologically, so it's never affected by which RTH scenario is tested).
+
+**Real caveat found during audit, before this could be over-trusted**: the `OVERNIGHT_OPTIMAL_STOP` lookup has no date restriction — it uses calibration derived from the FULL 2.68-year history, and that calibration's own internal out-of-sample check covers roughly the same recent ~11-12 months this new test calls "the past year." So the ~$32-33k figure substantially re-aggregates the same held-out evidence already used to validate the 15 calibrations, not fresh confirmation of it. `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test` (MEDIUM) flags the clean fix: freeze calibration through 1 year ago, test purely against the untouched following year. Full account: `docs/OVERNIGHT_RESEARCH_SPEC.md` Part 5.
+
 ## ✅ 2026-07-20 (same session, continued): overnight gets its own OPTIMAL_STOP-equivalent, built via real code reuse — 15/102 combinations genuinely calibrated
 
 User confirmed overnight should have its own calibration, specifically using RTH's REAL methodology (not the cruder pooled-percentile shortcut tested earlier today). Dispatched with a spec explicitly requiring import-and-call of the real, live, already-guardrailed functions rather than reimplementation — `sweepOptimalStopAndTarget` (`scripts/update_optimal_stops.mjs`) and `computeCorrectedTarget` (`server/services/targetCalibrationService.js`). Confirmed via direct source read of the resulting `scripts/calibrate_overnight_optimal_stops_20260720.mjs`: both real functions imported and called with correctly-shaped data, no local reimplementation anywhere.

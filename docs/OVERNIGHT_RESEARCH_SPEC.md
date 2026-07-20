@@ -234,6 +234,34 @@ today.
    vs. real trade outcomes — same spirit as the existing `origin_status` (`BACKFILL` vs
    `ACTIVE`/`SHADOW`) disclosure already standard for RTH-only walkthroughs.
 
-**Not yet built.** This section is the scoping a fresh context needs to start the build
-immediately — the actual script (day-loop merge, DLL wrapper, dual-leg reporting) is the next
-concrete step, either continuing in this session or picked up fresh.
+**Built and audited, same session (2026-07-20)**: `scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs`.
+Merge mechanics confirmed correct by direct source read — both legs' trades combined into one
+chronological list per day (`[...rth, ...globex].sort(by fired_at)`), one shared DLL-lockout
+loop walks that combined list, roster query is a fresh live `SETUP_STATUS` read, not
+hardcoded. Full matrix: `docs/GLOBEX_INCLUSIVE_1YR_PROP_RESULTS_20260720.md`.
+
+| RTH scenario | Globex | DLL $200 | DLL $400 | DLL $600 |
+|---|---|---|---|---|
+| `LEGACY_ROLLING` | Excluded | $21,565.51 | $14,707.09 | $9,840.83 |
+| `LEGACY_ROLLING` | Included | $47,102.69 | $42,136.31 | $35,614.21 |
+| `CURRENT_VALIDATED_ROSTER` | Excluded | -$954.50 | -$954.50 | -$954.50 |
+| `CURRENT_VALIDATED_ROSTER` | Included | $32,131.50 | $32,188.00 | $31,626.00 |
+
+The Globex leg contributes ~$32.7k-$33.3k independently across every Globex-included run —
+nearly identical across both RTH scenarios at matching DLL, confirmed as the CORRECT expected
+behavior (Globex always fires chronologically before that day's RTH trades, so it's never
+affected by which RTH scenario is being tested), not a bug.
+
+**A real caveat was found during audit, not yet resolved — do not treat the ~$32-33k Globex
+figure as fresh confirmation of the Part 4 calibration.** The `OVERNIGHT_OPTIMAL_STOP` lookup
+this script uses has no date restriction — it reads calibration derived from the FULL
+available history (2023-11-16 to 2026-07-19, ~2.68 years). `computeCorrectedTarget()`'s own
+internal chronological OOS check (the last 1/3 of each combo's own touch history) covers
+roughly the same recent ~11-12 months this new test calls "the past year." So this result
+substantially re-aggregates the SAME held-out evidence already used to validate the 15
+calibrated combos individually — a real but weaker claim than a genuinely fresh out-of-sample
+test (the stop/target VALUES were chosen from earlier, non-overlapping training data, so this
+isn't pure in-sample refitting, but the AGGREGATE validation window overlaps heavily with what
+was already checked). `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`
+(MEDIUM) flags the clean fix: freeze the calibration using only data through 1 year ago, then
+test purely against the following year, untouched by any part of calibration. Not yet built.
