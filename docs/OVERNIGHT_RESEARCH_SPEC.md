@@ -143,3 +143,41 @@ flags step 1 specifically (HIGH — it's what makes §1.6's headline number hone
 `OPEN_DECISION` `overnight_bigmove_trailing_mechanism_test` flags steps 2-5 as a single
 follow-on body of work (MEDIUM — real but not urgent, no live exposure either way since
 nothing here is wired).
+
+## Part 4 — Overnight gets its own calibration, using RTH's REAL methodology (done, 2026-07-20)
+
+Direct follow-up: user confirmed overnight should have its own calibration (not share RTH's,
+not use a blanket flat default), specifically using the SAME rigorous methodology RTH's real
+`OPTIMAL_STOP` pipeline uses — not the cruder pooled-percentile shortcut §1.3 already showed
+doesn't generalize. Built `scripts/calibrate_overnight_optimal_stops_20260720.mjs`, which
+achieves genuine methodology parity the strongest possible way: it **imports and calls the
+real, live, already-guardrailed functions directly** — `sweepOptimalStopAndTarget` from
+`scripts/update_optimal_stops.mjs` and `computeCorrectedTarget` from
+`server/services/targetCalibrationService.js` — rather than reimplementing either one.
+Confirmed via direct source read: no local reimplementation exists anywhere in the script.
+
+**Result**: 102 level+direction combinations tested (52 levels × 2 directions, full available
+history, overnight-fired touches only). **61 cleared stage 1** (EV-sweep, N≥20 + thin-tail
+gate — a believable ~60% pass rate). **15 additionally cleared stage 2** (full chronological
+corrected-resim with every guardrail — thin-tail, plateau, OOS split, rigor-clean, beats
+baseline both full-sample and OOS) — a believable, low ~15% pass rate matching RTH's own
+18/103 (17.5%), the trustworthy shape per this doc's own Part 2 lesson ("expect few
+survivors"). Audited before trusting: re-ran the deterministic script myself and reproduced
+byte-identical results; checked all 15 stage-2 corrected targets for the RTH-precedent
+overfitting spike pattern (719.8pt off 1 trade) — none found, all 15 are moderate widenings
+(50-134.8pt) with adequate supporting N (47-243).
+
+**Confirms the premise of this whole part**: the calibrated stops for well-powered levels are
+meaningfully tighter than the flat 90pt placeholder used throughout §1.2/§1.3/§1.6's other
+overnight work — `CAM_R1_LONG` 32pt, `CAM_R3_LONG` 34pt, `FLOOR_R2_LONG` 26pt. Overnight
+genuinely does warrant its own calibration, not a shared or blanket one. Persisted to
+`performance_audit` `signal_type='OVERNIGHT_OPTIMAL_STOP'`, mirroring the real `OPTIMAL_STOP`
+schema exactly (same columns, same query pattern — queryable the same way, including via
+`DISTINCT ON (signal_name) ... ORDER BY signal_name, run_date DESC` per this table's own
+standing convention). `RESEARCH_CLAIM` `OVERNIGHT_OPTIMAL_STOP` recorded (CONFIRMED).
+
+**Not yet done**: this is the general, always-on overnight calibration (mirrors RTH's base
+`OPTIMAL_STOP`) — it is NOT the big-move-conditional trailing mechanism from Part 3 steps 1-5,
+which remains separate, unstarted follow-on work. The two are complementary: this gives
+overnight levels a real baseline stop/target; the trailing mechanism (once Part 3 step 1's
+sequence-tracking fix lands) would be an additional, move-size-conditional refinement on top.
