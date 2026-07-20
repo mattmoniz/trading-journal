@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-20 (same session, continued): consolidated all of today's overnight research into `docs/OVERNIGHT_RESEARCH_SPEC.md`, cross-referenced against the RTH large-movement calibration playbook
+
+User asked to write up all of today's overnight threads thoroughly and explicitly cross-reference how this codebase already solved the analogous RTH problem (a fixed target not capturing how far a big move actually goes — `docs/TARGET_CALIBRATION_SPEC.md`/`docs/SCALEOUT_RUNNER_SPEC.md`). Wrote `docs/OVERNIGHT_RESEARCH_SPEC.md`: Part 1 consolidates the full day's findings (wider-window re-verification, the overnight-calibration overfitting lesson, the taper-timing negative, the pattern-discovery redo, the big-move diagnostics); Part 2 is a line-by-line cross-reference table mapping every RTH lesson (sequence-tracking, efficiency-ratio framing, why a static wider target is structurally the wrong tool, the scale-out/breakeven-trail mechanism that actually worked, the 4-part guardrail stack, the data-resolution floor, same-method baselining, low-survival-rate-as-a-good-sign, wire-durably-or-not-at-all) to its overnight analog; Part 3 is a concrete, ordered next-steps list.
+
+**Real self-correction made while writing this, before it could mislead anyone**: today's "143.2pt left on the table on big-move days" finding has the *exact* flaw the RTH `POST_TARGET_RUNUP` thread's first attempt had (2026-07-18) — it only tracks the running favorable extreme post-target, with no record of whether a real adverse retracement happens first. Amended the `RESEARCH_CLAIM` `overnight_big_move_target_truncation` to flag this explicitly (original number preserved, but marked not-yet-actionable) rather than let it stand as if already validated.
+
+Flagged two new `OPEN_DECISION`s: `overnight_bigmove_target_truncation_needs_sequence_fix` (HIGH — the sequence-tracking fix itself, cheap, should happen before anything else in this thread is trusted) and `overnight_bigmove_trailing_mechanism_test` (MEDIUM — the actual follow-on test, reusing the existing breakeven-trail mechanism already built for RTH rather than testing a recalibrated fixed target, which the cross-reference table argues is the wrong tool here too). Neither done yet — this is a scoped, documented plan, not a completed build.
+
 ## ✅ 2026-07-20 (same session, continued): direct overnight big-move diagnostics — count, MAE/MFE, target truncation, level respect, inception timing
 
 User asked 4 direct questions about the past-year overnight population, answered directly (deterministic, reused today's already-validated 52-level/window/resolution-cap infrastructure, no Gemini dispatch needed — `scripts/analyze_overnight_big_moves_20260720.mjs`):
