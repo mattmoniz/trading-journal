@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import { query } from '../server/db.js';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 const PT     = 2;   // $2/pt NQ micro
 const COMM   = 1;   // $1 round-trip commission
@@ -433,17 +434,34 @@ function pdIbMid(prevBars) {
 // Proximity widened to 15pt (was 10pt) to match live detection and catch approaches that
 // reverse before piercing deeply. confluenceCount tags how many OTHER levels fired within
 // the same bar — feeds CONFLUENCE_AUDIT in performance_audit.
+// Per-level formation gate (ET minute-of-day a level is first known without lookahead),
+// matching the exact convention already established and verified across the 2026-07-14
+// window-mismatch repair waves (scripts/repair_cam_r4_s3_window_mismatch.mjs,
+// repair_top8_window_mismatch.mjs, repair_ib_dependent_window_mismatch.mjs,
+// repair_remaining_window_mismatch.mjs, repair_weekly_vwap_window_mismatch.mjs) — reused
+// here rather than re-derived, since re-deriving per-level formation timing from scratch
+// is exactly the kind of mistake that caused the original CAM_R4/CAM_S3 lookahead bug.
+// Default is RTH_START (570, 9:30 ET) for every prior-period level (prior day/week/month/
+// quarter, floor/camarilla pivots, ONH/ONL, all rolling composites — verified directly
+// against their own computation functions in this file: buildIbMids/buildRollingVAs/
+// buildTwoDayPOC/etc. all window strictly BEFORE the current date, never including it).
+// Only same-day-forming levels get a later gate: OR_HIGH/OR_LOW need the opening range's
+// own bars to complete (575 = bars 570-574), IB-dependent levels need IB to close (630).
+const RTH_START = 570, RTH_END = 960; // 9:30 AM - 4:00 PM ET, matches live acd.js's all-session detection
+const LEVEL_GATES = {
+  OR_HIGH: 575, OR_LOW: 575,
+  IB_HIGH: 630, IB_LOW: 630, IB_MID_SCALP: 630, OR_MID_AFTER_IB: 630,
+};
+
 function detectLevelFades(bars, levels, isMonday) {
   const STOP = isMonday ? 60 : 90, TARGET = isMonday ? 30 : 40;
-  const IB_CLOSE = 630; // 10:30 AM ET = 570 + 60 min
-  const AM_CUT   = 720; // noon cutoff
   const fires = [];
   const fired = new Set();
   for (let i = 1; i < bars.length; i++) {
     const b = bars[i], prev = bars[i-1];
-    if (b.tod < IB_CLOSE) continue; // wait for IB to close
-    if (b.tod >= AM_CUT) break;
+    if (b.tod < RTH_START || b.tod >= RTH_END) continue;
     for (const [name, entry] of Object.entries(levels)) {
+      if (b.tod < (LEVEL_GATES[name] ?? RTH_START)) continue; // not yet formed
       // Level entry can be a plain price or { price, stop, target } for custom params
       const lvl    = (entry !== null && typeof entry === 'object') ? entry.price  : entry;
       const stopPt = (entry !== null && typeof entry === 'object') ? (entry.stop   ?? STOP)   : STOP;
@@ -845,7 +863,7 @@ function detectRsiDiv(bars) {
 }
 
 // ── Write results to performance_audit ───────────────────────────────────────
-async function writeResults(setupName, stats, windowDays, signalType = 'UNIFIED_BACKTEST', recommendation = null) {
+async function writeResults(setupName, stats, windowDays, signalType = 'UNIFIED_BACKTEST', recommendation = null, rigor = null) {
   if (!stats || stats.n === 0) return;
   const wr = stats.decided > 0 ? stats.wr : null;
   const confidence_tier = stats.n < 20 ? 'THIN' : stats.n < 50 ? 'MARGINAL' : 'CONFIDENT';
@@ -854,6 +872,12 @@ async function writeResults(setupName, stats, windowDays, signalType = 'UNIFIED_
     wins: stats.wins,
     confidence_tier,
     p80_mae_winners: stats.p80_mae_winners ?? null,
+    // Chronological EV-sign stability (computeRigor, 2026-07-20) -- this file was the one
+    // pipeline of the "all 4" standing rigor-diagnostic set (CLAUDE.md) that never got this
+    // check, despite being exactly the kind of full-history aggregate backtest it exists to
+    // validate. Only computed for the all-time (window_days=9999) row -- doesn't mean much
+    // on an already-windowed sub-slice. Informational only, does not feed recommendation.
+    ...(rigor ? { rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds } } : {}),
   });
   await query(`
     INSERT INTO performance_audit
@@ -1137,18 +1161,20 @@ async function main() {
     }
 
     const recommendation = classifyUnifiedRecommendation(setupType, statsAll, windowStats[90]);
+    const rigor = statsAll ? computeRigor(trades, { dateField: 'date', pnlFn: t => t.pnl }) : null;
 
     if (statsAll) {
       const wrStr = statsAll.wr != null ? (statsAll.wr*100).toFixed(1)+'%' : 'N/A';
       const evStr = statsAll.evPerTrade != null ? '$'+statsAll.evPerTrade.toFixed(0) : 'N/A';
       const maeStr = statsAll.p50_mae != null ? statsAll.p50_mae.toFixed(0)+'pt' : 'N/A';
       const mfeStr = statsAll.p50_mfe != null ? statsAll.p50_mfe.toFixed(0)+'pt' : 'N/A';
-      console.log(`${setupType.padEnd(35)} ${String(statsAll.n).padStart(4)} ${wrStr.padStart(7)} ${evStr.padStart(10)} ${maeStr.padStart(9)} ${mfeStr.padStart(9)} [${recommendation}]`);
+      const rigorFlag = rigor?.stable === false ? ' ⚠ UNSTABLE' : '';
+      console.log(`${setupType.padEnd(35)} ${String(statsAll.n).padStart(4)} ${wrStr.padStart(7)} ${evStr.padStart(10)} ${maeStr.padStart(9)} ${mfeStr.padStart(9)} [${recommendation}]${rigorFlag}`);
     }
 
     if (!DRY_RUN) {
       // Write all-time (window_days=9999)
-      writePromises.push(writeResults(setupType, statsAll, 9999, 'UNIFIED_BACKTEST', recommendation));
+      writePromises.push(writeResults(setupType, statsAll, 9999, 'UNIFIED_BACKTEST', recommendation, rigor));
       for (const sw of SESSION_WINDOWS) {
         writePromises.push(writeResults(setupType, windowStats[sw], sw));
       }
