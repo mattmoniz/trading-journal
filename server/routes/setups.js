@@ -3,6 +3,7 @@ import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
 import { inferDirection } from '../config/setupTypes.js';
+import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition } from '../config/setupDefinitions.js';
 
 const router = express.Router();
 
@@ -578,6 +579,84 @@ router.get('/setups/backtest', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('[setups/backtest]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Resolve a live setup_type string to its static definition (criteria/window/family) —
+// checks OTHER_SETUP_DEFINITIONS first (exact match: conditional variants, day-type-
+// conditional, momentum patterns — these don't fit the generic {BASE}_FADE_{DIR} shape),
+// then falls back to parsing the standard level-fade naming convention. Returns null for
+// anything genuinely undocumented — the endpoint still returns those rows (setup_type +
+// live numbers, no criteria text) rather than silently hiding them, matching the
+// "discoverable" requirement of this codebase's no-dead-ends convention.
+function resolveDefinition(setupType) {
+  if (OTHER_SETUP_DEFINITIONS[setupType]) {
+    const def = OTHER_SETUP_DEFINITIONS[setupType];
+    const rule = WINDOW_RULES[def.rule];
+    return { ...def, ruleLabel: rule.label, windowDescription: rule.windowDescription, formationGate: def.formationGate ?? rule.formationGate ?? null };
+  }
+  const m = setupType.match(/^(.+)_FADE_(LONG|SHORT)$/);
+  if (m) {
+    const [, base, dir] = m;
+    const def = getLevelFadeDefinition(base);
+    if (def) return { ...def, direction: dir, globexCapable: GLOBEX_CAPABLE_TYPES.has(setupType) };
+  }
+  return null;
+}
+
+// GET /api/setups/reference — the setup definitions page: what each setup IS (criteria,
+// detection window, family) joined against what it's ACTUALLY DOING right now (live
+// N/WR/EV/status from SETUP_STATUS, real_n/rigor from the 2026-07-20 origin_status and
+// rigor-diagnostics fixes). Criteria/window text is static (server/config/
+// setupDefinitions.js); every number is live-queried, never hand-typed here.
+router.get('/setups/reference', async (req, res) => {
+  try {
+    const [statusQ, optQ] = await Promise.all([
+      query(`
+        SELECT DISTINCT ON (signal_name) signal_name, sample_size, win_rate::float,
+          ev_per_trade::float, recommendation, notes, run_date
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `),
+      query(`
+        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float, optimal_target::float
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `),
+    ]);
+    const optByName = new Map(optQ.rows.map(r => [r.signal_name, r]));
+
+    const results = statusQ.rows.map(row => {
+      let notes = null;
+      try { notes = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes; } catch (_) {}
+      const opt = optByName.get(row.signal_name);
+      const def = resolveDefinition(row.signal_name);
+      return {
+        setupType: row.signal_name,
+        displayName: def?.displayName || row.signal_name.replace(/_/g, ' '),
+        family: def?.ruleLabel || null,
+        criteria: def?.criteria || null,
+        windowDescription: def?.windowDescription || null,
+        formationGate: def?.formationGate ?? null,
+        globexCapable: def?.globexCapable ?? GLOBEX_CAPABLE_TYPES.has(row.signal_name),
+        documented: def != null,
+        n: row.sample_size,
+        realN: notes?.all_time_real_n ?? null,
+        wr: row.win_rate,
+        ev: row.ev_per_trade,
+        recommendation: row.recommendation,
+        stop: opt?.optimal_stop ?? null,
+        target: opt?.optimal_target ?? null,
+        rigorTrend: notes?.rigor?.trend ?? (notes?.rigor?.three_way_stable === true ? 'STABLE' : null),
+        lastRunDate: row.run_date,
+      };
+    });
+
+    results.sort((a, b) => (a.documented === b.documented ? 0 : a.documented ? -1 : 1) || (b.n || 0) - (a.n || 0));
+    res.json({ total: results.length, undocumented: results.filter(r => !r.documented).length, setups: results });
+  } catch (err) {
+    console.error('[setups/reference]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

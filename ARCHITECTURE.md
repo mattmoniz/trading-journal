@@ -301,7 +301,7 @@ src/
 
 Views routed inside `App.jsx` → `src/views/`: `dashboard`, `all-trades`, `calendar`, `acd`, `backtest`, `settings`, `longterm`, `playbook` (still renderable, just not in sidebar nav; `scenario`, `risk`, `setup-log`, `tearsheet` render as Edge sub-tabs or via direct URL).
 
-**BacktestView ("Edge") sub-tabs:** Setup Log (default), **Alpha Engine** (system overview — size multiplier stack, tiers, suppressions, tools, road map), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
+**BacktestView ("Edge") sub-tabs:** Setup Log (default), **Setup Reference** (added 2026-07-20 — `SetupReferenceView.jsx`, what each setup_type IS: criteria/detection-window/family, joined against live N/WR/EV/status via `GET /api/setups/reference`; static definitions in `server/config/setupDefinitions.js`, never hand-typed numbers), **Alpha Engine** (system overview — size multiplier stack, tiers, suppressions, tools, road map), Performance Audit, Edge Analysis, Efficiency Analysis, Volume Profile, Playbook & Patterns, Key Levels, Scenarios, Risk & Sizing, Chart Review, Playbook, Backlog.
 
 **DashboardView fetches:** `stats/daily`, `stats/cumulative-pnl`, `tearsheet-overview`, `rolling`, `pnl-distribution`. Renders: daily P&L chart, equity curve, Sharpe/Sortino/Kelly chip card, Rolling 20-trade expectancy chart, Trade P&L Distribution chart, LevelMonitorPanel, DevelopingValueCard, Risk-Adjusted Performance section. Removed 2026-07-04: `SetupsTable`, `PerformanceVisuals`, `OptimizationSection`, `BehaviorSection` + their backend endpoints (`stats/by-setup`, `stats/by-duration`, `stats/behavior`, `stats/optimization`, `stats/trade-location`).
 
