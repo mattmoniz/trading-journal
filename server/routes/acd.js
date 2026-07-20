@@ -4795,6 +4795,12 @@ export default function createACDRouter(io) {
             { name: 'MONTHLY_OPEN_FADE', level: lp.MONTHLY_OPEN ?? null, ...(ls('MONTHLY_OPEN') || {}) },
             // Weekly VWAP
             { name: 'WEEKLY_VWAP_FADE',  level: lp.WEEKLY_VWAP  ?? null, ...(ls('WEEKLY_VWAP')  || {}) },
+            // Monthly VWAP (month-to-date) — added 2026-07-19. THIN_N as of backfill
+            // (N=12-17 same-day-decided outcomes; most touches don't resolve within one
+            // RTH session — see docs/OPEN_THREADS.md). SHADOW-only via the standard
+            // _suppressedSetups gate (THIN_N types are included in it same as SUPPRESS) —
+            // never a live alert until N≥20 clears the normal promotion bar.
+            { name: 'MONTHLY_VWAP_FADE', level: lp.MONTHLY_VWAP ?? null, ...(ls('MONTHLY_VWAP') || {}) },
             // Prior-week value area
             { name: 'PW_VAH_FADE',       level: lp.PW_VAH       ?? null, ...(ls('PW_VAH')       || {}) },
             { name: 'PW_VAL_FADE',       level: lp.PW_VAL       ?? null, ...(ls('PW_VAL')       || {}) },
@@ -4809,6 +4815,13 @@ export default function createACDRouter(io) {
             // 3M_VAH omitted — WR=7.1% (structural bull market makes this a breakout level, not fade)
             { name: '3M_VAL_FADE',       level: lp['3M_VAL']    ?? null, ...(ls('3M_VAL')       || {}) },
             { name: '3M_POC_FADE',       level: lp['3M_POC']    ?? null, ...(ls('3M_POC')       || {}) },
+            // Prior-year value area — added 2026-07-19. All 3 THIN_N as of backfill; touches
+            // of a specific bygone year's POC/VAL are genuinely rare (a full year's VA is wide,
+            // price seldom revisits its exact center) — PY_POC has N=1, PY_VAL N=0 over ~2.3yr
+            // of history. SHADOW-only via the standard THIN_N gate, same as MONTHLY_VWAP above.
+            { name: 'PY_VAH_FADE',       level: lp.PY_VAH       ?? null, ...(ls('PY_VAH')       || {}) },
+            { name: 'PY_VAL_FADE',       level: lp.PY_VAL       ?? null, ...(ls('PY_VAL')       || {}) },
+            { name: 'PY_POC_FADE',       level: lp.PY_POC       ?? null, ...(ls('PY_POC')       || {}) },
             // Camarilla pivots (R3/S3 = reversal zones, R4/S4 = breakout levels)
             { name: 'CAM_R1_FADE',       level: lp.CAM_R1       ?? null, ...(ls('CAM_R1')       || {}) },
             { name: 'CAM_R2_FADE',       level: lp.CAM_R2       ?? null, ...(ls('CAM_R2')       || {}) },

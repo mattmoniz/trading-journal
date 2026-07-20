@@ -8,14 +8,16 @@
 //   CURRENT       : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID, 5D_OR_MID
 //   PRIOR_DAY     : ... PD_SESSION_MID (added 2026-07-04)
 //   OPENS         : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
-//   VWAP          : RTH_VWAP, WEEKLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
+//   VWAP          : RTH_VWAP, WEEKLY_VWAP, MONTHLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
 //   PIVOT         : FLOOR_PIVOT, R1, R2, R3, S1, S2, S3
 //   CAMARILLA     : CAM_R1, CAM_R2, CAM_R3, CAM_R4, CAM_S1, CAM_S2, CAM_S3, CAM_S4 (from PD H/L/C)
 //   WEEKLY        : PW_HIGH, PW_LOW, PW_VAH, PW_VAL, PW_POC
 //   WEEKLY_PIVOT  : WPP, WR1, WR2, WS1, WS2 (prior-week floor pivots)
 //   MONTHLY       : PM_HIGH, PM_LOW, PM_VAH, PM_VAL, PM_POC
 //   MONTHLY_PIVOT : MPP, MR1, MR2, MS1, MS2 (prior-month floor pivots)
-//   3-MONTH       : 3M_VAH, 3M_VAL, 3M_POC
+//   3-MONTH       : 3M_VAH, 3M_VAL, 3M_POC (rolling window ending AT `date`, inclusive —
+//                   see OPEN_DECISION 3m_val_poc_same_day_lookahead_risk, unresolved)
+//   YEARLY        : PY_VAH, PY_VAL, PY_POC (prior COMPLETE calendar year, added 2026-07-19)
 //
 // CANONICAL DATA FLOW: compute_levels.js → level_prices table → backtest_unified.js + acd.js
 // Adding a new level here is all that's needed to make it fully symmetric across backtest and live detection.
@@ -91,6 +93,26 @@ function threeMonthStart(dateStr) {
   const d = new Date(dateStr + 'T12:00:00Z');
   d.setUTCMonth(d.getUTCMonth() - 3);
   return d.toISOString().slice(0, 10);
+}
+
+// ─── Year boundaries (calendar year containing dateStr) ───────────────────
+function yearBounds(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  return {
+    first: `${d.getUTCFullYear()}-01-01`,
+    last:  `${d.getUTCFullYear()}-12-31`,
+  };
+}
+
+// PY_VAH/PY_VAL/PY_POC only change once per calendar year (every date within
+// the same current year shares the same prior-complete-year value area) —
+// memoize by bounds so a --backfill across ~2+ years of dates doesn't re-run
+// the same ~98K-row year-long profile query redundantly for every date.
+const pyValueAreaCache = {};
+async function computePriorYearValueArea(first, last) {
+  const key = `${first}_${last}`;
+  if (!(key in pyValueAreaCache)) pyValueAreaCache[key] = await computeValueArea(first, last);
+  return pyValueAreaCache[key];
 }
 
 // ─── Core: compute all levels for one trading date ────────────────────────
@@ -307,6 +329,20 @@ async function computeLevelsForDate(date) {
   `, [wb.mon, date]);
   add('WEEKLY_VWAP', weekVwapR.rows[0]?.vwap ? parseFloat(weekVwapR.rows[0].vwap) : null, 'VWAP');
 
+  // Monthly VWAP (month open → date, month-to-date as of the date being computed).
+  // Same live-accumulating convention as WEEKLY_VWAP above (deliberate, not a lookahead
+  // bug — live acd.js will read this with no time gate, so day-by-day it only ever
+  // accumulates through "today" since future bars don't exist yet). Added 2026-07-19.
+  // Reuses `mb` (current month bounds) already computed above for MONTHLY_OPEN.
+  const monthVwapR = await q(`
+    SELECT SUM(close::numeric * volume::numeric) / NULLIF(SUM(volume::numeric), 0) AS vwap
+    FROM price_bars_primary
+    WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
+      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      AND volume > 0
+  `, [mb.first, date]);
+  add('MONTHLY_VWAP', monthVwapR.rows[0]?.vwap ? parseFloat(monthVwapR.rows[0].vwap) : null, 'VWAP');
+
   // ── 8. Prior week H/L/VA ─────────────────────────────────────────────────
   // Prior week = the Mon–Fri week before the current week
   const pwMon = new Date(wb.mon + 'T12:00:00Z');
@@ -401,6 +437,22 @@ async function computeLevelsForDate(date) {
     add('3M_VAH', m3VA.vah, 'QUARTERLY');
     add('3M_VAL', m3VA.val, 'QUARTERLY');
     add('3M_POC', m3VA.poc, 'QUARTERLY');
+  }
+
+  // ── 11. Prior year VA ────────────────────────────────────────────────────
+  // Prior COMPLETE calendar year (Jan 1 - Dec 31 of year-1) — same "prior period,
+  // fully before the current one starts" convention as PW/PM above, deliberately NOT
+  // the 3M block's date-inclusive rolling-window pattern (that one has an open,
+  // unresolved lookahead-risk question — see OPEN_DECISION 3m_val_poc_same_day_lookahead_risk
+  // — this file's prior-year block should not inherit the same ambiguity). Added 2026-07-19.
+  const pyD = new Date(date + 'T12:00:00Z');
+  pyD.setUTCFullYear(pyD.getUTCFullYear() - 1);
+  const pyBounds = yearBounds(pyD.toISOString().slice(0, 10));
+  const pyVA = await computePriorYearValueArea(pyBounds.first, pyBounds.last);
+  if (pyVA) {
+    add('PY_VAH', pyVA.vah, 'YEARLY');
+    add('PY_VAL', pyVA.val, 'YEARLY');
+    add('PY_POC', pyVA.poc, 'YEARLY');
   }
 
   return levels;
