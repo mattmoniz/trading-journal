@@ -31,6 +31,11 @@ const PROMOTE_WINDOW_DAYS = 90;
 const PROMOTE_MIN_N    = 15;   // 15 trades in last 90 days is enough to signal recovery
 const PROMOTE_MIN_WR   = 0.52;
 const PROMOTE_MIN_EV   = 0;    // any positive EV
+// Of those 15+, at least this many must be real (ACTIVE/SHADOW-origin, not BACKFILL) --
+// otherwise a "recovery" can be 100% synthetic, as FLOOR_S1_FADE_LONG's was 2026-07-20.
+// Reuses classifyTrend()'s own existing N<5 "too thin to trust" cutoff below, rather than
+// inventing a new number.
+const PROMOTE_MIN_REAL_N = 5;
 
 // Setup types that are day-type conditional — their overall EV blends good and bad day types
 // and therefore can't be evaluated as a single suppress/promote decision. These are managed
@@ -64,11 +69,17 @@ async function run() {
     ORDER BY setup_type
   `);
 
-  // Recent 90-day stats (to detect recovery)
+  // Recent 90-day stats (to detect recovery). real_n counts only ACTIVE/SHADOW-origin
+  // trades within the same window -- added 2026-07-20 after FLOOR_S1_FADE_LONG promoted
+  // to live purely on 15 BACKFILL-origin (synthetic) trades averaging +$8.33, overriding
+  // 115 real-backtest trades that were rigor-confirmed negative in all 3 chronological
+  // thirds (-$12.63/-$12.63/-$3.92, never once positive, -$1,113 total). The PROMOTE gate
+  // never checked provenance, so a recovery could be entirely fabricated. See CLAUDE.md.
   const recentQ = await query(`
     SELECT
       setup_type,
       COUNT(*) AS n,
+      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev
     FROM active_setups
@@ -208,11 +219,11 @@ async function run() {
 
     let recommendation = 'ACTIVE';
 
-    if (wasSuppressed && rec90 && +rec90.n >= PROMOTE_MIN_N && +rec90.wr >= PROMOTE_MIN_WR && +rec90.ev > PROMOTE_MIN_EV) {
+    if (wasSuppressed && rec90 && +rec90.n >= PROMOTE_MIN_N && +rec90.wr >= PROMOTE_MIN_WR && +rec90.ev > PROMOTE_MIN_EV && +rec90.real_n >= PROMOTE_MIN_REAL_N) {
       // Recovery detected — promote back to live
       recommendation = 'PROMOTE';
       promoted++;
-      console.log(`  PROMOTE  ${type.padEnd(38)} all: N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}  recent90: N=${rec90.n} WR=${(+rec90.wr*100).toFixed(1)}% EV=$${(+rec90.ev).toFixed(0)}`);
+      console.log(`  PROMOTE  ${type.padEnd(38)} all: N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}  recent90: N=${rec90.n} (real=${rec90.real_n}) WR=${(+rec90.wr*100).toFixed(1)}% EV=$${(+rec90.ev).toFixed(0)}`);
     } else if (n >= SUPPRESS_MIN_N && ev < SUPPRESS_MAX_EV) {
       recommendation = 'SUPPRESS';
       suppressed++;
