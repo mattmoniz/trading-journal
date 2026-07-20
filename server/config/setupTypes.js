@@ -75,6 +75,26 @@ export const CONDITIONAL_VARIANTS = {
     addedDate: '2026-07-09',
     monitorAtN: 50,
   },
+  // Not entry-conditional like the variant above — every FLOOR_R1_FADE_SHORT touch is
+  // unconditionally diverted here, because the thing that differs is the EXIT mechanism
+  // (breakeven-then-trail instead of a fixed single target), not the entry. Kept in this
+  // registry anyway per docs/SCALEOUT_RUNNER_SPEC.md §4: mixing the new mechanism's EV
+  // distribution into the base type's own live calibration would be a real distortion,
+  // so it gets its own name and its own SETUP_STATUS lifecycle. `trailSignalName` is the
+  // performance_audit BREAKEVEN_TRAIL_TEST signal_name to read runner_trail_width from
+  // (server/routes/acd.js reads this at insert time — never hardcode the trail width
+  // itself). First of 6 backtested survivors to be wired live (largest N); the other 5
+  // (docs/SCALEOUT_RUNNER_SPEC.md §2 table) are deliberately not yet built — add them the
+  // same way, one at a time, once this one proves itself at live N>=20.
+  FLOOR_R1_FADE_SHORT_TRAIL: {
+    baseType: 'FLOOR_R1_FADE_SHORT',
+    direction: 'SHORT',
+    condition: 'unconditional — every FLOOR_R1_FADE_SHORT touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'A_FLOOR_R1_FADE_SHORT',
+    addedDate: '2026-07-19',
+    monitorAtN: 20,
+  },
 };
 
 /**

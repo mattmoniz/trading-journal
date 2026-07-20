@@ -137,6 +137,55 @@ async function main() {
     if (r.error) { console.log(type.padEnd(20), r.error); continue; }
     console.log(type.padEnd(20), 'N='+r.n, 'stop='+r.stop, 'target='+r.target, 'EV=$'+r.ev.toFixed(2), 'WR='+(r.wr*100).toFixed(1)+'%', 'clustered='+r.rigor.clustered, 'stable='+r.rigor.stable);
   }
+
+  // Write real SETUP_STATUS rows (2026-07-19) — closing a real gap found while resolving
+  // OPEN_DECISION backtest_unified_pd2_2dpoc_methodology_stale: this script's CONFIRMED
+  // negative-EV finding (RESEARCH_CLAIM 2d_poc_fade_no_edge) had NEVER been wired into the
+  // live unified suppression pipeline (backtest_setup_status.mjs has ~0 real active_setups
+  // rows for these types to aggregate from, since they've essentially never fired live —
+  // confirmed directly, only 2 real active_setups rows exist across all 6 type/directions).
+  // That meant `liveStats._suppressedSetups` (server/routes/acd.js) had no row for these
+  // types at all — NOT suppressed, and the pre-existing CONFIRMED_NO_EDGE_OVERRIDE in
+  // acd.js only patched the Unified Signal Table DISPLAY, not the live candidate-
+  // construction path that actually reads UNIFIED_BACKTEST stats and could fire one of
+  // these as a full-sized ACTIVE candidate on a rare real touch. Writing SETUP_STATUS here
+  // (same signal_type, same recommendation thresholds as backtest_setup_status.mjs) closes
+  // the loop through the ONE real suppression pipeline this codebase has, per CLAUDE.md's
+  // "Unified suppression pipeline (the only suppression source)" rule — no new hardcoded
+  // list. sample_size here is SIMULATION-derived (this script's own bar-walk), not a count
+  // of real live-fired trades — flagged honestly in notes, matching this codebase's
+  // origin_status convention for the same distinction elsewhere.
+  const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
+  const SUPPRESS_MIN_N = 20, SUPPRESS_MAX_EV = -5;
+  for (const [type, r] of Object.entries(results)) {
+    // 'sweep failed' (not just thin N) means this script genuinely couldn't compute a
+    // usable stop/target even with data present — skip rather than write a misleading row.
+    // 'N<20' still gets a row: THIN_N is the correct, standard label for exactly this case
+    // (insufficient data, shadow until N>=20) — skipping it entirely would leave the type
+    // absent from SETUP_STATUS altogether, which reads as "not suppressed" at the live
+    // gate (server/routes/acd.js's _suppressedSetups) — the exact gap this whole fix exists
+    // to close, so leaving the N<20 variants out would silently reopen it for them.
+    if (r.error === 'sweep failed') continue;
+    const recommendation = r.error === 'N<20'
+      ? 'THIN_N'
+      : (r.n >= SUPPRESS_MIN_N && r.ev < SUPPRESS_MAX_EV) ? 'SUPPRESS' : (r.n < SUPPRESS_MIN_N ? 'THIN_N' : 'ACTIVE');
+    const notes = JSON.stringify({
+      source: 'backtest_pd2_2dpoc_complete.mjs simulation (bar-walk, NOT real live active_setups fires)',
+      simulated_n: r.n, ev: r.error ? null : +r.ev.toFixed(2), wr: r.error ? null : +(r.wr * 100).toFixed(1),
+      stop: r.error ? null : r.stop, target: r.error ? null : r.target,
+      rigor: r.error ? null : { distinct_dates: r.rigor.distinctDates, top5_day_pct: r.rigor.top5DayPct, three_way_stable: r.rigor.stable, thirds: r.rigor.thirds },
+      research_claim: '2d_poc_fade_no_edge',
+    });
+    await query(`
+      INSERT INTO performance_audit
+        (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, recommendation, notes)
+      VALUES ($1, 0, 'SETUP_STATUS', $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+        sample_size = EXCLUDED.sample_size, win_rate = EXCLUDED.win_rate,
+        ev_per_trade = EXCLUDED.ev_per_trade, recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
+    `, [today, type, r.n, r.error ? null : r.wr, r.error ? null : r.ev, recommendation, notes]);
+    console.log(`  SETUP_STATUS written: ${type} -> ${recommendation}`);
+  }
 }
 
 main().catch(console.error).finally(() => process.exit(0));

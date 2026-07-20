@@ -1195,11 +1195,20 @@ function LiveSessionPanel() {
   const nowET  = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etMin  = nowET.getHours() * 60 + nowET.getMinutes();
   const etHour = nowET.getHours();
-  const inGlobex = etHour >= 18 || etMin < 8 * 60 + 30;
-  const inRTH = etMin >= 9 * 60 + 30 && etMin < 16 * 60;
+  const etDay  = nowET.getDay(); // 0=Sun ... 6=Sat
+  // Day-of-week boundaries — matches server/index.js's own Globex-hours poller convention
+  // exactly (isSaturday / isSundayBeforeOpen / isFridayAfterClose). Found missing 2026-07-19
+  // (user report): without these, a pure time-of-day check reads Saturday 10 AM as "in RTH"
+  // (etMin lands in the 9:30-4:00 window) even though the market is closed all day Saturday.
+  const isSaturday = etDay === 6;
+  const isSundayBeforeOpen = etDay === 0 && etMin < 18 * 60; // Globex reopens 6:00 PM ET Sunday
+  const isFridayAfterClose = etDay === 5 && etMin >= 17 * 60; // Globex closes 5:00 PM ET Friday
+  const weekendClosed = isSaturday || isSundayBeforeOpen || isFridayAfterClose;
+  const inGlobex = !weekendClosed && (etHour >= 18 || etMin < 8 * 60 + 30);
+  const inRTH = !weekendClosed && etMin >= 9 * 60 + 30 && etMin < 16 * 60;
   const isOpen = inGlobex || inRTH;
-  const inResetGap = etMin >= 17 * 60 && etMin < 18 * 60; // 5–6 PM dead zone
-  const isClosed = inResetGap || sessionClosed;
+  const inResetGap = !weekendClosed && etMin >= 17 * 60 && etMin < 18 * 60; // 5–6 PM dead zone
+  const isClosed = inResetGap || weekendClosed || sessionClosed;
 
   const active = setupCard && !setupCard.isExpired ? setupCard : null;
   const isLong = active

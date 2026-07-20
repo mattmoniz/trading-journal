@@ -18,6 +18,11 @@ echo "=== Weekly backtest run: $(date) ==="
 # --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
 /usr/bin/node scripts/backtest_wpp_short_gap.mjs
 /usr/bin/node scripts/backtest_momentum60_daytype.mjs
+# Breakeven-then-trail trail-width calibration for FLOOR_R1_FADE_SHORT_TRAIL (and any of
+# the other 5 backtested survivors once they're wired live) — see
+# docs/SCALEOUT_RUNNER_SPEC.md. Writes performance_audit signal_type='BREAKEVEN_TRAIL_TEST',
+# read live by acd.js at insert time (never hardcode the trail width).
+/usr/bin/node scripts/backtest_breakeven_trail.mjs
 
 # --- Context + anticipation pipelines ---
 /usr/bin/node scripts/backtest_permission_slips.mjs
@@ -28,6 +33,11 @@ echo "=== Weekly backtest run: $(date) ==="
 # --- Audit pipelines ---
 /usr/bin/node scripts/level_fade_audit.mjs
 /usr/bin/node scripts/audit_mae_mfe.mjs
+# 2D_POC/PD2_VAH/PD2_VAL confirmed-negative-EV recheck (RESEARCH_CLAIM 2d_poc_fade_no_edge)
+# — also writes real SETUP_STATUS rows so the live unified suppression pipeline stays
+# correctly gated even though these types have ~0 real active_setups history for
+# backtest_setup_status.mjs to otherwise pick up. See docs/OPEN_THREADS.md 2026-07-19.
+/usr/bin/node scripts/backtest_pd2_2dpoc_complete.mjs
 
 # --- Session-bias / edge-mining pipelines (feed antigravity/edges-context cards) ---
 # mine_session_bias.mjs also runs daily via server/index.js cron; re-running here weekly

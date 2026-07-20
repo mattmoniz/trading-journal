@@ -1338,7 +1338,7 @@ export function PlaybookWeeklyPatternsSection() {
           {guideTab === 'scanning' && (
             <div>
               <p style={{ marginTop: 0 }}><strong>Can you perpetually keep looking at these and new high probability setups?</strong></p>
-              <p>Yes! The server runs a perpetual background daemon process. During market hours (9:30 AM – 4:00 PM ET), this daemon acts as a real-time monitor:</p>
+              <p>Yes! The server runs a perpetual background daemon process. It's live across the full CME Globex week (Sunday 6 PM – Friday 5 PM ET, with the daily 5–6 PM maintenance gap excluded) — not just RTH — polling every 15 seconds as a real-time monitor:</p>
               <ul style={{ paddingLeft: 20, margin: '10px 0' }}>
                 <li style={{ marginBottom: 6 }}><strong>Continuous Ingestion:</strong> It reads incoming 1-minute price bars as they are exported from Sierra Chart.</li>
                 <li style={{ marginBottom: 6 }}><strong>Dynamic Updates:</strong> It updates the developing Value Area, Number Line (NL30), and checks for Initial Balance breakouts in real-time.</li>

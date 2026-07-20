@@ -138,7 +138,6 @@ export async function populateDailyLog(tradeDate, io = null) {
       COUNT(*) FILTER (WHERE pnl > 0) as winners,
       COUNT(*) FILTER (WHERE pnl < 0) as losers,
       COUNT(*) FILTER (WHERE pnl = 0) as breakeven,
-      SUM(pnl) as session_pnl,
       MAX((custom_fields->>'max_open_profit')::numeric) as max_favorable,
       MIN((custom_fields->>'max_open_loss')::numeric) as max_adverse
     FROM trades
@@ -146,6 +145,44 @@ export async function populateDailyLog(tradeDate, io = null) {
   `, [tradeDate]);
   const t = tradesQ.rows[0];
   const totalTrades = parseInt(t.total_trades) || 0;
+
+  // session_pnl via CumPL-diff (CLAUDE.md hard rule — SUM(pnl) overcounts scaled/partial-fill
+  // positions), scoped to '%-PRO%' accounts only, matching the established correct pattern in
+  // stats.js's /stats/capture-ratio. Audited 2026-07-19 (docs/OPEN_THREADS.md): a raw, account-
+  // type-unscoped LAG-based diff is WORSE than the SUM(pnl) it replaces — practice/sim account
+  // balance resets (confirmed live: 'PRACTICEDec108855775' dropped from a $13,000 cum_pl on
+  // 2024-12-16 to resetting near zero the next day) make LAG() interpret the reset itself as a
+  // single-day loss in the tens of thousands. The -PRO% filter sidesteps this entirely — real
+  // accounts don't get balance-reset mid-history the way practice ones do.
+  const cumPlQ = await query(`
+    WITH ep_fills AS (
+      SELECT log_date, custom_fields->>'account' AS account, exit_time,
+        CASE WHEN custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)' ~ '^-?[0-9]+(\.[0-9]+)?$'
+        THEN (custom_fields->'sierra_data'->>'Cumulative Profit/Loss (C)')::numeric ELSE NULL END AS cum_pl
+      FROM trades
+      WHERE custom_fields->'sierra_data'->>'Exit DateTime' LIKE '% EP'
+        AND exit_time IS NOT NULL AND custom_fields->>'account' LIKE '%-PRO%'
+        AND log_date <= $1
+    ),
+    last_ep AS (
+      SELECT DISTINCT ON (log_date, account) log_date, account, cum_pl
+      FROM ep_fills WHERE cum_pl IS NOT NULL ORDER BY log_date, account, exit_time DESC
+    ),
+    daily_per_acct AS (
+      SELECT log_date,
+        cum_pl - LAG(cum_pl) OVER (PARTITION BY account ORDER BY log_date) AS session_pnl
+      FROM last_ep
+    )
+    SELECT SUM(session_pnl) as session_pnl FROM daily_per_acct WHERE log_date = $1 AND session_pnl IS NOT NULL
+  `, [tradeDate]);
+  // Fall back to the raw SUM(pnl) only when this day has no PRO-account CumPL data at all
+  // (e.g. a practice-only session, or a PRO account's very first day with no prior-day
+  // baseline for the diff) — same documented fallback convention as dll.js.
+  t.session_pnl = cumPlQ.rows[0]?.session_pnl;
+  if (t.session_pnl == null) {
+    const fallback = await query(`SELECT SUM(pnl) as s FROM trades WHERE log_date = $1 AND pnl IS NOT NULL`, [tradeDate]);
+    t.session_pnl = fallback.rows[0]?.s ?? 0;
+  }
 
   // Need at least trades to log — auction_reads optional but flagged
   if (totalTrades === 0) {

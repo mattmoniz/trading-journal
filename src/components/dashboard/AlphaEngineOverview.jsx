@@ -393,6 +393,90 @@ function LearningDigestPanel() {
   );
 }
 
+// Answers "why aren't all 100+ setups using the corrected target methodology" with real
+// data instead of leaving it an unanswerable black box — the guardrail funnel used to be
+// computed by update_optimal_stops.mjs and silently discarded (see CLAUDE.md / this
+// component's own comment history, 2026-07-19). lastRunDate + schedule text are the
+// concrete "not forgotten, evaluated constantly" proof: every setup_type is genuinely
+// re-run on both the daily and weekly cron, not just checked once and left.
+function TargetCalibrationCoveragePanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/acd/target-calibration-coverage`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+
+  const REASON_LABELS = {
+    corrected_resim: { label: 'Using corrected methodology', color: '#22c55e' },
+    failed_plateau_check: { label: 'Best target is an isolated spike (fails plateau check)', color: '#f59e0b' },
+    no_candidate_cleared_thin_tail: { label: 'Too few trades reach target distance (thin tail)', color: '#f59e0b' },
+    failed_oos_or_baseline: { label: "Doesn't beat baseline out-of-sample", color: '#f59e0b' },
+    not_rigor_clean: { label: 'Day-clustered or chronologically unstable', color: '#ef4444' },
+    stale_no_notes: { label: 'Not touched by the most recent run', color: '#475569' },
+  };
+
+  const daysSince = data.lastRunDate ? Math.floor((Date.now() - new Date(data.lastRunDate + 'T12:00:00Z').getTime()) / 86400000) : null;
+  const orderedKeys = ['corrected_resim', 'failed_plateau_check', 'no_candidate_cleared_thin_tail', 'failed_oos_or_baseline', 'not_rigor_clean', 'stale_no_notes'];
+
+  return (
+    <div style={S.section}>
+      <div style={S.sectionTitle}>Target Calibration Coverage</div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: '#22c55e' }}>{data.correctedResimCount}<span style={{ fontSize: 14, color: '#64748b' }}>/{data.total}</span></div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>setup_types using the corrected, guardrailed target methodology</div>
+        <span style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: daysSince <= 1 ? '#22c55e' : '#f59e0b', background: '#0f172a', border: `1px solid ${daysSince <= 1 ? '#14532d' : '#713f12'}`, borderRadius: 4, padding: '2px 8px' }}>
+          last evaluated {data.lastRunDate} ({daysSince}d ago)
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
+        {orderedKeys.filter(k => data.tally[k] > 0).map(k => {
+          const meta = REASON_LABELS[k] || { label: k, color: '#94a3b8' };
+          const examples = data.exclusionExamples[k];
+          return (
+            <div key={k} style={{ ...S.card, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 12, color: '#cbd5e1' }}>{meta.label}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: meta.color }}>{data.tally[k]}</span>
+              </div>
+              {examples?.length > 0 && (
+                <div style={{ fontSize: 11, color: '#64748b' }}>e.g. {examples.slice(0, 3).join(', ')}{examples.length > 3 ? `, +${examples.length - 3} more` : ''}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {data.widenings?.length > 0 && (
+        <div style={{ ...S.card, marginBottom: 10, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0' }}>Is the correction actually capturing more of the move?</span>
+            <span style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 700 }}>
+              <span style={{ color: '#22c55e' }}>{data.widenedCount} widened</span>
+              {data.narrowedCount > 0 && <span style={{ color: '#f87171' }}> · {data.narrowedCount} narrowed</span>}
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
+            Each row compares this setup's own new (guardrailed, chronologically-resimulated) target against its own old (order-blind, truncated-MFE) target — no hardcoded "large move" cutoff, just each setup versus its former self.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {data.widenings.slice(0, 8).map(w => (
+              <div key={w.signal_name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11 }}>
+                <span style={{ color: '#cbd5e1' }}>{w.signal_name}</span>
+                <span style={{ fontFamily: 'monospace', color: '#94a3b8' }}>
+                  {w.oldTarget}pt → {w.newTarget}pt <span style={{ color: w.widenPct >= 0 ? '#22c55e' : '#f87171', fontWeight: 700 }}>({w.widenPct >= 0 ? '+' : ''}{w.widenPct}%)</span>
+                </span>
+              </div>
+            ))}
+            {data.widenings.length > 8 && <div style={{ fontSize: 11, color: '#475569' }}>+{data.widenings.length - 8} more</div>}
+          </div>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>{data.schedule}</div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -569,8 +653,8 @@ export default function AlphaEngineOverview() {
         <div style={S.grid3}>
           <div style={S.card}>
             <div style={S.cardTitle}>Server Poll Cadence</div>
-            <div style={{ ...S.cardVal, fontSize: 18 }}>60s</div>
-            <div style={S.cardSub}>9:30–4:00 PM ET Mon–Fri · autonomous (no browser required)</div>
+            <div style={{ ...S.cardVal, fontSize: 18 }}>15s</div>
+            <div style={S.cardSub}>Full CME Globex week (Sun 6PM–Fri 5PM ET, daily 5–6PM maintenance gap excluded) · autonomous (no browser required)</div>
           </div>
           <div style={S.card}>
             <div style={S.cardTitle}>Detection Start</div>
@@ -589,6 +673,9 @@ export default function AlphaEngineOverview() {
           Structural phantom wins (price hits level + T1 within 60s) are not recoverable with polling — ~53 setups/180 days are in this category.
         </div>
       </div>
+
+      {/* Target Calibration Coverage */}
+      <TargetCalibrationCoveragePanel />
 
       {/* Size Multiplier Stack */}
       <div style={S.section}>

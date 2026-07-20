@@ -589,11 +589,15 @@ export default function VolatilityRegimeCard() {
     const progressPct = isForming ? Math.min(100, (data.barsLoaded / data.barsRequired) * 100) : 0;
 
     if (!isRTH) {
+      // RTH-only by design (this classifier is computed from the RTH session's own opening
+      // volatility baseline) — but "Market Closed" overclaims outside RTH, since Globex
+      // trades most of the week and this system actively detects overnight level fades then.
+      // Found 2026-07-19 alongside a related bug in DayOfWeekPlaybookCard.jsx.
       return (
         <div style={{ ...cardStyle, opacity: 0.6 }}>
           <div style={titleStyle}>Volatility Regime (live)</div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 3 }}>Market Closed</div>
-          <div style={{ fontSize: 11, color: '#94a3b8' }}>Available Mon–Fri 9:30–4:00 PM ET</div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 3 }}>RTH Only</div>
+          <div style={{ fontSize: 11, color: '#94a3b8' }}>Computed from the RTH open — available Mon–Fri 9:30 AM–4:00 PM ET</div>
         </div>
       );
     }

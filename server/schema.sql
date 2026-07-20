@@ -339,7 +339,11 @@ CREATE TABLE public.active_setups (
     touch_quality character varying(20),
     touch_quality_vol_z numeric,
     origin_status character varying(12),
-    is_rth boolean GENERATED ALWAYS AS ((((EXTRACT(hour FROM fired_at) > (9)::numeric) OR ((EXTRACT(hour FROM fired_at) = (9)::numeric) AND (EXTRACT(minute FROM fired_at) >= (30)::numeric))) AND (EXTRACT(hour FROM fired_at) < (16)::numeric))) STORED
+    is_rth boolean GENERATED ALWAYS AS ((((EXTRACT(hour FROM fired_at) > (9)::numeric) OR ((EXTRACT(hour FROM fired_at) = (9)::numeric) AND (EXTRACT(minute FROM fired_at) >= (30)::numeric))) AND (EXTRACT(hour FROM fired_at) < (16)::numeric))) STORED,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric
 );
 
 
@@ -569,6 +573,57 @@ CREATE TABLE public.active_setups_maemfe_backup_20260717 (
 
 
 --
+-- Name: active_setups_monthlyvwap_yearlypoc_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_monthlyvwap_yearlypoc_backup_20260719 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean
+);
+
+
+--
 -- Name: active_setups_pnl_rescale_backup_20260714; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -671,6 +726,57 @@ CREATE TABLE public.active_setups_top8_window_backup_20260714 (
     replay_resolution character varying(20),
     size_multiplier numeric(5,3),
     suppression_reason text
+);
+
+
+--
+-- Name: active_setups_unified_levels_backup_20260718; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_unified_levels_backup_20260718 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean
 );
 
 
@@ -948,6 +1054,42 @@ CREATE SEQUENCE public.condition_memory_id_seq
 --
 
 ALTER SEQUENCE public.condition_memory_id_seq OWNED BY public.condition_memory.id;
+
+
+--
+-- Name: condition_memory_session_pnl_fix_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.condition_memory_session_pnl_fix_backup_20260719 (
+    id integer,
+    structural_state character varying(30),
+    nl30_bucket character varying(15),
+    opening_call character varying(30),
+    a_signal_quality character varying(20),
+    confluence_bucket character varying(15),
+    counter_trend boolean,
+    occurrences integer,
+    wins integer,
+    losses integer,
+    breakeven integer,
+    t1_hits integer,
+    stops integer,
+    total_pnl numeric,
+    win_rate numeric,
+    t1_hit_rate numeric,
+    avg_pnl numeric,
+    expectancy numeric,
+    occurrences_last30 integer,
+    wins_last30 integer,
+    win_rate_last30 numeric,
+    avg_pnl_last30 numeric,
+    win_rate_trend character varying(12),
+    sufficient_data boolean,
+    first_seen date,
+    last_seen date,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone
+);
 
 
 --
@@ -1256,6 +1398,43 @@ ALTER SEQUENCE public.daily_performance_log_id_seq OWNED BY public.daily_perform
 
 
 --
+-- Name: daily_performance_log_session_pnl_fix_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.daily_performance_log_session_pnl_fix_backup_20260719 (
+    id integer,
+    trade_date date,
+    structural_state character varying(30),
+    nl30_at_open integer,
+    nl10_at_open integer,
+    opening_call character varying(30),
+    a_signal_direction character varying(20),
+    a_signal_quality character varying(20),
+    confluence_score_pre integer,
+    confluence_score_peak integer,
+    counter_trend boolean,
+    total_trades integer,
+    winners integer,
+    losers integer,
+    breakeven integer,
+    session_pnl numeric,
+    win_rate numeric,
+    t1_hit boolean,
+    stopped_out boolean,
+    max_favorable numeric,
+    max_adverse numeric,
+    phase_change_alerts_count integer,
+    phase_change_reversed integer,
+    close_position character varying(10),
+    value_migrated character varying(15),
+    sufficient_session_data boolean,
+    notes text,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone
+);
+
+
+--
 -- Name: daytype_accuracy_log; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1517,6 +1696,19 @@ CREATE TABLE public.level_prices (
     price numeric(12,4),
     category text,
     computed_at timestamp with time zone DEFAULT now()
+);
+
+
+--
+-- Name: level_prices_3m_va_lookahead_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_3m_va_lookahead_backup_20260719 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
 );
 
 
@@ -1842,6 +2034,34 @@ CREATE SEQUENCE public.pattern_stats_id_seq
 --
 
 ALTER SEQUENCE public.pattern_stats_id_seq OWNED BY public.pattern_stats.id;
+
+
+--
+-- Name: pattern_stats_session_pnl_fix_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.pattern_stats_session_pnl_fix_backup_20260719 (
+    id integer,
+    calculated_date date,
+    lookback_days integer,
+    structural_state character varying(30),
+    total_sessions integer,
+    avg_win_rate numeric,
+    avg_pnl_per_session numeric,
+    t1_hit_rate numeric,
+    stop_rate numeric,
+    total_pnl numeric,
+    best_confluence_threshold integer,
+    win_rate_above_threshold numeric,
+    win_rate_below_threshold numeric,
+    phase_change_reversal_rate numeric,
+    phase_change_avg_magnitude numeric,
+    phase_change_events integer,
+    win_rate_prior_window numeric,
+    win_rate_trend character varying(12),
+    degrading_alert boolean,
+    created_at timestamp without time zone
+);
 
 
 --
@@ -3840,6 +4060,24 @@ CREATE SEQUENCE public.setup_move_stats_id_seq
 --
 
 ALTER SEQUENCE public.setup_move_stats_id_seq OWNED BY public.setup_move_stats.id;
+
+
+--
+-- Name: setup_move_stats_session_pnl_fix_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.setup_move_stats_session_pnl_fix_backup_20260719 (
+    id integer,
+    calculated_date date,
+    setup_type character varying(30),
+    avg_move_30d numeric,
+    sessions_30d integer,
+    avg_move_90d numeric,
+    sessions_90d integer,
+    avg_move_alltime numeric,
+    sessions_alltime integer,
+    updated_at timestamp without time zone
+);
 
 
 --

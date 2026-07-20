@@ -26,6 +26,7 @@ export const SETUP_DISPLAY_LABELS = {
   VALUE_AREA_RESPONSIVE_SHORT: 'VA Responsive ↓',
   GAP_FILL_LONG:           'Gap Fill ↑',
   GAP_FILL_SHORT:          'Gap Fill ↓',
+  FLOOR_R1_FADE_SHORT_TRAIL: 'Floor R1 Fade ↓ (Trail)',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level
@@ -38,6 +39,7 @@ export const SETUP_RESOLUTION_TEXT = {
   SESSION_CLOSED:{ label: 'SESSION CLOSED',color: '#94a3b8', desc: 'Session ended with this setup unresolved.' },
   PREMISE_BROKEN:{ label: 'PREMISE BROKEN',color: '#ef4444', desc: 'Trade premise invalidated — price broke OR Low (for long) or OR High (for short).' },
   JUICE_EXHAUSTED:{ label: 'JUICE EXHAUSTED',color: '#94a3b8', desc: 'Morning drive exhausted — remaining profit potential is too low.' },
+  TRAIL_EXIT:    { label: 'TRAIL EXIT',     color: '#22c55e', desc: 'Target reached, stop moved to breakeven and trailed — exited on the trail (breakeven or better).' },
 };
 
 export const CAL_SETUP_SHORT_LABELS = {

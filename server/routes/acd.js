@@ -26,7 +26,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -185,8 +185,18 @@ export async function resolveSetupsByPrice(io) {
   // the $1 param below silently shifted the bar-walk window by the ET/UTC offset
   // (4hrs in EDT), pulling in pre-market bars and causing false STOP_HIT resolutions.
   // Passing the raw text avoids the round-trip entirely. Found 2026-06-30.
+  // runner_trail_width is the ONLY new column read as input here — it doubles as the
+  // trail-eligibility flag (non-null = breakeven-then-trail mechanism applies) and the
+  // trail distance itself. breakeven_armed_at/runner_peak_price/runner_trail_price are
+  // NOT read here because this function already re-walks every bar from fired_at on
+  // every single poll (same as the existing MAE/MFE computation below) rather than
+  // resuming from a saved cursor — so the armed/peak/trail state is fully re-derived
+  // from scratch each poll, deterministically, and only needs to be WRITTEN (for the
+  // frontend card to display "armed, trailing" — see docs/SCALEOUT_RUNNER_SPEC.md §7),
+  // never read back in as input.
   const active = await query(`
-    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
+           runner_trail_width::float as runner_trail_width
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
 
@@ -298,14 +308,76 @@ export async function resolveSetupsByPrice(io) {
 
     const bars = { rows: sharedBarsRows.filter(b => b.ts > row.fired_at) };
 
+    // Breakeven-then-trail (docs/SCALEOUT_RUNNER_SPEC.md): a non-null runner_trail_width
+    // marks this row as using the dynamic path-dependent exit instead of the plain
+    // fixed-stop/fixed-target logic below. Only FLOOR_R1_FADE_SHORT_TRAIL sets this today.
+    const trailWidth = row.runner_trail_width;
+
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
+    // Trail-mechanism state — recomputed from scratch on every poll (this function
+    // already re-walks the full bar range from fired_at every call, same as MAE/MFE
+    // above), never resumed from a saved cursor. Written back at the end regardless of
+    // whether the row terminally resolves this poll, purely so the frontend card can
+    // show "armed, trailing" (docs/SCALEOUT_RUNNER_SPEC.md §7) — never read as input.
+    let armedAt = null, peakPrice = null, trailStopPrice = null;
+
     for (const bar of bars.rows) {
       barCount++;
       const favorable = long ? bar.high - entry : entry - bar.low;
       const adverse   = long ? entry - bar.low  : bar.high - entry;
       runMfe = Math.max(runMfe, favorable);
       runMae = Math.max(runMae, adverse);
+
+      if (trailWidth != null) {
+        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
+        // string-slice, never Date-parse, to avoid the naive-timestamp landmine.
+        const isSessionEnd = bar.ts.slice(11, 13) >= '16';
+        if (armedAt == null) {
+          const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
+          const stopHit = long ? bar.low <= stop : bar.high >= stop;
+          if (t1Hit && stopHit) {
+            resolution = 'STOP_HIT'; method = 'SAME_BAR_STOP_FIRST';
+            resolvedAt = bar.ts; priceAtRes = stop;
+          } else if (t1Hit) {
+            // Arm: snap stop to breakeven, anchor the trail to this bar's favorable extreme.
+            armedAt = bar.ts;
+            peakPrice = long ? bar.high : bar.low;
+            trailStopPrice = entry;
+            const sameBarBreach = long ? bar.low <= trailStopPrice : bar.high >= trailStopPrice;
+            if (sameBarBreach) {
+              // Matches scripts/backtest_breakeven_trail.mjs lines ~216-225 exactly — a
+              // sharp same-bar reversal right after arming scratches immediately rather
+              // than riding to the next bar. Must reproduce this or live diverges from
+              // the backtest's own reported scratch rate.
+              resolution = 'TRAIL_EXIT'; method = 'SAME_BAR_ARM_AND_STOP';
+              resolvedAt = bar.ts; priceAtRes = trailStopPrice;
+            }
+          } else if (stopHit) {
+            resolution = 'STOP_HIT'; method = 'PRICE_CLEAN';
+            resolvedAt = bar.ts; priceAtRes = stop;
+          }
+        } else {
+          if (long && bar.high > peakPrice) peakPrice = bar.high;
+          if (!long && bar.low < peakPrice) peakPrice = bar.low;
+          const rawTrail = long ? peakPrice - trailWidth : peakPrice + trailWidth;
+          const candidateStop = long ? Math.max(entry, rawTrail) : Math.min(entry, rawTrail);
+          // Ratchet only — never loosens once armed.
+          if (long && candidateStop > trailStopPrice) trailStopPrice = candidateStop;
+          if (!long && candidateStop < trailStopPrice) trailStopPrice = candidateStop;
+          const trailHit = long ? bar.low <= trailStopPrice : bar.high >= trailStopPrice;
+          if (trailHit) {
+            resolution = 'TRAIL_EXIT'; method = 'BREAKEVEN_TRAIL_HIT';
+            resolvedAt = bar.ts; priceAtRes = trailStopPrice;
+          }
+        }
+        if (!resolution && isSessionEnd) {
+          resolution = 'TIME_EXPIRED'; method = 'BREAKEVEN_TIME_EXPIRED';
+          resolvedAt = bar.ts; priceAtRes = bar.close;
+        }
+        if (resolution) break;
+        continue;
+      }
 
       const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
       const stopHit = long ? bar.low <= stop : bar.high >= stop;
@@ -378,22 +450,42 @@ export async function resolveSetupsByPrice(io) {
       }
     }
 
-    if (!resolution) continue;
+    if (!resolution) {
+      // Trail-eligible and armed but not yet resolved this poll: persist the in-progress
+      // state purely for display (docs/SCALEOUT_RUNNER_SPEC.md §7 — the card should show
+      // "armed, trailing Npt" once armedAt is set). Never read back as input — see the
+      // comment on the `active` SELECT above.
+      if (trailWidth != null && armedAt != null) {
+        await query(
+          `UPDATE active_setups SET breakeven_armed_at=$2, runner_peak_price=$3, runner_trail_price=$4 WHERE id=$1`,
+          [row.id, armedAt, Math.round(peakPrice * 100) / 100, Math.round(trailStopPrice * 100) / 100]
+        ).catch(() => {});
+      }
+      continue;
+    }
 
-    const pnl = resolution === 'TARGET_HIT'
-      ? (long ? (t1 - entry) : (entry - t1)) * PNL_PER_POINT - COMMISSION
-      : (long ? (stop - entry) : (entry - stop)) * PNL_PER_POINT - COMMISSION;
+    // priceAtRes already holds the correct exit price for every resolution type above
+    // (t1 for TARGET_HIT, stop for STOP_HIT, the ratcheted trail/breakeven price for
+    // TRAIL_EXIT, the session-close price for TIME_EXPIRED) — one formula covers all of
+    // them; this is not a behavior change for the pre-existing TARGET_HIT/STOP_HIT cases,
+    // just a generalization to also cover the new trail-mechanism outcomes.
+    const pnl = (long ? (priceAtRes - entry) : (entry - priceAtRes)) * PNL_PER_POINT - COMMISSION;
 
     const updated = await query(`
       UPDATE active_setups
       SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_outcome=$2,
           actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW(),
           mae_points=$8, mfe_points=$9, bars_to_resolution=$10,
-          resolution_bar_time=$6, replay_resolution=$2
+          resolution_bar_time=$6, replay_resolution=$2,
+          breakeven_armed_at=COALESCE($11, breakeven_armed_at),
+          runner_peak_price=COALESCE($12, runner_peak_price),
+          runner_trail_price=COALESCE($13, runner_trail_price)
       WHERE id=$1 AND status=$7
       RETURNING *
     `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch,
-        Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount]);
+        Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount,
+        armedAt, peakPrice != null ? Math.round(peakPrice * 100) / 100 : null,
+        trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}
@@ -4875,6 +4967,11 @@ export default function createACDRouter(io) {
               const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
               if (sessionOpenBar && parseFloat(sessionOpenBar.open) < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
             }
+            // Unconditional diversion (docs/SCALEOUT_RUNNER_SPEC.md §4/§10) — every
+            // FLOOR_R1_FADE_SHORT touch gets the breakeven-then-trail exit mechanism
+            // instead of the fixed single target. Keeps the base type's own live
+            // calibration clean/untouched going forward.
+            if (rawType === 'FLOOR_R1_FADE_SHORT') return 'FLOOR_R1_FADE_SHORT_TRAIL';
             return rawType;
           };
 
@@ -6054,6 +6151,30 @@ export default function createACDRouter(io) {
         };
       } else {
         const hist = active.history || {};
+        // Trail-mechanism variants (docs/SCALEOUT_RUNNER_SPEC.md) have zero live
+        // SETUP_STATUS history by construction — they're brand new, so the standard
+        // `_suppressedSetups` check below (which only knows SUPPRESS/THIN_N from a REAL
+        // SETUP_STATUS row) would otherwise miss them entirely and let a type with N=0
+        // live trades fire straight to 'ACTIVE'. Force SHADOW explicitly here instead —
+        // matches CLAUDE.md's "New setup type checklist" item 3 ("If N<20 resolved
+        // trades, do NOT fire live"). Promotion once N>=20 accumulates is a deliberate
+        // manual step (spec §7/§10), not automatic, same as every other new setup type.
+        const trailVariant = CONDITIONAL_VARIANTS[active.type];
+        const isTrailMechanism = trailVariant?.trailSignalName != null;
+        let runnerTrailWidth = null;
+        if (isTrailMechanism) {
+          const trailRow = await query(
+            `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
+             WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
+             ORDER BY signal_name, run_date DESC`,
+            [trailVariant.trailSignalName]
+          );
+          const notes = trailRow.rows[0]?.notes;
+          const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
+          runnerTrailWidth = parsed?.trail ?? null;
+        }
+        const forceShadow = isTrailMechanism
+          || getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type);
         const ins = await query(`
           INSERT INTO active_setups (
             trade_date, setup_type, fired_at, expires_at, status, origin_status,
@@ -6061,8 +6182,8 @@ export default function createACDRouter(io) {
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection,
-            size_multiplier, suppression_reason
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19)
+            size_multiplier, suppression_reason, runner_trail_width
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20)
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -6071,8 +6192,9 @@ export default function createACDRouter(io) {
           hist.winRate ?? null, hist.occurrences ?? null, hist.avgPnl ?? null, hist.t1HitRate ?? null,
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
           active.sizeMultiplier ?? 1.0,
-          getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type) ? 'SHADOW' : 'ACTIVE',
-          getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type) ? 'PERFORMANCE_BELOW_THRESHOLD' : null,
+          forceShadow ? 'SHADOW' : 'ACTIVE',
+          forceShadow ? (isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT' : 'PERFORMANCE_BELOW_THRESHOLD') : null,
+          runnerTrailWidth,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -6892,6 +7014,57 @@ export default function createACDRouter(io) {
   // keyLevels.js's richer copy, mounted before acd.js) — removed 2026-07-17 dead-routes
   // audit. See server/routes/keyLevels.js for the live implementation.
 
+  // Target calibration coverage — makes the corrected-resim guardrail funnel visible
+  // (docs/OPEN_THREADS.md 2026-07-19: "why aren't all 100+ setups calibrating" was
+  // previously unanswerable without re-running the guardrail logic by hand — the
+  // exclusion reason was computed and silently discarded). Every setup_type is
+  // re-evaluated by update_optimal_stops.mjs on every weekly (Sun 10:30 PM ET) and daily
+  // (4:20 PM ET) run — this endpoint's `lastRunDate` is direct proof of that cadence, not
+  // a claim. Consumed by AlphaEngineOverview.jsx's "Target Calibration Coverage" section.
+  router.get('/acd/target-calibration-coverage', async (req, res) => {
+    try {
+      const r = await query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes, run_date
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const tally = {};
+      const byReason = {};
+      // Widening evidence (2026-07-19) — the concrete, ongoing answer to "are targets
+      // actually learning to capture more of a move, not just using a different
+      // methodology label." oldTarget is the pre-correction (order-blind, truncated-MFE)
+      // target for the same setup_type; widenPct is how much further the guardrailed
+      // resimulation validated riding the trade before this setup's own real data said
+      // stop. No static "large move" threshold anywhere here — every number is this
+      // setup's own before/after comparison, not a hardcoded cutoff.
+      const widenings = [];
+      for (const row of r.rows) {
+        let n = null;
+        try { n = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes; } catch (_) {}
+        const succeeded = n?.method === 'corrected-resim';
+        const key = succeeded ? 'corrected_resim' : (n?.exclusionReason || 'stale_no_notes');
+        tally[key] = (tally[key] || 0) + 1;
+        if (!succeeded) (byReason[key] ||= []).push(row.signal_name);
+        else if (n.oldTarget != null && n.bestTarget != null && n.oldTarget > 0) {
+          widenings.push({ signal_name: row.signal_name, oldTarget: n.oldTarget, newTarget: n.bestTarget, widenPct: Math.round((n.bestTarget - n.oldTarget) / n.oldTarget * 100) });
+        }
+      }
+      widenings.sort((a, b) => b.widenPct - a.widenPct);
+      const lastRunDate = r.rows.reduce((max, row) => (!max || row.run_date > max ? row.run_date : max), null);
+      res.json({
+        total: r.rows.length,
+        correctedResimCount: tally.corrected_resim || 0,
+        tally,
+        exclusionExamples: Object.fromEntries(Object.entries(byReason).map(([k, v]) => [k, v.slice(0, 5)])),
+        widenings,
+        widenedCount: widenings.filter(w => w.widenPct > 0).length,
+        narrowedCount: widenings.filter(w => w.widenPct < 0).length,
+        lastRunDate,
+        schedule: 'Re-evaluated weekly (Sun 10:30 PM ET, scripts/run_weekly_backtests.sh) and daily (8:20 PM ET Mon-Fri, scripts/run_daily_calibration.sh) — every setup_type, every run, no manual promotion list.',
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════
   // Unified Setup/Edge Table — single source of truth for all tradeable signals
   // ═══════════════════════════════════════════════════════════════════════
@@ -6911,7 +7084,7 @@ export default function createACDRouter(io) {
       const [
         latestRunQ, auditQ, priceQ, atrQ, pdVaQ, pdDvQ, acdQ, ibQ, pdIbQ, pdOrQ, or5Q,
         pdSessQ, trQ, last30Days, moQ, pmVaFull, m1VaQ, m3VaQ,
-        pairsBaseQ, pairsSubQ, pairsWinQ,
+        pairsBaseQ, pairsSubQ, pairsWinQ, optStopLatestQ,
       ] = await Promise.all([
         // 1. Latest results per signal_type — each signal type has its own run cadence,
         // so a single global MAX(run_date) hides older signal types whenever any
@@ -7096,6 +7269,25 @@ export default function createACDRouter(io) {
             AND signal_name NOT LIKE '%_TOD_%'
             AND signal_name NOT LIKE '%_DT_%'
           ORDER BY signal_name, window_days
+        `),
+        // Real per-setup calibration, correctly latest-per-signal_name (2026-07-20).
+        // auditQ's own `latest_per_type` join (query 2 above) filters by MAX(run_date)
+        // GROUPed BY signal_type alone -- fine for signal_types where every signal_name
+        // is rewritten in lockstep on the same run, but OPTIMAL_STOP is not one of those:
+        // update_optimal_stops.mjs's own population query can skip a signal_name on a
+        // given run (thin data, direction inference failure, etc — see
+        // /api/acd/target-calibration-coverage's own "stale_no_notes" bucket, currently
+        // 7 signal_names), leaving that ONE row at an older run_date while every other
+        // OPTIMAL_STOP row advances — auditQ's join then excludes it entirely, not just
+        // shows it stale. Confirmed live: IB_HIGH_FADE_LONG (real optimal_stop=53,
+        // optimal_target=35) was silently absent from auditQ.rows for exactly this
+        // reason. This dedicated DISTINCT ON (signal_name) query is the same
+        // latest-per-signal_name pattern CLAUDE.md's own OPTIMAL_STOP hard rule already
+        // documents as correct — used here instead of trusting auditQ's per-type join.
+        query(`
+          SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float, optimal_target::float, notes
+          FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+          ORDER BY signal_name, run_date DESC
         `),
       ]);
 
@@ -7424,23 +7616,17 @@ export default function createACDRouter(io) {
 
       // Build unified setups array
       const setups = [];
-      // Per-setup overrides for scalps and runner targets (T2 = P75 MFE)
-      const overrides = {
-        'IB_MID_SCALP':    { stop: 50, t1: 15, t2: 30, freq: '3/day' },
-        'OR_MID_AFTER_IB': { stop: 35, t1: 20, t2: 40, freq: '5/day' },
-        'PD_POC':          { t2: 65 },
-        '5D_OR_MID':       { t2: 80 },
-        'PD_VAL':          { t2: 60 },
-        'PD_VAH':          { t2: 60 },
-        'PD_IB_MID':       { t2: 38 },
-        'FLOOR_PIVOT':     { t2: 65 },
-        'OR_HIGH':         { t2: 55 },
-        'FLOOR_R1':        { t2: 65 },
-        'PD_OR_MID':       { t2: 65 },
-        'IB_HIGH':         { t2: 55 },
-        'IB_LOW':          { t2: 55 },
-        'TRT_LONG':        { stop: 143, t1: 60, t2: 120 },
-      };
+      // Removed 2026-07-20: a 14-entry hand-typed stop/t1/t2 override map — the exact
+      // "never hand-type a WR%/N/$ literal" anti-pattern CLAUDE.md has caught 7 other
+      // times, an 8th instance sitting unnoticed here. Checked directly before removing:
+      // 13 of 14 entries were already fully redundant (a real OPTIMAL_STOP row exists for
+      // every signal_name they covered, and `optByName` above already takes priority over
+      // this map, so the hardcoded values were silently dead — never actually reached).
+      // Only TRT_LONG (N=16, below the N>=20 calibration floor) still lacked real data;
+      // per the same hard rule ("never hand-type... even as a placeholder"), it now
+      // correctly shows `--` (honestly uncalibrated) instead of a stale guess, and will
+      // pick up real data automatically the moment update_optimal_stops.mjs can compute
+      // one — same self-healing pattern as everything else in this file.
 
       // Priority order for dedup: SETUP_STATUS > LEVEL_FADE_AUDIT / MIDPOINT_FADE_AUDIT > SYSTEM_BACKTEST
       // UNIFIED_BACKTEST: shown only for the specific signal_names that replace CONTEXT/SCALP legacy orphan types.
@@ -7488,21 +7674,41 @@ export default function createACDRouter(io) {
       // classification pass nothing has suppression history yet, so requiring PROMOTE alone
       // (as literally read from the original decision text) would show almost nothing;
       // ACTIVE is the correct "good enough to trust, no exception involved" state.
-      // 2D_POC_LONG/SHORT and PD2_VAH_SHORT classify ACTIVE under this backtest_unified.js
-      // pass, but a separate, more rigorous, CONFIRMED-status investigation (RESEARCH_CLAIM
-      // 2d_poc_fade_no_edge, scripts/backtest_pd2_2dpoc_complete.mjs, 2026-07-17) already
-      // settled these as genuinely negative EV after fixing two real bugs this script hasn't
-      // incorporated: an entry-price-realism bug (this script likely still pegs entry to the
-      // exact theoretical level price rather than the touch bar's open) and 2D_POC's own live
-      // price computation having the value-area volume-bucketing bug. Showing these as ACTIVE
-      // here would directly contradict an already-confirmed finding -- excluded until
-      // backtest_unified.js's PD2/2D_POC methodology is updated to match (flagged separately,
-      // not fixed here -- that's real backtest-script work, out of scope for a display filter).
-      const CONFIRMED_NO_EDGE_OVERRIDE = new Set(['2D_POC_LONG', '2D_POC_SHORT', 'PD2_VAH_SHORT', 'PD2_VAH_LONG', 'PD2_VAL_LONG', 'PD2_VAL_SHORT']);
+      // 2D_POC_LONG/SHORT, PD2_VAH_LONG/SHORT, PD2_VAL_LONG/SHORT used to classify ACTIVE
+      // under this backtest_unified.js pass (wrong entry-price convention + the old volume-
+      // bucketing bug — confirmed via Gemini audit, independently re-verified by reading
+      // detectLevelFades()/buildTwoDayPOC() directly), directly contradicting the CONFIRMED
+      // RESEARCH_CLAIM 2d_poc_fade_no_edge (scripts/backtest_pd2_2dpoc_complete.mjs). A
+      // hand-maintained CONFIRMED_NO_EDGE_OVERRIDE Set used to live here as a display-only
+      // patch. Removed 2026-07-19: fixed at the root instead — the real gap wasn't the
+      // display, it was that this CONFIRMED finding had never been wired into the live
+      // unified suppression pipeline at all (these types had ~0 real active_setups history,
+      // so backtest_setup_status.mjs had nothing to suppress). backtest_pd2_2dpoc_complete.mjs
+      // now writes real SETUP_STATUS rows (SUPPRESS for the 3 N>=20 LONG variants, THIN_N for
+      // the thin SHORT ones) using its own validated simulation — hasPrimary() below already
+      // excludes any UNIFIED_BACKTEST row with a matching SETUP_STATUS row, so this override
+      // is now redundant AND the underlying live-candidate-construction gap (server/routes/
+      // acd.js's keepLevelsAll reads UNIFIED_BACKTEST stats directly, with no display-only
+      // override applying there) is actually closed, not just hidden from this one table.
       const isUnifiedDisplayWorthy = (row) =>
         (row.recommendation === 'ACTIVE' || row.recommendation === 'PROMOTE')
-        && !hasPrimary(row.signal_name)
-        && !CONFIRMED_NO_EDGE_OVERRIDE.has(row.signal_name);
+        && !hasPrimary(row.signal_name);
+
+      // Real live-used stop/target, keyed by signal_name — added 2026-07-20. Before this,
+      // the stop/t1/t2 shown for a SETUP_STATUS-sourced row (the overwhelming majority of
+      // this table) never read the real OPTIMAL_STOP calibration at all — the values shown
+      // instead came from a hand-typed `overrides` literal (the exact "never hand-type a
+      // WR%/N/$ literal" anti-pattern CLAUDE.md has caught 7 other times, removed) or a raw
+      // MAE/MFE percentile fallback with no relationship to what's actually live. Sourced
+      // from the dedicated optStopLatestQ (see its own query comment above) rather than
+      // auditQ.rows — auditQ's per-signal_type latest-run join silently drops any
+      // OPTIMAL_STOP signal_name that wasn't touched by the single most recent run.
+      const optByName = new Map();
+      for (const r of optStopLatestQ.rows) {
+        let notes = null;
+        try { notes = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes; } catch (_) {}
+        optByName.set(r.signal_name, { stop: r.optimal_stop, target: r.optimal_target, method: notes?.method || null });
+      }
 
       for (const row of auditQ.rows) {
         if (row.signal_type === 'SYSTEM_SUMMARY') continue;
@@ -7603,7 +7809,7 @@ export default function createACDRouter(io) {
         if (regimeFit) tests.push('regime analysis');
         if (row.avg_mae != null) tests.push('MAE/MFE audit');
 
-        const ov = overrides[row.signal_name] || {};
+        const opt = optByName.get(row.signal_name);
         setups.push({
           name: row.signal_name.replace(/_/g, ' '),
           rawName: row.signal_name,
@@ -7613,10 +7819,11 @@ export default function createACDRouter(io) {
           ev: row.ev_per_trade,
           totalPnl: status === 'ACTIVE' ? row.total_pnl : null,
           n: row.sample_size,
-          stop: ov.stop || row.current_stop || (row.p75_mae ? Math.round(row.p75_mae) : null),
-          t1: ov.t1 || row.current_target || (row.p50_mfe ? Math.round(row.p50_mfe) : null),
-          t2: ov.t2 || (row.p75_mfe ? Math.round(row.p75_mfe) : null),
-          runner: ov.t2 ? true : !!(row.p75_mfe && row.p50_mfe && row.p75_mfe > row.p50_mfe * 1.2),
+          stop: opt?.stop ?? row.current_stop ?? (row.p75_mae ? Math.round(row.p75_mae) : null),
+          t1: opt?.target ?? row.current_target ?? (row.p50_mfe ? Math.round(row.p50_mfe) : null),
+          t2: row.p75_mfe ? Math.round(row.p75_mfe) : null,
+          targetMethod: opt?.method || null,
+          runner: !!(row.p75_mfe && row.p50_mfe && row.p75_mfe > row.p50_mfe * 1.2),
           mae: row.avg_mae,
           mfe: row.avg_mfe,
           p50mae: row.p50_mae,
@@ -7625,7 +7832,7 @@ export default function createACDRouter(io) {
           p50mfe: row.p50_mfe,
           bestContext: describeLevel(row, meta.bestCtx) || row.notes || '',
           regimeFit,
-          frequency: ov.freq || meta.freq || null,
+          frequency: meta.freq || null,
           levelPrice,
           distFromPrice: dist,
           next2DayProb,

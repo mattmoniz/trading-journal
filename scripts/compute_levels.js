@@ -431,8 +431,25 @@ async function computeLevelsForDate(date) {
   }
 
   // ── 10. 3-month VA ───────────────────────────────────────────────────────
+  // Resolved 2026-07-19 (was OPEN_DECISION 3m_val_poc_same_day_lookahead_risk): this used
+  // to end at `date` inclusive, the only VA/POC level in this file that did — every sibling
+  // (PW, PM, PY above/below) bounds to a period fully BEFORE the current one starts, and
+  // VA/POC is a completed-prior-period structural reference everywhere else in this
+  // codebase, never a live-accumulating running stat the way VWAP legitimately is (that's
+  // WEEKLY_VWAP/MONTHLY_VWAP's own explicitly-documented, deliberate exception, immediately
+  // below the prior comment block that used to sit here). Confirmed via git log -S: this is
+  // the original 2026-07-01 code (commit 53ccf6f), never modified since, and that commit's
+  // own message frames it as "prior week/month/3M value areas" — grouped with PW/PM's
+  // completed-prior-period convention, not the VWAP one. Zero SETUP_STATUS/active_setups
+  // history existed for 3M_VAL_FADE/3M_POC_FADE at fix time (never fired), so this closes
+  // cleanly with no live calibration to reconcile. Bounds the trailing-3-month window at
+  // `date - 1` (yesterday) instead of `date` — same rolling-lookback length, just point-in-
+  // time-safe like every other VA/POC level.
   const m3Start = threeMonthStart(date);
-  const m3VA = await computeValueArea(m3Start, date);
+  const m3EndD = new Date(date + 'T12:00:00Z');
+  m3EndD.setUTCDate(m3EndD.getUTCDate() - 1);
+  const m3End = m3EndD.toISOString().slice(0, 10);
+  const m3VA = await computeValueArea(m3Start, m3End);
   if (m3VA) {
     add('3M_VAH', m3VA.vah, 'QUARTERLY');
     add('3M_VAL', m3VA.val, 'QUARTERLY');

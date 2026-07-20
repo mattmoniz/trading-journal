@@ -1,9 +1,16 @@
 import React from 'react';
 
 export default function DayOfWeekPlaybookCard({ todayData, forecast }) {
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const etDateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const dow = new Date(etDateStr + 'T12:00:00').getDay();
   const dowNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  // Globex reopens Sunday 6:00 PM ET — matches server/index.js's own Globex-hours poller
+  // convention. The plain dow===0/6 check below used to unconditionally claim "MARKET
+  // CLOSED" all Sunday, including the evening once Globex (and this system's own overnight
+  // level-fade detection) is actually live. Found 2026-07-19 — user report, live-checked
+  // against a real Sunday-evening session with fresh bars flowing and setups resolving.
+  const isSundayGlobexOpen = dow === 0 && (nowET.getHours() >= 18);
 
   const monStats = todayData?.tradeBacktest?.allTime?.dowStats?.[1] || { winRate: 40.0, avgPnl: -339 };
   const friStats = todayData?.tradeBacktest?.allTime?.dowStats?.[5] || { winRate: 36.4, avgPnl: 374 };
@@ -36,6 +43,13 @@ export default function DayOfWeekPlaybookCard({ todayData, forecast }) {
     recs: ['IB_BULLISH/BEARISH', 'OPEN_TEST_DRIVE_LONG/SHORT'],
     color: '#10b981',
     bg: 'rgba(16, 185, 129, 0.05)',
+  } : isSundayGlobexOpen ? {
+    title: 'Sunday Globex — Overnight Session',
+    alert: '🌙 GLOBEX OPEN',
+    text: 'RTH is closed but Globex is live and this system is watching overnight PD VAH/VAL/POC fades. No day-of-week RTH playbook applies until Monday\'s open — use this window to finish weekend review.',
+    recs: [],
+    color: '#818cf8',
+    bg: 'rgba(129, 140, 248, 0.05)',
   } : {
     title: 'Weekend Replay & Review',
     alert: '☕ MARKET CLOSED',

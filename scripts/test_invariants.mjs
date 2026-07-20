@@ -101,20 +101,49 @@ async function main() {
     `);
     const optStops = Object.fromEntries(osRows.rows.map(r => [r.signal_name, r]));
 
-    for (const [variantType, meta] of Object.entries(CONDITIONAL_VARIANTS)) {
-      // a) SETUP_STATUS exists
-      if (!setupStatus[variantType]) {
-        fail(`${variantType}: no SETUP_STATUS row in performance_audit — run ${meta.backtestScript}`);
-      } else {
-        ok(`${variantType}: SETUP_STATUS = ${setupStatus[variantType]}`);
-      }
+    // Trail-mechanism variants (docs/SCALEOUT_RUNNER_SPEC.md — `trailSignalName` set)
+    // don't follow the fixed-stop/fixed-target SETUP_STATUS+OPTIMAL_STOP convention: the
+    // exit itself is dynamic, calibrated instead via signal_type='BREAKEVEN_TRAIL_TEST'
+    // (trail width, not a stop/target pair). They also genuinely have zero SETUP_STATUS
+    // history until real live-resolved trades accumulate — server/routes/acd.js forces
+    // status='SHADOW' at insert time unconditionally for these regardless of
+    // SETUP_STATUS (verified directly in the INSERT block, not assumed), so an absent
+    // SETUP_STATUS row is an expected bootstrap state, not a miscalibration.
+    const trailRows = await client.query(`
+      SELECT DISTINCT ON (signal_name) signal_name, notes FROM performance_audit
+      WHERE signal_type = 'BREAKEVEN_TRAIL_TEST' ORDER BY signal_name, run_date DESC
+    `);
+    const trailCalib = Object.fromEntries(trailRows.rows.map(r => [r.signal_name, r]));
 
-      // b) OPTIMAL_STOP exists
-      if (!optStops[variantType]) {
-        fail(`${variantType}: no OPTIMAL_STOP row in performance_audit — run ${meta.backtestScript}`);
+    for (const [variantType, meta] of Object.entries(CONDITIONAL_VARIANTS)) {
+      if (meta.trailSignalName) {
+        const tc = trailCalib[meta.trailSignalName];
+        if (!tc) {
+          fail(`${variantType}: no BREAKEVEN_TRAIL_TEST row '${meta.trailSignalName}' — run ${meta.backtestScript}`);
+        } else {
+          const notes = typeof tc.notes === 'string' ? JSON.parse(tc.notes) : tc.notes;
+          ok(`${variantType}: BREAKEVEN_TRAIL_TEST trail=${notes?.trail}pt (backtest OOS EV $${notes?.oosEv?.toFixed(2)})`);
+        }
+        if (!setupStatus[variantType]) {
+          ok(`${variantType}: no SETUP_STATUS row yet — expected pre-live-data bootstrap state (forced SHADOW at insert regardless)`);
+        } else {
+          ok(`${variantType}: SETUP_STATUS = ${setupStatus[variantType]} (live data accumulating)`);
+        }
       } else {
-        const os = optStops[variantType];
-        ok(`${variantType}: OPTIMAL_STOP stop=${os.optimal_stop}pt target=${os.optimal_target}pt`);
+        // a) SETUP_STATUS exists
+        if (!setupStatus[variantType]) {
+          fail(`${variantType}: no SETUP_STATUS row in performance_audit — run ${meta.backtestScript}`);
+        } else {
+          ok(`${variantType}: SETUP_STATUS = ${setupStatus[variantType]}`);
+        }
+
+        // b) OPTIMAL_STOP exists
+        if (!optStops[variantType]) {
+          fail(`${variantType}: no OPTIMAL_STOP row in performance_audit — run ${meta.backtestScript}`);
+        } else {
+          const os = optStops[variantType];
+          ok(`${variantType}: OPTIMAL_STOP stop=${os.optimal_stop}pt target=${os.optimal_target}pt`);
+        }
       }
 
       // c) inferDirection matches declared direction

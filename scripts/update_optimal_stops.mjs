@@ -81,26 +81,35 @@ const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 
 // A second hand-copied formula would itself be exactly the same bug class this exists to
 // prevent (see docs/OPEN_THREADS.md, 2026-07-17: ev_per_trade silently stopped matching
 // optStop/optTarget for 8 days before anyone caught it) -- import this, don't reimplement it.
-export function computeEvAtStopTarget(trades, stop, target, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP) {
+// commission defaults to the real MNQ round-trip commission (LIVE_INSTRUMENT) — added
+// 2026-07-19 (OPEN_DECISION compute_ev_at_stop_target_missing_commission). The first two
+// branches (synthetic stop-hit/target-hit at a CANDIDATE level) previously omitted
+// commission entirely, while the third (actual_pnl, sourced from real active_setups rows
+// resolved by the live engine) already included it correctly — an inconsistency, not a
+// uniform bias, that understated cost specifically for trades reclassified under a
+// candidate stop/target rather than kept at their own real exit. Optional trailing
+// parameter (not a signature-breaking change) so all 11+ existing call sites across
+// scripts/ get the fix automatically via the default, with zero call-site edits needed.
+export function computeEvAtStopTarget(trades, stop, target, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
   if (!trades.length) return null;
   let evSum = 0;
   for (const t of trades) {
     const mae = +t.mae_points, mfe = +t.mfe_points;
-    if (mae > stop)         evSum += -stop * stopDpp;
-    else if (mfe >= target) evSum += target * targetDpp;
+    if (mae > stop)         evSum += -stop * stopDpp - commission;
+    else if (mfe >= target) evSum += target * targetDpp - commission;
     else                    evSum += +t.actual_pnl;
   }
   return evSum / trades.length;
 }
 
 // Returns { target, ev }, or null if fewer than MIN_N trades or no candidates ≤ maxT.
-function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP) {
+function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, targetDpp = DEFAULT_DPP, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
   if (trades.length < MIN_N) return null;
   const candidates = TARGET_SWEEP.filter(T => T <= maxT);
   if (candidates.length === 0) return null;
   let bestT = null, bestEV = -Infinity;
   for (const T of candidates) {
-    const ev = computeEvAtStopTarget(trades, stop, T, stopDpp, targetDpp);
+    const ev = computeEvAtStopTarget(trades, stop, T, stopDpp, targetDpp, commission);
     if (ev > bestEV) { bestEV = ev; bestT = T; }
   }
   return { target: bestT, ev: bestEV };
@@ -129,14 +138,14 @@ function sweepOptimalTarget(trades, stop, maxT = 150, stopDpp = DEFAULT_DPP, tar
 // estimate a single outlier can shift. Require the same MIN_N floor already used
 // elsewhere in this file to apply to that tail count too, not just the type's total N
 // — derived per-candidate as MIN_N/(1-pct), not a new hardcoded number.
-export function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, targetDpp) {
+export function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, targetDpp, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
   if (trades.length < MIN_N) return null;
   let best = null;
   for (const { value, pct } of maeCandidates) {
     const S = Math.round(value);
     const requiredN = Math.ceil(MIN_N / (1 - pct));
     if (trades.length < requiredN) continue; // tail too thin to trust this percentile's boundary
-    const swept = sweepOptimalTarget(trades, S, maxT, stopDpp, targetDpp);
+    const swept = sweepOptimalTarget(trades, S, maxT, stopDpp, targetDpp, commission);
     if (!swept) continue;
     if (!best || swept.ev > best.ev) best = { stop: S, target: swept.target, ev: swept.ev };
   }
@@ -331,12 +340,30 @@ async function main() {
         long: direction === 'LONG', pnlPerPoint: DEFAULT_DPP, commission: LIVE_INSTRUMENT.commissionPerRoundTrip,
       });
       if (!corrected.exclusionReason) {
+        // oldTarget persisted alongside the new one (2026-07-19) so "is the corrected
+        // methodology actually capturing more of the move, not just a different number"
+        // is queryable/visible going forward, not something that has to be re-derived by
+        // hand each time someone asks — see AlphaEngineOverview.jsx's calibration panel.
+        // Captured BEFORE optTarget is overwritten below, from the same value already
+        // passed in as computeCorrectedTarget's own `oldTarget` argument.
+        const preCorrectionTarget = optTarget;
         optTarget = corrected.bestTarget;
         optEV = corrected.fullEv;
         targetMethod = 'corrected-resim';
-        correctedNotes = JSON.stringify({ method: 'corrected-resim', ...corrected });
+        correctedNotes = JSON.stringify({ method: 'corrected-resim', oldTarget: preCorrectionTarget, ...corrected });
         correctedCount++;
+      } else {
+        // Persist WHY corrected-resim was attempted but didn't qualify — this used to be
+        // computed and silently discarded (notes stayed null), so "why aren't all setups
+        // using the corrected method" had no answer without re-running the guardrail logic
+        // by hand. Found 2026-07-19 answering exactly that question. method stays whatever
+        // the fallback methodology actually is (EV-sweep / p50_mfe fallback) — this is
+        // diagnostic-only, never read as authoritative by test_invariants.mjs check [5]
+        // (which only special-cases method==='corrected-resim').
+        correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: true, exclusionReason: corrected.exclusionReason, exclusionDetail: corrected.exclusionDetail });
       }
+    } else {
+      correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: false, exclusionReason: !direction ? 'no_inferred_direction' : 'insufficient_trade_count', exclusionDetail: `expandedTrades=${expandedTrades.length}` });
     }
 
     await query(`

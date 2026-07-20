@@ -1713,7 +1713,12 @@ function PerformanceAuditPanel() {
                         }
                         case 'ev': return <td key={c.key} style={{ ...cs, fontWeight: 800, color: evColor(s.ev) }}>{s.ev != null ? '$' + Math.round(s.ev) : '--'}</td>;
                         case 'stop': return <td key={c.key} style={{ ...cs, color: '#f87171' }}>{s.stop ? fmtN(s.stop) + 'pt' : '--'}</td>;
-                        case 't1': return <td key={c.key} style={{ ...cs, color: '#4ade80' }}>{s.t1 ? fmtN(s.t1) + 'pt' : '--'}</td>;
+                        case 't1': return <td key={c.key} style={{ ...cs, color: '#4ade80' }}>
+                          {s.t1 ? fmtN(s.t1) + 'pt' : '--'}
+                          {s.targetMethod === 'corrected-resim' && (
+                            <span title="Chronologically-resimulated, guardrail-validated target (thin-tail/plateau/OOS/rigor-checked) — replaces the older order-blind EV-sweep, which was structurally blind to genuine continuation past target." style={{ marginLeft: 4, fontSize: 9, fontWeight: 800, color: '#a78bfa', background: 'rgba(167,139,250,0.15)', border: '1px solid rgba(167,139,250,0.4)', borderRadius: 3, padding: '0px 4px', cursor: 'help' }}>✓ CAL</span>
+                          )}
+                        </td>;
                         case 't2': return <td key={c.key} style={{ ...cs, color: s.t2 ? '#22d3ee' : '#64748b' }}>{s.t2 ? fmtN(s.t2) + 'pt' : '--'}</td>;
                         case 'mae': return <td key={c.key} style={{ ...cs, color: '#fb923c' }}>{s.mae != null ? fmtN(s.mae) + 'pt' : '--'}</td>;
                         case 'mfe': return <td key={c.key} style={{ ...cs, color: '#34d399' }}>{s.mfe != null ? fmtN(s.mfe) + 'pt' : '--'}</td>;

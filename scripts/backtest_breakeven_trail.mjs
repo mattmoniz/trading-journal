@@ -345,8 +345,8 @@ async function main() {
   console.log('Guardrail funnel Tier A:', JSON.stringify(funnel.A));
   console.log('Guardrail funnel Tier B:', JSON.stringify(funnel.B));
   
-  fs.writeFileSync('scratch/antigravity_response.md', responseMd);
-  console.log('Done, wrote results to scratch/antigravity_response.md');
+  fs.writeFileSync('scratch/breakeven_trail_report.md', responseMd);
+  console.log('Done, wrote results to scratch/breakeven_trail_report.md');
   
   const todayRow = await query(`SELECT CURRENT_DATE::text as d`);
   const today = todayRow.rows[0].d;
