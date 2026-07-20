@@ -17,6 +17,7 @@
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { recordClaim } from './record_claim.mjs';
 
 const EXTENSION_WINDOW_BARS = 240;
 
@@ -118,17 +119,14 @@ async function main() {
     : `NEGATIVE: r=${pearsonR.toFixed(4)} is too weak to serve as a standalone live trigger.`;
   console.log(`\nVerdict: ${verdict}`);
 
-  await query(`
-    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-    VALUES ($1, 0, 'RESEARCH_CLAIM', 'next_level_gap_predicts_target_extension_size', $2, $3)
-    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET sample_size=EXCLUDED.sample_size, notes=EXCLUDED.notes
-  `, [today, n, JSON.stringify({
-    claim_text: `${verdict} Pooled Pearson r=${pearsonR.toFixed(4)} between distance-to-next-known-level-beyond-target and actual post-target extension size (N=${n}). Quartile means (tightest-room to most-room): ${quartiles.map((q,i) => `Q${i+1}=${(q.reduce((s,r)=>s+r.extension,0)/q.length).toFixed(1)}pt`).join(', ')}.`,
-    source_file: 'scripts/test_extension_vs_next_level_distance.mjs', source_date: today,
-    rigor_status: rigor.clean ? 'clean' : 'flagged', status: Math.abs(pearsonR) > 0.15 ? 'PROVISIONAL' : 'CONFIRMED',
-    last_verified_date: today, next_recheck_due: today,
-  })]);
-  console.log('Persisted RESEARCH_CLAIM: next_level_gap_predicts_target_extension_size');
+  await recordClaim({
+    slug: 'next_level_gap_predicts_target_extension_size',
+    claimText: `${verdict} Pooled Pearson r=${pearsonR.toFixed(4)} between distance-to-next-known-level-beyond-target and actual post-target extension size (N=${n}). Quartile means (tightest-room to most-room): ${quartiles.map((q,i) => `Q${i+1}=${(q.reduce((s,r)=>s+r.extension,0)/q.length).toFixed(1)}pt`).join(', ')}.`,
+    sourceFile: 'scripts/test_extension_vs_next_level_distance.mjs', sourceDate: today,
+    sampleSize: n, rigorStatus: rigor.clean ? 'clean' : 'flagged',
+    status: Math.abs(pearsonR) > 0.15 ? 'PROVISIONAL' : 'CONFIRMED',
+  });
+  console.log('Persisted RESEARCH_CLAIM via recordClaim(): next_level_gap_predicts_target_extension_size (next recheck +30d)');
   process.exit(0);
 }
 

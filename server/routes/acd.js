@@ -737,7 +737,7 @@ export async function structurallyInvalidateSetups(io) {
   // classification always resolve to POST_ENTRY. Same root cause as the resolveSetupsByPrice
   // fix above. Found 2026-06-30.
   const activeWithTime = await query(`
-    SELECT id, setup_type, trade_date, stop_level,
+    SELECT id, setup_type, trade_date, stop_level, entry_zone_low, entry_zone_high,
       EXTRACT(epoch FROM ((NOW() AT TIME ZONE 'America/New_York') - fired_at)) / 60 as minutes_active
     FROM active_setups
     WHERE trade_date=$1 AND status='ACTIVE'
@@ -766,13 +766,29 @@ export async function structurallyInvalidateSetups(io) {
       : 0;
     const invalidationTiming = minutesActive >= 2 ? 'POST_ENTRY' : 'PRE_ENTRY';
 
+    // Mark-to-market actual_pnl for POST_ENTRY invalidations only (a real trader could have
+    // been in the trade — "the premise broke" after entry is a real, scoreable outcome, same
+    // convention as the TIME_EXPIRED fix above). PRE_ENTRY stays null on purpose: no real
+    // entry ever happened, so there's nothing to mark to market. User-confirmed design
+    // decision 2026-07-20 (OPEN_DECISION invalidated_session_closed_setups_never_get_actual_pnl).
+    let pnl = null;
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    if (invalidationTiming === 'POST_ENTRY' && entry != null) {
+      const long = isLongSetup(row.setup_type);
+      pnl = Math.round(((long ? (currentPrice - entry) : (entry - currentPrice))
+        * LIVE_INSTRUMENT.dollarsPerPoint - LIVE_INSTRUMENT.commissionPerRoundTrip) * 100) / 100;
+    }
+
     const updated = await query(`
       UPDATE active_setups
       SET status='EXPIRED', resolution='INVALIDATED', resolved_at=NOW(),
-          updated_at=NOW(), invalidation_timing=$2
+          updated_at=NOW(), invalidation_timing=$2,
+          actual_pnl=$3, price_at_resolution=$4,
+          resolution_method=$5, actual_outcome='INVALIDATED'
       WHERE id=$1 AND status='ACTIVE'
       RETURNING *
-    `, [row.id, invalidationTiming]);
+    `, [row.id, invalidationTiming, pnl, pnl != null ? currentPrice : null,
+        pnl != null ? 'MARK_TO_MARKET' : null]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}

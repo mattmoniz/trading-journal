@@ -177,3 +177,41 @@ families flip sign one way or the other, and a smaller set of clear winners look
 consideration. Implementing this live requires changing the RTH gate in
 `server/routes/acd.js` (`keepLevelsAll`/`nearLevels`), not just the backtest — the bigger,
 higher-blast-radius half of this work, deliberately not done the same night this was found.
+
+## ⚠️ UPDATE 2026-07-20 (same day, follow-up): the same-day-forming-levels table (12 rows) is confirmed unreliable, not just unverified
+
+Independently re-verified `IB_HIGH_SHORT`/`IB_LOW_LONG` (the two rows flagged above as
+having suspiciously large N multipliers) before any live change, per explicit user
+direction. Built `scripts/verify_ib_wider_window_20260720.mjs` — imports the real
+`resolve()` from `backtest_unified.js` (not reimplemented), uses canonical `level_prices`
+values (not recomputed), and its RTH-only output was cross-checked byte-exact against the
+committed script's own `--dry-run` (N=6/N=19 match exactly).
+
+**The wider-window side does NOT match Gemini's report, and one row disagrees on sign:**
+
+| Setup | Gemini (valid-until-superseded) | Independent reimplementation |
+|---|---|---|
+| IB_HIGH_SHORT | N=93, WR=79.2%, EV=+$22.67 | N=279, WR=61.6%, EV=+$2.63 |
+| IB_LOW_LONG | N=98, WR=74.2%, EV=+$13.79 | N=249, WR=63.9%, **EV=-$0.28** |
+
+**Root cause is structural, not a simple arithmetic bug**: `detectLevelFades()` hardcodes
+an RTH-only bar filter inside its own loop (`if (b.tod < RTH_START || b.tod >= RTH_END)
+continue;`) — it cannot be called with a wider window at all. Any same-day-forming-level
+wider-window test (all 6 levels / 12 rows in the table below, not just these 2) therefore
+requires a bespoke reimplementation of the touch-detection loop outside the real function —
+exactly the reimplementation risk CLAUDE.md's "import the real function, never reimplement"
+hard rule exists to prevent (see the `classifyRegime()` incident), and here it could not be
+avoided by construction. Two independent reimplementations now disagree by 3x on N and flip
+sign on one row's EV — this is the same failure mode, found again.
+
+**Practical conclusion**: treat the entire 12-row same-day-forming-levels table as
+unreliable, not just the 2 originally-flagged rows — do not use ANY of `OR_HIGH`/`OR_LOW`/
+`IB_HIGH`/`IB_LOW`/`IB_MID_SCALP`/`OR_MID_AFTER_IB`'s wider-window numbers for a live
+decision until a third, carefully reconciled implementation resolves the disagreement. The
+separate 59-level prior-period-levels table above is a different, more mechanically
+straightforward case (level values are already fixed before the scan window starts — no
+same-day formation dependency) and was NOT the subject of this re-check; it remains only
+spot-checked on its RTH-only side (`CAM_R4_SHORT`), not its 24hr side. `RESEARCH_CLAIM`
+`ib_wider_window_reimpl_disagreement` recorded. `OPEN_DECISION`
+`wider_window_level_fade_backtest_findings_20260720` updated (still PENDING, HIGH) with
+this narrower, corrected scope.

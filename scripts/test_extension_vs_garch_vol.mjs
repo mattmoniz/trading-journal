@@ -17,6 +17,7 @@
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { recordClaim } from './record_claim.mjs';
 
 const EXTENSION_WINDOW_BARS = 240;
 
@@ -115,17 +116,13 @@ async function main() {
   console.log('\nRigor (day-clustering/stability of extension distribution):', rigor);
 
   const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
-  await query(`
-    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-    VALUES ($1, 0, 'RESEARCH_CLAIM', 'garch_vol_predicts_target_extension_size', $2, $3)
-    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET sample_size=EXCLUDED.sample_size, notes=EXCLUDED.notes
-  `, [today, n, JSON.stringify({
-    claim_text: `Pearson r=${pearsonR.toFixed(4)} between that day's GARCH_VOL_SCALE and post-target extension size (N=${n}). Bucket means: LOW=${(buckets.LOW.reduce((a,b)=>a+b,0)/(buckets.LOW.length||1)).toFixed(1)}pt (N=${buckets.LOW.length}), NORMAL=${(buckets.NORMAL.reduce((a,b)=>a+b,0)/(buckets.NORMAL.length||1)).toFixed(1)}pt (N=${buckets.NORMAL.length}), HIGH=${(buckets.HIGH.reduce((a,b)=>a+b,0)/(buckets.HIGH.length||1)).toFixed(1)}pt (N=${buckets.HIGH.length}).`,
-    source_file: 'scripts/test_extension_vs_garch_vol.mjs', source_date: today,
-    rigor_status: rigor.clean ? 'clean' : 'flagged', status: 'PROVISIONAL', last_verified_date: today,
-    next_recheck_due: today,
-  })]);
-  console.log('\nPersisted preliminary RESEARCH_CLAIM: garch_vol_predicts_target_extension_size');
+  await recordClaim({
+    slug: 'garch_vol_predicts_target_extension_size',
+    claimText: `Pearson r=${pearsonR.toFixed(4)} between that day's GARCH_VOL_SCALE and post-target extension size (N=${n}). Bucket means: LOW=${(buckets.LOW.reduce((a,b)=>a+b,0)/(buckets.LOW.length||1)).toFixed(1)}pt (N=${buckets.LOW.length}), NORMAL=${(buckets.NORMAL.reduce((a,b)=>a+b,0)/(buckets.NORMAL.length||1)).toFixed(1)}pt (N=${buckets.NORMAL.length}), HIGH=${(buckets.HIGH.reduce((a,b)=>a+b,0)/(buckets.HIGH.length||1)).toFixed(1)}pt (N=${buckets.HIGH.length}).`,
+    sourceFile: 'scripts/test_extension_vs_garch_vol.mjs', sourceDate: today,
+    sampleSize: n, rigorStatus: rigor.clean ? 'clean' : 'flagged', status: 'CONFIRMED',
+  });
+  console.log('\nPersisted RESEARCH_CLAIM via recordClaim(): garch_vol_predicts_target_extension_size (next recheck +30d)');
   process.exit(0);
 }
 
