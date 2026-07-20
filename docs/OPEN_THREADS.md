@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-20 (same session, continued): apples-to-apples RTH-only vs 24hr for the SAME levels/window — 24hr comes out behind
+
+User asked why the 24hr-cycle walkthrough's P&L ($2.4k-$5.9k, 1yr, 52 levels) looked lower than the earlier RTH-only prop walkthrough's ($11.6k-$27.7k, 2yr, full ~103-type roster) — correctly suspicious of an unexplained drop. Explained the real, non-bug reasons (different time window, different setup universe, different data source: real historical `actual_pnl` vs a fresh flat-90/40-target simulation) — those two numbers were never comparable in the first place, not a sign anything regressed.
+
+Built the actual apples-to-apples comparison requested (`scripts/backtest_24hr_vs_rth_1yr_comparison_20260720.mjs`): same 52 prior-period levels, same past year, same simulated stop/target, same DLL wrapper — only the scan window differs (RTH-only vs the same ~15.5hr-overnight-plus-RTH window validated earlier today). **Result: 24hr underperforms RTH-only at every DLL level.** RTH-only: $6,451/$5,901/$3,856 ($200/$400/$600 DLL). 24hr: $5,862/$4,006/$2,412. Delta: **-$589/-$1,895/-$1,444** — more trades every time (333-567 more), but net worse P&L every time.
+
+This is a real, honest finding, but a narrower one than it might look: it's a **pooled** comparison across all 52 levels at once, over one specific year. It doesn't contradict the original multi-year wider-window backtest's per-level findings (which found real winners like `DAILY_OPEN_LONG/SHORT`, `3M_VAL_SHORT`, etc. — note `DAILY_OPEN` itself is excluded from THIS test as same-day-forming, so that particular original "winner" was never eligible for this comparison anyway) — a blended aggregate can easily mask individual winners and losers cancelling out. `RESEARCH_CLAIM` `24hr_vs_rth_apples_to_apples_1yr_negative` recorded. **Not done**: a per-level breakdown of this same 1yr apples-to-apples run (which specific levels actually did better under 24hr, not just the pooled total) — worth building if the "which levels benefit" question comes up again.
+
 ## ✅ 2026-07-20 (same session, continued): "24hr trading cycle" past-year prop walkthrough — modest positive, but only after finding and fixing 3 rounds of contamination in the process
 
 Direct follow-up to the real-N prop walkthrough above. User asked to see the wider-window ("24hr trading cycle") idea's performance on a prop account over the past year specifically. Before building anything, re-verified the underlying wider-window backtest more thoroughly than the earlier same-day pass — this materially changed the conclusion.
