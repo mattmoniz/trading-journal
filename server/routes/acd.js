@@ -195,10 +195,16 @@ export async function resolveSetupsByPrice(io) {
   // frontend card to display "armed, trailing" — see docs/SCALEOUT_RUNNER_SPEC.md §7),
   // never read back in as input.
   const active = await query(`
-    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, expires_at::text as expires_at,
+           entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
            runner_trail_width::float as runner_trail_width
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
+  // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the
+  // comment atop this function) -- lets expiry be compared via plain string comparison,
+  // avoiding the ET/UTC Date-parsing landmine already found twice in this file.
+  const nowEtRow = await query(`SELECT (NOW() AT TIME ZONE 'America/New_York')::text as now_et`);
+  const nowEt = nowEtRow.rows[0].now_et;
 
   // Was a real N+1: one "bars since fired_at" query per unresolved setup (up to ~20
   // on a normal day), each independently re-scanning price_bars_primary's full
@@ -349,8 +355,14 @@ export async function resolveSetupsByPrice(io) {
               // Matches scripts/backtest_breakeven_trail.mjs lines ~216-225 exactly — a
               // sharp same-bar reversal right after arming scratches immediately rather
               // than riding to the next bar. Must reproduce this or live diverges from
-              // the backtest's own reported scratch rate.
-              resolution = 'TRAIL_EXIT'; method = 'SAME_BAR_ARM_AND_STOP';
+              // the backtest's own reported scratch rate. Method string kept <=20 chars —
+              // resolution_method is VARCHAR(20); found 2026-07-20 that this exact literal
+              // (21 chars) and BREAKEVEN_TIME_EXPIRED below (22 chars) would have thrown a
+              // "value too long" error and crashed resolveSetupsByPrice() for EVERY setup
+              // (one shared loop) the first time either code path actually fired — caught
+              // before it ever did, while building an unrelated data-recovery script that
+              // hit the identical column-length issue with its own method string.
+              resolution = 'TRAIL_EXIT'; method = 'SAME_BAR_ARM_STOP';
               resolvedAt = bar.ts; priceAtRes = trailStopPrice;
             }
           } else if (stopHit) {
@@ -372,7 +384,7 @@ export async function resolveSetupsByPrice(io) {
           }
         }
         if (!resolution && isSessionEnd) {
-          resolution = 'TIME_EXPIRED'; method = 'BREAKEVEN_TIME_EXPIRED';
+          resolution = 'TIME_EXPIRED'; method = 'TRAIL_TIME_EXPIRED';
           resolvedAt = bar.ts; priceAtRes = bar.close;
         }
         if (resolution) break;
@@ -401,6 +413,27 @@ export async function resolveSetupsByPrice(io) {
         priceAtRes = stop;
         break;
       }
+    }
+
+    // Mark-to-market TIME_EXPIRED for the plain (non-trail) case: the trail branch
+    // above already handles its own timeout via isSessionEnd, but this general branch
+    // had no equivalent -- a setup that never hit stop/target just fell through to
+    // expireStaleSetups() (a separate, later call in the same poll cycle), which force-
+    // closes it with resolution='TIME_EXPIRED' and NEVER sets actual_pnl, leaving a
+    // permanent null. Found 2026-07-20 while recovering 341 historical rows with this
+    // exact shape (TRT_LONG/SHORT and 16 other setup_types) -- confirmed still live via
+    // 42 more null rows, some fired as recently as 2026-07-17, proving this wasn't a
+    // one-off from a deleted script but an ongoing structural gap. Fixed at the source:
+    // once expires_at has passed and at least one real bar was seen, mark-to-market at
+    // the last available bar's close instead of leaving the row for expireStaleSetups()
+    // to null out. Genuinely bar-data-less rows (fired but price_bars_primary never got
+    // a bar after) are left for expireStaleSetups() -- there's no price to mark against.
+    if (!resolution && trailWidth == null && bars.rows.length > 0 && row.expires_at && nowEt >= row.expires_at) {
+      const lastBar = bars.rows[bars.rows.length - 1];
+      resolution = 'TIME_EXPIRED';
+      method = 'MARK_TO_MARKET';
+      resolvedAt = lastBar.ts;
+      priceAtRes = lastBar.close;
     }
 
     // Touch-quality (order-flow) — informational only, side-effect UPDATE, never
@@ -632,19 +665,46 @@ export async function expireStaleSetups(io) {
     RETURNING id
   `, [todayET]);
 
-  const expired = await query(`
-    UPDATE active_setups
-    SET status = 'EXPIRED', resolution = 'TIME_EXPIRED', resolved_at = NOW(), updated_at = NOW()
-    WHERE status IN ('ACTIVE', 'SHADOW')
-      AND expires_at IS NOT NULL
-      AND expires_at < NOW()
-    RETURNING *
+  // This is the backstop for whatever resolveSetupsByPrice()'s own mark-to-market
+  // (added 2026-07-20, see the comment there) couldn't reach: rows with no entry/stop/t1
+  // to walk against, or genuinely zero price_bars_primary rows since fired_at. Those are
+  // rare, but "rare" isn't the same as "leave actual_pnl null forever" -- fall back to the
+  // single most recent known close (same live-price lookup ABSORPTION_LONG/COIL_SURGE
+  // already use above) rather than a blunt no-pnl status flip. Only genuinely un-scoreable
+  // rows (no entry price recorded, or no price data has EVER arrived) stay null.
+  const candidates = await query(`
+    SELECT id, setup_type, trade_date::text as trade_date, entry_zone_low, entry_zone_high
+    FROM active_setups
+    WHERE status IN ('ACTIVE', 'SHADOW') AND expires_at IS NOT NULL AND expires_at < NOW()
   `);
-  for (const row of expired.rows) {
+  let lastKnownClose = null;
+  if (candidates.rows.length) {
+    const pxRow = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);
+    lastKnownClose = pxRow.rows[0]?.close ?? null;
+  }
+  const expiredRows = [];
+  for (const row of candidates.rows) {
+    const long = isLongSetup(row.setup_type);
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    let pnl = null;
+    if (lastKnownClose != null && entry != null) {
+      pnl = Math.round(((long ? (lastKnownClose - entry) : (entry - lastKnownClose))
+        * LIVE_INSTRUMENT.dollarsPerPoint - LIVE_INSTRUMENT.commissionPerRoundTrip) * 100) / 100;
+    }
+    const upd = await query(`
+      UPDATE active_setups
+      SET status='EXPIRED', resolution='TIME_EXPIRED', resolution_method=$2, actual_outcome='TIME_EXPIRED',
+          actual_pnl=$3, price_at_resolution=$4, resolved_at=NOW(), updated_at=NOW()
+      WHERE id=$1
+      RETURNING *
+    `, [row.id, pnl != null ? 'MARK_TO_MARKET' : 'NO_PRICE_DATA', pnl, pnl != null ? lastKnownClose : null]);
+    if (upd.rows[0]) expiredRows.push(upd.rows[0]);
+  }
+  for (const row of expiredRows) {
     try { await dropToTimeline(row); } catch (_) {}
     if (io) io.emit('setup-expired', { setupId: row.id, setupType: row.setup_type, tradeDate: row.trade_date });
   }
-  return expired.rows.length + abandoned.rows.length;
+  return expiredRows.length + abandoned.rows.length;
 }
 
 // Structural invalidation: expire SHORT setups when price > OR High, LONG when price < OR Low.

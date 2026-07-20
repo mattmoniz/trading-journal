@@ -25,6 +25,12 @@ export async function recordClaim({
   if (!slug || !claimText || !sourceFile) {
     throw new Error('recordClaim requires slug, claimText, sourceFile');
   }
+  // signal_name is VARCHAR(60) -- fail fast with a clear message rather than a raw
+  // "value too long for type character varying(60)" from Postgres, and rather than
+  // silently truncating (two distinct 61+ char slugs could collide on the same prefix).
+  if (slug.length > 60) {
+    throw new Error(`recordClaim: slug '${slug}' is ${slug.length} chars, signal_name column is VARCHAR(60) -- shorten it`);
+  }
   const { rows } = await query(`SELECT CURRENT_DATE::text as today, (CURRENT_DATE + INTERVAL '${RECHECK_INTERVAL_DAYS} days')::date::text as next_recheck`);
   const { today, next_recheck } = rows[0];
   const notes = JSON.stringify({

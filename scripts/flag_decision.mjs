@@ -38,6 +38,12 @@ export async function flagDecision({ slug, decisionText, sourceFile, sourceDate 
   if (!slug || !decisionText || !sourceFile) {
     throw new Error('flagDecision requires slug, decisionText, sourceFile');
   }
+  // signal_name is VARCHAR(60) -- fail fast with a clear message rather than a raw
+  // "value too long for type character varying(60)" from Postgres, and rather than
+  // silently truncating (two distinct 61+ char slugs could collide on the same prefix).
+  if (slug.length > 60) {
+    throw new Error(`flagDecision: slug '${slug}' is ${slug.length} chars, signal_name column is VARCHAR(60) -- shorten it`);
+  }
   if (!VALID_PRIORITIES.includes(priority)) {
     throw new Error(`priority must be one of ${VALID_PRIORITIES.join('/')}, got '${priority}'`);
   }
