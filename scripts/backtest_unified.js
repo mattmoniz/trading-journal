@@ -1321,4 +1321,14 @@ async function main() {
   console.log('\nDone.');
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+// Export necessary components for external testing
+export {
+  resolve, aggregate, loadData, detectLevelFades, LEVEL_GATES,
+  buildBracketLevels, buildOrMids, buildIbMids, buildMonthlyOpens,
+  buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid
+};
+
+import { fileURLToPath } from 'url';
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}
