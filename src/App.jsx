@@ -1353,6 +1353,7 @@ function LiveSessionPanel() {
         const caseEvents = activeSetups.filter(Boolean).map(s => ({
           setup_type: s.setup_type,
           fired_time: s.fired_at_str ? s.fired_at_str.slice(11, 16) : null,
+          _firedAtFull: s.fired_at_str || null,
           _isRth: s.is_rth,
           fired_price: s.entry_zone_low,
           _resolution: s.resolution,
@@ -1383,9 +1384,17 @@ function LiveSessionPanel() {
             return matchesSessionFilter(e);
           })
           .sort((a, b) => {
-            if (!a.fired_time) return 1;
-            if (!b.fired_time) return -1;
-            return b.fired_time.localeCompare(a.fired_time); // most recent first
+            // Sort by the FULL fired_at timestamp (date+time), not just the truncated
+            // HH:MM fired_time display string. A trading session's own trade_date can
+            // span two calendar days (e.g. Sunday 10:50 PM Globex touches through Monday
+            // 4:00 PM RTH close, per the 6PM ET rollover) — comparing bare "HH:MM" strings
+            // put last night's overnight touches (e.g. "22:50") ABOVE today's more recent
+            // RTH touches (e.g. "16:36") purely because "22" > "16" as a string, backwards
+            // from the intended most-recent-first order. Found 2026-07-20 via a live
+            // screenshot check after the overnight wider-window detector went live.
+            if (!a._firedAtFull) return 1;
+            if (!b._firedAtFull) return -1;
+            return b._firedAtFull.localeCompare(a._firedAtFull); // most recent first
           });
         const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e)).length;
 

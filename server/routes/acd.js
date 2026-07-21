@@ -544,15 +544,67 @@ function nextTradingDay(etDate) {
 
 // Detect a Globex-session level fade. Checks current price against PD VAH/VAL/POC.
 // Returns a setup descriptor (same shape as RTH active) or null.
+// 4 prior-period levels whose wider (overnight-inclusive) window was independently
+// verified 2026-07-20 (see docs/OPEN_THREADS.md / OPEN_DECISION
+// wider_window_level_fade_backtest_findings_20260720): two separate backtest
+// implementations agree these are net-positive in the SHORT direction specifically —
+// no sign flip, unlike PM_HIGH_LONG (rejected) or DAILY_OPEN (rejected, pure lookahead
+// artifact). Only SHORT was verified for these 4 — LONG was never tested and must not
+// be added here. New, distinct setup_type names (not reused from the existing RTH-only
+// siblings of the same level) so this genuinely new overnight-fired population gets its
+// own SETUP_STATUS/OPTIMAL_STOP calibration rather than silently contaminating the
+// RTH-only history already on file for e.g. 3M_VAL_FADE_SHORT.
+const WIDER_WINDOW_OVERNIGHT_LEVELS = [
+  { levelName: '3M_VAL',  type: '3M_VAL_FADE_SHORT_OVERNIGHT',  displayName: '3M VAL' },
+  { levelName: '3M_POC',  type: '3M_POC_FADE_SHORT_OVERNIGHT',  displayName: '3M POC' },
+  { levelName: 'WS1',     type: 'WS1_FADE_SHORT_OVERNIGHT',     displayName: 'WS1' },
+  { levelName: 'PM_POC',  type: 'PM_POC_FADE_SHORT_OVERNIGHT',  displayName: 'PM POC' },
+];
+
+// Dynamic SHADOW->ACTIVE promotion for the 4 wider-window overnight types above —
+// mirrors minuteBarSignalDetector.js's getLiveStatus() exactly (N>=20 real resolved
+// trades + EV>=-$5 to graduate), since these start at N=0 and have never fired live
+// before. Without this they'd sit in SHADOW forever — nothing else in the pipeline
+// would ever flip them, same footgun the New Setup Type checklist (CLAUDE.md) warns
+// about for any standalone-poller-style detector.
+async function getOvernightLevelLiveStatus(type) {
+  const { rows } = await query(`
+    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
+    FROM active_setups
+    WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+  `, [type]);
+  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
+  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
+  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
+  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+}
+
 async function detectGlobexSetup(sessionDate, io) {
   try {
-    const [priceRow, pdRow, auditRow] = await Promise.all([
+    const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
       query(`SELECT signal_name, p75_mae, p50_mfe FROM performance_audit
              WHERE signal_type='UNIFIED_BACKTEST' AND window_days=9999
                AND signal_name IN ('PD_VAH_SHORT','PD_VAL_LONG','PD_POC_SHORT','PD_POC_LONG')
              ORDER BY sample_size DESC`),
+      // level_prices doesn't necessarily have a row for TODAY's exact date yet (these are
+      // prior-week/month/quarter levels that only change when their period rolls over) —
+      // DISTINCT ON + trade_date<=$1 gets the latest known value, matching the "valid
+      // until superseded" convention already used throughout this codebase for prior-
+      // period levels rather than requiring an exact same-day match.
+      query(`
+        SELECT DISTINCT ON (level_name) level_name, price::float as price
+        FROM level_prices
+        WHERE level_name = ANY($1) AND trade_date <= $2
+        ORDER BY level_name, trade_date DESC
+      `, [WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.levelName), sessionDate]),
+      query(`
+        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+          AND signal_name = ANY($1)
+        ORDER BY signal_name, run_date DESC
+      `, [WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type)]),
     ]);
     if (!priceRow.rows[0] || !pdRow.rows[0]) return null;
     const px = priceRow.rows[0].price;
@@ -568,10 +620,26 @@ async function detectGlobexSetup(sessionDate, io) {
     const TOUCH = 15; // proximity window — consistent with RTH level detection system-wide
 
     const pocDir = px >= poc ? 'SHORT' : 'LONG';
+    const widerLevelPrices = {};
+    for (const r of widerLevelsRow.rows) widerLevelPrices[r.level_name] = r.price;
+    const widerOptMap = {};
+    for (const r of widerOptRow.rows) widerOptMap[r.signal_name] = r;
+    // Monday's overnight span (Sun 6PM ET open) is longer than a normal weekday's —
+    // same stop/target split used by the wider-window verification backtest that
+    // validated these 4 types, reused here rather than picking new numbers.
+    const sessionIsMonday = new Date(sessionDate + 'T12:00:00').getDay() === 1;
+    const flatStop = sessionIsMonday ? 60 : 90, flatTarget = sessionIsMonday ? 30 : 40;
+
     const candidates = [
       { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT' },
       { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG'  },
       { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}` },
+      ...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => ({
+        level: widerLevelPrices[l.levelName] ?? null, name: l.displayName, type: l.type, dir: 'SHORT',
+        widerWindowNew: true,
+        widerStop: widerOptMap[l.type]?.stop ?? flatStop,
+        widerTarget: widerOptMap[l.type]?.target ?? flatTarget,
+      })),
     ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH);
 
     for (const c of candidates) {
@@ -581,11 +649,21 @@ async function detectGlobexSetup(sessionDate, io) {
       );
       if (existing.rows.length) continue;
 
-      const { stop: STOP, t1: T1 } = globexParams(c.auditKey);
+      const { stop: STOP, t1: T1 } = c.widerWindowNew
+        ? { stop: c.widerStop, t1: c.widerTarget }
+        : globexParams(c.auditKey);
       const isLong = c.dir === 'LONG';
       const entry  = px;
       const stop   = isLong ? px - STOP  : px + STOP;
       const target = isLong ? px + T1    : px - T1;
+
+      // The 3 original PD candidates fire straight to ACTIVE (existing, unchanged
+      // behavior). The 4 wider-window candidates are brand new (N=0 live history) —
+      // dynamically SHADOW-gated via getOvernightLevelLiveStatus(), same discipline
+      // as minuteBarSignalDetector.js, until N>=20 real resolutions clear the bar.
+      const live = c.widerWindowNew
+        ? await getOvernightLevelLiveStatus(c.type)
+        : { status: 'ACTIVE', reason: null };
 
       // Globex setups expire at next RTH open (9:30 AM ET, next calendar day)
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -613,15 +691,26 @@ async function detectGlobexSetup(sessionDate, io) {
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, historical_win_rate, historical_sessions
-        ) VALUES ($1,$2,NOW(),$3,'ACTIVE','ACTIVE',$4,$5,$6,$7,$8,$9,NULL,NULL)
+          price_at_detection, historical_win_rate, historical_sessions, suppression_reason
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11)
         ON CONFLICT DO NOTHING
-        RETURNING id, entry_zone_low, stop_level, t1_level
-      `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry]);
+        RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
+                  stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
+      `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry,
+          live.status, live.reason]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
+      // Every other insert path in this file drops a copy into trade_timeline_events —
+      // detectGlobexSetup was the one exception (pre-existing gap, not introduced here,
+      // flagged separately). Adding it for every candidate this function inserts (not
+      // just the new wider-window ones) since it's a pure additive fix with no risk to
+      // existing behavior.
+      try { await dropToTimeline(ins.rows[0]); } catch (_) {}
+
       const rr = (Math.abs(target - entry) / Math.abs(entry - stop)).toFixed(1);
+      if (live.status !== 'ACTIVE') continue; // SHADOW: logged for calibration, no live alert, keep checking other candidates
+
       if (io) io.emit('setup-detected', {
         type: c.type, direction: c.dir, entry, stop, target, rr,
         targetLabel: `T1: ${Math.round(T1)}pt (${c.name})`, globexMode: true,
@@ -6553,6 +6642,58 @@ export default function createACDRouter(io) {
       });
 
       res.json({ setups });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/setups/today-summary — same population as /setups/today, pre-formatted
+  // as a single text block for external consumers (Home Assistant, etc.) that can't
+  // iterate a JSON array as a sensor attribute -- confirmed 2026-07-20 via HA's own
+  // REST sensor docs that json_attributes only supports a single flat object, not a
+  // list, so a client-side array-based dashboard card can't work against this data
+  // no matter how the sensor is configured. This endpoint does the filtering/sorting
+  // server-side instead: excludes SHADOW/ACTIVE (unresolved/not-yet-promoted) rows,
+  // matching the exact same rule as src/App.jsx's Session Timeline sidebar, sorted
+  // most-recent-first by the FULL fired_at timestamp (not just HH:MM -- see the
+  // sidebar sort bug fixed the same session for why that distinction matters).
+  router.get('/setups/today-summary', async (req, res) => {
+    try {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const todayET = nowET.toLocaleDateString('en-CA');
+      // Single current-session trade_date (not "today + tomorrow" like /setups/today
+      // above) -- user wants this list scoped to just ONE session window (6PM Globex
+      // open through 4PM RTH close), resetting fresh at each 6PM rollover rather than
+      // accumulating across sessions. Before 6PM, that's today's own trade_date; at/
+      // after 6PM, the session that's now open belongs to the NEXT trading day already
+      // (matches every other 6PM-rollover convention in this codebase).
+      const currentSessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
+
+      const setupsRes = await query(`
+        SELECT setup_type, status, resolution, actual_pnl,
+          TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
+        FROM active_setups
+        WHERE status = 'ACTIVE'
+           OR (trade_date = $1 AND status NOT IN ('SHADOW', 'ACTIVE'))
+        ORDER BY fired_at DESC
+      `, [currentSessionDate]);
+
+      // Prefix each line with weekday+date, not just HH:MM -- this list can span two
+      // calendar days once past 6PM ET (today's leftover RTH entries + the new
+      // session's overnight touches), so bare time-of-day is genuinely ambiguous.
+      // Weekday computed from the Y-M-D calendar components directly (Date.UTC),
+      // not by parsing fired_at_str as a real-world instant -- avoids any ambient-
+      // timezone dependency for what's purely a calendar-date lookup.
+      const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      const lines = setupsRes.rows.map(s => {
+        const [y, mo, d] = s.fired_at_str.slice(0, 10).split('-').map(Number);
+        const weekday = WEEKDAYS[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
+        const dateLabel = `${weekday} ${mo}/${d}`;
+        const time = s.fired_at_str.slice(11, 16);
+        const outcome = s.resolution || 'expired';
+        const pnl = s.actual_pnl != null ? `, $${parseFloat(s.actual_pnl).toFixed(2)}` : '';
+        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl})`;
+      });
+
+      res.json({ count: lines.length, summary_text: lines.join('\n') || 'No resolved setups yet.' });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

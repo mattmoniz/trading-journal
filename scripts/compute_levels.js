@@ -282,14 +282,24 @@ async function computeLevelsForDate(date) {
   `, [date]);
   add('DAILY_OPEN', dailyOpenR.rows[0]?.o, 'OPENS');
 
-  // Weekly open (first RTH bar of the Mon–Fri week)
+  // Weekly open ("G-Line" convention: first Globex bar at/after Sunday 6PM ET,
+  // the moment the trading week actually begins) -- NOT the Monday RTH open
+  // this used to compute. Fixed 2026-07-20 per user clarification (they call
+  // this "G-Line" -- see scripts/replay_all_setups.js's own gLineQ, same
+  // hour>=18 definition) -- confirmed the live value (28747.75, the Sunday
+  // 2026-07-19 18:00 ET bar's open) matches what they see live on their own
+  // charts as "weekly open." The prior Monday-RTH-open definition here was a
+  // genuine mismatch, not a deliberate design choice.
   const wb = weekBounds(date);
+  const sunDate = new Date(wb.mon + 'T12:00:00Z');
+  sunDate.setUTCDate(sunDate.getUTCDate() - 1);
+  const sun = sunDate.toISOString().slice(0, 10);
   const weekOpenR = await q(`
     SELECT open::float AS o FROM price_bars_primary
     WHERE symbol = 'NQ' AND ts::date BETWEEN $1 AND $2
-      AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) = 570
+      AND EXTRACT(hour FROM ts) >= 18
     ORDER BY ts LIMIT 1
-  `, [wb.mon, wb.fri]);
+  `, [sun, wb.fri]);
   add('WEEKLY_OPEN', weekOpenR.rows[0]?.o, 'OPENS');
 
   // Monthly open (first RTH bar of the calendar month)

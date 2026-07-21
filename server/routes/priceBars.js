@@ -109,6 +109,37 @@ export default function createPriceBarsRouter(io, getBestACDParams, computeORLev
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // GET /api/price-bars/today-change — session-open-to-current price move.
+  // Built 2026-07-20 for an external (Home Assistant) "how much did the market move
+  // today" sensor -- no existing endpoint gave this as a single clean value:
+  // acd_daily_log only has or_high/or_low (the opening RANGE, not a single open tick)
+  // and session_close (the PRIOR day's close, not today's). "Session open" = the first
+  // RTH bar (et_min=570, 9:30 ET), same convention already used elsewhere in this
+  // codebase (acd.js's sessionOpenBar lookup) -- reused here, not reinvented.
+  router.get('/price-bars/today-change', async (req, res) => {
+    try {
+      const { symbol = 'NQ' } = req.query;
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const [openRow, latestRow] = await Promise.all([
+        query(`
+          SELECT open::float as open FROM price_bars_primary
+          WHERE symbol=$1 AND ts::date=$2
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 570
+          ORDER BY ts ASC LIMIT 1
+        `, [symbol, todayET]),
+        query(`SELECT ts, close::float as close FROM price_bars_primary WHERE symbol=$1 ORDER BY ts DESC LIMIT 1`, [symbol]),
+      ]);
+      const open = openRow.rows[0]?.open ?? null;
+      const current = latestRow.rows[0]?.close ?? null;
+      const change = (open != null && current != null) ? +(current - open).toFixed(2) : null;
+      const changePct = (open) ? +((current - open) / open * 100).toFixed(3) : null;
+      res.json({
+        symbol, tradeDate: todayET, open, current, change, changePct,
+        barAgeMinutes: latestRow.rows[0]?.ts ? Math.round((Date.now() - new Date(latestRow.rows[0].ts).getTime()) / 60000) : null,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // GET /api/price-bars/volume-profile
   router.get('/price-bars/volume-profile', async (req, res) => {
     try {
