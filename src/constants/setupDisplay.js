@@ -27,6 +27,11 @@ export const SETUP_DISPLAY_LABELS = {
   GAP_FILL_LONG:           'Gap Fill ↑',
   GAP_FILL_SHORT:          'Gap Fill ↓',
   FLOOR_R1_FADE_SHORT_TRAIL: 'Floor R1 Fade ↓ (Trail)',
+  PW_HIGH_FADE_LONG_TRAIL:    'PW High Fade ↑ (Trail)',
+  PD_POC_FADE_LONG_TRAIL:     'PD POC Fade ↑ (Trail)',
+  FLOOR_S1_FADE_LONG_TRAIL:   'Floor S1 Fade ↑ (Trail)',
+  DAILY_OPEN_FADE_LONG_TRAIL: 'Daily Open Fade ↑ (Trail)',
+  CAM_S2_FADE_LONG_TRAIL:     'Cam S2 Fade ↑ (Trail)',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level

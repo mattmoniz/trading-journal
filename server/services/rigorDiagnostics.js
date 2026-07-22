@@ -66,3 +66,67 @@ export function rigorContext(rigor) {
     clean: rigor.clean,
   };
 }
+
+// Held-out replication check for "top-K selected from a sweep, then rigor-checked"
+// findings -- a DIFFERENT failure mode from computeRigor()'s day-clustering/chronological
+// checks, which only look INSIDE the selected bucket and cannot see that the bucket
+// itself was cherry-picked from a wider surface. computeRigor() checking a selected
+// bucket's own internal stability says nothing about whether picking the biggest mover
+// out of 48 candidates was itself the whole "effect."
+//
+// Origin: Opus Audit #4 (2026-07-21, docs/OPUS_AUDIT_PROMPT_4.md /
+// scratch/opus_audit_4_results.md), built after the exact failure it's meant to catch
+// happened for real the same day -- `volume_confirmed_candle_pattern_low_vol_trap`
+// selected the 6 largest-effect-size setup_types out of 48, found a clean +$25/trade
+// signal, and it reversed under held-out replication (-$10.26 on the remaining 42).
+// That manual check (scratch/fair_test_volconf.mjs) is the pattern this generalizes --
+// this is the second time that exact check was hand-written (also done ad hoc for
+// regime_c_persistence_debunked_placebo_test and globex_large_moves_start_near_pit_safe_levels)
+// before being centralized here, same "written 3x, then shared" precedent as computeRigor()
+// itself.
+//
+// units: the FULL population a selection was drawn from (e.g. all 64 setup_types), one
+// entry per unit. Each unit needs a stable identifying key.
+// options.idFn: (unit) => id. Must match the ids in `selectedIds`.
+// options.metricFn: (unit) => { n, value } | null. `value`'s SIGN is what's being tested
+// for replication (an EV delta, a WR difference -- whatever the original finding's
+// headline number was); `n` is that unit's sample size for pooling weight. Return null
+// for a unit that can't be scored (e.g. N too thin) -- it's excluded from both pools.
+// selectedIds: the ids that were selected for the original finding (e.g. the top-K by
+// effect size) -- NOT recomputed here, pass in exactly what was actually used.
+//
+// Returns pooled (N-weighted) selected vs. held-out stats, the held-out favorable
+// fraction (what share of the NON-selected units still point the claimed direction),
+// and a single `replicates` boolean (same sign pooled AND held-out favorable
+// fraction >= 50%) -- deliberately a stricter bar than computeRigor()'s `clean`, since
+// this is checking for a coincidence of selection, not measurement noise.
+export function computeReplication(units, { idFn, metricFn, selectedIds }) {
+  const selectedSet = new Set(selectedIds);
+  const scored = units.map(u => ({ id: idFn(u), metric: metricFn(u) })).filter(x => x.metric && Number.isFinite(x.metric.value) && x.metric.n > 0);
+  const selected = scored.filter(x => selectedSet.has(x.id));
+  const heldOut = scored.filter(x => !selectedSet.has(x.id));
+
+  function pool(list) {
+    const totalN = list.reduce((s, x) => s + x.metric.n, 0);
+    if (totalN === 0) return { n: 0, value: null };
+    const weighted = list.reduce((s, x) => s + x.metric.n * x.metric.value, 0) / totalN;
+    return { n: totalN, value: +weighted.toFixed(2) };
+  }
+
+  const selectedPooled = pool(selected);
+  const heldOutPooled = pool(heldOut);
+  const heldOutFavorable = heldOut.filter(x => x.metric.value > 0).length;
+  const heldOutFavorableFrac = heldOut.length ? +(heldOutFavorable / heldOut.length).toFixed(2) : null;
+
+  const sameSign = selectedPooled.value != null && heldOutPooled.value != null
+    && Math.sign(selectedPooled.value) === Math.sign(heldOutPooled.value) && selectedPooled.value !== 0;
+
+  return {
+    selectedPooled,
+    heldOutPooled,
+    heldOutN: heldOut.length,
+    heldOutFavorableCount: heldOutFavorable,
+    heldOutFavorableFrac,
+    replicates: sameSign && heldOutFavorableFrac !== null && heldOutFavorableFrac >= 0.5,
+  };
+}

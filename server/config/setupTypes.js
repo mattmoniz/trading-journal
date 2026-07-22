@@ -95,6 +95,58 @@ export const CONDITIONAL_VARIANTS = {
     addedDate: '2026-07-19',
     monitorAtN: 20,
   },
+  // The other 5 of 6 backtested breakeven-trail survivors (docs/SCALEOUT_RUNNER_SPEC.md
+  // §2 table), wired 2026-07-21 following the exact FLOOR_R1_FADE_SHORT_TRAIL pattern
+  // above. Caveat found before wiring these: FLOOR_R1_FADE_SHORT_TRAIL itself has had
+  // ZERO real (non-suppressed) live touches since 2026-07-19 -- its own gating condition
+  // ("prove itself at live N>=20" before adding more) was not actually met. Wired anyway
+  // per explicit user direction, SHADOW-only (no live capital risk either way) -- but
+  // this means none of the 6 has real forward validation yet, only the backtest.
+  PW_HIGH_FADE_LONG_TRAIL: {
+    baseType: 'PW_HIGH_FADE_LONG',
+    direction: 'LONG',
+    condition: 'unconditional — every PW_HIGH_FADE_LONG touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_PW_HIGH_FADE_LONG',
+    addedDate: '2026-07-21',
+    monitorAtN: 20,
+  },
+  PD_POC_FADE_LONG_TRAIL: {
+    baseType: 'PD_POC_FADE_LONG',
+    direction: 'LONG',
+    condition: 'unconditional — every PD_POC_FADE_LONG touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_PD_POC_FADE_LONG',
+    addedDate: '2026-07-21',
+    monitorAtN: 20,
+  },
+  FLOOR_S1_FADE_LONG_TRAIL: {
+    baseType: 'FLOOR_S1_FADE_LONG',
+    direction: 'LONG',
+    condition: 'unconditional — every FLOOR_S1_FADE_LONG touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_FLOOR_S1_FADE_LONG',
+    addedDate: '2026-07-21',
+    monitorAtN: 20,
+  },
+  DAILY_OPEN_FADE_LONG_TRAIL: {
+    baseType: 'DAILY_OPEN_FADE_LONG',
+    direction: 'LONG',
+    condition: 'unconditional — every DAILY_OPEN_FADE_LONG touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_DAILY_OPEN_FADE_LONG',
+    addedDate: '2026-07-21',
+    monitorAtN: 20,
+  },
+  CAM_S2_FADE_LONG_TRAIL: {
+    baseType: 'CAM_S2_FADE_LONG',
+    direction: 'LONG',
+    condition: 'unconditional — every CAM_S2_FADE_LONG touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_CAM_S2_FADE_LONG',
+    addedDate: '2026-07-21',
+    monitorAtN: 20,
+  },
 };
 
 /**
