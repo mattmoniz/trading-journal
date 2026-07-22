@@ -256,7 +256,12 @@ async function run() {
 
   const results = {};
   const runKeys = [];
-  for (const scenario of ['LEGACY', 'ROSTER']) {
+  // 'ALL' added 2026-07-22 per user request: every setup_type/level that has EVER fired
+  // in the window, no rolling-eligibility gate (unlike LEGACY, which still requires
+  // N>=20/EV>=-$5 trailing) and no SETUP_STATUS gate (unlike ROSTER). Answers "what if
+  // literally everything currently wired into the detection code were allowed to fire,
+  // no quality filter at all" -- a maximally permissive upper bound, not a recommendation.
+  for (const scenario of ['LEGACY', 'ROSTER', 'ALL']) {
     for (const globexEnabled of [false, true]) {
       for (const dll of DLL_LEVELS) {
         const key = `${scenario}_GLOBEX_${globexEnabled ? 'IN' : 'OUT'}_${dll}`;
@@ -311,6 +316,10 @@ async function run() {
       }
     }
 
+    // ALL scenario: every setup_type that has fired at least once by today, no quality
+    // gate whatsoever -- literally everything wired, whatever its track record.
+    const allEligibleSetups = new Set(Object.keys(rthStats));
+
     const globexStats = {};
     for (const t of globexHist) {
       if (!globexStats[t.setup_type]) globexStats[t.setup_type] = { n: 0, pnl: 0 };
@@ -323,6 +332,7 @@ async function run() {
       const ev = globexStats[setup].pnl / n;
       if (n >= 20 && ev >= -5) globexEligibleSetups.add(setup);
     }
+    const allGlobexEligibleSetups = new Set(Object.keys(globexStats));
 
     const todaysTrades = combinedTradesByDate[todayStr] || [];
 
@@ -340,10 +350,12 @@ async function run() {
         let eligible = false;
         if (t.is_globex) {
           if (!includeGlobex) continue;
-          if (globexEligibleSetups.has(t.setup_type)) eligible = true;
+          if (scenario === 'ALL' && allGlobexEligibleSetups.has(t.setup_type)) eligible = true;
+          else if (scenario !== 'ALL' && globexEligibleSetups.has(t.setup_type)) eligible = true;
         } else {
           if (scenario === 'LEGACY' && legacyEligibleSetups.has(t.setup_type)) eligible = true;
           if (scenario === 'ROSTER' && rosterEligibleSetups.has(t.setup_type)) eligible = true;
+          if (scenario === 'ALL' && allEligibleSetups.has(t.setup_type)) eligible = true;
         }
         
         if (!eligible) continue;
@@ -375,7 +387,7 @@ async function run() {
   for (const rKey of runKeys) {
     const s = results[rKey];
     const [scenario, , globexMode, dllStr] = rKey.split('_');
-    const name = scenario === 'LEGACY' ? 'LEGACY_ROLLING' : 'CURRENT_VALIDATED_ROSTER';
+    const name = scenario === 'LEGACY' ? 'LEGACY_ROLLING' : scenario === 'ROSTER' ? 'CURRENT_VALIDATED_ROSTER' : 'ALL_WIRED_NO_FILTER';
     const totalWr = s.totalTrades > 0 ? (s.rthWins + s.globexWins) / s.totalTrades * 100 : 0;
     report += `| ${name} | ${globexMode === 'IN' ? 'Included' : 'Excluded'} | $${dllStr} | $${s.totalPnl.toFixed(2)} | ${s.totalTrades} | ${totalWr.toFixed(1)}% | $${s.maxDrawdown.toFixed(2)} | ${s.lockoutDays} |\n`;
   }
@@ -387,7 +399,7 @@ async function run() {
     if (rKey.includes('GLOBEX_OUT')) continue;
     const s = results[rKey];
     const [scenario, , , dllStr] = rKey.split('_');
-    const name = scenario === 'LEGACY' ? 'LEGACY_ROLLING' : 'CURRENT_VALIDATED_ROSTER';
+    const name = scenario === 'LEGACY' ? 'LEGACY_ROLLING' : scenario === 'ROSTER' ? 'CURRENT_VALIDATED_ROSTER' : 'ALL_WIRED_NO_FILTER';
     const gWr = s.globexTrades > 0 ? s.globexWins / s.globexTrades * 100 : 0;
     report += `| ${name} | $${dllStr} | $${s.rthPnl.toFixed(2)} | ${s.rthTrades} | $${s.globexPnl.toFixed(2)} | ${s.globexTrades} | ${gWr.toFixed(1)}% |\n`;
   }

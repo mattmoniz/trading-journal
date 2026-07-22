@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-22 continued: added an "all wired setups, no filter" scenario to the prop challenge — a ceiling, not a recommendation
+
+Direct follow-up: user asked to run "all active wired setups" as a walkthrough. Checked whether this could be done with strictly-real (non-`BACKFILL`) data first — `active_setups.origin_status` only distinguishes real `ACTIVE`/`SHADOW` fires starting **2026-07-09** (13 days, 223 rows total, most setup_types single-digit N) — nowhere near a year. Asked the user to choose; they picked falling back to a full 1-year window using all available data (including synthetic `BACKFILL`) over accepting the honest-but-tiny 13-day answer.
+
+Added a third scenario, `ALL_WIRED_NO_FILTER`, to `scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs`: every setup_type that fired at least once in the window, with no quality gate at all (not the strict `SETUP_STATUS` check, not even `LEGACY_ROLLING`'s looser rolling N≥20/EV≥-$5 walk-forward check) — includes every currently-`SUPPRESS`-status setup_type mixed in with everything else.
+
+**Result: $38,869.54 RTH-only at $400 DLL (N=4,436)** — much bigger than `LEGACY_ROLLING`'s $14,836 and `CURRENT_VALIDATED_ROSTER`'s -$1,697.60. **Documented clearly as a ceiling, not a recommendation** — this reflects mostly-`BACKFILL`-origin data (the system's retroactive calibration of the ideal stop/target per historical touch), with zero correction for setup_types already independently proven to lose (`SUPPRESS` status). Removing every filter doesn't validate anything; it just measures the full population's aggregate edge with the known losers still mixed in, diluted by everything else. Explicitly flagged: do not read this as "turn off suppression" — the whole `SETUP_STATUS` pipeline exists because an aggregate like this one hides real, individually-negative setups.
+
+Updated `docs/GLOBEX_INCLUSIVE_1YR_PROP_RESULTS_20260722.md` in place (same file, new scenario added) with a dedicated section explaining exactly what `ALL_WIRED_NO_FILTER` is and isn't. `node --check`/`eslint` clean.
+
 ## ✅ 2026-07-22 continued: corrected the 1-year Globex-inclusive prop challenge — old doc's Globex leg was inflated by in-sample leakage
 
 User asked for a 1-year prop walkthrough. One already existed (`scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs`, built 2026-07-20) — but its Globex leg priced trades using `OVERNIGHT_OPTIMAL_STOP`, which a same-day fresh train/test holdout had independently found makes things *worse* on real out-of-sample data (flat $6,357 vs calibrated -$4,717, N=2,618 — `OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`, resolved "do not wire in," `docs/OVERNIGHT_RESEARCH_SPEC.md` Part 6). The original script predates that resolution and used the calibration anyway.

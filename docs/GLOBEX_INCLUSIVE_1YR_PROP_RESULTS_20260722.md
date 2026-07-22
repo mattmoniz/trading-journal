@@ -23,6 +23,12 @@
 | CURRENT_VALIDATED_ROSTER | Included | $200 | $3304.82 | 1139 | 69.2% | $2934.28 | 79 |
 | CURRENT_VALIDATED_ROSTER | Included | $400 | $3117.82 | 1396 | 69.1% | $3131.52 | 37 |
 | CURRENT_VALIDATED_ROSTER | Included | $600 | $2047.80 | 1453 | 68.8% | $3271.12 | 17 |
+| ALL_WIRED_NO_FILTER | Excluded | $200 | $33657.30 | 3499 | 63.4% | $3749.14 | 157 |
+| ALL_WIRED_NO_FILTER | Excluded | $400 | $38869.54 | 4436 | 62.6% | $4605.70 | 116 |
+| ALL_WIRED_NO_FILTER | Excluded | $600 | $33372.14 | 4934 | 62.0% | $5770.56 | 89 |
+| ALL_WIRED_NO_FILTER | Included | $200 | $13093.69 | 4197 | 65.3% | $5948.18 | 188 |
+| ALL_WIRED_NO_FILTER | Included | $400 | $19578.67 | 5988 | 65.1% | $9337.98 | 142 |
+| ALL_WIRED_NO_FILTER | Included | $600 | $26725.59 | 7153 | 64.9% | $9054.28 | 111 |
 
 ## Component Breakdown (Globex Included Runs)
 
@@ -34,6 +40,17 @@
 | CURRENT_VALIDATED_ROSTER | $200 | $-938.18 | 75 | $4243.00 | 1064 | 70.1% |
 | CURRENT_VALIDATED_ROSTER | $400 | $-825.18 | 112 | $3943.00 | 1284 | 69.9% |
 | CURRENT_VALIDATED_ROSTER | $600 | $-667.20 | 121 | $2715.00 | 1332 | 69.4% |
+| ALL_WIRED_NO_FILTER | $200 | $6430.69 | 1925 | $6663.00 | 2272 | 70.1% |
+| ALL_WIRED_NO_FILTER | $400 | $12566.67 | 3105 | $7012.00 | 2883 | 69.9% |
+| ALL_WIRED_NO_FILTER | $600 | $20433.59 | 3950 | $6292.00 | 3203 | 69.7% |
+
+## `ALL_WIRED_NO_FILTER` — what it actually is, and isn't
+
+Added 2026-07-22 per user request ("all active wired setups... how do I ask for that"). First checked whether this could be answered with strictly-real (non-synthetic) data: `active_setups.origin_status` only distinguishes real `ACTIVE`/`SHADOW` fires from synthetic `BACKFILL` starting **2026-07-09** — 13 days of real data exist (223 rows total, most setup_types single-digit N), nowhere near a year. User chose to fall back to a full year using all available data (including `BACKFILL`) rather than accept a 13-day answer.
+
+`ALL_WIRED_NO_FILTER` = every setup_type that has fired at least once in the window, with **no quality gate at all** — not the strict `SETUP_STATUS` check (`CURRENT_VALIDATED_ROSTER`), not even the looser rolling N≥20/EV≥-$5 walk-forward check (`LEGACY_ROLLING`). It includes every currently-`SUPPRESS`-status setup_type (proven negative EV) mixed in with everything else.
+
+**This is a ceiling, not a recommendation.** The jump from `LEGACY_ROLLING` ($14,836 RTH-only at $400 DLL) to `ALL_WIRED_NO_FILTER` ($38,869) reflects mostly-`BACKFILL`-origin data — i.e., the system's own retroactive calibration of what the *ideal* stop/target would have been for each historical touch, not what would have actually been traded. Removing every quality filter doesn't validate the suppressed setups; it just measures the full population's aggregate historical edge with no correction for the setups already independently proven to lose. Do not read this as "we should turn off suppression" — the entire `SETUP_STATUS`/`SUPPRESS` pipeline exists precisely because averages like this one hide real, individually-negative setups inside a bigger positive number.
 
 ## Key caveats
 
