@@ -819,12 +819,34 @@ async function run() {
   }
 
   // Also store top pairs
+  // Pairs are TWO STATIC, fixed-for-the-day levels -- whether they're "close" is a fact
+  // about the day, not the touch, so a pair's N can be almost entirely one or two days
+  // of intraday re-touching (confirmed 2026-07-22: every currently-qualified pair had
+  // only 1-8 distinct convergence days out of this 180-day window). The standard
+  // top-5-dates-%-of-N clustering check misreads this as "clustered" regardless of
+  // whether the underlying effect is real, because convergence is inherently a rare
+  // per-day binary state for any two independently-computed levels. distinctDays is the
+  // real unit of independent evidence here -- store it explicitly so a live consumer can
+  // gate on it instead of touch count. PAIR_MIN_DISTINCT_DAYS reuses this codebase's
+  // existing N>=20 significance floor, just applied to the correct unit (days of
+  // convergence, not touches) for this specific data shape -- not a new arbitrary number.
+  const PAIR_MIN_DISTINCT_DAYS = 20;
   for (let i = 0; i < Math.min(qualifiedPairs.length, 10); i++) {
     const p = qualifiedPairs[i];
     const maes = p.touches.map(t => t.mae);
     const mfes = p.touches.map(t => t.mfe);
     const maeS = pct(maes);
     const mfeS = pct(mfes);
+
+    const dateCounts = new Map();
+    for (const t of p.touches) dateCounts.set(t.date, (dateCounts.get(t.date) || 0) + 1);
+    const distinctDays = dateCounts.size;
+
+    const rigor = computeRigor(p.touches, {
+      dateField: 'date',
+      pnlFn: t => (t.mfe >= 30 && t.mae < FADE_STOP) ? (30 * PNL_PER_POINT - COMMISSION)
+        : (t.mae >= FADE_STOP ? -(FADE_STOP * PNL_PER_POINT + COMMISSION) : 0),
+    });
 
     await query(`
       INSERT INTO performance_audit (
@@ -849,7 +871,12 @@ async function run() {
       maeS.mean, maeS.p50, maeS.p75, maeS.p90,
       FADE_STOP, 30,
       `TOP_PAIR_#${i + 1}`,
-      `WR: ${(p.wr30*100).toFixed(1)}%, MAE P50: ${fmt(p.maeP50)}, MFE P50: ${fmt(p.mfeP50)}`
+      JSON.stringify({
+        summary: `WR: ${(p.wr30*100).toFixed(1)}%, MAE P50: ${fmt(p.maeP50)}, MFE P50: ${fmt(p.mfeP50)}`,
+        distinctDays,
+        meetsMinDistinctDays: distinctDays >= PAIR_MIN_DISTINCT_DAYS,
+        rigor,
+      })
     ]);
   }
 

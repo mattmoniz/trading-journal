@@ -544,21 +544,33 @@ function nextTradingDay(etDate) {
 
 // Detect a Globex-session level fade. Checks current price against PD VAH/VAL/POC.
 // Returns a setup descriptor (same shape as RTH active) or null.
-// 4 prior-period levels whose wider (overnight-inclusive) window was independently
-// verified 2026-07-20 (see docs/OPEN_THREADS.md / OPEN_DECISION
+// First 4 (2026-07-20): prior-period levels whose wider (overnight-inclusive) window was
+// independently verified (see docs/OPEN_THREADS.md / OPEN_DECISION
 // wider_window_level_fade_backtest_findings_20260720): two separate backtest
 // implementations agree these are net-positive in the SHORT direction specifically —
 // no sign flip, unlike PM_HIGH_LONG (rejected) or DAILY_OPEN (rejected, pure lookahead
-// artifact). Only SHORT was verified for these 4 — LONG was never tested and must not
-// be added here. New, distinct setup_type names (not reused from the existing RTH-only
-// siblings of the same level) so this genuinely new overnight-fired population gets its
-// own SETUP_STATUS/OPTIMAL_STOP calibration rather than silently contaminating the
-// RTH-only history already on file for e.g. 3M_VAL_FADE_SHORT.
+// artifact). Only SHORT was verified for those 4 originally.
+// Next 4 (2026-07-22): scoped from a broader 51-setup THIN_N candidate pass, verified via
+// scripts/check_19_levels.mjs (an independent reimplementation against the same
+// docs/WIDER_WINDOW_BACKTEST_20260720.md table — first Gemini pass had a real bug, a
+// stray direction filter that inflated touch counts 1.5-3x; found and fixed directly
+// before trusting the result). MONTHLY_OPEN is LONG-direction — the first 4's "SHORT
+// only, LONG never tested" note applied to THOSE 4 specifically, not as a blanket rule;
+// each level's own verified direction is now tracked per-entry via `dir` below rather
+// than hardcoded, since this batch mixes directions.
+// New, distinct setup_type names (not reused from the existing RTH-only siblings of the
+// same level) so each genuinely new overnight-fired population gets its own
+// SETUP_STATUS/OPTIMAL_STOP calibration rather than silently contaminating the RTH-only
+// history already on file (e.g. 3M_VAL_FADE_SHORT, MPP_FADE_SHORT).
 const WIDER_WINDOW_OVERNIGHT_LEVELS = [
-  { levelName: '3M_VAL',  type: '3M_VAL_FADE_SHORT_OVERNIGHT',  displayName: '3M VAL' },
-  { levelName: '3M_POC',  type: '3M_POC_FADE_SHORT_OVERNIGHT',  displayName: '3M POC' },
-  { levelName: 'WS1',     type: 'WS1_FADE_SHORT_OVERNIGHT',     displayName: 'WS1' },
-  { levelName: 'PM_POC',  type: 'PM_POC_FADE_SHORT_OVERNIGHT',  displayName: 'PM POC' },
+  { levelName: '3M_VAL',        type: '3M_VAL_FADE_SHORT_OVERNIGHT',        displayName: '3M VAL',        dir: 'SHORT' },
+  { levelName: '3M_POC',        type: '3M_POC_FADE_SHORT_OVERNIGHT',        displayName: '3M POC',        dir: 'SHORT' },
+  { levelName: 'WS1',           type: 'WS1_FADE_SHORT_OVERNIGHT',           displayName: 'WS1',           dir: 'SHORT' },
+  { levelName: 'PM_POC',        type: 'PM_POC_FADE_SHORT_OVERNIGHT',        displayName: 'PM POC',        dir: 'SHORT' },
+  { levelName: 'MPP',           type: 'MPP_FADE_SHORT_OVERNIGHT',           displayName: 'MPP',           dir: 'SHORT' },
+  { levelName: 'MONTHLY_OPEN',  type: 'MONTHLY_OPEN_FADE_LONG_OVERNIGHT',   displayName: 'Monthly Open',  dir: 'LONG' },
+  { levelName: '10D_IB_MID',    type: '10D_IB_MID_FADE_SHORT_OVERNIGHT',    displayName: '10D IB Mid',    dir: 'SHORT' },
+  { levelName: 'WR1',           type: 'WR1_FADE_SHORT_OVERNIGHT',           displayName: 'WR1',           dir: 'SHORT' },
 ];
 
 // Dynamic SHADOW->ACTIVE promotion for the 4 wider-window overnight types above —
@@ -635,7 +647,7 @@ async function detectGlobexSetup(sessionDate, io) {
       { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG'  },
       { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}` },
       ...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => ({
-        level: widerLevelPrices[l.levelName] ?? null, name: l.displayName, type: l.type, dir: 'SHORT',
+        level: widerLevelPrices[l.levelName] ?? null, name: l.displayName, type: l.type, dir: l.dir,
         widerWindowNew: true,
         widerStop: widerOptMap[l.type]?.stop ?? flatStop,
         widerTarget: widerOptMap[l.type]?.target ?? flatTarget,
@@ -4826,7 +4838,7 @@ export default function createACDRouter(io) {
           if (!liveStats) {
             // DOW as integer (0=Sun, 1=Mon...5=Fri, 6=Sat) for SETUP_STATUS_DOW lookup
             const todayDowInt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
-            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ] = await Promise.all([
+            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ, confluencePairQ] = await Promise.all([
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
                   sample_size, win_rate::float, ev_per_trade::float,
@@ -4885,6 +4897,18 @@ export default function createACDRouter(io) {
                   AND signal_name LIKE $1
                 ORDER BY signal_name, run_date DESC
               `, [`%_DOW_${todayDowInt}`]).catch(() => ({ rows: [] })),
+              // Real level-pair confluence bonus data, computed weekly by backtest_confluence.js
+              // from a genuine bar simulation (not active_setups BACKFILL data). Gated on
+              // distinctDays (not sample_size/touch count) in the loop below -- see that
+              // script's PAIR_MIN_DISTINCT_DAYS comment for why touch count is the wrong unit
+              // for this data shape (two static levels being "close" is a per-day fact, so a
+              // pair's touches can nearly all land on one or two days).
+              query(`
+                SELECT DISTINCT ON (signal_name) signal_name, ev_per_trade::float, sample_size, notes
+                FROM performance_audit
+                WHERE signal_type = 'CONFLUENCE_AUDIT' AND signal_name LIKE 'PAIR:%'
+                ORDER BY signal_name, run_date DESC
+              `).catch(() => ({ rows: [] })),
             ]);
             liveStats = { _mon: {} };
             for (const r of statsQ.rows) {
@@ -5002,6 +5026,26 @@ export default function createACDRouter(io) {
                 const setupType = r.signal_name.replace(/_DOW_\d+$/, '');
                 liveStats._dowSuppressToday.add(setupType);
               }
+            }
+            // Live confluence pair-bonus lookup — replaces the old hardcoded _PAIR_BONUS_MAP
+            // (5 hand-picked pairs) with real data from backtest_confluence.js. Only pairs
+            // clearing PAIR_MIN_DISTINCT_DAYS (that script's own gate, 20 days — reusing this
+            // codebase's existing N>=20 significance floor applied to the correct unit for this
+            // data shape) qualify; as of 2026-07-22 NONE do (best case 7 distinct days), so this
+            // correctly yields zero bonuses today and self-heals as real convergence days
+            // accumulate via the existing weekly recompute — same practical effect as removing
+            // the hardcoded map, but keyed off real data instead of frozen guesswork.
+            liveStats._pairBonus = {}; // levelBase -> Set of partner levelBase names
+            for (const r of confluencePairQ.rows) {
+              let notes = {};
+              try { notes = typeof r.notes === 'string' ? JSON.parse(r.notes) : (r.notes || {}); } catch (_) { continue; }
+              if (!notes.meetsMinDistinctDays) continue;
+              if (r.ev_per_trade == null || r.ev_per_trade <= 0) continue;
+              const pairName = r.signal_name.replace(/^PAIR:/, '');
+              const [a, b] = pairName.split('+');
+              if (!a || !b) continue;
+              (liveStats._pairBonus[a] ??= new Set()).add(b);
+              (liveStats._pairBonus[b] ??= new Set()).add(a);
             }
             setCached(todayET, 'levelFadeStats', liveStats);
           }
@@ -5133,10 +5177,16 @@ export default function createACDRouter(io) {
               if (sessionOpenBar && parseFloat(sessionOpenBar.open) < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
             }
             // Unconditional diversion (docs/SCALEOUT_RUNNER_SPEC.md §4/§10) — every
-            // FLOOR_R1_FADE_SHORT touch gets the breakeven-then-trail exit mechanism
-            // instead of the fixed single target. Keeps the base type's own live
-            // calibration clean/untouched going forward.
+            // touch of these 6 base types gets the breakeven-then-trail exit mechanism
+            // instead of the fixed single target. Keeps each base type's own live
+            // calibration clean/untouched going forward. FLOOR_R1_FADE_SHORT was the
+            // first wired (2026-07-19); the other 5 added 2026-07-21, same pattern.
             if (rawType === 'FLOOR_R1_FADE_SHORT') return 'FLOOR_R1_FADE_SHORT_TRAIL';
+            if (rawType === 'PW_HIGH_FADE_LONG') return 'PW_HIGH_FADE_LONG_TRAIL';
+            if (rawType === 'PD_POC_FADE_LONG') return 'PD_POC_FADE_LONG_TRAIL';
+            if (rawType === 'FLOOR_S1_FADE_LONG') return 'FLOOR_S1_FADE_LONG_TRAIL';
+            if (rawType === 'DAILY_OPEN_FADE_LONG') return 'DAILY_OPEN_FADE_LONG_TRAIL';
+            if (rawType === 'CAM_S2_FADE_LONG') return 'CAM_S2_FADE_LONG_TRAIL';
             return rawType;
           };
 
@@ -5201,11 +5251,16 @@ export default function createACDRouter(io) {
             const dtaKey = dtClass ? `${type}-${dtClass}` : null;
             const dtaRow = dtaKey ? (liveStats._dta?.[dtaKey] ?? null) : null;
 
-            // Specific confluence pair bonus: verified N≥20 pairs (2026-07-05 Gemini Task 4)
-            // OR_MID+DAILY_OPEN 84%, OR_LOW+IB_LOW 80%, OR_HIGH+IB_HIGH 78%, IB_LOW+OR_LOW 77%
+            // Specific confluence pair bonus: live lookup against backtest_confluence.js's real
+            // PAIR:X+Y data (server/services/rigorDiagnostics.js-checked, distinct-day-gated —
+            // see liveStats._pairBonus construction above for why touch count alone isn't safe
+            // to use here). Replaced the old hardcoded 5-pair _PAIR_BONUS_MAP 2026-07-22 —
+            // that map was never validated against real data; as of this date NO pair clears
+            // the distinct-day floor yet, so this correctly yields no bonus until real
+            // convergence data accumulates.
             const _nearNames = new Set(nearLevels.filter(l => l.name !== lv.name).map(l => l.name));
-            const _PAIR_BONUS_MAP = { 'OR_MID': ['DAILY_OPEN'], 'OR_LOW': ['IB_LOW'], 'OR_HIGH': ['IB_HIGH'], 'IB_LOW': ['OR_LOW'], 'IB_HIGH': ['OR_HIGH'] };
-            const confluencePairPartner = (_PAIR_BONUS_MAP[levelBase] ?? []).find(p => _nearNames.has(p)) ?? null;
+            const _pairPartners = liveStats._pairBonus?.[levelBase];
+            const confluencePairPartner = _pairPartners ? [..._pairPartners].find(p => _nearNames.has(p)) ?? null : null;
 
             // Revisit latency: intraday minutes since price last closed within 10pt of this level.
             // Verified 2026-07-06: first visit of day = 78% WR +$71 EV (z=+2.74 N=283);
@@ -5386,10 +5441,14 @@ export default function createACDRouter(io) {
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
               await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4)
+                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason, confluence_score_at_detection, confluence_levels_at_detection)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6)
                 ON CONFLICT DO NOTHING
-              `, [todayET, type, currentPrice, suppressReason]).catch(() => {});
+              `, [
+                todayET, type, currentPrice, suppressReason,
+                nearLevels.length,
+                nearLevels.length ? nearLevels.map(l => l.name) : null,
+              ]).catch(() => {});
             }
           }
 
@@ -6347,8 +6406,9 @@ export default function createACDRouter(io) {
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection,
-            size_multiplier, suppression_reason, runner_trail_width
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20)
+            size_multiplier, suppression_reason, runner_trail_width,
+            confluence_score_at_detection, confluence_levels_at_detection
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22)
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -6360,6 +6420,8 @@ export default function createACDRouter(io) {
           forceShadow ? 'SHADOW' : 'ACTIVE',
           forceShadow ? (isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT' : 'PERFORMANCE_BELOW_THRESHOLD') : null,
           runnerTrailWidth,
+          active.confluenceCount ?? null,
+          active.confluenceLevels && active.confluenceLevels.length ? active.confluenceLevels : null,
         ]);
         let row = ins.rows[0];
         if (!row) {
