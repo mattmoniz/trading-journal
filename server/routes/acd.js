@@ -4897,14 +4897,17 @@ export default function createACDRouter(io) {
                   AND signal_name LIKE $1
                 ORDER BY signal_name, run_date DESC
               `, [`%_DOW_${todayDowInt}`]).catch(() => ({ rows: [] })),
-              // Real level-pair confluence bonus data, computed weekly by backtest_confluence.js
-              // from a genuine bar simulation (not active_setups BACKFILL data). Gated on
-              // distinctDays (not sample_size/touch count) in the loop below -- see that
-              // script's PAIR_MIN_DISTINCT_DAYS comment for why touch count is the wrong unit
-              // for this data shape (two static levels being "close" is a per-day fact, so a
-              // pair's touches can nearly all land on one or two days).
+              // Real level-pair confluence bonus data, computed weekly (full ~1.7yr level_prices
+              // history, not a rolling window) by backtest_confluence.js from a genuine bar
+              // simulation (not active_setups BACKFILL data). recommendation='VALIDATED_PAIR' is
+              // the single source of truth for "safe to use live" -- that script already requires
+              // distinctDays>=20 (the real unit of independent evidence for two static levels'
+              // convergence, not touch count -- see its PAIR_MIN_DISTINCT_DAYS comment), real
+              // per-pair proximity calibration (excludes VWAP/DEV_POC developing-level pairs, a
+              // confirmed confound), chronological stability, and positive EV, all in one place --
+              // do not re-derive or duplicate that filter logic here.
               query(`
-                SELECT DISTINCT ON (signal_name) signal_name, ev_per_trade::float, sample_size, notes
+                SELECT DISTINCT ON (signal_name) signal_name, ev_per_trade::float, sample_size, recommendation
                 FROM performance_audit
                 WHERE signal_type = 'CONFLUENCE_AUDIT' AND signal_name LIKE 'PAIR:%'
                 ORDER BY signal_name, run_date DESC
@@ -5028,19 +5031,20 @@ export default function createACDRouter(io) {
               }
             }
             // Live confluence pair-bonus lookup — replaces the old hardcoded _PAIR_BONUS_MAP
-            // (5 hand-picked pairs) with real data from backtest_confluence.js. Only pairs
-            // clearing PAIR_MIN_DISTINCT_DAYS (that script's own gate, 20 days — reusing this
-            // codebase's existing N>=20 significance floor applied to the correct unit for this
-            // data shape) qualify; as of 2026-07-22 NONE do (best case 7 distinct days), so this
-            // correctly yields zero bonuses today and self-heals as real convergence days
-            // accumulate via the existing weekly recompute — same practical effect as removing
-            // the hardcoded map, but keyed off real data instead of frozen guesswork.
+            // (5 hand-picked, never-validated pairs) with real data from
+            // backtest_confluence.js. Widened 2026-07-22 to the full ~1.7yr level_prices
+            // history + a per-pair calibrated proximity gate (was a flat 15pt/30pt window
+            // for every pair uniformly) — that script's own recommendation='VALIDATED_PAIR'
+            // now encodes the complete "safe to use live" decision (distinctDays>=20, real
+            // calibration, chronological stability, positive EV), so this loop just trusts
+            // it rather than re-deriving the criteria here. Result: 60 real static-static
+            // pairs qualify as of 2026-07-22 (N 301-1291, EV $4-$20/trade) — a real, wired
+            // result, not the placeholder "nothing qualifies yet" state from before the
+            // window/calibration fix. Self-heals via the existing weekly recompute as more
+            // data accumulates or a pair's stability changes.
             liveStats._pairBonus = {}; // levelBase -> Set of partner levelBase names
             for (const r of confluencePairQ.rows) {
-              let notes = {};
-              try { notes = typeof r.notes === 'string' ? JSON.parse(r.notes) : (r.notes || {}); } catch (_) { continue; }
-              if (!notes.meetsMinDistinctDays) continue;
-              if (r.ev_per_trade == null || r.ev_per_trade <= 0) continue;
+              if (r.recommendation !== 'VALIDATED_PAIR') continue;
               const pairName = r.signal_name.replace(/^PAIR:/, '');
               const [a, b] = pairName.split('+');
               if (!a || !b) continue;

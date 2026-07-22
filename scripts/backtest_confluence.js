@@ -16,12 +16,51 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 const PNL_PER_POINT = 2;   // NQ micro: $2/pt
 const COMMISSION    = 1;    // $1 round-trip
 const DLL           = 400;  // daily loss limit
-const WINDOW_DAYS   = 180;
+// Full available level_prices history (~449 trading days / ~1.8yr as of 2026-07-22,
+// earliest row 2023-11-13) rather than a rolling 180-day window — widened 2026-07-22
+// per user request to backtest the calibrated pair-proximity approach over the longest
+// real history available instead of a shorter recent slice.
+const WINDOW_DAYS   = 100000;
 const LOOK_FORWARD  = 30;   // bars to evaluate after touch
 const FADE_TARGETS  = [10, 20, 30, 40];
 const SCALP_TARGETS = [15, 20, 25, 30];
 const SCALP_STOPS   = [20, 30, 40, 50];
 const FADE_STOP     = 90;
+const PROXIMITY     = 15;  // per-level touch radius (matches the per-bar loop's own `proximity`)
+// Per-pair calibrated confluence proximity (2026-07-22, OPEN_DECISION
+// confluence_proximity_should_be_per_pair_calibrated): two levels being "close" is a
+// per-day, per-pair fact, not a universal constant. Some pairs (PD_HIGH/PD_IB_HIGH,
+// IB_HIGH/OR_HIGH, etc.) sit within a flat 30pt (2x PROXIMITY) cap on ALMOST EVERY DAY
+// by construction -- confirmed directly via level_prices: p25 distance for several such
+// pairs is 0-2pt, meaning "within 30pt" is never actually rare for them, so the old flat
+// cap couldn't distinguish genuine convergence from routine near-duplication. Calibrated
+// threshold = min(2*PROXIMITY, that pair's own historical p25 |priceA-priceB|) -- pairs
+// that are ALWAYS close get a much tighter bar (correctly suppressing "confluence" that's
+// really just two near-identical levels double-counted); pairs that are normally far apart
+// keep the existing 30pt cap unchanged (their own p25 is wider than 30 anyway). Only
+// calibrated for pairs with >=30 days of shared history; developing levels (VWAP/DEV_POC,
+// not in level_prices) and undercalibrated pairs fall back to the flat 30pt cap.
+const PAIR_MIN_COOCCURRENCE_DAYS = 30;
+
+async function loadPairProximityThresholds() {
+  const r = await query(`
+    WITH pivoted AS (
+      SELECT trade_date, level_name, price::float FROM level_prices WHERE price IS NOT NULL
+    )
+    SELECT a.level_name AS level_a, b.level_name AS level_b,
+      COUNT(*) AS co_days,
+      PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(a.price-b.price)) AS p25_dist
+    FROM pivoted a
+    JOIN pivoted b ON a.trade_date = b.trade_date AND a.level_name < b.level_name
+    GROUP BY a.level_name, b.level_name
+    HAVING COUNT(*) >= $1
+  `, [PAIR_MIN_COOCCURRENCE_DAYS]);
+  const thresholds = new Map();
+  for (const row of r.rows) {
+    thresholds.set(`${row.level_a}+${row.level_b}`, Math.min(2 * PROXIMITY, row.p25_dist));
+  }
+  return thresholds;
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Helpers
@@ -65,7 +104,7 @@ async function getTradingDays() {
     WHERE lp.trade_date <= CURRENT_DATE
       AND EXISTS (
         SELECT 1 FROM price_bars_primary p
-        WHERE p.ts::date = lp.trade_date
+        WHERE p.ts::date = lp.trade_date AND p.symbol = 'NQ'
           AND EXTRACT(hour FROM p.ts)*60+EXTRACT(minute FROM p.ts) BETWEEN 570 AND 959
       )
     GROUP BY lp.trade_date
@@ -90,6 +129,12 @@ async function getLevelPrices(tradeDate) {
 }
 
 async function getRTHBars(tradeDate) {
+  // symbol='NQ' filter is required -- price_bars_primary has documented ES contamination
+  // 2023-11-15 to 2023-12-15 (data_sanity_audit.mjs's standing flag). Without this filter,
+  // dates in that window mix ES bars (~$4,500 in that period) with NQ bars (~$18,000+),
+  // producing spurious multi-thousand-point MAE/MFE swings -- confirmed directly 2026-07-22
+  // via two pairs showing MFE P50 > 11,000pt (impossible for NQ in a 30-bar window) before
+  // this filter was added.
   const r = await query(`
     SELECT
       ts,
@@ -97,7 +142,7 @@ async function getRTHBars(tradeDate) {
       open::float, high::float, low::float, close::float,
       volume::int, bid_volume::int, ask_volume::int
     FROM price_bars_primary
-    WHERE ts::date = $1
+    WHERE ts::date = $1 AND symbol = 'NQ'
       AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
     ORDER BY ts
   `, [tradeDate]);
@@ -154,6 +199,9 @@ async function run() {
 
   const tradingDays = await getTradingDays();
   console.log(`Found ${tradingDays.length} trading days with complete data\n`);
+
+  const pairProximityThresholds = await loadPairProximityThresholds();
+  console.log(`Calibrated per-pair proximity thresholds for ${pairProximityThresholds.size} pairs (>=${PAIR_MIN_COOCCURRENCE_DAYS}d shared history)\n`);
 
   // Collect all touch events across all days
   const allTouches = [];  // { date, barIdx, price, direction, confluenceCount, nearbyLevels, levelName, isFirstTouch, isAM, hasDeltaExhaustion, mae, mfe }
@@ -282,6 +330,7 @@ async function run() {
           mae,
           mfe,
           proximity,
+          levelPricesAtTouch: Object.fromEntries(nearbyLevelsHigh.map(l => [l.name, l.level])),
         });
       }
 
@@ -325,6 +374,7 @@ async function run() {
           mae,
           mfe,
           proximity,
+          levelPricesAtTouch: Object.fromEntries(nearbyLevelsLow.map(l => [l.name, l.level])),
         });
       }
     }
@@ -468,18 +518,39 @@ async function run() {
   // For each touch with >=2 levels, extract all level pairs
   const pairStats = new Map(); // "LEVEL_A+LEVEL_B" -> { touches: [...] }
 
+  let pairsRejectedByCalibration = 0;
   for (const t of deduped) {
     if (t.nearbyLevelNames.length >= 2) {
       const names = t.nearbyLevelNames;
       for (let a = 0; a < names.length; a++) {
         for (let b = a + 1; b < names.length; b++) {
           const pairKey = `${names[a]}+${names[b]}`;
-          if (!pairStats.has(pairKey)) pairStats.set(pairKey, { touches: [] });
+          // Per-pair calibrated proximity gate (2026-07-22): only count this touch as
+          // real confluence if the two levels' ACTUAL prices on this date are within
+          // that pair's own calibrated threshold, not just "both happened to be within
+          // the flat per-level touch radius of the same bar" (which caps distance at
+          // 2*PROXIMITY=30 for every pair uniformly, regardless of whether 30pt is
+          // routine or rare for that specific pair). Falls back to the flat 30pt cap
+          // for pairs with no calibration (developing levels like VWAP/DEV_POC -- not in
+          // level_prices so uncalibratable from this data source -- or thin shared
+          // history). `isCalibrated` is persisted per pair below so a live consumer can
+          // tell a genuinely-calibrated result apart from an uncalibrated fallback one --
+          // do NOT infer this from level naming patterns at the consumer, it's brittle.
+          const isCalibrated = pairProximityThresholds.has(pairKey);
+          const priceA = t.levelPricesAtTouch?.[names[a]];
+          const priceB = t.levelPricesAtTouch?.[names[b]];
+          const threshold = pairProximityThresholds.get(pairKey) ?? (2 * PROXIMITY);
+          if (priceA != null && priceB != null && Math.abs(priceA - priceB) > threshold) {
+            pairsRejectedByCalibration++;
+            continue;
+          }
+          if (!pairStats.has(pairKey)) pairStats.set(pairKey, { touches: [], isCalibrated });
           pairStats.get(pairKey).touches.push(t);
         }
       }
     }
   }
+  console.log(`Pair-touches rejected by calibrated proximity gate: ${pairsRejectedByCalibration}\n`);
 
   // Filter pairs with N >= 10
   const qualifiedPairs = [];
@@ -492,7 +563,7 @@ async function run() {
     const ev = (w * (30 * PNL_PER_POINT - COMMISSION) - l * (90 * PNL_PER_POINT + COMMISSION)) / t.length;
     const maeP50 = pct(t.map(x => x.mae)).p50;
     const mfeP50 = pct(t.map(x => x.mfe)).p50;
-    qualifiedPairs.push({ pair, n: t.length, wr30, ev, maeP50, mfeP50, touches: t });
+    qualifiedPairs.push({ pair, n: t.length, wr30, ev, maeP50, mfeP50, touches: t, isCalibrated: data.isCalibrated });
   }
 
   // Sort by EV descending
@@ -831,22 +902,36 @@ async function run() {
   // existing N>=20 significance floor, just applied to the correct unit (days of
   // convergence, not touches) for this specific data shape -- not a new arbitrary number.
   const PAIR_MIN_DISTINCT_DAYS = 20;
-  for (let i = 0; i < Math.min(qualifiedPairs.length, 10); i++) {
-    const p = qualifiedPairs[i];
-    const maes = p.touches.map(t => t.mae);
-    const mfes = p.touches.map(t => t.mfe);
-    const maeS = pct(maes);
-    const mfeS = pct(mfes);
-
+  // Selection criterion is distinctDays, NOT raw EV -- ranking by raw EV alone (the old
+  // behavior) surfaces exactly the wrong candidates: a pair with 1-2 clustered days can
+  // show a huge EV from a handful of lucky touches, while a pair with real 20+ day
+  // coverage and modest EV is the actually-trustworthy one. Compute distinctDays/rigor
+  // for the FULL qualified set (not just a raw-EV-sorted slice) so the pairs that clear
+  // the real bar are never accidentally excluded by an EV-based cutoff, and persist those
+  // that qualify (plus enough of the highest-distinctDays near-misses to monitor progress
+  // toward qualifying) rather than an arbitrary top-10-by-EV slice.
+  const pairsWithRigor = qualifiedPairs.map(p => {
     const dateCounts = new Map();
     for (const t of p.touches) dateCounts.set(t.date, (dateCounts.get(t.date) || 0) + 1);
     const distinctDays = dateCounts.size;
-
     const rigor = computeRigor(p.touches, {
       dateField: 'date',
       pnlFn: t => (t.mfe >= 30 && t.mae < FADE_STOP) ? (30 * PNL_PER_POINT - COMMISSION)
         : (t.mae >= FADE_STOP ? -(FADE_STOP * PNL_PER_POINT + COMMISSION) : 0),
     });
+    return { ...p, distinctDays, rigor };
+  });
+  pairsWithRigor.sort((a, b) => b.distinctDays - a.distinctDays);
+  const toPersist = pairsWithRigor.filter(p => p.distinctDays >= PAIR_MIN_DISTINCT_DAYS)
+    .concat(pairsWithRigor.filter(p => p.distinctDays < PAIR_MIN_DISTINCT_DAYS).slice(0, 10));
+  console.log(`\nPairs clearing distinctDays>=${PAIR_MIN_DISTINCT_DAYS}: ${pairsWithRigor.filter(p => p.distinctDays >= PAIR_MIN_DISTINCT_DAYS).length} of ${pairsWithRigor.length} qualified (N>=10) pairs\n`);
+
+  for (const p of toPersist) {
+    const maes = p.touches.map(t => t.mae);
+    const mfes = p.touches.map(t => t.mfe);
+    const maeS = pct(maes);
+    const mfeS = pct(mfes);
+    const { distinctDays, rigor } = p;
 
     await query(`
       INSERT INTO performance_audit (
@@ -870,11 +955,19 @@ async function run() {
       mfeS.mean, mfeS.p50, mfeS.p75,
       maeS.mean, maeS.p50, maeS.p75, maeS.p90,
       FADE_STOP, 30,
-      `TOP_PAIR_#${i + 1}`,
+      // VALIDATED_PAIR requires ALL of: enough distinct convergence days, real per-pair
+      // calibration (not the VWAP/DEV_POC developing-level fallback -- those pairs are a
+      // known confound, see isCalibrated comment above), chronologically stable/clean
+      // rigor, and positive EV. Anything short of that stays NEAR_MISS_MONITOR --
+      // continues accumulating real data via the standing weekly recompute, no live
+      // sizing effect either way.
+      (distinctDays >= PAIR_MIN_DISTINCT_DAYS && p.isCalibrated && rigor.clean && p.ev > 0)
+        ? 'VALIDATED_PAIR' : 'NEAR_MISS_MONITOR',
       JSON.stringify({
         summary: `WR: ${(p.wr30*100).toFixed(1)}%, MAE P50: ${fmt(p.maeP50)}, MFE P50: ${fmt(p.mfeP50)}`,
         distinctDays,
         meetsMinDistinctDays: distinctDays >= PAIR_MIN_DISTINCT_DAYS,
+        isCalibrated: p.isCalibrated,
         rigor,
       })
     ]);
