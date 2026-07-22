@@ -13,20 +13,20 @@ import { query } from '../server/db.js';
 import * as ss from 'simple-statistics';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
-const PNL_PER_POINT = 2;   // NQ micro: $2/pt
-const COMMISSION    = 1;    // $1 round-trip
+export const PNL_PER_POINT = 2;   // NQ micro: $2/pt
+export const COMMISSION    = 1;    // $1 round-trip
 const DLL           = 400;  // daily loss limit
 // Full available level_prices history (~449 trading days / ~1.8yr as of 2026-07-22,
 // earliest row 2023-11-13) rather than a rolling 180-day window — widened 2026-07-22
 // per user request to backtest the calibrated pair-proximity approach over the longest
 // real history available instead of a shorter recent slice.
 const WINDOW_DAYS   = 100000;
-const LOOK_FORWARD  = 30;   // bars to evaluate after touch
+export const LOOK_FORWARD  = 30;   // bars to evaluate after touch
 const FADE_TARGETS  = [10, 20, 30, 40];
 const SCALP_TARGETS = [15, 20, 25, 30];
 const SCALP_STOPS   = [20, 30, 40, 50];
-const FADE_STOP     = 90;
-const PROXIMITY     = 15;  // per-level touch radius (matches the per-bar loop's own `proximity`)
+export const FADE_STOP     = 90;
+export const PROXIMITY     = 15;  // per-level touch radius (matches the per-bar loop's own `proximity`)
 // Per-pair calibrated confluence proximity (2026-07-22, OPEN_DECISION
 // confluence_proximity_should_be_per_pair_calibrated): two levels being "close" is a
 // per-day, per-pair fact, not a universal constant. Some pairs (PD_HIGH/PD_IB_HIGH,
@@ -40,9 +40,10 @@ const PROXIMITY     = 15;  // per-level touch radius (matches the per-bar loop's
 // keep the existing 30pt cap unchanged (their own p25 is wider than 30 anyway). Only
 // calibrated for pairs with >=30 days of shared history; developing levels (VWAP/DEV_POC,
 // not in level_prices) and undercalibrated pairs fall back to the flat 30pt cap.
-const PAIR_MIN_COOCCURRENCE_DAYS = 30;
+export const PAIR_MIN_COOCCURRENCE_DAYS = 30;
+export const PAIR_MIN_DISTINCT_DAYS = 20;
 
-async function loadPairProximityThresholds() {
+export async function loadPairProximityThresholds() {
   const r = await query(`
     WITH pivoted AS (
       SELECT trade_date, level_name, price::float FROM level_prices WHERE price IS NOT NULL
@@ -65,7 +66,7 @@ async function loadPairProximityThresholds() {
 // ─────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────
-function pct(arr) {
+export function pct(arr) {
   if (!arr.length) return { p25: 0, p50: 0, p75: 0, p90: 0, mean: 0 };
   const sorted = [...arr].sort((a, b) => a - b);
   return {
@@ -77,7 +78,7 @@ function pct(arr) {
   };
 }
 
-function fmt(v, decimals = 1) {
+export function fmt(v, decimals = 1) {
   return typeof v === 'number' ? v.toFixed(decimals) : String(v);
 }
 
@@ -901,7 +902,8 @@ async function run() {
   // gate on it instead of touch count. PAIR_MIN_DISTINCT_DAYS reuses this codebase's
   // existing N>=20 significance floor, just applied to the correct unit (days of
   // convergence, not touches) for this specific data shape -- not a new arbitrary number.
-  const PAIR_MIN_DISTINCT_DAYS = 20;
+  // (PAIR_MIN_DISTINCT_DAYS is now a module-level export, reused by
+  // backtest_confluence_globex.js -- see the const declaration near the top of this file.)
   // Selection criterion is distinctDays, NOT raw EV -- ranking by raw EV alone (the old
   // behavior) surfaces exactly the wrong candidates: a pair with 1-2 clustered days can
   // show a huge EV from a handful of lucky touches, while a pair with real 20+ day
@@ -977,7 +979,15 @@ async function run() {
   process.exit(0);
 }
 
-run().catch(err => {
-  console.error('Confluence audit failed:', err);
-  process.exit(1);
-});
+// Guarded so importing this file's shared exports (loadPairProximityThresholds, pct, fmt,
+// constants -- reused by backtest_confluence_globex.js) doesn't also trigger a full RTH
+// run() as an import side-effect. Found 2026-07-22: an unguarded call here raced two
+// full run() executions concurrently against the same DB connection the first time
+// anything imported from this file, with whichever finished first calling process.exit(0)
+// and killing the other mid-flight -- corrupted a Globex backtest run before this fix.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().catch(err => {
+    console.error('Confluence audit failed:', err);
+    process.exit(1);
+  });
+}

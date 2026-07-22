@@ -699,17 +699,27 @@ async function detectGlobexSetup(sessionDate, io) {
       // accumulate, which is what real re-touches actually produce. Every ON CONFLICT
       // clause against this table must repeat the same WHERE predicate as an inference
       // clause (Postgres requires this to match a partial index) -- all 6 updated together.
+      // confluenceLevels: `candidates` is already the full set of levels within TOUCH of
+      // px this poll (the .filter() above) -- no separate nearLevels computation needed,
+      // unlike the RTH engine. Persisted 2026-07-22 (same fields as the RTH INSERT) so
+      // overnight confluence combinations become queryable the same way RTH ones are --
+      // NOT yet fed into a sizing bonus here, since detectGlobexSetup() has no
+      // sizeMultiplier stack to hook one into (see OPEN_DECISION
+      // globex_confluence_pair_bonus_needs_sizing_mechanism).
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, historical_win_rate, historical_sessions, suppression_reason
-        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11)
+          price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
+          confluence_score_at_detection, confluence_levels_at_detection
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry,
-          live.status, live.reason]);
+          live.status, live.reason,
+          candidates.length,
+          candidates.map(x => x.name)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
