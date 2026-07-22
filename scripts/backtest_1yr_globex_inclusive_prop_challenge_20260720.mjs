@@ -93,20 +93,17 @@ async function run() {
 
   const windowRthTrades = allRthTrades.filter(t => t.trade_date >= startDateStr && t.trade_date <= maxDate);
   
-  // --- 2. GLOBEX LEG: Load Overnight Optimal Stops & Touch Simulation ---
-  console.log('Loading OVERNIGHT_OPTIMAL_STOP calibrations...');
-  const overnightCalibQ = await query(`
-    SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target
-    FROM performance_audit
-    WHERE signal_type = 'OVERNIGHT_OPTIMAL_STOP'
-    ORDER BY signal_name, run_date DESC
-  `);
-  const overnightCalibs = new Map();
-  for (const r of overnightCalibQ.rows) {
-    overnightCalibs.set(r.signal_name, { stop: r.optimal_stop, target: r.optimal_target });
-  }
-
-  console.log('Loading level and bar data for Globex simulation...');
+  // --- 2. GLOBEX LEG: Touch Simulation (flat stops only) ---
+  // OVERNIGHT_OPTIMAL_STOP is NOT used here -- resolved 2026-07-20 via a fresh
+  // train/test holdout (docs/OVERNIGHT_RESEARCH_SPEC.md Part 6): calibrated stops made
+  // held-out-year P&L WORSE than the flat fallback ($6,357 flat vs -$4,717 calibrated,
+  // N=2,618, independently audited). OPEN_DECISION
+  // overnight_calibration_needs_genuine_fresh_holdout_test was resolved "do not wire
+  // in" -- the original version of this script (2026-07-20) used the calibration
+  // anyway, since it predates that resolution. Fixed 2026-07-22 to always use the flat
+  // default (90/40, 60/30 Monday), matching the approach the holdout test actually
+  // validated.
+  console.log('Loading level and bar data for Globex simulation (flat stops only, per fresh-holdout resolution)...');
   const lvlRes = await query(`
     SELECT trade_date::text as d, level_name, price::float as price 
     FROM level_prices 
@@ -173,15 +170,10 @@ async function run() {
         const long = dir === 'LONG';
         const entry = b.close;
         const comboName = `${name}_${dir}`;
-        
-        let stopPts = defaultStop;
-        let targetPts = defaultTarget;
-        const calib = overnightCalibs.get(comboName);
-        if (calib) {
-          stopPts = calib.stop;
-          targetPts = calib.target;
-        }
-        
+
+        const stopPts = defaultStop;
+        const targetPts = defaultTarget;
+
         const stopPrice = long ? entry - stopPts : entry + stopPts;
         const targetPrice = long ? entry + targetPts : entry - targetPts;
         

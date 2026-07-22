@@ -1,4 +1,8 @@
 # 1-Year Globex-Inclusive Prop Challenge
+
+> [!CAUTION]
+> **SUPERSEDED 2026-07-22 by `docs/GLOBEX_INCLUSIVE_1YR_PROP_RESULTS_20260722.md`.** This version's Globex leg used the `OVERNIGHT_OPTIMAL_STOP` calibration to price trades, which a same-day fresh train/test holdout independently found makes things *worse* on real out-of-sample data (`OPEN_DECISION` `overnight_calibration_needs_genuine_fresh_holdout_test`, resolved "do not wire in" — see `docs/OVERNIGHT_RESEARCH_SPEC.md` Part 6). The ~$32-33k Globex figure below substantially re-aggregates the same held-out evidence that calibration was validated against — inflated by in-sample leakage, not a real number. The corrected doc always uses flat stops and finds the Globex leg's real contribution is closer to $3-4k for a comparable year, not $32-33k. Kept here for history only — do not cite these numbers.
+
 **Window:** 2025-07-21 to 2026-07-20 (256 trading days)
 
 > [!WARNING]
