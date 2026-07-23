@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: tested the bar6-checkpoint × volume-trajectory connection flagged earlier today — negative, and caught the same misleading-replication pattern again
+
+Direct follow-up to the cross-cutting synthesis observation from earlier today (the untested connection between `bar6_checkpoint`'s binary RECOVERING/DETERIORATING read and the volume-lifecycle-by-decile finding). Tested a scoped, buildable-today version: within the same bar-6 population, does volume TRAJECTORY over bars 0-6 (BUILDING: recent bars higher volRatio than early bars; FADING otherwise) sharpen the existing split?
+
+**Result: negative.** RECOVERING+BUILDING looked exciting on train (N=289, EV=$46.24, avg loss shrinks to -$71.67) but failed on test (N=62, EV=$16.48, flagged CLUSTERED/unstable) — actually worse than the plain RECOVERING+FADING slice on the same test data (N=494, EV=$26.61, CLEAN). DETERIORATING shows no difference between BUILDING/FADING at all.
+
+**Caught the same misleading-replication pattern as earlier today, a second time.** Gemini's summary claimed "replicates=true... the structural lift IS real at the setup-type level" — checking the raw numbers directly showed the "selected" setup_types' test diff ($20.09) was actually worse than the held-out group's ($52.86). `computeReplication()`'s `replicates` flag checks same-sign + held-out-majority-favorable, not "selected beats held-out" — this is the second time this exact misreading has needed correcting today (first: `worst_point_passed_as_entry_trigger`). Worth remembering as a standing pattern, not a one-off.
+
+**Practical conclusion**: `bar6_checkpoint`'s RECOVERING/DETERIORATING split is doing all the real work on its own — no change to the live signal. Recorded as `RESEARCH_CLAIM` `bar6_volume_trajectory_no_added_value`, promoted to `scripts/backtest_bar6_volume_trajectory.mjs`, reproduced exactly. `node --check`/`eslint` clean.
+
 ## ✅ 2026-07-23: corrected the big-move methodology again — the ZigZag-leg approach itself severely undercounted real movement, user caught it with a direct example
 
 Direct follow-up to the entry below. User pushed back hard on "22 moves in 2 years": *"the market moves 400 points at least weekly... you may be hyper focused on the 6 bar thing, you need to focus on all the factors."* Asked how much NQ moved intraday today as a concrete check.
