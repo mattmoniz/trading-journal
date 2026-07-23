@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: re-ran the 1-year Globex-inclusive prop challenge — same shape, RTH roster shrank further
+
+User asked for both a recap of today's engagement-research thread and a fresh re-run of the 1-year prop-challenge walkthrough. Nothing built today (confluence+exhaustion, bar6 checkpoint, etc.) changes any trading logic — all of it is informational-only or unwired-negative — so this re-run isn't testing today's changes, it's just refreshing the window (rolled forward to 2025-07-23→2026-07-23) and picking up whatever weekly `SETUP_STATUS` recalibration has run since 2026-07-22.
+
+**Real, notable shift**: `CURRENT_VALIDATED_ROSTER` RTH-only population dropped from 128 trades/year (2026-07-22 run) to **55 trades/year** — the honestly-eligible RTH roster keeps shrinking as weekly recalibration continues flipping setup_types to `SUPPRESS`/`THIN_N` (consistent with the broader theme this whole codebase has documented: the real, currently-tradeable RTH set is thin and getting thinner, not an error). RTH-only P&L at $400 DLL: -$659.00 (vs -$1,697.60 previously) — still flat/negative, now on an even smaller sample. `CURRENT_VALIDATED_ROSTER` Globex-Included at $400 DLL: $4,466.50 (N=1319, WR=69.7%) vs the prior $3,117.82 (N=1396, WR=69.1%) — the Globex leg is still doing the real work. `ALL_WIRED_NO_FILTER` remains what it's always been: a ceiling reflecting mostly-BACKFILL data with every quality filter removed, not a recommendation.
+
+Full refreshed table: `scratch/backtest_1yr_globex_inclusive_prop_challenge_RESULTS.md`. `RESEARCH_CLAIM` `GLOBEX_INCLUSIVE_1YR_PROP` auto-updated by the script's own `recordClaim()` call (same convention as prior runs — new `run_date`, same slug).
+
 ## ✅ 2026-07-23: bar-6 checkpoint wired LIVE — informational only, no entry gating, per explicit user tradeoff
 
 Resolves `OPEN_DECISION` `wire_bar6_worst_point_passed_signal`. Before building, asked the user how the live mechanism should behave (hard entry gate / countdown+soft warning / dual display); user's answer reframed the whole design: **"I hesitate at losing an opportunity at 6 bars."** This is exactly right and changes what should be built — a hard "wait until bar 6" gate would forfeit the fast, clean, high-win-rate winners that make up most of the touch population (the "Resolved by K" bucket in `backtest_engagement_duration_sizing.mjs` has 72-80% WR, much better than the "still active" bucket even at its best) in exchange for only capturing the harder, slower subset. That would be a net loss, not a win.
