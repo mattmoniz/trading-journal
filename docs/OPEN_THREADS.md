@@ -1,5 +1,19 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: engagement duration → winner-size test — real effect, but too small and doesn't replicate
+
+Direct follow-up to the entry-timing test below, per the user's pushback that win rate isn't the standard of success here — contained losses with occasional large winners is ("eventually the damn will break with a huge win"). Reframed the hypothesis: instead of using engagement duration to GATE entry (already tested, negative), test whether a touch still active (not stopped/targeted) at bar K predicts a BIGGER eventual winner. Bucketing is real-time-computable (knowing stop/target hasn't been hit by bar K needs no lookahead) — this avoids the entry-timing test's methodology entirely, no re-simulation needed, real `actual_pnl` used throughout.
+
+**Audited before trusting**: verified the unconditional baseline directly via raw SQL (avg win $92.87, avg loss -$127.66, max win $599 exactly) against the script's train+test blend ($92.40/$94.66 avg win, -$124.18/-$143.34 avg loss, $599 max win — exact match on max win, close on the rest, consistent with a per-setup_type chronological split vs a flat sample). No correction round needed this time — the first Gemini pass held up.
+
+**Real, nuanced result — not a clean yes or no**: the user's intuition is partially right. Touches still active at bar K DO have a bigger average win size than the unconditional population, and it grows with K (ALL/train: unconditional avg win $92.40 → Active@10 $99.78, roughly +$3 to +$17 across K=3/6/10 and all 3 views). But the ACTIVE bucket's overall EV is deeply negative (ALL/train: unconditional EV=-$0.86 → Active@3=-$5.21 → Active@6=-$9.93 → Active@10=-$12.46) because win rate collapses hard (56.9% → 49.4% at K=10) — the bigger-winner effect is real but nowhere near big enough to offset how much worse the whole bucket performs. The "avg win size advantage" also failed `computeReplication()` at every K value tried (replicates=false for K=3/6/10 — the specific setup_types that looked like winners on train didn't hold on held-out test).
+
+**Practical takeaway**: do not widen targets/trail wider just because a trade has run N bars without resolving — that population is dominated by grinding losers, not quietly-building winners. Recorded as `RESEARCH_CLAIM` `engagement_duration_conditions_winner_size`, promoted to `scripts/backtest_engagement_duration_sizing.mjs` (one-off, not scheduled).
+
+**Open follow-up, raised by the user immediately after this result**: does candlestick SHAPE at/around bar K — not just the raw fact of still being active — distinguish the minority of genuine still-building winners from the toxic majority dragging the bucket negative? Important context before pursuing this: candlestick-shape-based entry confirmation has already been extensively tested elsewhere in this codebase and failed every variant tried (`docs/CANDLE_ORDERFLOW_RESEARCH_SPEC.md`, `RESEARCH_CLAIM` `volume_confirmed_candle_pattern_low_vol_trap` among others). But none of those tests conditioned specifically on "still active at bar K" — this would be testing candle shape as a discriminator WITHIN an already-identified toxic-but-mixed population, not a re-run of a debunked pooled test. Given the track record (candle shape has failed multiple times, entry-timing triggers failed, duration-alone failed replication), the honest expectation going in should be skeptical, not optimistic — but it hasn't been tested in this specific conditioned form. Not yet built.
+
+`node --check`/`eslint` clean on the promoted script.
+
 ## ✅ 2026-07-23: engagement/exhaustion entry-TIMING backtest — resolved negative, real bug caught and fixed mid-thread
 
 Resolves the in-progress thread below. Tested whether waiting for the buyer/seller "tussle" to resolve before entering (user's own discretionary framework) beats immediate entry on first touch.
