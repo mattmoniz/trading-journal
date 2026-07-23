@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-22 continued: fixed a real bug in `/api/stats/capture-ratio`, then retracted the interpretation built on it
+
+User asked to work through the capture-ratio gap (treated earlier the same day as strong evidence of a real execution/behavioral problem, -40%). Investigating it surfaced a real, separate bug: `model_pnl` in `server/routes/stats.js`'s capture-ratio query had **no `origin_status` filter** — it summed real `ACTIVE`/`SHADOW` trades together with synthetic `BACKFILL` rows. Root cause: `scripts/backfill_unified_levels.mjs` (run 2026-07-18) queries `trade_date < CURRENT_DATE`, so a backfill re-run inserts synthetic rows all the way up through the day before it's run, not just old historical dates — confirmed directly, `BACKFILL`-origin rows exist with trade_dates as recent as 2026-07-16. Over a 60-day window, `BACKFILL` contributed $11,092.98 of `model_pnl` (698 of ~994 rows) vs real `ACTIVE`+`SHADOW`'s combined $3,146.76 — the "-40%" figure was mostly comparing synthetic data against the real account, not a real model-vs-execution measurement.
+
+**Fixed** the query to require `origin_status IN ('ACTIVE','SHADOW')`. Restarted the systemd-managed `trading-journal-server.service` (the process actually bound to port 3002, not the nodemon dev process) to pick up the change, confirmed via direct `curl`. Corrected result: only **2 trading days** have both real model data and real account data overlapping (2026-07-09 onward is all `origin_status` tracking exists) — nowhere near enough to compute a trustworthy capture ratio at all yet.
+
+**Investigated those 2 real days directly and found something that changes the whole framing — then the user clarified their trades aren't indicative of this system's analysis and asked that they not be looked at further.** Retracting the earlier -40%/-59.4% capture-ratio findings as evidence of a real execution/behavioral gap — `RESEARCH_CLAIM` `capture_ratio_interpretation_corrected` records this explicitly so it doesn't get cited as settled evidence in a future session. The origin_status bug fix itself stands (real, independently-justified correction); the *interpretation* built on top of the pre-fix number does not. **Standing rule going forward: do not analyze or reference the contents of the `trades` table as evidence about whether this system's signals are being followed** — per explicit user instruction 2026-07-22.
+
+`node --check`/`eslint` clean on `server/routes/stats.js`.
+
 ## ✅ 2026-07-22 continued: added an "all wired setups, no filter" scenario to the prop challenge — a ceiling, not a recommendation
 
 Direct follow-up: user asked to run "all active wired setups" as a walkthrough. Checked whether this could be done with strictly-real (non-`BACKFILL`) data first — `active_setups.origin_status` only distinguishes real `ACTIVE`/`SHADOW` fires starting **2026-07-09** (13 days, 223 rows total, most setup_types single-digit N) — nowhere near a year. Asked the user to choose; they picked falling back to a full 1-year window using all available data (including synthetic `BACKFILL`) over accepting the honest-but-tiny 13-day answer.

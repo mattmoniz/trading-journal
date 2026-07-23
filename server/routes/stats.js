@@ -813,6 +813,15 @@ router.get('/stats/capture-ratio', async (req, res) => {
         FROM daily_per_acct WHERE session_pnl IS NOT NULL GROUP BY log_date
       ),
       model AS (
+        -- origin_status IN ('ACTIVE','SHADOW') is REQUIRED here, not optional -- found
+        -- 2026-07-22: without it, model_pnl silently includes synthetic BACKFILL rows
+        -- (scripts/backfill_unified_levels.mjs backfills up through trade_date less than
+        -- CURRENT_DATE whenever it's re-run, so BACKFILL rows can carry very recent
+        -- dates, not just old historical ones) alongside real ACTIVE/SHADOW trades --
+        -- comparing that mix against the real account's actual_pnl is not a real
+        -- capture-ratio measurement, it silently blends in a strategy simulation.
+        -- Confirmed live: over a 60-day window, BACKFILL contributed $11,092.98 of
+        -- model_pnl (698 of ~994 rows) vs ACTIVE+SHADOW's real $3,146.76 combined.
         SELECT trade_date,
           SUM(actual_pnl) AS model_pnl,
           COUNT(*) AS n_setups,
@@ -820,6 +829,7 @@ router.get('/stats/capture-ratio', async (req, res) => {
           SUM(CASE WHEN resolution='STOP_HIT' THEN 1 ELSE 0 END) AS model_losses
         FROM active_setups
         WHERE status='RESOLVED' AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+          AND origin_status IN ('ACTIVE','SHADOW')
         GROUP BY trade_date
       ),
       combined AS (
