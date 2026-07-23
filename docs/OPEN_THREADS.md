@@ -1,4 +1,16 @@
-## 🔄 2026-07-23: mined for a predictor of WHICH RECOVERING touches should exit early — genuinely open, corrected Gemini's own overly-pessimistic reading
+## ✅ 2026-07-23: confirmatory test of the target-distance-fraction predictor — real, clean, consistent, one honest limitation remains
+
+Direct follow-up per explicit user direction: of the two validation tracks discussed (a clean historical re-test now, vs waiting for live data), do the first one now and report back.
+
+Built (not dispatched — the design needed to be exact, matching this session's Claude-implements/Gemini-explores division of labor) a pre-registered confirmatory test: the rule (targetDistFraction < 0.873 → exit at bar 6, else hold) was FROZEN from the prior exploratory pass, not re-searched, and applied UNIFORMLY to the full RECOVERING population with NO per-setup_type cherry-picking — removing one of the two nested-selection risk layers the provisional finding had.
+
+**Result: real, positive, and — unlike the exploratory pass — consistent across every view, with clean rigor throughout.** ALL: baseline EV=$25.66 → gated EV=$29.64 (+$3.98/trade, N=3170). CONFLUENCE: $23.01 → $26.62 (+$3.61). NON-CONFLUENCE: $27.10 → $31.28 (+$4.18). `computeRigor()` shows `clean=true, clustered=false` on every single bucket, baseline and gated alike — a materially cleaner result than the exploratory pass's sign-flipping per-view breakdown.
+
+**Honest limitation, not glossed over**: this is not calendar-fresh data — every historical touch here was already touched in some way by the original exploratory pass (feature search, cutoff search, or the pooled test-set summary). This removes the cherry-picking risk, not the "have I already seen this data" risk. The only way to fully resolve that is the live-data track. Flagged as a new `OPEN_DECISION` `validate_target_distance_predictor_on_live_data` — check back once `bar6_checkpoint` has accumulated real, non-BACKFILL RECOVERING touches and re-run this exact frozen rule against just those.
+
+Recorded as `RESEARCH_CLAIM` `recovering_exit_predictor_target_distance_confirmatory_pass` (still `PROVISIONAL` — upgraded from the exploratory pass's confidence level, not yet fully `CONFIRMED`, since the calendar-freshness limitation is real). The earlier `OPEN_DECISION` `confirm_target_distance_fraction_exit_predictor` is resolved (partially — the historical half is done, the live-data half is the new decision above). `node --check`/`eslint` clean.
+
+## ✅ 2026-07-23: mined for a predictor of WHICH RECOVERING touches should exit early — corrected Gemini's own overly-pessimistic reading
 
 Direct follow-up per user framing: instead of a static list of "which 71 setup_types qualify" for the RECOVERING early-exit edge, mine for a real-time-computable feature that predicts, per individual touch, whether exiting at bar 6 beats holding to target ("it won't be a uniform answer, that's where volume and price movement steps in").
 
