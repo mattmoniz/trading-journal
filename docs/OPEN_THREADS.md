@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: tested "worst point passed" as a fresh ENTRY trigger (not just an in-trade read) — two separate findings, don't conflate them
+
+Direct follow-up per user direction ("do what you think is best... we just need a better way to recognize it and engage in a trade"). The prior finding (below) validated "worst point passed by bar 6" as an in-trade signal for a position ALREADY held from its original entry. This test asked a different question: repurpose it as a fresh ENTRY GATE instead — skip the original touch, wait until bar 6, only engage if the pattern confirms — using the same 3-arm discipline (Arm A=original immediate entry, Arm B=genuine blind delay to bar 6 regardless, Arm C=only enter at bar 6 if worst point already passed). Built directly by Claude (not dispatched to Gemini — both component pieces were already fully audited this session).
+
+**Two separate, real findings — reported honestly rather than blended into one verdict:**
+1. **Real and consistent**: simply waiting until bar 6 and entering fresh (re-anchored stop/target) beats the original immediate entry, across ALL/CONFLUENCE/NON-CONFLUENCE, both train and test (ALL/TRAIN: original EV=-$9.21 vs blind-delay EV=-$1.95; ALL/TEST: original EV=-$13.61 vs blind-delay EV=+$6.93). A genuinely useful, structural finding on its own: once a touch has survived 6 bars without resolving, the price 6 bars later is a structurally better place to enter than the original touch price.
+2. **Not confirmed**: gating that delayed re-entry on the "worst point passed" recognition condition does NOT clearly improve on just taking the blind delayed entry for everyone — roughly equal-to-worse in 5 of 6 view/split combinations. `computeReplication()` nominally returned `replicates=true`, but this is misleading at face value: the held-out (non-selected) group did as well or better than the "selected" group on test, meaning the train-based selection isn't demonstrably finding anything — it just reflects mild positive EV in aggregate, not real incremental predictive power from picking "winners."
+
+**Practical takeaway**: the "worst point passed" recognition remains a real, validated signal for managing a position you're ALREADY in from its original entry (unaffected by this test). But it doesn't show a clear edge as a fresh-entry filter specifically — the value observed here is in the waiting itself, not in this particular recognition condition as an entry gate. Recorded as `RESEARCH_CLAIM` `worst_point_passed_as_entry_trigger`, script `scripts/backtest_worst_point_passed_entry_trigger.mjs` (one-off, not scheduled).
+
+`node --check`/`eslint` clean.
+
 ## ✅ 2026-07-23: found a real, robust in-trade signal — "has the worst point already passed by bar 6" — OPEN_DECISION on whether to wire it live
 
 Direct follow-up to the duration-sizing test below, per user direction to keep pushing on the "concentration battle" angle and do genuine open mining rather than test one preconceived idea. Dispatched a mining pass over the "still active at bar 6" population (already known mixed) comparing eventual winners vs losers across 4 real-time-computable candidate features: candle shape at bar 6, cumulative delta trajectory, whether the worst adverse point has already occurred (recovering) or is still fresh (deteriorating), and range compression.
