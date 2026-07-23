@@ -1,6 +1,24 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: corrected the big-move methodology again — the ZigZag-leg approach itself severely undercounted real movement, user caught it with a direct example
+
+Direct follow-up to the entry below. User pushed back hard on "22 moves in 2 years": *"the market moves 400 points at least weekly... you may be hyper focused on the 6 bar thing, you need to focus on all the factors."* Asked how much NQ moved intraday today as a concrete check.
+
+**Answer: 750.75pt today (open 29112 → low 28432.50 → high 29183.25).** Checked directly whether today would have counted as a "big move" under the prior ZigZag-leg method — it would not have: today's largest single CONFIRMED alternating leg (50pt reversal threshold) was only ~296pt. A day with a 750pt total range scored ZERO under the old method, because the market covered that range through a long, choppy, overlapping sequence of ~50 smaller legs, never one clean V-shaped swing. This is a real, structural flaw in the leg-based definition, not a data bug — proven with a live, current example, not a theoretical objection.
+
+**Redesigned using rolling-window RANGE instead of alternating legs** (session high-low for 1-day, rolling 5-day high-low), plus two new dimensions the user specifically asked for: incremental-progress tracking (what fraction of bars make a new running extreme — directly operationalizes "even incremental higher highs/lower lows is progress") and a volume-lifecycle-by-decile breakdown (does volume actually build as a move becomes "obvious," matching the user's own discretionary framework, rather than a single fixed checkpoint).
+
+**Audited each of the 4 tasks separately — 3 real, 1 broken, kept distinct rather than blended into one verdict:**
+1. **Frequency — REAL, independently reproduced.** 172/435 days (39.5%, direct from-scratch SQL check) vs the script's own 177/511 (34.6%) — same ballpark. Confirms the user's point decisively: 400pt+ days happen roughly a third to 40% of the time, nowhere near "22 in 2 years."
+2. **Incremental progress — plausible.** Only 3.9% (1-day) / 1.6% (5-day) of bars represent real forward progress — most of a big-range day is chop/retracement within the eventual range, not sustained momentum.
+3. **Volume lifecycle — REAL for 1-day windows.** Clean, monotonic climb from 0.19x to a peak of 1.61x at 70-80% elapsed progress, then tapering — genuinely validates the "quiet start, volume piles on once it's obvious, exhaustion near the end" framework. 5-day column is flatter, expected (diluted by overnight/weekend near-zero-volume stretches in the averaging denominator).
+4. **Level interaction/contention — BROKEN, do not trust the reported 92.7%/99.2% hit rate.** The 20pt micro-pivot detector, applied to whole-day/5-day windows instead of tight single legs, generates an enormous number of essentially meaningless micro-wiggles (consistent with finding #2 — most bars are chop) — each checked against ~60+ tracked levels produces a mechanical near-certain "hit," not a real signal. Confirmed by the population sizes themselves: "Big Move N=127,279, Control N=145" is inverted from what a real rare-event-vs-baseline comparison should look like. Flagged as `OPEN_DECISION` `big_move_level_contention_needs_consolidation_redesign` (needs a genuine multi-bar consolidation definition, not any small zigzag wiggle) rather than patched under time pressure.
+
+Recorded as `RESEARCH_CLAIM` `big_moves_rolling_window_frequency_and_lifecycle` (`PROVISIONAL` — tasks 1-3 verified, task 4 explicitly marked do-not-use in both the claim text and the script's own header comment). `node --check`/`eslint` clean.
+
 ## ✅ 2026-07-23: do genuine ≥400pt moves show contention at levels? Real modest finding, plus a serious data-gap bug caught and fixed permanently
+
+**Superseded in part — see the entry above.** The 22-move COUNT/frequency implied here was later shown (same day, user-caught) to be a severe undercount caused by the ZigZag-leg move definition itself, not by the data-gap fix — see the entry above for the corrected frequency (~a third to 40% of days, not 22-per-2-years). The volRatio/rangeRatio contention comparison in THIS entry (computed over clean single-leg moves) is not affected by that gap and remains a valid, separately-audited result — only the newer rolling-window version's own Task 4 (level-contention over broad multi-day windows) is broken, per the entry above.
 
 User asked to extend the whole engagement-research thread to real, large (≥400pt) moves over the past 2 years: do they show a recognizable order-flow contention signature at the levels they interact with? Dispatched to Gemini in 3 phases (enumerate the moves, find which levels they touched, compare order-flow features at those touches against an ordinary-touch control group).
 
