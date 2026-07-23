@@ -343,7 +343,9 @@ CREATE TABLE public.active_setups (
     runner_trail_width numeric,
     breakeven_armed_at timestamp without time zone,
     runner_peak_price numeric,
-    runner_trail_price numeric
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean
 );
 
 
@@ -559,6 +561,61 @@ ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
 
 
 --
+-- Name: active_setups_invalidated_pnl_backup_20260720; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_invalidated_pnl_backup_20260720 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric
+);
+
+
+--
 -- Name: active_setups_maemfe_backup_20260717; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -620,6 +677,116 @@ CREATE TABLE public.active_setups_monthlyvwap_yearlypoc_backup_20260719 (
     touch_quality_vol_z numeric,
     origin_status character varying(12),
     is_rth boolean
+);
+
+
+--
+-- Name: active_setups_null_pnl_recovery_backup_20260720; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_null_pnl_recovery_backup_20260720 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric
+);
+
+
+--
+-- Name: active_setups_null_pnl_recovery_backup_20260720_batch2; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_null_pnl_recovery_backup_20260720_batch2 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric
 );
 
 
@@ -1739,6 +1906,19 @@ CREATE TABLE public.level_prices_va_bucketing_backup_20260717 (
 
 
 --
+-- Name: level_prices_weekly_open_backup_20260720; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.level_prices_weekly_open_backup_20260720 (
+    trade_date date,
+    level_name text,
+    price numeric(12,4),
+    category text,
+    computed_at timestamp with time zone
+);
+
+
+--
 -- Name: level_prices_weeklyvwap_backup_20260714; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2072,7 +2252,7 @@ CREATE TABLE public.performance_audit (
     id integer NOT NULL,
     run_date date DEFAULT CURRENT_DATE NOT NULL,
     window_days integer NOT NULL,
-    signal_type character varying(20) NOT NULL,
+    signal_type character varying(30) NOT NULL,
     signal_name character varying(60) NOT NULL,
     sample_size integer,
     win_rate numeric,
@@ -2119,6 +2299,43 @@ CREATE SEQUENCE public.performance_audit_id_seq
 --
 
 ALTER SEQUENCE public.performance_audit_id_seq OWNED BY public.performance_audit.id;
+
+
+--
+-- Name: performance_audit_optimal_stop_commission_fix_backup_20260719; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.performance_audit_optimal_stop_commission_fix_backup_20260719 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(20),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
 
 
 --

@@ -3054,7 +3054,7 @@ export default function createACDRouter(io) {
         `, [todayET]),
         query(`
           SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-                 high::float, low::float, close::float, open::float,
+                 high::float, low::float, close::float, open::float, COALESCE(volume,0)::int as volume,
                  COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol
           FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
@@ -4848,7 +4848,7 @@ export default function createACDRouter(io) {
           if (!liveStats) {
             // DOW as integer (0=Sun, 1=Mon...5=Fri, 6=Sat) for SETUP_STATUS_DOW lookup
             const todayDowInt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
-            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ, confluencePairQ] = await Promise.all([
+            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ, confluencePairQ, exhaustionCalibQ] = await Promise.all([
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
                   sample_size, win_rate::float, ev_per_trade::float,
@@ -4921,6 +4921,16 @@ export default function createACDRouter(io) {
                 FROM performance_audit
                 WHERE signal_type = 'CONFLUENCE_AUDIT' AND signal_name LIKE 'PAIR:%'
                 ORDER BY signal_name, run_date DESC
+              `).catch(() => ({ rows: [] })),
+              // Live volRatio/rangeRatio cutoffs for the confluence+exhaustion interaction
+              // signal — informational only (see liveStats._exhaustionCutoffs below and
+              // scripts/backtest_confluence_exhaustion_interaction.mjs). RESEARCH_CLAIM
+              // confluence_exhaustion_interaction is still PROVISIONAL, not a validated
+              // live edge — do not use this to gate sizing/suppression.
+              query(`
+                SELECT notes FROM performance_audit
+                WHERE signal_type = 'EXHAUSTION_SIGNAL_CALIB' AND signal_name = 'LIVE_CUTOFFS'
+                ORDER BY run_date DESC LIMIT 1
               `).catch(() => ({ rows: [] })),
             ]);
             liveStats = { _mon: {} };
@@ -5061,6 +5071,12 @@ export default function createACDRouter(io) {
               (liveStats._pairBonus[a] ??= new Set()).add(b);
               (liveStats._pairBonus[b] ??= new Set()).add(a);
             }
+            // Live-usable exhaustion cutoffs (informational field only — see
+            // exhaustion_signal_at_detection below). Recomputed weekly from full history by
+            // scripts/backtest_confluence_exhaustion_interaction.mjs.
+            try {
+              liveStats._exhaustionCutoffs = JSON.parse(exhaustionCalibQ.rows[0]?.notes ?? 'null');
+            } catch (_) { liveStats._exhaustionCutoffs = null; }
             setCached(todayET, 'levelFadeStats', liveStats);
           }
           const ls = (key) => liveStats[key] || null;
@@ -5241,6 +5257,33 @@ export default function createACDRouter(io) {
             const buyersAtLevel  = isLong  && approachDelta > 0; // buyers defending support on approach
             const sellersAtLevel = !isLong && approachDelta < 0; // sellers pressing resistance on approach
 
+            // Confluence+exhaustion interaction signal (informational only — RESEARCH_CLAIM
+            // confluence_exhaustion_interaction is still PROVISIONAL, not a validated live edge;
+            // do NOT use this to gate sizeMultiplier or suppression). Mirrors
+            // scripts/backtest_confluence_exhaustion_interaction.mjs's definition exactly: entry
+            // bar's volRatio/rangeRatio vs the mean of the strictly-prior 20 bars (no lookahead),
+            // delta (this bar's own ask_vol - bid_vol, not the 5-bar approachDelta above) opposing
+            // the fade direction. Cutoffs are the live volRatioP50/rangeRatioP50 read from
+            // liveStats._exhaustionCutoffs (weekly recompute, full history — see that script).
+            let exhaustionSignalAtDetection = null;
+            const _exhBars = allRthBarsRow.rows;
+            const _exhEntryIdx = _exhBars.length - 1;
+            if (_exhEntryIdx >= 20 && liveStats._exhaustionCutoffs) {
+              const _exhPrior = _exhBars.slice(_exhEntryIdx - 20, _exhEntryIdx);
+              const _exhEntry = _exhBars[_exhEntryIdx];
+              const _meanVol = _exhPrior.reduce((s, b) => s + (b.volume || 0), 0) / _exhPrior.length;
+              const _meanRange = _exhPrior.reduce((s, b) => s + (b.high - b.low), 0) / _exhPrior.length;
+              if (_meanVol > 0 && _meanRange > 0) {
+                const _volRatio = (_exhEntry.volume || 0) / _meanVol;
+                const _rangeRatio = (_exhEntry.high - _exhEntry.low) / _meanRange;
+                const _entryBarDelta = (_exhEntry.ask_vol || 0) - (_exhEntry.bid_vol || 0);
+                const _deltaOpposing = isLong ? _entryBarDelta < 0 : _entryBarDelta > 0;
+                exhaustionSignalAtDetection = _volRatio >= liveStats._exhaustionCutoffs.volRatioP50
+                  && _rangeRatio <= liveStats._exhaustionCutoffs.rangeRatioP50
+                  && _deltaOpposing;
+              }
+            }
+
             // Elite zone: TURBULENT day + fade in IB direction + intraday range confirmation.
             // Research 2026-07-05: range >= 20d avg → 79.99% WR N=39; range < avg → 67.67% WR N=21.
             // turbConfirmed gates out the ~44% of TURBULENT calls that are false (classifier 20% accuracy).
@@ -5312,7 +5355,15 @@ export default function createACDRouter(io) {
                   if (dtaRow.recommendation === 'SIZE_DOWN')      return ` Caution — ${dtClass}: ${pct}% WR (below baseline).`;
                   return dtClass ? ` (${dtClass} day)` : '';
                 })();
-                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
+                // Confluence+exhaustion interaction note — RESEARCH_CLAIM confluence_exhaustion_interaction
+                // is still PROVISIONAL (real but not yet decisive: fails computeRigor's stability bar
+                // both train and test as of 2026-07-23). Surfaced as a caution, not a SKIP/suppress —
+                // this is exactly the "watch until I get conviction" framework the user described,
+                // not a live-execution gate yet.
+                const exhaustionNote = exhaustionSignalAtDetection
+                  ? ` ⚠ VOLUME/DELTA EXHAUSTION at this touch (high vol, tight range, delta opposing the fade) — historically a headwind when combined with confluence, still PROVISIONAL (not yet stable enough to size/suppress on).`
+                  : '';
+                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               sizeMultiplier: (() => {
@@ -5446,6 +5497,7 @@ export default function createACDRouter(io) {
               confluenceLevels: nearLevels.map(l => l.name.replace(/_FADE$/, '')),
               stackCount: _lfSameDirCounts[dir] ?? 0,
               tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
+              exhaustionSignalAtDetection,
             };
             } // end suppression check
             else {
@@ -6421,8 +6473,9 @@ export default function createACDRouter(io) {
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason, runner_trail_width,
-            confluence_score_at_detection, confluence_levels_at_detection
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22)
+            confluence_score_at_detection, confluence_levels_at_detection,
+            exhaustion_signal_at_detection
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23)
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -6436,6 +6489,7 @@ export default function createACDRouter(io) {
           runnerTrailWidth,
           active.confluenceCount ?? null,
           active.confluenceLevels && active.confluenceLevels.length ? active.confluenceLevels : null,
+          active.exhaustionSignalAtDetection ?? null,
         ]);
         let row = ins.rows[0];
         if (!row) {
