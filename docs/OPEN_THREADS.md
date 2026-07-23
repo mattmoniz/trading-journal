@@ -1,5 +1,19 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: found a real, robust in-trade signal — "has the worst point already passed by bar 6" — OPEN_DECISION on whether to wire it live
+
+Direct follow-up to the duration-sizing test below, per user direction to keep pushing on the "concentration battle" angle and do genuine open mining rather than test one preconceived idea. Dispatched a mining pass over the "still active at bar 6" population (already known mixed) comparing eventual winners vs losers across 4 real-time-computable candidate features: candle shape at bar 6, cumulative delta trajectory, whether the worst adverse point has already occurred (recovering) or is still fresh (deteriorating), and range compression.
+
+**Result: one real, strong separator found; the other three were honestly reported as weak/none.** "Worst point already passed" (bars 0-2) vs "still fresh" (bars 3-6) cleanly separates the group on every payoff dimension, not just win rate: TRAIN recovering N=2613 WR=63.0% EV=$25.73 avgWin=$103.10 avgLoss=-$105.75 vs deteriorating N=3618 WR=43.0% EV=-$34.43 avgWin=$93.75 avgLoss=-$131.05. TEST holds almost exactly (EV $25.69 vs -$33.67) with no re-selection — a genuine out-of-sample match, not a coincidence.
+
+**Audited hard before trusting this one, since it looked like the best result of the whole thread — exactly the moment to be most skeptical.** Two checks: (1) the "worst point passed" cutoff (bar 2) was hardcoded by Gemini with no derivation shown — swept every possible cutoff (0 through 5) myself and found a smooth, monotonic gradient at every single point, not a fragile artifact of the one value reported; (2) independently reimplemented the whole thing from scratch (not copying Gemini's script) and reproduced its exact N counts (2613+556=3169 vs my pooled 3169; 3618+1083=4701 vs my pooled 4701).
+
+**Real caveat, kept in the record honestly**: `computeReplication()` on a per-setup_type selection (which setup_types show a positive lift) returned `replicates=false` — the pooled/general effect is large and robust, but isn't uniformly present in every individual setup_type. This is a different, stricter question than the one the core finding answers (does the pooled real-time-computable split hold out-of-sample, which it does) — reported as a real, useful POOLED signal, not as validated for every setup_type.
+
+Recorded as `RESEARCH_CLAIM` `engagement_bar6_worst_point_passed`, promoted to `scripts/backtest_bar6_worst_point_passed.mjs`. **Not wired live** — this characterizes an already-OPEN position's in-trade state (bar 6 of an active trade), a different surface than detection-time tags (confluence/exhaustion) — would mean surfacing "worst point passed" vs "still deteriorating" on an open position's card. Flagged rather than built unilaterally since it touches live position management; awaiting user direction on whether/how to wire it.
+
+`node --check`/`eslint` clean on the promoted script.
+
 ## ✅ 2026-07-23: engagement duration → winner-size test — real effect, but too small and doesn't replicate
 
 Direct follow-up to the entry-timing test below, per the user's pushback that win rate isn't the standard of success here — contained losses with occasional large winners is ("eventually the damn will break with a huge win"). Reframed the hypothesis: instead of using engagement duration to GATE entry (already tested, negative), test whether a touch still active (not stopped/targeted) at bar K predicts a BIGGER eventual winner. Bucketing is real-time-computable (knowing stop/target hasn't been hit by bar K needs no lookahead) — this avoids the entry-timing test's methodology entirely, no re-simulation needed, real `actual_pnl` used throughout.
