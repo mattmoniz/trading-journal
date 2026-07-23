@@ -1,5 +1,19 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: do genuine ≥400pt moves show contention at levels? Real modest finding, plus a serious data-gap bug caught and fixed permanently
+
+User asked to extend the whole engagement-research thread to real, large (≥400pt) moves over the past 2 years: do they show a recognizable order-flow contention signature at the levels they interact with? Dispatched to Gemini in 3 phases (enumerate the moves, find which levels they touched, compare order-flow features at those touches against an ordinary-touch control group).
+
+**Gemini's first pass (`scratch/big_moves_contention.mjs`) found 28 qualifying legs, 71.4% level-hit rate, and real-looking volRatio/rangeRatio elevation — but auditing it surfaced a serious, previously-undocumented data problem, not a methodology bug.** Several "moves" had impossible bar counts (a 652pt move in "1 bar," a 1,769pt move over 2 months with only 51 bars) — checked directly against the DB and confirmed: `price_bars_primary` has **3 genuine ~61-day voids with zero NQ bars at all** (2024-09-20→2024-11-20, 2024-12-20→2025-02-19, 2025-03-21→2025-05-21), plus 3 shorter gaps. The ZigZag pivot detector was silently bridging these voids and reporting the price difference across them as a continuous "move" — 6 of 28 were pure data-gap artifacts, not real price action.
+
+**This was a new class of data-quality issue this codebase had never checked for** (distinct from the already-known ES-symbol contamination). Added a permanent, self-calibrating check to `scripts/data_sanity_audit.mjs` (Check 5) — first attempt used a static 60-hour cutoff and produced ~80 false positives on perfectly normal 72-96h weekend/holiday closures throughout the older history; fixed to self-calibrate at 10x the observed p99 inter-bar gap (matching Check 1's existing convention), which cleanly catches only the 3 genuine multi-week voids.
+
+**Re-verified the core finding after excluding all 6 gap-artifact moves — it survived essentially unchanged**, which is reassuring but was only confirmed by actually checking, not assumed: 22 real moves remain, 19 (86.4% — actually *higher* than the original uncorrected 71.4%) interacted with a known level. volRatio p50=1.20 (big-move touches) vs 0.82 (control, N=37,809); rangeRatio p50=1.15-1.20 vs 0.90. Real, modest, consistent in direction with this session's smaller-scale findings — N is thin at the move level (22 moves, 167 touches), so this is directional, not statistically decisive.
+
+**A separate delta comparison in the first pass was found invalid and excluded**: Gemini's control group used a random coin-flip to sign-adjust delta (no real subsequent big move to derive a direction from for an ordinary touch), which mechanically forces that group's delta distribution toward zero regardless of any real signal — making the reported "big moves show more delta divergence" claim an artifact, not evidence.
+
+Promoted to `scripts/backtest_big_moves_contention.mjs`, reproduced cleanly. Recorded as `RESEARCH_CLAIM` `big_moves_show_contention_at_levels` (`PROVISIONAL` — real and directionally consistent, not decisive at this N). `node --check`/`eslint` clean on both the promoted script and the `data_sanity_audit.mjs` fix.
+
 ## ✅ 2026-07-23: re-ran the 1-year Globex-inclusive prop challenge — same shape, RTH roster shrank further
 
 User asked for both a recap of today's engagement-research thread and a fresh re-run of the 1-year prop-challenge walkthrough. Nothing built today (confluence+exhaustion, bar6 checkpoint, etc.) changes any trading logic — all of it is informational-only or unwired-negative — so this re-run isn't testing today's changes, it's just refreshing the window (rolled forward to 2025-07-23→2026-07-23) and picking up whatever weekly `SETUP_STATUS` recalibration has run since 2026-07-22.

@@ -161,6 +161,52 @@ console.log('\n[4] performance_audit bounds check');
   }
 }
 
+// ---------------------------------------------------------------------------
+// Check 5: multi-day bar-data gaps in price_bars_primary. Found 2026-07-23 while auditing
+// a Gemini-authored "400pt move" ZigZag detector: 3 gaps of exactly 1470.8h (~61 days) —
+// 2024-09-20→2024-11-20, 2024-12-20→2025-02-19, 2025-03-21→2025-05-21 — plus 1 shorter one
+// (224.6h) with NO real bars at all in between. A pivot/trend detector that spans one of
+// these void periods reads the price difference across the gap as a continuous, real
+// "move" — 6 of 28 candidate "≥400pt moves" in that analysis turned out to span an
+// abnormal gap (3 of those 6 were the massive ~61-day voids; the underlying finding
+// survived once excluded, but only because it happened to be checked — nothing before
+// this flagged the gaps existed at all). Self-calibrating (10x p99), same convention as
+// Check 1 — a static hour count was tried first and produced ~80 false positives on
+// perfectly normal 72-96h weekend/holiday closures that exist throughout the older
+// history (p95=72h, p99=96h observed); real anomalies (224.6h, 1470.8h) sit far beyond
+// that with a clean separation, so this only fires on genuine multi-week+ voids.
+// ---------------------------------------------------------------------------
+console.log('\n[5] price_bars_primary multi-day gap check (NQ)');
+{
+  const allGaps = await query(`
+    WITH b AS (SELECT ts, LEAD(ts) OVER (ORDER BY ts) as next_ts FROM price_bars_primary WHERE symbol='NQ')
+    SELECT EXTRACT(EPOCH FROM (next_ts - ts))/3600.0 as gap_hours
+    FROM b WHERE next_ts IS NOT NULL AND next_ts - ts > interval '30 minutes'
+    ORDER BY gap_hours
+  `);
+  const hours = allGaps.rows.map(r => Number(r.gap_hours));
+  const p99Idx = Math.floor(hours.length * 0.99);
+  const p99 = hours[Math.min(p99Idx, hours.length - 1)] ?? 0;
+  const cutoffHours = Math.max(p99 * 10, 120); // floor of 120h in case history is too short/uniform for p99 to be meaningful
+
+  const r = await query(`
+    WITH b AS (
+      SELECT ts, LEAD(ts) OVER (ORDER BY ts) as next_ts
+      FROM price_bars_primary WHERE symbol='NQ'
+    )
+    SELECT ts as gap_start, next_ts as gap_end, EXTRACT(EPOCH FROM (next_ts - ts))/3600.0 as gap_hours
+    FROM b WHERE next_ts - ts > ($1 || ' hours')::interval
+    ORDER BY gap_hours DESC
+  `, [cutoffHours]);
+  if (r.rows.length === 0) {
+    ok(`No gaps beyond ${cutoffHours.toFixed(0)}h (10x p99=${p99.toFixed(1)}h) found in NQ bar history`);
+  } else {
+    for (const row of r.rows) {
+      flag(`Gap ${row.gap_start.toISOString()} → ${row.gap_end.toISOString()} (${Number(row.gap_hours).toFixed(1)}h, no bars at all in between, vs a normal-closure ceiling of ~${cutoffHours.toFixed(0)}h) — any trend/move/regime detector scanning across this window will silently bridge the void and misread it as continuous price action`);
+    }
+  }
+}
+
 console.log('\n' + '='.repeat(80));
 console.log(anomalyCount === 0 ? '✅ CLEAN — no anomalies found.' : `🔴 ${anomalyCount} anomaly group(s) found — review above before trusting related figures.`);
 console.log('='.repeat(80));
