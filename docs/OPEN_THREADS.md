@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: bar-6 checkpoint wired LIVE — informational only, no entry gating, per explicit user tradeoff
+
+Resolves `OPEN_DECISION` `wire_bar6_worst_point_passed_signal`. Before building, asked the user how the live mechanism should behave (hard entry gate / countdown+soft warning / dual display); user's answer reframed the whole design: **"I hesitate at losing an opportunity at 6 bars."** This is exactly right and changes what should be built — a hard "wait until bar 6" gate would forfeit the fast, clean, high-win-rate winners that make up most of the touch population (the "Resolved by K" bucket in `backtest_engagement_duration_sizing.mjs` has 72-80% WR, much better than the "still active" bucket even at its best) in exchange for only capturing the harder, slower subset. That would be a net loss, not a win.
+
+**What got built instead**: `active_setups.bar6_checkpoint` (VARCHAR(20), 'RECOVERING'/'DETERIORATING') — computed in `resolveSetupsByPrice()` (`server/routes/acd.js`) once a position genuinely reaches bar 6 still undecided (the loop naturally only reaches barCount>=7 for touches that didn't resolve fast, so the population is exactly right without extra filtering), classifying whether the worst adverse excursion already happened (bars 0-2) or is still fresh (bars 3-6). Never overwritten once set — same convention as the existing `touch_quality` informational field this mirrors exactly (found in `resolveSetupsByPrice()`, reused the identical side-effect-UPDATE pattern rather than inventing a new one). Surfaced via `antigravityEdges.js` (added to the existing `active_setups` SELECT, flows through the `...s` spread with zero extra plumbing) → a badge on `ACDView.jsx`'s live setup card.
+
+**Deliberately does NOT**: gate, delay, or suppress the original entry alert (fires exactly as it always has); auto-adjust stop/target on an open position. This is purely a read on a position already held, left for the trader to act on — matching the user's own framing earlier this session about wanting unemotional discipline FROM the tool, not necessarily automated intervention on every finding.
+
+**Also resolved same session**: the per-setup_type wait-window calibration (below) found no specific whitelist survives audit — so this is scoped to the general, pooled, validated finding (any setup reaching bar 6 undecided), not restricted to specific setup_types.
+
+`node --check`/`eslint`/`npm run build` all clean. `server/schema.sql` regenerated (new column only, minimal diff).
+
 ## ✅ 2026-07-23: per-setup_type wait-window calibration — headline "4 qualify" didn't survive a stricter check; scope the live build to the pooled finding, not a whitelist
 
 Before building the live wait-enforcement mechanism, dispatched a per-setup_type calibration (462 setup_type × K∈{3,6,10} combinations checked) to determine which specific setup types show a real, robust "wait beats immediate entry" edge, rather than assuming the pooled finding applies everywhere.

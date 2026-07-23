@@ -632,6 +632,20 @@ function EdgeSectionsPanel() {
                       </div>
                     );
                   })()}
+                  {s.bar6_checkpoint && (() => {
+                    // Bar-6 checkpoint (RESEARCH_CLAIM engagement_bar6_worst_point_passed) —
+                    // only known once a still-open position reaches bar 6 without resolving.
+                    // Informational only: never gates/delays the original entry, never auto-
+                    // adjusts stop/target — a read on a position already held, for the trader
+                    // to act on (or not) themselves.
+                    const recovering = s.bar6_checkpoint === 'RECOVERING';
+                    return (
+                      <div style={{ fontSize: 11, color: recovering ? '#34d399' : '#f87171', marginTop: 4, fontWeight: 600 }}
+                        title="Historically: worst point already passed by bar 6 → 63-67% WR / +$25 EV. Still deteriorating at bar 6 → 43-47% WR / -$34 EV.">
+                        {recovering ? '✓ Bar 6: worst point passed' : '⚠ Bar 6: still deteriorating'} — historically {recovering ? '63-67% WR / +$25 EV' : '43-47% WR / -$34 EV'}
+                      </div>
+                    );
+                  })()}
                   <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={refreshFeedback} />
                 </div>
               );

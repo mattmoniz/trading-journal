@@ -321,6 +321,15 @@ export async function resolveSetupsByPrice(io) {
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
+    // Bar-6 checkpoint (RESEARCH_CLAIM engagement_bar6_worst_point_passed,
+    // docs/OPEN_THREADS.md 2026-07-23): among touches still undecided (not stopped or
+    // targeted) 6 bars after entry, whether the worst adverse excursion already happened
+    // (bars 0-2, "recovering") vs is still fresh (bars 3-6, "deteriorating") cleanly
+    // separates real outcomes on every payoff dimension. Informational only, same
+    // convention as touch_quality just below — never affects resolution/pnl/entry. Does
+    // NOT delay or gate the original entry alert (user explicitly did not want to risk
+    // missing the fast, clean winners that make up most of the touch population).
+    let worstAdverse6 = -Infinity, worstAdverseBarIdx6 = null;
     // Trail-mechanism state — recomputed from scratch on every poll (this function
     // already re-walks the full bar range from fired_at every call, same as MAE/MFE
     // above), never resumed from a saved cursor. Written back at the end regardless of
@@ -334,6 +343,10 @@ export async function resolveSetupsByPrice(io) {
       const adverse   = long ? entry - bar.low  : bar.high - entry;
       runMfe = Math.max(runMfe, favorable);
       runMae = Math.max(runMae, adverse);
+      if (barCount <= 7 && adverse > worstAdverse6) {
+        worstAdverse6 = adverse;
+        worstAdverseBarIdx6 = barCount - 1; // 0-indexed, matches the research script's bar 0-6 convention
+      }
 
       if (trailWidth != null) {
         // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
@@ -413,6 +426,19 @@ export async function resolveSetupsByPrice(io) {
         priceAtRes = stop;
         break;
       }
+    }
+
+    // Persist the bar-6 checkpoint once bars 0-6 have actually been observed (the loop
+    // above only reaches barCount>=7 for a touch that's genuinely still undecided at that
+    // point — a fast STOP_HIT/TARGET_HIT breaks the loop earlier, which correctly means no
+    // checkpoint is written, matching the research population exactly). Never overwritten
+    // once set (WHERE bar6_checkpoint IS NULL), same convention as touch_quality below.
+    if (barCount >= 7 && worstAdverseBarIdx6 !== null) {
+      const checkpoint = worstAdverseBarIdx6 <= 2 ? 'RECOVERING' : 'DETERIORATING';
+      await query(
+        `UPDATE active_setups SET bar6_checkpoint=$2 WHERE id=$1 AND bar6_checkpoint IS NULL`,
+        [row.id, checkpoint]
+      ).catch(() => {});
     }
 
     // Mark-to-market TIME_EXPIRED for the plain (non-trail) case: the trail branch
