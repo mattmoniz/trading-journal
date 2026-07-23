@@ -1,4 +1,14 @@
-# Open Threads / Pending Work
+## 🔄 2026-07-23: mined for a predictor of WHICH RECOVERING touches should exit early — genuinely open, corrected Gemini's own overly-pessimistic reading
+
+Direct follow-up per user framing: instead of a static list of "which 71 setup_types qualify" for the RECOVERING early-exit edge, mine for a real-time-computable feature that predicts, per individual touch, whether exiting at bar 6 beats holding to target ("it won't be a uniform answer, that's where volume and price movement steps in").
+
+**Found a real, intuitive candidate — distance already traveled toward the original target by bar 6.** Touches worth cutting had only gone ~14% of the way to target; touches worth holding had gone ~28% — real forward progress by bar 6 predicts the trade actually completes the journey.
+
+**Had to correct Gemini's own conclusion, in the opposite direction from every earlier catch today.** Gemini reported this "FAILS REPLICATION" because `computeReplication()`'s `replicates` boolean requires the selected and held-out pools to share the same sign. Here selected showed +$11.20 (real) while held-out showed -$1.64 (negative) — opposite signs, which fails that specific check by definition, but is arguably *cleaner* evidence of real discrimination (the policy correctly separates a group that benefits from one that's actually hurt by the same rule) than same-sign agreement would be. `replicates` answers "is this universal," not "did the selection find something real" — this session has now learned, in both directions, not to trust that boolean literally without checking the raw selected-vs-held-out numbers.
+
+**Still not calling this confirmed, for a real reason.** The feature (1 of 5 tested) and its threshold (best of 9 deciles) were both chosen by searching the same train data before the per-setup_type selection layer was even applied — a nested, two-level selection with more researcher/model degrees of freedom than any single-hypothesis test earlier today. Flagged as `OPEN_DECISION` `confirm_target_distance_fraction_exit_predictor` — needs one pre-registered rule tested on a genuinely fresh holdout (e.g. real forward data as `bar6_checkpoint` accumulates live) before it's trusted or wired.
+
+Recorded as `RESEARCH_CLAIM` `recovering_exit_predictor_target_distance_provisional` (`PROVISIONAL`), promoted to `scripts/backtest_recovering_exit_predictor.mjs`. `node --check`/`eslint` clean.
 
 ## ✅ 2026-07-23: tested cutting EARLY at bar 6 (the complement to loosening) — split verdict, self-corrected mid-audit
 
