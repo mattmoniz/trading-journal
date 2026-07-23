@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-23: tested "loosen the stops" directly on the DETERIORATING bar-6 population — negative, doubly confirmed
+
+Direct follow-up per the user's explicit framing: "it eventually moves greatly, we need to dial in execution timing or loosen up stops." Given the market makes ≥400pt moves ~35-40% of days and volume keeps building well into a real move (both found earlier today), does the current calibrated stop cut DETERIORATING bar-6 touches (still making new lows at bar 6 — already known toxic) off too early, before a real move has a chance to arrive?
+
+Swept stop width at 1.0x (baseline, real stored `actual_pnl`), 1.5x, 2.0x, 3.0x, and NO_STOP (ride to session end, mark-to-market) — entry and target held fixed, only the stop widens.
+
+**Result: negative, and unusually clean this time — confirmed on both train AND test with no contradictions.** DETERIORATING EV gets *worse* as the stop widens: train -$34.43 → -$37.45 → -$37.84 → -$38.78 → -$38.51; test -$33.67 → -$30.99 → -$31.60 → -$34.28 → -$46.10. Win rate climbs dramatically (train 43.0%→64.2%, test 46.8%→74.1%) but it's a mechanical illusion — average loss balloons in lockstep (train -$131→-$282, test -$152→-$470) and max loss explodes (train -$609→-$2,119, test -$455→-$2,431). Giving a still-deteriorating trade more room lets a few more recover, but the ones that don't get dramatically more expensive, wiping out any gain. No widening multiplier beat baseline on train, so no per-setup_type replication check was even needed (correctly — nothing to validate). RECOVERING touches showed no benefit either (EV roughly flat, actually slightly worse at the widest settings, avg loss still climbs).
+
+**Practical conclusion**: the current calibrated stops are doing their job. If a touch is still actively making new lows at bar 6, giving it more room isn't a rescue — it swaps a small, contained loss for a real shot at a catastrophic one. The genuine edge stays the RECOVERING/DETERIORATING classification itself, not loosened risk tolerance for the ones that haven't turned yet. Recorded as `RESEARCH_CLAIM` `bar6_stop_widening_no_rescue`, promoted to `scripts/backtest_bar6_stop_width_sweep.mjs`, reproduced exactly. `node --check`/`eslint` clean.
+
 ## ✅ 2026-07-23: tested the bar6-checkpoint × volume-trajectory connection flagged earlier today — negative, and caught the same misleading-replication pattern again
 
 Direct follow-up to the cross-cutting synthesis observation from earlier today (the untested connection between `bar6_checkpoint`'s binary RECOVERING/DETERIORATING read and the volume-lifecycle-by-decile finding). Tested a scoped, buildable-today version: within the same bar-6 population, does volume TRAJECTORY over bars 0-6 (BUILDING: recent bars higher volRatio than early bars; FADING otherwise) sharpen the existing split?
