@@ -36,6 +36,7 @@ import { query } from '../server/db.js';
 import { directionFromType, replayBars } from '../server/services/maeMfeReplay.js';
 import { computeReplication } from '../server/services/rigorDiagnostics.js';
 import { loadPairProximityThresholds, PROXIMITY, COMMISSION, PNL_PER_POINT } from './backtest_confluence.js';
+import fs from 'fs';
 
 async function main() {
   const pairsRes = await query(`SELECT signal_name FROM performance_audit WHERE signal_type='CONFLUENCE_AUDIT' AND recommendation='VALIDATED_PAIR'`);
@@ -187,7 +188,7 @@ async function main() {
   doView(touches.filter(t => t.hasConfluence), 'CONFLUENCE ONLY');
   doView(touches.filter(t => !t.hasConfluence), 'NON-CONFLUENCE ONLY');
 
-  function replicationCheck(label, filterFn, armField) {
+  function replicationCheck(label, filterFn, armField, verbose = false) {
     const trainSubset = trainTouches.filter(filterFn);
     const evA = trainSubset.reduce((s, t) => s + t.pnlA, 0) / trainSubset.length;
     const evArm = trainSubset.reduce((s, t) => s + t[armField], 0) / trainSubset.length;
@@ -205,15 +206,31 @@ async function main() {
     if (selected.length) {
       const rep = computeReplication(testUnits, { idFn: x => x.setupType, metricFn: x => ({ n: x.n, value: x.value }), selectedIds: selected });
       console.log(`  ${selected.length} setup_types selected on train. Selected pool test diff=$${rep.selectedPooled.value.toFixed(2)} vs held-out diff=$${rep.heldOutPooled.value.toFixed(2)} (selected beats held-out: ${rep.selectedPooled.value > rep.heldOutPooled.value})`);
+      if (verbose) {
+        const qualifying = testUnits
+          .filter(x => selected.includes(x.setupType) && x.n > 0)
+          .sort((a, b) => b.value - a.value);
+        console.log(`  Qualifying setup_types (selected on train, N>0 on test), sorted by test EV diff:`);
+        for (const q of qualifying) {
+          console.log(`    ${q.setupType.padEnd(35)} test N=${String(q.n).padStart(4)}  test EV diff=$${q.value.toFixed(2)}`);
+        }
+        return qualifying;
+      }
     } else {
       console.log('  0 setup_types selected on train.');
     }
+    return [];
   }
 
   replicationCheck('DETERIORATING Arm B (Cut@Bar6) Replication', t => t.worstBarIdx > 2, 'pnlB');
   replicationCheck('DETERIORATING Arm C (Tighten) Replication', t => t.worstBarIdx > 2, 'pnlC');
-  replicationCheck('RECOVERING Arm B (Cut@Bar6) Replication', t => t.worstBarIdx <= 2, 'pnlB');
+  const recoveringArmBQualifying = replicationCheck('RECOVERING Arm B (Cut@Bar6) Replication', t => t.worstBarIdx <= 2, 'pnlB', true);
   replicationCheck('RECOVERING Arm C (Tighten) Replication', t => t.worstBarIdx <= 2, 'pnlC');
+
+  if (recoveringArmBQualifying.length) {
+    fs.writeFileSync('scratch/bar6_early_exit_qualifying_setup_types.json', JSON.stringify(recoveringArmBQualifying, null, 2));
+    console.log(`\nWrote ${recoveringArmBQualifying.length} qualifying setup_types to scratch/bar6_early_exit_qualifying_setup_types.json`);
+  }
 
   process.exit(0);
 }

@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-24: resolved `identify_recovering_early_exit_setup_types` — the whitelist doesn't hold up, the already-confirmed uniform rule supersedes it
+
+User asked "how do we proceed" — went to close out the safe, no-data-blocker items first. Added per-setup_type output to `scripts/backtest_bar6_early_exit.mjs`'s RECOVERING-Arm-B replication check (previously only logged the aggregate pooled diff, never the actual setup_type names) and ran it fresh.
+
+**Caught before reporting it as an actionable list**: none of the 63 "qualifying" (train-selected, test N>0) setup_types clear N>=20 on test — the highest is `ONH_FADE_SHORT` at N=17, most are N=1-9, and roughly half show *negative* test EV diff despite being train-selected (from `WS1_FADE_LONG` +$189.12/N=1 down to `PM_VAL_FADE_LONG` -$159.76/N=1). The pooled/aggregate lift ($13.42 selected vs -$0.34 held-out) is real and correctly computed, but does not decompose into a trustworthy per-setup_type whitelist at this sample size — building one would violate this codebase's own standing N>=20 floor.
+
+**Resolution**: don't build the whitelist. The already-confirmed, uniform `targetDistFraction<0.873` exit rule (`recovering_exit_predictor_target_distance_confirmatory_pass`, N=3170, clean rigor on every bucket) is the correct, statistically-supportable version of "when to cut a RECOVERING touch early" — it decides per-touch based on price position at bar 6, not per-setup_type, and fully supersedes this whitelist approach. Resolved `OPEN_DECISION` `identify_recovering_early_exit_setup_types` with this finding. The only remaining open piece for this whole thread is the already-tracked `validate_target_distance_predictor_on_live_data` (still blocked on real touches reaching N>=20, currently 2). `node --check`/`eslint` clean on the script change.
+
 ## 🟡 2026-07-24: real-time big-move detectors, both angles tested — one genuinely promising lead, blocked from validation by the recent market regime, not debunked
 
 Direct follow-up to the two untried angles flagged when the big-moves thread was closed out ("Let's try both and report back"). Dispatched together to Gemini (both prompts reused established no-lookahead/gap-exclusion conventions verbatim), then **audited the actual trigger-detection code directly** rather than trusting Gemini's own summary — which turned out to matter: Gemini's own conclusion ("no discernible predictive edge, do not deploy") conflated two genuinely different findings into one flat negative.
