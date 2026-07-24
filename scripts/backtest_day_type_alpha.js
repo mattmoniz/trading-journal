@@ -15,6 +15,24 @@
 // size_delta = min(|z| × 0.07, 0.25) — scales with evidence strength, no fixed amounts.
 //
 // Run after backtest_unified: node scripts/backtest_day_type_alpha.js
+//
+// EXTENDED 2026-07-23: the population query used to be `setup_type LIKE '%FADE%'` only,
+// which structurally excluded IB_BULLISH/IB_BEARISH (and MOMENTUM_60m_60m_TREND, which has
+// no active_setups history under that name and is unaffected either way) from this entire
+// mechanism -- meaning these two never got a dynamically-recalibrated, statistically-gated
+// per-day-type row here, ever. Found while investigating why the RTH leg of the 1yr prop-
+// challenge walkthrough looks negative: IB_BULLISH/IB_BEARISH's own SETUP_STATUS
+// day_type_breakdown shows a genuinely clean, large-N situational split (IB_BEARISH: BALANCE
+// EV=-$26/N=54, TURBULENT EV=+$65/N=31, TREND EV=+$8/N=32; IB_BULLISH: BALANCE EV=-$37/N=65,
+// TREND EV=+$17/N=32, TURBULENT EV=-$53/N=22) -- but the LIVE day-type gate for these two
+// (server/routes/acd.js ~line 4132-4134) is a hardcoded boolean (suppress IB_BULLISH on
+// BALANCE/TURBULENT, IB_BEARISH on BALANCE/TREND) based on a stale in-code comment snapshot,
+// never re-derived from current data, unlike every FADE setup_type which gets this dynamically
+// via liveStats._dta. Extending the population query is the safe half of the fix (a backtest/
+// calibration script -- populates performance_audit only, no live behavior change by itself).
+// Wiring ibSetup's live gate to actually READ liveStats._dta instead of the hardcoded boolean
+// is a separate, deliberately-not-yet-built live-behavior change -- see OPEN_DECISION
+// ib_bullish_bearish_daytype_gate_hardcoded_not_dynamic.
 // =============================================================================
 
 import { query } from '../server/db.js';
@@ -40,13 +58,14 @@ async function run() {
     query(`
       SELECT setup_type, resolution, actual_pnl::float
       FROM active_setups
-      WHERE setup_type LIKE '%FADE%' AND status = 'RESOLVED'
+      WHERE (setup_type LIKE '%FADE%' OR setup_type IN ('IB_BULLISH', 'IB_BEARISH'))
+        AND status = 'RESOLVED'
     `),
     query(`
       SELECT a.setup_type, a.resolution, a.actual_pnl::float, d.day_type
       FROM active_setups a
       JOIN acd_daily_log d ON a.trade_date = d.trade_date
-      WHERE a.setup_type LIKE '%FADE%'
+      WHERE (a.setup_type LIKE '%FADE%' OR a.setup_type IN ('IB_BULLISH', 'IB_BEARISH'))
         AND a.status = 'RESOLVED'
         AND d.day_type IS NOT NULL
       ORDER BY a.setup_type, d.day_type
