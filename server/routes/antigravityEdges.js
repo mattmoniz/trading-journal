@@ -1581,6 +1581,20 @@ async function getLiveEdgesContext() {
   const _cascadeCount = cascadeQ.rows[0]?.stop_count ?? 0;
   const cascadeBreaker = { active: _cascadeCount >= 3, stopCount: _cascadeCount, threshold: 3, windowMins: 45 };
 
+  // Real-time big-move-day signal — informational only. Deliberately a standalone query, NOT
+  // added to the Promise.all wave above, to avoid this file's own documented positional-index
+  // footgun (see CLAUDE.md's "Promise.all ordering footgun" entry). Just reads back today's
+  // already-persisted BIGMOVE_LIVE_SIGNAL row (written by acd.js's setup-detection handler),
+  // no duplicated detection logic here.
+  let bigMoveSignal = null;
+  try {
+    const bmsQ = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='BIGMOVE_LIVE_SIGNAL' AND signal_name=$1
+    `, [targetDate]);
+    if (bmsQ.rows[0]) bigMoveSignal = { active: true, ...JSON.parse(bmsQ.rows[0].notes || '{}') };
+  } catch (_) { /* informational only, never block the response */ }
+
   return {
     windows: resultsByWindow,
     liveStatus,
@@ -1597,6 +1611,7 @@ async function getLiveEdgesContext() {
     sessionPermissions,
     sessionBias,
     cascadeBreaker,
+    bigMoveSignal,
   };
 }
 

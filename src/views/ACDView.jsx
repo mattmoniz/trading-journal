@@ -483,7 +483,7 @@ function EdgeSectionsPanel() {
   if (err && !data) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
-  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker } = data;
+  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker, bigMoveSignal } = data;
   const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
   const inv = overnightContext?.overnight_inventory;
   const ovp = overnightContext?.open_vs_prior_value;
@@ -522,6 +522,15 @@ function EdgeSectionsPanel() {
       {cascadeBreaker?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.15)', border: '2px solid #ef4444', borderRadius: 8, color: '#ef4444', fontWeight: 700, fontSize: 13 }}>
           ⛔ FADE REGIME OFF — {cascadeBreaker.stopCount} different levels stopped out in {cascadeBreaker.windowMins} min · tape is trending · no new fade entries
+        </div>
+      )}
+      {/* Big-move-day signal — informational only, does not gate any setup. See RESEARCH_CLAIM
+          bigmove_realtime_price_progress_promising_volume_weak: a real, monotonic train-split
+          lift (+20.3pp vs baseline at this exact threshold) not yet test-confirmed because the
+          recent market has been too uniformly volatile to provide a comparison group. */}
+      {bigMoveSignal?.active && (
+        <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.15)', border: '2px solid #f59e0b', borderRadius: 8, color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>
+          📈 BIG-MOVE DAY SIGNAL — session range {bigMoveSignal.rangeSoFar}pt already, {bigMoveSignal.minutesRemaining}min left in RTH · historically 57% of days like this finish ≥400pt (vs 37% baseline) · informational only, not a trade signal
         </div>
       )}
       {/* Overnight Structural Context — moved to right column top */}

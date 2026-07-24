@@ -4120,18 +4120,30 @@ export default function createACDRouter(io) {
         }
       }
 
-      // IB setup day-type precision gate — originally Opus Audit 2 2026-07-07, numbers below
-      // re-verified 2026-07-14 and found stale/drifted (exactly the silent-drift pattern this
-      // codebase has hit before — see docs/OPEN_THREADS.md for the incident). IB_BULLISH's
-      // TREND bucket had gone from +$16 EV (N=32, 2026-07-07) to -$16 EV (N=34) by 2026-07-14 —
-      // no bucket clears the bar anymore, so IB_BULLISH is now fully SUPPRESSed by
-      // backtest_setup_status.mjs's DAY_TYPE_CONDITIONAL check (see that script), independent
-      // of the per-day-type nulling below. Current (2026-07-14) real numbers:
-      // IB_BULLISH: BALANCE N=53 EV=-$47 | TREND N=34 EV=-$16 | TURBULENT N=19 EV=+$4 (thin)
-      // IB_BEARISH: BALANCE N=53 EV=-$15 | TREND N=18 EV=-$64 | TURBULENT N=30 EV=+$78 (strong)
-      if (dtClass === 'BALANCE' && ibSetup) ibSetup = null;
-      if (dtClass === 'TURBULENT' && ibSetup?.type === 'IB_BULLISH') ibSetup = null;
-      if (dtClass === 'TREND' && ibSetup?.type === 'IB_BEARISH') ibSetup = null;
+      // IB setup day-type precision gate — made DYNAMIC 2026-07-24 (was a hardcoded boolean
+      // based on a stale in-code comment snapshot, re-verified/updated by hand at least twice
+      // before, 2026-07-07 then 2026-07-14 — exactly the silent-drift pattern this codebase has
+      // hit before, see docs/OPEN_THREADS.md). Now reads real DAY_TYPE_ALPHA rows (populated
+      // weekly by backtest_day_type_alpha.js, extended 2026-07-23 to cover IB_BULLISH/IB_BEARISH
+      // — previously excluded by that script's `LIKE '%FADE%'` filter) instead of a fixed
+      // decision, using the same standard N>=20 / EV<-$5 bar this codebase already uses
+      // everywhere else (backtest_setup_status.mjs's SUPPRESS floor) rather than a new
+      // threshold. Self-corrects automatically as real data accumulates — no more manual
+      // re-verification needed. liveStats._dta isn't populated until much later in this
+      // function (~line 4877's Promise.all) so this can't reuse that shared object here;
+      // intentionally a small, self-contained query instead of restructuring control flow in
+      // this fragile function.
+      if (ibSetup) {
+        const ibDtaQ = await query(`
+          SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade
+          FROM performance_audit
+          WHERE signal_type='DAY_TYPE_ALPHA' AND signal_name = ANY($1::text[])
+          ORDER BY signal_name, run_date DESC
+        `, [['IB_BULLISH_BALANCE', 'IB_BULLISH_TREND', 'IB_BULLISH_TURBULENT',
+             'IB_BEARISH_BALANCE', 'IB_BEARISH_TREND', 'IB_BEARISH_TURBULENT']]);
+        const ibDtaRow = ibDtaQ.rows.find(r => r.signal_name === `${ibSetup.type}_${dtClass}`);
+        if (ibDtaRow && ibDtaRow.sample_size >= 20 && ibDtaRow.ev_per_trade < -5) ibSetup = null;
+      }
 
       // Morning volatility regime — used to gate C_STANDALONE in HIGH-VOL-CHOP (0% WR confirmed, regime backtest 2026-06-30)
       const regimeResult = await computeLiveVolatilityRegime().catch(() => ({ regime: null }));
@@ -6589,6 +6601,30 @@ export default function createACDRouter(io) {
         })();
       }
 
+      // Real-time "is today becoming a big-move day" signal — informational only, does NOT
+      // gate/suppress any setup. Added 2026-07-24, reuses the validated 250pt-range-crossed /
+      // 180min-remaining threshold from RESEARCH_CLAIM
+      // bigmove_realtime_price_progress_promising_volume_weak (a real, monotonic train-split
+      // lift — +20.3pp vs baseline — not yet test-confirmed because the recent market has been
+      // too uniformly volatile to provide a comparison group; this live wiring is how that gets
+      // real forward data instead of waiting passively). Persisted write-once per day so forward
+      // accuracy can be checked once enough days accumulate.
+      let bigMoveSignal = { active: false, rangeSoFar: null, minutesRemaining: null };
+      if (sessionHiLoRow.rows[0]?.h != null && sessionHiLoRow.rows[0]?.l != null && allRthBarsRow.rows.length > 0) {
+        const rangeSoFar = sessionHiLoRow.rows[0].h - sessionHiLoRow.rows[0].l;
+        const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
+        const minutesRemaining = Math.max(0, 960 - nowEtMin);
+        const isActive = rangeSoFar >= 250 && minutesRemaining >= 180;
+        bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
+        if (isActive) {
+          query(`
+            INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+            VALUES ($1, 0, 'BIGMOVE_LIVE_SIGNAL', $1, 1, $2)
+            ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+          `, [todayET, JSON.stringify({ rangeSoFar: Math.round(rangeSoFar), minutesRemaining, triggeredAt: new Date().toISOString() })]).catch(() => {});
+        }
+      }
+
       res.json({
         setup: {
           ...active,
@@ -6601,6 +6637,7 @@ export default function createACDRouter(io) {
         },
         noNewEntries: !!noNewEntries,
         cascadeBreaker,
+        bigMoveSignal,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };
