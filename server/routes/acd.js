@@ -6604,31 +6604,57 @@ export default function createACDRouter(io) {
       // Real-time "is today becoming a big-move day" signal — informational only, does NOT
       // gate/suppress any setup.
       //
-      // DISABLED 2026-07-24 (same day it was added) — user caught a real methodology bug: the
+      // REBUILT 2026-07-24 (same day as the original wiring and the same-day disable) — the
+      // first version scoped rangeSoFar to sessionHiLoRow (RTH-only, 9:30am-4pm), but the
       // RESEARCH_CLAIM this cites (bigmove_realtime_price_progress_promising_volume_weak) was
-      // validated against sessions with NO time-of-day filter (scripts/backtest_bigmove_realtime_detectors.mjs
-      // groups bars purely on >45min gaps, so each "session" spans the full ~23hr Globex+RTH
-      // combined trading day, roughly 6PM ET open to the next day's 5PM ET maintenance close —
-      // see server/index.js's isDailyMaintenanceBreak, etMin 1020-1080, for this codebase's own
-      // established schedule convention). The RTH-only computation below (sessionHiLoRow, bounded
-      // 9:30am-4pm) measures a genuinely different, much narrower population than what was
-      // validated — the 57.2%-vs-36.9% stat does not apply to it. Forcing isActive=false
-      // unconditionally until this is rebuilt as genuinely Globex-inclusive (tracking the actual
-      // current session's start via the same gap-detection logic, and minutes-remaining against
-      // the real next 5PM ET close) — see OPEN_DECISION rebuild_bigmove_signal_globex_inclusive.
+      // validated against sessions with NO time-of-day filter — scripts/backtest_bigmove_realtime_detectors.mjs
+      // groups price_bars_primary purely on >45min gaps, so each validated session spans the
+      // full ~23hr Globex+RTH combined trading day (roughly 6PM ET reopen to the next day's 5PM
+      // ET maintenance close — server/index.js's isDailyMaintenanceBreak, etMin 1020-1080, is
+      // this codebase's own established convention for that boundary). User caught this
+      // ("why not globex") when asking to see the signal fire.
+      //
+      // Fixed by finding the CURRENT session's actual start via the same >45min gap-detection
+      // logic the backtest itself uses (a live SQL query, not a hardcoded RTH/Globex schedule
+      // guess) and computing rangeSoFar across that whole session, not just the RTH portion.
+      // minutesRemaining still uses the simple etMin-based next-5PM-ET-close formula — this part
+      // IS schedule-based (unavoidable: the future close time can't be read from past data the
+      // way session start can), but reuses this codebase's own already-established boundary
+      // (1020/1440 minute constants), not a newly-invented one. Only reachable from the RTH
+      // response path (a separate, earlier Globex-mode early-return exists in this same route
+      // handler) — the underlying measurement is now correctly Globex-inclusive, but the signal
+      // can still only be CHECKED/displayed while the RTH view is being polled, not literally
+      // overnight. That's a deliberate, smaller scoping choice, not the bug that was just fixed.
       let bigMoveSignal = { active: false, rangeSoFar: null, minutesRemaining: null };
-      if (sessionHiLoRow.rows[0]?.h != null && sessionHiLoRow.rows[0]?.l != null && allRthBarsRow.rows.length > 0) {
-        const rangeSoFar = sessionHiLoRow.rows[0].h - sessionHiLoRow.rows[0].l;
-        const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
-        const minutesRemaining = Math.max(0, 960 - nowEtMin);
-        const isActive = false; // was: rangeSoFar >= 250 && minutesRemaining >= 180 -- see comment above
-        bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
-        if (isActive) {
-          query(`
-            INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-            VALUES ($1, 0, 'BIGMOVE_LIVE_SIGNAL', $1, 1, $2)
-            ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-          `, [todayET, JSON.stringify({ rangeSoFar: Math.round(rangeSoFar), minutesRemaining, triggeredAt: new Date().toISOString() })]).catch(() => {});
+      if (allRthBarsRow.rows.length > 0) {
+        const sessionQ = await query(`
+          WITH recent AS (
+            SELECT ts, high::float, low::float,
+                   ts - LAG(ts) OVER (ORDER BY ts) AS gap
+            FROM price_bars_primary
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+          ),
+          session_start AS (
+            SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
+          )
+          SELECT MAX(high) AS h, MIN(low) AS l, COUNT(*) AS n
+          FROM recent, session_start
+          WHERE ts >= start_ts
+        `);
+        const row = sessionQ.rows[0];
+        if (row?.h != null && row?.l != null && Number(row.n) > 0) {
+          const rangeSoFar = row.h - row.l;
+          const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
+          const minutesRemaining = nowEtMin < 1020 ? (1020 - nowEtMin) : (1440 - nowEtMin + 1020);
+          const isActive = rangeSoFar >= 250 && minutesRemaining >= 180;
+          bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
+          if (isActive) {
+            query(`
+              INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+              VALUES ($1, 0, 'BIGMOVE_LIVE_SIGNAL', $1, 1, $2)
+              ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+            `, [todayET, JSON.stringify({ rangeSoFar: Math.round(rangeSoFar), minutesRemaining, triggeredAt: new Date().toISOString() })]).catch(() => {});
+          }
         }
       }
 
