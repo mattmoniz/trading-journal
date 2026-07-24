@@ -6602,19 +6602,26 @@ export default function createACDRouter(io) {
       }
 
       // Real-time "is today becoming a big-move day" signal — informational only, does NOT
-      // gate/suppress any setup. Added 2026-07-24, reuses the validated 250pt-range-crossed /
-      // 180min-remaining threshold from RESEARCH_CLAIM
-      // bigmove_realtime_price_progress_promising_volume_weak (a real, monotonic train-split
-      // lift — +20.3pp vs baseline — not yet test-confirmed because the recent market has been
-      // too uniformly volatile to provide a comparison group; this live wiring is how that gets
-      // real forward data instead of waiting passively). Persisted write-once per day so forward
-      // accuracy can be checked once enough days accumulate.
+      // gate/suppress any setup.
+      //
+      // DISABLED 2026-07-24 (same day it was added) — user caught a real methodology bug: the
+      // RESEARCH_CLAIM this cites (bigmove_realtime_price_progress_promising_volume_weak) was
+      // validated against sessions with NO time-of-day filter (scripts/backtest_bigmove_realtime_detectors.mjs
+      // groups bars purely on >45min gaps, so each "session" spans the full ~23hr Globex+RTH
+      // combined trading day, roughly 6PM ET open to the next day's 5PM ET maintenance close —
+      // see server/index.js's isDailyMaintenanceBreak, etMin 1020-1080, for this codebase's own
+      // established schedule convention). The RTH-only computation below (sessionHiLoRow, bounded
+      // 9:30am-4pm) measures a genuinely different, much narrower population than what was
+      // validated — the 57.2%-vs-36.9% stat does not apply to it. Forcing isActive=false
+      // unconditionally until this is rebuilt as genuinely Globex-inclusive (tracking the actual
+      // current session's start via the same gap-detection logic, and minutes-remaining against
+      // the real next 5PM ET close) — see OPEN_DECISION rebuild_bigmove_signal_globex_inclusive.
       let bigMoveSignal = { active: false, rangeSoFar: null, minutesRemaining: null };
       if (sessionHiLoRow.rows[0]?.h != null && sessionHiLoRow.rows[0]?.l != null && allRthBarsRow.rows.length > 0) {
         const rangeSoFar = sessionHiLoRow.rows[0].h - sessionHiLoRow.rows[0].l;
         const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
         const minutesRemaining = Math.max(0, 960 - nowEtMin);
-        const isActive = rangeSoFar >= 250 && minutesRemaining >= 180;
+        const isActive = false; // was: rangeSoFar >= 250 && minutesRemaining >= 180 -- see comment above
         bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
         if (isActive) {
           query(`

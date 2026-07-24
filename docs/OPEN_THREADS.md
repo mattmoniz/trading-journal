@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## 🟡 2026-07-24: user caught a real bug in the just-shipped big-move signal — RTH-only scoping didn't match what was actually validated, disabled pending a proper rebuild
+
+Direct follow-up: user asked "why not globex" when asking to see the new big-move-day badge fire. Investigated instead of dismissing it as a scope question — and it's a real, confirmed methodology bug, not just an unfinished extension.
+
+**The bug**: `scripts/backtest_bigmove_realtime_detectors.mjs` (the script behind `bigmove_realtime_price_progress_promising_volume_weak`, the RESEARCH_CLAIM this live signal cites) has **no time-of-day filter at all** — it groups `price_bars_primary` into "sessions" purely on gaps >45 minutes, so each validated session spans the full ~23hr Globex+RTH combined trading day (roughly 6PM ET reopen through the next day's 5PM ET maintenance close — `server/index.js`'s `isDailyMaintenanceBreak`, `etMin` 1020-1080, is this codebase's own established convention for that boundary). The live wiring shipped earlier today used `sessionHiLoRow`, explicitly bounded to RTH hours (9:30am-4pm) — a genuinely different, much narrower population than what was validated. The 57.2%-vs-36.9% stat does not describe what the RTH-only live version was measuring.
+
+**Immediate fix, same session**: forced `isActive=false` unconditionally in `acd.js` (one-line change, `node --check`/`eslint` clean, server restarted, verified live) so the badge cannot display a claim that doesn't apply, rather than leaving a wrong number live while a proper fix gets built. Resolved `OPEN_DECISION` `verify_bigmove_signal_live_rth_today` (moot — nothing to verify on a disabled signal) and flagged `rebuild_bigmove_signal_globex_inclusive` (MEDIUM) for the real fix: track the actual current continuous session (found via the same gap-detection logic the backtest uses, not a hardcoded RTH boundary) and compute minutes-remaining against the real next 5PM ET close — reusing this codebase's own established Globex-schedule convention rather than inventing new date/timezone math, given how many past incidents here trace back to exactly that (the naive-timestamp-parsing hard rule in CLAUDE.md is the same bug class).
+
+**Process note**: this is the second real live-code issue caught in this session's "wire the findings" push (after the IB day-type gate's discovered TREND-bucket delta) — both caught by the user asking a direct, simple question rather than accepting a shipped feature at face value. Worth remembering: "why not X" is often the fastest way to surface a scoping bug that a static/build check will never catch.
+
 ## ✅ 2026-07-24: two live wirings from today's findings — IB day-type gate made dynamic, big-move signal wired informational-only
 
 User asked "how do we proceed with these findings" and, given a choice on each, approved both: (1) wire the IB_BULLISH/IB_BEARISH day-type gate dynamically, (2) wire the price-progress big-move signal live as informational-only.
