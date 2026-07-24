@@ -1,3 +1,19 @@
+# Open Threads / Pending Work
+
+## ✅ 2026-07-23: does a volatility squeeze precede big moves? Rejected and inverted — plus a real stale-claim catch along the way
+
+User asked directly whether volatility squeezes had been considered. Investigating surfaced a real, previously-unaddressed gap first: `scripts/runner_leg_backtest.mjs` contains a hand-typed conclusion ("confirming the squeeze hypothesis" for tight Initial Balance range) that was **never persisted via `recordClaim()`** and doesn't appear in the `RESEARCH_CLAIM` ledger — a genuine instance of the dead-end pattern CLAUDE.md's hard rule #1 exists to catch. Its underlying query also doesn't filter by `origin_status`, so it likely mixes BACKFILL and real data uncritically. Flagged as `OPEN_DECISION` `audit_stale_ib_range_squeeze_claim` (LOW priority — narrow scope, not blocking anything live) rather than fixed in place.
+
+**The actual, broader question — tested fresh, not assumed answered by the stale claim**: does a period of low volatility precede the already-confirmed ≥400pt big moves (~35-40% of days)? Dispatched with a genuine permutation-significance test built in from the start (reusing the established convention from `backtest_globex_move_levels.mjs`).
+
+**Result: REJECTED, and inverted.** Big moves follow periods of ALREADY-ELEVATED volatility (clustering), not compression — the classic squeeze intuition is backwards here. Verified the mechanics directly (no lookahead in the percentile-rank computation, correct permutation-test implementation) before trusting it.
+
+**Had to correct the "robust everywhere, p=0.0000" framing, though — a real, meaningful nuance.** That claim only holds for the pooled/train data. On the genuinely held-out TEST split, direction stays fully consistent (zero exceptions across all 3 windows — ordinary days always show lower pre-move volatility than big-move days) but magnitude shrinks dramatically, and at the shortest (3-day) window isn't even statistically significant: N=3 test diff=-3.0% p=0.457 (not significant, vs train's -41.8% p=0.0000); N=5 test diff=-6.4% p=0.0055 (~85% smaller than train); N=10 test diff=-6.6% p=0.0085 (~81% smaller than train). Report the direction with confidence, the magnitude with real caution — especially at short lookback windows.
+
+**Genuinely satisfying cross-check**: this connects cleanly to the earlier incremental-progress finding (>96% of a big-range day is chop, not clean directional momentum) — big days aren't a coiled spring snapping into a clean breakout, they're wider, messier chop that shows up specifically when the market is already swinging hard. Two independently-tested findings pointing the same direction.
+
+Recorded as `RESEARCH_CLAIM` `volatility_squeeze_bigmove_inverted`, promoted to `scripts/backtest_volatility_squeeze_bigmove.mjs` (also fixed a cosmetic `\n`-literal bug in the results-file writer while promoting). `node --check`/`eslint` clean.
+
 ## ✅ 2026-07-23: confirmatory test of the target-distance-fraction predictor — real, clean, consistent, one honest limitation remains
 
 Direct follow-up per explicit user direction: of the two validation tracks discussed (a clean historical re-test now, vs waiting for live data), do the first one now and report back.
