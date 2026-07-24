@@ -56,6 +56,73 @@ function median(arr) {
   return pct(arr, 0.5);
 }
 
+// Exported 2026-07-23 so this exact no-lookahead regime computation can be reused by other
+// scripts instead of being copy-pasted a third time (already duplicated once, into
+// scripts/backtest_volatility_regime_bar6_split.mjs, before this extraction) -- CLAUDE.md's
+// "share modules, don't reimplement" convention. Returns Map<dateStr, percentile> where
+// percentile is the rank of that day's prior-nWindow-day mean session-range against the full
+// rolling history of prior means up to (not including) that day -- identical logic to main()'s
+// own N=5 pass, which this session's testing found the best test-split significance for.
+export async function computeVolatilityRegimeByDate(nWindow = 5) {
+  const barsRes = await query(`
+    SELECT ts, high::float, low::float
+    FROM price_bars_primary WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '2 years'
+    ORDER BY ts
+  `);
+  const bars = barsRes.rows;
+  const GAP_HOURS_CUTOFF = 60;
+
+  const sessions = [];
+  let currentBars = [];
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i];
+    if (currentBars.length > 0) {
+      const prevBar = currentBars[currentBars.length - 1];
+      const gapHours = (bar.ts.getTime() - prevBar.ts.getTime()) / 3600000;
+      if (gapHours > 0.75) { sessions.push({ bars: currentBars }); currentBars = []; }
+    }
+    currentBars.push(bar);
+  }
+  if (currentBars.length > 0) sessions.push({ bars: currentBars });
+
+  function getMaxGapHours(windowBars) {
+    let maxGap = 0;
+    for (let i = 0; i < windowBars.length - 1; i++) {
+      const gap = (windowBars[i + 1].ts.getTime() - windowBars[i].ts.getTime()) / 3600000;
+      if (gap > maxGap) maxGap = gap;
+    }
+    return maxGap;
+  }
+
+  const validSessions = [];
+  for (const s of sessions) {
+    const windowBars = s.bars;
+    if (getMaxGapHours(windowBars) < GAP_HOURS_CUTOFF) {
+      let high = -Infinity, low = Infinity;
+      for (const b of windowBars) { if (b.high > high) high = b.high; if (b.low < low) low = b.low; }
+      validSessions.push({ dateStr: windowBars[0].ts.toISOString().slice(0, 10), range: high - low });
+    }
+  }
+
+  const validRanges = validSessions.map(s => s.range);
+  const priorNDayMeans = [];
+  const dateToVolPct = new Map();
+  for (let i = 0; i < validSessions.length; i++) {
+    if (i < nWindow) continue;
+    const meanRange = mean(validRanges.slice(i - nWindow, i));
+    let percentile = 0.5;
+    if (priorNDayMeans.length > 0) {
+      const sortedHistory = [...priorNDayMeans].sort((a, b) => a - b);
+      let countBelow = 0;
+      for (const v of sortedHistory) { if (v <= meanRange) countBelow++; else break; }
+      percentile = countBelow / sortedHistory.length;
+    }
+    dateToVolPct.set(validSessions[i].dateStr, percentile);
+    priorNDayMeans.push(meanRange);
+  }
+  return dateToVolPct;
+}
+
 async function main() {
   console.log('Loading bars...');
   const barsRes = await query(`
