@@ -6658,6 +6658,82 @@ export default function createACDRouter(io) {
         }
       }
 
+      // Real-time sigma-conditioned down-move continuation signal — informational only, does
+      // NOT gate/suppress any setup. Added 2026-07-26, reuses the exact validated methodology
+      // from RESEARCH_CLAIM sigma_continuation_down_moves (scripts/backtest_sigma_continuation.mjs):
+      // rolling 100-bar log-return stdev as sigma, a 60-minute lookback for the initiating move,
+      // with gap-guards matching the backtest exactly (reset the rolling window on a >45min gap,
+      // require the lookback itself to be gap-free) rather than the RTH-only mistake made
+      // earlier this session with the big-move signal. Only DOWN moves were validated -- this
+      // does not fire on up-moves.
+      let sigmaContinuation = { active: false, sigma: null, expectedExtraPts: null };
+      try {
+        const sigBarsQ = await query(`
+          SELECT ts, close::float, gap
+          FROM (
+            SELECT ts, close::float,
+                   EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
+            FROM price_bars_primary
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '8 hours'
+          ) t ORDER BY ts ASC
+        `);
+        const sBars = sigBarsQ.rows;
+        const SIG_WIN = 100, H = 60, GAP_CUTOFF = 45;
+        if (sBars.length > SIG_WIN + H) {
+          let volWindow = [], sumLogRet = 0, sumSqLogRet = 0;
+          for (let i = 1; i < sBars.length; i++) {
+            const gapMin = sBars[i].gap == null ? Infinity : sBars[i].gap;
+            const logRet = Math.log(sBars[i].close / sBars[i - 1].close);
+            if (gapMin > GAP_CUTOFF) { volWindow = []; sumLogRet = 0; sumSqLogRet = 0; }
+            else {
+              volWindow.push(logRet);
+              sumLogRet += logRet; sumSqLogRet += logRet * logRet;
+              if (volWindow.length > SIG_WIN) { const rm = volWindow.shift(); sumLogRet -= rm; sumSqLogRet -= rm * rm; }
+            }
+          }
+          const i = sBars.length - 1;
+          let lookbackHasGap = false;
+          for (let j = Math.max(1, i - H + 1); j <= i; j++) {
+            const g = sBars[j].gap == null ? Infinity : sBars[j].gap;
+            if (g > GAP_CUTOFF) { lookbackHasGap = true; break; }
+          }
+          if (volWindow.length === SIG_WIN && i >= H && !lookbackHasGap) {
+            const mean = sumLogRet / SIG_WIN;
+            const variance = Math.max(0, sumSqLogRet / SIG_WIN - mean * mean);
+            const stdDevLogRet = Math.sqrt(variance);
+            if (stdDevLogRet > 0) {
+              const bar = sBars[i];
+              const moveInPoints = bar.close - sBars[i - H].close;
+              const expectedMove = bar.close * stdDevLogRet * Math.sqrt(H);
+              if (moveInPoints < 0) {
+                const downMagnitude = Math.abs(moveInPoints) / expectedMove;
+                if (downMagnitude >= 1.0) {
+                  const calibQ = await query(`SELECT notes FROM performance_audit WHERE signal_type='SIGMA_CONTINUATION_CALIB' AND signal_name='LIVE_CUTOFFS' ORDER BY run_date DESC LIMIT 1`);
+                  const calib = calibQ.rows[0] ? JSON.parse(calibQ.rows[0].notes) : null;
+                  let bucket = null;
+                  if (calib) {
+                    for (const c of calib.cutoffs) { if (downMagnitude >= c.sigma) bucket = c; }
+                  }
+                  sigmaContinuation = {
+                    active: true,
+                    sigma: Math.round(downMagnitude * 100) / 100,
+                    expectedExtraPts: bucket ? bucket.extraPts : null,
+                  };
+                  const hourEt = allRthBarsRow.rows.length ? Math.floor(allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min / 60) : 0;
+                  const bucketSigma = bucket ? bucket.sigma : Math.floor(downMagnitude * 2) / 2;
+                  const dedupeKey = `${todayET}_${hourEt}_${bucketSigma}`;
+                  query(`
+                    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+                    VALUES ($1, 0, 'SIGMA_CONTINUATION_LIVE', $2, 1, $3)
+                    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+                  `, [todayET, dedupeKey, JSON.stringify({ sigma: sigmaContinuation.sigma, expectedExtraPts: sigmaContinuation.expectedExtraPts, triggeredAt: new Date().toISOString() })]).catch(() => {});
+                }
+              }
+            }
+          }
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
       res.json({
         setup: {
           ...active,
@@ -6671,6 +6747,7 @@ export default function createACDRouter(io) {
         noNewEntries: !!noNewEntries,
         cascadeBreaker,
         bigMoveSignal,
+        sigmaContinuation,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };
@@ -6935,7 +7012,25 @@ export default function createACDRouter(io) {
         }
       } catch (_) { /* informational only, never block the response */ }
 
-      const summaryLines = bigMoveLine ? [bigMoveLine, ...lines] : lines;
+      // Sigma-continuation signal -- transient (unlike the big-move flag above), only shown if
+      // triggered within the last 20 minutes, matching antigravityEdges.js's recency check.
+      let sigmaLine = null;
+      try {
+        const scQ = await query(`
+          SELECT notes FROM performance_audit
+          WHERE signal_type='SIGMA_CONTINUATION_LIVE' AND run_date=$1
+          ORDER BY created_at DESC LIMIT 1
+        `, [currentSessionDate]);
+        if (scQ.rows[0]) {
+          const n = JSON.parse(scQ.rows[0].notes || '{}');
+          const ageMin = n.triggeredAt ? (Date.now() - new Date(n.triggeredAt).getTime()) / 60000 : Infinity;
+          if (ageMin <= 20) {
+            sigmaLine = `Sigma-continuation signal ACTIVE — ${n.sigma}σ down move` + (n.expectedExtraPts != null ? `, ~${n.expectedExtraPts}pt more downside expected (60min horizon)` : '') + ` (triggered ${n.triggeredAt})`;
+          }
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
+      const summaryLines = [bigMoveLine, sigmaLine].filter(Boolean).concat(lines);
       res.json({ count: lines.length, summary_text: summaryLines.join('\n') || 'No resolved setups yet.' });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });

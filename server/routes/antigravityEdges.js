@@ -1595,6 +1595,27 @@ async function getLiveEdgesContext() {
     if (bmsQ.rows[0]) bigMoveSignal = { active: true, ...JSON.parse(bmsQ.rows[0].notes || '{}') };
   } catch (_) { /* informational only, never block the response */ }
 
+  // Sigma-continuation signal (RESEARCH_CLAIM sigma_continuation_down_moves) -- unlike
+  // BIGMOVE_LIVE_SIGNAL (a once-a-day flag), this condition is transient: a down-move can
+  // trigger and then resolve/reverse within the hour. Reading "any row fired today" would be
+  // stale for most of the day, so this checks the MOST RECENT row and only treats it as still
+  // active if triggered within the last 20 minutes (roughly matching the 15s poll cadence with
+  // margin) -- an approximation, not a re-run of the live computation, to avoid duplicating
+  // acd.js's detection logic here.
+  let sigmaContinuation = null;
+  try {
+    const scQ = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='SIGMA_CONTINUATION_LIVE' AND run_date=$1
+      ORDER BY created_at DESC LIMIT 1
+    `, [targetDate]);
+    if (scQ.rows[0]) {
+      const n = JSON.parse(scQ.rows[0].notes || '{}');
+      const ageMin = n.triggeredAt ? (Date.now() - new Date(n.triggeredAt).getTime()) / 60000 : Infinity;
+      if (ageMin <= 20) sigmaContinuation = { active: true, ...n };
+    }
+  } catch (_) { /* informational only, never block the response */ }
+
   return {
     windows: resultsByWindow,
     liveStatus,
@@ -1612,6 +1633,7 @@ async function getLiveEdgesContext() {
     sessionBias,
     cascadeBreaker,
     bigMoveSignal,
+    sigmaContinuation,
   };
 }
 

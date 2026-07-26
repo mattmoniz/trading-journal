@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-26: wired the sigma-continuation signal live, answered the notification question honestly
+
+User approved wiring `sigma_continuation_down_moves` live and asked how they'd get notified.
+
+**Notification answer, stated plainly, not glossed over**: nothing pushes a phone alert today. `bar6_checkpoint`, `BIGMOVE_LIVE_SIGNAL`, and this new signal are all pull-based — a dashboard badge (only visible if the page is open) and a Home Assistant text feed (`/api/setups/today-summary`, only useful if HA is polling it). An actual push notification requires a Home Assistant **automation** on the user's own side watching that sensor and firing `notify.mobile_app_...` — that's HA configuration, not something this codebase can build or control. Flagged as `OPEN_DECISION` `verify_sigma_continuation_live_and_notification_gap` (LOW) so this doesn't get silently assumed-solved.
+
+**Wired carefully, given today's pattern of real bugs found by direct scrutiny**: persisted `SIGMA_CONTINUATION_CALIB` (`scripts/persist_sigma_continuation_calib.mjs`) from the CONFIRMED backtest's own TEST-split numbers (sigma-window=100, 60min lookback, 60min forward horizon) — 1.0σ→+6.8pt, 1.5σ→+16.3pt, 2.0σ→+24.8pt, 2.5σ→+44.5pt; **3.0σ deliberately omitted** since that specific bucket's 95% CI crosses zero at this exact config (test N=31, too thin) — not reliable enough to quote live. `acd.js` computes the live down-move sigma magnitude using the exact validated methodology (100-bar rolling log-return stdev, 60min lookback, gap-guarded — reset window on a >45min gap, require the lookback itself gap-free — matching the corrected backtest, not the RTH-only mistake made earlier with the big-move signal). Looks up the nearest calibrated bucket, surfaces via `antigravityEdges.js` → `ACDView.jsx` badge and the HA `today-summary` text line. **Unlike the once-daily big-move flag, this condition is transient** — a down-move can trigger and resolve within the hour — so the read-back uses a 20-minute recency window rather than "any row fired today," to avoid showing a stale/resolved signal as still active.
+
+Verified: `node --check`/`eslint`/`npm run build` all clean, server restarted with no new errors, the underlying SQL directly tested against live data. **Honest limitation**: could not verify actual firing behavior end-to-end since the market was closed (Sunday) at build time — flagged for a follow-up check once trading resumes. Only DOWN moves were calibrated, per the original research question — this does not fire on up-moves, and the mirror case hasn't been tested.
+
 ## ✅ 2026-07-26: sigma-conditioned down-move continuation — a real, clean, monotonic finding, after fixing 3 real bugs (2 Gemini, 1 caught only by Claude)
 
 User's direct question: "once the market moves a certain standard deviation price down, is there a degree of certainty that it will continue down further and how much?" Dispatched to Gemini with an explicit warning (drawn from this session's own prior "trigger fires on everything" incident) to sweep multiple sigma thresholds and always compare against a genuine control.

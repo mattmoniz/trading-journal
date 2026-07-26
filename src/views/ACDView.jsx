@@ -483,7 +483,7 @@ function EdgeSectionsPanel() {
   if (err && !data) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
-  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker, bigMoveSignal } = data;
+  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker, bigMoveSignal, sigmaContinuation } = data;
   const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
   const inv = overnightContext?.overnight_inventory;
   const ovp = overnightContext?.open_vs_prior_value;
@@ -531,6 +531,15 @@ function EdgeSectionsPanel() {
       {bigMoveSignal?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(245,158,11,0.15)', border: '2px solid #f59e0b', borderRadius: 8, color: '#f59e0b', fontWeight: 700, fontSize: 13 }}>
           📈 BIG-MOVE DAY SIGNAL — session range {bigMoveSignal.rangeSoFar}pt already, {bigMoveSignal.minutesRemaining}min left in RTH · historically 57% of days like this finish ≥400pt (vs 37% baseline) · informational only, not a trade signal
+        </div>
+      )}
+      {/* Sigma-continuation signal — RESEARCH_CLAIM sigma_continuation_down_moves. Transient
+          (unlike the big-move badge above): only shows if the underlying condition triggered
+          within roughly the last 20 minutes (see antigravityEdges.js's recency check). Down
+          moves only -- has not been tested for the mirror up-move case. */}
+      {sigmaContinuation?.active && (
+        <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.12)', border: '2px solid #ef4444', borderRadius: 8, color: '#ef4444', fontWeight: 700, fontSize: 13 }}>
+          📉 SIGMA CONTINUATION — down move of {sigmaContinuation.sigma}σ detected{sigmaContinuation.expectedExtraPts != null ? ` · historically ~${sigmaContinuation.expectedExtraPts}pt more downside than a random point in time (60min horizon)` : ' · magnitude beyond calibrated range, no specific figure available'} · informational only, not a trade signal
         </div>
       )}
       {/* Overnight Structural Context — moved to right column top */}
