@@ -95,4 +95,36 @@ async function computeMaeMfe(queryFn, setupRow) {
   return replayBars(barsResult.rows, entry, stop, t1, direction);
 }
 
-export { directionFromType, replayBars, computeMaeMfe };
+// Bar-6 checkpoint (RECOVERING/DETERIORATING) + the frozen target-distance-fraction exit
+// rule. Extracted 2026-07-26 after this exact logic had been independently rewritten at
+// least 4 times across scripts this session (bar6_early_exit, the volatility-regime split,
+// two versions of the 1yr-prop-challenge overlay) — CLAUDE.md's "share modules, don't
+// reimplement" convention, applied here the same way computeReplication() was extracted
+// for the replication-check logic and computeVolatilityRegimeByDate() for the regime split.
+// Matches server/routes/acd.js's resolveSetupsByPrice() live computation exactly: bars 0-6,
+// worst adverse excursion at bar index <=2 => RECOVERING, else DETERIORATING. The exit rule
+// itself is frozen from scripts/backtest_recovering_exit_predictor_confirmatory.mjs's
+// pre-registered cutoff (targetDistFraction < 0.873) — do not re-derive.
+const BAR6_FROZEN_CUTOFF = 0.873;
+
+function computeBar6Checkpoint(forwardBars, entry, stop, t1, direction, pnlPerPoint, commission) {
+  if (!forwardBars || forwardBars.length < 7) return null; // not enough bars to reach bar 6
+  const b0_6 = forwardBars.slice(0, 7);
+  let worstPrice = direction === 'LONG' ? b0_6[0].low : b0_6[0].high;
+  let worstBarIdx = 0;
+  for (let i = 0; i <= 6; i++) {
+    if (direction === 'LONG' && b0_6[i].low < worstPrice) { worstPrice = b0_6[i].low; worstBarIdx = i; }
+    if (direction === 'SHORT' && b0_6[i].high > worstPrice) { worstPrice = b0_6[i].high; worstBarIdx = i; }
+  }
+  const status = worstBarIdx <= 2 ? 'RECOVERING' : 'DETERIORATING';
+  const bar6Close = b0_6[6].close;
+  const pointsAtBar6 = direction === 'LONG' ? (bar6Close - entry) : (entry - bar6Close);
+  const pnlAtBar6 = pointsAtBar6 * pnlPerPoint - commission;
+  const distToTarget = direction === 'LONG' ? (t1 - bar6Close) : (bar6Close - t1);
+  const distEntryToTarget = direction === 'LONG' ? (t1 - entry) : (entry - t1);
+  const targetDistFraction = distEntryToTarget !== 0 ? (distToTarget / distEntryToTarget) : 0;
+  const ruleSaysExit = status === 'RECOVERING' && targetDistFraction < BAR6_FROZEN_CUTOFF;
+  return { worstBarIdx, status, targetDistFraction, bar6Close, pnlAtBar6, ruleSaysExit };
+}
+
+export { directionFromType, replayBars, computeMaeMfe, computeBar6Checkpoint, BAR6_FROZEN_CUTOFF };

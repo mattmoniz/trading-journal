@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-26: dialed in the 6-bar setup — session timeline + HA visibility, and the full-population annual PnL impact
+
+User: "I need to dial in the 6 bar setup and the large move setup," plus wanting to see the exit rule fire "on the session timeline and everywhere else setups fire," plus a request for the total annual backtested PnL of the exit rule vs holding.
+
+**Visibility**: `bar6_checkpoint` was only ever shown on `ACDView.jsx`'s live setup card. Added a small badge to `App.jsx`'s Session Timeline sidebar (reads `_bar6Checkpoint` off the same `active_setups.*` data already fetched — no new endpoint needed, `SELECT s.*` in `/setups/today` already included the column). Also surfaced both `bar6_checkpoint` and the big-move-day signal through `GET /api/setups/today-summary` — the existing pre-formatted text endpoint built for the Home Assistant integration (HA's REST sensor can't iterate a JSON array, per that endpoint's own 2026-07-20 comment) — so external consumers get the same visibility as the dashboard, not a second thing to maintain.
+
+**Annual PnL**: built `scripts/backtest_bar6_exit_rule_annual_pnl.mjs` — applies the frozen exit rule to every RECOVERING touch in the trailing 365 days (the FULL population this time, not the roster-restricted walkthrough from 2026-07-23). Result: baseline (hold) Total=$51,970.28 (N=1,583) vs gated (exit rule) Total=$57,334.24 — **+$5,363.96 annual impact** (+$3.39/touch avg), consistent with the all-time confirmed +$3.98/trade figure. **Honest caveat surfaced, not buried**: the origin-status breakdown shows `BACKFILL` (synthetic, N=1,210, 76% of the population) drives nearly all of the positive impact (+$5,475.96); the real `ACTIVE`-origin subset (N=28, still thin but growing — was 2, then 4, now 28) is actually slightly *negative* (-$92), and neither real-data subset is remotely large enough yet to independently confirm or contradict the rule. This is a bigger, cleaner view of the same already-validated historical finding, not new independent confirmation — the live-data validation gate (`validate_target_distance_predictor_on_live_data`) still stands as-is, reaffirmed by the user 2026-07-24.
+
+Recorded as `RESEARCH_CLAIM` `bar6_exit_rule_annual_pnl_impact` (`PROVISIONAL`). Also factored the bar-6/target-distance-fraction computation into a shared export (`computeBar6Checkpoint()`, `server/services/maeMfeReplay.js`) — this exact logic had been independently rewritten at least 4 times across scripts this session before being extracted, the same "share modules, don't reimplement" pattern already applied to `computeReplication()` and `computeVolatilityRegimeByDate()`. `node --check`/`eslint`/`npm run build` all clean.
+
 ## 🟡 2026-07-24: user caught a real bug in the just-shipped big-move signal — RTH-only scoping didn't match what was actually validated, disabled pending a proper rebuild
 
 Direct follow-up: user asked "why not globex" when asking to see the new big-move-day badge fire. Investigated instead of dismissing it as a scope question — and it's a real, confirmed methodology bug, not just an unfinished extension.
