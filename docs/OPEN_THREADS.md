@@ -1,3 +1,13 @@
+# Open Threads / Pending Work
+
+## ✅ 2026-07-26: reconciled the $5,364 annual figure against the 150-trade export — different populations, but the reconciliation check surfaced a real, positive N≥20 real-data milestone
+
+User asked directly: did the 150 exported trades make up the earlier-reported +$5,364 annual bar-6 exit-rule figure? Answer: no — the two numbers describe genuinely different populations. The $5,364 figure is the trailing-365-day, ALL-origins RECOVERING population (76% `BACKFILL`/synthetic); the 150-trade export is `ACTIVE`-origin only, all resolutions, over a ~2.5-week window. The only real overlap is the `ACTIVE`-origin RECOVERING subset of the annual test, which is a small slice of both.
+
+**Checking that overlap fresh is what mattered.** Two days ago that real subset was N=28 with a slightly negative -$92 read. Re-running the identical check right now found N has grown to **57** (real data keeps accumulating as expected) — and the exit rule now shows a real, positive **+$1,260** (baseline $3,226.50 → gated $4,486.50). This clears the N≥20 real-data bar that `validate_target_distance_predictor_on_live_data` was explicitly waiting on — the first time this has happened. Recorded as `RESEARCH_CLAIM` `target_distance_predictor_real_data_validation_cleared`, resolved the waiting `OPEN_DECISION` with this result. Since the user's 2026-07-24 choice to hold off on an actual "EXIT SUGGESTED" alert was explicitly conditioned on reaching this threshold, it's worth re-asking now that it's been met, not assuming the answer.
+
+**Smaller thing found along the way**: comparing the live-persisted `bar6_checkpoint` column against a fresh independent recompute (same trades, same shared `computeBar6Checkpoint()` function) found 3 of 121 checked real trades classify differently (~2.5% disagreement) — a real, if modest, discrepancy between two computations of the same thing. Not investigated further; flagged as `OPEN_DECISION` `bar6_checkpoint_persisted_vs_recomputed_mismatch` (LOW).
+
 ## ✅ 2026-07-26: built the trade audit export the user asked for — found a new, real timestamp bug along the way
 
 User asked for a file (dates/times/levels of entries and exits, line-by-line, plus daily/weekly summaries) to audit. Scoped to `active_setups` (`origin_status='ACTIVE'`, the system's own real live-fired setups) rather than the personal `trades` table, since the whole conversation this follows from is about auditing the system's signals — stated clearly in the delivered file in case that scope guess is wrong.
