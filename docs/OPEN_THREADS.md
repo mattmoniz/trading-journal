@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## 🟡 2026-07-26: redesigned the sigma-signal exit trigger (fresh-only) — fails train/test; built the big-move-day exit-trigger test fresh — real but not fully clean
+
+User said "keep it going" on both flagged follow-ups from the sigma-signal-exit-trigger confound.
+
+**Sigma-signal redesign, fresh-only**: fixed the identified confound (require sigma below threshold AT ENTRY, not just at first check) — worked exactly as intended, median trigger offset moved from 1 bar (confounded) to 6 bars (genuinely fresh), and the confound itself is now quantified directly: 394 of 3,197 LONG trades (12.3%) entered already sigma-elevated. On the clean population (N=2,803), the pooled result looked good (+$3,278 signal-gated vs baseline, blind control -$7,079 worse than holding) — **but a genuine chronological train/test split reverses it**: train +$4,951, test **-$1,673** (N=520), blind control even beating the signal on test. This is a clean, methodologically-sound negative now — not confounded, just doesn't replicate. Recorded as `RESEARCH_CLAIM` `sigma_signal_exit_trigger_fresh_fails_test` (`CONFIRMED` as a negative result). Resolved `OPEN_DECISION` `redesign_sigma_signal_exit_trigger_fresh_only`.
+
+**Big-move-day signal, built fresh-only from the start** (applying the lesson immediately rather than re-discovering it): tested as an exit trigger for ANY open trade, any direction, since the signal is about total range, not a specific direction. The confound here is much bigger — 54.4% of all trades entered with the condition already active (expected, since this is a broader day-level state, not a point event). On the clean population (N=2,861): signal-gated beats baseline on **both** train (+$345) and test (+$815, N=349) — no sign reversal, a real step up from the sigma result. But it does **not** consistently beat a blind control: train shows signal clearly ahead of blind (+$6,007 vs +$1,086), while test shows blind actually edging out the signal (+$3,232 vs +$2,368). Recorded as `RESEARCH_CLAIM` `bigmove_signal_as_exit_trigger_promising_not_clean` (`PROVISIONAL`) — real and directionally consistent, but not yet cleanly attributable to the specific signal over generic early-exit timing.
+
+**Follow-up flagged, not yet done**: this test pooled every setup_type/direction together. The sharper, untested version of the underlying intuition is whether the effect concentrates specifically in fades AGAINST the day's own established direction (a trending day should hurt a fade fighting it more than one riding with it) — flagged as `OPEN_DECISION` `bigmove_signal_exit_trigger_fade_direction_followup` (MEDIUM).
+
+`node --check`/`eslint` clean on both new scripts (`scripts/backtest_sigma_signal_exit_trigger_fresh.mjs`, `scripts/backtest_bigmove_signal_exit_trigger.mjs`).
+
 ## 🟡 2026-07-26: tested the sigma-continuation signal as an exit trigger (not just descriptive) — real effect, but confounded by how fade entries work
 
 User asked directly: of the three live signals now (bar6/exit-rule, big-move-day, sigma-continuation), have we tested the other two as exit triggers on existing trades the way we did for bar-6? Answer: no, not yet — those two were built purely as descriptive market-state predictors. Built the first such test, for sigma-continuation (the more directly actionable one, since it implies a direction) — scoped to LONG trades only, since the validated research only covers down-moves.
