@@ -1,5 +1,26 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-26: sigma-conditioned down-move continuation — a real, clean, monotonic finding, after fixing 3 real bugs (2 Gemini, 1 caught only by Claude)
+
+User's direct question: "once the market moves a certain standard deviation price down, is there a degree of certainty that it will continue down further and how much?" Dispatched to Gemini with an explicit warning (drawn from this session's own prior "trigger fires on everything" incident) to sweep multiple sigma thresholds and always compare against a genuine control.
+
+**Pass 1 result was degenerate, exactly as warned against**: "continuation" was defined as "does price dip at all below the trigger bar's close within the forward window" — true ~98-100% of the time for BOTH the triggered group and an unconditioned control. Not informative. Also found: no de-duplication of overlapping triggers — a single sustained decline that stays over threshold for 2 hours generates ~120 near-identical "triggers," massively overcounting independent events (e.g. train/30m/1.0σ showed Raw N=8,587 but only 103 distinct days).
+
+**Sent one precise correction** (per the standing 2-strikes convention): drop the tautological continuation-rate metric entirely, report the real-valued extension magnitude with a bootstrap 95% CI instead, and de-duplicate to one trigger per fresh threshold-crossing event.
+
+**Pass 2 fixed both, but revealed a third bug Gemini never caught in either pass**: read the actual corrected SQL directly rather than trusting the summary, and found the gap-detection was calendar-date-partitioned (`LAG(ts) OVER (PARTITION BY trade_date...)`) and discarded the ENTIRE calendar date if any internal gap exceeded 45 minutes. The normal daily 5-6PM ET maintenance break IS such a gap, and it occurs within the same calendar date on both sides (both before midnight) — so this was silently dropping the vast majority of ordinary trading days. **Verified directly: 301 of 461 distinct dates (65%) were being excluded.** Both "corrected" Gemini runs had been analyzing the same badly undersampled ~35% of days throughout, without either of us noticing until this specific check.
+
+**Fixed directly by Claude, not a 3rd Gemini dispatch** (per the standing rule) — loaded all bars unconditionally and instead added proper per-bar gap guards (volatility-window reset, lookback-window continuity check, forward-window continuity check) matching the same convention already used in every other script this session, rather than a whole-day exclusion. Also switched the script off hardcoded `gemini_readonly` pg credentials onto this codebase's own `server/db.js` wrapper, matching every other promoted script.
+
+**Result, now well-powered and clean**: the binary "will it continue" framing turns out to be close to moot — price drifts a little further in 30-120 minutes almost regardless of what preceded it. The real, useful answer is in the **magnitude** of that further extension, which shows a genuinely clean, monotonic relationship with the initiating move's size, replicated across all 4 sensitivity configs (rolling-sigma window 100 or 300 bars × initiating-move window 30 or 60min) and all 3 forward windows (30/60/120min), with the bootstrap 95% CI clear of zero in essentially every row on both train and test:
+- ~1.0σ down move → roughly +2 to +11pt of extra downside beyond an already-real control extension (~15-50pt depending on window)
+- ~2.0σ → roughly +12 to +34pt extra
+- ~2.5-3.0σ (thinner but still reasonably sized: dedup N=64-500, 15-153 distinct days) → roughly +20 to +80pt+ extra
+
+Recorded as `RESEARCH_CLAIM` `sigma_continuation_down_moves` (`CONFIRMED`). Promoted to `scripts/backtest_sigma_continuation.mjs` with full audit-context header documenting all three bugs and the fixes. `node --check`/`eslint` clean.
+
+**Not yet wired live** — flagged `OPEN_DECISION` `wire_sigma_continuation_signal_live` (this is fully real-time computable, no lookahead, a strong candidate for an informational badge matching `bar6_checkpoint`/`BIGMOVE_LIVE_SIGNAL`'s treatment) rather than built without asking, given how much live-code wiring already happened this session. Also note: only DOWN moves were tested, per the user's literal question — the symmetric up-move case hasn't been checked and shouldn't be assumed to behave identically.
+
 ## ✅ 2026-07-26: dialed in the 6-bar setup — session timeline + HA visibility, and the full-population annual PnL impact
 
 User: "I need to dial in the 6 bar setup and the large move setup," plus wanting to see the exit rule fire "on the session timeline and everywhere else setups fire," plus a request for the total annual backtested PnL of the exit rule vs holding.
