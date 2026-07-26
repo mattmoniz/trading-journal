@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-26: built the "EXIT NOW" alert now that the exit rule cleared N≥20 real data
+
+Direct follow-up to `target_distance_predictor_real_data_validation_cleared` clearing its N≥20 bar. User asked to build the actual alert, and asked a sharp clarifying question first: "will that not be a badge anymore?" Answered honestly — this system has no order/broker execution capability at all (it's a read-only journal, not a trading bot), so it can never auto-close a position no matter how the signal is worded. What changed is the *character* of the indicator: a distinct, visually assertive "🚨 EXIT NOW" recommendation, separate from the existing passive RECOVERING/DETERIORATING classification badge, not a neutral read someone has to interpret themselves.
+
+**Built carefully rather than bolted on**: the live resolution loop (`resolveSetupsByPrice()`) does double duty — it's also the primary STOP_HIT/TARGET_HIT/trail-mechanism detector — so refactoring it to call `computeBar6Checkpoint()` wholesale would have been much riskier surgery than needed. Instead: captured `bar6Close` during the loop's existing per-bar iteration (one new line, no restructuring), and extracted the exit-rule math itself into a new shared function (`computeExitRuleAtBar6()`, `server/services/maeMfeReplay.js`) that both the live path and `computeBar6Checkpoint()` now call — avoiding yet another copy of the `targetDistFraction` formula. Added `active_setups.bar6_exit_recommended` (BOOLEAN), regenerated `server/schema.sql`. Surfaced in `ACDView.jsx`, the Session Timeline (`App.jsx`), and the HA `today-summary` feed.
+
+**Found a real, if modest, discrepancy while building this** (see the entry below on reconciling the $5,364 figure): the live-persisted `bar6_checkpoint` and a fresh independent recompute disagree on ~2.5% of trades. Not investigated further this session — flagged as `OPEN_DECISION` `bar6_checkpoint_persisted_vs_recomputed_mismatch`.
+
+Verified: `node --check`/`eslint`/`npm run build` all clean, server restarted with no new errors, live endpoint returns the new field correctly (null on pre-existing rows, as expected). **Honest limitation**: no currently-open position had the condition actually true at build time, so the live firing/rendering couldn't be exercised end-to-end — flagged as `OPEN_DECISION` `verify_bar6_exit_recommended_live` (LOW).
+
 ## ✅ 2026-07-26: reconciled the $5,364 annual figure against the 150-trade export — different populations, but the reconciliation check surfaced a real, positive N≥20 real-data milestone
 
 User asked directly: did the 150 exported trades make up the earlier-reported +$5,364 annual bar-6 exit-rule figure? Answer: no — the two numbers describe genuinely different populations. The $5,364 figure is the trailing-365-day, ALL-origins RECOVERING population (76% `BACKFILL`/synthetic); the 150-trade export is `ACTIVE`-origin only, all resolutions, over a ~2.5-week window. The only real overlap is the `ACTIVE`-origin RECOVERING subset of the annual test, which is a small slice of both.

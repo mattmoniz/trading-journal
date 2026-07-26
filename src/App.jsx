@@ -1365,6 +1365,7 @@ function LiveSessionPanel() {
           _winRate: s.historical_win_rate,
           _sessions: s.historical_sessions,
           _bar6Checkpoint: s.bar6_checkpoint,
+          _bar6ExitRecommended: s.bar6_exit_recommended,
           _isCaseEngine: true,
         }));
         // Session Timeline: resolved/expired setups, filtered by the RTH/Non-RTH/Both toggle
@@ -1587,6 +1588,15 @@ function LiveSessionPanel() {
                               borderRadius: 3, padding: '1px 4px',
                             }} title="Bar-6 checkpoint: has the worst point of this trade already passed?">
                               BAR6 {ev._bar6Checkpoint}
+                            </span>
+                          )}
+                          {isCaseEngine && ev._bar6ExitRecommended && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 700, letterSpacing: '0.02em', color: '#fbbf24',
+                              background: 'rgba(251,191,36,0.14)', border: '1px solid rgba(251,191,36,0.3)',
+                              borderRadius: 3, padding: '1px 4px',
+                            }} title="Frozen exit rule fired at bar 6 -- historically better to take the bar-6 price than hold to target. N=57 real touches, +$1,260 total.">
+                              🚨 EXIT NOW
                             </span>
                           )}
                         </div>

@@ -346,7 +346,8 @@ CREATE TABLE public.active_setups (
     runner_trail_price numeric,
     confluence_levels_at_detection text[],
     exhaustion_signal_at_detection boolean,
-    bar6_checkpoint character varying(20)
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean
 );
 
 

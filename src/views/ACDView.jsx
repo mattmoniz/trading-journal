@@ -664,6 +664,17 @@ function EdgeSectionsPanel() {
                       </div>
                     );
                   })()}
+                  {s.bar6_exit_recommended && (
+                    // Distinct, more assertive than the checkpoint badge above -- RESEARCH_CLAIM
+                    // target_distance_predictor_real_data_validation_cleared (N=57 real touches,
+                    // +$1,260 live-confirmed, 2026-07-26). This system has no order/broker
+                    // execution capability -- it can never auto-close anything, so this is still
+                    // purely a stronger-worded recommendation, not an automated action.
+                    <div style={{ fontSize: 12, color: '#fbbf24', marginTop: 4, fontWeight: 700, background: 'rgba(251,191,36,0.12)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 4, padding: '3px 6px' }}
+                      title="Frozen rule: less than 87.3% of the distance to target still remains at bar 6 -> historically better to take the bar-6 price than hold. N=57 real touches, +$1,260 total, live-confirmed.">
+                      🚨 EXIT NOW recommended — take the bar-6 price rather than hold to target
+                    </div>
+                  )}
                   <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={refreshFeedback} />
                 </div>
               );

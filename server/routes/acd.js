@@ -7,7 +7,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
-import { directionFromType } from '../services/maeMfeReplay.js';
+import { directionFromType, computeExitRuleAtBar6 } from '../services/maeMfeReplay.js';
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
@@ -329,7 +329,7 @@ export async function resolveSetupsByPrice(io) {
     // convention as touch_quality just below — never affects resolution/pnl/entry. Does
     // NOT delay or gate the original entry alert (user explicitly did not want to risk
     // missing the fast, clean winners that make up most of the touch population).
-    let worstAdverse6 = -Infinity, worstAdverseBarIdx6 = null;
+    let worstAdverse6 = -Infinity, worstAdverseBarIdx6 = null, bar6Close = null;
     // Trail-mechanism state — recomputed from scratch on every poll (this function
     // already re-walks the full bar range from fired_at every call, same as MAE/MFE
     // above), never resumed from a saved cursor. Written back at the end regardless of
@@ -347,6 +347,7 @@ export async function resolveSetupsByPrice(io) {
         worstAdverse6 = adverse;
         worstAdverseBarIdx6 = barCount - 1; // 0-indexed, matches the research script's bar 0-6 convention
       }
+      if (barCount === 7) bar6Close = bar.close; // 0-indexed bar 6's close, for the exit-rule check below
 
       if (trailWidth != null) {
         // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
@@ -433,11 +434,25 @@ export async function resolveSetupsByPrice(io) {
     // point — a fast STOP_HIT/TARGET_HIT breaks the loop earlier, which correctly means no
     // checkpoint is written, matching the research population exactly). Never overwritten
     // once set (WHERE bar6_checkpoint IS NULL), same convention as touch_quality below.
+    //
+    // bar6_exit_recommended (added 2026-07-26) — RESEARCH_CLAIM
+    // target_distance_predictor_real_data_validation_cleared: the frozen exit rule
+    // (targetDistFraction < 0.873, computeExitRuleAtBar6 in maeMfeReplay.js) cleared its
+    // N>=20 real-data validation bar (N=57, +$1,260 live-confirmed) — user asked for this to
+    // become a distinct, more assertive "EXIT NOW" recommendation, not folded into the
+    // existing passive RECOVERING/DETERIORATING badge. Still purely informational: this
+    // system has no order/broker execution capability at all, so it can never auto-close a
+    // position — only ever a stronger-worded recommendation than the existing checkpoint.
     if (barCount >= 7 && worstAdverseBarIdx6 !== null) {
       const checkpoint = worstAdverseBarIdx6 <= 2 ? 'RECOVERING' : 'DETERIORATING';
+      let exitRecommended = null;
+      if (bar6Close != null) {
+        const direction = long ? 'LONG' : 'SHORT';
+        exitRecommended = computeExitRuleAtBar6(entry, bar6Close, t1, direction, checkpoint).ruleSaysExit;
+      }
       await query(
-        `UPDATE active_setups SET bar6_checkpoint=$2 WHERE id=$1 AND bar6_checkpoint IS NULL`,
-        [row.id, checkpoint]
+        `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3 WHERE id=$1 AND bar6_checkpoint IS NULL`,
+        [row.id, checkpoint, exitRecommended]
       ).catch(() => {});
     }
 
@@ -6971,7 +6986,7 @@ export default function createACDRouter(io) {
       const currentSessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
 
       const setupsRes = await query(`
-        SELECT setup_type, status, resolution, actual_pnl, bar6_checkpoint,
+        SELECT setup_type, status, resolution, actual_pnl, bar6_checkpoint, bar6_exit_recommended,
           TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups
         WHERE status = 'ACTIVE'
@@ -6994,7 +7009,8 @@ export default function createACDRouter(io) {
         const outcome = s.resolution || 'expired';
         const pnl = s.actual_pnl != null ? `, $${parseFloat(s.actual_pnl).toFixed(2)}` : '';
         const bar6 = s.bar6_checkpoint ? `, bar6:${s.bar6_checkpoint}` : '';
-        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl}${bar6})`;
+        const exitRec = s.bar6_exit_recommended ? ', EXIT NOW recommended' : '';
+        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl}${bar6}${exitRec})`;
       });
 
       // Big-move-day signal — same persisted BIGMOVE_LIVE_SIGNAL row antigravityEdges.js reads

@@ -107,6 +107,22 @@ async function computeMaeMfe(queryFn, setupRow) {
 // pre-registered cutoff (targetDistFraction < 0.873) — do not re-derive.
 const BAR6_FROZEN_CUTOFF = 0.873;
 
+// Extracted 2026-07-26 (same day as computeBar6Checkpoint itself) so server/routes/acd.js's
+// live resolveSetupsByPrice() can compute the exit-rule recommendation without restructuring
+// its own bar-by-bar resolution loop to call computeBar6Checkpoint() wholesale (that loop does
+// double duty -- it's also the primary STOP_HIT/TARGET_HIT/trail-mechanism detector, not a
+// simple fixed-window replay -- a full refactor would be much riskier surgery than adding one
+// captured value). Live code tracks its own bar6Close/status inline (identical bar 0-6 /
+// worstBarIdx<=2 convention) and calls this for the exit-rule math specifically, rather than
+// re-deriving the targetDistFraction formula a second time.
+function computeExitRuleAtBar6(entry, bar6Close, t1, direction, status) {
+  const distToTarget = direction === 'LONG' ? (t1 - bar6Close) : (bar6Close - t1);
+  const distEntryToTarget = direction === 'LONG' ? (t1 - entry) : (entry - t1);
+  const targetDistFraction = distEntryToTarget !== 0 ? (distToTarget / distEntryToTarget) : 0;
+  const ruleSaysExit = status === 'RECOVERING' && targetDistFraction < BAR6_FROZEN_CUTOFF;
+  return { targetDistFraction, ruleSaysExit };
+}
+
 function computeBar6Checkpoint(forwardBars, entry, stop, t1, direction, pnlPerPoint, commission) {
   if (!forwardBars || forwardBars.length < 7) return null; // not enough bars to reach bar 6
   const b0_6 = forwardBars.slice(0, 7);
@@ -120,11 +136,8 @@ function computeBar6Checkpoint(forwardBars, entry, stop, t1, direction, pnlPerPo
   const bar6Close = b0_6[6].close;
   const pointsAtBar6 = direction === 'LONG' ? (bar6Close - entry) : (entry - bar6Close);
   const pnlAtBar6 = pointsAtBar6 * pnlPerPoint - commission;
-  const distToTarget = direction === 'LONG' ? (t1 - bar6Close) : (bar6Close - t1);
-  const distEntryToTarget = direction === 'LONG' ? (t1 - entry) : (entry - t1);
-  const targetDistFraction = distEntryToTarget !== 0 ? (distToTarget / distEntryToTarget) : 0;
-  const ruleSaysExit = status === 'RECOVERING' && targetDistFraction < BAR6_FROZEN_CUTOFF;
+  const { targetDistFraction, ruleSaysExit } = computeExitRuleAtBar6(entry, bar6Close, t1, direction, status);
   return { worstBarIdx, status, targetDistFraction, bar6Close, pnlAtBar6, ruleSaysExit };
 }
 
-export { directionFromType, replayBars, computeMaeMfe, computeBar6Checkpoint, BAR6_FROZEN_CUTOFF };
+export { directionFromType, replayBars, computeMaeMfe, computeBar6Checkpoint, computeExitRuleAtBar6, BAR6_FROZEN_CUTOFF };
