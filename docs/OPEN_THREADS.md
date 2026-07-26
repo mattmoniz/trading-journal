@@ -1,6 +1,16 @@
 # Open Threads / Pending Work
 
-## 🟡 2026-07-26: redesigned the sigma-signal exit trigger (fresh-only) — fails train/test; built the big-move-day exit-trigger test fresh — real but not fully clean
+## ✅ 2026-07-26: tested the sharper fade-direction hypothesis — refuted, but surfaced a genuinely new, simpler idea
+
+Direct follow-up ("do what you think is best"), completing the flagged `bigmove_signal_exit_trigger_fade_direction_followup`. Split the fresh big-move-signal-triggered population (N=311) by whether the open trade was fading AGAINST the day's own established direction (N=258, hypothesized to be where the signal should matter most) vs riding WITH it (N=53, hypothesized to barely matter).
+
+**The hypothesis was wrong, and the actual pattern is the opposite, in an interesting way.** For the fading-against population (a real disaster group, baseline WR=18.2%): waiting for the specific big-move signal barely helps over holding (+$342), while a **blind, no-signal fixed-bar exit dramatically outperforms both** (+$14,320 vs baseline, beating the signal-gated approach by nearly $14,000). The signal is simply too slow here — by the time 250pt/180min-remaining is confirmed, a fade-against-the-trend trade has already taken most of its damage. For the riding-with population (already good, baseline WR=81.1%): the pattern **inverts** — signal-gated exit clearly beats both baseline (+$819) and blind control (+$4,646), while blind control actually hurts (-$3,827, cutting a working trend-following trade short for no reason).
+
+**Net conclusion**: the modest pooled positive result from the untargeted test was likely driven by the riding-with subset, not the fading-against one the original intuition was about. Recorded as `RESEARCH_CLAIM` `bigmove_signal_fade_direction_hypothesis_refuted` (`PROVISIONAL` — subgroup Ns are thin on test splits, as low as 11, so directional not conclusive, but the pooled subgroup sizes are large enough that the core pattern is real). Resolved the follow-up decision with this finding.
+
+**A genuinely new, simpler idea surfaced as a side effect, not chased further this session**: for trades fading against an established trend, a blind (signal-free) fast exit did dramatically better than anything signal-based. This suggests a much simpler standalone rule — exit fast whenever fading against the day's direction, no big-move threshold needed at all — that's never been tested on its own. Flagged as `OPEN_DECISION` `test_blind_fast_exit_fading_against_trend` (MEDIUM) for a dedicated follow-up.
+
+## ✅ 2026-07-26: redesigned the sigma-signal exit trigger (fresh-only) — fails train/test; built the big-move-day exit-trigger test fresh — real but not fully clean
 
 User said "keep it going" on both flagged follow-ups from the sigma-signal-exit-trigger confound.
 
@@ -12,7 +22,7 @@ User said "keep it going" on both flagged follow-ups from the sigma-signal-exit-
 
 `node --check`/`eslint` clean on both new scripts (`scripts/backtest_sigma_signal_exit_trigger_fresh.mjs`, `scripts/backtest_bigmove_signal_exit_trigger.mjs`).
 
-## 🟡 2026-07-26: tested the sigma-continuation signal as an exit trigger (not just descriptive) — real effect, but confounded by how fade entries work
+## ✅ 2026-07-26: tested the sigma-continuation signal as an exit trigger (not just descriptive) — real effect, but confounded by how fade entries work
 
 User asked directly: of the three live signals now (bar6/exit-rule, big-move-day, sigma-continuation), have we tested the other two as exit triggers on existing trades the way we did for bar-6? Answer: no, not yet — those two were built purely as descriptive market-state predictors. Built the first such test, for sigma-continuation (the more directly actionable one, since it implies a direction) — scoped to LONG trades only, since the validated research only covers down-moves.
 
