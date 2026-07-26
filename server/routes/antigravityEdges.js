@@ -3,6 +3,7 @@ import https from 'https';
 import { query } from '../db.js';
 import { getTrailingVwapStd } from '../services/queries.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
+import { checkFadeAgainstBigMoveExit } from './acd.js';
 
 const edgesHistoryCache = new Map();
 let tradeBacktestCache = null;
@@ -465,7 +466,7 @@ async function getLiveEdgesContext() {
       .catch(() => ({ rows: [] })),
     // Active setups
     query(`
-      SELECT s.id, s.setup_type, TO_CHAR(s.fired_at, 'HH24:MI') as fired_time,
+      SELECT s.id, s.setup_type, TO_CHAR(s.fired_at, 'HH24:MI') as fired_time, s.fired_at,
              s.entry_zone_low::float, s.entry_zone_high::float, s.stop_level::float, s.t1_level::float,
              s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
              s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
@@ -1529,6 +1530,14 @@ async function getLiveEdgesContext() {
       if (bucket && !bucket.thin) touchQualityStats = { bucket: s.touch_quality, ...bucket };
     }
 
+    // Fade-against-a-big-move-day exit alert — see checkFadeAgainstBigMoveExit() in acd.js
+    // for the full validation writeup (RESEARCH_CLAIM bigmove_fade_exit_2yr_robustness_confirmed).
+    // Only checked for still-open rows; informational only, never affects adjustedWr/confidence.
+    let fadeAgainstBigMoveExit = false;
+    if (s.resolution == null) {
+      fadeAgainstBigMoveExit = await checkFadeAgainstBigMoveExit(s, s.t_date);
+    }
+
     processedSetups.push({
       ...s,
       baselineWr: base.wr,
@@ -1537,6 +1546,7 @@ async function getLiveEdgesContext() {
       confidence,
       recommendation: rec,
       touchQualityStats,
+      fadeAgainstBigMoveExit,
     });
   }
 

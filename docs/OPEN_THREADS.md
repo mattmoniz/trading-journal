@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: the CONDITIONED fade-against-trend exit rule holds up — wired live
+
+Direct follow-up to the standalone test below, which killed the BROAD version of this idea. Before accepting that as the final word, re-checked the narrower, original-scope claim (conditioned on the day actually becoming a genuine big-move day) that the broad test never touched — widened the original 365-day/N=258 sample to a full 2 years for a real stress test.
+
+**It held.** N grew to 472 (fading-against-trend trades that later saw a fresh big-move trigger). A blind exit at the median fresh-trigger offset (13 bars/minutes after entry) beat holding on BOTH chronological splits, same sign: train +$18,327.22 (N=395, $46.40/trade), test +$2,843.20 (N=77, $36.92/trade). One honest caveat: test-set day-clustering is elevated (44.2% top-5-dates vs 14.9% in train) — noted, not disqualifying, since direction and rough magnitude held anyway.
+
+Recorded as `RESEARCH_CLAIM` `bigmove_fade_exit_2yr_robustness_confirmed`. **Wired live** the same session as an informational exit alert — `checkFadeAgainstBigMoveExit()` (server/routes/acd.js), shared between `/setups/today-summary` (HA feed) and `antigravityEdges.js` → `ACDView.jsx` (dashboard badge, orange "FADING a big-move day — EXIT NOW recommended"). Same convention as `bar6_exit_recommended`: this app has no order/broker execution capability, so it's a recommendation only, never an automated action. Verified: `node --check` clean on both routes, `npm run lint:frontend`/`npm run build` clean, server restarted and live (`/api/setups/today-summary` returns valid JSON).
+
+**Lesson for the "are you too strict" question this surfaced**: the broad and narrow versions of the same underlying idea got genuinely different verdicts — this is exactly the intended behavior, not overcaution. A sign-reversing broad claim was correctly killed; the same underlying mechanism, properly scoped to the condition where it's actually real, survived a harder test (bigger N, wider window) than the one that originally surfaced it. The discipline finds the boundary of where an edge lives — it doesn't reject on sight.
+
 ## ✅ 2026-07-27: tested the standalone blind fade-against-trend exit rule — does not generalize
 
 Direct follow-up to `test_blind_fast_exit_fading_against_trend` (below), built fresh (`scripts/backtest_fade_against_trend_exit.mjs`) per the user's explicit push to find real PnL levers. Tested the blind rule across the FULL 2-year population (N=9,096, all resolved trades, any direction) — not just the eventual-big-move-day subset the original +$14,320/N=258 number came from — with a real riding-with-trend control and chronological 80/20 train/test split, at four candidate fixed-bar offsets (3/6/10/15).

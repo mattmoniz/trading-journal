@@ -675,6 +675,20 @@ function EdgeSectionsPanel() {
                       🚨 EXIT NOW recommended — take the bar-6 price rather than hold to target
                     </div>
                   )}
+                  {s.fadeAgainstBigMoveExit && (
+                    // RESEARCH_CLAIM bigmove_fade_exit_2yr_robustness_confirmed (N=472, 2yr,
+                    // train/test same-sign, $37-46/trade). Fires only when this trade is fading
+                    // against the day's own established direction AND today has gone on to become
+                    // a genuine big-move day (>=250pt range, >=180min remaining) that was NOT
+                    // already true at entry. The broader/unconditioned version of this idea was
+                    // tested and does not hold up -- see fade_against_trend_blind_exit_does_not_generalize
+                    // -- this only fires the narrower, actually-validated condition. No order/
+                    // broker execution capability exists -- recommendation only.
+                    <div style={{ fontSize: 12, color: '#fb923c', marginTop: 4, fontWeight: 700, background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: 4, padding: '3px 6px' }}
+                      title="Fading against the day's established direction on a day that's become a genuine big-move day (>=250pt range, >=180min remaining) -- historically a blind exit ~13 bars after entry beat holding by $37-46/trade (N=472, 2yr, train/test confirmed).">
+                      🔶 FADING a big-move day — EXIT NOW recommended
+                    </div>
+                  )}
                   <SetupFeedbackForm setup={s} existingFeedback={fb} onSaved={refreshFeedback} />
                 </div>
               );
