@@ -1,4 +1,12 @@
-# Open Threads / Pending Work
+## ✅ 2026-07-26: built the trade audit export the user asked for — found a new, real timestamp bug along the way
+
+User asked for a file (dates/times/levels of entries and exits, line-by-line, plus daily/weekly summaries) to audit. Scoped to `active_setups` (`origin_status='ACTIVE'`, the system's own real live-fired setups) rather than the personal `trades` table, since the whole conversation this follows from is about auditing the system's signals — stated clearly in the delivered file in case that scope guess is wrong.
+
+**Caught before delivering it**: 38 of 150 real resolved trades had a mathematically impossible `resolved_at` (exit time before entry time), off by ~4 hours — all `resolution_method='PRICE_CLEAN'` (same as genuinely live-resolved trades) but with exact `:00`-second precision, which a real `NOW()` call never produces (always microseconds). This means these 38 weren't set by a live resolution at all — almost certainly the same "JS Date object round-tripped through the wrong timezone" bug class already found and fixed once before in `resolveSetupsByPrice()` for `fired_at` (2026-06-30), recurring here in some other backfill/repair path for `resolved_at`. Checked what's actually affected: entry time/levels, exit price, and pnl are all independently fine (target-hit exits land exactly on `t1_level`) — only the exit *timestamp* is wrong for these 38 rows.
+
+Did not chase down the exact originating script in this pass (out of scope for an audit-file request) — flagged `OPEN_DECISION` `active_setups_resolved_at_timezone_bug` (MEDIUM) with the specific fix path (identify the script, likely narrow to the 2026-07-09/07-10 date range, confirm the Date round-trip, correct the 38 values). The delivered CSV flags exactly which rows this affects (`exit_time_reliable` column) rather than silently presenting a wrong number, and the summary file documents the finding plainly.
+
+Files: `scratch/active_setups_audit_trades.csv` (line-by-line), `scratch/active_setups_audit_summary.md` (daily/weekly summaries + the data-quality finding). `node --check`/`eslint` clean on `scripts/export_active_setups_audit.mjs`.
 
 ## ✅ 2026-07-26: wired the sigma-continuation signal live, answered the notification question honestly
 
