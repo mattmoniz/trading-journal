@@ -1364,6 +1364,7 @@ function LiveSessionPanel() {
           _pnl: s.actual_pnl,
           _winRate: s.historical_win_rate,
           _sessions: s.historical_sessions,
+          _bar6Checkpoint: s.bar6_checkpoint,
           _isCaseEngine: true,
         }));
         // Session Timeline: resolved/expired setups, filtered by the RTH/Non-RTH/Both toggle
@@ -1575,6 +1576,17 @@ function LiveSessionPanel() {
                           {isCaseEngine && ev._winRate != null && ev._sessions >= 20 && (
                             <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>
                               · {Math.round(ev._winRate * 100)}% <span style={{ fontWeight: 400, color: '#94a3b8' }}>N={ev._sessions}</span>
+                            </span>
+                          )}
+                          {isCaseEngine && ev._bar6Checkpoint && (
+                            <span style={{
+                              fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
+                              color: ev._bar6Checkpoint === 'RECOVERING' ? '#4ade80' : '#f87171',
+                              background: ev._bar6Checkpoint === 'RECOVERING' ? 'rgba(74,222,128,0.12)' : 'rgba(248,113,113,0.12)',
+                              border: `1px solid ${ev._bar6Checkpoint === 'RECOVERING' ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)'}`,
+                              borderRadius: 3, padding: '1px 4px',
+                            }} title="Bar-6 checkpoint: has the worst point of this trade already passed?">
+                              BAR6 {ev._bar6Checkpoint}
                             </span>
                           )}
                         </div>

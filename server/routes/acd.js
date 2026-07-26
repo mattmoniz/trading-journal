@@ -6894,7 +6894,7 @@ export default function createACDRouter(io) {
       const currentSessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
 
       const setupsRes = await query(`
-        SELECT setup_type, status, resolution, actual_pnl,
+        SELECT setup_type, status, resolution, actual_pnl, bar6_checkpoint,
           TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups
         WHERE status = 'ACTIVE'
@@ -6916,10 +6916,27 @@ export default function createACDRouter(io) {
         const time = s.fired_at_str.slice(11, 16);
         const outcome = s.resolution || 'expired';
         const pnl = s.actual_pnl != null ? `, $${parseFloat(s.actual_pnl).toFixed(2)}` : '';
-        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl})`;
+        const bar6 = s.bar6_checkpoint ? `, bar6:${s.bar6_checkpoint}` : '';
+        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl}${bar6})`;
       });
 
-      res.json({ count: lines.length, summary_text: lines.join('\n') || 'No resolved setups yet.' });
+      // Big-move-day signal — same persisted BIGMOVE_LIVE_SIGNAL row antigravityEdges.js reads
+      // for the dashboard badge (server/routes/acd.js's setup-detection handler), surfaced here
+      // too so the HA integration doesn't need a second endpoint for it.
+      let bigMoveLine = null;
+      try {
+        const bmsQ = await query(`
+          SELECT notes FROM performance_audit
+          WHERE signal_type='BIGMOVE_LIVE_SIGNAL' AND signal_name=$1
+        `, [currentSessionDate]);
+        if (bmsQ.rows[0]) {
+          const n = JSON.parse(bmsQ.rows[0].notes || '{}');
+          bigMoveLine = `Big-move-day signal ACTIVE — session range ${n.rangeSoFar}pt, ${n.minutesRemaining}min remaining (triggered ${n.triggeredAt || ''})`;
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
+      const summaryLines = bigMoveLine ? [bigMoveLine, ...lines] : lines;
+      res.json({ count: lines.length, summary_text: summaryLines.join('\n') || 'No resolved setups yet.' });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
