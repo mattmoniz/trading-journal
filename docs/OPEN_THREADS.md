@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: tested the standalone blind fade-against-trend exit rule — does not generalize
+
+Direct follow-up to `test_blind_fast_exit_fading_against_trend` (below), built fresh (`scripts/backtest_fade_against_trend_exit.mjs`) per the user's explicit push to find real PnL levers. Tested the blind rule across the FULL 2-year population (N=9,096, all resolved trades, any direction) — not just the eventual-big-move-day subset the original +$14,320/N=258 number came from — with a real riding-with-trend control and chronological 80/20 train/test split, at four candidate fixed-bar offsets (3/6/10/15).
+
+**Does not hold up.** Restricted to the population the rule actually affects (trades still open at the offset — including trades that already resolved doesn't change the delta but dilutes the per-trade read), only the bar-6 offset shows a same-sign result on both train (+$0.84/trade, N=3,452) and test (+$2.69/trade, N=557) for the fading-against group — thin enough to be noise, especially since that population is a net loser at baseline either way (-$12.93/trade in test before the exit rule, -$10.24/trade after). Bars 3, 10, and 15 all reverse sign between train and test. The riding-with control is consistently hurt by early exit at bars 6/10/15 (both splits negative) but flips at bar 3 too — not fully clean either.
+
+**Conclusion: the dramatic effect is specific to eventual big-move days, not a general property of fighting the day's trend.** Broadening the population destroyed almost all of it. Recorded as `RESEARCH_CLAIM` `fade_against_trend_blind_exit_does_not_generalize`. Resolved `OPEN_DECISION` `test_blind_fast_exit_fading_against_trend` with this finding — not wired live. If revisited, the narrower original scope (conditioned on eventual big-move-day status) is what's actually untested standalone; this session tested the broader claim, which was the one on the table.
+
 ## ✅ 2026-07-26: tested the sharper fade-direction hypothesis — refuted, but surfaced a genuinely new, simpler idea
 
 Direct follow-up ("do what you think is best"), completing the flagged `bigmove_signal_exit_trigger_fade_direction_followup`. Split the fresh big-move-signal-triggered population (N=311) by whether the open trade was fading AGAINST the day's own established direction (N=258, hypothesized to be where the signal should matter most) vs riding WITH it (N=53, hypothesized to barely matter).
