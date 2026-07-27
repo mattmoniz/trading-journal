@@ -553,7 +553,7 @@ function EdgeSectionsPanel() {
           direction/sigma/oneSidedRatio combination has been backtested. */}
       {stackVolSignal?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(249,115,22,0.15)', border: '2px solid #f97316', borderRadius: 8, color: '#f97316', fontWeight: 700, fontSize: 13, animation: 'pulse 1.2s ease-in-out infinite' }}>
-          ⚡ STACK BREAK + VOLUME — {stackVolSignal.direction} confirmed, {stackVolSignal.sigma}σ volume ({Math.round(stackVolSignal.oneSidedRatio * 100)}% one-sided){stackVolSignal.levelDensity > 0 ? ` · under ${stackVolSignal.levelDensity} levels within 40pt (${stackVolSignal.levels.join(', ')})` : ''} · backtested RTH +$8.86/trade (N=552) / Globex +$4.23/trade (N=426), rigor-clean but not yet live-confirmed · informational only, not a trade signal
+          ⚡ STACK BREAK + VOLUME — {stackVolSignal.direction} confirmed, {stackVolSignal.sigma}σ volume ({Math.round(stackVolSignal.oneSidedRatio * 100)}% one-sided){stackVolSignal.paceZ != null ? ` · pace ${stackVolSignal.paceZ}σ, ${stackVolSignal.consecutiveCount}/5 same-direction` : ''}{stackVolSignal.levelDensity > 0 ? ` · under ${stackVolSignal.levelDensity} levels within 40pt (${stackVolSignal.levels.join(', ')})` : ''}{stackVolSignal.calibratedStop != null ? ` · calibrated stop ${stackVolSignal.calibratedStop}pt (${stackVolSignal.calibratedStopType === 'LEVEL_NEXT' ? 'next level out' : 'fixed fallback'}) / target ${stackVolSignal.calibratedTarget}pt` : ''} · rigor-clean but not yet live-confirmed · informational only, not a trade signal
         </div>
       )}
       {/* Overnight Structural Context — moved to right column top */}

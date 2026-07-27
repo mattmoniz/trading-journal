@@ -7048,7 +7048,7 @@ export default function createACDRouter(io) {
       // recipe was NOT clean for Globex in backtest, don't apply it there. VWAP (computeVWAP,
       // imported from backtest_confluence.js, not reimplemented) is now included as a
       // candidate level -- previously excluded, since it isn't in level_prices.
-      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedTarget: null };
+      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null };
       try {
         const svBarsQ = await query(`
           SELECT ts, close::float, high::float, low::float, open::float,
@@ -7150,6 +7150,28 @@ export default function createACDRouter(io) {
               }
             }
 
+            // Structural stop placement (RTH only): RESEARCH_CLAIM
+            // structural_next_level_stop_beats_fixed_and_median_control -- a stop placed at
+            // the NEXT real level beyond the one just broken (not the immediate cluster edge,
+            // and not a fixed 40pt) beat both the fixed-40 baseline AND a FIXED_AT_MEDIAN
+            // control (same avg width, not level-informed) at target=40pt, clean on rigor.
+            // levelsArr is already sorted by price. Falls back to the fixed 40pt if no level
+            // exists within 200pt (matches the backtest's own fallback population, which
+            // excluded those ~2% of cases rather than guessing a distance for them).
+            let nextLevelBeyondDist = null;
+            if (!isGlobexNow) {
+              if (direction === 'SHORT') {
+                for (const l of levelsArr) {
+                  if (l.price > clusterMax) { nextLevelBeyondDist = l.price - bar.close; break; }
+                }
+              } else {
+                for (let j = levelsArr.length - 1; j >= 0; j--) {
+                  if (levelsArr[j].price < clusterMin) { nextLevelBeyondDist = bar.close - levelsArr[j].price; break; }
+                }
+              }
+              if (nextLevelBeyondDist != null && nextLevelBeyondDist > 200) nextLevelBeyondDist = null;
+            }
+
             const favorableVol = direction === 'LONG' ? (bar.ask_volume || 0) : (bar.bid_volume || 0);
             const adverseVol = direction === 'LONG' ? (bar.bid_volume || 0) : (bar.ask_volume || 0);
             const oneSidedRatio = (favorableVol + adverseVol) > 0 ? favorableVol / (favorableVol + adverseVol) : 0.5;
@@ -7161,14 +7183,16 @@ export default function createACDRouter(io) {
                 active: true, direction, sigma: +volZ.toFixed(2), oneSidedRatio: +oneSidedRatio.toFixed(2),
                 levelDensity, levels: levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).map(l => l.name),
                 paceZ: isGlobexNow ? null : +paceZ.toFixed(2), consecutiveCount: isGlobexNow ? null : consecutiveCount,
-                calibratedStop: isGlobexNow ? null : 40, calibratedTarget: isGlobexNow ? null : 40,
+                calibratedStop: isGlobexNow ? null : +(nextLevelBeyondDist ?? 40).toFixed(1),
+                calibratedStopType: isGlobexNow ? null : (nextLevelBeyondDist != null ? 'LEVEL_NEXT' : 'FIXED_FALLBACK'),
+                calibratedTarget: isGlobexNow ? null : 40,
               };
               const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
               query(`
                 INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
                 VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
                 ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, definitionVersion: 2, triggeredAt: new Date().toISOString() })]).catch(() => {});
+              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, calibratedStop: stackVolSignal.calibratedStop, calibratedStopType: stackVolSignal.calibratedStopType, calibratedTarget: stackVolSignal.calibratedTarget, definitionVersion: 3, triggeredAt: new Date().toISOString() })]).catch(() => {});
               break;
             }
           }
