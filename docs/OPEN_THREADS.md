@@ -1,5 +1,25 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: unify_sizemultiplier_into_validated_score — 3 real provenance bugs found & fixed (not a full model, something more valuable)
+
+Scoped per user direction to actually build, not just plan. A full joint-validated model over the ~20 `sizeMultiplier` factors turned out to be infeasible right now for two structural reasons: (1) most factors (elite zone, VWAP extension, regime persistence, etc.) are computed on-the-fly and never persisted individually — only the final combined multiplier survives to `active_setups`, so reconstructing them retroactively would mean reimplementing the entire live context-gathering pipeline in a backtest script; (2) the real population (~200 trades) is far too thin to fit and validate a ~20-parameter model. Flagged as `trade_management_continuous_score_needs_more_data`'s sibling, `sizemultiplier_needs_per_factor_instrumentation` — a real, concrete next step (persist each factor going forward) once more data exists.
+
+**But auditing the stack's own real-world output surfaced something much more valuable than a premature model fit**: real (`ACTIVE`/`SHADOW`) level-fade `active_setups.size_multiplier` is **0.500 on 56 of 57 rows checked** — the rich 0.10–1.50 output essentially never survives to the DB. Root-caused to **three separate `active_setups` queries feeding the stack's context, all missing an `origin_status` filter** (all predate that column, added 2026-07-17, never revisited):
+
+1. **`hasLossToday`** (the "Death Sequence" 0.5x ceiling) — counted *any* loss that `trade_date`, regardless of origin. Confirmed empirically: on 6 of the last 23 days, this fired with **zero real losses**, purely from `BACKFILL`-origin rows sharing that date. Fixed to `origin_status='ACTIVE'` only.
+2. **`lfConsecWins`/`lfConsecLosses`** (win/loss streak sizing — the single largest-magnitude factors, +0.50 to a hard 0.10 cap) — same missing filter. Fixed the same way.
+3. **Stacking count and level recency** — fixed to `origin_status IN ('ACTIVE','SHADOW')`, deliberately different from the streak fix since these are market-structure questions (did a real, live-price-triggered touch happen), not "did the trader personally experience this."
+
+Checked the cascade-breaker suppression query too (higher stakes — it skips all new detection) — confirmed no practical exposure (only `ACTIVE`/`SHADOW` rows have a `resolved_at` within the last 7 days), left unchanged rather than fixed reflexively. This is a real, going-forward fix — can't retroactively repair historical `size_multiplier` values without re-deriving the full context at each historical moment. Verified: `node --check`/eslint clean, `test_invariants.mjs` shows only the pre-existing unrelated failure, server restarted, live endpoint healthy, no new errors.
+
+## ✅ 2026-07-27: formalize_trade_management_as_first_class_system — consolidated the bar6_checkpoint duplication, root-causing an already-flagged bug as a side effect
+
+`resolveSetupsByPrice()` maintained a second, independent inline reimplementation of `computeBar6Checkpoint()`'s worst-bar-index-of-adverse-excursion logic — mathematically equivalent (same argmax, same tie-break), but exactly the reimplementation-drift risk this codebase has been burned by before. **This duplication turned out to be the direct root cause of `bar6_checkpoint_persisted_vs_recomputed_mismatch`** (the 2.5% stored-vs-recomputed disagreement flagged 2026-07-26) — resolved as a side effect of the consolidation, not a separate fix.
+
+Consolidated: the live path now calls `computeBar6Checkpoint()` directly using the `bars.rows` array already fetched for the main resolution walk (no restructure needed — the full array was already available before the loop starts), gated the same way (`barCount>=7`). Spot-re-checked the 3 originally-flagged rows (67628/68146/68300) — all now agree between stored and a fresh recompute.
+
+The bigger generalization (one continuous per-bar score across multiple checkpoints) was **not** built — already tried in narrower form this session (a second checkpoint at bar 10/15) and found to need more real data than currently exists (~200 trades isn't enough to validate a further-sliced population honestly, as the bar-10 stop-cushion test's train/test reversal already demonstrated). Flagged as `trade_management_continuous_score_needs_more_data` rather than forced. Verified: `node --check`/eslint/build clean, server restarted, live endpoint healthy, no new errors.
+
 ## ✅ 2026-07-27: backtest_unified_uses_wrong_direction_formula_for_rth — fixed, full backtest re-run, 60 recommendation flips
 
 Direct follow-up to `level_fade_direction_convention_needs_verification`'s side-finding. `detectLevelFades()` (`scripts/backtest_unified.js`) computed direction via 1-bar-vs-level; the live RTH candidate path (confirmed 100% correct against real data) uses 5-bar momentum instead. Verified `detectLevelFades()` is never imported by live server code (only backtest/research scripts) before touching it — confirmed safe scope, no risk to the live firing path itself.

@@ -7,7 +7,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
-import { directionFromType, computeExitRuleAtBar6 } from '../services/maeMfeReplay.js';
+import { directionFromType, computeBar6Checkpoint } from '../services/maeMfeReplay.js';
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
@@ -390,7 +390,6 @@ export async function resolveSetupsByPrice(io) {
     // convention as touch_quality just below — never affects resolution/pnl/entry. Does
     // NOT delay or gate the original entry alert (user explicitly did not want to risk
     // missing the fast, clean winners that make up most of the touch population).
-    let worstAdverse6 = -Infinity, worstAdverseBarIdx6 = null, bar6Close = null;
     // Trail-mechanism state — recomputed from scratch on every poll (this function
     // already re-walks the full bar range from fired_at every call, same as MAE/MFE
     // above), never resumed from a saved cursor. Written back at the end regardless of
@@ -404,11 +403,6 @@ export async function resolveSetupsByPrice(io) {
       const adverse   = long ? entry - bar.low  : bar.high - entry;
       runMfe = Math.max(runMfe, favorable);
       runMae = Math.max(runMae, adverse);
-      if (barCount <= 7 && adverse > worstAdverse6) {
-        worstAdverse6 = adverse;
-        worstAdverseBarIdx6 = barCount - 1; // 0-indexed, matches the research script's bar 0-6 convention
-      }
-      if (barCount === 7) bar6Close = bar.close; // 0-indexed bar 6's close, for the exit-rule check below
 
       if (trailWidth != null) {
         // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
@@ -496,6 +490,19 @@ export async function resolveSetupsByPrice(io) {
     // checkpoint is written, matching the research population exactly). Never overwritten
     // once set (WHERE bar6_checkpoint IS NULL), same convention as touch_quality below.
     //
+    // Consolidated 2026-07-27 (formalize_trade_management_as_first_class_system): this used
+    // to track worstAdverse6/worstAdverseBarIdx6/bar6Close inline, a second, independent
+    // reimplementation of the exact same worst-bar-index-of-adverse-excursion logic already
+    // in computeBar6Checkpoint() (maeMfeReplay.js, used by every backtest/verification
+    // script). Both are mathematically equivalent (same argmax, same tie-break), but two
+    // copies of one calculation is exactly the reimplementation-drift risk this codebase has
+    // been burned by before — and in fact WAS the root cause of the persisted-vs-recomputed
+    // mismatch found 2026-07-26 (bar6_checkpoint_persisted_vs_recomputed_mismatch, 3/121
+    // rows, ~2.5%). `bars.rows` (the full bar array from fired_at) is already available
+    // before this loop starts, so calling the shared function directly needs no restructure
+    // of the main STOP_HIT/TARGET_HIT walk above — just one call after it, gated the same way
+    // (barCount>=7 means the walk reached bar 7 without an early resolution breaking it).
+    //
     // bar6_exit_recommended (added 2026-07-26) — RESEARCH_CLAIM
     // target_distance_predictor_real_data_validation_cleared: the frozen exit rule
     // (targetDistFraction < 0.873, computeExitRuleAtBar6 in maeMfeReplay.js) cleared its
@@ -504,17 +511,14 @@ export async function resolveSetupsByPrice(io) {
     // existing passive RECOVERING/DETERIORATING badge. Still purely informational: this
     // system has no order/broker execution capability at all, so it can never auto-close a
     // position — only ever a stronger-worded recommendation than the existing checkpoint.
-    if (barCount >= 7 && worstAdverseBarIdx6 !== null) {
-      const checkpoint = worstAdverseBarIdx6 <= 2 ? 'RECOVERING' : 'DETERIORATING';
-      let exitRecommended = null;
-      if (bar6Close != null) {
-        const direction = long ? 'LONG' : 'SHORT';
-        exitRecommended = computeExitRuleAtBar6(entry, bar6Close, t1, direction, checkpoint).ruleSaysExit;
+    if (barCount >= 7) {
+      const bar6 = computeBar6Checkpoint(bars.rows, entry, stop, t1, long ? 'LONG' : 'SHORT', PNL_PER_POINT, COMMISSION);
+      if (bar6) {
+        await query(
+          `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3 WHERE id=$1 AND bar6_checkpoint IS NULL`,
+          [row.id, bar6.status, bar6.ruleSaysExit]
+        ).catch(() => {});
       }
-      await query(
-        `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3 WHERE id=$1 AND bar6_checkpoint IS NULL`,
-        [row.id, checkpoint, exitRecommended]
-      ).catch(() => {});
     }
 
     // Mark-to-market TIME_EXPIRED for the plain (non-trail) case: the trail branch
@@ -4471,11 +4475,24 @@ export default function createACDRouter(io) {
       const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
       const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ, _lfTurbRangeQ] = await Promise.all([
         query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
-        query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] })),
+        // origin_status='ACTIVE' added 2026-07-27 (unify_sizemultiplier_into_validated_score) --
+        // this drives lfConsecWins/lfConsecLosses, the win/loss-streak sizing factor (the largest
+        // magnitude adjustments in the whole IIFE, up to +0.50/capped at 0.10). Predates the
+        // origin_status column (written 2026-06-22, column added 2026-07-17) and was never
+        // revisited. This is specifically about the TRADER'S OWN recent real trades (a
+        // psychological/risk concept), so scoped to ACTIVE only -- SHADOW setups were never
+        // shown to the user, so a SHADOW "loss" isn't something the user experienced either.
+        query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND origin_status='ACTIVE' AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] })),
+        // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- unlike the streak query above,
+        // "stacking" (how many same-direction fade attempts have occurred today) is a MARKET
+        // STRUCTURE signal, not a personal-day one -- a SHADOW-origin touch is still a real,
+        // live-price-triggered event (just suppressed from a full alert), so it legitimately
+        // counts toward "how many real fades has this direction seen today." BACKFILL/UNKNOWN
+        // (synthetic/historical) do not represent today's real market activity and are excluded.
         query(
           `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
                   COUNT(*) as cnt
-           FROM active_setups WHERE trade_date=$1 AND status IN ('ACTIVE','RESOLVED')
+           FROM active_setups WHERE trade_date=$1 AND origin_status IN ('ACTIVE','SHADOW') AND status IN ('ACTIVE','RESOLVED')
            GROUP BY 1`,
           [todayET]
         ).catch(() => ({ rows: [] })),
@@ -4496,12 +4513,18 @@ export default function createACDRouter(io) {
           SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
           FROM svwap WHERE vwap IS NOT NULL
         `, [todayET]).catch(() => ({ rows: [{}] })),
+        // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- "level recency" (was this level
+        // tested recently = proven defender, vs untested = risky) is about REAL market touches,
+        // same reasoning as the stacking-count fix above. Without this, a level with dense
+        // BACKFILL/UNKNOWN historical coverage would almost always show as "recently tested"
+        // regardless of genuine recent activity.
         query(`
           SELECT
             REGEXP_REPLACE(setup_type, '_(LONG|SHORT)$', '') AS level_base,
             MAX(trade_date)::text AS last_date
           FROM active_setups
           WHERE trade_date >= $1::date - INTERVAL '21 days' AND trade_date < $1
+            AND origin_status IN ('ACTIVE','SHADOW')
             AND status = 'RESOLVED'
           GROUP BY level_base
         `, [todayET]).catch(() => ({ rows: [] })),
@@ -6067,9 +6090,21 @@ export default function createACDRouter(io) {
 
         // Build full trade brief: WHY NOW + PACE + SIZE
         if (active) {
+          // origin_status='ACTIVE' filter added 2026-07-27 (unify_sizemultiplier_into_validated_score
+          // investigation) -- this query predates the origin_status column (written 2026-06-22,
+          // column added 2026-07-17) and was never revisited once it existed, matching this
+          // codebase's own documented "the concept didn't exist yet" bug class (see the CumPL
+          // account-scoping hard rule). Confirmed live: on 6 of the last 23 days, this query
+          // counted a loss with ZERO real (ACTIVE-origin) losses that day -- purely BACKFILL-
+          // origin rows sharing the same trade_date -- meaning the "Death Sequence" 0.5x ceiling
+          // was engaging on ~26% of days for a reason that had nothing to do with the user's own
+          // day. Also explains why real active_setups.size_multiplier is 0.500 on 56/57 real
+          // level-fade rows checked -- the rich ~20-factor stack's output was being overridden to
+          // 0.5x far more often than the "a real prior loss today" concept actually intends.
           const lossesToday = await query(`
             SELECT COUNT(*)::int as count FROM active_setups
-            WHERE trade_date=$1 AND (resolution='STOP_HIT' OR (status='RESOLVED' AND actual_pnl < 0))
+            WHERE trade_date=$1 AND origin_status='ACTIVE'
+              AND (resolution='STOP_HIT' OR (status='RESOLVED' AND actual_pnl < 0))
           `, [todayET]).catch(() => ({ rows: [{ count: 0 }] }));
           const hasLossToday = (lossesToday.rows[0]?.count || 0) > 0;
           let sizeMult = hasLossToday ? 0.5 : 1.0;
