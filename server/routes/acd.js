@@ -3117,11 +3117,21 @@ export default function createACDRouter(io) {
 
       // 5–6 PM ET: hard close / reset gap — expire RTH setups, dark until Globex opens
       if (etMin >= 17 * 60 && etMin < 18 * 60) {
-        await query(`
+        const closedRows = await query(`
           UPDATE active_setups SET status='EXPIRED', resolution='SESSION_CLOSED',
             resolved_at=NOW(), updated_at=NOW()
           WHERE trade_date=$1 AND status='ACTIVE'
-        `, [todayET]).catch(() => {});
+          RETURNING *
+        `, [todayET]).catch(() => ({ rows: [] }));
+        // Found 2026-07-27 (setup_log_sidebar_recording_audit): this UPDATE never dropped
+        // a timeline event — the only resolution path in this file that didn't. Confirmed
+        // live: every real (origin_status='ACTIVE') SESSION_CLOSED row in the last 3 months
+        // (6, all IB_BULLISH/IB_BEARISH — the long-lived DAY_TYPE_MANAGED types most likely
+        // to still be open at 5PM) had no trade_timeline_events row at all, so the sidebar
+        // never showed how they actually ended.
+        for (const row of closedRows.rows ?? []) {
+          try { await dropToTimeline(row); } catch (_) {}
+        }
         return res.json({ setup: null, sessionClosed: true });
       }
 
@@ -6703,6 +6713,32 @@ export default function createACDRouter(io) {
           INSERT INTO acd_setup_events (trade_date, setup_type, fired_time, fired_price)
           VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING
         `, [todayET, active.type, firedTimeStr, active.entry || null]);
+        // Found 2026-07-27 (setup_log_sidebar_recording_audit): this, the MAIN RTH
+        // candidate insertion path, was the one INSERT site in this file that never
+        // called dropToTimeline() at fire time -- every other insert path does. A
+        // freshly-fired ACTIVE setup was invisible in the sidebar Session Timeline until
+        // it later resolved (which does drop a timeline event via its own UPDATE path),
+        // sometimes minutes to hours later. dropToTimeline()'s own ON CONFLICT (setup_id)
+        // DO NOTHING makes this safe even though the resolve path will also call it later
+        // for the same id.
+        if (setupId) {
+          try {
+            await dropToTimeline({
+              id: setupId,
+              trade_date: todayET,
+              fired_at: firedAtTs,
+              setup_type: active.type,
+              entry_zone_low: persistedLevels.entry,
+              stop_level: persistedLevels.stop,
+              t1_level: persistedLevels.target,
+              t1_label: persistedLevels.targetLabel,
+              resolution: null,
+              historical_win_rate: hist.winRate ?? null,
+              historical_sessions: hist.occurrences ?? null,
+              expires_at: computeExpiry(active.type),
+            });
+          } catch (_) {}
+        }
       }
 
       // Keep size_multiplier current — it changes with intraday conditions (streak, stacking, etc.)
