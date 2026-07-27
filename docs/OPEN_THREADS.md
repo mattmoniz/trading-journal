@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: tested a new structural position-state idea (bar-10 stop-cushion) — fails cleanly, not wired
+
+Per explicit user direction to extend the structural-rule family (bar6 worst-point-passed, distance-to-target-fraction, trend-alignment all held up cleanly this session) rather than build another numeric-threshold signal — specifically "time-in-trade vs. distance-to-stop" as a candidate new position-state fact. Built `scripts/backtest_stop_cushion_checkpoint.mjs`: at bar 10 (deliberately later than `bar6_checkpoint`, to test something genuinely new rather than reproduce it slightly later), does how much of the original stop-cushion remains (current distance-to-stop / entry-to-stop distance) predict the eventual outcome. Real (`origin_status IN ('ACTIVE','SHADOW')`) data only — N=56 checkpoint-eligible trades out of the full 195-trade real population.
+
+**Looked promising on the full sample** (median split: LOW cushion EV=-$4.21 vs HIGH cushion EV=+$57.50, delta=$61.71/trade) **but fails a chronological 70/30 train/test split outright** — the delta reverses sign out-of-sample (train +$111.14, test **-$93.65**). The "at-risk" (low-cushion) group is also 78.6% concentrated in just 5 distinct dates and fails the 3-way chronological stability check. **Not wired live.** Recorded as `RESEARCH_CLAIM` `stop_cushion_bar10_checkpoint_fails_test` (status `CONFIRMED` — the negative result itself is robust, not a thin maybe).
+
+**This is a useful negative, not a wasted test**: it's a direct, honest confirmation of the user's own stated constraint this session — at ~150-195 real trades, this codebase can detect a large, clean effect (bar6, distance-fraction both held up robustly) but not a subtler one yet. More real SHADOW/ACTIVE data accumulating over time, not more single-shot backtest attempts, is what unlocks the next layer of structural findings. Didn't chase multiple checkpoint bars (3/6/10/15/20) looking for one that "worked" — that's the exact largest-of-K-effects overfitting trap this codebase's confound checklist exists to prevent; one pre-specified hypothesis was tested and reported honestly.
+
 ## ✅ 2026-07-27: price_bars_primary materialized — the structural fix, not just the tactical one
 
 Direct follow-up to the tactical audit below, per explicit user direction to build the structural half now. Full technical writeup lives in ARCHITECTURE.md's `price_bars_primary` section — this entry is the narrative.
