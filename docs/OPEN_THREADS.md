@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: found `price_bars_primary` is an unindexable VIEW — one unbounded query cost 15-20x, ~200 files at risk
+
+While re-deriving the bar-6 exit-rule's real dollar impact against the full `active_setups` population (see entry below — the N=57/+$1,260 figure quoted earlier this session turned out to have an internal inconsistency and needed a from-scratch recompute), a straightforward per-trade bar lookup was taking ~900ms-1.2s per call — on pace for 2.5+ hours to walk ~11,000 trades.
+
+Root cause, confirmed directly: `price_bars_primary` is a `VIEW` (`information_schema.tables.table_type='VIEW'`), not a plain table — it does a `JOIN`+`GROUP BY date_trunc('minute', ts)` aggregation over `price_bars`/`price_bars_contract_calendar` on every call (the dedup logic from the 2026-07-13 fix, see ARCHITECTURE.md), and structurally cannot have an index of its own. The query in question had `ts >= $1` with **no upper bound** — `EXPLAIN ANALYZE` showed it touching ~540,000 rows to return 10, because the planner had to materialize the aggregation across everything from that timestamp through the present before it could sort/`LIMIT`.
+
+**Fix**: added a tight upper bound (`ts < $1::timestamp + interval '6 hours'`) sized to what the caller actually needs. Verified: same query, same real data, ~900-1200ms → **62ms**. The full 11,041-row run went from a 2.5+ hour projection to ~15 minutes.
+
+This isn't a one-script bug — a rough grep found ~200 files across `scripts/`/`server/` querying `price_bars_primary`, ~23 with a `ts >=`-only pattern (not a real audit, just a scope indicator). Flagged two separate `OPEN_DECISION`s rather than fixing reflexively: `price_bars_primary_unbounded_query_audit` (go through actual call sites, add bounds where missing — narrower, tactical) and `price_bars_primary_materialize_historical_bars` (the real structural fix — materialize immutable historical bars into a real indexed table, leaving only today's live window on the expensive join — broader, needs its own design pass given no tracked migration system exists in this codebase). Full writeup: ARCHITECTURE.md's `price_bars_primary` section.
+
 ## ✅ 2026-07-27: the CONDITIONED fade-against-trend exit rule holds up — wired live
 
 Direct follow-up to the standalone test below, which killed the BROAD version of this idea. Before accepting that as the final word, re-checked the narrower, original-scope claim (conditioned on the day actually becoming a genuine big-move day) that the broad test never touched — widened the original 365-day/N=258 sample to a full 2 years for a real stress test.
