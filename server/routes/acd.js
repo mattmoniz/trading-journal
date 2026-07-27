@@ -699,7 +699,7 @@ async function getOvernightLevelLiveStatus(type) {
 
 async function detectGlobexSetup(sessionDate, io) {
   try {
-    const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow] = await Promise.all([
+    const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
       query(`SELECT signal_name, p75_mae, p50_mfe FROM performance_audit
@@ -723,6 +723,8 @@ async function detectGlobexSetup(sessionDate, io) {
           AND signal_name = ANY($1)
         ORDER BY signal_name, run_date DESC
       `, [WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type)]),
+      query(`SELECT signal_name, recommendation FROM performance_audit
+             WHERE signal_type='CONFLUENCE_AUDIT_OVERNIGHT' AND signal_name LIKE 'PAIR:%'`),
     ]);
     if (!priceRow.rows[0] || !pdRow.rows[0]) return null;
     const px = priceRow.rows[0].price;
@@ -734,6 +736,22 @@ async function detectGlobexSetup(sessionDate, io) {
       stop: parseFloat(auditMap[key]?.p75_mae ?? 65),
       t1:   parseFloat(auditMap[key]?.p50_mfe ?? 40),
     });
+
+    // Live confluence pair-bonus lookup for Globex — same convention as the RTH
+    // liveStats._pairBonus (server/routes/acd.js ~line 5202), just built fresh per poll
+    // here since detectGlobexSetup() has no persistent per-day cache the way the RTH path
+    // does. Reads backtest_confluence_globex.js's real CONFLUENCE_AUDIT_OVERNIGHT
+    // recommendation='VALIDATED_PAIR' rows (5 pairs as of 2026-07-27: PD_IB_LOW+PD_LOW,
+    // FLOOR_PIVOT+PD_SESSION_MID, PD_HIGH+PD_IB_HIGH, PD_CLOSE+PD_POC, CAM_S4+FLOOR_S1) —
+    // resolves OPEN_DECISION globex_confluence_pair_bonus_needs_sizing_mechanism.
+    const globexPairBonus = {}; // levelBase -> Set of partner levelBase names
+    for (const r of pairAuditRow.rows) {
+      if (r.recommendation !== 'VALIDATED_PAIR') continue;
+      const [a, b] = r.signal_name.replace(/^PAIR:/, '').split('+');
+      if (!a || !b) continue;
+      (globexPairBonus[a] ??= new Set()).add(b);
+      (globexPairBonus[b] ??= new Set()).add(a);
+    }
 
     const TOUCH = 15; // proximity window — consistent with RTH level detection system-wide
 
@@ -749,14 +767,15 @@ async function detectGlobexSetup(sessionDate, io) {
     const flatStop = sessionIsMonday ? 60 : 90, flatTarget = sessionIsMonday ? 30 : 40;
 
     const candidates = [
-      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT' },
-      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG'  },
-      { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}` },
+      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT', levelBase: 'PD_VAH' },
+      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG',  levelBase: 'PD_VAL' },
+      { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}`, levelBase: 'PD_POC' },
       ...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => ({
         level: widerLevelPrices[l.levelName] ?? null, name: l.displayName, type: l.type, dir: l.dir,
         widerWindowNew: true,
         widerStop: widerOptMap[l.type]?.stop ?? flatStop,
         widerTarget: widerOptMap[l.type]?.target ?? flatTarget,
+        levelBase: l.levelName,
       })),
     ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH);
 
@@ -783,6 +802,15 @@ async function detectGlobexSetup(sessionDate, io) {
         ? await getOvernightLevelLiveStatus(c.type)
         : { status: 'ACTIVE', reason: null };
 
+      // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
+      // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
+      // partners). `candidates` is already this poll's full within-TOUCH set, so any
+      // OTHER candidate here IS a same-instant confluence partner by construction.
+      const otherLevelBases = new Set(candidates.filter(x => x !== c).map(x => x.levelBase));
+      const pairPartners = globexPairBonus[c.levelBase];
+      const confluencePairPartner = pairPartners ? [...pairPartners].find(p => otherLevelBases.has(p)) ?? null : null;
+      const sizeMultiplier = confluencePairPartner ? 1.15 : 1.0;
+
       // Globex setups expire at next RTH open (9:30 AM ET, next calendar day)
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const expDate = new Date(etNow);
@@ -808,24 +836,25 @@ async function detectGlobexSetup(sessionDate, io) {
       // confluenceLevels: `candidates` is already the full set of levels within TOUCH of
       // px this poll (the .filter() above) -- no separate nearLevels computation needed,
       // unlike the RTH engine. Persisted 2026-07-22 (same fields as the RTH INSERT) so
-      // overnight confluence combinations become queryable the same way RTH ones are --
-      // NOT yet fed into a sizing bonus here, since detectGlobexSetup() has no
-      // sizeMultiplier stack to hook one into (see OPEN_DECISION
-      // globex_confluence_pair_bonus_needs_sizing_mechanism).
+      // overnight confluence combinations become queryable the same way RTH ones are.
+      // size_multiplier now fed by the pair-bonus check above (2026-07-27, resolves
+      // OPEN_DECISION globex_confluence_pair_bonus_needs_sizing_mechanism) — informational
+      // only, same as RTH, since this app has no broker execution capability.
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
-          confluence_score_at_detection, confluence_levels_at_detection
-        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13)
+          confluence_score_at_detection, confluence_levels_at_detection, size_multiplier
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry,
           live.status, live.reason,
           candidates.length,
-          candidates.map(x => x.name)]);
+          candidates.map(x => x.name),
+          sizeMultiplier]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
