@@ -962,6 +962,38 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[compute_levels] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 8:00 AM ET Mon-Fri: compute today's level_prices row. Found 2026-07-27: this cron
+  // block above was the ONLY automated writer of level_prices anywhere in this codebase
+  // (confirmed via grep -- no other cron, no other INSERT/UPDATE against the table), and
+  // it only fires on SUNDAY, writing a row keyed to Sunday's own calendar date. Every
+  // Mon-Fri weekday had ZERO automated refresh -- live acd.js's `WHERE trade_date=$1`
+  // level_prices query (exact match, no fallback, ~line 4948) would return empty on any
+  // day this hadn't been run, and the level-fade candidates array would silently miss
+  // every static level (PD/PW/PM/3M/PY/camarilla/floor-pivot/WEEKLY_OPEN/etc; only
+  // real-time-computed OR/IB levels still worked). Confirmed live-impacting: caught
+  // because 2026-07-27 (today, a Monday) had zero rows until run manually mid-session --
+  // WEEKLY_OPEN/PW_VAH were 28500/29355.5 once freshly computed, meaningfully different
+  // from the stale week-old 28747.75/29884.5 the live system had been serving all
+  // morning. Deliberately a SEPARATE cron rather than widening the Sunday one's day-of-week
+  // field -- the Sunday run's own semantics (does it correctly represent the *coming*
+  // Monday's session, or literally Sunday's calendar date?) is a separate, not-yet-
+  // resolved question (see OPEN_DECISION level_prices_missing_for_current_trade_date /
+  // its Sunday-cron-date-semantics follow-up) and changing it without more certainty
+  // risks corrupting the one case that WAS working. This new block only fixes the
+  // unambiguous Mon-Fri gap, where "today's calendar date" and "today's trade_date" are
+  // the same value with no ambiguity. Runs before the 8:30 AM Morning Brief cron so any
+  // level_prices reads there also get fresh data.
+  cron.schedule('0 8 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('COMPUTE_LEVELS_WEEKDAY', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[compute_levels_weekday] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Monthly Report — 7:00 PM ET first Sunday of month
   cron.schedule('0 19 * * 0', async () => {
     try {
