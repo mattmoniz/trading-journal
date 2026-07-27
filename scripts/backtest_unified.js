@@ -453,12 +453,20 @@ const LEVEL_GATES = {
   IB_HIGH: 630, IB_LOW: 630, IB_MID_SCALP: 630, OR_MID_AFTER_IB: 630,
 };
 
+// Direction convention fixed 2026-07-27 (backtest_unified_uses_wrong_direction_formula_for_rth):
+// this used to compare only the 1 prior bar's close vs the level (`prev.close > lvl`) --
+// structurally the early-touch-backfill convention, NOT the live RTH candidate path's own
+// convention. Confirmed directly against the live system (server/routes/acd.js's `nearLevels`
+// block: `approachDir = last5[0].close < currentPrice ? FROM_BELOW : FROM_ABOVE`, 5-bar
+// momentum vs the CURRENT price, not 1-bar vs the level) -- the two conventions disagreed on
+// 27.5% (39/142) of real RTH touches, a real methodology gap, not noise. Now matches the live
+// formula exactly: 5 bars ago's close vs the current (touch) bar's close.
 function detectLevelFades(bars, levels, isMonday) {
   const STOP = isMonday ? 60 : 90, TARGET = isMonday ? 30 : 40;
   const fires = [];
   const fired = new Set();
-  for (let i = 1; i < bars.length; i++) {
-    const b = bars[i], prev = bars[i-1];
+  for (let i = 5; i < bars.length; i++) {
+    const b = bars[i];
     if (b.tod < RTH_START || b.tod >= RTH_END) continue;
     for (const [name, entry] of Object.entries(levels)) {
       if (b.tod < (LEVEL_GATES[name] ?? RTH_START)) continue; // not yet formed
@@ -469,8 +477,8 @@ function detectLevelFades(bars, levels, isMonday) {
       if (lvl == null || fired.has(name)) continue;
       const nearNow  = Math.abs(b.close - lvl) <= 15;
       if (!nearNow) continue;
-      const fromAbove = prev.close > lvl;
-      const dir = fromAbove ? 'SHORT' : 'LONG';
+      const fromAbove = !(bars[i - 5].close < b.close); // matches acd.js's approachDir/isLong exactly
+      const dir = fromAbove ? 'LONG' : 'SHORT';
       fires.push({ type: `${name}_${dir}`, direction: dir,
         entryIdx: i, entry: b.close,
         stop:   dir === 'LONG' ? b.close - stopPt : b.close + stopPt,

@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: backtest_unified_uses_wrong_direction_formula_for_rth — fixed, full backtest re-run, 60 recommendation flips
+
+Direct follow-up to `level_fade_direction_convention_needs_verification`'s side-finding. `detectLevelFades()` (`scripts/backtest_unified.js`) computed direction via 1-bar-vs-level; the live RTH candidate path (confirmed 100% correct against real data) uses 5-bar momentum instead. Verified `detectLevelFades()` is never imported by live server code (only backtest/research scripts) before touching it — confirmed safe scope, no risk to the live firing path itself.
+
+Fixed the formula to match the live convention exactly, then re-ran the full backtest for real (not dry-run): 790 `UNIFIED_BACKTEST` rows written. **60 of 162 signal_names (37%) flipped recommendation**, several with full EV sign reversals — `CAM_R4_SHORT` +$42.08 → -$11.04, `OR_HIGH_LONG` +$3.89 → -$52.64, `PM_VAL_LONG` -$40.08 → +$5.76, `WEEKLY_VWAP_LONG` +$21.22 → -$21.59, among many others. This confirms the direction-formula bug was materially significant, not a minor discrepancy — comparable in scale to the 2026-07-14 CAM_R4/CAM_S3 window-mismatch fix.
+
+Checked both known live consumers before considering this done: (1) `SETUP_STATUS`/`_suppressedSetups` (the actual live suppression gate) reads `active_setups` directly, not `UNIFIED_BACKTEST` — confirmed unaffected, no live firing/suppression behavior changed; (2) `detectGlobexSetup()`'s `globexParams()` reads `p75_mae`/`p50_mfe` for the 4 original PD overnight candidates — checked directly post-fix, all sane (32-43pt stop, 39-42pt target) — this *does* change their live stop/target sizing going forward, which is the correct, intended outcome now that the touch population is measured against the right formula.
+
+Verified: `node --check`/eslint clean, `test_invariants.mjs` shows only the pre-existing unrelated failure, server restarted, live endpoint healthy, no new errors.
+
 ## ✅ 2026-07-27: price_bars_recurring_2month_data_gaps_pattern — root-caused, NOT a code bug
 
 Direct follow-up to the 3 recurring ~61-day NQ data gaps flagged during the `price_bars_primary` materialization work. Confirmed via `price_bar_ingests`: every quarterly-contract-specific Sierra Chart export file (`NQZ4`, `NQH5`, `NQM5`, `NQZ5`, `NQM6`, and going back to `NQZ3`/`NQM4`) recorded `bars_inserted=0` — these source files were essentially empty when provided. The wider continuous-range files (`NQU4.dly`, `NQU4.scid`, etc.) only cover through whenever that particular export happened to be run, not through the next quarterly rollover.
