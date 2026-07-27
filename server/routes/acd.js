@@ -515,7 +515,7 @@ export async function resolveSetupsByPrice(io) {
       const bar6 = computeBar6Checkpoint(bars.rows, entry, stop, t1, long ? 'LONG' : 'SHORT', PNL_PER_POINT, COMMISSION);
       if (bar6) {
         await query(
-          `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3 WHERE id=$1 AND bar6_checkpoint IS NULL`,
+          `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3, updated_at=NOW() WHERE id=$1 AND bar6_checkpoint IS NULL`,
           [row.id, bar6.status, bar6.ruleSaysExit]
         ).catch(() => {});
       }
@@ -579,7 +579,7 @@ export async function resolveSetupsByPrice(io) {
           });
           if (tq) {
             await query(
-              `UPDATE active_setups SET touch_quality=$2, touch_quality_vol_z=$3 WHERE id=$1 AND touch_quality IS NULL`,
+              `UPDATE active_setups SET touch_quality=$2, touch_quality_vol_z=$3, updated_at=NOW() WHERE id=$1 AND touch_quality IS NULL`,
               [row.id, tq.bucket, Math.round(tq.maxVolZ * 100) / 100]
             );
           }
@@ -595,9 +595,18 @@ export async function resolveSetupsByPrice(io) {
       // "armed, trailing Npt" once armedAt is set). Never read back as input — see the
       // comment on the `active` SELECT above.
       if (trailWidth != null && armedAt != null) {
+        const newPeak = Math.round(peakPrice * 100) / 100;
+        const newTrail = Math.round(trailStopPrice * 100) / 100;
+        // Found 2026-07-27 (answering "how do I tell if a setup was modified"): this used
+        // to fire unconditionally every ~15s poll while a trail is armed, regardless of
+        // whether peak/trail actually moved -- if updated_at were added blindly here (as
+        // it should be, to make updated_at a real "has this row changed" signal) it would
+        // just track "last polled," not "actually ratcheted." Guarded so it's a no-op
+        // (and updated_at stays put) when nothing has genuinely moved.
         await query(
-          `UPDATE active_setups SET breakeven_armed_at=$2, runner_peak_price=$3, runner_trail_price=$4 WHERE id=$1`,
-          [row.id, armedAt, Math.round(peakPrice * 100) / 100, Math.round(trailStopPrice * 100) / 100]
+          `UPDATE active_setups SET breakeven_armed_at=$2, runner_peak_price=$3, runner_trail_price=$4, updated_at=NOW()
+           WHERE id=$1 AND (runner_peak_price IS DISTINCT FROM $3 OR runner_trail_price IS DISTINCT FROM $4 OR breakeven_armed_at IS DISTINCT FROM $2)`,
+          [row.id, armedAt, newPeak, newTrail]
         ).catch(() => {});
       }
       continue;
@@ -6742,8 +6751,12 @@ export default function createACDRouter(io) {
       }
 
       // Keep size_multiplier current — it changes with intraday conditions (streak, stacking, etc.)
+      // Guarded by IS DISTINCT FROM (2026-07-27): this fires on every ~15s poll for any
+      // open setup regardless of whether the value actually moved -- without the guard,
+      // adding updated_at=NOW() here would make it track "last polled" rather than
+      // "actually changed," defeating its use as a real modification signal.
       if (setupId && active.sizeMultiplier != null) {
-        query('UPDATE active_setups SET size_multiplier=$1 WHERE id=$2',
+        query('UPDATE active_setups SET size_multiplier=$1, updated_at=NOW() WHERE id=$2 AND size_multiplier IS DISTINCT FROM $1',
           [active.sizeMultiplier, setupId]).catch(() => {});
       }
 
