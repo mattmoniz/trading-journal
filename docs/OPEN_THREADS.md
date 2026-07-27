@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: price_bars_recurring_2month_data_gaps_pattern — root-caused, NOT a code bug
+
+Direct follow-up to the 3 recurring ~61-day NQ data gaps flagged during the `price_bars_primary` materialization work. Confirmed via `price_bar_ingests`: every quarterly-contract-specific Sierra Chart export file (`NQZ4`, `NQH5`, `NQM5`, `NQZ5`, `NQM6`, and going back to `NQZ3`/`NQM4`) recorded `bars_inserted=0` — these source files were essentially empty when provided. The wider continuous-range files (`NQU4.dly`, `NQU4.scid`, etc.) only cover through whenever that particular export happened to be run, not through the next quarterly rollover.
+
+Initial hypothesis (a stale/wrong rollover date baked into `price_bars_contract_calendar`) was checked and **ruled out**: directly confirmed the calendar — which is computed dynamically per-date from actual `price_bars` bar counts, not hand-maintained (`priceBarService.js`'s ingest-time upsert, picks whichever contract has the most bars that day) — has **zero rows at all**, for either the outgoing or incoming contract, during every one of the 3 gap windows. The calendar isn't miscomputing anything; it correctly has nothing to compute from.
+
+**Not fixable in code** — this is a genuine external data-source coverage gap, recurring every ~3 months because NQ quarterlies roll every ~3 months and the same export-gap pattern apparently repeats each time. Documented in `docs/KNOWN_ISSUES.md` (item 12) so a future session doesn't re-investigate this as a mystery bug. `OPEN_DECISION` resolved.
+
 ## ✅ 2026-07-27: backfill_mae_mfe_new_date_round_trip_bug — confirmed as a real, ACTIVE bug (not just style), fixed, 1,049 rows corrected
 
 Direct follow-up found as a side-discovery while fixing the `resolved_at` timezone bug above. `scripts/backfill_mae_mfe.mjs` has the identical missing-`::text` pattern — but analysis showed the *relative* bar-filter comparison was actually safe (both operands get the same ambient-timezone misinterpretation, preserving ordering). The real damage: `result.resolutionBarTime = bar.ts` — still a corrupted-parse `Date` object — gets written **directly** to the `resolution_bar_time` column, the exact same absolute-value-corruption mechanism as the `resolved_at` bug, just landing on a different column and never touching `resolved_at` itself. **This script is still actively scheduled** (`crontab`, `run_daily_calibration.sh`, daily 8:20 PM ET) — a live, ongoing bug, not historical residue. Fixed the script (`fired_at::text`, `ts::text`, plain text comparison).
