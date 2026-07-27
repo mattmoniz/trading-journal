@@ -3883,10 +3883,72 @@ CREATE TABLE public.price_bars_contract_calendar (
 
 
 --
+-- Name: price_bars_dedup_hist; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+--
+
+CREATE MATERIALIZED VIEW public.price_bars_dedup_hist AS
+ SELECT (array_agg(pb.id ORDER BY pb.ts))[1] AS id,
+    pb.symbol,
+    pb.contract,
+    date_trunc('minute'::text, pb.ts) AS ts,
+    ((array_agg(pb.open ORDER BY pb.ts))[1])::numeric(12,4) AS open,
+    (max(pb.high))::numeric(12,4) AS high,
+    (min(pb.low))::numeric(12,4) AS low,
+    ((array_agg(pb.close ORDER BY pb.ts DESC))[1])::numeric(12,4) AS close,
+    (sum(pb.volume))::integer AS volume,
+    (sum(pb.num_trades))::integer AS num_trades,
+    (sum(pb.bid_volume))::integer AS bid_volume,
+    (sum(pb.ask_volume))::integer AS ask_volume
+   FROM (public.price_bars pb
+     JOIN public.price_bars_contract_calendar cc ON (((cc.symbol = pb.symbol) AND (cc.trade_date = (pb.ts)::date) AND (cc.contract = pb.contract))))
+  WHERE ((pb.ts)::date < CURRENT_DATE)
+  GROUP BY pb.symbol, pb.contract, (date_trunc('minute'::text, pb.ts))
+  WITH NO DATA;
+
+
+--
 -- Name: price_bars_primary; Type: VIEW; Schema: public; Owner: -
 --
 
 CREATE VIEW public.price_bars_primary AS
+ SELECT price_bars_dedup_hist.id,
+    price_bars_dedup_hist.symbol,
+    price_bars_dedup_hist.contract,
+    price_bars_dedup_hist.ts,
+    price_bars_dedup_hist.open,
+    price_bars_dedup_hist.high,
+    price_bars_dedup_hist.low,
+    price_bars_dedup_hist.close,
+    price_bars_dedup_hist.volume,
+    price_bars_dedup_hist.num_trades,
+    price_bars_dedup_hist.bid_volume,
+    price_bars_dedup_hist.ask_volume
+   FROM public.price_bars_dedup_hist
+UNION ALL
+ SELECT (array_agg(pb.id ORDER BY pb.ts))[1] AS id,
+    pb.symbol,
+    pb.contract,
+    date_trunc('minute'::text, pb.ts) AS ts,
+    ((array_agg(pb.open ORDER BY pb.ts))[1])::numeric(12,4) AS open,
+    (max(pb.high))::numeric(12,4) AS high,
+    (min(pb.low))::numeric(12,4) AS low,
+    ((array_agg(pb.close ORDER BY pb.ts DESC))[1])::numeric(12,4) AS close,
+    (sum(pb.volume))::integer AS volume,
+    (sum(pb.num_trades))::integer AS num_trades,
+    (sum(pb.bid_volume))::integer AS bid_volume,
+    (sum(pb.ask_volume))::integer AS ask_volume
+   FROM (public.price_bars pb
+     JOIN public.price_bars_contract_calendar cc ON (((cc.symbol = pb.symbol) AND (cc.trade_date = (pb.ts)::date) AND (cc.contract = pb.contract))))
+  WHERE (pb.ts > ( SELECT COALESCE(max(price_bars_dedup_hist.ts), '1970-01-01 00:00:00'::timestamp without time zone) AS "coalesce"
+           FROM public.price_bars_dedup_hist))
+  GROUP BY pb.symbol, pb.contract, (date_trunc('minute'::text, pb.ts));
+
+
+--
+-- Name: price_bars_primary_orig_backup; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.price_bars_primary_orig_backup AS
  SELECT (array_agg(pb.id ORDER BY pb.ts))[1] AS id,
     pb.symbol,
     pb.contract,
@@ -7035,6 +7097,20 @@ CREATE INDEX idx_pattern_disc_status ON public.pattern_discoveries USING btree (
 --
 
 CREATE INDEX idx_pattern_disc_window_type ON public.pattern_discoveries USING btree (window_type);
+
+
+--
+-- Name: idx_pbdh_symbol_contract_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_pbdh_symbol_contract_ts ON public.price_bars_dedup_hist USING btree (symbol, contract, ts);
+
+
+--
+-- Name: idx_pbdh_symbol_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_pbdh_symbol_ts ON public.price_bars_dedup_hist USING btree (symbol, ts);
 
 
 --

@@ -8,6 +8,11 @@
 cd /home/mmoniz/trading-journal
 echo "=== Daily calibration: $(date) ==="
 
+# Refresh the materialized historical bar store (2026-07-27, price_bars_primary_materialize_historical_bars)
+# first, so today's now-closed session becomes part of the fast indexed path before the
+# calibration scripts below query it. ~8s, non-blocking (CONCURRENTLY).
+/usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
+
 /usr/bin/node scripts/backfill_mae_mfe.mjs
 /usr/bin/node scripts/update_optimal_stops.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs

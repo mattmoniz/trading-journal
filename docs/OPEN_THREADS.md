@@ -1,5 +1,19 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: price_bars_primary materialized — the structural fix, not just the tactical one
+
+Direct follow-up to the tactical audit below, per explicit user direction to build the structural half now. Full technical writeup lives in ARCHITECTURE.md's `price_bars_primary` section — this entry is the narrative.
+
+Built a real, indexed Postgres **materialized view** (`price_bars_dedup_hist`, everything before today) backing a thin `price_bars_primary` (`UNION ALL` of the mat view + a live join over only today's still-forming data). Zero code changes needed anywhere — every existing consumer keeps querying `price_bars_primary` by the same name. The live branch's lower bound self-derives from the mat view's own `MAX(ts)`, so it never depends on exactly when the nightly refresh last ran.
+
+**Verification caught two real things, not just confirmed a clean build**: (1) an early "mismatch" between the new and original view turned out to be two separate queries landing on either side of a real new bar arriving mid-verification (this data is genuinely live, market was open) — fixed by comparing both in a single combined SQL statement instead of two sequential ones; (2) a genuine off-by-one (`>=` instead of `>` for the live branch's lower bound) that double-counted the boundary minute, caught because the mismatch was systematically +1 every time, not randomly sized — the kind of signal this codebase's own "too clean/too consistent" audit discipline exists to catch. Fixed, then verified byte-identical fingerprints across full history.
+
+**Real, measured win**: the exact "forgot the upper bound" query pattern from the entry below (900ms-1.2s) now runs in ~80ms (11-15x) with zero explicit bound added — this is what the tactical per-query audit couldn't provide, since it only protects callers who remember to add a bound themselves.
+
+Wired: nightly refresh (`scripts/refresh_price_bars_dedup_hist.mjs`, `REFRESH MATERIALIZED VIEW CONCURRENTLY`, ~8s) added as the first step of `run_daily_calibration.sh`. `schema.sql` regenerated (clean, additive-only 76-line diff). `test_invariants.mjs`/lint/build clean, server restarted, live endpoints checked, no new errors. `OPEN_DECISION` resolved.
+
+**One unrelated finding surfaced during verification, flagged separately, not fixed**: `data_sanity_audit.mjs`'s multi-day gap check flagged 3 suspiciously regular ~61-day NQ data gaps (Sep-Nov 2024, Dec 2024-Feb 2025, Mar-May 2025) — confirmed NOT caused by this change (row counts identical in old view, new view, and raw `price_bars` for that window) but worth its own investigation given the regular ~3-month spacing. `price_bars_recurring_2month_data_gaps_pattern` `OPEN_DECISION` flagged.
+
 ## ✅ 2026-07-27: price_bars_primary unbounded-query audit — hot path is fully clean, no fixes needed
 
 Direct follow-up to priority #4 in the 2026-07-27 session handoff (`price_bars_primary_unbounded_query_audit`). The prior finding's "~200 files, ~23 with a ts>=-only pattern" was explicitly a rough scope indicator, not a real audit — did the real audit.
@@ -66,7 +80,7 @@ Full detail for every item below lives in its `OPEN_DECISION` row (`node scripts
 
 **3. RESOLVED (was MEDIUM) — `pm_poc_rth_inclusion_stale_exclusion_found`.** Re-verified same session — see the new entry at the top of this file. Real `sweepOptimalStopAndTarget()` sweep + an independent Gemini re-derivation both found `PM_POC_FADE_SHORT` real but thin/fragile/chronologically unstable (not a confirmed edge) and `PM_POC_FADE_LONG` a confirmed non-edge. Re-added to `keepLevelsAll` but seeded conservatively (`SHORT=THIN_N`, `LONG=SUPPRESS`) rather than promoted to ACTIVE — both now accumulate real SHADOW data via the standard weekly pipeline. Nothing further needed unless the watch list below flags a recovery.
 
-**4. RESOLVED (was MEDIUM, tactical half) — `price_bars_primary_unbounded_query_audit`.** Audited same session — see the new entry at the top of this file. Live/hot-path (all of `server/routes`+`server/services`) is fully clean; the ~25 remaining candidates are all one-off, non-scheduled scripts. **Still MEDIUM, unstarted — `price_bars_primary_materialize_historical_bars`** (the structural half: materialize immutable historical bars into a real indexed table, only today's window stays on the expensive live join). Concrete plan already written (see the `price_bars_primary` section of ARCHITECTURE.md) — this is a genuine schema/ingest-pipeline decision (no tracked migration system in this codebase) and still needs an explicit go-ahead before building, not further scoping.
+**4. RESOLVED (both halves) — `price_bars_primary_unbounded_query_audit` and `price_bars_primary_materialize_historical_bars`.** Tactical audit found the live/hot-path fully clean; the structural fix (real indexed materialized view backing `price_bars_primary`, zero code changes needed anywhere) was built the same session per explicit user direction — see the two new entries at the top of this file for the full account, including a real off-by-one bug caught by the verification process itself.
 
 **5. MEDIUM — check the CORRECTED-TARGET-BUT-SUPPRESSED watch list** (printed at every session start, not its own `OPEN_DECISION` — it self-monitors) for any of the 20 setups crossing the N≥15 real-trade recovery floor since last checked. Zero-effort, mechanical check, no new research needed.
 
