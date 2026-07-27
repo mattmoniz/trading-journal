@@ -7048,7 +7048,7 @@ export default function createACDRouter(io) {
       // recipe was NOT clean for Globex in backtest, don't apply it there. VWAP (computeVWAP,
       // imported from backtest_confluence.js, not reimplemented) is now included as a
       // candidate level -- previously excluded, since it isn't in level_prices.
-      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null };
+      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null, manageGuidance: null };
       try {
         const svBarsQ = await query(`
           SELECT ts, close::float, high::float, low::float, open::float,
@@ -7186,6 +7186,15 @@ export default function createACDRouter(io) {
                 calibratedStop: isGlobexNow ? null : +(nextLevelBeyondDist ?? 40).toFixed(1),
                 calibratedStopType: isGlobexNow ? null : (nextLevelBeyondDist != null ? 'LEVEL_NEXT' : 'FIXED_FALLBACK'),
                 calibratedTarget: isGlobexNow ? null : 40,
+                // Informational only, not a specific calibrated number -- RESEARCH_CLAIM
+                // breakeven_trail_early_arm_timing_effect_not_volume_content found that
+                // arming a breakeven-then-trail exit early (~bar 7) roughly doubled backtest
+                // EV vs waiting for the 40pt target, but the effect is a TIMING effect (a
+                // blind early-arm control captured ~96% of the improvement) not genuinely
+                // about volume content -- and the specific dollar figure only cleared a thin
+                // (~9-event) replication check, so it's not asserted as a confirmed number
+                // here, only the qualitative direction.
+                manageGuidance: isGlobexNow ? null : 'Backtest suggests switching to a trailing stop well before the 40pt target is reached, not after -- exact timing not yet confirmed.',
               };
               const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
               query(`

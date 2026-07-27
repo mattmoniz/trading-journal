@@ -554,6 +554,11 @@ function EdgeSectionsPanel() {
       {stackVolSignal?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(249,115,22,0.15)', border: '2px solid #f97316', borderRadius: 8, color: '#f97316', fontWeight: 700, fontSize: 13, animation: 'pulse 1.2s ease-in-out infinite' }}>
           ⚡ STACK BREAK + VOLUME — {stackVolSignal.direction} confirmed, {stackVolSignal.sigma}σ volume ({Math.round(stackVolSignal.oneSidedRatio * 100)}% one-sided){stackVolSignal.paceZ != null ? ` · pace ${stackVolSignal.paceZ}σ, ${stackVolSignal.consecutiveCount}/5 same-direction` : ''}{stackVolSignal.levelDensity > 0 ? ` · under ${stackVolSignal.levelDensity} levels within 40pt (${stackVolSignal.levels.join(', ')})` : ''}{stackVolSignal.calibratedStop != null ? ` · calibrated stop ${stackVolSignal.calibratedStop}pt (${stackVolSignal.calibratedStopType === 'LEVEL_NEXT' ? 'next level out' : 'fixed fallback'}) / target ${stackVolSignal.calibratedTarget}pt` : ''} · rigor-clean but not yet live-confirmed · informational only, not a trade signal
+          {stackVolSignal.manageGuidance && (
+            <div style={{ marginTop: 6, fontSize: 12, fontWeight: 500, color: '#fdba74' }}>
+              💡 {stackVolSignal.manageGuidance}
+            </div>
+          )}
         </div>
       )}
       {/* Overnight Structural Context — moved to right column top */}
