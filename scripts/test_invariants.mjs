@@ -50,6 +50,17 @@
  *    added -- if left in place, it would keep hiding that type forever even after a
  *    PROMOTE recommendation, since nothing else ever prunes a hardcoded Set. Pruned this
  *    list from 27 to 5 entries 2026-07-17 after finding 22 were already stale.
+ *
+ * 7. No dead-end active_setups rows (added 2026-07-27)
+ *    A generic, standing tripwire for the whole bug class found this session: 3 separate
+ *    INSERT paths (suppressed-near-level audit, CASCADE_BREAKER logging,
+ *    minuteBarSignalDetector.js's momentum poller) silently produced rows with no way to
+ *    ever reach a real resolved outcome -- caught only because the user asked a pointed
+ *    question about one week's numbers, not by anything automated. This check doesn't
+ *    depend on knowing which code path is at fault: (a) FAILs if any real row from the last
+ *    30 days has no entry/stop/target at all (structurally unresolvable), (b) WARNs on any
+ *    resolved-but-actual_pnl-null row not already explained by a known, deliberately-deferred
+ *    gap (SESSION_CLOSED, PRE_ENTRY invalidation).
  */
 
 import pg from 'pg';
@@ -428,6 +439,61 @@ async function main() {
       } else {
         for (const t of stale) {
           fail(`UNCALIBRATED_SHADOW_TYPES has '${t}' but it now has a real SETUP_STATUS row (recommendation=${calibrated.get(t)}) — remove it from server/config/setupTypes.js's UNCALIBRATED_SHADOW_TYPES; the live getShadowSetupTypes() query already covers it correctly`);
+        }
+      }
+    }
+
+    // 7. No dead-end active_setups rows
+    //    Added 2026-07-27 after finding 3 separate INSERT paths (the suppressed-near-level
+    //    audit, CASCADE_BREAKER logging, minuteBarSignalDetector.js's momentum poller) that
+    //    silently produced rows with no way to ever reach a real resolved outcome -- caught
+    //    only because the user asked a pointed question about a specific week's numbers, not
+    //    by anything automated. This check is the actual fix: a standing, generic tripwire
+    //    for this whole bug class, not just a one-time audit of the 3 paths found so far.
+    //    Any FUTURE insert path that forgets entry/stop/target/expires_at trips part (a);
+    //    any resolution path that forgets to compute actual_pnl trips part (b) -- neither
+    //    depends on knowing which specific code path caused it.
+    console.log('\n[7] No dead-end active_setups rows (structural + resolved-but-no-outcome)');
+    {
+      // (a) Real (ACTIVE/SHADOW-origin) rows from the last 30 days missing entry/stop/target
+      // entirely -- structurally can never be walked by resolveSetupsByPrice(), guaranteed to
+      // eventually dead-end via the NO_EXPIRY_SET backstop with no actual_pnl. This is the
+      // exact shape of all 3 bugs just fixed -- a FAIL here means a new instance exists.
+      const { rows: structural } = await client.query(`
+        SELECT setup_type, suppression_reason, COUNT(*) as n
+        FROM active_setups
+        WHERE origin_status IN ('ACTIVE','SHADOW') AND trade_date >= CURRENT_DATE - 30
+          AND entry_zone_low IS NULL AND stop_level IS NULL AND t1_level IS NULL
+        GROUP BY 1, 2 ORDER BY 3 DESC
+      `);
+      if (structural.length === 0) {
+        ok('no real rows in the last 30 days are missing entry/stop/target entirely');
+      } else {
+        for (const r of structural) {
+          fail(`${r.setup_type} (suppression_reason=${r.suppression_reason ?? 'null'}): ${r.n} row(s) in the last 30 days with no entry/stop/target at all -- can never resolve, will dead-end via NO_EXPIRY_SET with no actual_pnl. Find and fix the INSERT path that produced these.`);
+        }
+      }
+
+      // (b) Real rows that DID resolve but have no actual_pnl -- excludes the two categories
+      // already known and deliberately deferred (documented in CLAUDE.md/OPEN_THREADS.md):
+      // INVALIDATED+PRE_ENTRY (no real entry occurred, correctly null by design) and
+      // SESSION_CLOSED (OPEN_DECISION invalidated_session_closed_setups_never_get_actual_pnl,
+      // not yet fixed, tracked separately). Anything ELSE in this bucket is a NEW pattern to
+      // investigate, not yet explained by a known, already-flagged gap.
+      const { rows: resolvedDead } = await client.query(`
+        SELECT resolution, resolution_method, COUNT(*) as n, MIN(trade_date)::text as oldest, MAX(trade_date)::text as newest
+        FROM active_setups
+        WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution IS NOT NULL AND actual_pnl IS NULL
+          AND trade_date >= CURRENT_DATE - 30
+          AND NOT (resolution = 'INVALIDATED' AND invalidation_timing = 'PRE_ENTRY')
+          AND resolution != 'SESSION_CLOSED'
+        GROUP BY 1, 2 ORDER BY 3 DESC
+      `);
+      if (resolvedDead.length === 0) {
+        ok('no unexplained resolved-but-no-actual_pnl rows in the last 30 days (beyond the known SESSION_CLOSED/PRE_ENTRY gaps)');
+      } else {
+        for (const r of resolvedDead) {
+          warn(`${r.n} row(s) resolved=${r.resolution} resolution_method=${r.resolution_method ?? 'null'} with actual_pnl=NULL (${r.oldest} to ${r.newest}) -- not one of the already-known/deferred categories (SESSION_CLOSED, PRE_ENTRY invalidation). If resolution_method is null and predates 2026-07-20, this may be historical debris from before the TIME_EXPIRED mark-to-market fix, never backfilled -- otherwise investigate as a new gap.`);
         }
       }
     }
