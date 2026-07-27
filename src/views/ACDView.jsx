@@ -483,7 +483,7 @@ function EdgeSectionsPanel() {
   if (err && !data) return <div style={{ fontSize: 12, color: '#ef4444' }}>Edge data error: {err}</div>;
   if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading edge data...</div>;
 
-  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker, bigMoveSignal, sigmaContinuation } = data;
+  const { liveStatus, setups, windows, overnightContext, sessionPermissions, cascadeBreaker, bigMoveSignal, sigmaContinuation, stackVolSignal } = data;
   const last30 = windows?.last30, last90 = windows?.last90, allTime = windows?.allTime;
   const inv = overnightContext?.overnight_inventory;
   const ovp = overnightContext?.open_vs_prior_value;
@@ -540,6 +540,20 @@ function EdgeSectionsPanel() {
       {sigmaContinuation?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.12)', border: '2px solid #ef4444', borderRadius: 8, color: '#ef4444', fontWeight: 700, fontSize: 13 }}>
           📉 SIGMA CONTINUATION — down move of {sigmaContinuation.sigma}σ detected{sigmaContinuation.expectedExtraPts != null ? ` · historically ~${sigmaContinuation.expectedExtraPts}pt more downside than a random point in time (60min horizon)` : ' · magnitude beyond calibrated range, no specific figure available'} · informational only, not a trade signal
+        </div>
+      )}
+      {/* Stack-break + volume/delta confirmation — RESEARCH_CLAIM
+          stack_break_volume_confirmation_promising_not_confirmed. Deliberately the most
+          visually urgent of the three informational badges (animated pulse + brighter
+          border) because it's the only one of the three that can fire at the START of a
+          move (needs one bar, not 60min of realized move or 250pt already covered) — the
+          whole point per the user's explicit "catch it intuitively, instantly" directive
+          2026-07-27. levelDensity/levels are informational context (how many levels this
+          sat under within 40pt) — NOT yet a separately validated factor, only the
+          direction/sigma/oneSidedRatio combination has been backtested. */}
+      {stackVolSignal?.active && (
+        <div style={{ padding: '10px 14px', background: 'rgba(249,115,22,0.15)', border: '2px solid #f97316', borderRadius: 8, color: '#f97316', fontWeight: 700, fontSize: 13, animation: 'pulse 1.2s ease-in-out infinite' }}>
+          ⚡ STACK BREAK + VOLUME — {stackVolSignal.direction} confirmed, {stackVolSignal.sigma}σ volume ({Math.round(stackVolSignal.oneSidedRatio * 100)}% one-sided){stackVolSignal.levelDensity > 0 ? ` · under ${stackVolSignal.levelDensity} levels within 40pt (${stackVolSignal.levels.join(', ')})` : ''} · backtested RTH +$8.86/trade (N=552) / Globex +$4.23/trade (N=426), rigor-clean but not yet live-confirmed · informational only, not a trade signal
         </div>
       )}
       {/* Overnight Structural Context — moved to right column top */}

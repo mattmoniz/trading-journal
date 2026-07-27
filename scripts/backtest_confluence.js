@@ -97,7 +97,7 @@ function proportionZTest(a, b) {
 // Data loading
 // ─────────────────────────────────────────────────────────────────
 
-async function getTradingDays() {
+export async function getTradingDays() {
   // Days that have level_prices data AND RTH bar data
   const r = await query(`
     SELECT lp.trade_date::text as trade_date
@@ -116,7 +116,7 @@ async function getTradingDays() {
   return r.rows.map(r => r.trade_date).sort();
 }
 
-async function getLevelPrices(tradeDate) {
+export async function getLevelPrices(tradeDate) {
   // Returns { LEVEL_NAME: price, ... } for all levels on this date.
   // Written by compute_levels.js — adding a new level there makes it
   // appear here automatically.
@@ -129,7 +129,7 @@ async function getLevelPrices(tradeDate) {
   return map;
 }
 
-async function getRTHBars(tradeDate) {
+export async function getRTHBars(tradeDate) {
   // symbol='NQ' filter is required -- price_bars_primary has documented ES contamination
   // 2023-11-15 to 2023-12-15 (data_sanity_audit.mjs's standing flag). Without this filter,
   // dates in that window mix ES bars (~$4,500 in that period) with NQ bars (~$18,000+),
@@ -153,7 +153,7 @@ async function getRTHBars(tradeDate) {
 // ─────────────────────────────────────────────────────────────────
 // Developing POC from volume profile (mode of price buckets)
 // ─────────────────────────────────────────────────────────────────
-function computeDevelopingPOC(bars, upToIdx) {
+export function computeDevelopingPOC(bars, upToIdx) {
   // Build volume profile from bars[0..upToIdx] using 1-point buckets
   const profile = new Map();
   for (let i = 0; i <= upToIdx; i++) {
@@ -178,7 +178,7 @@ function computeDevelopingPOC(bars, upToIdx) {
 // ─────────────────────────────────────────────────────────────────
 // Developing VWAP
 // ─────────────────────────────────────────────────────────────────
-function computeVWAP(bars, upToIdx) {
+export function computeVWAP(bars, upToIdx) {
   let cumVP = 0, cumVol = 0;
   for (let i = 0; i <= upToIdx; i++) {
     const b = bars[i];

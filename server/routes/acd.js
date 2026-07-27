@@ -6994,6 +6994,126 @@ export default function createACDRouter(io) {
         }
       } catch (_) { /* informational only, never block the response */ }
 
+      // Real-time level-stack break + volume/delta confirmation signal — informational
+      // only, does NOT gate/suppress any setup. Added 2026-07-27, RESEARCH_CLAIM
+      // stack_break_volume_confirmation_promising_not_confirmed. Direct answer to the
+      // user watching a live flush: neither bigMoveSignal (needs 250pt already covered)
+      // nor sigmaContinuation (needs a full 60min of realized move) can fire near the
+      // START of a move -- this one can, since it only needs ONE bar. Backtest found 3
+      // genuinely rigor-clean (day-clustering + chronological-stability) configs, not
+      // just the single best cell in a big swept grid:
+      //   RTH:    volZ>=2,   OSR>=0.55  N=552 EV=+$8.86/trade
+      //   Globex: volZ>=1.5, OSR>=0.65  N=426 EV=+$4.23/trade
+      // "Stack break" = price closes through every level in a >=2-level cluster (levels
+      // within PROXIMITY of each other) after having clearly been on the other side
+      // within the last 30 bars -- same definition as scratch/pilot_breakdown_continuation.mjs's
+      // processBars(), reimplemented compactly here for the live single-current-bar case
+      // rather than importing the backtest script into the live route.
+      // Also reports levelDensity (count of ALL levels within a wider 40pt band, not just
+      // the strictly-adjacent-clustered ones) per the user's direct observation that
+      // today's real qualifying moment (10:01 ET) sat under 5 levels within 40pt even
+      // though the strict 15pt clustering only grouped 2 of them -- level DENSITY at the
+      // break is surfaced as context on the badge, not (yet) a separately validated
+      // factor of its own; do not treat it as calibrated until it's actually backtested.
+      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [] };
+      try {
+        const svBarsQ = await query(`
+          SELECT ts, close::float, high::float, low::float,
+                 EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
+                 bid_volume::int, ask_volume::int,
+                 EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '3 hours'
+          ORDER BY ts ASC
+        `);
+        const svBars = svBarsQ.rows;
+        if (svBars.length > 31) {
+          const i = svBars.length - 1;
+          const bar = svBars[i];
+          const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
+          const volZCutoff = isGlobexNow ? 1.5 : 2;
+          const osrCutoff = isGlobexNow ? 0.65 : 0.55;
+
+          // Levels: same daily-cached level_prices batch as the rest of this handler,
+          // plus real-time OR/IB (not from level_prices, which may lag same-day formation).
+          const svLevelsRaw = getCached(todayET, 'stackVolLevels', DAY_CACHE_TTL) || await (async () => {
+            const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL`, [todayET]);
+            const map = {};
+            for (const r of lpQ.rows) map[r.level_name] = r.price;
+            return setCached(todayET, 'stackVolLevels', map);
+          })();
+          const svLevels = { ...svLevelsRaw };
+          if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
+          if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
+
+          const levelsArr = Object.entries(svLevels).filter(([, p]) => p != null && isFinite(p)).map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
+          const clusters = [];
+          let cur = levelsArr.length ? [levelsArr[0]] : [];
+          for (let j = 1; j < levelsArr.length; j++) {
+            if (levelsArr[j].price - levelsArr[j - 1].price <= 15) cur.push(levelsArr[j]);
+            else { clusters.push(cur); cur = [levelsArr[j]]; }
+          }
+          if (cur.length) clusters.push(cur);
+
+          const totalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
+          const svBaseline = await getTouchQualityBaseline(todayET);
+          const bl = svBaseline.get(Number(bar.tod));
+          const volZ = (bl && bl.std_vol > 0) ? (totalVol - bl.avg_vol) / bl.std_vol : 0;
+
+          for (const cluster of clusters) {
+            if (cluster.length < 2) continue;
+            const clusterMin = cluster[0].price, clusterMax = cluster[cluster.length - 1].price;
+            let direction = null;
+            // Gap guard: a bar whose OWN gap (distance from its predecessor) exceeds ~5min
+            // (the measured real small-gap ceiling in this codebase's own RTH/Globex data,
+            // see the barsAdjacent() precedent in pilot_level_agnostic_touch_battle_quality.mjs)
+            // means everything before it is on the OTHER side of a real discontinuity (most
+            // commonly the daily 5-6PM ET maintenance halt, which this 3-hour lookback window
+            // can span) -- stop the backward scan there rather than comparing pre/post-gap
+            // price as if it were one continuous sequence.
+            if (bar.close < clusterMin) {
+              let foundAbove = false, validBreak = true;
+              for (let k = 1; k <= 30; k++) {
+                const pb = svBars[i - k]; if (!pb) break;
+                if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+                if (pb.close >= clusterMax) { foundAbove = true; break; }
+                if (pb.close < clusterMin) { validBreak = false; break; }
+              }
+              if (foundAbove && validBreak) direction = 'SHORT';
+            } else if (bar.close > clusterMax) {
+              let foundBelow = false, validBreak = true;
+              for (let k = 1; k <= 30; k++) {
+                const pb = svBars[i - k]; if (!pb) break;
+                if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+                if (pb.close <= clusterMin) { foundBelow = true; break; }
+                if (pb.close > clusterMax) { validBreak = false; break; }
+              }
+              if (foundBelow && validBreak) direction = 'LONG';
+            }
+            if (!direction) continue;
+
+            const favorableVol = direction === 'LONG' ? (bar.ask_volume || 0) : (bar.bid_volume || 0);
+            const adverseVol = direction === 'LONG' ? (bar.bid_volume || 0) : (bar.ask_volume || 0);
+            const oneSidedRatio = (favorableVol + adverseVol) > 0 ? favorableVol / (favorableVol + adverseVol) : 0.5;
+
+            if (volZ >= volZCutoff && oneSidedRatio >= osrCutoff) {
+              const levelDensity = levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).length;
+              stackVolSignal = {
+                active: true, direction, sigma: +volZ.toFixed(2), oneSidedRatio: +oneSidedRatio.toFixed(2),
+                levelDensity, levels: levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).map(l => l.name),
+              };
+              const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
+              query(`
+                INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+                VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
+                ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, triggeredAt: new Date().toISOString() })]).catch(() => {});
+              break;
+            }
+          }
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
       res.json({
         setup: {
           ...active,
@@ -7008,6 +7128,7 @@ export default function createACDRouter(io) {
         cascadeBreaker,
         bigMoveSignal,
         sigmaContinuation,
+        stackVolSignal,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };
