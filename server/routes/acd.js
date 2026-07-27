@@ -5695,19 +5695,52 @@ export default function createACDRouter(io) {
             };
             } // end suppression check
             else {
-              // Suppressed near-level audit: write SHADOW row so user can verify suppression decisions
+              // Suppressed near-level audit: write SHADOW row so user can verify suppression decisions.
+              // FIXED 2026-07-27 (found via a direct user question about last week's shadow P&L):
+              // this used to write ONLY setup_type/fired_at/price_at_detection -- no entry/stop/
+              // target/expires_at at all -- so these rows could NEVER resolve via resolveSetupsByPrice()
+              // (nothing to walk against) and NEVER counted toward backtest_setup_status.mjs's N
+              // (which requires resolution IN ('TARGET_HIT','STOP_HIT')). Confirmed live: 64 of these
+              // fired in a single week with zero path to ever produce a real P&L or grow the gating
+              // sample size -- a full dead end by this codebase's own standing rule, not just a
+              // missing-stat cosmetic gap. Now computes the exact same entry/stop/target a live
+              // (non-suppressed) candidate would have gotten (same liveStats._opt[type] lookup,
+              // same STOP/TARGET fallback), so these rows resolve normally and their outcome
+              // actually answers "was this suppression decision correct" in dollar terms.
               const suppressReason = liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
                 : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+              const auditOptStop = liveStats._opt?.[type];
+              const auditStopPts = auditOptStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
+              const auditTargetPts = auditOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
+              const auditStopLevel = isLong ? currentPrice - auditStopPts : currentPrice + auditStopPts;
+              const auditT1Level = isLong ? currentPrice + auditTargetPts : currentPrice - auditTargetPts;
+              // Self-contained expiry calc (4PM ET RTH close, rolled to next day if already past) --
+              // deliberately NOT calling the shared computeExpiry()/fmtETStr() helpers further down
+              // in this same function: both are `const` closures defined later in this handler's
+              // execution order, so they're not yet in scope at this earlier point (would throw a
+              // temporal-dead-zone ReferenceError). Mirrors their exact non-special-cased logic.
+              const auditEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const auditSessionEnd = new Date(auditEtNow);
+              auditSessionEnd.setHours(16, 0, 0, 0);
+              if (auditSessionEnd <= auditEtNow) auditSessionEnd.setDate(auditSessionEnd.getDate() + 1);
+              const auditExpiresAt = `${auditSessionEnd.getFullYear()}-${String(auditSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(auditSessionEnd.getDate()).padStart(2, '0')} ${String(auditSessionEnd.getHours()).padStart(2, '0')}:${String(auditSessionEnd.getMinutes()).padStart(2, '0')}:00`;
               await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason, confluence_score_at_detection, confluence_levels_at_detection)
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6)
+                INSERT INTO active_setups (
+                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
+                  suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
+                  entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at
+                )
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11)
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
                 nearLevels.length,
                 nearLevels.length ? nearLevels.map(l => l.name) : null,
+                currentPrice, auditStopLevel, auditT1Level,
+                `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
+                auditExpiresAt,
               ]).catch(() => {});
             }
           }
