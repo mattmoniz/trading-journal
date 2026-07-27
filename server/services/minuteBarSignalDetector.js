@@ -144,15 +144,31 @@ export async function detectMomentum60Trend(io) {
       // bar backtest_setup_status.mjs applies everywhere else. Shadow rows still resolve
       // (TARGET_HIT/STOP_HIT) via the same generic resolver, so live data accumulates either way.
       const live = await getLiveStatus();
+      // Found 2026-07-27 (comprehensive dead-end audit, dispatched after the SUPPRESSED_FADE
+      // fix): this INSERT populated entry/stop/target correctly but omitted expires_at
+      // entirely. If the trade runs to end-of-day without hitting stop/target, it has no
+      // expires_at to trigger the normal TIME_EXPIRED mark-to-market path in
+      // expireStaleSetups() -- a SHADOW row falls through to the NO_EXPIRY_SET backstop
+      // (no actual_pnl computed, same dead end as SUPPRESSED_FADE), and an ACTIVE row would
+      // become a PERMANENT ORPHAN (NO_EXPIRY_SET's own query is scoped to status='SHADOW'
+      // only, so an ACTIVE row with no expiry is never force-closed by anything). Zero real
+      // rows exist yet (this poller has never actually fired), so no historical damage --
+      // fixed before it can produce any. Expiry = fired-time + HORIZON_MIN (this signal's
+      // own designed holding window), capped at RTH close same as every other expiry in
+      // this codebase.
+      const expiryCandidate = new Date(nowET.getTime() + HORIZON_MIN * 60000);
+      const rthClose = new Date(nowET); rthClose.setHours(16, 0, 0, 0);
+      const expiryDate = expiryCandidate < rthClose ? expiryCandidate : rthClose;
+      const expiresAt = `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')} ${String(expiryDate.getHours()).padStart(2, '0')}:${String(expiryDate.getMinutes()).padStart(2, '0')}:00`;
       const ins = await query(`
         INSERT INTO active_setups (
-          trade_date, setup_type, fired_at, status, origin_status,
+          trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, suppression_reason
-        ) VALUES ($1,$2,NOW(),$7,$7,$3,$3,$4,$5,$6,$3,$8)
+        ) VALUES ($1,$2,NOW(),$9,$7,$7,$3,$3,$4,$5,$6,$3,$8)
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
-      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason]);
+      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason, expiresAt]);
 
       // Every other insert path in acd.js drops a copy into trade_timeline_events — matching
       // that here so this setup type shows up in the timeline the same as any other, once it's

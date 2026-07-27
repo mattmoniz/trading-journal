@@ -5420,13 +5420,42 @@ export default function createACDRouter(io) {
           const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
 
           // Cascade breaker: skip new fade setup detection when trend regime detected.
+          // FIXED 2026-07-27 (comprehensive dead-end audit, same session as the
+          // SUPPRESSED_FADE fix): this used to insert setup_type=lv.name directly (a bare
+          // level name with no direction suffix, inconsistent with every other insert's
+          // convention) and no entry/stop/target/expires_at at all -- structurally
+          // identical dead end (0 rows ever recorded, so no historical damage, but
+          // guaranteed to fail the same way whenever the cascade breaker next fires).
+          // Now mirrors the suppressed-near-level-audit fix exactly: resolves a real
+          // direction+type per level and computes the same entry/stop/target a live
+          // candidate at that level would have gotten.
           if (cascadeBreaker.active && nearLevels.length > 0) {
+            const cbIsLong = approachDir === 'FROM_ABOVE';
+            const cbDir = cbIsLong ? 'LONG' : 'SHORT';
             for (const lv of nearLevels) {
+              const cbType = resolveSetupType(`${lv.name}_${cbDir}`, lv);
+              const cbOptStop = liveStats._opt?.[cbType];
+              const cbStopPts = cbOptStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
+              const cbTargetPts = cbOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
+              const cbStopLevel = cbIsLong ? currentPrice - cbStopPts : currentPrice + cbStopPts;
+              const cbT1Level = cbIsLong ? currentPrice + cbTargetPts : currentPrice - cbTargetPts;
+              const cbEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+              const cbSessionEnd = new Date(cbEtNow);
+              cbSessionEnd.setHours(16, 0, 0, 0);
+              if (cbSessionEnd <= cbEtNow) cbSessionEnd.setDate(cbSessionEnd.getDate() + 1);
+              const cbExpiresAt = `${cbSessionEnd.getFullYear()}-${String(cbSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(cbSessionEnd.getDate()).padStart(2, '0')} ${String(cbSessionEnd.getHours()).padStart(2, '0')}:${String(cbSessionEnd.getMinutes()).padStart(2, '0')}:00`;
               await query(`
-                INSERT INTO active_setups (trade_date, setup_type, fired_at, price_at_detection, status, origin_status, suppression_reason)
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER')
+                INSERT INTO active_setups (
+                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
+                  suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at
+                )
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7)
                 ON CONFLICT DO NOTHING
-              `, [todayET, lv.name, currentPrice]).catch(() => {});
+              `, [
+                todayET, cbType, currentPrice, cbStopLevel, cbT1Level,
+                `T1: ${cbTargetPts}pt · Stop: ${cbStopPts}pt (cascade breaker audit)`,
+                cbExpiresAt,
+              ]).catch(() => {});
             }
           }
           if (!cascadeBreaker.active && nearLevels.length > 0) {
