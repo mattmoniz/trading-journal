@@ -7194,7 +7194,7 @@ export default function createACDRouter(io) {
                 // about volume content -- and the specific dollar figure only cleared a thin
                 // (~9-event) replication check, so it's not asserted as a confirmed number
                 // here, only the qualitative direction.
-                manageGuidance: isGlobexNow ? null : 'Backtest suggests switching to a trailing stop well before the 40pt target is reached, not after -- exact timing not yet confirmed.',
+                manageGuidance: isGlobexNow ? null : 'Backtest suggests switching to a trailing stop well before the 40pt target is reached, not after -- exact timing not yet confirmed. These trades can take well over 30min to fully resolve; don\'t judge on a short clock.',
               };
               const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
               query(`
