@@ -27,6 +27,7 @@ import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
+import { computeVWAP } from '../../scripts/backtest_confluence.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,6 +110,28 @@ async function getTouchQualityBaseline(tradeDate) {
   if (cached) return cached;
   const baseline = await getVolumeBaseline(query, tradeDate);
   return setCached(tradeDate, 'touchQualityBaseline', baseline);
+}
+
+// Rolling 20-day, per-minute-of-day baseline for trailing-5-bar net price movement
+// ("pace") — same convention as getVolumeBaseline, just on |close - close_5| instead of
+// volume. Backs the STACK_VOL_BREAK_LIVE pace factor (RESEARCH_CLAIM
+// loose_confluence_pace_rth_promising_not_confirmed) — reused directly from
+// scratch/pilot_loose_confluence_pace.mjs's getPaceBaseline(), not reimplemented.
+async function getPaceBaseline(tradeDate) {
+  const cached = getCached(tradeDate, 'paceBaseline', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const res = await query(`
+    WITH raw_bars AS (
+      SELECT ts, (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod, close,
+        LAG(close, 5) OVER (PARTITION BY ts::date ORDER BY ts) as close_5
+      FROM price_bars_primary
+      WHERE ts::date >= $1::date - INTERVAL '20 days' AND ts::date < $1::date AND symbol = 'NQ'
+    )
+    SELECT mod, AVG(ABS(close - close_5))::float as avg_pace, STDDEV(ABS(close - close_5))::float as std_pace
+    FROM raw_bars WHERE close_5 IS NOT NULL GROUP BY 1
+  `, [tradeDate]);
+  const baseline = new Map(res.rows.map(r => [r.mod, r]));
+  return setCached(tradeDate, 'paceBaseline', baseline);
 }
 
 let structuralBackfillJob = { status: 'idle', done: 0, total: 0, eventsAdded: 0, error: null };
@@ -7015,10 +7038,20 @@ export default function createACDRouter(io) {
       // though the strict 15pt clustering only grouped 2 of them -- level DENSITY at the
       // break is surfaced as context on the badge, not (yet) a separately validated
       // factor of its own; do not treat it as calibrated until it's actually backtested.
-      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [] };
+      // 2026-07-27 v2: replaced the RTH threshold with the looser, pace-confirmed recipe
+      // from RESEARCH_CLAIM loose_confluence_pace_rth_promising_not_confirmed (single-level
+      // breaks count, volZ>=0.5, OSR>=0.55, PLUS a pace/no-countermovement gate: >=4 of the
+      // last 5 bars same-direction AND paceZ>=1 vs a real 20-day per-minute-of-day trailing-
+      // pace baseline). This is what actually caught 2026-07-27's 09:42 ET move (the old
+      // volZ>=2 RTH threshold didn't fire until 10:01). Globex keeps the OLD, separately-
+      // validated threshold (clusterSize>=2, volZ>=1.5, OSR>=0.65, no pace) -- the looser+pace
+      // recipe was NOT clean for Globex in backtest, don't apply it there. VWAP (computeVWAP,
+      // imported from backtest_confluence.js, not reimplemented) is now included as a
+      // candidate level -- previously excluded, since it isn't in level_prices.
+      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedTarget: null };
       try {
         const svBarsQ = await query(`
-          SELECT ts, close::float, high::float, low::float,
+          SELECT ts, close::float, high::float, low::float, open::float,
                  EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
                  bid_volume::int, ask_volume::int,
                  EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
@@ -7031,11 +7064,13 @@ export default function createACDRouter(io) {
           const i = svBars.length - 1;
           const bar = svBars[i];
           const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
-          const volZCutoff = isGlobexNow ? 1.5 : 2;
+          const volZCutoff = isGlobexNow ? 1.5 : 0.5;
           const osrCutoff = isGlobexNow ? 0.65 : 0.55;
+          const minClusterSize = isGlobexNow ? 2 : 1;
 
           // Levels: same daily-cached level_prices batch as the rest of this handler,
-          // plus real-time OR/IB (not from level_prices, which may lag same-day formation).
+          // plus real-time OR/IB (not from level_prices, which may lag same-day formation)
+          // plus live developing VWAP (never in level_prices at all -- a per-bar value).
           const svLevelsRaw = getCached(todayET, 'stackVolLevels', DAY_CACHE_TTL) || await (async () => {
             const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL`, [todayET]);
             const map = {};
@@ -7045,6 +7080,7 @@ export default function createACDRouter(io) {
           const svLevels = { ...svLevelsRaw };
           if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
           if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
+          if (!isGlobexNow) svLevels.VWAP = computeVWAP(svBars, i);
 
           const levelsArr = Object.entries(svLevels).filter(([, p]) => p != null && isFinite(p)).map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
           const clusters = [];
@@ -7060,8 +7096,21 @@ export default function createACDRouter(io) {
           const bl = svBaseline.get(Number(bar.tod));
           const volZ = (bl && bl.std_vol > 0) ? (totalVol - bl.avg_vol) / bl.std_vol : 0;
 
+          // Pace/no-countermovement (RTH only) -- consecutiveCount = how many of the last 5
+          // bars closed the same direction as the candidate break; paceZ = trailing-5-bar net
+          // move vs a real 20-day per-minute-of-day baseline (getPaceBaseline), not a static
+          // point cutoff.
+          let consecutiveCount = 0, paceZ = 0;
+          if (!isGlobexNow) {
+            const paceBaseline = await getPaceBaseline(todayET);
+            const pBl = paceBaseline.get(Number(bar.tod));
+            const prev5Close = i >= 5 ? svBars[i - 5].close : svBars[0].close;
+            const netPace = Math.abs(bar.close - prev5Close);
+            paceZ = (pBl && pBl.std_pace > 0) ? (netPace - pBl.avg_pace) / pBl.std_pace : 0;
+          }
+
           for (const cluster of clusters) {
-            if (cluster.length < 2) continue;
+            if (cluster.length < minClusterSize) continue;
             const clusterMin = cluster[0].price, clusterMax = cluster[cluster.length - 1].price;
             let direction = null;
             // Gap guard: a bar whose OWN gap (distance from its predecessor) exceeds ~5min
@@ -7092,22 +7141,34 @@ export default function createACDRouter(io) {
             }
             if (!direction) continue;
 
+            if (!isGlobexNow) {
+              consecutiveCount = 0;
+              for (let k = Math.max(0, i - 4); k <= i; k++) {
+                const b = svBars[k];
+                if (direction === 'SHORT' && b.close < b.open) consecutiveCount++;
+                if (direction === 'LONG' && b.close > b.open) consecutiveCount++;
+              }
+            }
+
             const favorableVol = direction === 'LONG' ? (bar.ask_volume || 0) : (bar.bid_volume || 0);
             const adverseVol = direction === 'LONG' ? (bar.bid_volume || 0) : (bar.ask_volume || 0);
             const oneSidedRatio = (favorableVol + adverseVol) > 0 ? favorableVol / (favorableVol + adverseVol) : 0.5;
 
-            if (volZ >= volZCutoff && oneSidedRatio >= osrCutoff) {
+            const paceOk = isGlobexNow ? true : (consecutiveCount >= 4 && paceZ >= 1);
+            if (volZ >= volZCutoff && oneSidedRatio >= osrCutoff && paceOk) {
               const levelDensity = levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).length;
               stackVolSignal = {
                 active: true, direction, sigma: +volZ.toFixed(2), oneSidedRatio: +oneSidedRatio.toFixed(2),
                 levelDensity, levels: levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).map(l => l.name),
+                paceZ: isGlobexNow ? null : +paceZ.toFixed(2), consecutiveCount: isGlobexNow ? null : consecutiveCount,
+                calibratedStop: isGlobexNow ? null : 40, calibratedTarget: isGlobexNow ? null : 40,
               };
               const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
               query(`
                 INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
                 VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
                 ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, triggeredAt: new Date().toISOString() })]).catch(() => {});
+              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, definitionVersion: 2, triggeredAt: new Date().toISOString() })]).catch(() => {});
               break;
             }
           }
