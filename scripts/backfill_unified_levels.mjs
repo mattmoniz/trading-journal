@@ -132,13 +132,22 @@ for (const date of dates) {
 
   const fired = new Set();
   const fires = [];
-  for (let i = 1; i < bars.length; i++) {
-    const b = bars[i], prev = bars[i - 1];
+  // Direction fixed 2026-07-27 (found while re-scoping the WEEKLY_OPEN G-Line
+  // recalibration): this used to compare the PREVIOUS bar's close against the LEVEL
+  // price (1-bar-vs-level) -- a real mismatch against the live RTH candidate path's
+  // actual convention, `approachDir = last5[0].close < currentPrice` (server/routes/
+  // acd.js ~line 4865, 5-bar momentum vs the CURRENT price, not the level). Same bug
+  // class independently found and fixed the same day in backtest_unified.js's
+  // detectLevelFades() (backtest_unified_uses_wrong_direction_formula_for_rth) --
+  // this script is a separate reimplementation that had drifted the same way. Loop
+  // start moved from i=1 to i=5 so bars[i-5] is always available.
+  for (let i = 5; i < bars.length; i++) {
+    const b = bars[i];
     if (b.tod < GATE || b.tod >= RTH_END) continue;
     for (const [levelName, lvl] of Object.entries(levels)) {
       if (lvl == null || fired.has(levelName)) continue;
       if (Math.abs(b.close - lvl) > TOUCH_TOLERANCE) continue;
-      const fromAbove = prev.close > lvl;
+      const fromAbove = !(bars[i - 5].close < b.close);
       const dir = fromAbove ? 'LONG' : 'SHORT';
       fires.push({ levelName, dir, barIdx: i, barTs: b.ts, entryPx: Math.round(b.close * 4) / 4, levelPx: lvl });
       fired.add(levelName);
