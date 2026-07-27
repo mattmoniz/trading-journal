@@ -1,5 +1,25 @@
 # Open Threads / Pending Work
 
+## 📋 2026-07-27 session handoff — priority order for next context
+
+Full detail for every item below lives in its `OPEN_DECISION` row (`node scripts/flag_decision.mjs --list`, also auto-printed at every session start) — this is just the priority ordering across everything open, so the next session doesn't have to re-derive it.
+
+**1. HIGH — `bigmove_fade_exit_needs_origin_status_reverify`.** The fade-against-big-move-day exit alert is LIVE on the dashboard right now (orange badge, `ACDView.jsx`) based on a 2yr backtest that was never filtered by `origin_status` — the population is 98.4% BACKFILL/UNKNOWN. Re-run filtered to real (`ACTIVE`/`SHADOW`) data before trusting the badge further. This is the only item actively shaping what the user sees live without being re-verified — start here.
+
+**2. HIGH — `bar6_full_pop_backfill_discrepancy`.** The bar-6 exit rule's real (`ACTIVE`-only) number is trusted and reproducible: N=130, Diff=$6,765.62 ($52.04/trade). The full-population number is NOT trusted: $818,725.54 ($74.18/trade) — a 57% larger per-trade effect on `BACKFILL` data than on verified-clean `ACTIVE` data, unexplained by a first point-distance sanity check. Do not report or act on any full-population/BACKFILL-inclusive number for this rule until this gap is understood.
+
+**3. MEDIUM — `pm_poc_rth_inclusion_stale_exclusion_found`** (elevated from LOW this session). The most concrete, bounded, immediately-actionable real-alpha candidate in the backlog: a genuine setup type (`PM_POC_FADE_SHORT`) excluded from the live roster in 2026-07-02 for looking like a loser, on level data since confirmed corrupted by a bug fixed 2026-07-17. A fresh check already found real EV=+$9.41/N=29 — positive. Needs a proper `OPTIMAL_STOP` sweep and re-add to `keepLevelsAll` if it holds.
+
+**4. MEDIUM — `price_bars_primary_materialize_historical_bars` and `price_bars_primary_unbounded_query_audit`.** Structural DB performance fix (materialize immutable historical bars into a real indexed table, only today's window stays on the expensive live join) plus the narrower tactical audit of ~200 existing call sites for the same unbounded-query bug this session found and fixed in its own script. Concrete plan already written (see the `price_bars_primary` section of ARCHITECTURE.md) — needs a go-ahead to build, not further scoping.
+
+**5. MEDIUM — check the CORRECTED-TARGET-BUT-SUPPRESSED watch list** (printed at every session start, not its own `OPEN_DECISION` — it self-monitors) for any of the 20 setups crossing the N≥15 real-trade recovery floor since last checked. Zero-effort, mechanical check, no new research needed.
+
+**6. MEDIUM — the three longer-term architecture ideas flagged 2026-07-26, still unstarted**: `unify_sizemultiplier_into_validated_score` (collapse the ~20-factor sizeMultiplier stack into one walk-forward-validated model), `formalize_trade_management_as_first_class_system` (generalize bar6/distance-fraction/trail/fade-exit into one continuous per-bar re-evaluation instead of separate ad hoc checkpoints), and the pre-existing `level_agnostic_absorption_multisession_research` (Opus Audit #4's highest-ceiling idea, needs its own scoping pass before any code). None of these are urgent; all three are the kind of thing that moves the needle more than another single-signal backtest.
+
+**7. LOW-priority cleanup items already tracked, no change needed**: `active_setups_resolved_at_timezone_bug`, `bar6_checkpoint_persisted_vs_recomputed_mismatch`, `verify_bar6_exit_recommended_live`, `verify_sigma_continuation_live_and_notification_gap`, `verify_bigmove_signal_rebuild_rth_display`, `globex_confluence_pair_bonus_needs_sizing_mechanism`.
+
+**Standing lesson reinforced hard this session, worth restating for whoever picks this up**: every population pulled from `active_setups` needs an explicit `origin_status` decision stated up front (ACTIVE-only, ACTIVE+SHADOW, or full-with-caveats) — not an afterthought. Two separate findings this session (bar-6, big-move fade-exit) were built on an unfiltered population before the gap was caught, and one of those two (the fade-exit one) is currently live without the re-check ever having been completed. Check `origin_status` scope BEFORE writing the query, not after seeing a suspicious number.
+
 ## ✅ 2026-07-27: found `price_bars_primary` is an unindexable VIEW — one unbounded query cost 15-20x, ~200 files at risk
 
 While re-deriving the bar-6 exit-rule's real dollar impact against the full `active_setups` population (see entry below — the N=57/+$1,260 figure quoted earlier this session turned out to have an internal inconsistency and needed a from-scratch recompute), a straightforward per-trade bar lookup was taking ~900ms-1.2s per call — on pace for 2.5+ hours to walk ~11,000 trades.
