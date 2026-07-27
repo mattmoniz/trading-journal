@@ -7185,7 +7185,17 @@ export default function createACDRouter(io) {
                 paceZ: isGlobexNow ? null : +paceZ.toFixed(2), consecutiveCount: isGlobexNow ? null : consecutiveCount,
                 calibratedStop: isGlobexNow ? null : +(nextLevelBeyondDist ?? 40).toFixed(1),
                 calibratedStopType: isGlobexNow ? null : (nextLevelBeyondDist != null ? 'LEVEL_NEXT' : 'FIXED_FALLBACK'),
-                calibratedTarget: isGlobexNow ? null : 40,
+                // Direction-specific, via computeCorrectedTarget() (the real, already-audited
+                // target-calibration pipeline every other setup_type in this codebase uses --
+                // thin-tail gate, chronological OOS split, plateau check, must beat baseline
+                // both in-sample and OOS, rigor-clean), NOT a raw best-EV grid pick.
+                // RESEARCH_CLAIM stackvol_target_direction_specific_calibration_2026_07_27:
+                // LONG clears every guardrail at 70pt (N=215, oosEv=+$1.74 thin but positive,
+                // rigor-clean, though the most recent chronological third shows the edge
+                // thinning to $0.15/trade -- worth re-checking as more data accumulates).
+                // SHORT FAILED calibration (oosEv=-$24.73 despite a positive in-sample read)
+                // -- widening would have been a real mistake, stays at the original 40pt.
+                calibratedTarget: isGlobexNow ? null : (direction === 'LONG' ? 70 : 40),
                 // Informational only, not a specific calibrated number -- RESEARCH_CLAIM
                 // breakeven_trail_early_arm_timing_effect_not_volume_content found that
                 // arming a breakeven-then-trail exit early (~bar 7) roughly doubled backtest
