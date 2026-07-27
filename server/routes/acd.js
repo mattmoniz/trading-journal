@@ -5253,7 +5253,16 @@ export default function createACDRouter(io) {
             // Prior-month value area (VAH, VAL, POC) + range
             { name: 'PM_VAH_FADE',       level: lp.PM_VAH       ?? null, ...(ls('PM_VAH')       || {}) },
             { name: 'PM_VAL_FADE',       level: lp.PM_VAL       ?? null, ...(ls('PM_VAL')       || {}) },
-            // PM_POC omitted — WR=44.4%, stop=93pt, EV=-$54.9 (negative EV at any stop)
+            // PM_POC re-added 2026-07-27 (OPEN_DECISION pm_poc_rth_inclusion_stale_exclusion_found):
+            // the 2026-07-02 "WR=44.4%, EV=-$54.9" exclusion was computed on level_prices data
+            // since confirmed corrupted by the volume-profile bucketing bug (fixed 2026-07-17).
+            // Re-verified on corrected data (scripts/backtest_pm_poc_short_reverify_20260727.mjs,
+            // sweepOptimalStopAndTarget-derived, Gemini-cross-checked): PM_POC_FADE_SHORT is real
+            // but thin (N=29) and chronologically unstable — seeded THIN_N, not ACTIVE, so it
+            // fires SHADOW-only via the standard _suppressedSetups gate and accumulates real data
+            // for backtest_setup_status.mjs to take over. PM_POC_FADE_LONG confirmed a non-edge on
+            // two independent checks — seeded SUPPRESS. See scripts/seed_pm_poc_setup_status_20260727.mjs.
+            { name: 'PM_POC_FADE',       level: lp.PM_POC       ?? null, ...(ls('PM_POC')       || {}) },
             { name: 'PM_HIGH_FADE',      level: lp.PM_HIGH      ?? null, ...(ls('PM_HIGH')      || {}) },
             { name: 'PM_LOW_FADE',       level: lp.PM_LOW       ?? null, ...(ls('PM_LOW')       || {}) },
             // Quarterly value area
