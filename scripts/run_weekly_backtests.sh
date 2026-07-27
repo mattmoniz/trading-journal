@@ -62,6 +62,13 @@ echo "=== Weekly backtest run: $(date) ==="
 # ~194s for 417 RTH trading days (2026-07-17) -- cheap enough for weekly, not nightly.
 /usr/bin/node scripts/mine_level_fades_alltime.mjs
 
+# Execution-efficiency audit (2026-07-27) -- how real fired setups performed vs their own
+# MAE/MFE and vs OPTIMAL_STOP's calibrated-achievable EV. Persists performance_audit
+# signal_type='EXECUTION_EFFICIENCY_AUDIT' per setup_type clearing N>=20 real (ACTIVE/
+# SHADOW-origin) resolved trades -- currently just IB_BEARISH, self-expands as real N
+# grows elsewhere. See docs/OPEN_THREADS.md and RESEARCH_CLAIM ib_bearish_mfe_left_on_table_20260727.
+/usr/bin/node scripts/analyze_execution_efficiency.mjs
+
 # Standing data-sanity audit (2026-07-17) -- catches the class of bug found manually this
 # session (impossible MAE/MFE values, a non-uniform $/pt constant defended by a false
 # "verified" comment) automatically instead of requiring another multi-hour deep-dive to
