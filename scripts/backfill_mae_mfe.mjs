@@ -15,8 +15,12 @@ async function main() {
   console.log('='.repeat(80));
 
   // 1. Fetch all setups needing backfill
+  // fired_at selected as ::text, never round-tripped through new Date() (this codebase's
+  // documented, repeated timezone bug class -- see active_setups_resolved_at_timezone_bug,
+  // 2026-07-27: the exact same missing-::text pattern in resolveSetupsByPrice() corrupted
+  // resolved_at for 6+ weeks until an unrelated commit incidentally added the cast).
   const setupsRes = await query(`
-    SELECT id, trade_date, setup_type, fired_at,
+    SELECT id, trade_date, setup_type, fired_at::text as fired_at,
            entry_zone_low::float                                    AS entry_low,
            COALESCE(entry_zone_high, entry_zone_low)::float         AS entry_high,
            stop_level::float                                        AS stop,
@@ -44,7 +48,7 @@ async function main() {
   const barsByDate = {};
   for (const d of dates) {
     const res = await query(`
-      SELECT ts, open::float, high::float, low::float, close::float
+      SELECT ts::text as ts, open::float, high::float, low::float, close::float
       FROM price_bars_primary
       WHERE symbol = 'NQ'
         AND ts::date = $1
@@ -65,10 +69,10 @@ async function main() {
     const stop      = setup.stop;
     const t1        = setup.t1;
     const direction = directionFromType(setup.setup_type);
-    const firedAt   = new Date(setup.fired_at);
+    const firedAt   = setup.fired_at; // text, e.g. "2026-07-08 09:30:00" -- sortable as-is
 
     const allBars   = barsByDate[setup.trade_date] ?? [];
-    const bars      = allBars.filter(b => new Date(b.ts) >= firedAt);
+    const bars      = allBars.filter(b => b.ts >= firedAt);
 
     const result    = replayBars(bars, entry, stop, t1, direction);
 
