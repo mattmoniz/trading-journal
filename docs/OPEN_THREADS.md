@@ -1,12 +1,26 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: root-caused and fixed the $800K phantom bar-6 number — and caught that the earlier "trusted" figure was wrong too
+
+Direct follow-up to the full-population bar-6 investigation below. The user pushed back on accepting "that seems too big to be real" as proof — fair, since big moves genuinely can happen — so this was chased to an actual, concrete mechanism instead of a plausibility argument.
+
+**Root cause, confirmed definitively**: `scripts/backtest_bar6_full_population_20260727.mjs` fetched `active_setups.fired_at` as a raw column (returning a JS `Date` object) and passed that directly into a second query's `ts >= $1` parameter — the exact naive-ET-timestamp-round-trip bug this codebase has documented and fixed multiple times before (`resolveSetupsByPrice()`'s 2026-06-30 fix, `sierraParser.js`'s `parseDateTime()`). Proven on a specific row (id=64651): the buggy query pulled bars starting 4 hours before the real touch, at a price level ~800pt away from the recorded entry (30,280 vs the real 29,499.75) — using `fired_at::text` instead, the bar-6 close matched the recorded entry exactly.
+
+**Because the bug was deterministic, running the same buggy script twice and getting a matching answer did NOT validate it** — it only proved the bug was consistent, a real trap worth remembering. This means the earlier "trusted, independently verified" ACTIVE-only figure ($6,765.62 / $52.04-per-trade) was itself wrong, not just the absurd full-population number.
+
+**Corrected, now-trustworthy numbers** (fixed script, re-run in full): `origin_status='ACTIVE'` N=130, rule triggered on 59, Diff=**$1,586.37 ($12.20/trade)**. Full population N=11,037, Diff=**$54,610.64 ($4.95/trade)** — down 15x from the phantom $818,725. Day-clustering now healthy (2.2% top-5-dates, 425 distinct days, vs a meaningless 3% before that didn't rule anything out). Chronological train/test split same-sign both halves ($4.20/trade train, $8.23/trade test). Recorded as `RESEARCH_CLAIM` `bar6_exit_rule_corrected_dollar_impact_20260727`, superseding both the earlier session's inconsistent claim and this session's own first-pass number. `OPEN_DECISION` `bar6_full_pop_backfill_discrepancy` resolved with this finding.
+
+**Important reassurance, independently verified, not assumed**: the LIVE production code (`resolveSetupsByPrice()` in `server/routes/acd.js`) already fetches `fired_at::text` correctly (confirmed by reading the code directly, with its own comment documenting the fix) — this bug only ever existed in the brand-new backtest script written today, never in what's live on the dashboard. `bar6_checkpoint`/`bar6_exit_recommended` badges are unaffected.
+
+**General lesson**: the bar-6 exit rule is real and positive — just roughly a quarter the size claimed earlier this session. A number that survives "run it twice" is not the same as a number that's been checked for a mechanism bug in how it was computed. When re-deriving a suspiciously large or suspiciously small result, look for a concrete root cause (a mismatched value, a wrong timestamp, an off-by-something) rather than accepting either "it repeated" or "it seems implausible" as the final word.
+
 ## 📋 2026-07-27 session handoff — priority order for next context
 
 Full detail for every item below lives in its `OPEN_DECISION` row (`node scripts/flag_decision.mjs --list`, also auto-printed at every session start) — this is just the priority ordering across everything open, so the next session doesn't have to re-derive it.
 
 **1. HIGH — `bigmove_fade_exit_needs_origin_status_reverify`.** The fade-against-big-move-day exit alert is LIVE on the dashboard right now (orange badge, `ACDView.jsx`) based on a 2yr backtest that was never filtered by `origin_status` — the population is 98.4% BACKFILL/UNKNOWN. Re-run filtered to real (`ACTIVE`/`SHADOW`) data before trusting the badge further. This is the only item actively shaping what the user sees live without being re-verified — start here.
 
-**2. HIGH — `bar6_full_pop_backfill_discrepancy`.** The bar-6 exit rule's real (`ACTIVE`-only) number is trusted and reproducible: N=130, Diff=$6,765.62 ($52.04/trade). The full-population number is NOT trusted: $818,725.54 ($74.18/trade) — a 57% larger per-trade effect on `BACKFILL` data than on verified-clean `ACTIVE` data, unexplained by a first point-distance sanity check. Do not report or act on any full-population/BACKFILL-inclusive number for this rule until this gap is understood.
+**2. RESOLVED (was HIGH) — `bar6_full_pop_backfill_discrepancy`.** Root-caused and fixed same session — see the entry above this one. The real, trustworthy number is now `origin_status='ACTIVE'` N=130, Diff=$1,586.37 ($12.20/trade), not the earlier $52.04/trade figure or the phantom $818K. Nothing further needed here.
 
 **3. MEDIUM — `pm_poc_rth_inclusion_stale_exclusion_found`** (elevated from LOW this session). The most concrete, bounded, immediately-actionable real-alpha candidate in the backlog: a genuine setup type (`PM_POC_FADE_SHORT`) excluded from the live roster in 2026-07-02 for looking like a loser, on level data since confirmed corrupted by a bug fixed 2026-07-17. A fresh check already found real EV=+$9.41/N=29 — positive. Needs a proper `OPTIMAL_STOP` sweep and re-add to `keepLevelsAll` if it holds.
 

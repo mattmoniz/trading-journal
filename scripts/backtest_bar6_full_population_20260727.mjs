@@ -28,9 +28,15 @@ async function annotateWithCheckpoints(rows) {
     // table, no indexes possible on a view) -- an unbounded `ts >= $1` forces it to consider
     // everything from fired_at through the present before it can sort/limit. Only ever need
     // the first ~7 bars (well within a few hours), so bound the upper end tightly.
+    // fired_at is fetched as ::text above and used as text here -- NEVER pass the raw Date
+    // object node-pg would otherwise return, which silently round-trips through the ambient
+    // process timezone and can shift the effective instant by several hours (confirmed live,
+    // 2026-07-27: id=64651 showed a 779pt "6-minute move" that was actually bars from 4 hours
+    // before the real touch -- fixed by using fired_at::text throughout, matching the bar-6
+    // close exactly against the recorded entry price after the fix).
     const barsRes = await query(`
       SELECT high::float, low::float, close::float FROM price_bars_primary
-      WHERE symbol='NQ' AND ts >= $1 AND ts < $1::timestamp + interval '6 hours'
+      WHERE symbol='NQ' AND ts >= $1::timestamp AND ts < $1::timestamp + interval '6 hours'
       ORDER BY ts ASC LIMIT 10
     `, [t.fired_at]);
     done++;
@@ -71,7 +77,7 @@ function fmt(label, r) {
 
 async function main() {
   const allTrades = await query(`
-    SELECT id, trade_date::text, fired_at, setup_type, origin_status,
+    SELECT id, trade_date::text, fired_at::text as fired_at, setup_type, origin_status,
       entry_zone_low::float, entry_zone_high::float, stop_level::float, t1_level::float, actual_pnl::float
     FROM active_setups
     WHERE resolution IS NOT NULL
