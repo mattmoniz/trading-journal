@@ -676,16 +676,18 @@ function EdgeSectionsPanel() {
                     </div>
                   )}
                   {s.fadeAgainstBigMoveExit && (
-                    // RESEARCH_CLAIM bigmove_fade_exit_2yr_robustness_confirmed (N=472, 2yr,
-                    // train/test same-sign, $37-46/trade). Fires only when this trade is fading
-                    // against the day's own established direction AND today has gone on to become
-                    // a genuine big-move day (>=250pt range, >=180min remaining) that was NOT
-                    // already true at entry. The broader/unconditioned version of this idea was
-                    // tested and does not hold up -- see fade_against_trend_blind_exit_does_not_generalize
-                    // -- this only fires the narrower, actually-validated condition. No order/
-                    // broker execution capability exists -- recommendation only.
+                    // DISABLED 2026-07-27: checkFadeAgainstBigMoveExit() (server/routes/acd.js)
+                    // now always returns false, so s.fadeAgainstBigMoveExit is never truthy --
+                    // this block is dead in practice, kept only so the JSX doesn't need
+                    // restructuring if this is ever re-validated on real data. The original
+                    // RESEARCH_CLAIM bigmove_fade_exit_2yr_robustness_confirmed (N=472, $37-46/
+                    // trade) was 98.4% BACKFILL/UNKNOWN -- re-checked on real (ACTIVE/SHADOW)
+                    // data only and found the trigger condition has occurred ZERO times in the
+                    // entire 2-year real trade history. See RESEARCH_CLAIM
+                    // bigmove_fade_exit_zero_real_occurrences. Do not re-enable without
+                    // re-validating on real data first.
                     <div style={{ fontSize: 12, color: '#fb923c', marginTop: 4, fontWeight: 700, background: 'rgba(251,146,60,0.12)', border: '1px solid rgba(251,146,60,0.3)', borderRadius: 4, padding: '3px 6px' }}
-                      title="Fading against the day's established direction on a day that's become a genuine big-move day (>=250pt range, >=180min remaining) -- historically a blind exit ~13 bars after entry beat holding by $37-46/trade (N=472, 2yr, train/test confirmed).">
+                      title="DISABLED -- zero real-world occurrences found, see bigmove_fade_exit_zero_real_occurrences.">
                       🔶 FADING a big-move day — EXIT NOW recommended
                     </div>
                   )}

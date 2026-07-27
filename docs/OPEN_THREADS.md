@@ -1,5 +1,27 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-07-27: independent Gemini re-check caught a real bug in the "zero occurrences" finding — corrected to N=4, still negative
+
+Direct follow-up to the entry below (which disabled the fade-against-big-move-day exit badge based on a claimed "zero real occurrences ever" finding). The user pushed back hard on trusting a self-reported result without independent verification, so both of today's conclusions (bar-6's corrected number, and this zero-occurrence claim) were dispatched to Gemini as a genuine second, independent derivation — not shown the original methodology, asked to compute both from scratch.
+
+**Gemini's own check-1 methodology had a real bug** (hardcoded `$20/point` and `$4.04` commission into `computeBar6Checkpoint()` — this journal trades MNQ at `$2/point, $1` commission, the exact "wrong $/pt constant" bug class this codebase has been burned by multiple times before). That fully explains its ~30x-larger disagreement on the bar-6 number; the corrected `$12.20/trade` figure stands.
+
+**But Gemini's check-2 methodology caught something real**: it found 2 candidate real occurrences of the fade-against-big-move-day condition where the earlier claim said zero. Manual audit of both: one (id=65770) was invalid (the condition was already active AT entry, failing the "fresh" requirement) — but the other (id=67604) was a genuine miss. Root cause: `backtest_bigmove_fade_exit_real_only_20260727.mjs` looked up each trade's entry bar via an **exact epoch match** against a Map keyed by 1-minute bar timestamps — but real trades' `fired_at` carries genuine sub-minute precision (recorded live via `NOW()`), so the exact match silently failed and discarded 31 real trades into a skip bucket, never checked at all. The earlier "verification" of this lookup method happened to test a trade whose `fired_at` was coincidentally exactly on the minute — an unrepresentative pick that masked the bug.
+
+**Fixed** (floor `fired_at` to the minute before the lookup) and re-run: **0 trades skipped** (was 31), and the corrected real occurrence count is **N=4** (not 0, not Gemini's 2) — with `Baseline=-$134.87, Signal-gated=-$302.00, Blind=-$243.50` — the rule makes real outcomes *worse*, not better, though N=4 is far below this codebase's own N≥20 floor for any real conclusion. The badge staying disabled remains correct, now on firmer, more precisely-stated grounds. Recorded as `RESEARCH_CLAIM` `bigmove_fade_exit_real_occurrences_corrected_20260727`, superseding the "zero occurrences" claim.
+
+**General lesson, the actual point of this whole thread**: an independent second derivation of the same question is valuable even when it ALSO contains a real error — Gemini's check-1 was wrong for its own reason, but its check-2 disagreement was worth chasing down rather than dismissed just because check-1 had already proven unreliable that same response. Audit a disagreement in both directions; don't assume whichever answer came first, or whichever source seems more reliable in general, is automatically the correct one this time.
+
+## ✅ 2026-07-27: fade-against-big-move-day exit alert has ZERO real occurrences — disabled
+
+Direct follow-up to the HIGH-priority `bigmove_fade_exit_needs_origin_status_reverify` decision flagged earlier this session. That signal was live on the dashboard (orange badge, `ACDView.jsx`) based on a 2yr backtest that turned out to be 98.4% BACKFILL/UNKNOWN, never re-checked on real data.
+
+Re-ran filtered to `origin_status IN ('ACTIVE','SHADOW')` only (`scripts/backtest_bigmove_fade_exit_real_only_20260727.mjs`, timestamp-handling independently spot-checked clean — this script indexes bars by exact JS epoch match rather than round-tripping through a second SQL query, unlike the bar-6 script's bug below, and was confirmed correct against a real row before trusting the null result). **Result: zero.** Across the entire 2-year real trade history, the trigger condition (fading against the day's direction, then the day becoming a genuine big-move day, fresh not already-active-at-entry) has never once occurred on a real, live-fired trade.
+
+**Disabled the live badge** rather than leave a confidently-worded "$37-46/trade, N=472, confirmed" recommendation live with zero real-world track record: `checkFadeAgainstBigMoveExit()` (`server/routes/acd.js`) now unconditionally returns `false`, original logic preserved as a comment block (not deleted) for future reference if real occurrences ever accumulate. `ACDView.jsx`'s badge comment updated to reflect the disabled status. Verified: `node --check`/lint/build clean, server restarted and responding. Recorded as `RESEARCH_CLAIM` `bigmove_fade_exit_zero_real_occurrences`, superseding the original claim. `OPEN_DECISION` resolved.
+
+**General lesson, paired with the bar-6 entry below**: two separate live-wired signals this session were both built on origin_status-unfiltered populations. One (bar-6) survived the filter with a smaller-but-real number. The other (this one) didn't survive at all. Neither outcome could have been predicted without actually doing the real-data-only check — "it passed train/test" and "it's already live" are not substitutes for "it's been checked against real data."
+
 ## ✅ 2026-07-27: root-caused and fixed the $800K phantom bar-6 number — and caught that the earlier "trusted" figure was wrong too
 
 Direct follow-up to the full-population bar-6 investigation below. The user pushed back on accepting "that seems too big to be real" as proof — fair, since big moves genuinely can happen — so this was chased to an actual, concrete mechanism instead of a plausibility argument.
@@ -18,7 +40,7 @@ Direct follow-up to the full-population bar-6 investigation below. The user push
 
 Full detail for every item below lives in its `OPEN_DECISION` row (`node scripts/flag_decision.mjs --list`, also auto-printed at every session start) — this is just the priority ordering across everything open, so the next session doesn't have to re-derive it.
 
-**1. HIGH — `bigmove_fade_exit_needs_origin_status_reverify`.** The fade-against-big-move-day exit alert is LIVE on the dashboard right now (orange badge, `ACDView.jsx`) based on a 2yr backtest that was never filtered by `origin_status` — the population is 98.4% BACKFILL/UNKNOWN. Re-run filtered to real (`ACTIVE`/`SHADOW`) data before trusting the badge further. This is the only item actively shaping what the user sees live without being re-verified — start here.
+**1. RESOLVED (was HIGH) — `bigmove_fade_exit_needs_origin_status_reverify`.** Re-checked and disabled same session — see the entry above this one. Zero real occurrences ever, badge pulled. Nothing further needed unless real occurrences start accumulating.
 
 **2. RESOLVED (was HIGH) — `bar6_full_pop_backfill_discrepancy`.** Root-caused and fixed same session — see the entry above this one. The real, trustworthy number is now `origin_status='ACTIVE'` N=130, Diff=$1,586.37 ($12.20/trade), not the earlier $52.04/trade figure or the phantom $818K. Nothing further needed here.
 

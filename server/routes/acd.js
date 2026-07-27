@@ -172,65 +172,66 @@ function isLongSetup(setupType) {
   return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
 }
 
-// Fade-against-a-big-move-day exit check — shared between the live setup-detection response
-// (single `active` candidate) and /setups/today-summary (all open trades), so the logic is
-// never duplicated (this codebase's standing "share modules" rule). Informational only, does
-// NOT gate/resolve anything -- this app has no order/broker execution capability, this only
-// surfaces a recommendation. Validated 2026-07-27 (RESEARCH_CLAIM
-// bigmove_fade_exit_2yr_robustness_confirmed): for a trade fading against the day's
-// established direction, once the day goes on to become a genuine big-move day
-// (BIGMOVE_LIVE_SIGNAL active) AND that condition was NOT already true at entry (fresh), a
-// blind exit ~13 bars/minutes after entry beat holding by $37-46/trade on a 2yr,
-// train/test-confirmed sample (N=472, same sign both splits). The broader, unconditioned
-// version (any fade-against-trend trade, regardless of eventual big-move status) was tested
-// and does NOT generalize -- see RESEARCH_CLAIM fade_against_trend_blind_exit_does_not_generalize
-// -- this only fires the narrower, actually-validated condition.
-export async function checkFadeAgainstBigMoveExit(setupRow, currentSessionDate) {
-  if (!setupRow || setupRow.resolution != null || setupRow.entry_zone_low == null) return false;
-  try {
-    const bigMoveActiveRow = await query(`
-      SELECT 1 FROM performance_audit WHERE signal_type='BIGMOVE_LIVE_SIGNAL' AND signal_name=$1
-    `, [currentSessionDate]);
-    if (bigMoveActiveRow.rows.length === 0) return false;
-
-    const direction = inferDirection(setupRow.setup_type);
-    if (!direction) return false;
-
-    const elapsedMin = (Date.now() - new Date(setupRow.fired_at).getTime()) / 60000;
-    if (elapsedMin < 13) return false; // matches the validated median fresh-trigger offset
-
-    const sessQ = await query(`
-      WITH recent AS (
-        SELECT ts, close::float, ts - LAG(ts) OVER (ORDER BY ts) AS gap
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
-      ),
-      session_start AS (
-        SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
-      )
-      SELECT
-        (SELECT start_ts FROM session_start) AS start_ts,
-        (SELECT close FROM recent, session_start WHERE ts >= session_start.start_ts ORDER BY ts ASC LIMIT 1) AS open_close,
-        (SELECT close FROM recent ORDER BY ts DESC LIMIT 1) AS latest_close
-    `);
-    const { start_ts, open_close, latest_close } = sessQ.rows[0] || {};
-    if (!start_ts || open_close == null || latest_close == null) return false;
-
-    const dayDir = Number(latest_close) >= Number(open_close) ? 'UP' : 'DOWN';
-    const isFadingAgainst = (dayDir === 'DOWN' && direction === 'LONG') || (dayDir === 'UP' && direction === 'SHORT');
-    if (!isFadingAgainst) return false;
-
-    const rngAtEntryQ = await query(`
-      SELECT MAX(high::float) - MIN(low::float) AS rng
-      FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1 AND ts <= $2
-    `, [start_ts, setupRow.fired_at]);
-    const rngAtEntry = rngAtEntryQ.rows[0]?.rng;
-    const wasActiveAtEntry = rngAtEntry != null && Number(rngAtEntry) >= 250;
-    return !wasActiveAtEntry;
-  } catch (_) {
-    return false;
-  }
+// Fade-against-a-big-move-day exit check — DISABLED 2026-07-27, kept in place (not deleted)
+// so the wiring/history is visible rather than silently vanishing. The 2026-07-26 validation
+// (RESEARCH_CLAIM bigmove_fade_exit_2yr_robustness_confirmed, N=472, $37-46/trade) was never
+// filtered by origin_status -- turned out to be 98.4% BACKFILL/UNKNOWN. Re-run filtered to
+// real (ACTIVE/SHADOW) trades only found the fresh-trigger condition has occurred ZERO times
+// in the entire 2-year real trade history -- not thin, genuinely never happened once. See
+// RESEARCH_CLAIM bigmove_fade_exit_zero_real_occurrences for the full account. Returning
+// false unconditionally until real occurrences actually accumulate enough to re-validate --
+// do not re-enable by just reverting this line without re-checking origin_status first.
+export async function checkFadeAgainstBigMoveExit(_setupRow, _currentSessionDate) {
+  return false;
 }
+
+// Disabled logic preserved for reference (do not re-enable without re-validating on real
+// origin_status='ACTIVE'/'SHADOW' data first -- see the disabled function's own comment above):
+//
+// if (!setupRow || setupRow.resolution != null || setupRow.entry_zone_low == null) return false;
+// try {
+//   const bigMoveActiveRow = await query(`
+//     SELECT 1 FROM performance_audit WHERE signal_type='BIGMOVE_LIVE_SIGNAL' AND signal_name=$1
+//   `, [currentSessionDate]);
+//   if (bigMoveActiveRow.rows.length === 0) return false;
+//
+//   const direction = inferDirection(setupRow.setup_type);
+//   if (!direction) return false;
+//
+//   const elapsedMin = (Date.now() - new Date(setupRow.fired_at).getTime()) / 60000;
+//   if (elapsedMin < 13) return false; // matches the validated median fresh-trigger offset
+//
+//   const sessQ = await query(`
+//     WITH recent AS (
+//       SELECT ts, close::float, ts - LAG(ts) OVER (ORDER BY ts) AS gap
+//       FROM price_bars_primary
+//       WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+//     ),
+//     session_start AS (
+//       SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
+//     )
+//     SELECT
+//       (SELECT start_ts FROM session_start) AS start_ts,
+//       (SELECT close FROM recent, session_start WHERE ts >= session_start.start_ts ORDER BY ts ASC LIMIT 1) AS open_close,
+//       (SELECT close FROM recent ORDER BY ts DESC LIMIT 1) AS latest_close
+//   `);
+//   const { start_ts, open_close, latest_close } = sessQ.rows[0] || {};
+//   if (!start_ts || open_close == null || latest_close == null) return false;
+//
+//   const dayDir = Number(latest_close) >= Number(open_close) ? 'UP' : 'DOWN';
+//   const isFadingAgainst = (dayDir === 'DOWN' && direction === 'LONG') || (dayDir === 'UP' && direction === 'SHORT');
+//   if (!isFadingAgainst) return false;
+//
+//   const rngAtEntryQ = await query(`
+//     SELECT MAX(high::float) - MIN(low::float) AS rng
+//     FROM price_bars_primary WHERE symbol='NQ' AND ts >= $1 AND ts <= $2
+//   `, [start_ts, setupRow.fired_at]);
+//   const rngAtEntry = rngAtEntryQ.rows[0]?.rng;
+//   const wasActiveAtEntry = rngAtEntry != null && Number(rngAtEntry) >= 250;
+//   return !wasActiveAtEntry;
+// } catch (_) {
+//   return false;
+// }
 
 // Price-based resolution: for each ACTIVE setup with defined entry/stop/T1, walk price
 // bars since fired_at and resolve TARGET_HIT/STOP_HIT the moment either level is touched
