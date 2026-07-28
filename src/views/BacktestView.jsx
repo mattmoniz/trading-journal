@@ -4,6 +4,7 @@ import { PlaybookWeeklyPatternsSection, ImprovementsBacklogSection, default as P
 import SetupHistoryView from './SetupHistoryView.jsx';
 import AlphaEngineOverview from '../components/dashboard/AlphaEngineOverview.jsx';
 import SetupReferenceView from '../components/dashboard/SetupReferenceView.jsx';
+import ResearchLedgerView from '../components/dashboard/ResearchLedgerView.jsx';
 import ScenarioTesterView from './ScenarioTesterView.jsx';
 const RiskView = lazy(() => import('./RiskView.jsx'));
 import {
@@ -2289,6 +2290,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
         {[
           ['setups', 'Setup Log'],
           ['reference', 'Setup Reference'],
+          ['research', 'Research Ledger'],
           ['alpha', 'Alpha Engine'],
           ['audit', 'Performance Audit'],
           ['edge', 'Edge Analysis'],
@@ -2321,6 +2323,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
 
       {activeSection === 'setups' && <SetupHistoryView />}
       {activeSection === 'reference' && <SetupReferenceView onJumpToChart={(date) => { setChartReviewDate(date); setActiveSection('chartreview'); }} />}
+      {activeSection === 'research' && <ResearchLedgerView />}
       {activeSection === 'alpha' && <AlphaEngineOverview />}
       {activeSection === 'scenarios' && <ScenarioTesterView />}
       {activeSection === 'risk' && <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}><RiskView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} /></Suspense>}

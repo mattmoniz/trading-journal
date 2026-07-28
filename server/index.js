@@ -46,6 +46,7 @@ import developingValueRouter from './routes/developingValue.js';
 import antigravityEdgesRouter from './routes/antigravityEdges.js';
 import playbookRouter from './routes/playbook.js';
 import performanceAuditRouter from './routes/performanceAudit.js';
+import researchRouter from './routes/research.js';
 import { computeAndPersistSession } from './services/developingValueService.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
@@ -297,6 +298,7 @@ app.use('/api', developingValueRouter);
 app.use('/api', antigravityEdgesRouter);
 app.use('/api/playbook', playbookRouter);
 app.use('/api', performanceAuditRouter);
+app.use('/api', researchRouter);
 
 // Client-side error reporting — catches React render crashes via ErrorBoundary
 
