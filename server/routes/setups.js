@@ -3,7 +3,7 @@ import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
 import { inferDirection, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
-import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition } from '../config/setupDefinitions.js';
+import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition, getSetupGroup } from '../config/setupDefinitions.js';
 import { INSTRUMENTS } from '../config/instruments.js';
 
 const router = express.Router();
@@ -702,6 +702,7 @@ router.get('/setups/reference', async (req, res) => {
       return {
         setupType,
         displayName: def?.displayName || setupType.replace(/_/g, ' '),
+        group: getSetupGroup(setupType),
         family: def?.ruleLabel || null,
         criteria: def?.criteria || null,
         windowDescription: def?.windowDescription || null,
@@ -737,6 +738,109 @@ router.get('/setups/reference', async (req, res) => {
     res.json({ total: results.length, undocumented: results.filter(r => !r.documented).length, setups: results });
   } catch (err) {
     console.error('[setups/reference]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/setups/reference/:setupType/detail — per-setup_type touch detail, ported from
+// the Key Levels table's click-through drill-down (BacktestView.jsx's KlDetailPanel/
+// KlMfeBar/KlHourBreakdown) so Setup Reference gets the same "click a row -> see the MFE/
+// MAE distribution + touches-by-hour + per-day touch list -> click a date -> see the
+// chart" flow. Added 2026-07-28 per direct user request ("move that whole functionality
+// over to setup references"). Same real-vs-blended preference (real N>=5 floor) as the
+// main /setups/reference endpoint above -- reused, not reinvented.
+router.get('/setups/reference/:setupType/detail', async (req, res) => {
+  try {
+    const { setupType } = req.params;
+    const REAL_N_FLOOR = 5;
+
+    const [distQ, byDayQ, byHourQ] = await Promise.all([
+      // Full percentile bundle, real vs blended computed in parallel so we can pick
+      // whichever has enough N without a second round-trip.
+      query(`
+        SELECT
+          count(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED') AND actual_pnl IS NOT NULL)::int as real_resolved_n,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p75,
+          percentile_cont(0.9)  WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p90,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mae_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mae_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mae_p75,
+          AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_avg_pnl,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution='TARGET_HIT') as real_bars_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution='TARGET_HIT') as real_bars_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution='TARGET_HIT') as real_bars_p75,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p75,
+          percentile_cont(0.9)  WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p90,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mae_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mae_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mae_p75,
+          AVG(actual_pnl) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_avg_pnl,
+          percentile_cont(0.25) WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE resolution='TARGET_HIT') as all_bars_p25,
+          percentile_cont(0.5)  WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE resolution='TARGET_HIT') as all_bars_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY bars_to_resolution) FILTER (WHERE resolution='TARGET_HIT') as all_bars_p75
+        FROM active_setups WHERE setup_type = $1
+      `, [setupType]),
+      // Per-day touch list -- date/T(ouches)/R(espects=TARGET_HIT count)/entry price that
+      // day -- same shape as the Key Levels detail panel's `details` array (date/touches/
+      // respects/levelPrice), sourced from real (ACTIVE/SHADOW) rows only (a per-day list
+      // is exactly the kind of thing that gets misleading fast if backfill rows silently
+      // inflate it -- unlike the aggregate stats above, there's no meaningful blended
+      // fallback for a literal day-by-day list, so real-only here, no fallback).
+      query(`
+        SELECT trade_date::text as date,
+          count(*)::int as touches,
+          count(*) FILTER (WHERE resolution='TARGET_HIT')::int as respects,
+          AVG(price_at_detection)::float as level_price
+        FROM active_setups
+        WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+        GROUP BY trade_date
+        ORDER BY trade_date DESC
+      `, [setupType]),
+      // Touches by hour (ET wall-clock hour of fired_at) -- real-only, same reasoning as above.
+      query(`
+        SELECT EXTRACT(HOUR FROM fired_at)::int as hour,
+          count(*)::int as touches,
+          count(*) FILTER (WHERE resolution='TARGET_HIT')::int as respects,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY mfe_points) as mfe_p50
+        FROM active_setups
+        WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+        GROUP BY EXTRACT(HOUR FROM fired_at)
+        ORDER BY hour
+      `, [setupType]),
+    ]);
+
+    const d = distQ.rows[0] || {};
+    const useReal = (d.real_resolved_n ?? 0) >= REAL_N_FLOOR;
+    const pick = (realKey, allKey) => {
+      const v = useReal ? d[realKey] : d[allKey];
+      return v != null ? +Number(v).toFixed(1) : null;
+    };
+    const mfe = { p25: pick('real_mfe_p25', 'all_mfe_p25'), p50: pick('real_mfe_p50', 'all_mfe_p50'), p75: pick('real_mfe_p75', 'all_mfe_p75'), p90: pick('real_mfe_p90', 'all_mfe_p90') };
+    const mae = { p25: pick('real_mae_p25', 'all_mae_p25'), p50: pick('real_mae_p50', 'all_mae_p50'), p75: pick('real_mae_p75', 'all_mae_p75') };
+    const timeToPeak = { p25: pick('real_bars_p25', 'all_bars_p25'), p50: pick('real_bars_p50', 'all_bars_p50'), p75: pick('real_bars_p75', 'all_bars_p75') };
+    const avgPnl = useReal ? d.real_avg_pnl : d.all_avg_pnl;
+
+    res.json({
+      setupType,
+      usingBlendedStats: !useReal,
+      mfe, mae, timeToPeak,
+      avgPnl: avgPnl != null ? +Number(avgPnl).toFixed(2) : null,
+      byHour: byHourQ.rows.map(r => ({
+        hour: r.hour, label: `${r.hour}:00`, touches: r.touches,
+        respectRate: r.touches > 0 ? Math.round((r.respects / r.touches) * 100) : null,
+        mfe_p50: r.mfe_p50 != null ? +Number(r.mfe_p50).toFixed(1) : null,
+      })),
+      details: byDayQ.rows.map(r => ({
+        date: r.date, touches: r.touches, respects: r.respects,
+        levelPrice: r.level_price != null ? Math.round(r.level_price) : null,
+      })),
+    });
+  } catch (err) {
+    console.error('[setups/reference/detail]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

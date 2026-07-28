@@ -2320,7 +2320,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       </div>
 
       {activeSection === 'setups' && <SetupHistoryView />}
-      {activeSection === 'reference' && <SetupReferenceView />}
+      {activeSection === 'reference' && <SetupReferenceView onJumpToChart={(date) => { setChartReviewDate(date); setActiveSection('chartreview'); }} />}
       {activeSection === 'alpha' && <AlphaEngineOverview />}
       {activeSection === 'scenarios' && <ScenarioTesterView />}
       {activeSection === 'risk' && <Suspense fallback={<div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>}><RiskView accounts={accounts} selectedAccounts={selectedAccounts} setSelectedAccounts={setSelectedAccounts} /></Suspense>}

@@ -182,6 +182,73 @@ export const OTHER_SETUP_DEFINITIONS = {
   VALUE_AREA_RESPONSIVE_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Value Area Responsive Short', criteria: 'Price responds to (fades back into) the developing value area from outside it — bearish variant. Counter-trend classification (grouped with TRT/TRT_MAH as counter-trend setups in server/routes/setups.js).' },
 };
 
+// Level-family "Group" labels — matches the Key Levels table's grouping convention
+// (BacktestView.jsx's KL_LEVEL_GROUPS: Initial Balance / Prior Week / Prior Day Value
+// Area / Overnight / RTH VWAP / Opening Reference), extended to cover every base level
+// name this codebase tracks (Key Levels only covers 6 groups / ~16 levels; Setup
+// Reference spans ~70). Added 2026-07-28 per direct user request to add a Group column
+// to Setup Reference matching the Key Levels table's format.
+const LEVEL_GROUP_MAP = {
+  PD_POC: 'Prior Day', PD_VAH: 'Prior Day', PD_VAL: 'Prior Day', PD_HIGH: 'Prior Day',
+  PD_LOW: 'Prior Day', PD_CLOSE: 'Prior Day', PD_SESSION_MID: 'Prior Day',
+  PD_IB_HIGH: 'Prior Day Initial Balance', PD_IB_LOW: 'Prior Day Initial Balance', PD_IB_MID: 'Prior Day Initial Balance',
+  PD_OR_MID: 'Prior Day Opening Range',
+  PD2_VAH: '2 Days Ago', PD2_VAL: '2 Days Ago', '2D_POC': '2 Days Ago',
+  FLOOR_PIVOT: 'Floor Pivots', FLOOR_R1: 'Floor Pivots', FLOOR_R2: 'Floor Pivots', FLOOR_R3: 'Floor Pivots',
+  FLOOR_S1: 'Floor Pivots', FLOOR_S2: 'Floor Pivots', FLOOR_S3: 'Floor Pivots',
+  CAM_R1: 'Camarilla', CAM_R2: 'Camarilla', CAM_R3: 'Camarilla', CAM_R4: 'Camarilla',
+  CAM_S1: 'Camarilla', CAM_S2: 'Camarilla', CAM_S3: 'Camarilla', CAM_S4: 'Camarilla',
+  DAILY_OPEN: "Today's Open",
+  WEEKLY_OPEN: 'Prior Week', WEEKLY_VWAP: 'Weekly VWAP',
+  MONTHLY_OPEN: 'Prior Month', MONTHLY_VWAP: 'Monthly VWAP',
+  PW_HIGH: 'Prior Week', PW_LOW: 'Prior Week', PW_VAH: 'Prior Week', PW_VAL: 'Prior Week', PW_POC: 'Prior Week',
+  PM_HIGH: 'Prior Month', PM_LOW: 'Prior Month', PM_VAH: 'Prior Month', PM_VAL: 'Prior Month', PM_POC: 'Prior Month',
+  M1_VAH: 'Rolling 1-Month', M1_VAL: 'Rolling 1-Month',
+  M3_VAH: 'Rolling 3-Month', M3_VAL: 'Rolling 3-Month', '3M_VAL': 'Rolling 3-Month', '3M_POC': 'Rolling 3-Month',
+  WPP: 'Weekly Pivots', WR1: 'Weekly Pivots', WR2: 'Weekly Pivots', WS1: 'Weekly Pivots', WS2: 'Weekly Pivots',
+  MPP: 'Monthly Pivots', MR1: 'Monthly Pivots', MR2: 'Monthly Pivots', MS1: 'Monthly Pivots', MS2: 'Monthly Pivots',
+  ONH: 'Overnight', ONL: 'Overnight',
+  OR_HIGH: 'Opening Range', OR_LOW: 'Opening Range',
+  IB_HIGH: 'Initial Balance', IB_LOW: 'Initial Balance', IB_MID_SCALP: 'Initial Balance', OR_MID_AFTER_IB: 'Initial Balance',
+  '5D_OR_MID': 'Opening Range (5-Day)', '10D_IB_MID': 'Initial Balance (10-Day)',
+  PY_VAH: 'Prior Year', PY_VAL: 'Prior Year', PY_POC: 'Prior Year',
+  MPP_OVERNIGHT: 'Monthly Pivots', WR1_OVERNIGHT: 'Weekly Pivots', WS1_OVERNIGHT: 'Weekly Pivots',
+  MONTHLY_OPEN_OVERNIGHT: 'Prior Month', '10D_IB_MID_OVERNIGHT': 'Initial Balance (10-Day)',
+  '3M_VAL_OVERNIGHT': 'Rolling 3-Month', '3M_POC_OVERNIGHT': 'Rolling 3-Month', PM_POC_OVERNIGHT: 'Prior Month',
+};
+// Non-level-fade / pattern setup_types — grouped by trigger family, not a level.
+const OTHER_GROUP_MAP = {
+  IB_BULLISH: 'Initial Balance', IB_BEARISH: 'Initial Balance',
+  MOMENTUM_60m_60m_BALANCE_FADE: 'Momentum/Pattern', MOMENTUM_60m_60m_TREND: 'Momentum/Pattern',
+  C_STANDALONE_UP: 'Auction Structure', C_STANDALONE_DOWN: 'Auction Structure',
+  C_PAIRED_LONG: 'Auction Structure', C_PAIRED_SHORT: 'Auction Structure',
+  A_UP_STRONG: 'Auction Structure', A_UP_WEAK: 'Auction Structure', A_DOWN_STRONG: 'Auction Structure', A_DOWN_WEAK: 'Auction Structure',
+  OPEN_TEST_DRIVE_LONG: 'Opening Classification', OPEN_TEST_DRIVE_SHORT: 'Opening Classification',
+  OPEN_DRIVE_LONG: 'Opening Classification', OPEN_DRIVE_SHORT: 'Opening Classification',
+  BRACKET_BREAKOUT_LONG: 'Bracket Breakout', BRACKET_BREAKOUT_SHORT: 'Bracket Breakout',
+  VALUE_AREA_RESPONSIVE_LONG: 'Value Area Responsive', VALUE_AREA_RESPONSIVE_SHORT: 'Value Area Responsive',
+  TRT_LONG: 'Trend Reversal Test', TRT_SHORT: 'Trend Reversal Test',
+  TRT_MAH_LONG: 'Trend Reversal Test', TRT_MAH_SHORT: 'Trend Reversal Test',
+  FAILED_AUCTION_LONG: 'Auction Structure', FAILED_AUCTION_SHORT: 'Auction Structure',
+  GAP_FILL_LONG: 'Gap Fill', GAP_FILL_SHORT: 'Gap Fill',
+  STOP_SWEEP_LONG: 'Stop Sweep', STOP_SWEEP_SHORT: 'Stop Sweep',
+  VWAP_MAGNET_LONG: 'RTH VWAP', VWAP_MAGNET_SHORT: 'RTH VWAP',
+  ZONE_EDGE_FADE: 'Confluence Zone',
+  STACK_VOL_BREAK_LIVE_LONG: 'Volume/Level Break', STACK_VOL_BREAK_LIVE_SHORT: 'Volume/Level Break',
+};
+
+/** Derive a Key-Levels-style family Group label from a setup_type string. */
+export function getSetupGroup(setupType) {
+  if (OTHER_GROUP_MAP[setupType]) return OTHER_GROUP_MAP[setupType];
+  // Strip conditional-variant/exit-mechanism/session suffixes to reach the base level name.
+  const base = setupType
+    .replace(/_FADE_(LONG|SHORT)(_TRAIL)?(_GAP_(UP|DOWN))?(_OVERNIGHT)?$/, '')
+    .replace(/_OVERNIGHT$/, '');
+  if (LEVEL_GROUP_MAP[base]) return LEVEL_GROUP_MAP[base];
+  if (LEVEL_GROUP_MAP[setupType]) return LEVEL_GROUP_MAP[setupType];
+  return null;
+}
+
 /** Look up a level-fade family's full definition (window rule merged in). */
 export function getLevelFadeDefinition(levelName) {
   const def = LEVEL_FADE_DEFINITIONS[levelName];
