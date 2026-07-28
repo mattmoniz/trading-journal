@@ -20,11 +20,12 @@ const SETUP_LOG_COLS = [
 export default function SetupHistoryView() {
   const [setups, setSetups] = React.useState([]);
   const [total, setTotal] = React.useState(0);
+  const [originBreakdown, setOriginBreakdown] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [filters, setFilters] = React.useState(() => {
     let session = 'both';
     try { session = sessionStorage.getItem('setup-log-session-filter') || 'both'; } catch (_) {}
-    return { type: '', resolution: '', from: '', to: '', shadow: 'hide', session };
+    return { type: '', resolution: '', from: '', to: '', shadow: 'hide', session, origin: 'all', hourFrom: '', hourTo: '' };
   });
 
   React.useEffect(() => {
@@ -54,9 +55,12 @@ export default function SetupHistoryView() {
     if (filters.to) p.set('to', filters.to);
     if (filters.shadow !== 'hide') p.set('shadow', filters.shadow);
     if (filters.session !== 'both') p.set('session', filters.session);
+    if (filters.origin !== 'all') p.set('origin', filters.origin);
+    if (filters.hourFrom !== '') p.set('hourFrom', filters.hourFrom);
+    if (filters.hourTo !== '') p.set('hourTo', filters.hourTo);
     fetch(`${API_URL}/setups/history?${p}`)
       .then(r => r.json())
-      .then(d => { setSetups(d.setups || []); setTotal(d.total || d.count || 0); setLoading(false); })
+      .then(d => { setSetups(d.setups || []); setTotal(d.total || d.count || 0); setOriginBreakdown(d.originBreakdown || null); setLoading(false); })
       .catch(() => setLoading(false));
   }, [filters]);
 
@@ -202,10 +206,38 @@ export default function SetupHistoryView() {
             </button>
           ))}
         </div>
-        {(filters.type || filters.resolution || filters.from || filters.to || filters.shadow !== 'hide' || filters.session !== 'both') && (
-          <button onClick={() => setFilters({ type: '', resolution: '', from: '', to: '', shadow: 'hide', session: 'both' })} style={{ ...inputStyle, color: '#94a3b8', cursor: 'pointer' }}>Clear</button>
+        <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)' }}
+          title="Real = genuinely live-detected (ACTIVE or SHADOW origin), whether or not shown as an alert. Backfill = synthetic history reconstructed after the fact — never actually fired live. Most historical rows are Backfill; check this before reading a count as real experience.">
+          {[['all', 'All'], ['real', 'Real'], ['backfill', 'Backfill']].map(([val, label]) => (
+            <button key={val} onClick={() => setFilters(f => ({ ...f, origin: val }))}
+              style={{ padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', border: 'none',
+                background: filters.origin === val ? (val === 'real' ? 'rgba(34,197,94,0.25)' : val === 'backfill' ? 'rgba(100,116,139,0.35)' : 'rgba(51,65,85,0.6)') : 'rgba(15,23,42,0.8)',
+                color: filters.origin === val ? (val === 'real' ? '#4ade80' : val === 'backfill' ? '#cbd5e1' : '#e2e8f0') : '#64748b' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }} title="Filter by hour of day the setup fired (ET, 0-23)">
+          <span style={{ fontSize: 11, color: '#64748b' }}>Hour</span>
+          <input type="number" min="0" max="23" placeholder="from" style={{ ...inputStyle, width: 52 }}
+            value={filters.hourFrom} onChange={e => setFilters(f => ({ ...f, hourFrom: e.target.value }))} />
+          <span style={{ fontSize: 11, color: '#64748b' }}>–</span>
+          <input type="number" min="0" max="23" placeholder="to" style={{ ...inputStyle, width: 52 }}
+            value={filters.hourTo} onChange={e => setFilters(f => ({ ...f, hourTo: e.target.value }))} />
+        </div>
+        {(filters.type || filters.resolution || filters.from || filters.to || filters.shadow !== 'hide' || filters.session !== 'both' || filters.origin !== 'all' || filters.hourFrom !== '' || filters.hourTo !== '') && (
+          <button onClick={() => setFilters({ type: '', resolution: '', from: '', to: '', shadow: 'hide', session: 'both', origin: 'all', hourFrom: '', hourTo: '' })} style={{ ...inputStyle, color: '#94a3b8', cursor: 'pointer' }}>Clear</button>
         )}
       </div>
+
+      {originBreakdown && originBreakdown.total_n > 0 && filters.origin === 'all' && (
+        <div style={{ marginBottom: 16, fontSize: 12, color: '#94a3b8' }}>
+          Of {originBreakdown.total_n.toLocaleString()} rows matching current filters: {' '}
+          <span style={{ color: '#4ade80', fontWeight: 700 }}>{originBreakdown.real_n.toLocaleString()} real</span>
+          {' '}(genuinely live-detected) · <span style={{ color: '#94a3b8', fontWeight: 700 }}>{originBreakdown.backfill_n.toLocaleString()} backfill</span> (synthetic history)
+          {originBreakdown.unknown_n > 0 && <> · <span style={{ color: '#64748b' }}>{originBreakdown.unknown_n.toLocaleString()} unknown</span></>}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ color: '#94a3b8', padding: 40, textAlign: 'center' }}>Loading…</div>
@@ -244,14 +276,15 @@ export default function SetupHistoryView() {
                     borderLeft: isShadow ? '2px solid #7c3aed' : undefined,
                   }}>
                     {effectiveCols.map(col => {
-                      if (col.key === 'setup_type' && isShadow) {
+                      if (col.key === 'setup_type' && (isShadow || s.origin_status === 'BACKFILL')) {
                         const isLong = s.setup_type?.includes('LONG') || s.setup_type?.includes('BULLISH');
                         const isShort = s.setup_type?.includes('SHORT') || s.setup_type?.includes('BEARISH');
                         const dirColor = isLong ? '#4ade80' : isShort ? '#f87171' : '#94a3b8';
                         return (
                           <td key={col.key} style={{ ...tdStyle, color: dirColor, fontWeight: 600 }}>
                             {s.setup_type?.replace(/_/g, ' ')}
-                            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, color: '#7c3aed', background: 'rgba(124,58,237,0.15)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.05em' }}>SHADOW</span>
+                            {isShadow && <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, color: '#7c3aed', background: 'rgba(124,58,237,0.15)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.05em' }}>SHADOW</span>}
+                            {s.origin_status === 'BACKFILL' && <span title="Synthetic history reconstructed after the fact — never actually fired live" style={{ marginLeft: 6, fontSize: 11, fontWeight: 800, color: '#94a3b8', background: 'rgba(100,116,139,0.2)', padding: '1px 4px', borderRadius: 3, letterSpacing: '0.05em' }}>BACKFILL</span>}
                           </td>
                         );
                       }

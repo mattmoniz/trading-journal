@@ -6178,13 +6178,21 @@ export default function createACDRouter(io) {
               auditSessionEnd.setHours(16, 0, 0, 0);
               if (auditSessionEnd <= auditEtNow) auditSessionEnd.setDate(auditSessionEnd.getDate() + 1);
               const auditExpiresAt = `${auditSessionEnd.getFullYear()}-${String(auditSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(auditSessionEnd.getDate()).padStart(2, '0')} ${String(auditSessionEnd.getHours()).padStart(2, '0')}:${String(auditSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+              // historical_win_rate/historical_sessions were never populated on this INSERT path
+              // (only the live-candidate ACTIVE/non-suppressed path set them) -- found 2026-07-28
+              // directly from a user report of "WR at Fire" showing empty on real, today-fired
+              // SHADOW rows. The data was already in scope two blocks up (liveStats._setupStats,
+              // built from the same SETUP_STATUS query that built _suppressedSetups) and simply
+              // never got read here. Same source SetupHistoryView.jsx's "WR at Fire" column reads.
+              const auditStats = liveStats._setupStats?.[type];
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
-                  entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at
+                  entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
+                  historical_win_rate, historical_sessions
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13)
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -6193,6 +6201,7 @@ export default function createACDRouter(io) {
                 currentPrice, auditStopLevel, auditT1Level,
                 `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
                 auditExpiresAt,
+                auditStats?.wr ?? null, auditStats?.n ?? null,
               ]).catch(() => {});
             }
           }
@@ -7784,7 +7793,7 @@ export default function createACDRouter(io) {
   // ── GET /api/setups/history ───────────────────────────────────────────────
   router.get('/setups/history', async (req, res) => {
     try {
-      const { from, to, type, resolution, shadow = 'hide', session = 'both', limit = 2000, offset = 0 } = req.query;
+      const { from, to, type, resolution, shadow = 'hide', session = 'both', origin = 'all', hourFrom, hourTo, limit = 2000, offset = 0 } = req.query;
       const liveShadowTypes = await getShadowSetupTypes();
       const shadowTypes = [...new Set([...liveShadowTypes, ...UNCALIBRATED_SHADOW_TYPES])];
       // $1 = shadowTypes only when actually used (not for shadow=show/both, which apply no shadow filter at all)
@@ -7803,6 +7812,12 @@ export default function createACDRouter(io) {
       } else {
         conditions = ["status != 'SHADOW'", `setup_type != ALL(${shadowRef})`];
       }
+      // Hour-of-day filter (ET wall-clock hour of fired_at), added 2026-07-28 per direct
+      // user request. fired_at is stored as a naive ET timestamp (see the naive-timestamp
+      // hard rule in CLAUDE.md) so EXTRACT(HOUR ...) reads the real ET hour directly, no
+      // timezone conversion needed.
+      if (hourFrom !== undefined && hourFrom !== '') { params.push(parseInt(hourFrom)); conditions.push(`EXTRACT(HOUR FROM fired_at) >= $${params.length}`); }
+      if (hourTo !== undefined && hourTo !== '') { params.push(parseInt(hourTo)); conditions.push(`EXTRACT(HOUR FROM fired_at) <= $${params.length}`); }
       // RTH = 9:30-15:59 ET, now backed by the persisted is_rth generated column (added
       // 2026-07-18) instead of a hand-rolled EXTRACT expression — see OPEN_DECISION
       // no_rth_column_trades_or_active_setups. 'overnight' had no real rows until the
@@ -7817,6 +7832,27 @@ export default function createACDRouter(io) {
       if (to)   { params.push(to);   conditions.push(`trade_date <= $${params.length}`); }
       if (type) { params.push(type); conditions.push(`setup_type = $${params.length}`); }
       if (resolution) { params.push(resolution); conditions.push(`resolution = $${params.length}`); }
+      // origin/real-vs-backfill breakdown — added 2026-07-28 after a direct user report of
+      // misreading a Setup Log count (e.g. "62" rows for OR_LOW_FADE_LONG) as real live-fired
+      // experience, when ~96% of it was actually origin_status='BACKFILL' (synthetic
+      // reconstructed history). Computed over every OTHER active filter (type/date/shadow/
+      // session/hour, all applied above) but deliberately BEFORE the origin filter itself is
+      // applied, so the breakdown stays meaningful no matter which origin slice is currently
+      // selected — filtering to origin=real and then showing "100% real" would be circular.
+      const originWhere = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const originBreakdownR = await query(`
+        SELECT
+          count(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::int as real_n,
+          count(*) FILTER (WHERE origin_status = 'BACKFILL')::int as backfill_n,
+          count(*) FILTER (WHERE origin_status = 'UNKNOWN' OR origin_status IS NULL)::int as unknown_n,
+          count(*)::int as total_n
+        FROM active_setups ${originWhere}
+      `, params);
+      const originBreakdown = originBreakdownR.rows[0];
+      // Default 'all' preserves prior behavior; 'real' isolates ACTIVE+SHADOW (genuinely
+      // live-detected, whether or not shown), 'backfill' isolates the synthetic population.
+      if (origin === 'real') conditions.push(`origin_status IN ('ACTIVE','SHADOW')`);
+      else if (origin === 'backfill') conditions.push(`origin_status = 'BACKFILL'`);
       const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
       const totalR = await query(`SELECT COUNT(*)::int as total FROM active_setups ${where}`, params);
       const total = totalR.rows[0]?.total || 0;
@@ -7849,7 +7885,7 @@ export default function createACDRouter(io) {
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
           s.entry_zone_low, s.stop_level, s.t1_level, s.t1_label, s.status, s.resolution, s.actual_pnl,
           s.historical_win_rate, s.historical_sessions, s.price_at_detection,
-          s.mae_points, s.mfe_points, s.resolution_method, s.bars_to_resolution,
+          s.mae_points, s.mfe_points, s.resolution_method, s.bars_to_resolution, s.origin_status,
           TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str,
           cur.win_rate as current_win_rate, cur.sample_size as current_sample_size, cur.ev_per_trade as current_ev,
           tr.pnl as matched_trade_pnl, tr.quantity as matched_trade_qty,
@@ -7886,7 +7922,7 @@ export default function createACDRouter(io) {
       `, params);
       const shadowSet = new Set(shadowTypes);
       const rows = r.rows.map(row => ({ ...row, is_shadow_type: shadowSet.has(row.setup_type) }));
-      res.json({ setups: rows, count: rows.length, total });
+      res.json({ setups: rows, count: rows.length, total, originBreakdown });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
