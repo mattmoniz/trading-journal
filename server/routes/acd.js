@@ -7196,15 +7196,24 @@ export default function createACDRouter(io) {
                 // SHORT FAILED calibration (oosEv=-$24.73 despite a positive in-sample read)
                 // -- widening would have been a real mistake, stays at the original 40pt.
                 calibratedTarget: isGlobexNow ? null : (direction === 'LONG' ? 70 : 40),
-                // Informational only, not a specific calibrated number -- RESEARCH_CLAIM
-                // breakeven_trail_early_arm_timing_effect_not_volume_content found that
-                // arming a breakeven-then-trail exit early (~bar 7) roughly doubled backtest
-                // EV vs waiting for the 40pt target, but the effect is a TIMING effect (a
-                // blind early-arm control captured ~96% of the improvement) not genuinely
-                // about volume content -- and the specific dollar figure only cleared a thin
-                // (~9-event) replication check, so it's not asserted as a confirmed number
-                // here, only the qualitative direction.
-                manageGuidance: isGlobexNow ? null : 'Backtest suggests switching to a trailing stop well before the 40pt target is reached, not after -- exact timing not yet confirmed. These trades can take well over 30min to fully resolve; don\'t judge on a short clock.',
+                // Informational only, not a mechanism this signal can enforce itself (it's a
+                // momentary, fire-once flag, not a tracked position walked bar-by-bar the way
+                // real active_setups rows are for bar6_checkpoint) -- surfaces the synthesized
+                // finding from this arc's full research pass (RESEARCH_CLAIMs
+                // path_quality_bars_to_target_predicts_continuation,
+                // capture_ratio_flat_wide_beats_trailing_on_tail_moves,
+                // combined_system_volz_climax_hurts_grinding_cohort): tested volume-climax
+                // exits, arm-a-trail mechanisms, and direct volume exits as ways to extend a
+                // winning trade -- ALL of them underperformed a plain wide (~150pt) target on
+                // capturing the biggest moves, because trailing/volume logic gets shaken out
+                // by normal chop that a patient fixed level doesn't react to. Separately: HOW
+                // FAST a trade reaches its initial target matters more than any volume signal
+                // -- reaching target in <=9 bars is a climax pattern (extending it loses money,
+                // median -$135/trade on the fastest arrivals); reaching it in 10-25 bars (a
+                // grinding pace) is a real trend worth extending toward a wider target instead
+                // of taking the original one. OPEN_DECISION promote_stackvol_to_tracked_setup
+                // covers building this as a real, dynamically-updating mechanism.
+                manageGuidance: isGlobexNow ? null : 'If this reaches its target FAST (roughly under 10 bars), take it -- that\'s usually a climax, not a trend, and holding past it has lost money on backtest. If it grinds there gradually (10-25 bars), that\'s a real trend -- consider riding to a much wider target (~150pt) instead of the original one, rather than trailing tightly.',
               };
               const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
               query(`
