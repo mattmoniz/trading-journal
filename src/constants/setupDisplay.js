@@ -32,6 +32,8 @@ export const SETUP_DISPLAY_LABELS = {
   FLOOR_S1_FADE_LONG_TRAIL:   'Floor S1 Fade ↑ (Trail)',
   DAILY_OPEN_FADE_LONG_TRAIL: 'Daily Open Fade ↑ (Trail)',
   CAM_S2_FADE_LONG_TRAIL:     'Cam S2 Fade ↑ (Trail)',
+  STACK_VOL_BREAK_LIVE_LONG:  'Stack Vol Break ↑',
+  STACK_VOL_BREAK_LIVE_SHORT: 'Stack Vol Break ↓',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level

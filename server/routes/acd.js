@@ -281,7 +281,7 @@ export async function resolveSetupsByPrice(io) {
   const active = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, expires_at::text as expires_at,
            entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
-           runner_trail_width::float as runner_trail_width
+           runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
   // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the
@@ -402,6 +402,12 @@ export async function resolveSetupsByPrice(io) {
     // marks this row as using the dynamic path-dependent exit instead of the plain
     // fixed-stop/fixed-target logic below. Only FLOOR_R1_FADE_SHORT_TRAIL sets this today.
     const trailWidth = row.runner_trail_width;
+    // Bank-vs-extend (promote_stackvol_to_tracked_setup, 2026-07-27): a non-null
+    // extend_target_level marks this row (STACK_VOL_BREAK_LIVE_LONG/SHORT only, as of
+    // 2026-07-27) as using the dynamic bars-to-target exit below instead of the plain
+    // fixed-stop/fixed-target logic. Mutually exclusive with trailWidth -- no setup_type
+    // sets both columns.
+    const extendTarget = row.extend_target_level;
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
@@ -419,6 +425,12 @@ export async function resolveSetupsByPrice(io) {
     // whether the row terminally resolves this poll, purely so the frontend card can
     // show "armed, trailing" (docs/SCALEOUT_RUNNER_SPEC.md §7) — never read as input.
     let armedAt = null, peakPrice = null, trailStopPrice = null;
+    // Bank-vs-extend state -- same re-derive-from-scratch-every-poll convention as the
+    // trail state above. `extending` flips true once the original t1 is reached in a
+    // "grinding" 10-25 bar window (RESEARCH_CLAIM path_quality_bars_to_target_predicts_
+    // continuation); false the whole way through for a fast (<=9 bar) bank or a slow
+    // (>25 bar, unvalidated-to-extend) arrival, both of which just take t1 normally.
+    let extending = false;
 
     for (const bar of bars.rows) {
       barCount++;
@@ -426,6 +438,66 @@ export async function resolveSetupsByPrice(io) {
       const adverse   = long ? entry - bar.low  : bar.high - entry;
       runMfe = Math.max(runMfe, favorable);
       runMae = Math.max(runMae, adverse);
+
+      if (extendTarget != null) {
+        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function).
+        const isSessionEnd = bar.ts.slice(11, 13) >= '16';
+        const stopHit = long ? bar.low <= stop : bar.high >= stop;
+
+        if (!extending) {
+          const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
+          if (t1Hit && stopHit) {
+            // Conservative: assume stop hit first (worst case), same convention as the
+            // plain branch below.
+            resolution = 'STOP_HIT'; method = 'SAME_BAR_STOP_FIRST';
+            resolvedAt = bar.ts; priceAtRes = stop;
+          } else if (stopHit) {
+            resolution = 'STOP_HIT'; method = 'PRICE_CLEAN';
+            resolvedAt = bar.ts; priceAtRes = stop;
+          } else if (t1Hit) {
+            const barsToTarget = barCount - 1; // 0 = reached on the very first bar, matches
+                                                // pilot_path_quality_at_target.mjs's own convention
+            if (barsToTarget <= 9) {
+              // Fast arrival = climax spike -- bank now, extending destroyed value on backtest
+              // (median -$135/trade on the fastest quartile).
+              resolution = 'TARGET_HIT'; method = 'BANKED_FAST_ARRIVAL';
+              resolvedAt = bar.ts; priceAtRes = t1;
+            } else if (barsToTarget <= 25) {
+              // Grinding arrival = real trend, rigor-clean +$34.75/trade median to extend.
+              // Original stop_level is NEVER moved once extending -- the validated
+              // FLAT_WIDE_150 design keeps the same stop throughout, it does not ratchet
+              // to breakeven (unlike the trailWidth mechanism above, which is a different
+              // exit design entirely).
+              extending = true;
+            } else {
+              // >25 bars: only thinly positive on backtest, not independently rigor-clean
+              // (see RESEARCH_CLAIM path_quality_bars_to_target_predicts_continuation) --
+              // the OPEN_DECISION this mechanism implements only validated the 10-25 bar
+              // window as worth extending, so this defaults to banking like a fast arrival.
+              resolution = 'TARGET_HIT'; method = 'BANKED_SLOW_ARRIVAL';
+              resolvedAt = bar.ts; priceAtRes = t1;
+            }
+          }
+          if (!resolution && isSessionEnd) {
+            resolution = 'TIME_EXPIRED'; method = 'MARK_TO_MARKET';
+            resolvedAt = bar.ts; priceAtRes = bar.close;
+          }
+        } else {
+          const extHit = long ? bar.high >= extendTarget : bar.low <= extendTarget;
+          if (stopHit) {
+            resolution = 'STOP_HIT'; method = 'EXTEND_STOP_HIT';
+            resolvedAt = bar.ts; priceAtRes = stop;
+          } else if (extHit) {
+            resolution = 'TARGET_HIT'; method = 'EXTENDED_TARGET_HIT';
+            resolvedAt = bar.ts; priceAtRes = extendTarget;
+          } else if (isSessionEnd) {
+            resolution = 'TIME_EXPIRED'; method = 'EXTEND_TIME_EXPIRED';
+            resolvedAt = bar.ts; priceAtRes = bar.close;
+          }
+        }
+        if (resolution) break;
+        continue;
+      }
 
       if (trailWidth != null) {
         // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
@@ -632,6 +704,15 @@ export async function resolveSetupsByPrice(io) {
           [row.id, armedAt, newPeak, newTrail]
         ).catch(() => {});
       }
+      // Bank-vs-extend eligible and now extending but not yet resolved this poll: persist
+      // purely for display (so a future card can show "extending toward the wider target"),
+      // same never-read-back-as-input convention as the trail state just above.
+      if (extendTarget != null && extending) {
+        await query(
+          `UPDATE active_setups SET extend_decision='EXTENDING', updated_at=NOW() WHERE id=$1 AND extend_decision IS DISTINCT FROM 'EXTENDING'`,
+          [row.id]
+        ).catch(() => {});
+      }
       continue;
     }
 
@@ -723,6 +804,27 @@ async function getOvernightLevelLiveStatus(type) {
     FROM active_setups
     WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
   `, [type]);
+  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
+  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
+  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
+  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+}
+
+// Same dynamic SHADOW->ACTIVE promotion pattern for STACK_VOL_BREAK_LIVE_LONG/SHORT
+// (promote_stackvol_to_tracked_setup, 2026-07-27) -- N=0 real trades confirmed at build
+// time (verify_stack_vol_break_live_actual_fire_globex_reachable), so every row must
+// insert as SHADOW today, but per the New Setup Type checklist's standalone-poller rule
+// this MUST be a live re-check every fire, not a hardcoded 'SHADOW' literal -- otherwise
+// it would sit in SHADOW forever even once real forward data clears the bar. Checked
+// per exact setup_type (LONG/SHORT calibrations differ -- 70pt vs 40pt target, direction-
+// specific per stackvol_target_direction_specific_calibration_2026_07_27), not a LIKE
+// pattern combining both.
+async function getStackVolBreakLiveStatus(setupType) {
+  const { rows } = await query(`
+    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
+    FROM active_setups
+    WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+  `, [setupType]);
   const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
   if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
   if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
@@ -3349,8 +3451,9 @@ export default function createACDRouter(io) {
               // -- reaching target in <=9 bars is a climax pattern (extending it loses money,
               // median -$135/trade on the fastest arrivals); reaching it in 10-25 bars (a
               // grinding pace) is a real trend worth extending toward a wider target instead
-              // of taking the original one. OPEN_DECISION promote_stackvol_to_tracked_setup
-              // covers building this as a real, dynamically-updating mechanism.
+              // of taking the original one. Now a real, dynamically-updating mechanism (below
+              // + resolveSetupsByPrice()'s extend_target_level branch), not just this string --
+              // promote_stackvol_to_tracked_setup, resolved 2026-07-27.
               manageGuidance: isGlobexNow ? null : 'If this reaches its target FAST (roughly under 10 bars), take it -- that\'s usually a climax, not a trend, and holding past it has lost money on backtest. If it grinds there gradually (10-25 bars), that\'s a real trend -- consider riding to a much wider target (~150pt) instead of the original one, rather than trailing tightly.',
             };
             const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
@@ -3359,6 +3462,46 @@ export default function createACDRouter(io) {
               VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
               ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
             `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, calibratedStop: stackVolSignal.calibratedStop, calibratedStopType: stackVolSignal.calibratedStopType, calibratedTarget: stackVolSignal.calibratedTarget, definitionVersion: 3, triggeredAt: new Date().toISOString() })]).catch(() => {});
+
+            // Real active_setups tracking (promote_stackvol_to_tracked_setup, 2026-07-27):
+            // RTH only -- the bank-vs-extend research (path_quality_bars_to_target_predicts_
+            // continuation) was validated specifically against the RTH loose-confluence+pace
+            // population with a LEVEL_NEXT/fixed-40 stop and a direction-specific calibrated
+            // target; the Globex fire above has no calibratedStop/calibratedTarget at all (a
+            // different, unvalidated-for-this-mechanism recipe), so it stays informational-only
+            // via the performance_audit row above until its own stop/target get calibrated.
+            // extend_target_level (entry +/-150pt) is set unconditionally here -- non-null
+            // flags this row for the bank-vs-extend branch in resolveSetupsByPrice(), the same
+            // "one column is both the eligibility flag and the value" convention already used
+            // by runner_trail_width for the breakeven-trail mechanism.
+            if (!isGlobexNow) {
+              const svSetupType = `STACK_VOL_BREAK_LIVE_${direction}`;
+              const svEntry = bar.close;
+              const svStop = direction === 'LONG' ? svEntry - stackVolSignal.calibratedStop : svEntry + stackVolSignal.calibratedStop;
+              const svT1 = direction === 'LONG' ? svEntry + stackVolSignal.calibratedTarget : svEntry - stackVolSignal.calibratedTarget;
+              const svExtendTarget = direction === 'LONG' ? svEntry + 150 : svEntry - 150;
+              const svExpiresAt = `${todayET} 16:00:00`;
+              getStackVolBreakLiveStatus(svSetupType).then(async (live) => {
+                const ins = await query(`
+                  INSERT INTO active_setups (
+                    trade_date, setup_type, fired_at, expires_at, status, origin_status,
+                    entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
+                    extend_target_level, price_at_detection, confluence_score_at_detection,
+                    confluence_levels_at_detection, suppression_reason
+                  ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12)
+                  ON CONFLICT DO NOTHING
+                  RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
+                `, [todayET, svSetupType, svExpiresAt, live.status, svEntry, svStop, svT1,
+                    `${stackVolSignal.calibratedTarget}pt (bank <=9 bars / extend 10-25 bars to 150pt)`,
+                    svExtendTarget, levelDensity, stackVolSignal.levels, live.reason]);
+                if (ins.rows[0]) {
+                  try { await dropToTimeline(ins.rows[0]); } catch (_) {}
+                  if (live.status === 'ACTIVE' && io) {
+                    io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
+                  }
+                }
+              }).catch(() => {});
+            }
             break;
           }
         }
