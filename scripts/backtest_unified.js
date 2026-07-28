@@ -1334,7 +1334,12 @@ export {
   resolve, aggregate, loadData, detectLevelFades, LEVEL_GATES,
   buildBracketLevels, buildOrMids, buildIbMids, buildMonthlyOpens,
   buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid,
-  PT, COMM
+  PT, COMM,
+  // Added 2026-07-28 so the "OTHER" (non-level-fade) setup family's real detection
+  // functions can be reused by external test scripts instead of reimplemented --
+  // same "export the real function" convention as detectLevelFades above.
+  detectIB, detectCStandalone, detectOTD, detectVAResp, detectTRT,
+  detectBracketBreakout, detectVwapMagnet, detectStopSweep,
 };
 
 import { fileURLToPath } from 'url';
