@@ -117,7 +117,7 @@ async function getTouchQualityBaseline(tradeDate) {
 // volume. Backs the STACK_VOL_BREAK_LIVE pace factor (RESEARCH_CLAIM
 // loose_confluence_pace_rth_promising_not_confirmed) — reused directly from
 // scratch/pilot_loose_confluence_pace.mjs's getPaceBaseline(), not reimplemented.
-async function getPaceBaseline(tradeDate) {
+export async function getPaceBaseline(tradeDate) {
   const cached = getCached(tradeDate, 'paceBaseline', DAY_CACHE_TTL);
   if (cached) return cached;
   const res = await query(`
