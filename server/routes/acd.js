@@ -3135,6 +3135,196 @@ export default function createACDRouter(io) {
   // below is new. Only `res.json`/`res.status` are called anywhere in this handler
   // (checked), so a minimal fake res capturing just those two is a safe substitute
   // for concurrent callers that share this same in-flight computation.
+  // Extracted 2026-07-27 so this runs in BOTH the RTH and Globex branches of
+  // runSetupDetection below -- originally written with isGlobexNow branches baked
+  // in throughout (different volZ/OSR/cluster-size cutoffs, RTH-only pace/stop/
+  // target fields), but physically placed after the Globex early-return, so those
+  // branches were dead code in practice: during the 6PM-8:30AM ET window the route
+  // always exited before ever reaching this block. Per the standing rule (never
+  // ship RTH-only and call it done without checking Globex), this now actually
+  // runs in both.
+  async function computeStackVolSignal(todayET) {
+    let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null, manageGuidance: null };
+    try {
+      const svBarsQ = await query(`
+        SELECT ts, close::float, high::float, low::float, open::float,
+               EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
+               bid_volume::int, ask_volume::int,
+               EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
+        FROM price_bars_primary
+        WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '3 hours'
+        ORDER BY ts ASC
+      `);
+      const svBars = svBarsQ.rows;
+      if (svBars.length > 31) {
+        const i = svBars.length - 1;
+        const bar = svBars[i];
+        const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
+        const volZCutoff = isGlobexNow ? 1.5 : 0.5;
+        const osrCutoff = isGlobexNow ? 0.65 : 0.55;
+        const minClusterSize = isGlobexNow ? 2 : 1;
+
+        // Levels: same daily-cached level_prices batch as the rest of this handler,
+        // plus real-time OR/IB (not from level_prices, which may lag same-day formation)
+        // plus live developing VWAP (never in level_prices at all -- a per-bar value).
+        const svLevelsRaw = getCached(todayET, 'stackVolLevels', DAY_CACHE_TTL) || await (async () => {
+          const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL`, [todayET]);
+          const map = {};
+          for (const r of lpQ.rows) map[r.level_name] = r.price;
+          return setCached(todayET, 'stackVolLevels', map);
+        })();
+        const svLevels = { ...svLevelsRaw };
+        if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
+        if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
+        if (!isGlobexNow) svLevels.VWAP = computeVWAP(svBars, i);
+
+        const levelsArr = Object.entries(svLevels).filter(([, p]) => p != null && isFinite(p)).map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
+        const clusters = [];
+        let cur = levelsArr.length ? [levelsArr[0]] : [];
+        for (let j = 1; j < levelsArr.length; j++) {
+          if (levelsArr[j].price - levelsArr[j - 1].price <= 15) cur.push(levelsArr[j]);
+          else { clusters.push(cur); cur = [levelsArr[j]]; }
+        }
+        if (cur.length) clusters.push(cur);
+
+        const totalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
+        const svBaseline = await getTouchQualityBaseline(todayET);
+        const bl = svBaseline.get(Number(bar.tod));
+        const volZ = (bl && bl.std_vol > 0) ? (totalVol - bl.avg_vol) / bl.std_vol : 0;
+
+        // Pace/no-countermovement (RTH only) -- consecutiveCount = how many of the last 5
+        // bars closed the same direction as the candidate break; paceZ = trailing-5-bar net
+        // move vs a real 20-day per-minute-of-day baseline (getPaceBaseline), not a static
+        // point cutoff.
+        let consecutiveCount = 0, paceZ = 0;
+        if (!isGlobexNow) {
+          const paceBaseline = await getPaceBaseline(todayET);
+          const pBl = paceBaseline.get(Number(bar.tod));
+          const prev5Close = i >= 5 ? svBars[i - 5].close : svBars[0].close;
+          const netPace = Math.abs(bar.close - prev5Close);
+          paceZ = (pBl && pBl.std_pace > 0) ? (netPace - pBl.avg_pace) / pBl.std_pace : 0;
+        }
+
+        for (const cluster of clusters) {
+          if (cluster.length < minClusterSize) continue;
+          const clusterMin = cluster[0].price, clusterMax = cluster[cluster.length - 1].price;
+          let direction = null;
+          // Gap guard: a bar whose OWN gap (distance from its predecessor) exceeds ~5min
+          // (the measured real small-gap ceiling in this codebase's own RTH/Globex data,
+          // see the barsAdjacent() precedent in pilot_level_agnostic_touch_battle_quality.mjs)
+          // means everything before it is on the OTHER side of a real discontinuity (most
+          // commonly the daily 5-6PM ET maintenance halt, which this 3-hour lookback window
+          // can span) -- stop the backward scan there rather than comparing pre/post-gap
+          // price as if it were one continuous sequence.
+          if (bar.close < clusterMin) {
+            let foundAbove = false, validBreak = true;
+            for (let k = 1; k <= 30; k++) {
+              const pb = svBars[i - k]; if (!pb) break;
+              if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+              if (pb.close >= clusterMax) { foundAbove = true; break; }
+              if (pb.close < clusterMin) { validBreak = false; break; }
+            }
+            if (foundAbove && validBreak) direction = 'SHORT';
+          } else if (bar.close > clusterMax) {
+            let foundBelow = false, validBreak = true;
+            for (let k = 1; k <= 30; k++) {
+              const pb = svBars[i - k]; if (!pb) break;
+              if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+              if (pb.close <= clusterMin) { foundBelow = true; break; }
+              if (pb.close > clusterMax) { validBreak = false; break; }
+            }
+            if (foundBelow && validBreak) direction = 'LONG';
+          }
+          if (!direction) continue;
+
+          if (!isGlobexNow) {
+            consecutiveCount = 0;
+            for (let k = Math.max(0, i - 4); k <= i; k++) {
+              const b = svBars[k];
+              if (direction === 'SHORT' && b.close < b.open) consecutiveCount++;
+              if (direction === 'LONG' && b.close > b.open) consecutiveCount++;
+            }
+          }
+
+          // Structural stop placement (RTH only): RESEARCH_CLAIM
+          // structural_next_level_stop_beats_fixed_and_median_control -- a stop placed at
+          // the NEXT real level beyond the one just broken (not the immediate cluster edge,
+          // and not a fixed 40pt) beat both the fixed-40 baseline AND a FIXED_AT_MEDIAN
+          // control (same avg width, not level-informed) at target=40pt, clean on rigor.
+          // levelsArr is already sorted by price. Falls back to the fixed 40pt if no level
+          // exists within 200pt (matches the backtest's own fallback population, which
+          // excluded those ~2% of cases rather than guessing a distance for them).
+          let nextLevelBeyondDist = null;
+          if (!isGlobexNow) {
+            if (direction === 'SHORT') {
+              for (const l of levelsArr) {
+                if (l.price > clusterMax) { nextLevelBeyondDist = l.price - bar.close; break; }
+              }
+            } else {
+              for (let j = levelsArr.length - 1; j >= 0; j--) {
+                if (levelsArr[j].price < clusterMin) { nextLevelBeyondDist = bar.close - levelsArr[j].price; break; }
+              }
+            }
+            if (nextLevelBeyondDist != null && nextLevelBeyondDist > 200) nextLevelBeyondDist = null;
+          }
+
+          const favorableVol = direction === 'LONG' ? (bar.ask_volume || 0) : (bar.bid_volume || 0);
+          const adverseVol = direction === 'LONG' ? (bar.bid_volume || 0) : (bar.ask_volume || 0);
+          const oneSidedRatio = (favorableVol + adverseVol) > 0 ? favorableVol / (favorableVol + adverseVol) : 0.5;
+
+          const paceOk = isGlobexNow ? true : (consecutiveCount >= 4 && paceZ >= 1);
+          if (volZ >= volZCutoff && oneSidedRatio >= osrCutoff && paceOk) {
+            const levelDensity = levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).length;
+            stackVolSignal = {
+              active: true, direction, sigma: +volZ.toFixed(2), oneSidedRatio: +oneSidedRatio.toFixed(2),
+              levelDensity, levels: levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).map(l => l.name),
+              paceZ: isGlobexNow ? null : +paceZ.toFixed(2), consecutiveCount: isGlobexNow ? null : consecutiveCount,
+              calibratedStop: isGlobexNow ? null : +(nextLevelBeyondDist ?? 40).toFixed(1),
+              calibratedStopType: isGlobexNow ? null : (nextLevelBeyondDist != null ? 'LEVEL_NEXT' : 'FIXED_FALLBACK'),
+              // Direction-specific, via computeCorrectedTarget() (the real, already-audited
+              // target-calibration pipeline every other setup_type in this codebase uses --
+              // thin-tail gate, chronological OOS split, plateau check, must beat baseline
+              // both in-sample and OOS, rigor-clean), NOT a raw best-EV grid pick.
+              // RESEARCH_CLAIM stackvol_target_direction_specific_calibration_2026_07_27:
+              // LONG clears every guardrail at 70pt (N=215, oosEv=+$1.74 thin but positive,
+              // rigor-clean, though the most recent chronological third shows the edge
+              // thinning to $0.15/trade -- worth re-checking as more data accumulates).
+              // SHORT FAILED calibration (oosEv=-$24.73 despite a positive in-sample read)
+              // -- widening would have been a real mistake, stays at the original 40pt.
+              calibratedTarget: isGlobexNow ? null : (direction === 'LONG' ? 70 : 40),
+              // Informational only, not a mechanism this signal can enforce itself (it's a
+              // momentary, fire-once flag, not a tracked position walked bar-by-bar the way
+              // real active_setups rows are for bar6_checkpoint) -- surfaces the synthesized
+              // finding from this arc's full research pass (RESEARCH_CLAIMs
+              // path_quality_bars_to_target_predicts_continuation,
+              // capture_ratio_flat_wide_beats_trailing_on_tail_moves,
+              // combined_system_volz_climax_hurts_grinding_cohort): tested volume-climax
+              // exits, arm-a-trail mechanisms, and direct volume exits as ways to extend a
+              // winning trade -- ALL of them underperformed a plain wide (~150pt) target on
+              // capturing the biggest moves, because trailing/volume logic gets shaken out
+              // by normal chop that a patient fixed level doesn't react to. Separately: HOW
+              // FAST a trade reaches its initial target matters more than any volume signal
+              // -- reaching target in <=9 bars is a climax pattern (extending it loses money,
+              // median -$135/trade on the fastest arrivals); reaching it in 10-25 bars (a
+              // grinding pace) is a real trend worth extending toward a wider target instead
+              // of taking the original one. OPEN_DECISION promote_stackvol_to_tracked_setup
+              // covers building this as a real, dynamically-updating mechanism.
+              manageGuidance: isGlobexNow ? null : 'If this reaches its target FAST (roughly under 10 bars), take it -- that\'s usually a climax, not a trend, and holding past it has lost money on backtest. If it grinds there gradually (10-25 bars), that\'s a real trend -- consider riding to a much wider target (~150pt) instead of the original one, rather than trailing tightly.',
+            };
+            const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
+            query(`
+              INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+              VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
+              ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+            `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, calibratedStop: stackVolSignal.calibratedStop, calibratedStopType: stackVolSignal.calibratedStopType, calibratedTarget: stackVolSignal.calibratedTarget, definitionVersion: 3, triggeredAt: new Date().toISOString() })]).catch(() => {});
+            break;
+          }
+        }
+      }
+    } catch (_) { /* informational only, never block the response */ }
+    return stackVolSignal;
+  }
+
   const runSetupDetection = async (req, res) => {
     try {
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
@@ -3172,7 +3362,8 @@ export default function createACDRouter(io) {
       if (inGlobex) {
         const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
         const globexSetup = await detectGlobexSetup(sessionDate, io);
-        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true });
+        const stackVolSignal = await computeStackVolSignal(todayET);
+        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal });
       }
 
       const noNewEntries = false; // setups fire throughout RTH session
@@ -7018,214 +7209,10 @@ export default function createACDRouter(io) {
       } catch (_) { /* informational only, never block the response */ }
 
       // Real-time level-stack break + volume/delta confirmation signal — informational
-      // only, does NOT gate/suppress any setup. Added 2026-07-27, RESEARCH_CLAIM
-      // stack_break_volume_confirmation_promising_not_confirmed. Direct answer to the
-      // user watching a live flush: neither bigMoveSignal (needs 250pt already covered)
-      // nor sigmaContinuation (needs a full 60min of realized move) can fire near the
-      // START of a move -- this one can, since it only needs ONE bar. Backtest found 3
-      // genuinely rigor-clean (day-clustering + chronological-stability) configs, not
-      // just the single best cell in a big swept grid:
-      //   RTH:    volZ>=2,   OSR>=0.55  N=552 EV=+$8.86/trade
-      //   Globex: volZ>=1.5, OSR>=0.65  N=426 EV=+$4.23/trade
-      // "Stack break" = price closes through every level in a >=2-level cluster (levels
-      // within PROXIMITY of each other) after having clearly been on the other side
-      // within the last 30 bars -- same definition as scratch/pilot_breakdown_continuation.mjs's
-      // processBars(), reimplemented compactly here for the live single-current-bar case
-      // rather than importing the backtest script into the live route.
-      // Also reports levelDensity (count of ALL levels within a wider 40pt band, not just
-      // the strictly-adjacent-clustered ones) per the user's direct observation that
-      // today's real qualifying moment (10:01 ET) sat under 5 levels within 40pt even
-      // though the strict 15pt clustering only grouped 2 of them -- level DENSITY at the
-      // break is surfaced as context on the badge, not (yet) a separately validated
-      // factor of its own; do not treat it as calibrated until it's actually backtested.
-      // 2026-07-27 v2: replaced the RTH threshold with the looser, pace-confirmed recipe
-      // from RESEARCH_CLAIM loose_confluence_pace_rth_promising_not_confirmed (single-level
-      // breaks count, volZ>=0.5, OSR>=0.55, PLUS a pace/no-countermovement gate: >=4 of the
-      // last 5 bars same-direction AND paceZ>=1 vs a real 20-day per-minute-of-day trailing-
-      // pace baseline). This is what actually caught 2026-07-27's 09:42 ET move (the old
-      // volZ>=2 RTH threshold didn't fire until 10:01). Globex keeps the OLD, separately-
-      // validated threshold (clusterSize>=2, volZ>=1.5, OSR>=0.65, no pace) -- the looser+pace
-      // recipe was NOT clean for Globex in backtest, don't apply it there. VWAP (computeVWAP,
-      // imported from backtest_confluence.js, not reimplemented) is now included as a
-      // candidate level -- previously excluded, since it isn't in level_prices.
-      let stackVolSignal = { active: false, direction: null, sigma: null, oneSidedRatio: null, levelDensity: 0, levels: [], paceZ: null, consecutiveCount: null, calibratedStop: null, calibratedStopType: null, calibratedTarget: null, manageGuidance: null };
-      try {
-        const svBarsQ = await query(`
-          SELECT ts, close::float, high::float, low::float, open::float,
-                 EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
-                 bid_volume::int, ask_volume::int,
-                 EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
-          FROM price_bars_primary
-          WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '3 hours'
-          ORDER BY ts ASC
-        `);
-        const svBars = svBarsQ.rows;
-        if (svBars.length > 31) {
-          const i = svBars.length - 1;
-          const bar = svBars[i];
-          const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
-          const volZCutoff = isGlobexNow ? 1.5 : 0.5;
-          const osrCutoff = isGlobexNow ? 0.65 : 0.55;
-          const minClusterSize = isGlobexNow ? 2 : 1;
-
-          // Levels: same daily-cached level_prices batch as the rest of this handler,
-          // plus real-time OR/IB (not from level_prices, which may lag same-day formation)
-          // plus live developing VWAP (never in level_prices at all -- a per-bar value).
-          const svLevelsRaw = getCached(todayET, 'stackVolLevels', DAY_CACHE_TTL) || await (async () => {
-            const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL`, [todayET]);
-            const map = {};
-            for (const r of lpQ.rows) map[r.level_name] = r.price;
-            return setCached(todayET, 'stackVolLevels', map);
-          })();
-          const svLevels = { ...svLevelsRaw };
-          if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
-          if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
-          if (!isGlobexNow) svLevels.VWAP = computeVWAP(svBars, i);
-
-          const levelsArr = Object.entries(svLevels).filter(([, p]) => p != null && isFinite(p)).map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
-          const clusters = [];
-          let cur = levelsArr.length ? [levelsArr[0]] : [];
-          for (let j = 1; j < levelsArr.length; j++) {
-            if (levelsArr[j].price - levelsArr[j - 1].price <= 15) cur.push(levelsArr[j]);
-            else { clusters.push(cur); cur = [levelsArr[j]]; }
-          }
-          if (cur.length) clusters.push(cur);
-
-          const totalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
-          const svBaseline = await getTouchQualityBaseline(todayET);
-          const bl = svBaseline.get(Number(bar.tod));
-          const volZ = (bl && bl.std_vol > 0) ? (totalVol - bl.avg_vol) / bl.std_vol : 0;
-
-          // Pace/no-countermovement (RTH only) -- consecutiveCount = how many of the last 5
-          // bars closed the same direction as the candidate break; paceZ = trailing-5-bar net
-          // move vs a real 20-day per-minute-of-day baseline (getPaceBaseline), not a static
-          // point cutoff.
-          let consecutiveCount = 0, paceZ = 0;
-          if (!isGlobexNow) {
-            const paceBaseline = await getPaceBaseline(todayET);
-            const pBl = paceBaseline.get(Number(bar.tod));
-            const prev5Close = i >= 5 ? svBars[i - 5].close : svBars[0].close;
-            const netPace = Math.abs(bar.close - prev5Close);
-            paceZ = (pBl && pBl.std_pace > 0) ? (netPace - pBl.avg_pace) / pBl.std_pace : 0;
-          }
-
-          for (const cluster of clusters) {
-            if (cluster.length < minClusterSize) continue;
-            const clusterMin = cluster[0].price, clusterMax = cluster[cluster.length - 1].price;
-            let direction = null;
-            // Gap guard: a bar whose OWN gap (distance from its predecessor) exceeds ~5min
-            // (the measured real small-gap ceiling in this codebase's own RTH/Globex data,
-            // see the barsAdjacent() precedent in pilot_level_agnostic_touch_battle_quality.mjs)
-            // means everything before it is on the OTHER side of a real discontinuity (most
-            // commonly the daily 5-6PM ET maintenance halt, which this 3-hour lookback window
-            // can span) -- stop the backward scan there rather than comparing pre/post-gap
-            // price as if it were one continuous sequence.
-            if (bar.close < clusterMin) {
-              let foundAbove = false, validBreak = true;
-              for (let k = 1; k <= 30; k++) {
-                const pb = svBars[i - k]; if (!pb) break;
-                if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
-                if (pb.close >= clusterMax) { foundAbove = true; break; }
-                if (pb.close < clusterMin) { validBreak = false; break; }
-              }
-              if (foundAbove && validBreak) direction = 'SHORT';
-            } else if (bar.close > clusterMax) {
-              let foundBelow = false, validBreak = true;
-              for (let k = 1; k <= 30; k++) {
-                const pb = svBars[i - k]; if (!pb) break;
-                if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
-                if (pb.close <= clusterMin) { foundBelow = true; break; }
-                if (pb.close > clusterMax) { validBreak = false; break; }
-              }
-              if (foundBelow && validBreak) direction = 'LONG';
-            }
-            if (!direction) continue;
-
-            if (!isGlobexNow) {
-              consecutiveCount = 0;
-              for (let k = Math.max(0, i - 4); k <= i; k++) {
-                const b = svBars[k];
-                if (direction === 'SHORT' && b.close < b.open) consecutiveCount++;
-                if (direction === 'LONG' && b.close > b.open) consecutiveCount++;
-              }
-            }
-
-            // Structural stop placement (RTH only): RESEARCH_CLAIM
-            // structural_next_level_stop_beats_fixed_and_median_control -- a stop placed at
-            // the NEXT real level beyond the one just broken (not the immediate cluster edge,
-            // and not a fixed 40pt) beat both the fixed-40 baseline AND a FIXED_AT_MEDIAN
-            // control (same avg width, not level-informed) at target=40pt, clean on rigor.
-            // levelsArr is already sorted by price. Falls back to the fixed 40pt if no level
-            // exists within 200pt (matches the backtest's own fallback population, which
-            // excluded those ~2% of cases rather than guessing a distance for them).
-            let nextLevelBeyondDist = null;
-            if (!isGlobexNow) {
-              if (direction === 'SHORT') {
-                for (const l of levelsArr) {
-                  if (l.price > clusterMax) { nextLevelBeyondDist = l.price - bar.close; break; }
-                }
-              } else {
-                for (let j = levelsArr.length - 1; j >= 0; j--) {
-                  if (levelsArr[j].price < clusterMin) { nextLevelBeyondDist = bar.close - levelsArr[j].price; break; }
-                }
-              }
-              if (nextLevelBeyondDist != null && nextLevelBeyondDist > 200) nextLevelBeyondDist = null;
-            }
-
-            const favorableVol = direction === 'LONG' ? (bar.ask_volume || 0) : (bar.bid_volume || 0);
-            const adverseVol = direction === 'LONG' ? (bar.bid_volume || 0) : (bar.ask_volume || 0);
-            const oneSidedRatio = (favorableVol + adverseVol) > 0 ? favorableVol / (favorableVol + adverseVol) : 0.5;
-
-            const paceOk = isGlobexNow ? true : (consecutiveCount >= 4 && paceZ >= 1);
-            if (volZ >= volZCutoff && oneSidedRatio >= osrCutoff && paceOk) {
-              const levelDensity = levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).length;
-              stackVolSignal = {
-                active: true, direction, sigma: +volZ.toFixed(2), oneSidedRatio: +oneSidedRatio.toFixed(2),
-                levelDensity, levels: levelsArr.filter(l => Math.abs(l.price - bar.close) <= 40).map(l => l.name),
-                paceZ: isGlobexNow ? null : +paceZ.toFixed(2), consecutiveCount: isGlobexNow ? null : consecutiveCount,
-                calibratedStop: isGlobexNow ? null : +(nextLevelBeyondDist ?? 40).toFixed(1),
-                calibratedStopType: isGlobexNow ? null : (nextLevelBeyondDist != null ? 'LEVEL_NEXT' : 'FIXED_FALLBACK'),
-                // Direction-specific, via computeCorrectedTarget() (the real, already-audited
-                // target-calibration pipeline every other setup_type in this codebase uses --
-                // thin-tail gate, chronological OOS split, plateau check, must beat baseline
-                // both in-sample and OOS, rigor-clean), NOT a raw best-EV grid pick.
-                // RESEARCH_CLAIM stackvol_target_direction_specific_calibration_2026_07_27:
-                // LONG clears every guardrail at 70pt (N=215, oosEv=+$1.74 thin but positive,
-                // rigor-clean, though the most recent chronological third shows the edge
-                // thinning to $0.15/trade -- worth re-checking as more data accumulates).
-                // SHORT FAILED calibration (oosEv=-$24.73 despite a positive in-sample read)
-                // -- widening would have been a real mistake, stays at the original 40pt.
-                calibratedTarget: isGlobexNow ? null : (direction === 'LONG' ? 70 : 40),
-                // Informational only, not a mechanism this signal can enforce itself (it's a
-                // momentary, fire-once flag, not a tracked position walked bar-by-bar the way
-                // real active_setups rows are for bar6_checkpoint) -- surfaces the synthesized
-                // finding from this arc's full research pass (RESEARCH_CLAIMs
-                // path_quality_bars_to_target_predicts_continuation,
-                // capture_ratio_flat_wide_beats_trailing_on_tail_moves,
-                // combined_system_volz_climax_hurts_grinding_cohort): tested volume-climax
-                // exits, arm-a-trail mechanisms, and direct volume exits as ways to extend a
-                // winning trade -- ALL of them underperformed a plain wide (~150pt) target on
-                // capturing the biggest moves, because trailing/volume logic gets shaken out
-                // by normal chop that a patient fixed level doesn't react to. Separately: HOW
-                // FAST a trade reaches its initial target matters more than any volume signal
-                // -- reaching target in <=9 bars is a climax pattern (extending it loses money,
-                // median -$135/trade on the fastest arrivals); reaching it in 10-25 bars (a
-                // grinding pace) is a real trend worth extending toward a wider target instead
-                // of taking the original one. OPEN_DECISION promote_stackvol_to_tracked_setup
-                // covers building this as a real, dynamically-updating mechanism.
-                manageGuidance: isGlobexNow ? null : 'If this reaches its target FAST (roughly under 10 bars), take it -- that\'s usually a climax, not a trend, and holding past it has lost money on backtest. If it grinds there gradually (10-25 bars), that\'s a real trend -- consider riding to a much wider target (~150pt) instead of the original one, rather than trailing tightly.',
-              };
-              const dedupeKey = `${todayET}_${Math.floor(bar.tod / 5)}_${direction}`;
-              query(`
-                INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-                VALUES ($1, 0, 'STACK_VOL_BREAK_LIVE', $2, 1, $3)
-                ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-              `, [todayET, dedupeKey, JSON.stringify({ direction, volZ: stackVolSignal.sigma, oneSidedRatio: stackVolSignal.oneSidedRatio, levelDensity, levels: stackVolSignal.levels, paceZ: stackVolSignal.paceZ, consecutiveCount: stackVolSignal.consecutiveCount, calibratedStop: stackVolSignal.calibratedStop, calibratedStopType: stackVolSignal.calibratedStopType, calibratedTarget: stackVolSignal.calibratedTarget, definitionVersion: 3, triggeredAt: new Date().toISOString() })]).catch(() => {});
-              break;
-            }
-          }
-        }
-      } catch (_) { /* informational only, never block the response */ }
+      // only, does NOT gate/suppress any setup. Full definition/history in
+      // computeStackVolSignal() above (extracted 2026-07-27 so it actually runs in
+      // BOTH this RTH branch and the Globex branch above, not just this one).
+      const stackVolSignal = await computeStackVolSignal(todayET);
 
       res.json({
         setup: {
