@@ -1,5 +1,11 @@
 # Open Threads / Pending Work
 
+## 🔴 HIGH PRIORITY — NEXT SESSION START HERE: does acting on a bad delta-confirmation signal actually improve EV?
+
+`delta_confirmation_state` (wired live 2026-07-28, see the full arc below) is validated as a DESCRIPTIVE split — `CONFIRMATION` trades really did average far better than `PRICE_ONLY_CONTROL` trades, historically, across all three validated categories (real fades, Globex fades, `STACK_VOL_BREAK_LIVE` breakouts). But that's a fact about what already happened, not yet an action. The user asked directly ("but i thought this greatly improved ev... what changed?") and the honest answer is: nothing reversed — the split is real — but converting it into an actual EV improvement requires ACTING on it, and the two actions tested so far both act on the GOOD side and both failed (entry filter: no edge; widening the target on confirmation: destroys EV). **Never tested: does exiting early — at bar 10, mark-to-market or a tightened stop — when a trade shows `PRICE_ONLY_CONTROL` or `NO_EFFORT` actually recover EV vs. holding to the original stop/target?** That's the natural action on the BAD side, and it's untested.
+
+`OPEN_DECISION` `test_early_exit_on_price_only_control` (HIGH) — needs the same control discipline as every other test in this arc: does an unconditional bar-10 exit on EVERY surviving trade (regardless of confirmation state) do just as well, isolating whether the signal adds anything beyond generic time-based mean reversion or just cutting losers generally? Scope: all three validated categories (`FADE`, `FADE_GLOBEX`, `BREAKOUT`). Dispatch this first before anything else next session.
+
 ## 🔶 2026-07-28: Cumulative delta adds real information beyond price action for breakout-continuation trades — not yet wired
 
 User's own order-flow framework, adapted from a DOM-absorption description (no live DOM data in this system, but `price_bars_primary`'s `ask_volume`/`bid_volume` already supports the trade-based version): does cumulative delta (a running sum since entry, not the single-bar snapshot ratio `STACK_VOL_BREAK_LIVE` already tests) predict whether a breakout-continuation trade actually continues, distinct from the already-tested pre-entry gate (which failed `computeReplication()` earlier the same session).
