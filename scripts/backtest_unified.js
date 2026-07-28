@@ -1333,7 +1333,8 @@ async function main() {
 export {
   resolve, aggregate, loadData, detectLevelFades, LEVEL_GATES,
   buildBracketLevels, buildOrMids, buildIbMids, buildMonthlyOpens,
-  buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid
+  buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid,
+  PT, COMM
 };
 
 import { fileURLToPath } from 'url';
