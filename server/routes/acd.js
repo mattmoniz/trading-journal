@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
 import { directionFromType, computeBar6Checkpoint } from '../services/maeMfeReplay.js';
+import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
@@ -325,6 +326,26 @@ export async function resolveSetupsByPrice(io) {
     sharedBarsRows = sharedBars.rows;
   }
 
+  // Cumulative-delta-confirmation calibrated thresholds — read once per poll (cached,
+  // matching the sharedBarsRows fetch-once-per-poll pattern above), never hardcoded.
+  // Written weekly by scripts/calibrate_delta_confirmation.mjs (server/services/
+  // deltaConfirmation.js's classifyDeltaConfirmation() is the shared classifier both
+  // sides use). RESEARCH_CLAIM cumulative_delta_confirms_breakout_beyond_price_alone /
+  // cumulative_delta_confirms_fades_stronger_than_breakout.
+  const deltaCalibCached = getCached('_global', 'deltaConfirmationCalib', DAY_CACHE_TTL);
+  const deltaCalib = deltaCalibCached ?? await (async () => {
+    const r = await query(`
+      SELECT DISTINCT ON (signal_name) signal_name, notes
+      FROM performance_audit WHERE signal_type='DELTA_CONFIRMATION_CALIB'
+      ORDER BY signal_name, run_date DESC
+    `);
+    const map = {};
+    for (const row of r.rows) {
+      try { map[row.signal_name] = JSON.parse(row.notes).threshold; } catch (_) {}
+    }
+    return setCached('_global', 'deltaConfirmationCalib', map, DAY_CACHE_TTL);
+  })();
+
   let count = 0;
   for (const row of active.rows) {
     const long = isLongSetup(row.setup_type);
@@ -613,6 +634,29 @@ export async function resolveSetupsByPrice(io) {
           `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3, updated_at=NOW() WHERE id=$1 AND bar6_checkpoint IS NULL`,
           [row.id, bar6.status, bar6.ruleSaysExit]
         ).catch(() => {});
+      }
+    }
+
+    // Cumulative-delta-confirmation badge (added 2026-07-28) — purely informational,
+    // same "compute once, never overwrite" convention as bar6_checkpoint above. Scoped
+    // exactly to what's been validated (RESEARCH_CLAIM cumulative_delta_confirms_
+    // breakout_beyond_price_alone / cumulative_delta_confirms_fades_stronger_than_
+    // breakout) — getDeltaConfirmationCategory() returns null for every setup_type NOT
+    // covered (the "OTHER" session-structure family, Globex/overnight variants), so this
+    // is a silent no-op for those until they have their own validated category. Does NOT
+    // gate entry or adjust the target — both tested separately and failed
+    // (pre_entry_cumulative_delta_no_entry_edge, target_extension_on_confirmation_not_actionable).
+    {
+      const deltaCategory = getDeltaConfirmationCategory(row.setup_type);
+      const deltaThreshold = deltaCategory ? deltaCalib[deltaCategory] : null;
+      if (deltaCategory && deltaThreshold != null) {
+        const dc = classifyDeltaConfirmation(bars.rows, long ? 'LONG' : 'SHORT', entry, deltaThreshold);
+        if (dc) {
+          await query(
+            `UPDATE active_setups SET delta_confirmation_state=$2, updated_at=NOW() WHERE id=$1 AND delta_confirmation_state IS NULL`,
+            [row.id, dc.state]
+          ).catch(() => {});
+        }
       }
     }
 
@@ -7670,6 +7714,7 @@ export default function createACDRouter(io) {
 
       const setupsRes = await query(`
         SELECT id, setup_type, status, resolution, actual_pnl, bar6_checkpoint, bar6_exit_recommended,
+          delta_confirmation_state,
           entry_zone_low, fired_at, TO_CHAR(fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups
         WHERE status = 'ACTIVE'
@@ -7702,7 +7747,8 @@ export default function createACDRouter(io) {
         const bar6 = s.bar6_checkpoint ? `, bar6:${s.bar6_checkpoint}` : '';
         const exitRec = s.bar6_exit_recommended ? ', EXIT NOW recommended' : '';
         const fadeExit = fadeExitBySetupId.get(s.id) ? ', FADING BIG-MOVE DAY — EXIT NOW recommended' : '';
-        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl}${bar6}${exitRec}${fadeExit})`;
+        const deltaConf = s.delta_confirmation_state ? `, delta:${s.delta_confirmation_state}` : '';
+        return `${dateLabel} ${time} — ${s.setup_type} (${outcome}${pnl}${bar6}${exitRec}${fadeExit}${deltaConf})`;
       });
 
       // Big-move-day signal — same persisted BIGMOVE_LIVE_SIGNAL row antigravityEdges.js reads

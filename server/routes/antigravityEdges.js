@@ -471,7 +471,8 @@ async function getLiveEdgesContext() {
              s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
              s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
              EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day,
-             s.touch_quality, s.touch_quality_vol_z::float, s.bar6_checkpoint, s.bar6_exit_recommended
+             s.touch_quality, s.touch_quality_vol_z::float, s.bar6_checkpoint, s.bar6_exit_recommended,
+             s.delta_confirmation_state
       FROM active_setups s
       WHERE s.trade_date = $1 AND s.status != 'SHADOW'
       ORDER BY s.fired_at DESC

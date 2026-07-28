@@ -694,6 +694,28 @@ function EdgeSectionsPanel() {
                       🚨 EXIT NOW recommended — take the bar-6 price rather than hold to target
                     </div>
                   )}
+                  {s.delta_confirmation_state && (() => {
+                    // Cumulative delta confirmation (RESEARCH_CLAIM
+                    // cumulative_delta_confirms_breakout_beyond_price_alone /
+                    // cumulative_delta_confirms_fades_stronger_than_breakout) — at bar 10
+                    // since entry, does cumulative buy/sell-volume delta back up the
+                    // favorable price move that's already happened, or is price moving
+                    // alone without real order-flow support behind it? Informational only:
+                    // does not gate entry, does not adjust the target (both tested
+                    // separately and failed) — a read on a position already held.
+                    const cfg = {
+                      CONFIRMATION: { color: '#34d399', label: '✓ Delta confirms', detail: 'historically 61-83% WR / +$40-43 EV' },
+                      PRICE_ONLY_CONTROL: { color: '#f87171', label: '⚠ Price moved, delta didn\'t', detail: 'historically 30-54% WR / -$22-25 EV' },
+                      NO_EFFORT: { color: '#94a3b8', label: 'No confirmation yet', detail: 'neither price nor delta built favorably' },
+                    }[s.delta_confirmation_state];
+                    if (!cfg) return null;
+                    return (
+                      <div style={{ fontSize: 11, color: cfg.color, marginTop: 4, fontWeight: 600 }}
+                        title="At bar 10 since entry: does cumulative delta back up the price move? Validated separately for breakout-continuation and fade setups.">
+                        {cfg.label} — {cfg.detail}
+                      </div>
+                    );
+                  })()}
                   {s.fadeAgainstBigMoveExit && (
                     // DISABLED 2026-07-27: checkFadeAgainstBigMoveExit() (server/routes/acd.js)
                     // now always returns false, so s.fadeAgainstBigMoveExit is never truthy --

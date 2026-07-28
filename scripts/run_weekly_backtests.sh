@@ -77,4 +77,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # code as a build-breaking signal in this cron; read its output instead.
 /usr/bin/node scripts/data_sanity_audit.mjs
 
+# Rolling recalibration for the cumulative-delta-confirmation live badge (2026-07-28) --
+# RESEARCH_CLAIM cumulative_delta_confirms_breakout_beyond_price_alone /
+# cumulative_delta_confirms_fades_stronger_than_breakout. Recomputes the trailing-200-day
+# 25th-percentile-of-positive-cumulative-delta floor per category (FADE/BREAKOUT), no
+# static threshold per the standing rule -- server/services/deltaConfirmation.js reads
+# this back live (12h cache).
+/usr/bin/node scripts/calibrate_delta_confirmation.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

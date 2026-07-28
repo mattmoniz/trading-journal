@@ -1,0 +1,144 @@
+// Rolling calibration for the cumulative-delta-confirmation live signal
+// (server/services/deltaConfirmation.js). Computes the 25th-percentile-of-positive-
+// cumulative-delta floor separately for each validated category (FADE, BREAKOUT) over a
+// trailing window, and persists it to performance_audit so the live path never uses a
+// number baked in from a one-off backtest -- matches this codebase's no-static-thresholds
+// rule and the existing rolling-baseline convention (getVolumeBaseline/getPaceBaseline).
+//
+// Run weekly via run_weekly_backtests.sh, same cadence as every other calibration script.
+//
+// Reuses the exact detection/resolution functions already validated this session:
+// FADE:     detectLevelFades/resolve (scripts/backtest_unified.js), getTradingDays/
+//           getLevelPrices/getRTHBars (scripts/backtest_confluence.js) -- identical to
+//           scratch/pilot_delta_fade_confirmation.mjs, which this mirrors.
+// BREAKOUT: the same level-cluster-break detection already validated in
+//           scratch/pilot_cumulative_delta_divergence.mjs (audited, bug-fixed, reused 3x
+//           this session) -- not yet factored into an exported function in
+//           server/routes/acd.js (computeStackVolSignal() is shaped for a single live
+//           poll over the last 3hrs, not a full-history backtest loop), so this script
+//           replicates that exact, already-validated logic rather than inventing new
+//           detection. If computeStackVolSignal() is ever refactored, extract its
+//           detection core into a shared function and import it here instead.
+import { query } from '../server/db.js';
+import * as ss from 'simple-statistics';
+import { getTradingDays, getLevelPrices, getRTHBars } from './backtest_confluence.js';
+import { detectLevelFades } from './backtest_unified.js';
+import { K_BARS } from '../server/services/deltaConfirmation.js';
+
+const TRAILING_DAYS = 200; // rolling window -- recalibrated fresh each run, not "all history forever"
+
+async function calibrateFade(days) {
+  const events = [];
+  for (const d of days) {
+    const levels = await getLevelPrices(d);
+    const rthBars = await getRTHBars(d);
+    if (rthBars.length < 60) continue;
+    const isMonday = new Date(d).getUTCDay() === 1;
+    const fires = detectLevelFades(rthBars, levels, isMonday);
+    for (const fire of fires) {
+      if (rthBars.length - 1 - fire.entryIdx < K_BARS) continue;
+      const window = rthBars.slice(fire.entryIdx + 1, fire.entryIdx + 1 + K_BARS);
+      let cumDelta = 0;
+      for (const b of window) {
+        const delta = (b.ask_volume || 0) - (b.bid_volume || 0);
+        cumDelta += (fire.direction === 'LONG' ? delta : -delta);
+      }
+      events.push(cumDelta);
+    }
+  }
+  return events;
+}
+
+async function calibrateBreakout(days) {
+  const events = [];
+  for (const d of days) {
+    const levels = await getLevelPrices(d);
+    const rthBars = await getRTHBars(d);
+    if (rthBars.length < 40) continue;
+
+    for (let i = 0; i < rthBars.length; i++) {
+      rthBars[i].gap = i > 0 ? (rthBars[i].ts.getTime() - rthBars[i - 1].ts.getTime()) / 60000 : null;
+    }
+
+    const levelsArr = Object.entries(levels).filter(([, p]) => p != null && isFinite(p))
+      .map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
+    const clusters = [];
+    let cur = levelsArr.length ? [levelsArr[0]] : [];
+    for (let j = 1; j < levelsArr.length; j++) {
+      if (levelsArr[j].price - levelsArr[j - 1].price <= 15) cur.push(levelsArr[j]);
+      else { clusters.push(cur); cur = [levelsArr[j]]; }
+    }
+    if (cur.length) clusters.push(cur);
+
+    const firedBars = new Set();
+    for (let i = 30; i < rthBars.length; i++) {
+      if (firedBars.has(i)) continue;
+      const bar = rthBars[i];
+      for (const cluster of clusters) {
+        const clusterMin = cluster[0].price, clusterMax = cluster[cluster.length - 1].price;
+        let direction = null;
+        if (bar.close < clusterMin) {
+          let foundAbove = false, validBreak = true;
+          for (let k = 1; k <= 30; k++) {
+            const pb = rthBars[i - k]; if (!pb) break;
+            if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+            if (pb.close >= clusterMax) { foundAbove = true; break; }
+            if (pb.close < clusterMin) { validBreak = false; break; }
+          }
+          if (foundAbove && validBreak) direction = 'SHORT';
+        } else if (bar.close > clusterMax) {
+          let foundBelow = false, validBreak = true;
+          for (let k = 1; k <= 30; k++) {
+            const pb = rthBars[i - k]; if (!pb) break;
+            if (pb.gap == null || pb.gap > 5) { validBreak = false; break; }
+            if (pb.close <= clusterMin) { foundBelow = true; break; }
+            if (pb.close > clusterMax) { validBreak = false; break; }
+          }
+          if (foundBelow && validBreak) direction = 'LONG';
+        }
+        if (direction) {
+          if (i + K_BARS < rthBars.length) {
+            const window = rthBars.slice(i + 1, i + 1 + K_BARS);
+            let cumDelta = 0;
+            for (const b of window) {
+              const delta = (b.ask_volume || 0) - (b.bid_volume || 0);
+              cumDelta += (direction === 'LONG' ? delta : -delta);
+            }
+            events.push(cumDelta);
+          }
+          firedBars.add(i);
+          break;
+        }
+      }
+    }
+  }
+  return events;
+}
+
+async function run() {
+  const allDays = await getTradingDays();
+  const days = allDays.slice(-TRAILING_DAYS);
+  console.log(`Calibrating over trailing ${days.length} days (of ${allDays.length} available)`);
+
+  const { rows } = await query(`SELECT CURRENT_DATE::text as today`);
+  const today = rows[0].today;
+
+  for (const [category, fn] of [['FADE', calibrateFade], ['BREAKOUT', calibrateBreakout]]) {
+    const cumDeltas = await fn(days);
+    const positive = cumDeltas.filter(v => v > 0);
+    const threshold = positive.length > 0 ? ss.quantile(positive, 0.25) : 0;
+    console.log(`${category}: N=${cumDeltas.length}, positive=${positive.length}, p25 threshold=${threshold.toFixed(1)}`);
+
+    await query(`
+      INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+      VALUES ($1, $2, 'DELTA_CONFIRMATION_CALIB', $3, $4, $5)
+      ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
+        SET sample_size = EXCLUDED.sample_size, notes = EXCLUDED.notes
+    `, [today, TRAILING_DAYS, category, cumDeltas.length, JSON.stringify({ threshold, k: K_BARS, computed_at: today })]);
+  }
+
+  console.log('Done.');
+  process.exit(0);
+}
+
+run().catch(e => { console.error(e); process.exit(1); });

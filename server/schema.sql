@@ -349,7 +349,8 @@ CREATE TABLE public.active_setups (
     bar6_checkpoint character varying(20),
     bar6_exit_recommended boolean,
     extend_target_level numeric,
-    extend_decision character varying(20)
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20)
 );
 
 
