@@ -1,5 +1,15 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-07-28: Cumulative delta adds real information beyond price action for breakout-continuation trades — not yet wired
+
+User's own order-flow framework, adapted from a DOM-absorption description (no live DOM data in this system, but `price_bars_primary`'s `ask_volume`/`bid_volume` already supports the trade-based version): does cumulative delta (a running sum since entry, not the single-bar snapshot ratio `STACK_VOL_BREAK_LIVE` already tests) predict whether a breakout-continuation trade actually continues, distinct from the already-tested pre-entry gate (which failed `computeReplication()` earlier the same session).
+
+Dispatched to Gemini with a 3-bucket design (CONFIRMATION/DIVERGENCE/NO_EFFORT); audited before trusting and found two real problems: (1) the `NO_EFFORT` filter had a tautological clause (`!x || x`, always true) that silently no-opped its own price-action exclusion; (2) no control bucket existed to isolate whether the reported CONFIRMATION-vs-NO_EFFORT gap was a genuine delta effect or just "price already moved in your favor" (a very low, near-tautological bar — `newExtreme` = any tick beyond entry within the window). Fixed directly (not re-dispatched — a diagnosed bug + one added control bucket, not new mining) into a clean, exhaustive 2×2 split on `(cumDelta >= p25) × (newExtreme)`.
+
+**Result, unusually for this session, the control CONFIRMED rather than debunked the hypothesis**: holding price action equal (both buckets have `newExtreme=true`), whether delta also built alongside it splits `CONFIRMATION` (N=3768, WR=61.0%, EV=+$40.24) from `PRICE_ONLY_CONTROL` (N=6214, WR=30.4%, EV=-$24.50) — consistent across K=5 and K=10, `computeRigor` clean/stable/not-clustered on both. The rare pure-exhaustion signature (`DIVERGENCE`: delta builds, price never progresses) stayed too thin to use standalone (N=8-11), matching the first pass. Recorded: `RESEARCH_CLAIM` `cumulative_delta_confirms_breakout_beyond_price_alone` (`PROVISIONAL`).
+
+**Not yet wired anywhere** — `OPEN_DECISION` `wire_cumulative_delta_confirmation_signal` (MEDIUM) is open on scope: a post-entry confirm/exit read (`bar6_checkpoint`-style, doesn't gate entry) vs. an entry-quality filter (which the user has separately pushed back on while the system is real-N-starved) vs. something else. Resolves an earlier low-priority backlog item, `test_cumulative_delta_divergence_breakout_exhaustion` (now `RESOLVED` with this outcome).
+
 ## 🔶 2026-07-28: Opus Audit #5 — the system is data-starved, not miscalibrated; stop building new signals
 
 Full deliverable: `scratch/opus_audit_5_results.md`. Dispatched per direct user request after the day's three research threads (DOW gate, re-fire gate, rolling-window health gate) left them feeling scattered — see `docs/OPUS_AUDIT_PROMPT_5.md`.
