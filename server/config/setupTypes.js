@@ -21,6 +21,19 @@
  */
 
 /**
+ * STACK_VOL_BREAK_LIVE live detection thresholds — single source of truth so
+ * computeStackVolSignal() (server/routes/acd.js) and /api/setups/reference (which
+ * displays these as the "Applied volZ" reference column) can never drift apart.
+ * Added 2026-07-28 alongside the Setup Reference volZ column build — previously these
+ * lived only as local consts inside computeStackVolSignal(), which is exactly the
+ * hand-duplicated-threshold shape this file's own convention exists to prevent.
+ */
+export const STACK_VOL_THRESHOLDS = {
+  RTH: { volZCutoff: 0.5, osrCutoff: 0.55, minClusterSize: 1 },
+  GLOBEX: { volZCutoff: 1.5, osrCutoff: 0.65, minClusterSize: 2 },
+};
+
+/**
  * Infer trade direction from a setup type name.
  *
  * Algorithm:

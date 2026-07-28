@@ -26,7 +26,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -3262,9 +3262,8 @@ export default function createACDRouter(io) {
         const i = svBars.length - 1;
         const bar = svBars[i];
         const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
-        const volZCutoff = isGlobexNow ? 1.5 : 0.5;
-        const osrCutoff = isGlobexNow ? 0.65 : 0.55;
-        const minClusterSize = isGlobexNow ? 2 : 1;
+        const svThresholds = isGlobexNow ? STACK_VOL_THRESHOLDS.GLOBEX : STACK_VOL_THRESHOLDS.RTH;
+        const { volZCutoff, osrCutoff, minClusterSize } = svThresholds;
 
         // Levels: same daily-cached level_prices batch as the rest of this handler,
         // plus real-time OR/IB (not from level_prices, which may lag same-day formation)

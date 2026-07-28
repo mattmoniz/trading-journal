@@ -2,8 +2,9 @@ import express from 'express';
 import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
-import { inferDirection } from '../config/setupTypes.js';
+import { inferDirection, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
 import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition } from '../config/setupDefinitions.js';
+import { INSTRUMENTS } from '../config/instruments.js';
 
 const router = express.Router();
 
@@ -612,7 +613,7 @@ function resolveDefinition(setupType) {
 // setupDefinitions.js); every number is live-queried, never hand-typed here.
 router.get('/setups/reference', async (req, res) => {
   try {
-    const [statusQ, optQ] = await Promise.all([
+    const [statusQ, optQ, touchQ] = await Promise.all([
       query(`
         SELECT DISTINCT ON (signal_name) signal_name, sample_size, win_rate::float,
           ev_per_trade::float, recommendation, notes, run_date
@@ -624,32 +625,111 @@ router.get('/setups/reference', async (req, res) => {
         FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
         ORDER BY signal_name, run_date DESC
       `),
+      // Key-Levels-style touch/MFE/MAE/P&L metrics, added 2026-07-28 per direct user
+      // request ("keep the metrics you have but also add these columns from key levels
+      // touches, mfe p50/p75, mae p50, average pnl, how much profit was left on table").
+      // Computed twice per setup_type -- REAL (origin_status IN ACTIVE,SHADOW, genuinely
+      // live-detected) and ALL (blended, includes BACKFILL) -- so the page can prefer the
+      // real numbers when there's enough real N and fall back to blended with a visible
+      // marker otherwise, same honesty convention as the Setup Log origin-breakdown fix
+      // earlier this session (don't let a backfill-inflated count masquerade as real
+      // experience). left_on_table is in POINTS (mfe_p50 minus realized favorable move in
+      // points, avg_pnl converted via INSTRUMENTS.MNQ.dollarsPerPoint) -- same unit and
+      // same "MFE minus what was actually captured" definition as the Key Levels table's
+      // own "Left on table" column (BacktestView.jsx), not a new metric invented here.
+      query(`
+        SELECT setup_type,
+          count(*)::int as touches_total,
+          count(*) FILTER (WHERE trade_date >= date_trunc('week', CURRENT_DATE)::date)::int as touches_this_week,
+          MAX(fired_at) as last_touch,
+          count(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::int as touches_real,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mfe_p75,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_mae_p50,
+          AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_avg_pnl,
+          SUM(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED')) as real_total_pnl,
+          count(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND status IN ('RESOLVED','EXPIRED') AND actual_pnl IS NOT NULL)::int as real_resolved_n,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p50,
+          percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mfe_p75,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY mae_points) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_mae_p50,
+          AVG(actual_pnl) FILTER (WHERE status IN ('RESOLVED','EXPIRED')) as all_avg_pnl,
+          count(*) FILTER (WHERE status IN ('RESOLVED','EXPIRED') AND actual_pnl IS NOT NULL)::int as all_resolved_n
+        FROM active_setups
+        GROUP BY setup_type
+      `),
     ]);
     const optByName = new Map(optQ.rows.map(r => [r.signal_name, r]));
+    const touchByName = new Map(touchQ.rows.map(r => [r.setup_type, r]));
+    const statusByName = new Map(statusQ.rows.map(r => [r.signal_name, r]));
+    const DPP = INSTRUMENTS.MNQ.dollarsPerPoint;
+    const svThreshText = (t) => `RTH volZ≥${t.RTH.volZCutoff}·OSR≥${t.RTH.osrCutoff}·cluster≥${t.RTH.minClusterSize} / Globex volZ≥${t.GLOBEX.volZCutoff}·OSR≥${t.GLOBEX.osrCutoff}·cluster≥${t.GLOBEX.minClusterSize}`;
 
-    const results = statusQ.rows.map(row => {
+    // Driven by the UNION of (has a SETUP_STATUS row) ∪ (has any active_setups touch,
+    // even zero resolved) ∪ (known live-wired informational setup_types that haven't
+    // fired even once yet, e.g. STACK_VOL_BREAK_LIVE_LONG/SHORT as of 2026-07-28) --
+    // NOT just statusQ.rows alone. Matches CLAUDE.md's own item-11 lesson ("a level with
+    // zero real touches ever is not automatically safe to omit -- an absent row is not
+    // the same as a THIN_N row"), found live here: STACK_VOL_BREAK_LIVE_LONG/SHORT had
+    // zero active_setups rows and no SETUP_STATUS row, so the old statusQ-only driver
+    // silently omitted the exact setup_types this page's new "Applied volZ" column was
+    // built to show.
+    const allSetupTypes = new Set([
+      ...statusQ.rows.map(r => r.signal_name),
+      ...touchQ.rows.map(r => r.setup_type),
+      'STACK_VOL_BREAK_LIVE_LONG', 'STACK_VOL_BREAK_LIVE_SHORT',
+    ]);
+
+    const results = [...allSetupTypes].map(setupType => {
+      const row = statusByName.get(setupType) ?? {};
       let notes = null;
       try { notes = typeof row.notes === 'string' ? JSON.parse(row.notes) : row.notes; } catch (_) {}
-      const opt = optByName.get(row.signal_name);
-      const def = resolveDefinition(row.signal_name);
+      const opt = optByName.get(setupType);
+      const def = resolveDefinition(setupType);
+      const t = touchByName.get(setupType);
+      // Prefer REAL (genuinely live-detected) aggregates once there's enough real N to
+      // mean anything; below that, fall back to blended (incl. backfill) and flag it —
+      // same REAL_N_FLOOR precedent as backtest_setup_status.mjs's PROMOTE_MIN_REAL_N,
+      // reused here rather than a fresh arbitrary number.
+      const REAL_N_FLOOR = 5;
+      const useReal = (t?.real_resolved_n ?? 0) >= REAL_N_FLOOR;
+      const mfeP50 = t ? (useReal ? t.real_mfe_p50 : t.all_mfe_p50) : null;
+      const mfeP75 = t ? (useReal ? t.real_mfe_p75 : t.all_mfe_p75) : null;
+      const maeP50 = t ? (useReal ? t.real_mae_p50 : t.all_mae_p50) : null;
+      const avgPnl = t ? (useReal ? t.real_avg_pnl : t.all_avg_pnl) : null;
+      const avgPnlPts = avgPnl != null ? Number(avgPnl) / DPP : null;
+      const leftOnTablePts = (mfeP50 != null && avgPnlPts != null) ? Number(mfeP50) - avgPnlPts : null;
+      const svThresholds = /^STACK_VOL_BREAK_LIVE_(LONG|SHORT)$/.test(setupType) ? svThreshText(STACK_VOL_THRESHOLDS) : null;
       return {
-        setupType: row.signal_name,
-        displayName: def?.displayName || row.signal_name.replace(/_/g, ' '),
+        setupType,
+        displayName: def?.displayName || setupType.replace(/_/g, ' '),
         family: def?.ruleLabel || null,
         criteria: def?.criteria || null,
         windowDescription: def?.windowDescription || null,
         formationGate: def?.formationGate ?? null,
-        globexCapable: def?.globexCapable ?? GLOBEX_CAPABLE_TYPES.has(row.signal_name),
+        globexCapable: def?.globexCapable ?? GLOBEX_CAPABLE_TYPES.has(setupType),
         documented: def != null,
-        n: row.sample_size,
-        realN: notes?.all_time_real_n ?? null,
-        wr: row.win_rate,
-        ev: row.ev_per_trade,
-        recommendation: row.recommendation,
+        n: row.sample_size ?? null,
+        realN: notes?.all_time_real_n ?? t?.touches_real ?? null,
+        wr: row.win_rate ?? null,
+        ev: row.ev_per_trade ?? null,
+        recommendation: row.recommendation ?? (t ? 'NOT_YET_CALIBRATED' : null),
         stop: opt?.optimal_stop ?? null,
         target: opt?.optimal_target ?? null,
         rigorTrend: notes?.rigor?.trend ?? (notes?.rigor?.three_way_stable === true ? 'STABLE' : null),
-        lastRunDate: row.run_date,
+        lastRunDate: row.run_date ?? null,
+        // Key-Levels-style touch/MFE/MAE/P&L metrics (2026-07-28) — see the touchQ query
+        // comment above for the real-vs-blended fallback rule and unit conventions.
+        touchesTotal: t?.touches_total ?? 0,
+        touchesThisWeek: t?.touches_this_week ?? 0,
+        lastTouch: t?.last_touch ?? null,
+        usingBlendedStats: t ? !useReal : null,
+        mfeP50: mfeP50 != null ? +Number(mfeP50).toFixed(1) : null,
+        mfeP75: mfeP75 != null ? +Number(mfeP75).toFixed(1) : null,
+        maeP50: maeP50 != null ? +Number(maeP50).toFixed(1) : null,
+        avgPnl: avgPnl != null ? +Number(avgPnl).toFixed(2) : null,
+        leftOnTablePts: leftOnTablePts != null ? +leftOnTablePts.toFixed(1) : null,
+        totalPnlRealAllTime: t?.real_total_pnl != null ? +Number(t.real_total_pnl).toFixed(2) : null,
+        appliedVolZ: svThresholds,
       };
     });
 
