@@ -3167,10 +3167,52 @@ export default function createACDRouter(io) {
         // Levels: same daily-cached level_prices batch as the rest of this handler,
         // plus real-time OR/IB (not from level_prices, which may lag same-day formation)
         // plus live developing VWAP (never in level_prices at all -- a per-bar value).
+        // RTH_VWAP excluded: it's a full-RTH-session average (compute_levels.js sums bars
+        // 570-959 with no "as of now" cap), only actually correct once RTH closes for that
+        // date -- backtest_confluence.js already excludes it for exactly this reason ("a
+        // real lookahead risk in a bar sim"). Live, the same value is just as wrong for a
+        // different reason: found 2026-07-27 that today's row was written mid-session
+        // (computed_at 14:40 ET) by a manual/testing invocation of compute_levels.js, so it
+        // was a PARTIAL-session sum through 2:40pm masquerading as the full session's VWAP --
+        // and DAY_CACHE_TTL (12h) would have frozen that wrong number in svLevelsRaw for the
+        // rest of the day. The live developing `VWAP` key below (computeVWAP, bounded to
+        // bars seen so far) is the correct live equivalent -- RTH_VWAP is redundant with it
+        // at best and actively wrong at worst.
         const svLevelsRaw = getCached(todayET, 'stackVolLevels', DAY_CACHE_TTL) || await (async () => {
-          const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL`, [todayET]);
+          const lpQ = await query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND price IS NOT NULL AND level_name != 'RTH_VWAP'`, [todayET]);
           const map = {};
           for (const r of lpQ.rows) map[r.level_name] = r.price;
+          // 3 meta-levels the main RTH fade engine (keepLevelsAll) tracks that aren't
+          // stored in level_prices directly -- computed inline there via developing_value_log
+          // / computeVolumeProfileForRange, same real functions reused here, own cache keys
+          // so this doesn't duplicate work if the main RTH path already computed them this
+          // session (getCached checks the shared per-request cache map regardless of key
+          // namespace, so a cache hit here is free even on first call if the RTH path ran
+          // first in the same poll).
+          const pd2 = getCached(todayET, 'pd2VA') || await (async () => {
+            const pd2Q = await query(`
+              SELECT vah::float, val::float FROM developing_value_log
+              WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
+              ORDER BY trade_date DESC LIMIT 1
+            `, [todayET]).catch(() => ({ rows: [] }));
+            const v = pd2Q.rows[0] ? { pd2VAH: pd2Q.rows[0].vah, pd2VAL: pd2Q.rows[0].val } : { pd2VAH: null, pd2VAL: null };
+            return setCached(todayET, 'pd2VA', v);
+          })();
+          if (pd2.pd2VAH != null) map.PD2_VAH = pd2.pd2VAH;
+          if (pd2.pd2VAL != null) map.PD2_VAL = pd2.pd2VAL;
+          const cached2DPOC = getCached(todayET, '2dPOC');
+          const twoDayPOC = cached2DPOC !== undefined ? cached2DPOC : await (async () => {
+            const last2Q = await query(`
+              SELECT DISTINCT ts::date::text as d FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date < $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+              ORDER BY d DESC LIMIT 2
+            `, [todayET]).then(r => r.rows.map(x => x.d)).catch(() => []);
+            if (last2Q.length < 2) return setCached(todayET, '2dPOC', null);
+            const profile = await computeVolumeProfileForRange(query, { startDate: last2Q[last2Q.length - 1], endDate: last2Q[0] }).catch(() => null);
+            return setCached(todayET, '2dPOC', profile ? profile.poc : null);
+          })();
+          if (twoDayPOC != null) map['2D_POC'] = twoDayPOC;
           return setCached(todayET, 'stackVolLevels', map);
         })();
         const svLevels = { ...svLevelsRaw };
