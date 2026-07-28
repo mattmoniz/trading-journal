@@ -8,17 +8,23 @@
 // Run weekly via run_weekly_backtests.sh, same cadence as every other calibration script.
 //
 // Reuses the exact detection/resolution functions already validated this session:
-// FADE:     detectLevelFades/resolve (scripts/backtest_unified.js), getTradingDays/
-//           getLevelPrices/getRTHBars (scripts/backtest_confluence.js) -- identical to
-//           scratch/pilot_delta_fade_confirmation.mjs, which this mirrors.
-// BREAKOUT: the same level-cluster-break detection already validated in
-//           scratch/pilot_cumulative_delta_divergence.mjs (audited, bug-fixed, reused 3x
-//           this session) -- not yet factored into an exported function in
-//           server/routes/acd.js (computeStackVolSignal() is shaped for a single live
-//           poll over the last 3hrs, not a full-history backtest loop), so this script
-//           replicates that exact, already-validated logic rather than inventing new
-//           detection. If computeStackVolSignal() is ever refactored, extract its
-//           detection core into a shared function and import it here instead.
+// FADE:        detectLevelFades/resolve (scripts/backtest_unified.js), getTradingDays/
+//              getLevelPrices/getRTHBars (scripts/backtest_confluence.js) -- identical to
+//              scratch/pilot_delta_fade_confirmation.mjs, which this mirrors.
+// FADE_GLOBEX: mirrors scratch/pilot_delta_other_family_and_globex.mjs's
+//              detectGlobexLevelFades/getGlobexBars (audited, no reimplementation bug --
+//              it's detectLevelFades with the RTH-only gate removed, since Globex has no
+//              RTH window to gate against). Genuinely different volume scale than RTH
+//              fades (p25=31 vs 143 at K=10 in the validated test), hence a separate
+//              category with its own calibration, not a shared threshold.
+// BREAKOUT:    the same level-cluster-break detection already validated in
+//              scratch/pilot_cumulative_delta_divergence.mjs (audited, bug-fixed, reused
+//              3x this session) -- not yet factored into an exported function in
+//              server/routes/acd.js (computeStackVolSignal() is shaped for a single live
+//              poll over the last 3hrs, not a full-history backtest loop), so this script
+//              replicates that exact, already-validated logic rather than inventing new
+//              detection. If computeStackVolSignal() is ever refactored, extract its
+//              detection core into a shared function and import it here instead.
 import { query } from '../server/db.js';
 import * as ss from 'simple-statistics';
 import { getTradingDays, getLevelPrices, getRTHBars } from './backtest_confluence.js';
@@ -26,6 +32,71 @@ import { detectLevelFades } from './backtest_unified.js';
 import { K_BARS } from '../server/services/deltaConfirmation.js';
 
 const TRAILING_DAYS = 200; // rolling window -- recalibrated fresh each run, not "all history forever"
+const GLOBEX_EXCLUDED_LEVELS = new Set(['OR_HIGH', 'OR_LOW', 'OR_MID', 'IB_HIGH', 'IB_LOW', 'IB_MID', 'RTH_VWAP', 'ONH', 'ONL']);
+
+async function getGlobexBars(sessionDate) {
+  const r = await query(`
+    SELECT ts, EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as tod,
+      open::float, high::float, low::float, close::float,
+      COALESCE(bid_volume,0)::int as bid_volume, COALESCE(ask_volume,0)::int as ask_volume
+    FROM price_bars_primary WHERE symbol = 'NQ'
+      AND (
+        (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 1080)
+        OR (ts::date = $1::date AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) < 510)
+      )
+    ORDER BY ts
+  `, [sessionDate]);
+  return r.rows;
+}
+
+function detectGlobexLevelFades(bars, levels, isMonday) {
+  const STOP = isMonday ? 60 : 90, TARGET = isMonday ? 30 : 40;
+  const fires = [];
+  const fired = new Set();
+  for (let i = 5; i < bars.length; i++) {
+    const b = bars[i];
+    for (const [name, price] of Object.entries(levels)) {
+      if (price == null || fired.has(name)) continue;
+      if (Math.abs(b.close - price) > 15) continue;
+      const fromAbove = !(bars[i - 5].close < b.close);
+      const dir = fromAbove ? 'LONG' : 'SHORT';
+      fires.push({ direction: dir, entryIdx: i,
+        stop: dir === 'LONG' ? b.close - STOP : b.close + STOP,
+        target: dir === 'LONG' ? b.close + TARGET : b.close - TARGET });
+      fired.add(name);
+    }
+  }
+  return fires;
+}
+
+async function calibrateFadeGlobex(days) {
+  const events = [];
+  for (const d of days) {
+    const levelsRes = await query(`
+      SELECT DISTINCT ON (level_name) level_name, price::float
+      FROM level_prices WHERE trade_date < $1 AND price IS NOT NULL
+      ORDER BY level_name, trade_date DESC
+    `, [d]);
+    const levels = {};
+    for (const row of levelsRes.rows) if (!GLOBEX_EXCLUDED_LEVELS.has(row.level_name)) levels[row.level_name] = row.price;
+
+    const bars = await getGlobexBars(d);
+    if (bars.length < 60) continue;
+    const isMonday = new Date(d).getUTCDay() === 1;
+    const fires = detectGlobexLevelFades(bars, levels, isMonday);
+    for (const fire of fires) {
+      if (bars.length - 1 - fire.entryIdx < K_BARS) continue;
+      const window = bars.slice(fire.entryIdx + 1, fire.entryIdx + 1 + K_BARS);
+      let cumDelta = 0;
+      for (const b of window) {
+        const delta = (b.ask_volume || 0) - (b.bid_volume || 0);
+        cumDelta += (fire.direction === 'LONG' ? delta : -delta);
+      }
+      events.push(cumDelta);
+    }
+  }
+  return events;
+}
 
 async function calibrateFade(days) {
   const events = [];
@@ -123,7 +194,7 @@ async function run() {
   const { rows } = await query(`SELECT CURRENT_DATE::text as today`);
   const today = rows[0].today;
 
-  for (const [category, fn] of [['FADE', calibrateFade], ['BREAKOUT', calibrateBreakout]]) {
+  for (const [category, fn] of [['FADE', calibrateFade], ['FADE_GLOBEX', calibrateFadeGlobex], ['BREAKOUT', calibrateBreakout]]) {
     const cumDeltas = await fn(days);
     const positive = cumDeltas.filter(v => v > 0);
     const threshold = positive.length > 0 ? ss.quantile(positive, 0.25) : 0;

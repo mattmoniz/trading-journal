@@ -54,19 +54,27 @@ function classifyDeltaConfirmation(bars, direction, entryPrice, threshold) {
 }
 
 /** Which calibration category a setup_type belongs to, or null if not covered yet.
- * Scope matches exactly what's been tested: real RTH level-fade setup_types (the
- * `_FADE_LONG`/`_FADE_SHORT` family, any conditional-variant suffix stripped) and
- * STACK_VOL_BREAK_LIVE's RTH breakout-continuation entries. Deliberately does NOT cover:
- * the "OTHER" session-structure family (IB_BULLISH, TRT, C_STANDALONE, OPEN_DRIVE,
- * BRACKET_BREAKOUT, VALUE_AREA_RESPONSIVE, VWAP_MAGNET, STOP_SWEEP) — untested; or
- * `_OVERNIGHT`-suffixed fade variants — the underlying test used RTH bars only
- * (getRTHBars), so Globex/overnight fades are NOT covered by this category despite
- * matching the base `_FADE_LONG/SHORT` pattern. Both gaps are being tested separately
- * (pilot_delta_other_family_and_globex.mjs) — extend this function only once a category
- * has its own validated RESEARCH_CLAIM, not preemptively. */
+ * Scope matches exactly what's been validated:
+ * - 'FADE': real RTH level-fade setup_types (RESEARCH_CLAIM
+ *   cumulative_delta_confirms_fades_stronger_than_breakout).
+ * - 'FADE_GLOBEX': `_OVERNIGHT`-suffixed fade variants — a SEPARATE category, not folded
+ *   into 'FADE', because Globex has a genuinely different volume scale (calibrated floor
+ *   p25=31 vs RTH's p25=143 at K=10 — confirmed, not assumed) (RESEARCH_CLAIM
+ *   cumulative_delta_confirms_globex_fades_too).
+ * - 'BREAKOUT': STACK_VOL_BREAK_LIVE's RTH breakout-continuation entries (RESEARCH_CLAIM
+ *   cumulative_delta_confirms_breakout_beyond_price_alone).
+ * Deliberately does NOT cover the "OTHER" session-structure family (IB_BULLISH, TRT,
+ * C_STANDALONE, OPEN_DRIVE, BRACKET_BREAKOUT, VALUE_AREA_RESPONSIVE, VWAP_MAGNET,
+ * STOP_SWEEP) — tested and found NOT validated (RESEARCH_CLAIM
+ * cumulative_delta_other_family_too_thin_not_validated: N far too thin for most of these
+ * setup_types, and the one family with real N, BRACKET_BREAKOUT, showed no effect at all,
+ * contradicting the initial "generalizes universally" claim). Extend this function only
+ * once a category clears its own validated RESEARCH_CLAIM with real N, not preemptively. */
 function getDeltaConfirmationCategory(setupType) {
   if (/^STACK_VOL_BREAK_LIVE_(LONG|SHORT)$/.test(setupType)) return 'BREAKOUT';
-  if (setupType.endsWith('_OVERNIGHT')) return null;
+  if (setupType.endsWith('_OVERNIGHT')) {
+    return /_FADE_(LONG|SHORT)_OVERNIGHT$/.test(setupType) ? 'FADE_GLOBEX' : null;
+  }
   if (/_FADE_(LONG|SHORT)(_TRAIL)?(_GAP_(UP|DOWN))?$/.test(setupType)) return 'FADE';
   return null;
 }
