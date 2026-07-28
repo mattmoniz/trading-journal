@@ -62,7 +62,7 @@ async function run() {
         AND status = 'RESOLVED'
     `),
     query(`
-      SELECT a.setup_type, a.resolution, a.actual_pnl::float, d.day_type
+      SELECT a.setup_type, a.resolution, a.actual_pnl::float, a.origin_status, d.day_type
       FROM active_setups a
       JOIN acd_daily_log d ON a.trade_date = d.trade_date
       WHERE (a.setup_type LIKE '%FADE%' OR a.setup_type IN ('IB_BULLISH', 'IB_BEARISH'))
@@ -83,16 +83,30 @@ async function run() {
     overalls[r.setup_type].n   += 1;
   }
 
-  // Build cells from day-typed trades only
+  // Build cells from day-typed trades only. Tracks real_n/real_pnl (origin_status
+  // IN ('ACTIVE','SHADOW') only) ALONGSIDE the blended n/pnl -- found 2026-07-28 (Opus
+  // Audit #5 + user's own live-firing observation) that the live gate at acd.js's
+  // `ibDtaRow.ev_per_trade < -5` check trusts the BLENDED cell EV with no origin filter,
+  // the same gap PROMOTE_MIN_REAL_N fixed for the main suppression check on 2026-07-20
+  // but never applied here. Confirmed live: IB_BULLISH_TREND fires on blended EV=+$16.3
+  // (N=38) while its real (ACTIVE/SHADOW-origin) support is ~0 trades, all UNKNOWN-origin
+  // and 3 weeks stale; IB_BEARISH_TURBULENT fires on blended +$72.1 while its real EV is
+  // -$10.33 (N=9 real). Persisting real_n/real_ev here so the live gate can require real
+  // evidence instead of trusting blended.
   const cells = {};
   for (const r of daytypeRes.rows) {
-    const { setup_type, resolution, actual_pnl, day_type } = r;
+    const { setup_type, resolution, actual_pnl, origin_status, day_type } = r;
     const win = resolution === 'TARGET_HIT' ? 1 : 0;
     const ck = `${setup_type}|${day_type}`;
-    if (!cells[ck]) cells[ck] = { setup_type, day_type, wins: 0, n: 0, pnl_sum: 0, pnl_n: 0 };
+    if (!cells[ck]) cells[ck] = { setup_type, day_type, wins: 0, n: 0, pnl_sum: 0, pnl_n: 0, real_pnl_sum: 0, real_pnl_n: 0 };
     cells[ck].wins += win;
     cells[ck].n    += 1;
-    if (actual_pnl != null && !isNaN(actual_pnl)) { cells[ck].pnl_sum += actual_pnl; cells[ck].pnl_n++; }
+    if (actual_pnl != null && !isNaN(actual_pnl)) {
+      cells[ck].pnl_sum += actual_pnl; cells[ck].pnl_n++;
+      if (origin_status === 'ACTIVE' || origin_status === 'SHADOW') {
+        cells[ck].real_pnl_sum += actual_pnl; cells[ck].real_pnl_n++;
+      }
+    }
   }
 
   const today  = new Date().toISOString().slice(0, 10);
@@ -134,6 +148,8 @@ async function run() {
       se:         Math.round(se * 1000)          / 1000,
       z_score:    Math.round(z_score * 100)      / 100,
       size_delta: Math.round(size_delta * 100)   / 100,
+      real_n:     cell.real_pnl_n,
+      real_ev:    cell.real_pnl_n ? Math.round((cell.real_pnl_sum / cell.real_pnl_n) * 100) / 100 : null,
     });
 
     await query(`

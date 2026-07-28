@@ -4662,14 +4662,38 @@ export default function createACDRouter(io) {
       // this fragile function.
       if (ibSetup) {
         const ibDtaQ = await query(`
-          SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade
+          SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade, notes
           FROM performance_audit
           WHERE signal_type='DAY_TYPE_ALPHA' AND signal_name = ANY($1::text[])
           ORDER BY signal_name, run_date DESC
         `, [['IB_BULLISH_BALANCE', 'IB_BULLISH_TREND', 'IB_BULLISH_TURBULENT',
              'IB_BEARISH_BALANCE', 'IB_BEARISH_TREND', 'IB_BEARISH_TURBULENT']]);
         const ibDtaRow = ibDtaQ.rows.find(r => r.signal_name === `${ibSetup.type}_${dtClass}`);
-        if (ibDtaRow && ibDtaRow.sample_size >= 20 && ibDtaRow.ev_per_trade < -5) ibSetup = null;
+        if (ibDtaRow) {
+          // Real-N floor added 2026-07-28 (Opus Audit #5 + direct user question "why is
+          // IB_BULLISH still firing") -- the check above this comment trusted the BLENDED
+          // cell EV with no origin_status filter, same gap PROMOTE_MIN_REAL_N already fixed
+          // for the main SUPPRESS check on 2026-07-20 (backtest_setup_status.mjs) but never
+          // applied here. Confirmed live: IB_BULLISH_TREND fired on blended EV=+$37.8 while
+          // real (ACTIVE/SHADOW-origin) support was 0 trades -- all UNKNOWN-origin, unverifiable.
+          // IB_BEARISH_TURBULENT fired on blended +$57.1 while real EV was -$12.70 (N=10 real).
+          // Fix: once a cell has >=REAL_N_FLOOR real trades, trust REAL EV instead of blended
+          // (this can un-suppress a cell whose blended EV looks bad but whose real trades are
+          // fine, not just suppress) -- below the floor, treat as unproven and don't fire it
+          // live regardless of how good blended looks, since blended can't be trusted at all
+          // (the exact IB_BULLISH_TREND failure mode). REAL_N_FLOOR=5 reuses backtest_setup_
+          // status.mjs's PROMOTE_MIN_REAL_N precedent (not importable directly -- that file
+          // runs its whole backtest unconditionally on import, so redeclaring the same value
+          // here with this comment is the established pattern, see IB_MID_SCALP's own local
+          // PT/COMM redeclaration elsewhere in this file for the identical convention).
+          const REAL_N_FLOOR = 5;
+          const dtaNotes = ibDtaRow.notes ? JSON.parse(ibDtaRow.notes) : {};
+          const realN = dtaNotes.real_n ?? 0;
+          const realEv = dtaNotes.real_ev;
+          const unproven = realN < REAL_N_FLOOR;
+          const realBad = !unproven && realEv != null && realEv < -5;
+          if (unproven || realBad) ibSetup = null;
+        }
       }
 
       // Morning volatility regime — used to gate C_STANDALONE in HIGH-VOL-CHOP (0% WR confirmed, regime backtest 2026-06-30)
