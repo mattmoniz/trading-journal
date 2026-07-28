@@ -336,6 +336,22 @@ async function run() {
   // write a SETUP_STATUS_DOW row. acd.js loads today's DOW rows into _dowSuppressToday.
   // DOW_TYPE_CONDITIONAL setups (IB_BULLISH/IB_BEARISH) are excluded — they use the
   // candidates path and aren't gated by _dowSuppressToday in the level-fade engine.
+  //
+  // Rigor gate added 2026-07-28: found on audit (user asked "why did we gate these by
+  // DOW, should we pause it") that this pass had NEVER had computeRigor applied to it,
+  // unlike every other statistical pipeline in this codebase (the main per-setup_type
+  // SUPPRESS/PROMOTE check above already gets it) — a real gap given ~180
+  // (setup_type x weekday) cells get tested every run at a thin N>=20 floor with zero
+  // multiple-comparison correction. Direct audit of the 39 cells live at the time: only
+  // 10 (26%) were chronologically stable and non-clustered; IB_BEARISH_DOW_1 had 68% of
+  // its N sitting in just 5 days (a handful of bad Mondays, not a real Monday effect).
+  // Fix: a candidate must ALSO pass computeRigor's `clean` bit (stable + not clustered)
+  // to actually gate live firing — same standard, not a new one, just finally applied
+  // here too. A candidate that clears N/EV but fails rigor still gets a real, visible
+  // row (recommendation='ACTIVE', notes carry the rigor stats) rather than silently
+  // vanishing, so it's trackable and self-heals to SUPPRESS the moment a future run's
+  // fresh population passes rigor (this recomputes from scratch every run, nothing is
+  // carried over from a prior decision).
   console.log('\n[backtest_setup_status] Computing per-DOW suppression...');
   const DOW_SIGNAL_TYPE = 'SETUP_STATUS_DOW';
   const DOW_NAMES = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -358,7 +374,24 @@ async function run() {
     ORDER BY 1, 2
   `);
 
+  // Per-(setup_type, dow) trade list for the rigor check — one query, not one per
+  // candidate (this file already has ~180 candidates to check).
+  const dowTradesQ = await query(`
+    SELECT setup_type, EXTRACT(DOW FROM trade_date)::int AS dow,
+           trade_date::text AS trade_date, actual_pnl::float AS pnl
+    FROM active_setups
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+    ORDER BY setup_type, dow, trade_date ASC
+  `);
+  const tradesByTypeDow = new Map();
+  for (const r of dowTradesQ.rows) {
+    const key = `${r.setup_type}_${r.dow}`;
+    if (!tradesByTypeDow.has(key)) tradesByTypeDow.set(key, []);
+    tradesByTypeDow.get(key).push(r);
+  }
+
   let dowSuppressed = 0, dowWritten = 0;
+  const newDowSuppress = new Set();
   for (const r of dowQ.rows) {
     const dow = +r.dow;
     const type = r.setup_type;
@@ -370,16 +403,24 @@ async function run() {
     // acd.js checks _dowSuppressToday for IB types when building the candidates array.
     if (globalSuppress.has(type) || dow === 0 || dow === 6) continue;
 
-    const shouldSuppress = ev < SUPPRESS_MAX_EV;
-    if (!shouldSuppress) continue;
+    const meetsNAndEv = ev < SUPPRESS_MAX_EV;
+    if (!meetsNAndEv) continue;
+
+    const trades = tradesByTypeDow.get(`${type}_${dow}`) || [];
+    const rigor = computeRigor(trades, { dateField: 'trade_date', pnlFn: t => t.pnl });
+    const shouldSuppress = rigor.clean === true;
 
     const signalName = `${type}_DOW_${dow}`;
-    const notes = JSON.stringify({ dow, dow_name: DOW_NAMES[dow], setup_type: type, n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2) });
+    const notes = JSON.stringify({
+      dow, dow_name: DOW_NAMES[dow], setup_type: type, n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2),
+      rigor: { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, clean: rigor.clean },
+      ...(shouldSuppress ? {} : { failed_rigor: true }),
+    });
 
     await query(`
       INSERT INTO performance_audit
         (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
-      VALUES ($1, 0, $2, $3, $4, $5, $6, $7, 'SUPPRESS', $8)
+      VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
         sample_size    = EXCLUDED.sample_size,
         win_rate       = EXCLUDED.win_rate,
@@ -387,28 +428,30 @@ async function run() {
         total_pnl      = EXCLUDED.total_pnl,
         recommendation = EXCLUDED.recommendation,
         notes          = EXCLUDED.notes
-    `, [today, DOW_SIGNAL_TYPE, signalName, n, wr, ev, +r.total_pnl, notes]);
+    `, [today, DOW_SIGNAL_TYPE, signalName, n, wr, ev, +r.total_pnl, shouldSuppress ? 'SUPPRESS' : 'ACTIVE', notes]);
 
-    console.log(`  DOW_SUPPRESS ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}`);
-    dowSuppressed++;
+    if (shouldSuppress) {
+      console.log(`  DOW_SUPPRESS ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} rigor=clean`);
+      newDowSuppress.add(signalName);
+      dowSuppressed++;
+    } else {
+      console.log(`  DOW_RIGOR_FAIL ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} rigor=${rigor.clustered ? 'clustered' : 'unstable'} (top5day%=${rigor.top5DayPct})`);
+    }
     dowWritten++;
   }
 
   // Clear any stale DOW suppression rows that no longer qualify (set to ACTIVE)
   // Any signal_name matching DOW pattern that ISN'T in this run's suppress set → write ACTIVE
+  // Reuses the SAME newDowSuppress set built in the loop above (now rigor-gated) — this
+  // used to independently recompute its own copy of the N/EV qualification check here,
+  // which would have silently missed the rigor gate and kept clearing/reinstating cells
+  // inconsistently with the main loop's decision. One computation, not two.
   const currentDowQ = await query(`
     SELECT DISTINCT ON (signal_name) signal_name, recommendation
     FROM performance_audit
     WHERE signal_type = $1
     ORDER BY signal_name, run_date DESC
   `, [DOW_SIGNAL_TYPE]);
-
-  const newDowSuppress = new Set();
-  for (const r of dowQ.rows) {
-    const dow = +r.dow;
-    if (globalSuppress.has(r.setup_type) || dow === 0 || dow === 6) continue;
-    if (+r.ev < SUPPRESS_MAX_EV && +r.n >= SUPPRESS_MIN_N) newDowSuppress.add(`${r.setup_type}_DOW_${dow}`);
-  }
 
   for (const row of currentDowQ.rows) {
     if (row.recommendation === 'SUPPRESS' && !newDowSuppress.has(row.signal_name)) {
