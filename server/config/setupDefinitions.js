@@ -98,6 +98,11 @@ export const LEVEL_FADE_DEFINITIONS = {
   // VWAP
   WEEKLY_VWAP:  { rule: 'PRIOR_PERIOD', displayName: 'Weekly VWAP', levelDesc: 'week-to-date volume-weighted average price' },
   MONTHLY_VWAP: { rule: 'PRIOR_PERIOD', displayName: 'Monthly VWAP', levelDesc: 'month-to-date volume-weighted average price' },
+  // Ordinary close-range touch of the running (developing) RTH VWAP -- distinct from
+  // VWAP_MAGNET_LONG/SHORT (OTHER_SETUP_DEFINITIONS below), which only fires on a rare
+  // sigma-distance departure. This is the same 15pt-proximity mechanism every other level
+  // here uses, just applied to a moving rather than fixed level. Added 2026-07-28.
+  RTH_VWAP:     { rule: 'PRIOR_PERIOD', displayName: 'RTH VWAP', levelDesc: 'running (developing) RTH volume-weighted average price' },
   // Rolling composites (all strictly prior-days, verified against their own build functions)
   '5D_OR_MID':  { rule: 'PRIOR_PERIOD', displayName: '5-Day OR Mid', levelDesc: "rolling 5-prior-day average Opening Range midpoint" },
   '10D_IB_MID': { rule: 'PRIOR_PERIOD', displayName: '10-Day IB Mid', levelDesc: "rolling 10-prior-day average Initial Balance midpoint" },
@@ -180,6 +185,30 @@ export const OTHER_SETUP_DEFINITIONS = {
   BRACKET_BREAKOUT_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Bracket Breakout Short', criteria: 'Price breaks the 5-session bracket (consolidation range) bottom with sufficient NL30 momentum. Prior bracket bottom becomes resistance — shorts rallies to that boundary, not the breakdown bar itself.' },
   VALUE_AREA_RESPONSIVE_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'Value Area Responsive Long', criteria: 'Price responds to (fades back into) the developing value area from outside it — bullish variant. Counter-trend classification (grouped with TRT/TRT_MAH as counter-trend setups in server/routes/setups.js).' },
   VALUE_AREA_RESPONSIVE_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Value Area Responsive Short', criteria: 'Price responds to (fades back into) the developing value area from outside it — bearish variant. Counter-trend classification (grouped with TRT/TRT_MAH as counter-trend setups in server/routes/setups.js).' },
+  // VWAP_MAGNET is the FAR-AWAY (sigma-distance) VWAP fade — one of two VWAP fade families
+  // now built (2026-07-28). Originally documented here as "THE RTH-VWAP fade" before the
+  // second family (RTH_VWAP_FADE_LONG/SHORT, LEVEL_FADE_DEFINITIONS above) existed — kept
+  // separate on purpose, not merged, since they're genuinely different trigger conditions:
+  // this one only fires on a rare extreme departure from VWAP; RTH_VWAP_FADE_LONG/SHORT
+  // fires on an ordinary close-range (15pt) touch, the far more common case, added directly
+  // per user pushback ("what about fades off the vwap? those are trades too"). Criteria
+  // verified directly against server/routes/acd.js ~line 5310-5338 (vwapMagnetSetup).
+  VWAP_MAGNET_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'VWAP Magnet Long', criteria: 'Fires when price is ≥1.5σ BELOW the running RTH VWAP (σ = rolling 30-session std of session_close − RTH_VWAP) — a mean-reversion long back toward VWAP. T1 = 20pt, stop = 30pt (resolves as a plain single-target trade — the description text mentions a scale-out/runner, but the live insert never sets a trail/extend mechanism, so it always resolves flat). See RTH_VWAP_FADE_LONG for the ordinary close-range VWAP touch, a separate, more common trigger.' },
+  VWAP_MAGNET_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'VWAP Magnet Short', criteria: 'Fires when price is ≥1.5σ ABOVE the running RTH VWAP (σ = rolling 30-session std of session_close − RTH_VWAP) — a mean-reversion short back toward VWAP. T1 = 20pt, stop = 30pt (resolves as a plain single-target trade — the description text mentions a scale-out/runner, but the live insert never sets a trail/extend mechanism, so it always resolves flat). See RTH_VWAP_FADE_SHORT for the ordinary close-range VWAP touch, a separate, more common trigger.' },
+  // The Globex sibling of VWAP_MAGNET — built 2026-07-28 directly from a user request that
+  // the 24hr/Globex-spanning VWAP be tracked as a real, historical setup like every other
+  // level, not just the passive text alert (morningBrief.js's "24HR VWAP" alert) it was
+  // before. See server/routes/acd.js's detectGlobexSetup() for the live detection code.
+  GLOBEX_VWAP_MAGNET_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Magnet Long', globexOnly: true, criteria: 'Fires when price is ≥1.5σ BELOW the running 24hr VWAP (Globex 6PM ET open through now; σ = rolling 30-session std of session_close − 24hr-VWAP) — a mean-reversion long back toward the 24hr VWAP. T1/stop are data-derived (OPTIMAL_STOP once N≥20; fallback 20pt/30pt matching VWAP_MAGNET\'s own live values until then). See GLOBEX_VWAP_FADE_LONG for the ordinary close-range touch, a separate, more common trigger.' },
+  GLOBEX_VWAP_MAGNET_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Magnet Short', globexOnly: true, criteria: 'Fires when price is ≥1.5σ ABOVE the running 24hr VWAP (Globex 6PM ET open through now; σ = rolling 30-session std of session_close − 24hr-VWAP) — a mean-reversion short back toward the 24hr VWAP. T1/stop are data-derived (OPTIMAL_STOP once N≥20; fallback 20pt/30pt matching VWAP_MAGNET\'s own live values until then). See GLOBEX_VWAP_FADE_SHORT for the ordinary close-range touch, a separate, more common trigger.' },
+  // Globex sibling of RTH_VWAP_FADE_LONG/SHORT (LEVEL_FADE_DEFINITIONS above) — ordinary
+  // close-range (15pt) touch of the running 24hr VWAP, distinct from GLOBEX_VWAP_MAGNET's
+  // far-away sigma trigger. Kept in OTHER_SETUP_DEFINITIONS (not LEVEL_FADE_DEFINITIONS)
+  // since its rule/window text needs to say "Globex-only," not reuse GLOBEX_CAPABLE's
+  // wording (that rule's text is specific to the PD_VAH/VAL/POC RTH-calibrated-stop gap,
+  // which doesn't apply here — this setup is calibrated on its own real Globex data).
+  GLOBEX_VWAP_FADE_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Fade Long', globexOnly: true, criteria: 'Fires on an ordinary touch (within 15pt) of the running 24hr VWAP (Globex 6PM ET open through now) while price is currently below it — direction is dynamic from current price side (like PD_POC), not a fixed per-level bias. Globex-only, no RTH sibling by this exact name (see RTH_VWAP_FADE_LONG for the RTH version).' },
+  GLOBEX_VWAP_FADE_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Fade Short', globexOnly: true, criteria: 'Fires on an ordinary touch (within 15pt) of the running 24hr VWAP (Globex 6PM ET open through now) while price is currently above it — direction is dynamic from current price side (like PD_POC), not a fixed per-level bias. Globex-only, no RTH sibling by this exact name (see RTH_VWAP_FADE_SHORT for the RTH version).' },
 };
 
 // Level-family "Group" labels — matches the Key Levels table's grouping convention
@@ -201,6 +230,7 @@ const LEVEL_GROUP_MAP = {
   DAILY_OPEN: "Today's Open",
   WEEKLY_OPEN: 'Prior Week', WEEKLY_VWAP: 'Weekly VWAP',
   MONTHLY_OPEN: 'Prior Month', MONTHLY_VWAP: 'Monthly VWAP',
+  RTH_VWAP: 'RTH VWAP', GLOBEX_VWAP: 'Globex 24hr VWAP',
   PW_HIGH: 'Prior Week', PW_LOW: 'Prior Week', PW_VAH: 'Prior Week', PW_VAL: 'Prior Week', PW_POC: 'Prior Week',
   PM_HIGH: 'Prior Month', PM_LOW: 'Prior Month', PM_VAH: 'Prior Month', PM_VAL: 'Prior Month', PM_POC: 'Prior Month',
   M1_VAH: 'Rolling 1-Month', M1_VAL: 'Rolling 1-Month',
@@ -233,6 +263,7 @@ const OTHER_GROUP_MAP = {
   GAP_FILL_LONG: 'Gap Fill', GAP_FILL_SHORT: 'Gap Fill',
   STOP_SWEEP_LONG: 'Stop Sweep', STOP_SWEEP_SHORT: 'Stop Sweep',
   VWAP_MAGNET_LONG: 'RTH VWAP', VWAP_MAGNET_SHORT: 'RTH VWAP',
+  GLOBEX_VWAP_MAGNET_LONG: 'Globex 24hr VWAP', GLOBEX_VWAP_MAGNET_SHORT: 'Globex 24hr VWAP',
   ZONE_EDGE_FADE: 'Confluence Zone',
   STACK_VOL_BREAK_LIVE_LONG: 'Volume/Level Break', STACK_VOL_BREAK_LIVE_SHORT: 'Volume/Level Break',
 };

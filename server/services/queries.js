@@ -4,6 +4,7 @@
  */
 
 import { query } from '../db.js';
+import { cacheGet, cacheSet } from '../lib/cache.js';
 
 // ── NL30 / NL10 rolling sums ────────────────────────────────────────────────
 
@@ -234,6 +235,111 @@ export async function getTrailingVwapStd(date, days = 30, sigmaMult = 1.5) {
     [date, days]
   ).catch(() => ({ rows: [] }));
   const vals = res.rows.map(r => r.close_vs_vwap);
+  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+  return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
+}
+
+/**
+ * Bars for the "24hr VWAP" window — 6PM ET the prior day through 4:59PM ET the given
+ * date (spans the full Globex+RTH combined trading day, NOT the pre-RTH-only window
+ * scripts/calibrate_delta_confirmation.mjs's getGlobexBars uses for a different purpose).
+ * Same window already hand-written 2x in server/routes/morningBrief.js — factored out here
+ * 2026-07-28 as the third consumer (GLOBEX_VWAP_MAGNET, server/routes/acd.js) arrived,
+ * rather than hand-copying a 3rd/4th time. Shape matches computeRunningVwapSeries()'s
+ * expected input directly ({ high, low, close, volume }), plus bid_volume/ask_volume for
+ * any consumer needing order-flow (cumulative delta) — added 2026-07-28 after this
+ * function's original VWAP-only column list silently broke a same-day delta-confirmation
+ * test: every bar's ask_volume/bid_volume read as `undefined`, so cumulative delta was
+ * exactly 0 for every touch, collapsing the p25 threshold to 0 and producing a fully
+ * degenerate split (100% "CONFIRMATION", zero PRICE_ONLY_CONTROL) that looked like "Globex
+ * has no delta signal" but was actually just missing columns.
+ */
+export async function getGlobex24hrBars(date) {
+  const r = await query(`
+    SELECT ts, high::float, low::float, close::float, volume::bigint as volume,
+      COALESCE(bid_volume,0)::int as bid_volume, COALESCE(ask_volume,0)::int as ask_volume
+    FROM price_bars_primary WHERE symbol='NQ' AND (
+      (ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18) OR
+      (ts::date = $1 AND EXTRACT(hour FROM ts) < 17)
+    ) ORDER BY ts`, [date]).catch(() => ({ rows: [] }));
+  return r.rows;
+}
+
+/**
+ * Trailing 24hr-VWAP (Globex-spanning) distances — moved here from
+ * server/routes/morningBrief.js 2026-07-28 (was a private, unexported helper) so the new
+ * GLOBEX_VWAP_MAGNET live setup and its historical backfill script (scripts/
+ * backtest_globex_vwap_magnet.mjs) can both call the exact same no-lookahead
+ * implementation instead of re-deriving the Globex-session-bucketing logic — that logic
+ * has real subtlety (a bar with hour>=18 belongs to the NEXT calendar day's session, not
+ * its own) that this codebase has gotten wrong before on reimplementation. Pure relocation,
+ * zero logic change (verified: same query, same bulk-fetch-then-bucket structure, same
+ * cache key/TTL) — server/routes/morningBrief.js now imports this instead of defining it.
+ * Returns an array of (session_close - vwap24) distances, one per historical session with
+ * >50 Globex bars, for sessions strictly before `date`.
+ */
+export async function getTrailing24hrVwapDists(date, days = 30) {
+  const ck = `mb:24hrVwapDists:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
+  const DAY_CACHE_TTL = 12 * 60 * 60 * 1000;
+  const result = await query(`
+    WITH day_list AS (
+      SELECT DISTINCT ts::date as d FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date >= $1::date - $2::int AND ts::date < $1
+      ORDER BY d
+    )
+    SELECT d::text, (array_agg(close ORDER BY ts DESC))[1]::float as close_price
+    FROM price_bars_primary pb
+    JOIN day_list dl ON pb.ts::date = dl.d
+    WHERE symbol='NQ' AND EXTRACT(hour FROM pb.ts)*60+EXTRACT(minute FROM pb.ts) BETWEEN 570 AND 959
+    GROUP BY d
+    ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
+  if (result.rows.length < 5) return cacheSet(ck, [], DAY_CACHE_TTL);
+
+  const days_arr = result.rows.map(r => r.d);
+  const minD = days_arr[0], maxD = days_arr[days_arr.length - 1];
+  const bulkRes = await query(`
+    SELECT ts::date::text as d, EXTRACT(hour FROM ts)::int as hr,
+           high::float, low::float, close::float, volume::bigint as vol
+    FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date >= $1::date - 1 AND ts::date <= $2::date
+      AND (EXTRACT(hour FROM ts) >= 18 OR EXTRACT(hour FROM ts) < 17)
+  `, [minD, maxD]).catch(() => ({ rows: [] }));
+  const bySession = new Map();
+  for (const b of bulkRes.rows) {
+    let sessDate;
+    if (b.hr >= 18) {
+      const dt = new Date(b.d + 'T12:00:00Z'); dt.setUTCDate(dt.getUTCDate() + 1);
+      sessDate = dt.toISOString().slice(0, 10);
+    } else {
+      sessDate = b.d;
+    }
+    if (!bySession.has(sessDate)) bySession.set(sessDate, []);
+    bySession.get(sessDate).push(b);
+  }
+
+  const dists = [];
+  for (const row of result.rows) {
+    const globexBars = bySession.get(row.d) || [];
+    if (globexBars.length > 50) {
+      let pv = 0, v = 0;
+      for (const b of globexBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
+      const vwap24 = pv / v;
+      dists.push(row.close_price - vwap24);
+    }
+  }
+  return cacheSet(ck, dists, DAY_CACHE_TTL);
+}
+
+/**
+ * Rolling 24hr-VWAP distance std — the Globex-spanning sibling of getTrailingVwapStd()
+ * above, same shape/threshold formula (max(50, std*sigmaMult)), for GLOBEX_VWAP_MAGNET.
+ */
+export async function getTrailing24hrVwapStd(date, days = 30, sigmaMult = 1.5) {
+  const vals = await getTrailing24hrVwapDists(date, days);
   if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
   const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
   const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);

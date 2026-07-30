@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Quick Check</title>
+<style>
+  :root {
+    --green: #22c55e; --green-soft: #4ade80;
+    --red: #ef4444; --red-soft: #f87171;
+    --amber: #f59e0b; --amber-soft: #fbbf24;
+    --muted: #94a3b8; --dim: #64748b;
+    --text: #e2e8f0;
+    --bg: #0b1120; --card: rgba(15,23,42,0.7);
+    --border: rgba(51,65,85,0.5);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; padding-bottom: 40px;
+  }
+  .mono { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+
+  /* Top market bar — left padding reserved so the fixed hamburger button never overlaps the NQ chip */
+  #pulse-bar {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 6px;
+    background: rgba(15,23,42,0.96); border-bottom: 1px solid var(--border);
+    padding: 10px 14px 10px 46px; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px);
+  }
+
+  /* Hamburger nav — a separate fixed element, never touched by pulse-bar's own
+     periodic innerHTML re-render, so it survives every 15s poll untouched. */
+  #hamburger-btn {
+    position: fixed; top: 8px; left: 10px; z-index: 300;
+    width: 30px; height: 30px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+    color: var(--text); font-size: 16px; cursor: pointer; user-select: none;
+  }
+  #hamburger-btn:hover { background: rgba(255,255,255,0.12); }
+  #nav-menu {
+    display: none; position: fixed; top: 44px; left: 10px; z-index: 300;
+    background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px; min-width: 190px; box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  }
+  #nav-menu.open { display: block; }
+  #nav-menu a {
+    display: block; padding: 8px 10px; border-radius: 6px; font-size: 13px;
+    color: var(--text); text-decoration: none; cursor: pointer;
+  }
+  #nav-menu a:hover { background: rgba(255,255,255,0.06); }
+  .chip {
+    display: flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: rgba(255,255,255,0.03); flex-shrink: 0;
+  }
+  .chip .lbl { font-size: 11px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .chip .val { font-size: 14px; font-weight: 700; }
+  .chip .sub { font-size: 11px; font-weight: 700; text-transform: uppercase; }
+
+  /* Container */
+  .wrap { max-width: 480px; margin: 0 auto; padding: 14px; }
+
+  /* Active setup card */
+  #setup-card {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 12px 14px;
+    background: rgba(15,23,42,0.4); min-height: 60px; margin-bottom: 14px;
+  }
+  #setup-card.long  { border-color: var(--green); background: rgba(34,197,94,0.07); }
+  #setup-card.short { border-color: var(--red); background: rgba(239,68,68,0.07); }
+  .setup-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .setup-type { font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; flex: 1; }
+  .setup-time { font-size: 12px; color: var(--dim); }
+  .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 13px; }
+  .setup-grid .k { color: var(--muted); }
+  .setup-mins { font-size: 12px; color: var(--dim); margin-top: 6px; }
+  .empty-card { font-size: 13px; color: var(--muted); display: flex; align-items: center; justify-content: center; height: 40px; }
+
+  /* Session timeline */
+  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+  #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
+  #timeline-stats span b { font-family: monospace; }
+  .row {
+    display: flex; align-items: center; gap: 8px; padding: 8px 0;
+    border-bottom: 1px solid rgba(51,65,85,0.3); font-size: 13px;
+    cursor: pointer; transition: background 0.1s;
+  }
+  .row:hover { background: rgba(255,255,255,0.03); }
+  .row .rdot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .row .time { color: var(--dim); font-size: 12px; width: 56px; flex-shrink: 0; }
+  .row .type { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .price { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+  .badge.win { color: var(--green); background: rgba(34,197,94,0.12); }
+  .badge.loss { color: var(--red); background: rgba(239,68,68,0.12); }
+  .badge.other { color: var(--dim); background: rgba(148,163,184,0.1); }
+
+  /* Modal */
+  #modal-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.65); align-items: center; justify-content: center; padding: 16px;
+  }
+  #modal-backdrop.open { display: flex; }
+  #modal {
+    background: #0f172a; border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; width: 100%; max-width: 380px; max-height: 85vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  #modal .m-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  #modal .m-title { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  #modal .m-close { background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; line-height: 1; padding: 4px; }
+  #modal .m-sub { font-size: 12px; color: var(--dim); margin-bottom: 14px; }
+  .m-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid rgba(51,65,85,0.25); font-size: 13px; }
+  .m-row:last-child { border-bottom: none; }
+  .m-row .m-k { color: var(--muted); }
+  .m-row .m-v { font-weight: 600; }
+  .m-section { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 4px; }
+  .m-section:first-of-type { margin-top: 4px; }
+
+  .loading { text-align: center; color: var(--dim); padding: 30px 0; font-size: 13px; }
+
+  /* Aggregation sections */
+  .section-block { margin-top: 26px; }
+  .section-block h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+  table.agg { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table.agg th { text-align: left; color: var(--dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; padding: 0 6px 6px; }
+  table.agg th.num, table.agg td.num { text-align: right; }
+  table.agg td { padding: 6px 6px; border-top: 1px solid rgba(51,65,85,0.25); }
+  table.agg tr.total td { border-top: 1px solid var(--border); font-weight: 700; padding-top: 8px; }
+  .setup-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; display: inline-block; vertical-align: bottom; }
+
+  canvas.equity { width: 100%; height: 140px; display: block; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; }
+
+  .range-filter { display: flex; gap: 6px; margin-bottom: 8px; }
+  .range-btn {
+    flex: 1; padding: 7px 0; border-radius: 6px; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.03); color: var(--muted); font-size: 12.5px; font-weight: 600;
+    cursor: pointer; transition: all 0.12s;
+  }
+  .range-btn:hover { background: rgba(255,255,255,0.07); color: var(--text); }
+  .range-btn.active { background: rgba(99,102,241,0.18); border-color: rgba(99,102,241,0.5); color: #a5b4fc; }
+  .range-label { font-size: 11px; color: var(--dim); margin-bottom: 10px; }
+  .origin-banner {
+    display: none; align-items: center; justify-content: space-between; gap: 10px;
+    font-size: 11.5px; padding: 7px 10px; border-radius: 6px; margin-bottom: 10px;
+    background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.3); color: var(--amber-soft);
+  }
+  .origin-banner.show { display: flex; }
+  .origin-banner label { display: flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; flex-shrink: 0; white-space: nowrap; }
+  .origin-banner input { cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div id="hamburger-btn" onclick="toggleNavMenu()">☰</div>
+<div id="nav-menu">
+  <a onclick="jumpTo('top')">Market Pulse</a>
+  <a onclick="jumpTo('setup-card')">Active Setup</a>
+  <a onclick="jumpTo('timeline-head')">Session Timeline</a>
+  <a onclick="jumpTo('sec-performance')">Performance</a>
+</div>
+
+<div id="pulse-bar"></div>
+
+<div class="wrap">
+  <div id="setup-card"><div class="empty-card">Loading…</div></div>
+
+  <div id="timeline-head">
+    <h2 id="timeline-title">Session Timeline</h2>
+  </div>
+  <div id="timeline-stats"></div>
+  <div id="timeline-list"><div class="loading">Loading…</div></div>
+
+  <div class="section-block" id="sec-performance">
+    <h2>Performance</h2>
+    <div id="range-filter" class="range-filter">
+      <button class="range-btn" data-range="today">Today</button>
+      <button class="range-btn" data-range="week">Week</button>
+      <button class="range-btn" data-range="month">Month</button>
+      <button class="range-btn" data-range="year">Year</button>
+      <button class="range-btn" data-range="all">All</button>
+    </div>
+    <div id="range-label" class="range-label"></div>
+    <div id="origin-banner" class="origin-banner"></div>
+    <canvas id="range-equity" class="equity"></canvas>
+    <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
+  </div>
+</div>
+
+<div id="modal-backdrop">
+  <div id="modal"></div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtPct(n) { return (n > 0 ? '+' : '') + n; }
+function sigmaColor(s) {
+  const abs = Math.abs(s || 0);
+  return abs >= 1.5 ? 'var(--amber)' : abs >= 1 ? '#fb923c' : 'var(--dim)';
+}
+
+// ---- Top market pulse bar ----
+async function loadPulse() {
+  try {
+    const [pulseRes, setupRes, ctxRes] = await Promise.all([
+      fetch('/api/market/pulse').then(r => r.json()).catch(() => null),
+      fetch('/api/acd/setup-detection').then(r => r.json()).catch(() => null),
+      fetch('/api/morning-brief/live-session-context/' + todayET()).then(r => r.json()).catch(() => null),
+    ]);
+    renderPulseBar(pulseRes, setupRes, ctxRes);
+    renderSetupCard(setupRes);
+  } catch (e) { /* keep last good render */ }
+}
+
+function todayET() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+function renderPulseBar(pulse, setupData, ctx) {
+  if (!pulse || pulse.error) return;
+  const chips = [];
+
+  const fromOpenStr = pulse.ptsFromOpen != null ? fmtPct(pulse.ptsFromOpen.toFixed(0)) + 'pt' : '—';
+  const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--dim)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--dim)';
+  chips.push(chip('NQ', pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—', fromOpenStr, fromOpenClr, 'var(--text)'));
+
+  const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--dim)' : 'var(--amber)';
+  const rangeLabel = pulse.rangeClass === 'EXTENDED' ? 'BIG' : pulse.rangeClass === 'QUIET' ? 'QUIET' : 'NORMAL';
+  chips.push(chip('Range', pulse.sessionRange ? pulse.sessionRange.toFixed(0) + 'pt' : '—', rangeLabel, moveColor, moveColor));
+
+  const deltaColor = pulse.deltaClass === 'HIGH' ? (pulse.deltaSign === 'BUYING' ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
+  const deltaArrow = pulse.deltaSign === 'BUYING' ? '▲' : pulse.deltaSign === 'SELLING' ? '▼' : '—';
+  chips.push(chip('CumΔ', pulse.sessionDelta != null ? deltaArrow + ' ' + Math.abs(pulse.sessionDelta).toLocaleString() : '—', pulse.deltaClass !== 'NORMAL' ? pulse.deltaClass : '', deltaColor, deltaColor));
+
+  if (pulse.rvol != null) {
+    const rvolColor = pulse.rvolSigma >= 2 ? 'var(--red)' : pulse.rvolSigma >= 1 ? 'var(--amber)' : pulse.rvolSigma < -0.5 ? 'var(--dim)' : 'var(--muted)';
+    const rvolLabel = pulse.rvolSigma >= 2 ? 'EXTREME' : pulse.rvolSigma >= 1 ? 'SPIKE' : '';
+    chips.push(chip('RVol', pulse.rvol.toFixed(1) + '×', rvolLabel, rvolColor, rvolColor));
+  }
+
+  // Size chip
+  const setup = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
+  const mult = setup?.standDown ? 0 : (setup?.sizeMultiplier ?? null);
+  if (setup != null && mult !== null) {
+    const base = parseInt(localStorage.getItem('baseContracts') || '2');
+    const rec = mult === 0 ? 0 : Math.max(1, Math.round(base * mult));
+    const vColor = setup.standDown || mult === 0 ? 'var(--red)' : mult >= 1.1 ? 'var(--green)' : mult >= 0.85 ? '#60a5fa' : mult >= 0.5 ? 'var(--amber)' : '#f97316';
+    chips.push(chip('Size', base + ' → ' + (rec === 0 ? 'SKIP' : rec + ' ct'), '(' + mult.toFixed(2) + '×)', vColor, vColor));
+  }
+
+  if (ctx && !ctx.noData) {
+    if (ctx.sessionChar) {
+      const cc = ctx.sessionChar === 'EXTREME_CHOP' ? 'var(--red)' : ctx.sessionChar === 'CHOP' ? 'var(--amber)' : ctx.sessionChar.includes('TREND') ? 'var(--green)' : 'var(--dim)';
+      chips.push(chip('Session', ctx.sessionChar.replace(/_/g, ' '), '', cc, cc));
+    }
+    if (ctx.dailyVwapSigma != null) {
+      const clr = sigmaColor(ctx.dailyVwapSigma);
+      chips.push(chip('RVWAP', fmtPct(ctx.dailyVwapSigma) + 'σ', '', clr, clr));
+    }
+    if (ctx.vwap24Sigma != null) {
+      const clr = sigmaColor(ctx.vwap24Sigma);
+      chips.push(chip('24H', fmtPct(ctx.vwap24Sigma) + 'σ', '', clr, clr));
+    }
+    if (ctx.weeklyVwapSigma != null) {
+      const clr = sigmaColor(ctx.weeklyVwapSigma);
+      chips.push(chip('WK VWAP', fmtPct(ctx.weeklyVwapSigma) + 'σ', '', clr, clr));
+    }
+  }
+
+  $('pulse-bar').innerHTML = chips.join('');
+}
+
+function chip(label, val, sub, subColor, valColor) {
+  return '<div class="chip"><span class="lbl">' + label + '</span>' +
+    '<span class="val mono" style="color:' + (valColor || 'var(--text)') + '">' + val + '</span>' +
+    (sub ? '<span class="sub" style="color:' + subColor + '">' + sub + '</span>' : '') +
+    '</div>';
+}
+
+// ---- Active setup card ----
+function renderSetupCard(setupData) {
+  const el = $('setup-card');
+  const active = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
+  if (!active) {
+    el.className = '';
+    el.innerHTML = '<div class="empty-card">Watching — no setup</div>';
+    return;
+  }
+  const isLong = (active.type || '').includes('LONG') || (active.type || '').includes('BULLISH');
+  el.className = isLong ? 'long' : 'short';
+  const color = isLong ? 'var(--green)' : 'var(--red)';
+  const rr = (active.entry && active.stop && active.target && Math.abs(active.entry - active.stop) > 0)
+    ? (Math.abs(active.target - active.entry) / Math.abs(active.entry - active.stop)).toFixed(1) : null;
+
+  let html = '<div class="setup-head">';
+  html += '<span class="dot" style="background:' + color + (active.minsRemaining != null && active.minsRemaining <= 0 ? ';animation:none' : '') + '"></span>';
+  html += '<span class="setup-type" style="color:' + color + '">' + (active.type || '').replace(/_/g, ' ') + '</span>';
+  html += '<span class="setup-time mono">fired ' + (active.detectedAt || '') + ' ET</span>';
+  html += '</div>';
+  html += '<div class="setup-grid">';
+  if (active.entry != null)  html += '<span class="k">Entry <b class="mono" style="color:var(--text)">' + Math.round(active.entry) + '</b></span>';
+  if (active.stop != null)   html += '<span class="k">Stop <b class="mono" style="color:var(--red)">' + Math.round(active.stop) + '</b></span>';
+  if (active.target != null) html += '<span class="k">T1 <b class="mono" style="color:var(--green)">' + Math.round(active.target) + '</b></span>';
+  if (rr != null)             html += '<span class="k">R:R <b class="mono" style="color:#cbd5e1">' + rr + '</b></span>';
+  html += '</div>';
+  if (active.minsRemaining != null) {
+    html += '<div class="setup-mins" style="color:' + (active.minsRemaining < 10 ? 'var(--amber)' : 'var(--dim)') + '">' + active.minsRemaining + 'm remaining</div>';
+  }
+  el.innerHTML = html;
+}
+
+// ---- Session timeline ----
+async function loadTimeline() {
+  try {
+    const data = await fetch('/api/setups/today').then(r => r.json());
+    renderTimeline(Array.isArray(data?.setups) ? data.setups : []);
+  } catch (e) { /* keep last good render */ }
+}
+
+let timelineRows = []; // full setup rows, keyed for the modal lookup
+
+function renderTimeline(setups) {
+  const resolved = setups
+    .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
+    .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
+  timelineRows = resolved;
+
+  let wins = 0, losses = 0, pnl = 0;
+  for (const s of resolved) {
+    if (s.resolution === 'TARGET_HIT') wins++;
+    else if (s.resolution === 'STOP_HIT') losses++;
+    if (s.actual_pnl != null) pnl += parseFloat(s.actual_pnl);
+  }
+
+  $('timeline-title').textContent = 'Session Timeline (' + resolved.length + ')';
+  $('timeline-stats').innerHTML =
+    '<span>Wins <b style="color:var(--green)">' + wins + '</b></span>' +
+    '<span>Losses <b style="color:var(--red)">' + losses + '</b></span>' +
+    '<span>P&L <b style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(0) + '</b></span>';
+
+  if (resolved.length === 0) {
+    $('timeline-list').innerHTML = '<div class="loading">Nothing fired yet today</div>';
+    return;
+  }
+
+  $('timeline-list').innerHTML = resolved.map(s => {
+    const isWin = s.resolution === 'TARGET_HIT';
+    const isLoss = s.resolution === 'STOP_HIT';
+    const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
+    const badgeText = isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
+      (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
+      s.resolution === 'INVALIDATED' ? 'inv.' : (s.status === 'ACTIVE' ? 'live' : '—');
+    const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
+    const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
+    const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
+    const timeLabel = to12Hour(time);
+    const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
+    return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
+      '<span class="rdot" style="background:' + dotColor + '"></span>' +
+      '<span class="time mono">' + timeLabel + '</span>' +
+      '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+      '<span class="price mono">' + price + '</span>' +
+      '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
+      '</div>';
+  }).join('');
+}
+
+// ---- Trade detail modal ----
+function mRow(k, v, color) {
+  if (v == null || v === '') return '';
+  return '<div class="m-row"><span class="m-k">' + k + '</span><span class="m-v mono" style="color:' + (color || 'var(--text)') + '">' + v + '</span></div>';
+}
+function mSection(label) { return '<div class="m-section">' + label + '</div>'; }
+
+function openTradeModal(id) {
+  const s = timelineRows.find(r => r.id === id);
+  if (!s) return;
+  const isWin = s.resolution === 'TARGET_HIT';
+  const isLoss = s.resolution === 'STOP_HIT';
+  const color = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--dim)';
+  const pnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+
+  let html = '<div class="m-head"><span class="m-title" style="color:' + color + '">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.is_rth ? 'RTH' : 'Overnight/Globex') + ' · ' + (s.origin_status || 'UNKNOWN') + ' · id ' + s.id + '</div>';
+
+  html += mSection('Outcome');
+  html += mRow('Resolution', s.resolution, color);
+  html += mRow('Method', s.resolution_method);
+  html += mRow('P&L', pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : null, pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Bars to resolve', s.bars_to_resolution);
+
+  html += mSection('Levels');
+  html += mRow('Entry', s.entry_zone_low != null ? Number(s.entry_zone_low).toFixed(2) : null);
+  html += mRow('Stop', s.stop_level != null ? Number(s.stop_level).toFixed(2) : null, 'var(--red)');
+  html += mRow('T1', s.t1_level != null ? Number(s.t1_level).toFixed(2) : null, 'var(--green)');
+  html += mRow('MAE', s.mae_points != null ? Number(s.mae_points).toFixed(1) + 'pt' : null);
+  html += mRow('MFE', s.mfe_points != null ? Number(s.mfe_points).toFixed(1) + 'pt' : null);
+
+  html += mSection('Timing');
+  html += mRow('Fired', s.fired_at_str);
+  html += mRow('Resolved', s.resolved_at ? String(s.resolved_at).replace('T', ' ').slice(0, 19) : null);
+
+  const hasSignals = s.bar6_checkpoint || s.bar6_exit_recommended || s.delta_confirmation_state || s.touch_quality || (s.confluence_levels_at_detection && s.confluence_levels_at_detection.length);
+  if (hasSignals) {
+    html += mSection('Signals at the time');
+    if (s.bar6_exit_recommended) html += mRow('Bar-6', '🚨 EXIT NOW', 'var(--amber)');
+    else if (s.bar6_checkpoint) html += mRow('Bar-6', s.bar6_checkpoint, s.bar6_checkpoint === 'RECOVERING' ? 'var(--green)' : 'var(--red)');
+    if (s.delta_confirmation_state) html += mRow('Delta', s.delta_confirmation_state);
+    if (s.touch_quality) html += mRow('Touch quality', s.touch_quality);
+    if (s.confluence_levels_at_detection && s.confluence_levels_at_detection.length) html += mRow('Confluence', s.confluence_levels_at_detection.join(', '));
+  }
+
+  if (s.historical_win_rate != null) {
+    html += mSection('Calibrated at detection');
+    html += mRow('Historical WR', (Number(s.historical_win_rate) * 100).toFixed(0) + '%');
+    html += mRow('Sample size', s.historical_sessions);
+  }
+
+  // Cluster dedup tags (2026-07-29): when several level names sit in the same price zone,
+  // only one fires as the real trade -- the others still resolve for their own calibration
+  // credit but get attributed here instead of counting as separate live P&L. Shown as chips
+  // so it's visually distinct from the "Confluence" context row above (that's about nearby
+  // levels at detection; this is specifically about other setups deduped INTO this trade).
+  if (s.cluster_attributed_setups && s.cluster_attributed_setups.length) {
+    html += mSection('Also represents (deduped, same zone)');
+    html += '<div style="display:flex;flex-wrap:wrap;gap:5px;">' +
+      s.cluster_attributed_setups.map(t => '<span style="font-size:11px;padding:3px 8px;border-radius:10px;background:rgba(165,180,252,0.12);border:1px solid rgba(165,180,252,0.35);color:#a5b4fc;">' + t.replace(/_/g, ' ') + '</span>').join('') +
+      '</div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+function closeTradeModal() { $('modal-backdrop').classList.remove('open'); }
+$('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeTradeModal(); });
+
+function to12Hour(hhmm) {
+  if (!hhmm) return '';
+  let [h, m] = hhmm.split(':').map(Number);
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12; if (h === 0) h = 12;
+  return h + ':' + String(m).padStart(2, '0') + ' ' + ampm;
+}
+
+// ---- Aggregation by setup type (shared by today + week) ----
+function aggregateBySetup(rows) {
+  const map = new Map();
+  for (const s of rows) {
+    const key = s.setup_type || 'UNKNOWN';
+    if (!map.has(key)) map.set(key, { type: key, n: 0, wins: 0, losses: 0, pnl: 0 });
+    const g = map.get(key);
+    g.n++;
+    if (s.resolution === 'TARGET_HIT') g.wins++;
+    else if (s.resolution === 'STOP_HIT') g.losses++;
+    if (s.actual_pnl != null) g.pnl += parseFloat(s.actual_pnl);
+  }
+  return [...map.values()].sort((a, b) => b.pnl - a.pnl);
+}
+
+function renderAggTable(containerId, rows) {
+  const groups = aggregateBySetup(rows);
+  if (!groups.length) { $(containerId).innerHTML = '<div class="loading">Nothing fired yet</div>'; return; }
+
+  let totalN = 0, totalWins = 0, totalLosses = 0, totalPnl = 0;
+  let body = groups.map(g => {
+    totalN += g.n; totalWins += g.wins; totalLosses += g.losses; totalPnl += g.pnl;
+    const decided = g.wins + g.losses;
+    const wr = decided > 0 ? (g.wins / decided * 100).toFixed(0) + '%' : '—';
+    const pnlColor = g.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    return '<tr>' +
+      '<td><span class="setup-name" title="' + g.type + '">' + g.type.replace(/_/g, ' ') + '</span></td>' +
+      '<td class="num mono">' + g.n + '</td>' +
+      '<td class="num mono">' + wr + '</td>' +
+      '<td class="num mono" style="color:' + pnlColor + '">' + (g.pnl >= 0 ? '+' : '') + '$' + g.pnl.toFixed(0) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  const decidedTotal = totalWins + totalLosses;
+  const wrTotal = decidedTotal > 0 ? (totalWins / decidedTotal * 100).toFixed(0) + '%' : '—';
+  const totalColor = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+  body += '<tr class="total"><td>Total (' + groups.length + ' types)</td>' +
+    '<td class="num mono">' + totalN + '</td>' +
+    '<td class="num mono">' + wrTotal + '</td>' +
+    '<td class="num mono" style="color:' + totalColor + '">' + (totalPnl >= 0 ? '+' : '') + '$' + totalPnl.toFixed(0) + '</td></tr>';
+
+  $(containerId).innerHTML = '<table class="agg"><thead><tr><th>Setup</th><th class="num">N</th><th class="num">WR</th><th class="num">P&L</th></tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+// ---- Equity curve (canvas, no library) — with $ Y-axis and date/time X-axis ----
+function fmtAxisMoney(v) {
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  return sign + '$' + (abs >= 1000 ? (abs / 1000).toFixed(1) + 'k' : abs.toFixed(0));
+}
+function fmtAxisTime(firedAtStr, useTime) {
+  if (!firedAtStr) return '';
+  const datePart = firedAtStr.slice(0, 10);
+  const timePart = firedAtStr.slice(11, 16);
+  if (useTime) return to12Hour(timePart);
+  const [, mo, d] = datePart.split('-');
+  return mo + '/' + d;
+}
+
+function renderEquityCurve(canvasId, rows, range) {
+  const canvas = $(canvasId);
+  const decided = rows
+    .filter(s => s.actual_pnl != null && (s.resolution === 'TARGET_HIT' || s.resolution === 'STOP_HIT' || s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED'))
+    .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  if (decided.length < 2) {
+    ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Not enough resolved trades yet', w / 2, h / 2);
+    return;
+  }
+
+  let running = 0;
+  const points = [0]; // cumulative pnl values
+  const times = [decided[0].fired_at_str]; // matching timestamp per point (point 0 borrows the first trade's time)
+  for (const s of decided) { running += parseFloat(s.actual_pnl); points.push(running); times.push(s.fired_at_str); }
+
+  const min = Math.min(0, ...points), max = Math.max(0, ...points);
+  const valRange = (max - min) || 1;
+  const padL = 52, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (points.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  // Y-axis gridlines + $ labels (min, 0 if in range, max — 3-4 ticks)
+  const yTicks = [...new Set([min, 0, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const t of yTicks) {
+    const y = yAt(t);
+    ctx.strokeStyle = t === 0 ? 'rgba(148,163,184,0.3)' : 'rgba(148,163,184,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,0.75)';
+    ctx.fillText(fmtAxisMoney(t), padL - 6, y + 3);
+  }
+
+  // X-axis date/time labels — today shows times, everything else shows dates
+  const useTime = range === 'today';
+  const xTickCount = Math.min(5, points.length);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (points.length - 1));
+    const x = xAt(idx);
+    ctx.fillText(fmtAxisTime(times[idx], useTime), Math.min(Math.max(x, padL + 20), w - padR - 20), h - 4);
+  }
+
+  const finalPnl = points[points.length - 1];
+  const lineColor = finalPnl >= 0 ? '#4ade80' : '#f87171';
+  const fillColor = finalPnl >= 0 ? 'rgba(74,222,128,0.12)' : 'rgba(248,113,113,0.12)';
+
+  ctx.beginPath();
+  points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.lineTo(xAt(points.length - 1), yAt(0)); ctx.lineTo(xAt(0), yAt(0)); ctx.closePath();
+  ctx.fillStyle = fillColor; ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+  ctx.fillText((finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0), w - padR - 2, padT + 12);
+}
+
+// ---- Performance: filterable range (today/week/month/year/all) ----
+// Defaults to REAL data only (origin_status ACTIVE/SHADOW) -- for wide ranges most of
+// active_setups is BACKFILL (synthetic historical seeding) or UNKNOWN (pre-2026-07-09,
+// unrecoverable), and blending it into "performance" silently is exactly the mistake
+// this app's own standing rule exists to prevent. The banner below always shows the
+// real-vs-excluded composition so this can never be silently forgotten, even when
+// already filtered to real-only.
+let currentRange = 'today';
+let currentRangeRows = [];
+let includeBackfill = false;
+
+async function loadRange(range) {
+  currentRange = range;
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+  try {
+    const origin = includeBackfill ? 'all' : 'real';
+    const data = await fetch('/api/setups/range-summary?range=' + range + '&origin=' + origin).then(r => r.json());
+    const rows = Array.isArray(data?.setups) ? data.setups : [];
+    currentRangeRows = rows;
+    $('range-label').textContent = data.rangeLabel || '';
+
+    const banner = $('origin-banner');
+    const nonReal = data.nonRealCount || 0;
+    if (nonReal > 0) {
+      banner.classList.add('show');
+      banner.innerHTML =
+        '<span>' + (includeBackfill
+          ? '⚠ Includes ' + nonReal.toLocaleString() + ' backfill/unknown row' + (nonReal === 1 ? '' : 's') + ' — not real performance'
+          : '✓ ' + (data.realCount || 0).toLocaleString() + ' real trades shown — ' + nonReal.toLocaleString() + ' backfill/unknown excluded') +
+        '</span>' +
+        '<label><input type="checkbox" id="backfill-toggle" ' + (includeBackfill ? 'checked' : '') + '> include</label>';
+      $('backfill-toggle').addEventListener('change', (e) => { includeBackfill = e.target.checked; loadRange(currentRange); });
+    } else {
+      banner.classList.remove('show');
+    }
+
+    renderAggTable('range-agg', rows);
+    renderEquityCurve('range-equity', rows, range);
+  } catch (e) { /* keep last good render */ }
+}
+
+document.querySelectorAll('.range-btn').forEach(btn => {
+  btn.addEventListener('click', () => loadRange(btn.dataset.range));
+});
+
+// ---- Hamburger nav ----
+function toggleNavMenu() { $('nav-menu').classList.toggle('open'); }
+function jumpTo(id) {
+  $('nav-menu').classList.remove('open');
+  if (id === 'top') { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+  const el = $(id);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+document.addEventListener('click', (e) => {
+  if (!$('nav-menu').contains(e.target) && !$('hamburger-btn').contains(e.target)) {
+    $('nav-menu').classList.remove('open');
+  }
+});
+
+// ---- Boot ----
+loadPulse();
+loadTimeline();
+loadRange('today');
+setInterval(loadPulse, 15000);
+setInterval(loadTimeline, 20000);
+setInterval(() => loadRange(currentRange), 60000);
+window.addEventListener('resize', () => renderEquityCurve('range-equity', currentRangeRows, currentRange));
+</script>
+</body>
+</html>

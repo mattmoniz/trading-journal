@@ -716,6 +716,20 @@ function EdgeSectionsPanel() {
                       </div>
                     );
                   })()}
+                  {s.hivolLopaceAtDetection && (
+                    // RESEARCH_CLAIM hivol_lopace_precursor_confirmed_negative — CONFIRMED
+                    // (train/test same-sign both splits, N=1548 full population). High
+                    // transactional volume WITHOUT correspondingly large price movement in
+                    // the trailing 5 bars before this touch -- the opposite of a "defended
+                    // level/absorption" read, historically a real headwind. Informational
+                    // only: this app has no order/broker execution capability, so this can
+                    // never gate entry or auto-adjust size -- same convention as every other
+                    // badge in this family.
+                    <div style={{ fontSize: 11, color: '#f87171', marginTop: 4, fontWeight: 600 }}
+                      title="Trailing 5 bars into this touch: volume elevated (z>=0.5) but price barely moved (paceZ<1.0) -- historically -$7.91 EV vs +$0.07 control, N=1548, train/test consistent both splits.">
+                      ⚠ High volume, low pace into touch — historically a headwind, not absorption
+                    </div>
+                  )}
                   {s.fadeAgainstBigMoveExit && (
                     // DISABLED 2026-07-27: checkFadeAgainstBigMoveExit() (server/routes/acd.js)
                     // now always returns false, so s.fadeAgainstBigMoveExit is never truthy --

@@ -702,37 +702,44 @@ function KeyLevelBT({ selectedAccounts, onJumpToChart }) {
           }}
         />
       )}
-      {/* Chart modal overlay */}
-      {chartModal && (() => {
-        const { date, dates } = chartModal;
-        const idx = dates.indexOf(date);
-        const hasPrev = idx < dates.length - 1; // dates sorted newest-first, so prev = older = higher idx
-        const hasNext = idx > 0;
-        return (
-          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 20000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 60px' }}
-            onClick={e => { if (e.target === e.currentTarget) setChartModal(null); }}>
-            <div style={{ background: '#0d1117', border: '1px solid var(--border-color)', borderRadius: 10, display: 'flex', flexDirection: 'column', overflow: 'hidden', width: '100%', maxWidth: 1100, maxHeight: 'calc(100vh - 80px)' }}>
-              {/* Modal header */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
-                <button onClick={() => hasPrev && setChartModal(prev => ({ ...prev, date: dates[idx + 1] }))}
-                  disabled={!hasPrev}
-                  style={{ padding: '2px 9px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: hasPrev ? 'var(--text-secondary)' : 'var(--text-muted)', cursor: hasPrev ? 'pointer' : 'default', fontSize: 14, opacity: hasPrev ? 1 : 0.35 }}>‹</button>
-                <button onClick={() => hasNext && setChartModal(prev => ({ ...prev, date: dates[idx - 1] }))}
-                  disabled={!hasNext}
-                  style={{ padding: '2px 9px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: hasNext ? 'var(--text-secondary)' : 'var(--text-muted)', cursor: hasNext ? 'pointer' : 'default', fontSize: 14, opacity: hasNext ? 1 : 0.35 }}>›</button>
-                <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
-                  {new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 2 }}>{idx + 1} / {dates.length}</span>
-                <button onClick={() => setChartModal(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18, cursor: 'pointer', padding: '2px 6px', lineHeight: 1 }}>✕</button>
-              </div>
-              <div style={{ overflow: 'auto', flex: 1 }}>
-                <ChartReviewSection selectedAccounts={selectedAccounts} initialDate={date} initialLevelKey={chartModal.levelKey} />
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      <ChartModalOverlay chartModal={chartModal} setChartModal={setChartModal} selectedAccounts={selectedAccounts} />
+    </div>
+  );
+}
+
+// Shared "click a date -> see the chart" modal overlay — was hand-duplicated inline inside
+// KeyLevelBT only; factored out 2026-07-28 so Setup Reference's own date links (which used
+// to navigate away to the Chart Review tab, losing your place in the table — a real
+// complaint) can open the exact same true modal instead of a second, reimplemented copy.
+// chartModal shape: { date, dates (sorted newest-first), levelKey (nullable) } | null.
+function ChartModalOverlay({ chartModal, setChartModal, selectedAccounts }) {
+  if (!chartModal) return null;
+  const { date, dates } = chartModal;
+  const idx = dates.indexOf(date);
+  const hasPrev = idx < dates.length - 1; // dates sorted newest-first, so prev = older = higher idx
+  const hasNext = idx > 0;
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 20000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 60px' }}
+      onClick={e => { if (e.target === e.currentTarget) setChartModal(null); }}>
+      <div style={{ background: '#0d1117', border: '1px solid var(--border-color)', borderRadius: 10, display: 'flex', flexDirection: 'column', overflow: 'hidden', width: '100%', maxWidth: 1100, maxHeight: 'calc(100vh - 80px)' }}>
+        {/* Modal header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: '1px solid var(--border-color)', flexShrink: 0 }}>
+          <button onClick={() => hasPrev && setChartModal(prev => ({ ...prev, date: dates[idx + 1] }))}
+            disabled={!hasPrev}
+            style={{ padding: '2px 9px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: hasPrev ? 'var(--text-secondary)' : 'var(--text-muted)', cursor: hasPrev ? 'pointer' : 'default', fontSize: 14, opacity: hasPrev ? 1 : 0.35 }}>‹</button>
+          <button onClick={() => hasNext && setChartModal(prev => ({ ...prev, date: dates[idx - 1] }))}
+            disabled={!hasNext}
+            style={{ padding: '2px 9px', borderRadius: 5, border: '1px solid var(--border-color)', background: 'var(--card-bg)', color: hasNext ? 'var(--text-secondary)' : 'var(--text-muted)', cursor: hasNext ? 'pointer' : 'default', fontSize: 14, opacity: hasNext ? 1 : 0.35 }}>›</button>
+          <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
+            {new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+          </span>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 2 }}>{idx + 1} / {dates.length}</span>
+          <button onClick={() => setChartModal(null)} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18, cursor: 'pointer', padding: '2px 6px', lineHeight: 1 }}>✕</button>
+        </div>
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          <ChartReviewSection selectedAccounts={selectedAccounts} initialDate={date} initialLevelKey={chartModal.levelKey} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -2004,6 +2011,7 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
   const [ran, setRan] = useState(false);
   const [activeSection, setActiveSection] = useState('alpha'); // default to Alpha Engine
   const [chartReviewDate, setChartReviewDate] = useState('');
+  const [srChartModal, setSrChartModal] = useState(null); // Setup Reference's own chart modal (date links) — separate from the Chart Review tab
   const [vpDate, setVpDate] = useState('');
   const [vpSession, setVpSession] = useState('rth');
   const [vpData, setVpData] = useState(null);
@@ -2322,7 +2330,8 @@ function BacktestView({ accounts, selectedAccounts, setSelectedAccounts, priceSy
       </div>
 
       {activeSection === 'setups' && <SetupHistoryView />}
-      {activeSection === 'reference' && <SetupReferenceView onJumpToChart={(date) => { setChartReviewDate(date); setActiveSection('chartreview'); }} />}
+      {activeSection === 'reference' && <SetupReferenceView onOpenChart={(date, dates) => setSrChartModal({ date, dates, levelKey: null })} />}
+      <ChartModalOverlay chartModal={srChartModal} setChartModal={setSrChartModal} selectedAccounts={selectedAccounts} />
       {activeSection === 'research' && <ResearchLedgerView />}
       {activeSection === 'alpha' && <AlphaEngineOverview />}
       {activeSection === 'scenarios' && <ScenarioTesterView />}

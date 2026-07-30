@@ -56,6 +56,38 @@ export function computeProfile(bars) {
   return { poc: entries[pocIdx].price, vah, val, maxVol, totalVol, entries };
 }
 
+// ── Running (developing) VWAP ───────────────────────────────────────────────
+// Canonical replacement for a cumulative-typical-price-weighted-by-volume loop
+// that was hand-duplicated 3x before this existed: server/routes/acd.js's
+// VWAP_MAGNET earlyVwap, and server/routes/morningBrief.js's vwap24 (computed
+// twice, once for the recap/alerts path and once for the live-session-context
+// dashboard chip). Extracted 2026-07-28 specifically so a new historical
+// backtest script computing the SAME running VWAP over historical bars can
+// import this instead of re-deriving the math a 4th time — the "two
+// independent reimplementations disagree" bug class this codebase has hit
+// before (classifyRegime(), the value-area bucketing bug above). NOTE: the 3
+// existing call sites are not yet retrofitted to call this (out of scope for
+// this pass, tracked so it doesn't look done when it isn't) — every NEW VWAP
+// consumer (the Globex VWAP fade + both historical backfill scripts, built
+// the same day) calls this from the start.
+// bars: [{ high, low, close, volume }] in chronological order — caller maps
+// whatever raw column names it queried (ask_volume+bid_volume, vol, etc.) into
+// this shape before calling, so this function never has to guess a field name.
+// Returns an array the same length as bars: the cumulative VWAP through and
+// including each bar (bars[i].volume==0 bars fall back to weight 1, matching
+// every existing live call site's convention).
+export function computeRunningVwapSeries(bars) {
+  let pv = 0, tv = 0;
+  const out = [];
+  for (const b of bars) {
+    const v = Number(b.volume) || 1;
+    pv += (b.high + b.low + b.close) / 3 * v;
+    tv += v;
+    out.push(tv > 0 ? pv / tv : null);
+  }
+  return out;
+}
+
 // ── Volume profile over an arbitrary date range (week/month/quarter) ───────
 // Canonical replacement for the bucket-by-low SQL pattern that used to be
 // hand-duplicated in scripts/compute_levels.js, server/routes/acd.js, and

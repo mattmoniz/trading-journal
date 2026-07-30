@@ -22,8 +22,9 @@
 
 /**
  * STACK_VOL_BREAK_LIVE live detection thresholds — single source of truth so
- * computeStackVolSignal() (server/routes/acd.js) and /api/setups/reference (which
- * displays these as the "Applied volZ" reference column) can never drift apart.
+ * computeStackVolSignal() (server/routes/acd.js) and /api/setups/reference (folded into
+ * the "Misc" reference column's firing-gate tag, alongside every other setup_type's own
+ * mechanisms — see computeMiscTags() in server/routes/setups.js) can never drift apart.
  * Added 2026-07-28 alongside the Setup Reference volZ column build — previously these
  * lived only as local consts inside computeStackVolSignal(), which is exactly the
  * hand-duplicated-threshold shape this file's own convention exists to prevent.

@@ -2,9 +2,10 @@ import express from 'express';
 import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
-import { inferDirection, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
+import { inferDirection, STACK_VOL_THRESHOLDS, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
 import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition, getSetupGroup } from '../config/setupDefinitions.js';
 import { INSTRUMENTS } from '../config/instruments.js';
+import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 
 const router = express.Router();
 
@@ -606,6 +607,94 @@ function resolveDefinition(setupType) {
   return null;
 }
 
+// "Misc" column (renamed 2026-07-28 from the STACK_VOL_BREAK_LIVE-only "Applied volZ" per
+// direct user request: list EVERY live mechanism that actually controls each setup_type's
+// firing, in-trade sizing, and exit -- not just volZ). Every scope check below is derived
+// from reading the real gating code in server/routes/acd.js, not guessed:
+// - Level-fade family test mirrors getDeltaConfirmationCategory()'s own FADE regex.
+// - sizeMultiplier IIFE + the post-loss "Death Sequence" 0.5x cap only ever apply to
+//   whichever setup wins selection into the `active` variable -- and the `candidates`
+//   array that feeds `active` contains exactly two members: levelScalpSetup (the whole
+//   level-fade family) and ibSetup (IB_BULLISH/IB_BEARISH). Every other live setup_type
+//   (TRT, C_STANDALONE, OPEN_DRIVE, BRACKET_BREAKOUT, VALUE_AREA_RESPONSIVE, VWAP_MAGNET,
+//   STOP_SWEEP, etc.) is inserted via the separate `shadowCandidates` path, which never
+//   touches sizeMultiplier or hasLossToday at all -- confirmed by reading both insert
+//   blocks directly, not assumed from SHADOW/ACTIVE status.
+// - Confluence pair-bonus + S2/trend-counter-fade suppression are computed inside the
+//   level-fade near-touch loop (keepLevelsAll) -- level-fade family only.
+// - Bar-6 checkpoint/EXIT NOW and touch-quality both run inside resolveSetupsByPrice()'s
+//   shared bar-by-bar walk -- everyone EXCEPT ABSORPTION_LONG/COIL_SURGE*, which resolve
+//   via a separate current-price-snapshot branch that never reaches that walk.
+const TRAIL_TYPES = new Set(Object.keys(CONDITIONAL_VARIANTS).filter(k => CONDITIONAL_VARIANTS[k].trailSignalName));
+const GAP_CONDITIONAL_TYPES = new Set(Object.keys(CONDITIONAL_VARIANTS).filter(k => !CONDITIONAL_VARIANTS[k].trailSignalName));
+const IB_MANAGED_TYPES = new Set(['IB_BULLISH', 'IB_BEARISH']);
+const CUSTOM_RESOLVER_TYPES = (t) => t === 'ABSORPTION_LONG' || t.startsWith('COIL_SURGE');
+const LEVEL_FADE_RE = /_FADE_(LONG|SHORT)(_TRAIL)?(_GAP_(UP|DOWN))?(_OVERNIGHT)?$/;
+
+function computeMiscTags(setupType, { touchQualityTypes, optNotes }) {
+  // GLOBEX_VWAP_MAGNET_LONG/SHORT and GLOBEX_VWAP_FADE_LONG/SHORT (both added 2026-07-28)
+  // fire through detectGlobexSetup()'s candidates loop, NOT the RTH keepLevelsAll path --
+  // same minimal pair-bonus-only sizeMultiplier, same fixed single-target exit as the
+  // _OVERNIGHT fades, regardless of what LEVEL_FADE_RE would otherwise match. Checked and
+  // excluded from isLevelFade FIRST, before the regex test, because GLOBEX_VWAP_FADE_LONG/
+  // SHORT's name shape (ends in _FADE_LONG/SHORT) WOULD otherwise false-positive match
+  // LEVEL_FADE_RE and get incorrectly tagged with the RTH-only sizeMultiplier stack.
+  const isGlobexVwapMagnet = /^GLOBEX_VWAP_MAGNET_(LONG|SHORT)$/.test(setupType);
+  const isGlobexVwapFade = /^GLOBEX_VWAP_FADE_(LONG|SHORT)$/.test(setupType);
+  const isLevelFade = !isGlobexVwapFade && LEVEL_FADE_RE.test(setupType);
+  const isOvernightFade = isLevelFade && setupType.endsWith('_OVERNIGHT');
+  const isTrail = TRAIL_TYPES.has(setupType);
+  const isStackVol = /^STACK_VOL_BREAK_LIVE_(LONG|SHORT)$/.test(setupType);
+  const isIbManaged = IB_MANAGED_TYPES.has(setupType);
+  const deltaCat = getDeltaConfirmationCategory(setupType);
+  const tags = [];
+
+  // Firing
+  if (GAP_CONDITIONAL_TYPES.has(setupType)) tags.push(`Fires only when: ${CONDITIONAL_VARIANTS[setupType].condition}`);
+  if (isStackVol) {
+    const t = STACK_VOL_THRESHOLDS;
+    tags.push(`Fires on RTH volZ≥${t.RTH.volZCutoff}/OSR≥${t.RTH.osrCutoff}/cluster≥${t.RTH.minClusterSize}, Globex volZ≥${t.GLOBEX.volZCutoff}/OSR≥${t.GLOBEX.osrCutoff}/cluster≥${t.GLOBEX.minClusterSize}`);
+  }
+  if (isGlobexVwapMagnet) tags.push('Fires on |price − running 24hr VWAP| ≥ 1.5σ (rolling 30-session std)');
+  if (isGlobexVwapFade) tags.push('Fires on ordinary touch (within 15pt) of running 24hr VWAP, direction from current price side');
+  if (isIbManaged) tags.push('Gated/suppressed per day-type (DAY_TYPE_ALPHA), not blended EV');
+  if (isOvernightFade) tags.push('Globex-only window, wider stop/target than the RTH sibling (Mon 60/30pt, else 90/40pt)');
+
+  // Sizing (in-trade) — the full ~20-factor sizeMultiplier IIFE is a property set only
+  // when levelScalpSetup itself is constructed (server/routes/acd.js ~line 6058) --
+  // ibSetup's object literal has no such property (confirmed by reading its construction
+  // directly, ~line 4258), so IB only ever gets the shared post-selection Death-Sequence
+  // ceiling (active.sizeMultiplier = hasLossToday ? min(existing, 0.5) : existing ?? 1.0,
+  // the ONLY `.sizeMultiplier =` assignment in the file) starting from a plain 1.0, not
+  // the full factor stack. detectGlobexSetup() is a third, separate, simpler function
+  // with its own "minimal Globex sizeMultiplier" (just the pair-bonus factor) -- do not
+  // conflate any of these three.
+  if (isOvernightFade || isGlobexVwapMagnet || isGlobexVwapFade) {
+    tags.push('Minimal Globex sizeMultiplier: confluence pair-bonus only (1.15x if paired, else 1.0x)');
+  } else if (isLevelFade) {
+    tags.push('sizeMultiplier factor stack (confluence, day-type significance, streaks, VWAP-extension, OR-bias, regime)');
+    tags.push('Death-Sequence 0.5x size cap after a real loss today');
+    tags.push('Confluence pair-bonus + S2/trend-counter-fade suppression');
+  } else if (isIbManaged) {
+    tags.push('Death-Sequence 0.5x size cap after a real loss today (no other sizing factors)');
+  }
+
+  // Exit
+  if (isTrail) tags.push('Exit: breakeven-then-trail ratchet, not a fixed 2nd target');
+  else if (isStackVol) tags.push('Exit: bank-vs-extend (10-25 bar grind extends target, else banks fixed T1)');
+  else tags.push('Exit: fixed calibrated stop/target');
+  let optN = null;
+  try { optN = typeof optNotes === 'string' ? JSON.parse(optNotes) : optNotes; } catch (_) {}
+  if (optN?.method === 'corrected-resim') tags.push('Target: corrected bar-walk calibration (widened past raw EV-sweep)');
+
+  // Informational badges (never gate/size/exit, purely displayed)
+  if (!CUSTOM_RESOLVER_TYPES(setupType)) tags.push('Bar-6 checkpoint + EXIT NOW badge');
+  if (deltaCat) tags.push(`Cumulative-delta-confirmation badge (${deltaCat})`);
+  if (touchQualityTypes.has(setupType)) tags.push('Touch-quality (order-flow) badge');
+
+  return tags;
+}
+
 // GET /api/setups/reference — the setup definitions page: what each setup IS (criteria,
 // detection window, family) joined against what it's ACTUALLY DOING right now (live
 // N/WR/EV/status from SETUP_STATUS, real_n/rigor from the 2026-07-20 origin_status and
@@ -613,7 +702,7 @@ function resolveDefinition(setupType) {
 // setupDefinitions.js); every number is live-queried, never hand-typed here.
 router.get('/setups/reference', async (req, res) => {
   try {
-    const [statusQ, optQ, touchQ] = await Promise.all([
+    const [statusQ, optQ, touchQ, touchQualityQ] = await Promise.all([
       query(`
         SELECT DISTINCT ON (signal_name) signal_name, sample_size, win_rate::float,
           ev_per_trade::float, recommendation, notes, run_date
@@ -621,7 +710,7 @@ router.get('/setups/reference', async (req, res) => {
         ORDER BY signal_name, run_date DESC
       `),
       query(`
-        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float, optimal_target::float
+        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float, optimal_target::float, notes
         FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
         ORDER BY signal_name, run_date DESC
       `),
@@ -657,12 +746,20 @@ router.get('/setups/reference', async (req, res) => {
         FROM active_setups
         GROUP BY setup_type
       `),
+      // Which setup_types currently have a live TOUCH_QUALITY calibration -- mirrors
+      // getTouchQualityCalib()'s own query exactly (server/routes/acd.js) so the "Misc"
+      // column's touch-quality tag reflects the same live gate the resolution loop
+      // actually checks, not a guess.
+      query(`
+        SELECT DISTINCT signal_name FROM performance_audit
+        WHERE signal_type='TOUCH_QUALITY' AND run_date=(SELECT MAX(run_date) FROM performance_audit WHERE signal_type='TOUCH_QUALITY')
+      `),
     ]);
+    const touchQualityTypes = new Set(touchQualityQ.rows.map(r => r.signal_name));
     const optByName = new Map(optQ.rows.map(r => [r.signal_name, r]));
     const touchByName = new Map(touchQ.rows.map(r => [r.setup_type, r]));
     const statusByName = new Map(statusQ.rows.map(r => [r.signal_name, r]));
     const DPP = INSTRUMENTS.MNQ.dollarsPerPoint;
-    const svThreshText = (t) => `RTH volZ≥${t.RTH.volZCutoff}·OSR≥${t.RTH.osrCutoff}·cluster≥${t.RTH.minClusterSize} / Globex volZ≥${t.GLOBEX.volZCutoff}·OSR≥${t.GLOBEX.osrCutoff}·cluster≥${t.GLOBEX.minClusterSize}`;
 
     // Driven by the UNION of (has a SETUP_STATUS row) ∪ (has any active_setups touch,
     // even zero resolved) ∪ (known live-wired informational setup_types that haven't
@@ -698,7 +795,7 @@ router.get('/setups/reference', async (req, res) => {
       const avgPnl = t ? (useReal ? t.real_avg_pnl : t.all_avg_pnl) : null;
       const avgPnlPts = avgPnl != null ? Number(avgPnl) / DPP : null;
       const leftOnTablePts = (mfeP50 != null && avgPnlPts != null) ? Number(mfeP50) - avgPnlPts : null;
-      const svThresholds = /^STACK_VOL_BREAK_LIVE_(LONG|SHORT)$/.test(setupType) ? svThreshText(STACK_VOL_THRESHOLDS) : null;
+      const misc = computeMiscTags(setupType, { touchQualityTypes, optNotes: opt?.notes });
       return {
         setupType,
         displayName: def?.displayName || setupType.replace(/_/g, ' '),
@@ -730,7 +827,7 @@ router.get('/setups/reference', async (req, res) => {
         avgPnl: avgPnl != null ? +Number(avgPnl).toFixed(2) : null,
         leftOnTablePts: leftOnTablePts != null ? +leftOnTablePts.toFixed(1) : null,
         totalPnlRealAllTime: t?.real_total_pnl != null ? +Number(t.real_total_pnl).toFixed(2) : null,
-        appliedVolZ: svThresholds,
+        misc,
       };
     });
 

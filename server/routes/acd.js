@@ -12,7 +12,7 @@ import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../serv
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd } from '../services/queries.js';
+import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -26,7 +26,7 @@ import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboR
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
-import { computeVolumeProfileForRange } from '../services/developingValueService.js';
+import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 
@@ -900,7 +900,7 @@ async function detectGlobexSetup(sessionDate, io) {
         FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
           AND signal_name = ANY($1)
         ORDER BY signal_name, run_date DESC
-      `, [WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type)]),
+      `, [[...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type), 'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT']]),
       query(`SELECT signal_name, recommendation FROM performance_audit
              WHERE signal_type='CONFLUENCE_AUDIT_OVERNIGHT' AND signal_name LIKE 'PAIR:%'`),
     ]);
@@ -944,6 +944,59 @@ async function detectGlobexSetup(sessionDate, io) {
     const sessionIsMonday = new Date(sessionDate + 'T12:00:00').getDay() === 1;
     const flatStop = sessionIsMonday ? 60 : 90, flatTarget = sessionIsMonday ? 30 : 40;
 
+    // ── Globex 24hr VWAP Magnet: sigma-based fade off the 24hr-spanning VWAP ──────────
+    // The Globex sibling of the RTH VWAP_MAGNET_LONG/SHORT setup (~line 5310 below,
+    // earlyVwap/getTrailingVwapStd) -- built 2026-07-28 directly from a user request that
+    // the 24hr VWAP be tracked as a real, historical setup "like every other level," not
+    // just the passive morningBrief.js text alert it was before (OPEN_DECISION
+    // globex_24hr_vwap_never_tracked_as_real_setup). Reuses computeRunningVwapSeries
+    // (developingValueService.js) and getTrailing24hrVwapStd/getGlobex24hrBars (queries.js,
+    // themselves a relocation of morningBrief.js's already-validated 24hr-VWAP logic) --
+    // no math re-derived here. Structurally different from every other candidate in this
+    // array (not a fixed level_prices level -- a sigma-distance-from-a-moving-average
+    // trigger), so it's computed separately and appended after the proximity filter below
+    // rather than forced through the level/TOUCH shape. Resolves as a plain single T1/stop
+    // trade via the standard resolveSetupsByPrice() path, matching what VWAP_MAGNET_LONG/
+    // SHORT's own live rows already do (its "scale out" trade-brief text has never been
+    // mechanically enforced -- the live INSERT never sets runner_trail_width/
+    // extend_target_level, so it always resolves flat).
+    // vwap24 is shared by both the magnet (sigma-distance) and fade (ordinary proximity)
+    // candidates below -- computed once here rather than twice.
+    let vwap24 = null;
+    {
+      const vwapBars = await getGlobex24hrBars(sessionDate);
+      if (vwapBars.length > 50) {
+        const vwapSeries = computeRunningVwapSeries(vwapBars);
+        vwap24 = vwapSeries[vwapSeries.length - 1];
+      }
+    }
+
+    let globexVwapCandidate = null;
+    if (vwap24 != null) {
+      const std24 = await getTrailing24hrVwapStd(sessionDate, 30);
+      const dist = px - vwap24;
+      if (Math.abs(dist) >= std24.threshold) {
+        const dir = dist < 0 ? 'LONG' : 'SHORT';
+        const vwapType = `GLOBEX_VWAP_MAGNET_${dir}`;
+        globexVwapCandidate = {
+          level: px, name: 'Globex 24hr VWAP', type: vwapType, dir,
+          widerWindowNew: true,
+          widerStop: widerOptMap[vwapType]?.stop ?? 30,
+          widerTarget: widerOptMap[vwapType]?.target ?? 20,
+          levelBase: 'GLOBEX_VWAP',
+        };
+      }
+    }
+
+    // Ordinary close-range VWAP touch (within the standard 15pt TOUCH window, same as every
+    // other candidate below) -- distinct from the magnet's far-away sigma trigger just
+    // above. Added 2026-07-28 per direct user pushback ("what about fades off the vwap?
+    // those are trades too"). Direction is dynamic from current price side (matching PD
+    // POC's own pocDir convention just below, the established pattern for a symmetric
+    // central-tendency level with no inherent support/resistance bias), not a hardcoded
+    // per-level direction like PD_VAH/PD_VAL.
+    const globexVwapFadeDir = vwap24 != null ? (px >= vwap24 ? 'SHORT' : 'LONG') : null;
+
     const candidates = [
       { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT', levelBase: 'PD_VAH' },
       { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG',  levelBase: 'PD_VAL' },
@@ -955,7 +1008,15 @@ async function detectGlobexSetup(sessionDate, io) {
         widerTarget: widerOptMap[l.type]?.target ?? flatTarget,
         levelBase: l.levelName,
       })),
-    ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH);
+      {
+        level: vwap24, name: 'Globex VWAP', type: `GLOBEX_VWAP_FADE_${globexVwapFadeDir}`, dir: globexVwapFadeDir,
+        widerWindowNew: true,
+        widerStop: widerOptMap[`GLOBEX_VWAP_FADE_${globexVwapFadeDir}`]?.stop ?? flatStop,
+        widerTarget: widerOptMap[`GLOBEX_VWAP_FADE_${globexVwapFadeDir}`]?.target ?? flatTarget,
+        levelBase: 'GLOBEX_VWAP_FADE',
+      },
+    ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH)
+     .concat(globexVwapCandidate ? [globexVwapCandidate] : []);
 
     for (const c of candidates) {
       const existing = await query(
@@ -5291,6 +5352,8 @@ export default function createACDRouter(io) {
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
       let levelScalpSetup = null;
       let vwapMagnetSetup = null;
+      let globexVwapMagnetRTH = null;
+      let globexVwapFadeRTH = null;
       // Early-touch backfill: levels touched before a previous poll could catch them
       // (touched-and-already-moved-on between polls) but never got a live banner.
       // Recorded SHADOW-only for stats integrity — never fires a live alert, since the
@@ -5336,6 +5399,60 @@ export default function createACDRouter(io) {
                 ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
                 : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
             };
+          }
+        }
+
+        // ── 24hr/Globex VWAP relevance during RTH ──────────────────────────────────
+        // The 24hr VWAP doesn't stop mattering once RTH opens -- it's a real, continuously
+        // relevant level all day, not just overnight. Added 2026-07-28 per direct user
+        // pushback ("you know the 24hr vwap is relevant during RTH as well too right?")
+        // after GLOBEX_VWAP_MAGNET/GLOBEX_VWAP_FADE were found to be wired ONLY into
+        // detectGlobexSetup(), which the route handler only calls when `inGlobex` (6PM-
+        // 8:30AM ET, acd.js ~line 3650) -- meaning a 24hr-VWAP touch during RTH could never
+        // be caught live, even though the historical BACKFILL (getGlobex24hrBars' window
+        // spans through RTH, hour<17) already counted RTH-hour touches. That mismatch is
+        // exactly the "backfill population must match what the live poller actually fires
+        // on" bug class (CLAUDE.md's New Setup Type checklist, item 10) -- fixed here by
+        // making the RTH path ALSO check the 24hr VWAP, reusing the SAME setup_type names
+        // (GLOBEX_VWAP_MAGNET_LONG/SHORT, GLOBEX_VWAP_FADE_LONG/SHORT) rather than inventing
+        // RTH-specific ones -- matches the existing PD_VAH/PD_VAL/PD_POC precedent, which
+        // already fire from both detectGlobexSetup() AND the RTH keepLevelsAll path under
+        // one shared name. Reuses the exact same shared functions as the Globex-fired
+        // version (computeRunningVwapSeries, getTrailing24hrVwapStd, getGlobex24hrBars) --
+        // no independent reimplementation. SHADOW-only (shadowCandidates), same minimal
+        // sizing convention (no sizeMultiplier stack) as every other Globex-fired VWAP
+        // candidate, since none of that RTH-only machinery has ever been validated for this
+        // family and it fires through a fundamentally different (moving-level) mechanism.
+        // (globexVwapMagnetRTH/globexVwapFadeRTH declared with `let` at the outer scope
+        // above, same escape-the-block pattern vwapMagnetSetup already uses, so shadowCandidates far below can read them.)
+        {
+          const vwap24Bars = await getGlobex24hrBars(todayET);
+          if (vwap24Bars.length > 50) {
+            const vwap24Series = computeRunningVwapSeries(vwap24Bars);
+            const vwap24Now = vwap24Series[vwap24Series.length - 1];
+            if (vwap24Now != null) {
+              const dist24 = currentPrice - vwap24Now;
+              const std24 = await getTrailing24hrVwapStd(todayET, 30);
+              if (Math.abs(dist24) >= std24.threshold) {
+                const isLong = dist24 < 0;
+                const type = isLong ? 'GLOBEX_VWAP_MAGNET_LONG' : 'GLOBEX_VWAP_MAGNET_SHORT';
+                globexVwapMagnetRTH = {
+                  type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
+                  stop: isLong ? currentPrice - 30 : currentPrice + 30,
+                  target: isLong ? currentPrice + 20 : currentPrice - 20,
+                  targetLabel: 'T1: 20pt (24hr VWAP magnet, fired during RTH)',
+                };
+              } else if (Math.abs(dist24) <= 15) {
+                const isLong = currentPrice < vwap24Now; // matches detectGlobexSetup's pocDir-style convention
+                const type = isLong ? 'GLOBEX_VWAP_FADE_LONG' : 'GLOBEX_VWAP_FADE_SHORT';
+                globexVwapFadeRTH = {
+                  type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
+                  stop: isLong ? currentPrice - 90 : currentPrice + 90,
+                  target: isLong ? currentPrice + 40 : currentPrice - 40,
+                  targetLabel: 'T1: 40pt (24hr VWAP fade, fired during RTH)',
+                };
+              }
+            }
           }
         }
 
@@ -5854,6 +5971,18 @@ export default function createACDRouter(io) {
             // fix (docs/OPEN_THREADS.md).
             { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
             { name: 'OR_MID_AFTER_IB_FADE', level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
+            // Ordinary close-range VWAP touch (within the standard 15pt window every other
+            // level here uses), distinct from VWAP_MAGNET's far-away sigma-distance trigger
+            // just above. Added 2026-07-28 per direct user pushback ("what about fades off
+            // the vwap? those are trades too") -- VWAP_MAGNET only ever fires on a rare
+            // extreme departure from VWAP; it says nothing about the far more common case of
+            // price simply touching VWAP at close range like it touches any other level.
+            // Reuses earlyVwap (the same running/developing VWAP VWAP_MAGNET already
+            // computes above, in scope here) -- inherits the exact same machinery every
+            // other keepLevelsAll entry gets for free (direction-from-approach-side,
+            // sizeMultiplier stack, confluence, S2/trend-counter suppression, dedup) rather
+            // than a bespoke check.
+            { name: 'RTH_VWAP_FADE', level: earlyVwap, ...(ls('RTH_VWAP') || {}) },
           ].filter(l => l.level != null);
           const keepLevels = keepLevelsAll;
 
@@ -5931,7 +6060,33 @@ export default function createACDRouter(io) {
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const type = resolveSetupType(`${lv.name}_${dir}`, lv);
-            if (!liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
+            // Cluster dedup (2026-07-29): nearLevels.reduce() above only picks one primary
+            // PER POLL -- but the server polls every 15-60s, and as price ticks within a
+            // clustered zone, CONSECUTIVE polls can each pick a DIFFERENT "best EV" level
+            // from an overlapping nearLevels set, so multiple different setup_types can each
+            // independently become "the primary" and fire their own row within a few minutes
+            // of each other at nearly the same price -- confirmed live same-day (e.g.
+            // PD_CLOSE_FADE_SHORT and OR_MID_AFTER_IB_FADE_SHORT both fired at the identical
+            // price 27907.75, three minutes apart). This checks whether ANY setup_type that
+            // could plausibly be drawn from THIS SAME nearLevels cluster (same direction) has
+            // already fired in the last 15 minutes; if so, this touch is attributed to that
+            // trade instead of becoming a new independent one. The 15-minute window is a
+            // dedup/plumbing parameter, not a trading threshold (entry/stop/target/signal),
+            // so it's a documented fixed choice rather than derived from a rolling
+            // distribution -- matches this codebase's own precedent for similar internal
+            // windows (the 5-bar touch dedup already used elsewhere, SIGMA_CONTINUATION_LIVE's
+            // 20-minute recency window).
+            const clusterTypes = nearLevels.map(cl => resolveSetupType(`${cl.name}_${dir}`, cl));
+            const clusterAnchorRes = await query(`
+              SELECT id, setup_type FROM active_setups
+              WHERE trade_date = $1 AND setup_type = ANY($2)
+                AND origin_status IN ('ACTIVE','SHADOW')
+                AND fired_at >= NOW() - INTERVAL '15 minutes'
+              ORDER BY fired_at ASC LIMIT 1
+            `, [todayET, clusterTypes]).catch(() => ({ rows: [] }));
+            const clusterAlreadyFired = clusterAnchorRes.rows[0] || null;
+
+            if (!clusterAlreadyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
@@ -5970,6 +6125,46 @@ export default function createACDRouter(io) {
                 exhaustionSignalAtDetection = _volRatio >= liveStats._exhaustionCutoffs.volRatioP50
                   && _rangeRatio <= liveStats._exhaustionCutoffs.rangeRatioP50
                   && _deltaOpposing;
+              }
+            }
+
+            // HI-VOL+LO-PACE precursor (informational only — RESEARCH_CLAIM
+            // hivol_lopace_precursor_confirmed_negative, CONFIRMED 2026-07-29, train/test
+            // same-sign both splits). High transactional volume WITHOUT correspondingly
+            // large price movement in the trailing 5 bars before a touch predicts a WORSE
+            // outcome — the opposite of the "absorption defends the level" hypothesis that
+            // motivated testing it. Same volZ/paceZ methodology and cutoffs (volZ>=0.5,
+            // paceZ<1.0) as the already-live STACK_VOL_BREAK_LIVE entry trigger and the
+            // backtest that validated this — reused via getTouchQualityBaseline()/
+            // getPaceBaseline(), not reimplemented. Never gates entry or sizeMultiplier.
+            let hivolLopaceAtDetection = null;
+            if (last5.length === 5) {
+              const _hlBaseline = await getTouchQualityBaseline(todayET);
+              const _hlPaceBaseline = await getPaceBaseline(todayET);
+              // Gemini review (retroactive, post-ship) caught a real off-by-one here: the
+              // volume z-score loop was reusing `last5` (bars entry-5..entry-1, EXCLUDES the
+              // entry bar), but the backtest that validated this finding
+              // (pilot_velocity_round3_absorption_acceleration.mjs, window=5) computes over
+              // bars entry-4..entry (INCLUDES the entry bar). The live signal was silently
+              // evaluating a window shifted back by 1 bar from what was actually validated.
+              // Fixed to the correct 5-bar window ending at the entry bar itself. Pace was
+              // independently confirmed correct (last5[0] is genuinely entry-5, matching the
+              // backtest's allBars[allBarsIdx-5]) and left unchanged.
+              const _hlVolBars = allRthBarsRow.rows.slice(-5);
+              let _hlMaxVolZ = -Infinity;
+              for (const b of _hlVolBars) {
+                const _hlBl = _hlBaseline.get(Number(b.et_min));
+                if (_hlBl && _hlBl.std_vol > 0) {
+                  const _tVol = (b.bid_vol || 0) + (b.ask_vol || 0);
+                  _hlMaxVolZ = Math.max(_hlMaxVolZ, (_tVol - _hlBl.avg_vol) / _hlBl.std_vol);
+                }
+              }
+              const _hlEntryBar = allRthBarsRow.rows[allRthBarsRow.rows.length - 1];
+              const _hlPaceBl = _hlPaceBaseline.get(Number(_hlEntryBar.et_min));
+              if (_hlMaxVolZ > -Infinity && _hlPaceBl && _hlPaceBl.std_pace > 0) {
+                const _hlNetPace = Math.abs(_hlEntryBar.close - last5[0].close);
+                const _hlPaceZ = (_hlNetPace - _hlPaceBl.avg_pace) / _hlPaceBl.std_pace;
+                hivolLopaceAtDetection = _hlMaxVolZ >= 0.5 && _hlPaceZ < 1.0;
               }
             }
 
@@ -6052,7 +6247,15 @@ export default function createACDRouter(io) {
                 const exhaustionNote = exhaustionSignalAtDetection
                   ? ` ⚠ VOLUME/DELTA EXHAUSTION at this touch (high vol, tight range, delta opposing the fade) — historically a headwind when combined with confluence, still PROVISIONAL (not yet stable enough to size/suppress on).`
                   : '';
-                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
+                // RESEARCH_CLAIM hivol_lopace_precursor_confirmed_negative — CONFIRMED
+                // (train/test same-sign both splits). Unlike exhaustionNote above, this one
+                // is validated, not provisional — still informational only, never gates
+                // entry or sizeMultiplier per this app's standing "no execution capability"
+                // convention (same as bar6_exit_recommended/checkFadeAgainstBigMoveExit).
+                const hivolLopaceNote = hivolLopaceAtDetection
+                  ? ` ⚠ HIGH VOLUME, LOW PACE into this touch (heavy volume without matching price movement) — historically a real headwind, not a defended level as the "absorption" idea would suggest (validated: -$7.91 EV vs +$0.07 EV control, N=1548, train/test consistent).`
+                  : '';
+                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${hivolLopaceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               sizeMultiplier: (() => {
@@ -6187,6 +6390,7 @@ export default function createACDRouter(io) {
               stackCount: _lfSameDirCounts[dir] ?? 0,
               tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
               exhaustionSignalAtDetection,
+              hivolLopaceAtDetection,
             };
             } // end suppression check
             else {
@@ -6202,7 +6406,8 @@ export default function createACDRouter(io) {
               // (non-suppressed) candidate would have gotten (same liveStats._opt[type] lookup,
               // same STOP/TARGET fallback), so these rows resolve normally and their outcome
               // actually answers "was this suppression decision correct" in dollar terms.
-              const suppressReason = liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
+              const suppressReason = clusterAlreadyFired ? 'CLUSTER_ALREADY_FIRED'
+                : liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
                 : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
@@ -6246,6 +6451,19 @@ export default function createACDRouter(io) {
                 auditExpiresAt,
                 auditStats?.wr ?? null, auditStats?.n ?? null,
               ]).catch(() => {});
+              // Tag the anchor trade with this attributed setup, so the trade detail modal can
+              // show "this execution also represents: X, Y, Z" -- the whole point of tracking
+              // this dedup, per the user's explicit ask, is that every level still gets credit
+              // (this SHADOW row still resolves normally and counts toward that level's own
+              // calibration N) while the anchor's live P&L isn't multiplied by however many
+              // levels happened to be stacked in the same zone.
+              if (clusterAlreadyFired) {
+                await query(`
+                  UPDATE active_setups
+                  SET cluster_attributed_setups = array_append(COALESCE(cluster_attributed_setups, ARRAY[]::text[]), $2)
+                  WHERE id = $1 AND NOT ($2 = ANY(COALESCE(cluster_attributed_setups, ARRAY[]::text[])))
+                `, [clusterAlreadyFired.id, type]).catch(() => {});
+              }
             }
           }
 
@@ -6629,6 +6847,8 @@ export default function createACDRouter(io) {
       const shadowCandidates = [
         stopSweepSetup,
         vwapMagnetSetup,
+        globexVwapMagnetRTH,
+        globexVwapFadeRTH,
         absorptionSetup,
         coilSurgeSetup,
         zoneEdgeFade,
@@ -7217,8 +7437,8 @@ export default function createACDRouter(io) {
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
-            exhaustion_signal_at_detection
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23)
+            exhaustion_signal_at_detection, hivol_lopace_at_detection
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24)
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -7233,6 +7453,7 @@ export default function createACDRouter(io) {
           active.confluenceCount ?? null,
           active.confluenceLevels && active.confluenceLevels.length ? active.confluenceLevels : null,
           active.exhaustionSignalAtDetection ?? null,
+          active.hivolLopaceAtDetection ?? null,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -7687,6 +7908,95 @@ export default function createACDRouter(io) {
       });
 
       res.json({ setups });
+    } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/setups/range-summary?range=today|week|month|year|all&origin=real|all —
+  // powers the quick-check page's single filterable equity curve + by-setup table
+  // (superseded the earlier separate /setups/week-summary, which only did one fixed
+  // range). Deliberately NOT `SELECT s.*` like /setups/today -- for month/year/all this
+  // can return thousands of rows, and the equity curve / aggregation table only need a
+  // handful of fields, so this stays lightweight on purpose rather than shipping every
+  // active_setups column (confluence arrays, runner-trail state, etc.) for a range that
+  // could span the whole history. SHADOW/ACTIVE-status excluded server-side (only
+  // resolved/expired rows) -- separate from origin_status below, which is about
+  // ACTIVE/SHADOW/BACKFILL/UNKNOWN provenance, not the `status` column's ACTIVE/SHADOW/
+  // RESOLVED/EXPIRED lifecycle, an easy pair to conflate since both use "ACTIVE"/
+  // "SHADOW" as literal values for two unrelated concepts.
+  //
+  // origin=real (default) restricts to origin_status IN ('ACTIVE','SHADOW') -- genuinely
+  // live-fired data, per this codebase's standing rule that ~80-97% of active_setups for
+  // any wide date range is BACKFILL (synthetic historical seeding) or UNKNOWN (pre-2026-
+  // 07-09, unrecoverable), and presenting a blended figure as "performance" without this
+  // filter is exactly the mistake that rule exists to prevent. Found 2026-07-29, same
+  // session this endpoint was built: the "All time" range's blended equity curve was
+  // being dragged to a large apparent loss almost entirely by UNKNOWN-origin legacy rows
+  // (-$10,892) while the real ACTIVE+SHADOW total was actually positive (+$4,858) --
+  // confirmed directly, not assumed. realCount/nonRealCount are always returned
+  // regardless of which origin filter is active, so the frontend can show the
+  // composition even when already filtered to real-only.
+  router.get('/setups/range-summary', async (req, res) => {
+    try {
+      const range = ['today', 'week', 'month', 'year', 'all'].includes(req.query.range) ? req.query.range : 'today';
+      const origin = req.query.origin === 'all' ? 'all' : 'real';
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const todayET = nowET.toLocaleDateString('en-CA');
+
+      let whereClause, params, rangeLabel;
+      if (range === 'today') {
+        const dates = [todayET];
+        if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
+        whereClause = 's.trade_date = ANY($1)';
+        params = [dates];
+        rangeLabel = todayET;
+      } else if (range === 'week') {
+        const dow = nowET.getDay(); // 0=Sun...6=Sat
+        // Sunday: the week opening tonight starts TOMORROW (Monday) -- post-6PM Sunday
+        // activity is already tagged trade_date=Monday under this app's own rollover
+        // convention, so Sunday shows the upcoming week, not the one that already
+        // closed out last Friday.
+        const daysSinceMonday = dow === 0 ? 1 : 1 - dow;
+        const monday = new Date(nowET);
+        monday.setDate(monday.getDate() + daysSinceMonday);
+        const weekDates = [];
+        for (let i = 0; i < 5; i++) {
+          const d = new Date(monday);
+          d.setDate(d.getDate() + i);
+          weekDates.push(d.toLocaleDateString('en-CA'));
+        }
+        whereClause = 's.trade_date = ANY($1)';
+        params = [weekDates];
+        rangeLabel = weekDates[0] + ' → ' + weekDates[4];
+      } else if (range === 'month' || range === 'year') {
+        const days = range === 'month' ? 30 : 365;
+        const since = new Date(nowET);
+        since.setDate(since.getDate() - days);
+        const sinceStr = since.toLocaleDateString('en-CA');
+        whereClause = 's.trade_date >= $1::date';
+        params = [sinceStr];
+        rangeLabel = 'trailing ' + days + 'd (since ' + sinceStr + ')';
+      } else {
+        whereClause = 'TRUE';
+        params = [];
+        rangeLabel = 'all time';
+      }
+
+      const setupsRes = await query(`
+        SELECT s.id, s.setup_type, s.trade_date, s.status, s.resolution, s.actual_pnl, s.is_rth, s.origin_status,
+          TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
+        FROM active_setups s
+        WHERE ${whereClause}
+          AND s.fired_at IS NOT NULL AND s.status NOT IN ('SHADOW','ACTIVE')
+        ORDER BY s.fired_at
+      `, params);
+
+      const allRows = setupsRes.rows;
+      const isReal = (r) => r.origin_status === 'ACTIVE' || r.origin_status === 'SHADOW';
+      const realCount = allRows.filter(isReal).length;
+      const nonRealCount = allRows.length - realCount;
+      const setups = origin === 'real' ? allRows.filter(isReal) : allRows;
+
+      res.json({ setups, range, rangeLabel, origin, realCount, nonRealCount });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

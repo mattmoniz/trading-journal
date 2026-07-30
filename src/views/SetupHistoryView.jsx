@@ -25,15 +25,30 @@ export default function SetupHistoryView() {
   const [filters, setFilters] = React.useState(() => {
     let session = 'both';
     try { session = sessionStorage.getItem('setup-log-session-filter') || 'both'; } catch (_) {}
-    return { type: '', resolution: '', from: '', to: '', shadow: 'hide', session, origin: 'all', hourFrom: '', hourTo: '' };
+    // Default to showing everything (Live+Shadow=Both, RTH/Non-RTH=Both, Real/Backfill=All)
+    // per direct user request 2026-07-28 — previously defaulted shadow to 'hide' (Live-only),
+    // which silently narrowed the very first view of this page.
+    return { type: '', resolution: '', from: '', to: '', shadow: 'both', session, origin: 'all', hourFrom: '', hourTo: '' };
   });
 
   React.useEffect(() => {
     try { sessionStorage.setItem('setup-log-session-filter', filters.session); } catch (_) {}
   }, [filters.session]);
   const [sort, setSort] = React.useState({ col: 'trade_date', dir: 'desc' });
+  // Reconciled against SETUP_LOG_COLS at load time (same fix as SetupReferenceView.jsx's
+  // colOrder, 2026-07-28) — a plain filter-only merge silently drops any column added to
+  // SETUP_LOG_COLS after the user's last drag, since it only ever removes stale keys and
+  // never re-adds a new one. Appends any missing key at the end, synchronously.
   const [colOrder, setColOrder] = React.useState(() => {
-    try { const s = localStorage.getItem('setup-log-col-order'); return s ? JSON.parse(s) : null; } catch { return null; }
+    try {
+      const s = localStorage.getItem('setup-log-col-order');
+      if (!s) return null;
+      const saved = JSON.parse(s);
+      const defaultKeys = SETUP_LOG_COLS.map(c => c.key);
+      const known = new Set(saved);
+      const missing = defaultKeys.filter(k => !known.has(k));
+      return missing.length ? [...saved.filter(k => defaultKeys.includes(k)), ...missing] : saved;
+    } catch { return null; }
   });
   const [dragCol, setDragCol] = React.useState(null);
 

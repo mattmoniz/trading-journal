@@ -27,9 +27,12 @@
 //              detection core into a shared function and import it here instead.
 import { query } from '../server/db.js';
 import * as ss from 'simple-statistics';
+import { fileURLToPath } from 'url';
 import { getTradingDays, getLevelPrices, getRTHBars } from './backtest_confluence.js';
 import { detectLevelFades } from './backtest_unified.js';
 import { K_BARS } from '../server/services/deltaConfirmation.js';
+import { computeRunningVwapSeries } from '../server/services/developingValueService.js';
+import { getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../server/services/queries.js';
 
 const TRAILING_DAYS = 200; // rolling window -- recalibrated fresh each run, not "all history forever"
 const GLOBEX_EXCLUDED_LEVELS = new Set(['OR_HIGH', 'OR_LOW', 'OR_MID', 'IB_HIGH', 'IB_LOW', 'IB_MID', 'RTH_VWAP', 'ONH', 'ONL']);
@@ -186,6 +189,77 @@ async function calibrateBreakout(days) {
   return events;
 }
 
+// VWAP_MAGNET (RTH) — added 2026-07-28 after RESEARCH_CLAIM
+// delta_confirmation_validated_for_vwap_magnet_rth_and_globex confirmed a real, rigor-clean
+// descriptive gap using its OWN threshold (not the unrelated RTH FADE threshold). Reuses the
+// exact same sigma-distance detection as scripts/backtest_vwap_magnet.mjs and the live
+// vwapMagnetSetup in server/routes/acd.js -- computeRunningVwapSeries + getTrailingVwapStd.
+async function calibrateVwapMagnet(days) {
+  const events = [];
+  for (const d of days) {
+    const rthBars = await getRTHBars(d);
+    if (rthBars.length < 30) continue;
+    const vwapSeries = computeRunningVwapSeries(rthBars);
+    const std = await getTrailingVwapStd(d, 30);
+    let i = 2;
+    while (i < rthBars.length) {
+      const vwap = vwapSeries[i];
+      if (vwap != null) {
+        const dist = rthBars[i].close - vwap;
+        if (Math.abs(dist) >= std.threshold) {
+          const direction = dist < 0 ? 'LONG' : 'SHORT';
+          if (rthBars.length - 1 - i >= K_BARS) {
+            const window = rthBars.slice(i + 1, i + 1 + K_BARS);
+            let cumDelta = 0;
+            for (const b of window) {
+              const delta = (b.ask_volume || 0) - (b.bid_volume || 0);
+              cumDelta += (direction === 'LONG' ? delta : -delta);
+            }
+            events.push(cumDelta);
+          }
+          i += K_BARS; // same "one touch, then skip ahead" convention as the backfill script
+        }
+      }
+      i++;
+    }
+  }
+  return events;
+}
+
+// GLOBEX_VWAP_MAGNET — same idea for the 24hr VWAP, own threshold source
+// (getTrailing24hrVwapStd/getGlobex24hrBars, genuinely different volume scale than RTH).
+async function calibrateGlobexVwapMagnet(days) {
+  const events = [];
+  for (const d of days) {
+    const globexBars = await getGlobex24hrBars(d);
+    if (globexBars.length < 60) continue;
+    const vwapSeries = computeRunningVwapSeries(globexBars);
+    const std = await getTrailing24hrVwapStd(d, 30);
+    let i = 4;
+    while (i < globexBars.length) {
+      const vwap = vwapSeries[i];
+      if (vwap != null) {
+        const dist = globexBars[i].close - vwap;
+        if (Math.abs(dist) >= std.threshold) {
+          const direction = dist < 0 ? 'LONG' : 'SHORT';
+          if (globexBars.length - 1 - i >= K_BARS) {
+            const window = globexBars.slice(i + 1, i + 1 + K_BARS);
+            let cumDelta = 0;
+            for (const b of window) {
+              const delta = (b.ask_volume || 0) - (b.bid_volume || 0);
+              cumDelta += (direction === 'LONG' ? delta : -delta);
+            }
+            events.push(cumDelta);
+          }
+          i += K_BARS;
+        }
+      }
+      i++;
+    }
+  }
+  return events;
+}
+
 async function run() {
   const allDays = await getTradingDays();
   const days = allDays.slice(-TRAILING_DAYS);
@@ -194,7 +268,10 @@ async function run() {
   const { rows } = await query(`SELECT CURRENT_DATE::text as today`);
   const today = rows[0].today;
 
-  for (const [category, fn] of [['FADE', calibrateFade], ['FADE_GLOBEX', calibrateFadeGlobex], ['BREAKOUT', calibrateBreakout]]) {
+  for (const [category, fn] of [
+    ['FADE', calibrateFade], ['FADE_GLOBEX', calibrateFadeGlobex], ['BREAKOUT', calibrateBreakout],
+    ['VWAP_MAGNET', calibrateVwapMagnet], ['GLOBEX_VWAP_MAGNET', calibrateGlobexVwapMagnet],
+  ]) {
     const cumDeltas = await fn(days);
     const positive = cumDeltas.filter(v => v > 0);
     const threshold = positive.length > 0 ? ss.quantile(positive, 0.25) : 0;
@@ -212,4 +289,12 @@ async function run() {
   process.exit(0);
 }
 
-run().catch(e => { console.error(e); process.exit(1); });
+// Exported (2026-07-28) so a later script (the bar-10 early-exit-on-bad-signal test) can
+// reuse the exact validated Globex/breakout detection logic rather than reimplementing it
+// per the "export the real function" rule -- guarded below so importing this module never
+// triggers the weekly calibration run() as a side effect.
+export { detectGlobexLevelFades, getGlobexBars, calibrateFadeGlobex, calibrateFade, calibrateBreakout, calibrateVwapMagnet, calibrateGlobexVwapMagnet };
+
+if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+  run().catch(e => { console.error(e); process.exit(1); });
+}

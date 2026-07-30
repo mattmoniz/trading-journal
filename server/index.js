@@ -123,6 +123,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
 app.use('/uploads', express.static(join(__dirname, 'uploads')));
 
+// Standalone read-only quick-check page — market pulse + active setup + session
+// timeline in one lightweight static page, no React/build step needed. Meant to be
+// viewed directly (bookmarked, behind the Cloudflare Access login on the tunnel),
+// not embedded elsewhere.
+app.get('/quick-check', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'quick-check.html'));
+});
+
 // ── Startup helper functions ──────────────────────────────────────────────────
 
 const SIERRA_DATA_DIR   = process.env.SIERRA_DATA_PATH   || '/mnt/c/SierraChart/Data';

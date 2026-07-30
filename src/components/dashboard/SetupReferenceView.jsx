@@ -31,7 +31,7 @@ const DEFAULT_COLS = [
   { key: 'touchesTotal', label: 'Touches', align: 'right', sortable: true, tip: 'Total rows ever recorded for this setup_type — blended, includes synthetic backfill. Check the Setup Log\'s origin filter for the real breakdown.' },
   { key: 'touchesThisWeek', label: 'This Week', align: 'right', sortable: true, tip: 'Touches so far this calendar week (Mon-Sun ET) — resets automatically each week.' },
   { key: 'lastTouch', label: 'Last Touch', align: 'right', sortable: true, tip: 'Timestamp of the most recent touch recorded for this setup_type — a live freshness check that the system is still updating.' },
-  { key: 'appliedVolZ', label: 'Applied volZ', align: 'left', sortable: false, tip: 'Live volume-Z-score / one-sided-ratio / cluster-size thresholds currently gating this setup, where applicable (currently STACK_VOL_BREAK_LIVE only).' },
+  { key: 'misc', label: 'Misc', align: 'left', sortable: false, tip: 'Every live mechanism that actually controls this setup — what gates it firing, what adjusts its size once live, and what determines its exit. Derived from the real gating code (server/routes/acd.js), not a guess — see the computeMiscTags comment in server/routes/setups.js for how each tag is scoped.' },
   { key: 'rigorTrend', label: 'Stability', align: 'left', sortable: true },
 ];
 
@@ -105,7 +105,7 @@ function SrHourBreakdown({ byHour }) {
   );
 }
 
-function SrDetailPanel({ setupType, displayName, onClose, onJumpToChart }) {
+function SrDetailPanel({ setupType, displayName, onClose, onOpenChart }) {
   const [detail, setDetail] = useState(null);
   useEffect(() => {
     setDetail(null);
@@ -155,7 +155,7 @@ function SrDetailPanel({ setupType, displayName, onClose, onJumpToChart }) {
                     return (
                       <tr key={d.date} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
                         <td style={{ padding: '6px 12px', fontWeight: 500 }}>
-                          <span onClick={() => onJumpToChart?.(d.date)} style={{ color: '#a78bfa', cursor: 'pointer', textDecoration: 'underline dotted' }}>
+                          <span onClick={() => onOpenChart?.(d.date, detail.details.map(x => x.date))} style={{ color: '#a78bfa', cursor: 'pointer', textDecoration: 'underline dotted' }}>
                             {new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' })}
                           </span>
                         </td>
@@ -178,15 +178,30 @@ function SrDetailPanel({ setupType, displayName, onClose, onJumpToChart }) {
   );
 }
 
-export default function SetupReferenceView({ onJumpToChart }) {
+export default function SetupReferenceView({ onOpenChart }) {
   const [data, setData] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all'); // all | live | globex | undocumented
   const [expanded, setExpanded] = useState(null);
   const [detailFor, setDetailFor] = useState(null); // setupType with the touch-detail panel open
   const [sort, setSort] = useState({ col: 'ev', dir: 'desc' });
+  // Reconciled against DEFAULT_COLS at load time, not just filtered against it — a plain
+  // order.map(k => DEFAULT_COLS.find(...)).filter(Boolean) only ever DROPS a key that's no
+  // longer valid, it never re-adds one that's new since the user's last drag. That silently
+  // deleted the Misc column (added 2026-07-28) for anyone with an older saved order — found
+  // live via a user screenshot missing it entirely. Any DEFAULT_COLS key absent from the
+  // saved order is appended at the end here, synchronously (no render flicker), and the
+  // existing persist effect below writes the corrected order straight back to localStorage.
   const [colOrder, setColOrder] = useState(() => {
-    try { const s = localStorage.getItem('setup-reference-col-order'); return s ? JSON.parse(s) : null; } catch { return null; }
+    try {
+      const s = localStorage.getItem('setup-reference-col-order');
+      if (!s) return null;
+      const saved = JSON.parse(s);
+      const defaultKeys = DEFAULT_COLS.map(c => c.key);
+      const known = new Set(saved);
+      const missing = defaultKeys.filter(k => !known.has(k));
+      return missing.length ? [...saved.filter(k => defaultKeys.includes(k)), ...missing] : saved;
+    } catch { return null; }
   });
   const [dragCol, setDragCol] = useState(null);
 
@@ -284,8 +299,16 @@ export default function SetupReferenceView({ onJumpToChart }) {
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', color: r.touchesThisWeek > 0 ? '#e2e8f0' : '#64748b' }}>{r.touchesThisWeek}</td>;
       case 'lastTouch':
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontSize: 11.5, color: '#94a3b8' }}>{fmtTime(r.lastTouch)}</td>;
-      case 'appliedVolZ':
-        return <td key={col.key} style={{ ...tdStyle, textAlign: 'left', fontSize: 11, color: r.appliedVolZ ? '#67e8f9' : '#475569', whiteSpace: 'normal' }}>{r.appliedVolZ || '—'}</td>;
+      case 'misc':
+        return (
+          <td key={col.key} style={{ ...tdStyle, textAlign: 'left', fontSize: 11, whiteSpace: 'normal', minWidth: 260 }}>
+            {r.misc && r.misc.length ? (
+              <ul style={{ margin: 0, padding: '0 0 0 14px', color: '#67e8f9' }}>
+                {r.misc.map((m, i) => <li key={i} style={{ marginBottom: 2 }}>{m}</li>)}
+              </ul>
+            ) : <span style={{ color: '#475569' }}>—</span>}
+          </td>
+        );
       case 'rigorTrend':
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'left' }}>{r.rigorTrend ? <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 6px', borderRadius: 4, color: TREND_COLOR[r.rigorTrend] || '#94a3b8', background: (TREND_COLOR[r.rigorTrend] || '#94a3b8') + '1e' }}>{r.rigorTrend}</span> : '—'}</td>;
       default:
@@ -385,7 +408,7 @@ export default function SetupReferenceView({ onJumpToChart }) {
           setupType={detailFor}
           displayName={data.setups.find(s => s.setupType === detailFor)?.displayName || ''}
           onClose={() => setDetailFor(null)}
-          onJumpToChart={onJumpToChart}
+          onOpenChart={onOpenChart}
         />
       )}
     </div>

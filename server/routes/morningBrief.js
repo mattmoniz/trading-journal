@@ -1,7 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
-import { getTrailingVwapStd } from '../services/queries.js';
+import { getTrailingVwapStd, getTrailing24hrVwapDists } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const router = express.Router();
@@ -62,67 +62,10 @@ async function getTrailingCumDeltas(date, days = 30) {
   }), MB_DAY_CACHE_TTL);
 }
 
-// Fetch trailing 24hr VWAP distances (30-day window)
-async function getTrailing24hrVwapDists(date, days = 30) {
-  const ck = `mb:24hrVwapDists:${date}:${days}`;
-  const cached = cacheGet(ck);
-  if (cached) return cached;
-  const result = await query(`
-    WITH day_list AS (
-      SELECT DISTINCT ts::date as d FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date >= $1::date - $2::int AND ts::date < $1
-      ORDER BY d
-    )
-    SELECT d::text, (array_agg(close ORDER BY ts DESC))[1]::float as close_price
-    FROM price_bars_primary pb
-    JOIN day_list dl ON pb.ts::date = dl.d
-    WHERE symbol='NQ' AND EXTRACT(hour FROM pb.ts)*60+EXTRACT(minute FROM pb.ts) BETWEEN 570 AND 959
-    GROUP BY d
-    ORDER BY d`, [date, days]).catch(() => ({ rows: [] }));
-  if (result.rows.length < 5) return cacheSet(ck, [], MB_DAY_CACHE_TTL);
-
-  // Was a real N+1: one Globex-session bar query per day (~21-30 sequential round trips,
-  // confirmed the dominant cost of /morning-brief/live-session-context, 2026-07-15). Fixed
-  // by bulk-fetching every candidate Globex-window bar across the whole date range in one
-  // plain query, then bucketing each bar into its owning session date in JS (a Globex
-  // session spans 6PM ET the prior day through 5PM ET the session date — bars with hour>=18
-  // belong to the NEXT calendar day's session, bars with hour<17 belong to their own date's
-  // session). Verified byte-for-byte against the original per-day loop (21/21 distances
-  // matched exactly) before wiring in.
-  const days_arr = result.rows.map(r => r.d);
-  const minD = days_arr[0], maxD = days_arr[days_arr.length - 1];
-  const bulkRes = await query(`
-    SELECT ts::date::text as d, EXTRACT(hour FROM ts)::int as hr,
-           high::float, low::float, close::float, volume::bigint as vol
-    FROM price_bars_primary WHERE symbol='NQ'
-      AND ts::date >= $1::date - 1 AND ts::date <= $2::date
-      AND (EXTRACT(hour FROM ts) >= 18 OR EXTRACT(hour FROM ts) < 17)
-  `, [minD, maxD]).catch(() => ({ rows: [] }));
-  const bySession = new Map();
-  for (const b of bulkRes.rows) {
-    let sessDate;
-    if (b.hr >= 18) {
-      const dt = new Date(b.d + 'T12:00:00Z'); dt.setUTCDate(dt.getUTCDate() + 1);
-      sessDate = dt.toISOString().slice(0, 10);
-    } else {
-      sessDate = b.d;
-    }
-    if (!bySession.has(sessDate)) bySession.set(sessDate, []);
-    bySession.get(sessDate).push(b);
-  }
-
-  const dists = [];
-  for (const row of result.rows) {
-    const globexBars = bySession.get(row.d) || [];
-    if (globexBars.length > 50) {
-      let pv = 0, v = 0;
-      for (const b of globexBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
-      const vwap24 = pv / v;
-      dists.push(row.close_price - vwap24);
-    }
-  }
-  return cacheSet(ck, dists, MB_DAY_CACHE_TTL);
-}
+// getTrailing24hrVwapDists moved to server/services/queries.js 2026-07-28 (pure
+// relocation, zero logic change) so the new GLOBEX_VWAP_MAGNET live setup and its
+// historical backfill script can import the same no-lookahead implementation instead of
+// re-deriving the Globex-session-bucketing logic. Imported above alongside getTrailingVwapStd.
 
 // Fetch trailing weekly VWAP distances.
 // Was a real N+1 (12 sequential weekly-range queries, ~700ms-4.3s depending on DB load)
