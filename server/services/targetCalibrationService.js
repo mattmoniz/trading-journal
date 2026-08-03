@@ -66,6 +66,19 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
   }
   if (walked.length < MIN_N) return { exclusionReason: 'insufficient_bar_data', exclusionDetail: `only ${walked.length} of ${trades.length} trades had bars` };
 
+  // Self-calibrating outlier guard (2026-08-02, matching data_sanity_audit.mjs's existing
+  // "10x p95"-style convention for this exact class of problem): a walked trade whose
+  // favorable excursion exceeds 10x the CURRENT live target is far more likely to be a
+  // fired_at/bar-index data artifact (walking from the wrong point in time and picking up
+  // unrelated price action) than genuine edge -- found via VWAP_MAGNET_LONG, where a batch
+  // of BACKFILL rows with a corrupted fired_at let a real-but-unrelated ~1,590pt overnight
+  // move get misattributed as "favorable excursion since entry," producing a 454.5pt
+  // candidate against a real p75_mfe of 30.8pt. Filtering the BACKFILL source at the query
+  // level (update_optimal_stops.mjs) is the primary fix; this is defense in depth so a
+  // future bad row can't reproduce the same failure silently. Discarded count surfaced in
+  // the return value rather than silently dropped, per the standing no-dead-ends rule.
+  const outlierCap = oldTarget * 10;
+  let outliersDiscarded = 0;
   const trueMfes = walked.map(w => {
     let maxFav = -Infinity;
     for (let i = w.startIdx; i < w.endIdx; i++) {
@@ -74,7 +87,11 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
       if (fav > maxFav) maxFav = fav;
     }
     return maxFav;
-  }).filter(v => v > 0).sort((a, b) => a - b);
+  }).filter(v => {
+    if (v <= 0) return false;
+    if (v > outlierCap) { outliersDiscarded++; return false; }
+    return true;
+  }).sort((a, b) => a - b);
   if (!trueMfes.length) return { exclusionReason: 'no_positive_mfe', exclusionDetail: 'every walked trade had zero/negative favorable excursion' };
 
   const anchored = ANCHOR_MULTIPLES.map(m => +(oldTarget * m).toFixed(1));
@@ -145,5 +162,6 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
     bestTarget: bestInSample.target, baselineEv: +baselineEv.toFixed(2),
     isEv: +bestInSample.isEv.toFixed(2), oosEv: +oosEv.toFixed(2), fullEv: +fullEv.toFixed(2),
     targetHits: bestInSample.targetHits, n: numWalked, candidatesTested: candidates, rigor,
+    outliersDiscarded,
   };
 }

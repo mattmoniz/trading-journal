@@ -264,6 +264,22 @@ async function main() {
   // CAM_S2_FADE_LONG flips from surviving (oosEv=+$0.23, N=157) to failing (oosEv=-$13.78,
   // N=154) purely from excluding its 3 TIME_EXPIRED trades -- confirms this isn't a
   // cosmetic choice.
+  // origin_status IN ('ACTIVE','SHADOW') -- found 2026-08-02: BACKFILL rows can carry a
+  // fired_at that doesn't correspond to when entry_zone_low/high was actually observed in
+  // the market (confirmed for a batch of VWAP_MAGNET_LONG BACKFILL rows from 2026-06-09 --
+  // fired_at was ~4hrs early vs. when the stored entry price actually printed, a naive
+  // ET-as-UTC-style offset). computeCorrectedTarget()'s 390-bar walk is keyed entirely off
+  // fired_at, so on those rows it walked from the WRONG point in time and picked up PAST
+  // price action (a real, sustained ~1,590pt overnight move that happened BEFORE the true
+  // entry) as if it were future favorable excursion -- a genuine lookahead artifact, not
+  // real edge. This silently promoted a 454.5pt target for VWAP_MAGNET_LONG (real p75_mfe
+  // is 30.8pt) and the same pattern across all 4 VWAP-magnet variants -- the highest-volume
+  // live setups, so the live impact was real, not theoretical. BACKFILL rows' own
+  // mae_points/mfe_points (used elsewhere, e.g. rawByType above) were computed by whatever
+  // wrote them and aren't necessarily wrong -- this filter only affects the fresh,
+  // fired_at-keyed re-walk here. Real (ACTIVE/SHADOW) N still clears MIN_N for every setup
+  // that was actually corrupted (VWAP_MAGNET_LONG=82, GLOBEX_VWAP_MAGNET_LONG=88,
+  // GLOBEX_VWAP_MAGNET_SHORT=54) -- see docs/OPEN_THREADS.md for the full writeup.
   const rawResExpanded = await query(`
     SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
       fired_at, entry_zone_low::float, entry_zone_high::float
@@ -272,6 +288,7 @@ async function main() {
       AND mae_points <= 300 AND mfe_points <= 300
       AND resolution IN ('TARGET_HIT', 'STOP_HIT', 'TIME_EXPIRED')
       AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
+      AND origin_status IN ('ACTIVE', 'SHADOW')
     ORDER BY fired_at ASC
   `);
   const rawByTypeExpanded = {};
