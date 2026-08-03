@@ -63,6 +63,28 @@ This file is a 14K all-account trade dataset. A prior Gemini session overwrote i
 ### 7. Report Errors Immediately — Don't Retry Silently
 If a script throws a SQL error, node error, or DB connection error: write the exact error to `scratch/antigravity_response.md` immediately and stop. Do not retry the same failing command multiple times. Claude will send a one-sentence correction prompt — wait for that before continuing.
 
+### 8. Executive Summary Rule — Never Dump Raw Rows Into antigravity_response.md
+Claude reads `scratch/antigravity_response.md` into its context window to validate your work. Every row you put in that file costs Claude tokens. Violating this burns the session budget fast.
+
+**Hard limits:**
+- **Maximum 10 rows of raw data** in `antigravity_response.md`, ever.
+- Full result sets go to a **separate file**: `reports/<task_slug>_<YYYY-MM-DD>.csv` (or `.md` if it's a formatted table). Create the `reports/` directory if it doesn't exist.
+- `antigravity_response.md` must contain: (1) a 3-sentence executive summary of findings, (2) the path to the full results file, (3) methodology summary (SQL pattern used, N, window), (4) any flags/caveats.
+
+**Example good structure:**
+```
+## Executive Summary
+CAM_S2_FADE_LONG cleared N≥20 with EV=+$14.22 and passed all 4 rigor checks.
+Full 103-row sweep written to reports/cam_sweep_2026-07-31.csv.
+One flag: 3 setup_types had N<20 — marked directional-only in the CSV.
+
+## File
+reports/cam_sweep_2026-07-31.csv
+
+## Methodology
+Rolling-mean±2σ threshold, 180-day window, CumPL-diff P&L, PRO accounts only.
+```
+
 ---
 
 ## Communication Protocol

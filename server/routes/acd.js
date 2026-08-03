@@ -80,6 +80,45 @@ function setCached(tradeDate, key, val) {
   return val;
 }
 
+// ── Value-area regime stamping (measurement layer only, 2026-07-31) ────────────────
+// Tags every setup with its position relative to the TRUE volume-weighted value area
+// (vah/val/poc from computeVolumeProfileForRange, computed nightly by
+// scripts/compute_value_area_regime_snapshots.mjs into value_area_regime_snapshots) at
+// 7 lookbacks. Deliberately informational-only -- see docs/OPEN_THREADS.md's 2026-07-31
+// entry and docs/REGIME_INTELLIGENCE_SPEC.md (marked REJECTED): the original spec's
+// gating/routing engine did not survive audit, but tagging every setup so real forward
+// data can be judged over the next few months does not depend on that engine at all.
+// Nothing reads these columns to suppress or size anything -- do not wire that until a
+// real forward sample clears this codebase's actual rigor bar (computeRigor +
+// computeReplication), not a backtest sweep.
+const REGIME_LOOKBACKS = [10, 20, 30, 45, 60, 90, 180];
+async function getValueAreaRegimeMap(tradeDate) {
+  const cached = getCached(tradeDate, 'valueAreaRegimeMap', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const rows = await query(`
+    SELECT lookback_days, vah::float, val::float FROM value_area_regime_snapshots
+    WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM value_area_regime_snapshots WHERE snapshot_date <= $1)
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  const map = {};
+  for (const r of rows.rows) map[r.lookback_days] = { vah: r.vah, val: r.val };
+  return setCached(tradeDate, 'valueAreaRegimeMap', map);
+}
+// price outside [val, vah] gives pos < 0 or > 1 (a real extension beyond the value area),
+// not clamped -- the magnitude of the overshoot is itself informative, not noise to hide.
+function computeRegimeStamp(price, vaMap) {
+  const stamp = {};
+  for (const L of REGIME_LOOKBACKS) {
+    const va = vaMap[L];
+    const width = va ? va.vah - va.val : null;
+    const pos = (va && width > 0) ? (price - va.val) / width : null;
+    stamp[`regime_pos_${L}d`] = pos != null ? +pos.toFixed(4) : null;
+    stamp[`regime_label_${L}d`] = pos != null ? (pos >= 0 && pos <= 1 ? 'Mid' : 'Edge') : null;
+  }
+  return stamp;
+}
+const REGIME_STAMP_COLS = REGIME_LOOKBACKS.flatMap(L => [`regime_pos_${L}d`, `regime_label_${L}d`]);
+function regimeStampValues(stamp) { return REGIME_STAMP_COLS.map(c => stamp[c] ?? null); }
+
 // Touch-quality (order-flow) calibration + volume-baseline lookups — informational
 // only; see server/services/touchQuality.js and scripts/calibrate_touch_quality.mjs.
 async function getTouchQualityCalib() {
@@ -942,7 +981,7 @@ async function detectGlobexSetup(sessionDate, io) {
     // same stop/target split used by the wider-window verification backtest that
     // validated these 4 types, reused here rather than picking new numbers.
     const sessionIsMonday = new Date(sessionDate + 'T12:00:00').getDay() === 1;
-    const flatStop = sessionIsMonday ? 60 : 90, flatTarget = sessionIsMonday ? 30 : 40;
+    const flatStop = 45, flatTarget = 90;
 
     // ── Globex 24hr VWAP Magnet: sigma-based fade off the 24hr-spanning VWAP ──────────
     // The Globex sibling of the RTH VWAP_MAGNET_LONG/SHORT setup (~line 5310 below,
@@ -1079,13 +1118,16 @@ async function detectGlobexSetup(sessionDate, io) {
       // size_multiplier now fed by the pair-bonus check above (2026-07-27, resolves
       // OPEN_DECISION globex_confluence_pair_bonus_needs_sizing_mechanism) — informational
       // only, same as RTH, since this app has no broker execution capability.
+      const regimeStamp = computeRegimeStamp(entry, await getValueAreaRegimeMap(sessionDate));
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
-          confluence_score_at_detection, confluence_levels_at_detection, size_multiplier
-        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14)
+          confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
+          ${REGIME_STAMP_COLS.join(', ')}
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
+          ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
@@ -1093,7 +1135,8 @@ async function detectGlobexSetup(sessionDate, io) {
           live.status, live.reason,
           candidates.length,
           candidates.map(x => x.name),
-          sizeMultiplier]);
+          sizeMultiplier,
+          ...regimeStampValues(regimeStamp)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
@@ -3586,18 +3629,21 @@ export default function createACDRouter(io) {
               const svExtendTarget = direction === 'LONG' ? svEntry + 150 : svEntry - 150;
               const svExpiresAt = `${todayET} 16:00:00`;
               getStackVolBreakLiveStatus(svSetupType).then(async (live) => {
+                const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const ins = await query(`
                   INSERT INTO active_setups (
                     trade_date, setup_type, fired_at, expires_at, status, origin_status,
                     entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                     extend_target_level, price_at_detection, confluence_score_at_detection,
-                    confluence_levels_at_detection, suppression_reason
-                  ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12)
+                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}
+                  ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
+                    ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')})
                   ON CONFLICT DO NOTHING
                   RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
                 `, [todayET, svSetupType, svExpiresAt, live.status, svEntry, svStop, svT1,
                     `${stackVolSignal.calibratedTarget}pt (bank <=9 bars / extend 10-25 bars to 150pt)`,
-                    svExtendTarget, levelDensity, stackVolSignal.levels, live.reason]);
+                    svExtendTarget, levelDensity, stackVolSignal.levels, live.reason,
+                    ...regimeStampValues(svRegimeStamp)]);
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   if (live.status === 'ACTIVE' && io) {
@@ -3620,6 +3666,16 @@ export default function createACDRouter(io) {
       const nowET   = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const etMin   = nowET.getHours() * 60 + nowET.getMinutes();
       const etHour  = nowET.getHours();
+
+      // No-new-entries dead zone: 4:00–6:00 PM ET (user directive, 2026-07-31 — "seems to be
+      // noise and bad trades"). Deliberately the FULL 4-6pm window even though 5-6pm is
+      // already fully dark via the hard-close gate below — this flag is the actual source of
+      // truth for the user's stated rule, so it stays correct on its own if that separate
+      // gate's boundary ever changes. Does NOT force-close any already-open position (that
+      // remains the 5-6pm hard-close gate's job) — resolveSetupsByPrice/expireStaleSetups
+      // above already run unconditionally every poll, so an open trade still manages/resolves
+      // normally through this window; this only blocks NEW candidates from firing ACTIVE.
+      const inNewEntryDeadZone = etMin >= 16 * 60 && etMin < 18 * 60;
 
       // Resolve/expire existing setups on every poll regardless of window
       await resolveSetupsByPrice(io).catch(() => {});
@@ -3655,7 +3711,11 @@ export default function createACDRouter(io) {
         return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal });
       }
 
-      const noNewEntries = false; // setups fire throughout RTH session
+      // Was a hardcoded `false` (never wired to anything — confirmed zero frontend consumers
+      // of this field) until 2026-07-31, when it became the real flag for the 4-6pm
+      // no-new-entries dead zone above. Distinct from dll.js's own noNewEntries concept
+      // (daily-loss-limit-driven) — this one is purely time-of-day.
+      const noNewEntries = inNewEntryDeadZone;
 
       // RTH detection — same as before (8:30 AM–5 PM ET)
       const isRTH = true; // already gated above
@@ -6027,6 +6087,7 @@ export default function createACDRouter(io) {
           if (cascadeBreaker.active && nearLevels.length > 0) {
             const cbIsLong = approachDir === 'FROM_ABOVE';
             const cbDir = cbIsLong ? 'LONG' : 'SHORT';
+            const cbVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
             for (const lv of nearLevels) {
               const cbType = resolveSetupType(`${lv.name}_${cbDir}`, lv);
               const cbOptStop = liveStats._opt?.[cbType];
@@ -6039,17 +6100,21 @@ export default function createACDRouter(io) {
               cbSessionEnd.setHours(16, 0, 0, 0);
               if (cbSessionEnd <= cbEtNow) cbSessionEnd.setDate(cbSessionEnd.getDate() + 1);
               const cbExpiresAt = `${cbSessionEnd.getFullYear()}-${String(cbSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(cbSessionEnd.getDate()).padStart(2, '0')} ${String(cbSessionEnd.getHours()).padStart(2, '0')}:${String(cbSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+              const cbRegimeStamp = computeRegimeStamp(currentPrice, cbVaMap);
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
-                  suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at
+                  suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
+                  ${REGIME_STAMP_COLS.join(', ')}
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7,
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, cbType, currentPrice, cbStopLevel, cbT1Level,
                 `T1: ${cbTargetPts}pt · Stop: ${cbStopPts}pt (cascade breaker audit)`,
                 cbExpiresAt,
+                ...regimeStampValues(cbRegimeStamp),
               ]).catch(() => {});
             }
           }
@@ -6433,14 +6498,16 @@ export default function createACDRouter(io) {
               // built from the same SETUP_STATUS query that built _suppressedSetups) and simply
               // never got read here. Same source SetupHistoryView.jsx's "WR at Fire" column reads.
               const auditStats = liveStats._setupStats?.[type];
+              const auditRegimeStamp = computeRegimeStamp(currentPrice, await getValueAreaRegimeMap(todayET).catch(() => ({})));
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  historical_win_rate, historical_sessions
+                  historical_win_rate, historical_sessions, ${REGIME_STAMP_COLS.join(', ')}
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13)
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${14 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -6450,6 +6517,7 @@ export default function createACDRouter(io) {
                 `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
                 auditExpiresAt,
                 auditStats?.wr ?? null, auditStats?.n ?? null,
+                ...regimeStampValues(auditRegimeStamp),
               ]).catch(() => {});
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -7246,6 +7314,7 @@ export default function createACDRouter(io) {
       if (backfilledTouches.length > 0) {
         const sessionEndStr = `${todayET} 13:00:00`;
         (async () => {
+          const btVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           for (const bt of backfilledTouches) {
             try {
               const existing = await query(
@@ -7255,17 +7324,20 @@ export default function createACDRouter(io) {
               if (existing.rows.length) continue; // already recorded (ACTIVE or SHADOW) this day
               const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
               const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+              const btRegimeStamp = computeRegimeStamp(bt.entry, btVaMap);
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL')
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')})
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
                 bt.entry, bt.history.winRate, bt.history.occurrences, bt.history.avgPnl, bt.history.t1HitRate,
+                ...regimeStampValues(btRegimeStamp),
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -7427,7 +7499,12 @@ export default function createACDRouter(io) {
           runnerTrailWidth = parsed?.trail ?? null;
         }
         const forceShadow = isTrailMechanism
-          || getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type);
+          || getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type)
+          || inNewEntryDeadZone;
+        const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
+          : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+          : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
+        const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const ins = await query(`
           INSERT INTO active_setups (
             trade_date, setup_type, fired_at, expires_at, status, origin_status,
@@ -7437,8 +7514,10 @@ export default function createACDRouter(io) {
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
-            exhaustion_signal_at_detection, hivol_lopace_at_detection
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24)
+            exhaustion_signal_at_detection, hivol_lopace_at_detection,
+            ${REGIME_STAMP_COLS.join(', ')}
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,
+            ${REGIME_STAMP_COLS.map((_, i) => `$${25 + i}`).join(', ')})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -7448,12 +7527,13 @@ export default function createACDRouter(io) {
           nl30, nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE',
           active.sizeMultiplier ?? 1.0,
           forceShadow ? 'SHADOW' : 'ACTIVE',
-          forceShadow ? (isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT' : 'PERFORMANCE_BELOW_THRESHOLD') : null,
+          forceShadowReason,
           runnerTrailWidth,
           active.confluenceCount ?? null,
           active.confluenceLevels && active.confluenceLevels.length ? active.confluenceLevels : null,
           active.exhaustionSignalAtDetection ?? null,
           active.hivolLopaceAtDetection ?? null,
+          ...regimeStampValues(regimeStamp),
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -7536,6 +7616,7 @@ export default function createACDRouter(io) {
       // Persist shadow setups (fire-and-forget, don't block response)
       if (shadowCandidates.length > 0) {
         (async () => {
+          const vaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           for (const shadow of shadowCandidates) {
             if (!shadow || shadow.type === active?.type) continue;
             const isLongS = shadow.direction === 'LONG';
@@ -7543,15 +7624,17 @@ export default function createACDRouter(io) {
             if (!riskOk) continue;
             let sT1 = shadow.target;
             if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
+            const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW')
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')})
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
+              ...regimeStampValues(regimeStamp),
             ]).catch(() => {});
           }
         })();

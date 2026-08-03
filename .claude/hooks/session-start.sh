@@ -281,6 +281,25 @@ ORDER BY (s.recommendation IN ('SUPPRESS','THIN_N')) DESC, s.ev_per_trade ASC;
 SQLEOF
 )
 
+# Doc size growth watch — 2026-07-31. CLAUDE.md and docs/OPEN_THREADS.md are both read at
+# the start of every session (per this hook's own "IMPORTANT" line below), so their size is
+# a direct, recurring per-session token cost. Found the same day this was built:
+# OPEN_THREADS.md had grown to 856KB/~214K tokens uncommitted, unnoticed because nothing
+# ever surfaced its growth — archived via scripts/archive_open_threads.mjs the same session.
+# Threshold is growth-since-last-commit (not a flat KB number) so a big archiving/trim commit
+# resets the baseline to zero automatically, matching post-edit-filesize.sh's own
+# "grew by X since last commit" convention rather than inventing a new fixed cutoff.
+export DOC_SIZE_INFO
+DOC_SIZE_INFO=""
+for f in CLAUDE.md docs/OPEN_THREADS.md; do
+  if [ -f "$REPO/$f" ]; then
+    CUR=$(wc -c < "$REPO/$f" | tr -d ' ')
+    HEAD_SIZE=$(git -C "$REPO" show "HEAD:$f" 2>/dev/null | wc -c | tr -d ' ')
+    [ -z "$HEAD_SIZE" ] && HEAD_SIZE=0
+    DOC_SIZE_INFO="${DOC_SIZE_INFO}${f}|${CUR}|${HEAD_SIZE}"$'\n'
+  fi
+done
+
 # test_invariants.mjs FAIL watch — 2026-07-17. Wired into run_daily_calibration.sh the same
 # day (previously manual-only: "run after any change touching acd.js..."), which meant a
 # real invariant break (e.g. check [6]'s UNCALIBRATED_SHADOW_TYPES staleness) could sit
@@ -318,6 +337,18 @@ const feedbackCoverageRaw = process.env.FEEDBACK_COVERAGE || '0|0';
 const [feedbackWithSetupId, feedbackTotal] = feedbackCoverageRaw.split('|').map(n => parseInt(n, 10) || 0);
 const untrackedSymbols = (process.env.UNTRACKED_SYMBOLS || '').split('\n').filter(Boolean);
 const invariantFailures = (process.env.INVARIANT_FAILURES || '').split('\n').filter(Boolean);
+const docSizeRows = (process.env.DOC_SIZE_INFO || '').split('\n').filter(Boolean).map(l => {
+  const [file, cur, head] = l.split('|');
+  return { file, cur: parseInt(cur, 10) || 0, head: parseInt(head, 10) || 0 };
+});
+const GROWTH_FLAG_PCT = 0.15; // matches post-edit-filesize.sh's "significant single-session growth" spirit
+const docSizeLines = docSizeRows.map(({ file, cur, head }) => {
+  const kb = (cur / 1024).toFixed(1);
+  const tokens = Math.round(cur / 4).toLocaleString();
+  const pctGrowth = head > 0 ? (cur - head) / head : 0;
+  const flag = head > 0 && pctGrowth > GROWTH_FLAG_PCT;
+  return { file, kb, tokens, pctGrowth, flag };
+});
 
 // Parse mining staleness rows: "signal_type|last_run|days_ago"
 const miningLines = miningRaw.split('\n').filter(Boolean).map(line => {
@@ -481,6 +512,10 @@ const lines = [
   invariantFailures.length > 0
     ? `🔴 test_invariants.mjs FAILED in the most recent daily calibration run:\n${invariantFailures.join('\n')}\n  ACTION: run node scripts/test_invariants.mjs directly to see full context, then fix the underlying drift.`
     : '✅ test_invariants.mjs: no FAILs in the most recent daily calibration run.',
+  '',
+  docSizeLines.length > 0
+    ? `${docSizeLines.some(d => d.flag) ? '⚠️ ' : '📄'} DOC SIZE WATCH — auto-loaded every session:\n${docSizeLines.map(d => `  ${d.file.padEnd(24)} ${d.kb}KB (~${d.tokens} tokens)${d.head > 0 ? `  [${d.pctGrowth >= 0 ? '+' : ''}${(d.pctGrowth * 100).toFixed(0)}% since last commit]` : '  [untracked/new]'}${d.flag ? '  ⚠️ grown >15% uncommitted — consider archiving/trimming before it compounds' : ''}`).join('\n')}`
+    : '',
   '',
   '=== COMMON REQUESTS (things you frequently ask for) ===',
   '',

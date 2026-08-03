@@ -147,7 +147,14 @@ export const LEVEL_FADE_DEFINITIONS = {
   IB_HIGH: { rule: 'SAME_DAY_FORMING', displayName: 'Initial Balance High', levelDesc: "today's Initial Balance high (9:30-10:30 AM ET)", formationGate: 630 },
   IB_LOW:  { rule: 'SAME_DAY_FORMING', displayName: 'Initial Balance Low', levelDesc: "today's Initial Balance low (9:30-10:30 AM ET)", formationGate: 630 },
   IB_MID_SCALP:    { rule: 'SAME_DAY_FORMING', displayName: 'IB Mid Scalp', levelDesc: "midpoint of today's Initial Balance, tight scalp stop/target", formationGate: 630 },
-  OR_MID_AFTER_IB: { rule: 'SAME_DAY_FORMING', displayName: 'OR Mid (After IB)', levelDesc: "midpoint of today's Opening Range, only tradeable once IB has closed", formationGate: 630 },
+  // Name is a historical artifact — this used to be gated to fire only after IB closed
+  // (etMinNow >= 630), a copy-paste of the IB_MID_SCALP_FADE line above it (both added
+  // same commit, bf65b47, 2026-07-02). Fixed live 2026-07-16 (server/routes/acd.js ~line
+  // 5960): the OR mid forms with the 5-min OR itself (~9:35 ET) and was never actually
+  // IB-dependent, so the gate was removed there — but this definition/formationGate/group
+  // entry was never updated to match, so the Setup Reference page kept showing the old,
+  // wrong gate/description/family for 2 weeks. Fixed here 2026-07-31.
+  OR_MID_AFTER_IB: { rule: 'SAME_DAY_FORMING', displayName: 'Opening Range Mid (5-Min)', levelDesc: "midpoint of today's 5-minute opening range (9:30-9:35 AM ET) — tradeable as soon as the OR completes, not gated to IB close despite the legacy setup_type name", formationGate: 575 },
   // Prior-year value area — added 2026-07-19 (see CLAUDE.md). Deliberately the safe
   // prior-COMPLETE-year convention (like PW/PM), not a rolling window.
   PY_VAH: { rule: 'PRIOR_PERIOD', displayName: 'Prior Year VAH', levelDesc: "prior complete calendar year's value area high" },
@@ -238,8 +245,8 @@ const LEVEL_GROUP_MAP = {
   WPP: 'Weekly Pivots', WR1: 'Weekly Pivots', WR2: 'Weekly Pivots', WS1: 'Weekly Pivots', WS2: 'Weekly Pivots',
   MPP: 'Monthly Pivots', MR1: 'Monthly Pivots', MR2: 'Monthly Pivots', MS1: 'Monthly Pivots', MS2: 'Monthly Pivots',
   ONH: 'Overnight', ONL: 'Overnight',
-  OR_HIGH: 'Opening Range', OR_LOW: 'Opening Range',
-  IB_HIGH: 'Initial Balance', IB_LOW: 'Initial Balance', IB_MID_SCALP: 'Initial Balance', OR_MID_AFTER_IB: 'Initial Balance',
+  OR_HIGH: 'Opening Range', OR_LOW: 'Opening Range', OR_MID_AFTER_IB: 'Opening Range',
+  IB_HIGH: 'Initial Balance', IB_LOW: 'Initial Balance', IB_MID_SCALP: 'Initial Balance',
   '5D_OR_MID': 'Opening Range (5-Day)', '10D_IB_MID': 'Initial Balance (10-Day)',
   PY_VAH: 'Prior Year', PY_VAL: 'Prior Year', PY_POC: 'Prior Year',
   MPP_OVERNIGHT: 'Monthly Pivots', WR1_OVERNIGHT: 'Weekly Pivots', WS1_OVERNIGHT: 'Weekly Pivots',

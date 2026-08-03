@@ -131,6 +131,18 @@ app.get('/quick-check', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'quick-check.html'));
 });
 
+// Bare-root redirect — found 2026-07-30: the Cloudflare Tunnel's ingress only
+// allow-lists exact paths (see ~/.cloudflared/config.yml), so hitting the tunnel
+// hostname's root with no path (e.g. a bookmark saved as just the domain) fell
+// through to the tunnel's own catch-all 404 before ever reaching this server.
+// Fixed at both layers: this redirect, plus a matching `^/$` ingress rule added
+// the same session so root requests actually reach here instead of dying at the
+// edge. Root itself has no real content of its own — /quick-check is the intended
+// landing page.
+app.get('/', (req, res) => {
+  res.redirect('/quick-check');
+});
+
 // ── Startup helper functions ──────────────────────────────────────────────────
 
 const SIERRA_DATA_DIR   = process.env.SIERRA_DATA_PATH   || '/mnt/c/SierraChart/Data';
@@ -1002,6 +1014,23 @@ httpServer.listen(PORT, () => {
         return { count: 1 };
       });
     } catch (err) { console.error('[compute_levels_weekday] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
+  // Value-area regime measurement layer (2026-07-31) — see docs/OPEN_THREADS.md's
+  // 2026-07-31 entry. Pure tagging, no gating: computes today's true volume-weighted
+  // value area at 7 lookbacks (into value_area_regime_snapshots) so every setup fired
+  // today can be stamped with its position against them. Runs after compute_levels
+  // (needs no dependency on it, just avoiding concurrent heavy queries) and before
+  // market open.
+  cron.schedule('5 8 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('VALUE_AREA_REGIME_SNAPSHOT', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/compute_value_area_regime_snapshots.mjs ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[value_area_regime_snapshot] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Monthly Report — 7:00 PM ET first Sunday of month
