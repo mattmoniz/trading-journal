@@ -24,6 +24,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # docs/SCALEOUT_RUNNER_SPEC.md. Writes performance_audit signal_type='BREAKEVEN_TRAIL_TEST',
 # read live by acd.js at insert time (never hardcode the trail width).
 /usr/bin/node scripts/backtest_breakeven_trail.mjs
+# Day-type-conditioned breakeven-then-trail test for IB_BULLISH/IB_BEARISH (resolves
+# extend_be_trail_to_bad_rr_live_setups) — 0/5 day-type buckets survived as of 2026-08-03
+# (RESEARCH_CLAIM ib_daytype_be_trail_no_survivor), kept scheduled so it self-recalibrates
+# as real ACTIVE/SHADOW-origin IB trades accumulate, same convention as every other
+# calibration in this file — never a dead end just because the first run was negative.
+/usr/bin/node scripts/backtest_ib_daytype_breakeven_trail.mjs
 
 # --- Context + anticipation pipelines ---
 /usr/bin/node scripts/backtest_permission_slips.mjs
