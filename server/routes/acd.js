@@ -7517,11 +7517,46 @@ export default function createACDRouter(io) {
           const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
           runnerTrailWidth = parsed?.trail ?? null;
         }
+        // Re-fire cooldown (2026-08-03) — gates a NEW candidate to SHADOW if the SAME
+        // setup_type resolved within the last N minutes today. IB_BEARISH: 30min is
+        // backtest-validated (RESEARCH_CLAIM ib_bearish_refire_cooldown_beats_volz_gate,
+        // PROVISIONAL — rigor-clean, not yet independently replicated) — real finding:
+        // "re-firing repeatedly in one day is itself the problem" (EV degrades by
+        // within-day fire number), and a blind cooldown performs at least as well as a
+        // bespoke volume gate, so the simple fix is the right shape. VWAP_MAGNET family:
+        // precautionary, not independently backtested for its own EV — historical
+        // backfill directly showed the same unbounded-rapid-refire pattern on trend days
+        // (scripts/backtest_vwap_magnet.mjs: 2025-11-20, 107 of 1158 VWAP_MAGNET_LONG
+        // backfilled fires from repeated ~2-bar-apart stop-outs in one session), same
+        // shape of problem as the validated IB_BEARISH fix (OPEN_DECISION
+        // vwap_magnet_repeated_whipsaw_on_trend_days). IB_BULLISH deliberately excluded —
+        // its own cooldown backtest cell failed computeReplication (see the RESEARCH_CLAIM
+        // above), and it's globally SUPPRESSed today anyway. `resolved_at` (not
+        // resolution_bar_time) matches the cascadeBreaker precedent 130 lines above.
+        const REFIRE_COOLDOWN_MINUTES = {
+          IB_BEARISH: 30,
+          VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
+          GLOBEX_VWAP_MAGNET_LONG: 30, GLOBEX_VWAP_MAGNET_SHORT: 30,
+        };
+        let inRefireCooldown = false;
+        const _cooldownMin = REFIRE_COOLDOWN_MINUTES[active.type];
+        if (_cooldownMin) {
+          const cooldownQ = await query(`
+            SELECT 1 FROM active_setups
+            WHERE trade_date = $1 AND setup_type = $2
+              AND resolution IS NOT NULL
+              AND resolved_at > NOW() - ($3::int * INTERVAL '1 minute')
+            LIMIT 1
+          `, [todayET, active.type, _cooldownMin]).catch(() => ({ rows: [] }));
+          inRefireCooldown = cooldownQ.rows.length > 0;
+        }
         const forceShadow = isTrailMechanism
           || getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type)
-          || inNewEntryDeadZone;
+          || inNewEntryDeadZone
+          || inRefireCooldown;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+          : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const ins = await query(`
