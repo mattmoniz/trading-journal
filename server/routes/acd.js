@@ -4363,7 +4363,20 @@ export default function createACDRouter(io) {
             // _ibLS: read the level-fade stats cache directly here (liveStats is declared later in the level-fade block)
             const _ibLS = getCached(todayET, 'levelFadeStats');
             const ibTypeName = isBull ? 'IB_BULLISH' : 'IB_BEARISH';
-            const ibOpt = _ibLS?._opt?.[ibTypeName];
+            // Day-type-conditioned calibration (2026-08-03, OPEN_DECISION
+            // ib_bearish_optimal_stop_not_day_type_conditioned) — the execution-efficiency
+            // audit found IB_BEARISH's real realized EV sat well above its blended
+            // OPTIMAL_STOP row, and its own SETUP_STATUS day-type breakdown already shows
+            // a real BALANCE/TREND/TURBULENT split. scripts/backtest_ib_daytype_stop_target.mjs
+            // sweeps stop/target SEPARATELY per (setup_type, day_type) via the same real,
+            // imported sweepOptimalStopAndTarget(), writing rows keyed
+            // `{setup_type}_{day_type}` (matching backtest_day_type_alpha.js's convention)
+            // whenever that cell clears the usual MIN_N=20 floor. Try the day-type-specific
+            // row first; fall back to the blended `{setup_type}` row if the cell doesn't
+            // exist or is still thin — dtClass (~line 4284) is already required to fire
+            // this whole block, so no extra dependency introduced.
+            const ibDayTypeKey = dtClass ? `${ibTypeName}_${dtClass}` : null;
+            const ibOpt = (ibDayTypeKey && _ibLS?._opt?.[ibDayTypeKey]) || _ibLS?._opt?.[ibTypeName];
             const ibStopPts = ibOpt?.stop ?? 50; // sweep-optimal 50pt for both BULLISH and BEARISH
             const stop = isBull ? +(currentPrice - ibStopPts).toFixed(0) : +(currentPrice + ibStopPts).toFixed(0);
             // FIXED 2026-07-17 (user noticed an 8:1 R:R / 630pt target on a real STOP_HIT trade and

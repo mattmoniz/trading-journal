@@ -263,10 +263,22 @@ async function main() {
 
     const allOptTypes = new Set(osRows.rows.map(r => r.signal_name));
     const allSsTypes  = new Set(ssRows.rows.map(r => r.signal_name));
-    const orphaned = [...allOptTypes].filter(t => !allSsTypes.has(t));
+    // Day-type-conditioned OPTIMAL_STOP sub-keys (2026-08-03, scripts/backtest_ib_daytype_stop_target.mjs)
+    // are deliberately NOT real setup_types -- they're a `{setup_type}_{day_type}` calibration
+    // refinement (matching backtest_day_type_alpha.js's own naming convention), read by acd.js's
+    // ibOpt lookup as a day-type-first override before falling back to the blended row. SETUP_STATUS
+    // (SUPPRESS/ACTIVE/THIN_N) is scoped to real setup_types only -- these sub-keys legitimately have
+    // no counterpart there, as long as the BASE setup_type itself does.
+    const DAY_TYPES = ['BALANCE', 'TREND', 'TURBULENT'];
+    const orphaned = [...allOptTypes].filter(t => {
+      if (allSsTypes.has(t)) return false;
+      const dayTypeSuffix = DAY_TYPES.find(dt => t.endsWith(`_${dt}`));
+      if (dayTypeSuffix && allSsTypes.has(t.slice(0, -(dayTypeSuffix.length + 1)))) return false;
+      return true;
+    });
 
     if (orphaned.length === 0) {
-      ok(`all ${allOptTypes.size} OPTIMAL_STOP types have a SETUP_STATUS row`);
+      ok(`all ${allOptTypes.size} OPTIMAL_STOP types have a SETUP_STATUS row (or are a day-type sub-key of one)`);
     } else {
       for (const t of orphaned) {
         warn(`${t}: has OPTIMAL_STOP but no SETUP_STATUS — stale calibration data`);
@@ -322,6 +334,44 @@ async function main() {
     for (const t of tradesRes.rows) {
       (tradesByType[t.setup_type] ||= []).push(t);
     }
+
+    // Day-type-conditioned OPTIMAL_STOP sub-keys (2026-08-03, scripts/backtest_ib_daytype_stop_target.mjs)
+    // need their own population, keyed `{setup_type}_{day_type}`, joined the same way that
+    // script does -- otherwise check [5] silently skips them (tradesByType['IB_BEARISH_TURBULENT']
+    // is undefined since no active_setups row has that literal setup_type), and a future drift
+    // in that script's own ev_per_trade write path would go undetected, the exact bug class
+    // this check exists to catch (see the optStopQ p75_mae incident, 2026-08-03).
+    const dtStatsRes = await client.query(`
+      SELECT a.setup_type || '_' || d.day_type as signal_name,
+        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p25_mae,
+        ROUND(PERCENTILE_CONT(0.40) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p40_mae,
+        ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p50_mae,
+        ROUND(PERCENTILE_CONT(0.60) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p60_mae,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p75_mae,
+        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.mfe_points)::numeric, 1) AS p75_mfe
+      FROM active_setups a
+      JOIN acd_daily_log d ON d.trade_date = a.trade_date
+      WHERE a.mae_points IS NOT NULL AND a.mfe_points IS NOT NULL AND a.actual_pnl IS NOT NULL
+        AND a.mae_points <= 300 AND a.mfe_points <= 300
+        AND a.status = 'RESOLVED' AND a.replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+        AND d.day_type IS NOT NULL
+      GROUP BY a.setup_type, d.day_type
+      HAVING COUNT(*) >= 20
+    `);
+    for (const r of dtStatsRes.rows) statsByType[r.signal_name] = r;
+
+    const dtTradesRes = await client.query(`
+      SELECT a.setup_type || '_' || d.day_type as cell_key,
+        a.mae_points::float, a.mfe_points::float, a.actual_pnl::float,
+        a.fired_at, a.entry_zone_low::float, a.entry_zone_high::float
+      FROM active_setups a
+      JOIN acd_daily_log d ON d.trade_date = a.trade_date
+      WHERE a.mae_points IS NOT NULL AND a.mfe_points IS NOT NULL AND a.actual_pnl IS NOT NULL
+        AND a.mae_points <= 300 AND a.mfe_points <= 300
+        AND a.status = 'RESOLVED' AND a.replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+        AND d.day_type IS NOT NULL
+    `);
+    for (const t of dtTradesRes.rows) (tradesByType[t.cell_key] ||= []).push(t);
 
     // Bars + expanded (TIME_EXPIRED-inclusive) trade population for corrected-resim
     // re-derivation -- matches update_optimal_stops.mjs's own rawByTypeExpanded exactly
@@ -379,7 +429,15 @@ async function main() {
       const trades = tradesByType[row.signal_name];
       const stats = statsByType[row.signal_name];
       if (!trades || trades.length < 20 || !stats) continue; // same MIN_N floor as update_optimal_stops.mjs
-      const { stopDpp, targetDpp } = dppByType[row.signal_name] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
+      // Day-type-suffixed rows (e.g. 'IB_BEARISH_TURBULENT') have no dppByType entry of
+      // their own -- $/pt is an instrument/setup_type property, not day-type-dependent,
+      // and backtest_ib_daytype_stop_target.mjs deliberately reuses the BASE setup_type's
+      // dpp (not DEFAULT_DPP) for exactly this reason. Strip the day-type suffix before
+      // looking up, or this would re-derive against the wrong $/pt and false-FAIL every
+      // day-type row.
+      const _dtSuffix = ['BALANCE', 'TREND', 'TURBULENT'].find(dt => row.signal_name.endsWith(`_${dt}`));
+      const _dppKey = _dtSuffix ? row.signal_name.slice(0, -(_dtSuffix.length + 1)) : row.signal_name;
+      const { stopDpp, targetDpp } = dppByType[_dppKey] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
       const stored = { stop: parseFloat(row.optimal_stop), target: parseFloat(row.optimal_target), ev: parseFloat(row.ev_per_trade) };
 
       const maeCandidates = [
