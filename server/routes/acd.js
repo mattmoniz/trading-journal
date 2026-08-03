@@ -5714,9 +5714,32 @@ export default function createACDRouter(io) {
               `).catch(() => ({ rows: [] })),
               // Directional optimal stops derived from active_setups MAE backfill.
               // Keyed by full setup_type (e.g. 'OR_HIGH_FADE_SHORT'). Updated weekly.
+              // FIXED 2026-08-03 (OPEN_DECISION live_opt_stop_reads_percentiles_not_ev_sweep):
+              // this query read the raw p75_mae/p50_mfe percentile columns -- the ORIGINAL
+              // calibration method from this query's creation (2026-07-05, commit a04b2fd) --
+              // instead of the real EV-swept optimal_stop/optimal_target columns added 4 days
+              // later (2026-07-09, de3e407, "EV-sweep targets") when update_optimal_stops.mjs
+              // was upgraded. This query was never migrated, so the ENTIRE RTH level-fade
+              // engine (keepLevelsAll, IB_BEARISH/BULLISH, OPEN_DRIVE, VALUE_AREA_RESPONSIVE,
+              // BRACKET_BREAKOUT, FAILED_AUCTION, VWAP_MAGNET's RTH paths -- everything except
+              // detectGlobexSetup(), whose separate widerOptMap query ~line 938 was already
+              // correct) has been live-firing with raw MAE-p75/MFE-p50 stop/target instead of
+              // the properly EV-optimized, thin-tail-guardrailed sweep result for ~1 month.
+              // Confirmed live via test_invariants.mjs check [8] (real fired trades' stop
+              // distances matched p75_mae, not optimal_stop) and independently verified via
+              // Gemini before fixing: computeEvAtStopTarget() (imported, not reimplemented)
+              // against every setup_type's real resolved trades showed 77 improve / 39 degrade
+              // under the fix -- the degradations are NOT a reason to revert: they're mostly
+              // low-N setups where the bug was accidentally bypassing sweepOptimalStopAndTarget's
+              // thin-tail gate (a deliberate anti-overfitting guardrail) by feeding the live
+              // engine a wide, in-sample-lucky percentile stop instead of the properly
+              // constrained swept one. COALESCE fallback: 0 of 124 current OPTIMAL_STOP rows
+              // have a NULL optimal_stop/optimal_target as of this fix, but kept as a safety
+              // net for any future setup_type inserted before its first calibration run.
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
-                  p75_mae::float AS opt_stop, p50_mfe::float AS opt_target
+                  COALESCE(optimal_stop, p75_mae)::float AS opt_stop,
+                  COALESCE(optimal_target, p50_mfe)::float AS opt_target
                 FROM performance_audit
                 WHERE signal_type = 'OPTIMAL_STOP'
                 ORDER BY signal_name, run_date DESC
