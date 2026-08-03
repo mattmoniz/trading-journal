@@ -85,4 +85,16 @@ echo "=== Weekly backtest run: $(date) ==="
 # this back live (12h cache).
 /usr/bin/node scripts/calibrate_delta_confirmation.mjs
 
+# Regime-combination scanner (2026-08-02) -- the read-back half of the value-area regime
+# measurement layer (regime_pos_Nd/regime_label_Nd on active_setups, tagged at insert time
+# by acd.js, no gating). Groups real (origin_status IN ACTIVE/SHADOW) resolved touches by
+# setup_type x regime_label_Nd, requires real N>=20 per cell, runs computeRigor +
+# computeReplication before trusting anything. Every real cell tested gets a RESEARCH_CLAIM
+# row regardless of outcome; a cell that clears the FULL gate (rigor-clean, replicates,
+# positive EV) additionally gets flagDecision()'d into the OPEN_DECISION queue -- this is
+# the actual path "into live," a human call, not an auto-wire. Will find ~nothing for a
+# while (2 total real regime-tagged resolved rows as of 2026-08-02) -- that's expected, this
+# is infrastructure for the months-long accumulation, see docs/OPEN_THREADS.md.
+/usr/bin/node scripts/scan_regime_combinations.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
