@@ -81,6 +81,25 @@
  *    a single-target OPTIMAL_STOP row for a benign reason -- this check surfaces the
  *    discrepancy for human review rather than assuming it's always a bug, matching this
  *    codebase's own "not everything unstable is a bug" convention elsewhere.
+ *
+ * 9. Live setup_types aren't silently falling back to raw percentiles (added 2026-08-03)
+ *    Check 2 only verifies an OPTIMAL_STOP ROW exists for an ACTIVE type -- it doesn't verify
+ *    that row's optimal_stop/optimal_target columns are actually populated (non-NULL). A row
+ *    can exist with those columns NULL (the sweep never produced a value for it), and
+ *    acd.js's own COALESCE(optimal_stop, p75_mae)/COALESCE(optimal_target, p50_mfe) will
+ *    silently trade that live setup off the raw pre-sweep percentile instead -- an
+ *    uncalibrated fallback value, with nothing surfacing that the substitution happened.
+ *    Built from a Claude+DeepSeek critique/debate session (2026-08-03) investigating why a
+ *    system-wide "stop:target ratio" figure computed against the raw p75_mae/p50_mfe columns
+ *    looked drastically worse than the real EV-swept optimal_stop/optimal_target (median
+ *    ratio ~1.67 vs ~0.72 across the same rows) -- see RESEARCH_CLAIM
+ *    stop_target_ratio_9729_finding_was_measurement_artifact. This check WARNs on any live
+ *    (non-SUPPRESS/THIN_N) setup_type with a NULL optimal_stop/optimal_target, and -- since an
+ *    automated check can't stop a FUTURE ad-hoc analysis script from confusing the two column
+ *    pairs the way the original 2026-07-29 finding likely did -- always prints the aggregate
+ *    population's median stop:target ratio under BOTH methodologies side by side, so that
+ *    divergence is visible every single run rather than requiring a from-scratch investigation
+ *    to rediscover it.
  */
 
 import pg from 'pg';
@@ -663,6 +682,51 @@ async function main() {
           warn('no live setup_type had >=3 recent real trades with entry/stop/target populated -- check [8] had nothing to verify this run');
         }
       }
+    }
+
+    // ── 9. Live types aren't silently falling back to raw percentiles ──────────────
+    console.log('\n[9] Live setup_types use their own EV-swept stop/target, not the raw percentile fallback');
+    {
+      const { rows: fullOpt } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name,
+          optimal_stop::float AS stop, optimal_target::float AS target,
+          p75_mae::float AS raw_stop, p50_mfe::float AS raw_target
+        FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `);
+
+      const liveTypes = new Set(
+        ssRows.rows.filter(r => !['SUPPRESS', 'THIN_N'].includes(r.recommendation)).map(r => r.signal_name)
+      );
+
+      let nullCount = 0;
+      for (const row of fullOpt) {
+        if (!liveTypes.has(row.signal_name)) continue;
+        if (row.stop == null || row.target == null) {
+          nullCount++;
+          warn(`${row.signal_name}: live (non-SUPPRESS/THIN_N) but optimal_stop/optimal_target is NULL -- acd.js's COALESCE falls back to raw p75_mae/p50_mfe (${row.raw_stop}/${row.raw_target}), an uncalibrated pre-sweep value, with nothing surfacing the substitution.`);
+        }
+      }
+      if (nullCount === 0) ok('all live setup_types have a real (non-fallback) optimal_stop/optimal_target');
+
+      // Standing paper trail: report both methodologies' aggregate ratio side by side so a
+      // future session can't accidentally quote one as if it were the other (see the
+      // 2026-08-03 incident this check was built from in the header comment above).
+      const ratio = (a, b) => (a != null && b != null && b !== 0) ? a / b : null;
+      const median = (arr) => {
+        const s = arr.filter(x => x != null).sort((a, b) => a - b);
+        return s.length ? s[Math.floor(s.length / 2)] : null;
+      };
+      const fmt = (n) => n == null ? 'n/a' : n.toFixed(2);
+      const liveOpt = fullOpt.filter(r => liveTypes.has(r.signal_name));
+
+      const realAll = fullOpt.map(r => ratio(r.stop, r.target));
+      const rawAll  = fullOpt.map(r => ratio(r.raw_stop, r.raw_target));
+      const realLive = liveOpt.map(r => ratio(r.stop, r.target));
+      const rawLive  = liveOpt.map(r => ratio(r.raw_stop, r.raw_target));
+
+      ok(`population stop:target ratio (n=${fullOpt.length}) -- EV-sweep (real, load-bearing) median=${fmt(median(realAll))}, raw-percentile (NOT load-bearing, never quote as "the calibration") median=${fmt(median(rawAll))}`);
+      ok(`live-firing-only (n=${liveOpt.length}) -- EV-sweep median=${fmt(median(realLive))}, raw-percentile median=${fmt(median(rawLive))}`);
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────
