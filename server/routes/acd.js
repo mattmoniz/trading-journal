@@ -5433,7 +5433,8 @@ export default function createACDRouter(io) {
         // ── VWAP Magnet: σ-based trigger — fires when price ≥1.5σ from RTH VWAP ──
         // σ = rolling 30-session std of (session_close - RTH_VWAP) from session_analysis.
         // Consistent with trade-alerts dailyVwapSigma (same source, same threshold).
-        // T1 = 20pt (half off), runner = min(vwapDist*0.5, 100pt). Stop = 30pt.
+        // T1/stop are data-derived (OPTIMAL_STOP calibration, see below) since 2026-08-02 —
+        // runner = min(vwapDist*0.5, 100pt), fallback T1=20pt/stop=30pt if uncalibrated.
         if (earlyVwap) {
           const vwapStdData = await getTrailingVwapStd(todayET, 30);
           const vwapThreshold = vwapStdData.threshold;
@@ -5447,14 +5448,22 @@ export default function createACDRouter(io) {
             // stat" violation as the other setups fixed this session (docs/OPEN_THREADS.md).
             const _vwapMagType = isLong ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT';
             const _vwapMagStats = getCached(todayET, 'levelFadeStats')?._setupStats?.[_vwapMagType];
+            // FIXED 2026-08-02 (OPEN_DECISION vwap_magnet_hardcoded_stop_target_never_calibrated):
+            // stop/target were hardcoded 30/20, never reading OPTIMAL_STOP -- a live No-Static-
+            // Thresholds violation on this system's highest-volume setup family. Mirrors the exact
+            // getCached(...)?._opt?.[type] pattern already used everywhere else in this file
+            // (e.g. OPEN_DRIVE_LONG ~line 4436), same fallback numbers as before if uncalibrated.
+            const _vwapMagOpt = getCached(todayET, 'levelFadeStats')?._opt?.[_vwapMagType];
+            const _vwapStopPts = _vwapMagOpt?.stop ?? 30;
+            const _vwapT1Pts = _vwapMagOpt?.target ?? 20;
             vwapMagnetSetup = {
               type: _vwapMagType,
               direction: isLong ? 'LONG' : 'SHORT',
               entry: currentPrice,
-              stop: isLong ? currentPrice - 30 : currentPrice + 30,
-              target: isLong ? currentPrice + 20 : currentPrice - 20,
-              targetLabel: `T1: 20pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
-              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at 20pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
+              stop: isLong ? currentPrice - _vwapStopPts : currentPrice + _vwapStopPts,
+              target: isLong ? currentPrice + _vwapT1Pts : currentPrice - _vwapT1Pts,
+              targetLabel: `T1: ${_vwapT1Pts}pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
+              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at ${_vwapT1Pts}pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
               history: (_vwapMagStats && _vwapMagStats.n >= 20)
                 ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
                 : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -5493,23 +5502,33 @@ export default function createACDRouter(io) {
             if (vwap24Now != null) {
               const dist24 = currentPrice - vwap24Now;
               const std24 = await getTrailing24hrVwapStd(todayET, 30);
+              // FIXED 2026-08-02 (OPEN_DECISION vwap_magnet_hardcoded_stop_target_never_calibrated):
+              // both branches hardcoded stop/target (30/20, 90/40), never reading OPTIMAL_STOP --
+              // the RTH-fired copy of these setups, unlike detectGlobexSetup()'s real Globex-hours
+              // path (~line 1023/1053, widerOptMap[type]?.stop ?? fallback), which was already
+              // correctly wired. Same fallback numbers preserved if calibration is unavailable.
+              const _rthGlobexOpt = getCached(todayET, 'levelFadeStats')?._opt;
               if (Math.abs(dist24) >= std24.threshold) {
                 const isLong = dist24 < 0;
                 const type = isLong ? 'GLOBEX_VWAP_MAGNET_LONG' : 'GLOBEX_VWAP_MAGNET_SHORT';
+                const stopPts = _rthGlobexOpt?.[type]?.stop ?? 30;
+                const t1Pts = _rthGlobexOpt?.[type]?.target ?? 20;
                 globexVwapMagnetRTH = {
                   type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
-                  stop: isLong ? currentPrice - 30 : currentPrice + 30,
-                  target: isLong ? currentPrice + 20 : currentPrice - 20,
-                  targetLabel: 'T1: 20pt (24hr VWAP magnet, fired during RTH)',
+                  stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
+                  target: isLong ? currentPrice + t1Pts : currentPrice - t1Pts,
+                  targetLabel: `T1: ${t1Pts}pt (24hr VWAP magnet, fired during RTH)`,
                 };
               } else if (Math.abs(dist24) <= 15) {
                 const isLong = currentPrice < vwap24Now; // matches detectGlobexSetup's pocDir-style convention
                 const type = isLong ? 'GLOBEX_VWAP_FADE_LONG' : 'GLOBEX_VWAP_FADE_SHORT';
+                const stopPts = _rthGlobexOpt?.[type]?.stop ?? 90;
+                const t1Pts = _rthGlobexOpt?.[type]?.target ?? 40;
                 globexVwapFadeRTH = {
                   type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
-                  stop: isLong ? currentPrice - 90 : currentPrice + 90,
-                  target: isLong ? currentPrice + 40 : currentPrice - 40,
-                  targetLabel: 'T1: 40pt (24hr VWAP fade, fired during RTH)',
+                  stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
+                  target: isLong ? currentPrice + t1Pts : currentPrice - t1Pts,
+                  targetLabel: `T1: ${t1Pts}pt (24hr VWAP fade, fired during RTH)`,
                 };
               }
             }

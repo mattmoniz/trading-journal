@@ -23,7 +23,10 @@
 // options.pnlFn: (event) => number. Sign of this value is what the stability check tracks —
 // pass real dollar/point PnL where there is one; for a pure hit-rate claim with no $ concept
 // (e.g. TOD_PATTERN's "closes up X% of days"), pass a +1/-1 hit/miss proxy instead.
-export function computeRigor(events, { dateField = 'date', pnlFn } = {}) {
+// options.filterFn: optional (event) => boolean. If provided, only events passing the filter
+// are evaluated (e.g. for regime-conditioned chronological stability).
+export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } = {}) {
+  const events = filterFn ? rawEvents.filter(filterFn) : rawEvents;
   if (!events.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null, clustered: false, clean: null };
 
   const perDay = new Map();
