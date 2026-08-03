@@ -63,6 +63,19 @@ async function run() {
   // codebase's own N>=20 hard floor with synthetic data for the vast majority of the
   // live roster (all 73 non-suppressed setup_types had real_n<20, most had real_n=0).
   // See CLAUDE.md / OPEN_DECISION setup_status_calibration_ignores_origin_status_backfill.
+  //
+  // TIME_EXPIRED added to every resolution filter in this file 2026-08-03 (all 6 sites --
+  // this query, recentQ, dtConditionalQ, perTradeQ, dowQ, dowTradesQ): this exclusion
+  // dates to the file's original commit, correct at the time (TIME_EXPIRED trades had
+  // NULL actual_pnl then) but stale since the 2026-07-20 mark-to-market fix gave them real
+  // P&L -- a sibling script (targetCalibrationService.js) was fixed for the identical
+  // reason the very next day, this one never was. Confirmed live: 1,384 TIME_EXPIRED
+  // trades system-wide, 1,363 with valid actual_pnl (avg +$9.18), ~7% of all resolved
+  // trades, silently missing from every setup_type's N/real_n/EV. Win-rate formula
+  // deliberately left unchanged (stays strict resolution='TARGET_HIT', not actual_pnl>0)
+  // to match the existing convention in analyze_execution_efficiency.mjs -- WR answers
+  // "did this resolve decisively in our favor," EV/N carry the P&L question. Gemini
+  // design-critiqued before this change (scratch/gemini_review_time_expired_setup_status_fix.md).
   const allTimeQ = await query(`
     SELECT
       setup_type,
@@ -72,7 +85,7 @@ async function run() {
       AVG(actual_pnl)::float AS ev,
       SUM(actual_pnl)::float AS total_pnl
     FROM active_setups
-    WHERE resolution IN ('TARGET_HIT','STOP_HIT')
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
     GROUP BY setup_type
     ORDER BY setup_type
@@ -92,7 +105,7 @@ async function run() {
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev
     FROM active_setups
-    WHERE resolution IN ('TARGET_HIT','STOP_HIT')
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
       AND trade_date >= CURRENT_DATE - 90
     GROUP BY setup_type
@@ -122,7 +135,7 @@ async function run() {
     FROM active_setups s
     JOIN acd_daily_log dl ON dl.trade_date = s.trade_date
     WHERE s.setup_type = ANY($1)
-      AND s.resolution IN ('TARGET_HIT','STOP_HIT') AND s.actual_pnl IS NOT NULL
+      AND s.resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND s.actual_pnl IS NOT NULL
       AND dl.day_type IS NOT NULL
     GROUP BY s.setup_type, dl.day_type
   `, [[...DAY_TYPE_CONDITIONAL]]);
@@ -140,7 +153,7 @@ async function run() {
   const perTradeQ = await query(`
     SELECT setup_type, trade_date::text AS trade_date, actual_pnl::float AS pnl, fired_at
     FROM active_setups
-    WHERE resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
     ORDER BY setup_type, fired_at ASC
   `);
   const tradesByType = new Map();
@@ -367,7 +380,7 @@ async function run() {
       AVG(actual_pnl)::float AS ev,
       SUM(actual_pnl)::float AS total_pnl
     FROM active_setups
-    WHERE resolution IN ('TARGET_HIT','STOP_HIT')
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
     GROUP BY 1, 2
     HAVING COUNT(*) >= ${SUPPRESS_MIN_N}
@@ -380,7 +393,7 @@ async function run() {
     SELECT setup_type, EXTRACT(DOW FROM trade_date)::int AS dow,
            trade_date::text AS trade_date, actual_pnl::float AS pnl
     FROM active_setups
-    WHERE resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
     ORDER BY setup_type, dow, trade_date ASC
   `);
   const tradesByTypeDow = new Map();
