@@ -18,6 +18,12 @@ echo "=== Daily calibration: $(date) ==="
 /usr/bin/node scripts/backtest_setup_status.mjs
 /usr/bin/node scripts/derive_day_types.js
 
+# Day-type-conditioned IB_BEARISH/IB_BULLISH stop/target (2026-08-03,
+# OPEN_DECISION ib_bearish_optimal_stop_not_day_type_conditioned) -- run after
+# derive_day_types.js so today's day_type classification is available for the
+# (setup_type, day_type) population join.
+/usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
+
 # Standing invariant check (2026-07-17) -- previously only ever run manually ("run after
 # any change touching acd.js..."), which meant its checks (including [6]'s
 # UNCALIBRATED_SHADOW_TYPES staleness re-verification) only caught a real drift whenever
