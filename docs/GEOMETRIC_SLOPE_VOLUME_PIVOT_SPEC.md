@@ -1,0 +1,34 @@
+# Geometric-slope + volume-dynamics pivot detection — idea capture, not yet built
+
+**Status: idea saved 2026-08-03, user wants to try this "tomorrow." Not built, not backtested, not critiqued yet as of this commit — DeepSeek critique dispatched same session, check `scratch/deepseek_response.md` for the result before starting any build.**
+
+## Why this is being tracked separately
+
+User context, stated directly: standing risk-management priority (`prioritize_risk_management_over_signal_research`) has produced 8+ negative/inconclusive tests in the last few days (profit-lock, grind detector, SPC throttle, weakness-confirmation delay, day-type/confluence gates, the IB breakeven-trail extension). User's own words: "All our ideas sre gailing [sic]. We need a non mean reversion strategy with edge." This is a real pivot in direction — everything currently live in this codebase is a fade/mean-reversion setup (118/122 setup_types per `user-trading-style-breakout-preference` memory) — not a request to keep iterating on risk-management wrappers around the existing fade roster.
+
+## The idea, as given (verbatim from the user, source: a found-online-style writeup, not user-original)
+
+Feed a rolling-regression / volume-dynamics feature vector into a classifier (KNN or XGBoost) to detect intraday pivot points in real time, instead of relying on lagging moving averages.
+
+**1. Geometric slopes (speed/acceleration of price, not raw price):**
+- Rolling OLS linear regression on closing price over short windows (3, 5, 10 bars) on 1-min or 5-min bars → slope `m` from `y = mx + b`.
+- Pivot signature: slope rapidly approaches zero from a high absolute value, then sharply reverses sign.
+- Velocity = slope(t) − slope(t−1). Acceleration = velocity(t) − velocity(t−1). Claim: acceleration spikes just before a real pivot as buying/selling pressure exhausts.
+
+**2. Volume signatures:**
+- RVOL: current bar volume ÷ rolling median volume for that exact time-of-day over the past 20 trading days (normalizes for the intraday U-shape). Claim: RVOL > 3.0 combined with a narrowing price spread = climax/absorption, a candidate pivot.
+- Volume delta (aggressive buys − aggressive sells) accumulated over a rolling 3-bar window, if tick/order-flow data is available. Claim: price makes a new high but rolling delta drops = divergence, signals an unsupported move / imminent top.
+
+**3. Proposed feature vector per bar**: `[3-bar slope, 5-bar slope, slope acceleration, current RVOL, 3-bar volume delta]`, fed to KNN (nearest-neighbor in feature space) or XGBoost (threshold splits) trained to output pivot / no-pivot.
+
+## What's already known in this codebase that bears on this idea — read before building
+
+- **This would be a genuine ML-training infrastructure paradigm shift.** This codebase is 100% rule-based/statistical (rolling-distribution thresholds, EV backtests, `computeRigor`/`computeReplication`) — zero ML training infra exists (no Python/PyTorch/scikit-learn, no labeled-data pipeline, no model-serving path). Flagged as a real, separate decision the last time ML-training articles were reviewed (2026-08-03, same day, see `docs/OPEN_THREADS.md`'s "Two 'found on the internet' ML-training articles were also reviewed" entry) — deliberately not started then either.
+- **The volume/delta-divergence piece overlaps already-tested, mostly-negative prior work**: `STACK_VOL_BREAK_LIVE` (real but only PROVISIONAL, N still thin), `pilot_volume_climax_absorption.mjs` (pooled-negative), `confluence_exhaustion_interaction.mjs` (thin/unstable), and specifically `intrabar_cvd_divergence_no_edge_confounded` — a delta-divergence-at-a-new-extreme test that already ran and found no real marginal signal once controlled. Any rebuild of the delta-divergence piece needs to explain why it would come out differently this time, not just re-run the same shape of test.
+- **Pre-entry inflection/exhaustion detection was explicitly tabled** (`OPEN_DECISION table_preentry_inflection_detection_pending_orderflow_data`, LOW) after a Gemini/Claude debate concluded this system's current 1-minute-aggregated data structurally cannot resolve true order-flow absorption/exhaustion — every reasonable formulation tried (this includes an RVOL/climax-shaped test) came back negative, and the conclusion was "real data-resolution ceiling, not a string of bad ideas." **This new idea should be read as a candidate for un-tabling that decision, not as untested territory** — it needs to either bring something genuinely new past that ceiling (finer time resolution, real order-book depth) or have a good answer for why the rolling-slope framing escapes the same ceiling the RVOL/delta framing didn't.
+- **The rolling-slope/acceleration piece is comparatively fresh** — this specific formulation (OLS regression slope + 2nd derivative as a pivot signature, independent of volume) has not been directly tested in this codebase before, unlike the volume half.
+- **This is explicitly meant to be a *reversal*/pivot detector.** Worth naming plainly: detecting "price is about to turn" is conceptually still adjacent to mean-reversion (predicting where a move ends), not a trend-following/breakout entry in the sense the user's own stated trading preference (`user-trading-style-breakout-preference` memory: "user personally prefers trading breakouts, not fades") points toward. Worth raising directly with the user before building — is the goal "a better *reversal* detector" (still exit/entry-timing-adjacent to the existing fade family) or "a genuine trend-continuation/breakout entry" (a structurally different kind of setup this codebase doesn't have a live example of, aside from the already-negative `structural_breakout_phase0_retest_test`)?
+
+## Next step
+
+DeepSeek critique dispatched 2026-08-03 (`scratch/claude_request_deepseek.md` → `scratch/deepseek_response.md`) — read that before writing any code. Do not build the KNN/XGBoost pipeline or any rolling-slope feature computation until the critique is read and reconciled against the three points above (ML infra gap, volume-piece overlap, tabled-decision overlap).

@@ -1,5 +1,5 @@
 import { query } from '../server/db.js';
-import { inferDirection } from '../server/config/setupTypes.js';
+import { inferDirection, CONDITIONAL_VARIANTS } from '../server/config/setupTypes.js';
 import fs from 'fs';
 import {
   testTrailForPopulation, MIN_N,
@@ -133,18 +133,36 @@ async function main() {
     }
   }
 
-  // Scoped to blended (non-day-type-suffixed) signal_names only — never touches the
-  // IB_*_{BALANCE,TREND,TURBULENT} rows backtest_ib_daytype_breakeven_trail.mjs owns,
-  // matching the conditional_variant_setup_status_daily_overwrite_race lesson (each
-  // script's cleanup must stay scoped to the population it actually tested this run,
-  // never a blanket "not in my survivor list" across the whole signal_type).
+  // Never delete a row that a LIVE CONDITIONAL_VARIANTS entry currently reads
+  // (trailVariant.trailSignalName in acd.js's insert-time lookup), even if it doesn't
+  // survive this run. Found 2026-08-03 (Gemini+DeepSeek blind cross-check while
+  // extending this mechanism to IB): the original unconditional DELETE wiped 5 of the
+  // 6 originally-wired TRAIL variants' rows within ~1-2 weekly runs (survivor sets are
+  // genuinely volatile run to run, especially right after an OPTIMAL_STOP calibration
+  // change like today's optStopQ fix), and the live consumer (acd.js line ~7580) treats
+  // a missing row as `runnerTrailWidth = null`, which resolveSetupsByPrice() then
+  // silently resolves as an ordinary fixed-target trade — no warning, no distinction
+  // from the mechanism actually working. Confirmed live: all 33 real fires across all 6
+  // wired _TRAIL setup_types had runner_trail_width IS NULL, i.e. the mechanism has
+  // never once actually engaged since going live 2026-07-21 (SHADOW-only, so zero
+  // capital risk — but a real, previously-undetected dead mechanism nonetheless).
+  // A live-wired trail calibration going one noisy week stale is a much smaller problem
+  // than it vanishing outright — trail widths shift gradually, not sign-flip, so
+  // graceful degration to a recent-but-not-today value is clearly better than silently
+  // reverting to "no trail at all." Non-wired exploratory candidates still get pruned
+  // normally the moment they stop surviving. RESEARCH_CLAIM
+  // breakeven_trail_calibration_wiped_by_unscoped_cleanup has the full incident.
+  const wiredTrailSignalNames = Object.values(CONDITIONAL_VARIANTS)
+    .map(v => v.trailSignalName)
+    .filter(Boolean);
   const staleRes = await query(`
     DELETE FROM performance_audit
     WHERE signal_type='BREAKEVEN_TRAIL_TEST'
       AND signal_name !~ '_(BALANCE|TREND|TURBULENT)$'
       AND NOT (signal_name = ANY($1))
+      AND NOT (signal_name = ANY($2))
     RETURNING signal_name
-  `, [allSurvivorNames]);
+  `, [allSurvivorNames, wiredTrailSignalNames]);
   if (staleRes.rows.length) console.log(`Cleaned up ${staleRes.rows.length} stale row(s) no longer surviving: ${staleRes.rows.map(r => r.signal_name).join(', ')}`);
 }
 
