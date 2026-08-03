@@ -6197,16 +6197,45 @@ export default function createACDRouter(io) {
             // windows (the 5-bar touch dedup already used elsewhere, SIGMA_CONTINUATION_LIVE's
             // 20-minute recency window).
             const clusterTypes = nearLevels.map(cl => resolveSetupType(`${cl.name}_${dir}`, cl));
+            // Re-arm on resolution, not just on a flat clock (fixed 2026-08-03, DeepSeek
+            // design debate + confirmed live via the CAM_S1/PW_VAH miss on 2026-08-03 09:30-09:45
+            // ET -- see OPEN_DECISION cluster_dedup_blocks_reentry_after_first_fade_stopped).
+            // The 15-minute window alone used to block EVERY other level in a stacked cluster
+            // for the full 15 minutes even after the anchor trade had already been decided
+            // (STOP_HIT/TARGET_HIT/EXPIRED) -- so a fast, wrong pick at the top of a cluster
+            // could silently lock out the level the market actually respected a few minutes
+            // later. Adding `status IN ('ACTIVE','SHADOW')` means only a STILL-OPEN anchor
+            // blocks the cluster; once it resolves, the cluster is immediately re-eligible for
+            // the rest of the 15-minute window.
             const clusterAnchorRes = await query(`
               SELECT id, setup_type FROM active_setups
               WHERE trade_date = $1 AND setup_type = ANY($2)
                 AND origin_status IN ('ACTIVE','SHADOW')
+                AND status IN ('ACTIVE','SHADOW')
                 AND fired_at >= NOW() - INTERVAL '15 minutes'
               ORDER BY fired_at ASC LIMIT 1
             `, [todayET, clusterTypes]).catch(() => ({ rows: [] }));
             const clusterAlreadyFired = clusterAnchorRes.rows[0] || null;
+            // Same-type rapid-refire guard (fixed 2026-08-03, same day as the resolution-based
+            // re-arm above -- flagged independently by both Gemini and DeepSeek reviewing that
+            // change): re-arming the CLUSTER on resolution has a side effect the flat 15-minute
+            // clock used to prevent as an accident of its own bluntness -- the exact SAME
+            // setup_type could now refire on itself seconds after being STOP_HIT, if price wicks
+            // through and snaps back within the same 15pt zone (a real live gap, not
+            // hypothetical -- this is the identical whipsaw shape already fixed once for
+            // IB_BEARISH/VWAP_MAGNET_*/GLOBEX_VWAP_MAGNET_* via REFIRE_COOLDOWN_MINUTES below,
+            // which does NOT cover ordinary level fades). This restores the old same-type
+            // protection (unconditional 15-minute block on THIS exact type, resolved or not)
+            // while keeping the new behavior for every OTHER type in the same cluster.
+            const sameTypeRecentRes = await query(`
+              SELECT 1 FROM active_setups
+              WHERE trade_date = $1 AND setup_type = $2
+                AND fired_at >= NOW() - INTERVAL '15 minutes'
+              LIMIT 1
+            `, [todayET, type]).catch(() => ({ rows: [] }));
+            const sameTypeRecentlyFired = sameTypeRecentRes.rows.length > 0;
 
-            if (!clusterAlreadyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
+            if (!clusterAlreadyFired && !sameTypeRecentlyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
@@ -6527,6 +6556,7 @@ export default function createACDRouter(io) {
               // same STOP/TARGET fallback), so these rows resolve normally and their outcome
               // actually answers "was this suppression decision correct" in dollar terms.
               const suppressReason = clusterAlreadyFired ? 'CLUSTER_ALREADY_FIRED'
+                : sameTypeRecentlyFired ? 'SAME_TYPE_REFIRE_COOLDOWN'
                 : liveStats._suppressedSetups?.has(type) ? 'SUPPRESSED_FADE'
                 : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
