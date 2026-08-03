@@ -28,6 +28,7 @@ import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
+import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -4331,14 +4332,9 @@ export default function createACDRouter(io) {
       // level definition) lets the existing checks below actually run.
       let ibSetup = null;
       if (etMin >= 630 && ibBars.length >= 3) {
-        const ibHigh = Math.max(...ibBars.map(b => b.high));
-        const ibLow  = Math.min(...ibBars.map(b => b.low));
-        const ibMid  = (ibHigh + ibLow) / 2;
-        const ibClose = ibBars[ibBars.length - 1].close;
-        const totalAsk = ibBars.reduce((s, b) => s + b.ask_vol, 0);
-        const totalBid = ibBars.reduce((s, b) => s + b.bid_vol, 0);
-        const ibBullish = ibClose > ibMid && totalAsk > totalBid;
-        const ibBearish = ibClose < ibMid && totalBid > totalAsk;
+        // Shared with scripts/backtest_trend_gate_suppression.mjs — see caseEngine.js's
+        // computeIbBullBear() header for why this was extracted 2026-08-03.
+        const { ibMid, ibClose, totalAsk, totalBid, ibBullish, ibBearish } = computeIbBullBear(ibBars);
         if ((ibBullish || ibBearish) && currentPrice) {
           const isBull = ibBullish;
           const priceSide = isBull ? currentPrice > ibMid : currentPrice < ibMid;

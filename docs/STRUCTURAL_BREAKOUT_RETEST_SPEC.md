@@ -1,9 +1,27 @@
 # Structural Breakout / Persistent-Level Retest — Research Spec
 
-**Status as of 2026-08-03: design complete, build not started.** Two Gemini build
+**Status as of 2026-08-03: RESOLVED — Phase 0 negative, thread closed.** Two Gemini build
 attempts failed (one fabricated results — see incident log below — one honestly ran out
-of time). Per the standing "2 corrections then Claude takes over" rule, building this
-directly is the next step, not a third Gemini dispatch.
+of time). Per the standing "2 corrections then Claude takes over" rule, Claude built
+`scripts/backtest_structural_breakout_phase0.mjs` directly, same day, later session —
+reviewed pre-execution by DeepSeek and Gemini in parallel (blind, independent passes),
+each catching a different real CRITICAL bug the other missed, plus 3 more real issues,
+all fixed before the actual run. Result: **0/8 gated (regime,scale) cells passed** the
+conjunctive success criteria (Arm1 must beat Arm0 AND Arm2 AND Arm3, N≥20, rigor-clean).
+Per the spec's own decision rule (§3, "If Phase 0 is negative: close the thread, the
+persistence engine was never justified"): the full persistence-table engine (Phase
+1/2/3) is not being built. `RESEARCH_CLAIM structural_breakout_phase0_retest_test` has
+the full per-cell numbers. The companion `dtClass`/trend-gate thread (§5) also resolved
+negative the same session — see `docs/OPEN_THREADS.md`'s 2026-08-03 entry for both.
+
+**This is not the final word, though** — a real, DeepSeek-reviewed follow-up ("Phase
+0a," a cheap time-of-day-windowed diagnostic on top of Phase 0's already-computed trade
+data) was brainstormed the same session and is plan-ready but NOT built. See
+`docs/OPEN_THREADS.md`'s separate 2026-08-03 "Time-windowed follow-up" entry,
+`scratch/deepseek_phase0_time_windowed_brainstorm.md`, and `OPEN_DECISION
+phase0a_time_windowed_diagnostic_not_built` before assuming this whole research
+direction is fully closed — the POOLED test is closed; the time-localized question is
+still open.
 
 This doc exists so the full arc of this research thread survives a context clear — read
 this before re-deriving any of it from scratch.

@@ -141,6 +141,26 @@ export function classifyOpeningType(bars, thresholds = null) {
   return 'OPEN_BALANCED';
 }
 
+// IB_BULLISH/IB_BEARISH direction call — the exact formula acd.js's ibSetup block
+// (~line 4333-4341) uses inline. Extracted 2026-08-03 so scripts/backtest_trend_gate_
+// suppression.mjs can import the real logic instead of reimplementing it (this codebase's
+// "share modules when the same logic would otherwise be reimplemented" rule). NOTE: despite
+// the "IB" name, `ibBars` here is the 30-min Opening Range window (9:30-10:00 ET), not a
+// 60-min Initial Balance — matches acd.js's own comment at ~line 4321 ("ibBars itself is
+// still the 30-min window, spec — only the fire gate moved to 630").
+export function computeIbBullBear(ibBars) {
+  if (!ibBars || ibBars.length < 3) return null;
+  const ibHigh = Math.max(...ibBars.map(b => b.high));
+  const ibLow  = Math.min(...ibBars.map(b => b.low));
+  const ibMid  = (ibHigh + ibLow) / 2;
+  const ibClose  = ibBars[ibBars.length - 1].close;
+  const totalAsk = ibBars.reduce((s, b) => s + b.ask_vol, 0);
+  const totalBid = ibBars.reduce((s, b) => s + b.bid_vol, 0);
+  const ibBullish = ibClose > ibMid && totalAsk > totalBid;
+  const ibBearish = ibClose < ibMid && totalBid > totalAsk;
+  return { ibHigh, ibLow, ibMid, ibClose, totalAsk, totalBid, ibBullish, ibBearish };
+}
+
 // Rolling opening-bar thresholds — cached per trade date.
 // Loaded once per session from last-30-sessions first-5-bar data; cheap query (150 rows max).
 let _openingThresholdsCache = null;
