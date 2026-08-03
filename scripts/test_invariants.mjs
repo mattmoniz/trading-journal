@@ -61,11 +61,32 @@
  *    30 days has no entry/stop/target at all (structurally unresolvable), (b) WARNs on any
  *    resolved-but-actual_pnl-null row not already explained by a known, deliberately-deferred
  *    gap (SESSION_CLOSED, PRE_ENTRY invalidation).
+ *
+ * 8. Live-fired stop/target actually matches current calibration (added 2026-08-02)
+ *    Checks 2 and 5 above both stop at "does an OPTIMAL_STOP row exist / is it internally
+ *    self-consistent" -- neither one verifies the LIVE FIRING CODE actually reads that row.
+ *    Found this session, only after a direct user question: VWAP_MAGNET_LONG/SHORT and the
+ *    RTH-hours half of GLOBEX_VWAP_MAGNET_LONG/SHORT (server/routes/acd.js's
+ *    vwapMagnetSetup/globexVwapMagnetRTH blocks) use a hand-typed 30pt stop / 20pt target
+ *    that has NEVER read OPTIMAL_STOP at all, on this system's single highest-volume live
+ *    setup family (~230 fires/week) -- a live, current "no static thresholds" violation that
+ *    every existing check passed cleanly, because they all check for the calibration row's
+ *    EXISTENCE/self-consistency, not its CONSUMPTION. This check instead pulls each live
+ *    (non-SUPPRESS/THIN_N) setup_type's most recent real (ACTIVE/SHADOW-origin) fired
+ *    trades, computes the ACTUAL stop/target distance used (|stop_level - entry|,
+ *    |t1_level - entry|), and WARNs if the current OPTIMAL_STOP stop/target never appears
+ *    (within a small tolerance) among them -- the exact signature of a setup whose live code
+ *    path bypasses calibration entirely. WARN, not FAIL: a real setup can legitimately run a
+ *    scale-out/multi-leg exit where t1_level reflects only the first leg, which won't match
+ *    a single-target OPTIMAL_STOP row for a benign reason -- this check surfaces the
+ *    discrepancy for human review rather than assuming it's always a bug, matching this
+ *    codebase's own "not everything unstable is a bug" convention elsewhere.
  */
 
 import pg from 'pg';
+import fs, { existsSync } from 'fs';
+import path from 'path';
 import { config } from 'dotenv';
-import { existsSync } from 'fs';
 import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget } from '../server/services/targetCalibrationService.js';
@@ -80,11 +101,26 @@ const pool = new pg.Pool({
   password: process.env.DB_PASSWORD || 'trader123',
 });
 
+// This script has run daily since 2026-07-17 (run_daily_calibration.sh, 8:20pm ET Mon-Fri)
+// but its own comment there said "non-zero exit is non-gating... read the output" -- nothing
+// ever did. A new FAIL/WARN could sit silently in scratch/daily_calibration.log forever,
+// the exact "checked but never surfaced" gap this whole script exists to prevent for OTHER
+// parts of the system. Fixed 2026-08-02 (direct user request: "it should run daily" / "or
+// live... i dunno" -- daily is the right cadence here, nothing this script checks changes
+// faster than once/day since calibration itself only updates nightly) by self-alerting on
+// every run, matching audit_setup_latency.mjs's established convention -- same file, same format.
+const ALERTS_FILE = path.resolve('scratch/gemini_alerts.txt');
+function nowET() {
+  return new Date().toLocaleString('en-CA', { timeZone: 'America/New_York' }).replace(',', '');
+}
+
 let failures = 0;
 let warnings = 0;
+const failMsgs = [];
+const warnMsgs = [];
 
-const fail  = (msg) => { console.log(`  FAIL  ${msg}`); failures++; };
-const warn  = (msg) => { console.log(`  WARN  ${msg}`); warnings++; };
+const fail  = (msg) => { console.log(`  FAIL  ${msg}`); failures++; failMsgs.push(msg); };
+const warn  = (msg) => { console.log(`  WARN  ${msg}`); warnings++; warnMsgs.push(msg); };
 const ok    = (msg) => { console.log(`  ok    ${msg}`); };
 
 async function main() {
@@ -498,6 +534,79 @@ async function main() {
       }
     }
 
+    // ── 8. Live-fired stop/target actually matches current calibration ─────────────
+    console.log('\n[8] Live-fired stop/target matches current OPTIMAL_STOP calibration');
+    {
+      const TOLERANCE_PT = 2; // small rounding slack, not a "static threshold" for sizing/entries -- just a float-compare tolerance
+      const RECENT_N = 10;
+
+      const { rows: liveTypes } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, recommendation
+        FROM performance_audit WHERE signal_type = 'SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const liveRows = liveTypes.filter(r => !['SUPPRESS', 'THIN_N'].includes(r.recommendation));
+      const liveNames = liveRows.map(r => r.signal_name);
+      const recByName = Object.fromEntries(liveRows.map(r => [r.signal_name, r.recommendation]));
+
+      if (liveNames.length === 0) {
+        warn('no live (non-SUPPRESS/THIN_N) setup_types found -- check [8] has nothing to verify this run');
+      } else {
+        const { rows: optRows } = await client.query(`
+          SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
+          FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP' AND signal_name = ANY($1)
+          ORDER BY signal_name, run_date DESC
+        `, [liveNames]);
+        const optByName = Object.fromEntries(optRows.map(r => [r.signal_name, r]));
+
+        let checkedCount = 0, mismatchCount = 0;
+        for (const type of liveNames) {
+          const opt = optByName[type];
+          if (!opt || opt.stop == null || opt.target == null) continue; // check [2] already covers missing OPTIMAL_STOP rows
+
+          const { rows: recent } = await client.query(`
+            SELECT ABS(stop_level::float - COALESCE(entry_zone_high::float, entry_zone_low::float)) as stop_dist,
+              ABS(t1_level::float - COALESCE(entry_zone_high::float, entry_zone_low::float)) as target_dist
+            FROM active_setups
+            WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+              AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL AND t1_level IS NOT NULL
+            ORDER BY fired_at DESC LIMIT $2
+          `, [type, RECENT_N]);
+          if (recent.length < 3) continue; // too thin to draw a conclusion either way
+
+          checkedCount++;
+          // Require BOTH stop AND target to match -- "either one matches" is too lenient and
+          // produces a real false negative: VWAP_MAGNET_LONG's hardcoded 30pt stop happened to
+          // coincidentally equal its current calibrated stop (both 30), masking that its target
+          // (hardcoded 20 vs calibrated 30) never matches at all. A genuinely-wired setup should
+          // track BOTH legs of its own calibration, not just one by chance.
+          const stopMatches = recent.some(r => Math.abs(r.stop_dist - opt.stop) <= TOLERANCE_PT);
+          const targetMatches = recent.some(r => Math.abs(r.target_dist - opt.target) <= TOLERANCE_PT);
+          if (!stopMatches || !targetMatches) {
+            mismatchCount++;
+            const sampleStops = [...new Set(recent.map(r => r.stop_dist))].slice(0, 3).join(',');
+            const sampleTargets = [...new Set(recent.map(r => r.target_dist))].slice(0, 3).join(',');
+            const mismatchedLeg = !stopMatches && !targetMatches ? 'stop AND target' : !stopMatches ? 'stop' : 'target';
+            // DAY_TYPE_MANAGED types (IB_BULLISH/IB_BEARISH) deliberately use a per-day-type
+            // bucket mechanism instead of a single blended OPTIMAL_STOP row -- a mismatch here
+            // is expected, not evidence of a hardcode, so the message says so instead of
+            // asserting a bug that isn't there. Still surfaced (not skipped) since the day-type
+            // bucket wiring itself has never had an equivalent check -- a future real gap there
+            // would otherwise go just as unnoticed as this whole check class did before today.
+            const caveat = recByName[type] === 'DAY_TYPE_MANAGED'
+              ? ` NOTE: this type is DAY_TYPE_MANAGED -- it may legitimately read a per-day-type calibration bucket instead of this single blended OPTIMAL_STOP row, so this mismatch is NOT necessarily a hardcode bug. Verify against the day-type-specific stop/target logic before concluding anything.`
+              : ` This is the signature of a live code path that never reads OPTIMAL_STOP for its ${mismatchedLeg} (a hardcoded value, or a different field entirely) -- verify the actual INSERT/setup-construction code for this type before assuming the calibration is simply stale.`;
+            warn(`${type}: current calibration says stop=${opt.stop}/target=${opt.target}, but the ${mismatchedLeg} never matches across the last ${recent.length} real fired trades -- actual stop distances seen: ${sampleStops}, target distances: ${sampleTargets}.${caveat}`);
+          }
+        }
+        if (checkedCount > 0 && mismatchCount === 0) {
+          ok(`all ${checkedCount} live setup_types with enough recent real trades show their calibrated stop/target actually in use`);
+        } else if (checkedCount === 0) {
+          warn('no live setup_type had >=3 recent real trades with entry/stop/target populated -- check [8] had nothing to verify this run');
+        }
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {
@@ -506,6 +615,18 @@ async function main() {
       if (failures > 0) console.log(`${failures} FAILURE(S) — fix before deploying`);
       if (warnings > 0) console.log(`${warnings} WARNING(S) — review`);
       console.log('');
+    }
+
+    // Self-alert on every run (cron or manual) so a new FAIL/WARN can't sit silently in a
+    // log file nobody reads -- see the ALERTS_FILE comment near the top for why this was added.
+    if (failures > 0 || warnings > 0) {
+      const ts = nowET();
+      const lines = [
+        ...failMsgs.map(m => `[${ts} ET] [INVARIANT_FAIL] ${m}\n`),
+        ...warnMsgs.map(m => `[${ts} ET] [INVARIANT_WARN] ${m}\n`),
+      ];
+      fs.appendFileSync(ALERTS_FILE, lines.join(''));
+      console.log(`⚠ ${lines.length} alert line(s) written to scratch/gemini_alerts.txt`);
     }
 
   } finally {
