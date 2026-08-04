@@ -18,11 +18,7 @@
 import { query } from '../server/db.js';
 import { computeRunningVwapSeries } from '../server/services/developingValueService.js';
 // removed: import { getGlobex24hrBars, getTrailing24hrVwapStd } from '../server/services/queries.js';
-import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
-import { computeEvAtStopTarget } from './update_optimal_stops.mjs';
 import fs from 'fs';
-
-const dpp = LIVE_INSTRUMENT.dollarsPerPoint;
 // FIXED 2026-08-04 (caught auditing Gemini's rewrite, but the bug was mine, not Gemini's --
 // present in the original script before it was ever dispatched): was WALK_BARS_MAX=390, an
 // UNCONDITIONAL fixed-bar-count walk with no early exit. This codebase's actual mae_points
@@ -117,6 +113,17 @@ async function main() {
   const days = allDays.slice(startIdx);
   console.log(`${days.length} candidate trading days (${days[0]} through ${days[days.length - 1]})`);
 
+  // Stop-out-rate / target-hit-rate curve (2026-08-04, per direct follow-up): the MAE/MFE
+  // percentile ladder above answers "how far did price wander unconstrained" -- not a usable
+  // stop-selection question ("nobody should set a stop at p75 of unconstrained MAE"). The
+  // question this uncensored data CAN answer directly: for a candidate stop S and target T,
+  // what fraction of real historical instances would have hit S before T? Computed in the SAME
+  // forward walk as the MAE/MFE above (one pass, not a re-walk) -- for every (S,T) candidate
+  // pair, tracks which level is touched first, same conservative same-bar-tie-break convention
+  // used everywhere else in this codebase (stop wins if both hit on the identical bar).
+  const CANDIDATE_STOPS = [20, 30, 40, 52, 65, 80, 100, 125, 150];
+  const CANDIDATE_TARGETS = [40, 60, 80, 100];
+
   const instances = [];
   let dayCount = 0;
   for (const d of days) {
@@ -140,13 +147,25 @@ async function main() {
         const entry = bars24[i].close;
         const endIdx = bars24.length; // walk to session close, not a fixed bar count -- see comment above
         let mae = 0, mfe = 0;
+        // grid[stop][target] = 'STOP' | 'TARGET' | null (unresolved by session close)
+        const grid = {};
+        for (const s of CANDIDATE_STOPS) { grid[s] = {}; for (const t of CANDIDATE_TARGETS) grid[s][t] = null; }
         for (let j = i + 1; j < endIdx; j++) {
           const adverse = isLong ? entry - bars24[j].low : bars24[j].high - entry;
           const favorable = isLong ? bars24[j].high - entry : entry - bars24[j].low;
           if (adverse > mae) mae = adverse;
           if (favorable > mfe) mfe = favorable;
+          for (const s of CANDIDATE_STOPS) {
+            const stopHit = adverse >= s;
+            for (const t of CANDIDATE_TARGETS) {
+              if (grid[s][t] != null) continue; // already resolved on an earlier bar
+              const targetHit = favorable >= t;
+              if (stopHit) grid[s][t] = 'STOP'; // same-bar conservative tie-break: stop wins
+              else if (targetHit) grid[s][t] = 'TARGET';
+            }
+          }
         }
-        instances.push({ date: d, direction: isLong ? 'LONG' : 'SHORT', entry, mae: +mae.toFixed(1), mfe: +mfe.toFixed(1), thresholdAtTrigger: std24.threshold });
+        instances.push({ date: d, direction: isLong ? 'LONG' : 'SHORT', entry, mae: +mae.toFixed(1), mfe: +mfe.toFixed(1), thresholdAtTrigger: std24.threshold, grid });
       }
       wasBeyond = isBeyond;
     }
@@ -161,15 +180,26 @@ async function main() {
     const mfes = group.map(x => x.mfe).sort((a, b) => a - b);
     const pct = (arr, p) => arr.length ? arr[Math.floor(arr.length * p)] : null;
     console.log(`\n=== GLOBEX_VWAP_MAGNET_${dirLabel} bar-history reconstruction, N=${group.length} ===`);
-    console.log(`MAE ladder: p25=${pct(maes,0.25)} p40=${pct(maes,0.40)} p50=${pct(maes,0.50)} p60=${pct(maes,0.60)} p70=${pct(maes,0.70)} p75=${pct(maes,0.75)} p90=${pct(maes,0.90)}`);
-    console.log(`MFE ladder: p50=${pct(mfes,0.50)} p75=${pct(mfes,0.75)}`);
+    console.log(`MAE ladder (unconstrained -- NOT a stop-selection input, see the stop-out-rate curve below instead): p25=${pct(maes,0.25)} p40=${pct(maes,0.40)} p50=${pct(maes,0.50)} p60=${pct(maes,0.60)} p70=${pct(maes,0.70)} p75=${pct(maes,0.75)} p90=${pct(maes,0.90)}`);
+    console.log(`MFE ladder (unconstrained, same caveat): p50=${pct(mfes,0.50)} p75=${pct(mfes,0.75)}`);
 
-    const p50mfe = Math.round(pct(mfes, 0.50));
-    const trades = group.map(x => ({ mae_points: x.mae, mfe_points: x.mfe, actual_pnl: 0 })); // actual_pnl unused by computeEvAtStopTarget's synthetic-exit branches
-    for (const p of [0.50, 0.60, 0.70, 0.75, 0.90]) {
-      const stop = Math.round(pct(maes, p));
-      const ev = computeEvAtStopTarget(trades, stop, p50mfe, dpp, dpp);
-      console.log(`  p${p*100} stop=${stop}pt vs target=${p50mfe}pt(p50 MFE)  EV=$${ev.toFixed(2)}`);
+    // Stop-out-rate / target-hit-rate curve -- order-aware (real bar-by-bar resolution, same
+    // conservative same-bar tie-break as resolveSetupsByPrice()), not the order-blind
+    // "mae>stop independently of mfe>=target" check computeEvAtStopTarget uses on censored
+    // trade data. This is the correct use of the uncensored bar-history reconstruction: not a
+    // percentile-based stop candidate, a real hit-rate curve to pick a shape from.
+    console.log(`Stop-out-rate / target-hit-rate curve (N=${group.length}, real bar-by-bar resolution, no censoring):`);
+    console.log(`  stop\\target  ${CANDIDATE_TARGETS.map(t => `T=${t}`.padStart(14)).join('')}`);
+    for (const s of CANDIDATE_STOPS) {
+      const cells = CANDIDATE_TARGETS.map(t => {
+        const outcomes = group.map(x => x.grid[s][t]);
+        const n = outcomes.length;
+        const stopN = outcomes.filter(o => o === 'STOP').length;
+        const targetN = outcomes.filter(o => o === 'TARGET').length;
+        const unresolvedN = n - stopN - targetN;
+        return `${(100 * stopN / n).toFixed(0)}%S/${(100 * targetN / n).toFixed(0)}%T/${(100 * unresolvedN / n).toFixed(0)}%U`.padStart(14);
+      });
+      console.log(`  S=${String(s).padStart(3)}pt      ${cells.join('')}`);
     }
   }
   process.exit(0);
