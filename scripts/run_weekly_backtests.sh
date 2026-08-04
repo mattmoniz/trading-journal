@@ -46,6 +46,19 @@ echo "=== Weekly backtest run: $(date) ==="
 # backtest_setup_status.mjs to otherwise pick up. See docs/OPEN_THREADS.md 2026-07-19.
 /usr/bin/node scripts/backtest_pd2_2dpoc_complete.mjs
 
+# VWAP reclaim-and-hold Phase 1 (RTH + Globex), 2026-08-04 — RESEARCH_CLAIM
+# vwap_reclaim_hold_k{1,2,3}_{long,short}_phase1 (RTH) and _globex_ variants (overnight).
+# Neither is wired live -- see docs/VWAP_RECLAIM_HOLD_SPEC.md and OPEN_DECISION
+# vwap_reclaim_hold_rth_only_build_worth_it. Added here so both self-recalibrate as more
+# real NQ price history accumulates each week, instead of sitting static until a future
+# session happens to remember the 30-day recordClaim() recheck-due flag and manually
+# re-invokes them -- the same "generic weekly rerun, human decides on promotion" pattern
+# scan_regime_combinations.mjs already uses below. Both scripts are read-only against
+# price_bars_primary plus a recordClaim() upsert -- no DROP/DELETE/backup side effects,
+# safe to rerun unattended.
+/usr/bin/node scripts/backtest_vwap_reclaim_hold_phase1.mjs
+/usr/bin/node scripts/backtest_vwap_reclaim_hold_globex_phase1.mjs
+
 # --- Session-bias / edge-mining pipelines (feed antigravity/edges-context cards) ---
 # mine_session_bias.mjs also runs daily via server/index.js cron; re-running here weekly
 # is harmless (idempotent DELETE+INSERT) and keeps it covered if that cron ever stalls.

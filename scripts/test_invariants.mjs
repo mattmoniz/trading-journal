@@ -729,6 +729,69 @@ async function main() {
       ok(`live-firing-only (n=${liveOpt.length}) -- EV-sweep median=${fmt(median(realLive))}, raw-percentile median=${fmt(median(rawLive))}`);
     }
 
+    // ── 10. RESEARCH_CLAIM scripts are wired to actually keep re-checking themselves ──
+    // Added 2026-08-04, direct user question ("why isn't this being applied to all setups
+    // for when they reach 20 N?" re: recordClaim()'s 30-day next_recheck_due being a FLAG,
+    // not an auto-rerun). SETUP_STATUS/OPTIMAL_STOP already recompute automatically for
+    // every live setup_type because backtest_setup_status.mjs is a generic scan (no
+    // hardcoded list) run on a cron -- RESEARCH_CLAIM findings don't get that for free
+    // because each is backed by a bespoke one-off script, but several (calibrate_
+    // delta_confirmation.mjs, scan_regime_combinations.mjs, backtest_pd2_2dpoc_complete.mjs,
+    // and now backtest_vwap_reclaim_hold_phase1.mjs/_globex_phase1.mjs) already use the
+    // established fix: just add the script to run_weekly_backtests.sh (or
+    // run_daily_calibration.sh) like any other calibration script, so it keeps recomputing
+    // against fresh data on a schedule -- the promotion decision still stays a human call,
+    // only the RECOMPUTE becomes automatic. This check verifies that pattern was actually
+    // followed for every claim, not just the ones someone remembered to wire -- WARN-only,
+    // since a real fraction of RESEARCH_CLAIM rows are legitimately one-time, settled
+    // investigations (e.g. a definitively-rejected idea where no future data would change
+    // the conclusion) that don't need a standing recheck. Read each WARN and judge; this
+    // is a diagnostic surface, not a mandate to wire every single one.
+    console.log('\n[10] RESEARCH_CLAIM source scripts wired into a recurring cron (not just a 30-day flag)');
+    {
+      const { rows: claimRows } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes
+        FROM performance_audit
+        WHERE signal_type = 'RESEARCH_CLAIM'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const weeklyCron = fs.readFileSync(path.resolve('scripts/run_weekly_backtests.sh'), 'utf8');
+      const dailyCron = fs.readFileSync(path.resolve('scripts/run_daily_calibration.sh'), 'utf8');
+      const scheduled = weeklyCron + dailyCron;
+
+      // Detail goes to a dedicated scratch file, NOT one warn()/alert line per claim --
+      // the historical backlog is large (~100+ pre-existing one-off scratch/pilot scripts,
+      // most of them legitimately settled findings that don't need a standing recheck) and
+      // dumping all of them into scratch/gemini_alerts.txt every run would drown out real
+      // signal there. Only a single aggregate count enters the routine WARN/alert stream --
+      // read the detail file when you actually want to triage the backlog, not every run.
+      const unscheduled = [];
+      const seenSourceFiles = new Set();
+      for (const row of claimRows) {
+        let parsed;
+        try { parsed = JSON.parse(row.notes); } catch { continue; }
+        const sourceFile = parsed.source_file;
+        if (!sourceFile || seenSourceFiles.has(sourceFile)) continue; // report once per script, not once per (K,dir)-style slug family
+        seenSourceFiles.add(sourceFile);
+        const scriptName = sourceFile.split('/').pop();
+        if (!scheduled.includes(scriptName)) {
+          unscheduled.push(`${row.signal_name} -> ${sourceFile}`);
+        }
+      }
+      const detailFile = path.resolve('scratch/research_claim_unscheduled.txt');
+      if (unscheduled.length === 0) {
+        ok('every RESEARCH_CLAIM source script is wired into a recurring cron');
+        if (existsSync(detailFile)) fs.unlinkSync(detailFile);
+      } else {
+        fs.writeFileSync(detailFile,
+          `${unscheduled.length} RESEARCH_CLAIM source script(s) not found in run_weekly_backtests.sh or run_daily_calibration.sh, as of ${nowET()} ET.\n` +
+          `Most of these are legitimately settled/rejected one-time findings that don't need a standing recheck -- this is a triage list, not a to-do list.\n` +
+          `Only add a script to one of those two cron files if it's still an open/PROVISIONAL question that should keep re-checking itself as real data accumulates.\n\n` +
+          unscheduled.join('\n') + '\n');
+        warn(`${unscheduled.length} of ${seenSourceFiles.size} distinct RESEARCH_CLAIM source scripts are not wired into a recurring cron -- full list in ${detailFile} (not printed here individually, mostly expected for settled findings)`);
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {
