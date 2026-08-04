@@ -5437,9 +5437,10 @@ export default function createACDRouter(io) {
 
         // Compute VWAP early for magnet detection
         let earlyVwap = null;
-        { let pv = 0, tv = 0;
-          for (const b of allRthBarsRow.rows) { const v = (b.ask_vol || 0) + (b.bid_vol || 0) || 1; pv += (b.high + b.low + b.close) / 3 * v; tv += v; }
-          earlyVwap = tv > 0 ? pv / tv : null;
+        if (allRthBarsRow.rows.length > 0) {
+          const mappedBars = allRthBarsRow.rows.map(b => ({ ...b, volume: (b.ask_vol || 0) + (b.bid_vol || 0) }));
+          const vwapSeries = computeRunningVwapSeries(mappedBars);
+          earlyVwap = vwapSeries[vwapSeries.length - 1];
         }
 
         // ── VWAP Magnet: σ-based trigger — fires when price ≥1.5σ from RTH VWAP ──
