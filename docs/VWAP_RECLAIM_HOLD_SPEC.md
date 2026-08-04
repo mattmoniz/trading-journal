@@ -1,6 +1,6 @@
 # VWAP Reclaim-and-Hold — trend-continuation entry spec
 
-**Status: Phase 1 (backtest-only) DONE, 2026-08-04. Real setup, honest negative on 5 of 6 cells, one real survivor (K=2 SHORT). Not yet built as a live setup — that's Phase 2/3, not started. See "Phase 1 results" section at the bottom.**
+**Status: Phase 1 (backtest-only) DONE for BOTH RTH and Globex, 2026-08-04, per CLAUDE.md's standing rule to test both windows before calling anything complete. RTH: one real survivor (K=2 SHORT). Globex: clean negative, does NOT replicate — 0 of 6 cells pass rigor. Not yet built as a live setup — that's Phase 2/3, not started, and the Globex result argues against building a Globex variant at all. See "Phase 1 results" section at the bottom.**
 
 ## Why this exists
 
@@ -106,3 +106,46 @@ Phase 2 (an actual code review of a would-be live implementation) and the real b
 new plumbing" + the mutual-exclusion gate against `RTH_VWAP_FADE`, both flagged as must-haves in the
 pre-build review above) have not started. One surviving cell out of six, on one instrument, RTH-only,
 backtest-only, is a real result worth building on — not yet a validated live setup.
+
+## Phase 1 results, Globex/overnight window (2026-08-04) — clean negative, does not replicate
+
+Per CLAUDE.md's standing rule ("Any new setup, signal, or calibration finding must be evaluated for
+BOTH the RTH window and the Globex/overnight window before being considered complete"), the RTH
+result above is not "done" on its own. Built `scripts/backtest_vwap_reclaim_hold_globex_phase1.mjs`
+— a close adaptation of the already-audited RTH script (identical candidate/control/target/rigor
+logic, both previously-found bugs already fixed in the template it was built from), changing only
+the session window: NQ bars from 6:00 PM ET through 8:30 AM ET the following calendar day, grouped
+into one Globex session per night (evening bars pulled forward to join the following morning under
+that morning's date, matching `active_setups.trade_date`'s own convention for overnight fires,
+verified directly against real data), with the developing VWAP resetting at 6:00 PM instead of RTH
+open. This time Gemini's build correctly reused the mutually-exclusive control arm and the real
+`sweepOptimalStopAndTarget()` call from the start — no correction round needed — and the response
+file wasn't corrupted (kept in its own file as instructed this time). Independently re-ran the
+script directly and reproduced identical numbers before trusting the result.
+
+| K | Dir | N | WR | EV (cand) | Target | Rigor clean | Control EV |
+|---|-----|---|----|-----------|--------|--------------|------------|
+| 1 | LONG  | 2490 | 38.5% | $0.43  | 20pt | NO | $0.00 (degenerate, same as RTH K=1) |
+| 1 | SHORT | 2458 | 33.4% | $0.60  | 25pt | NO | $0.00 (degenerate) |
+| 2 | LONG  | 1818 | 33.9% | -$0.25 | 30pt | NO | -$1.01 |
+| 2 | SHORT | 1702 | 37.5% | **-$0.08** | 25pt | NO | -$0.88 |
+| 3 | LONG  | 1486 | 33.6% | $1.79  | 40pt | NO | -$1.46 |
+| 3 | SHORT | 1370 | 37.7% | $1.07  | 30pt | NO | $0.11 |
+
+**The RTH survivor does not transfer**: K=2 SHORT is slightly negative overnight (-$0.08/trade,
+vs +$5.96 in RTH) and, like every other Globex cell, fails the chronological-stability gate (thirds:
+-0.49, -1.82, 2.07 — sign-unstable). Zero of the 6 Globex cells pass every gate the way RTH's K=2
+SHORT did. This is a clean, honest negative, not a thin/inconclusive one — real N (1370-2490/cell,
+larger than the RTH cells since the overnight window is ~14.5hrs vs RTH's 6.5hrs) and a uniformly
+unstable/near-zero pattern across all 6 cells, not a borderline miss on one or two.
+
+All 6 Globex cells persisted via `recordClaim()` (slugs
+`vwap_reclaim_hold_globex_k{K}_{long|short}_phase1`, `rigorStatus='UNSTABLE'` for all, `PROVISIONAL`).
+
+**Conclusion**: this idea does not generalize across sessions — RTH's K=2 SHORT edge looks like a
+real, RTH-specific phenomenon (plausibly tied to RTH-only structural features like the opening
+range, IB, or session-anchored order flow that don't exist the same way overnight), not a universal
+VWAP-continuation effect. Building a live Globex variant of this setup is not supported by this
+data. Whether the RTH-only finding is still worth building (Phase 2/3) given it's one cell out of
+six, on one instrument, is the open question left in `OPEN_DECISION
+vwap_reclaim_hold_phase1_build_next_or_not`.
