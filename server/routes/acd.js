@@ -4076,7 +4076,7 @@ export default function createACDRouter(io) {
           // -$74 to -$100) so this was actively misleading on an already-suppressed setup. Also
           // fixed the same "unbounded structural-level target" bug found across this session
           // (docs/OPEN_THREADS.md) — target/stop now read the real OPTIMAL_STOP calibration.
-          const _otdOpt = getCached(todayET, 'levelFadeStats')?._opt;
+          const _otdOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
           if (otdShortSignaled && currentPrice < orL) {
             const _otdStopPts = _otdOpt?.OPEN_TEST_DRIVE_SHORT?.stop ?? 89;
             const _otdTargetPts = _otdOpt?.OPEN_TEST_DRIVE_SHORT?.target ?? 33;
@@ -4088,7 +4088,7 @@ export default function createACDRouter(io) {
               target: +(currentPrice - _otdTargetPts).toFixed(0),
               targetLabel: `T1: ${_otdTargetPts}pt sweep-optimal · Stop: ${_otdStopPts}pt`,
               keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low (reversal confirmed)',
-              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} then reversed through OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_TEST_DRIVE_SHORT') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
+              description: `Open Test Drive short. Price probed up ${upProbe.toFixed(0)}pts to ${probeHigh.toFixed(0)} then reversed through OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('OPEN_TEST_DRIVE_SHORT') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
               history: await getHistory('TRANSITIONAL'),
             };
           } else if (otdLongSignaled && currentPrice > orH) {
@@ -4102,7 +4102,7 @@ export default function createACDRouter(io) {
               target: +(currentPrice + _otdTargetPts).toFixed(0),
               targetLabel: `T1: ${_otdTargetPts}pt sweep-optimal · Stop: ${_otdStopPts}pt`,
               keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (reversal confirmed)',
-              description: `Open Test Drive long. Price probed down ${downProbe.toFixed(0)}pts to ${probeLow.toFixed(0)} in the opening, then reversed through OR High (${orH?.toFixed(0)}) — initiative buyers dominated.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_TEST_DRIVE_LONG') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
+              description: `Open Test Drive long. Price probed down ${downProbe.toFixed(0)}pts to ${probeLow.toFixed(0)} in the opening, then reversed through OR High (${orH?.toFixed(0)}) — initiative buyers dominated.\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('OPEN_TEST_DRIVE_LONG') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
               history: await getHistory('TRANSITIONAL'),
             };
           }
@@ -4276,7 +4276,7 @@ export default function createACDRouter(io) {
           target: trtLongT1.value,
           targetLabel: trtLongT1.label,
           keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High (failed resistance)',
-          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal — it's a slow-burn reversal, not a spike.\n\nEDGE: TRT_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('TRT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: This trade needs TIME. Don't cut early. Expiry is 120 min. Target PD VAH or OR measured move. Stop below A Down level (${trtLongStop}).${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction zone.' : ''}`,
+          description: `A Down + C Down both failed. Price is now above OR High (${orH?.toFixed(0)}) and A Down level (${aDownLevel?.toFixed(0)}). Trapped shorts fuel the reversal — it's a slow-burn reversal, not a spike.\n\nEDGE: TRT_LONG ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('TRT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: This trade needs TIME. Don't cut early. Expiry is 120 min. Target PD VAH or OR measured move. Stop below A Down level (${trtLongStop}).${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction zone.' : ''}`,
           history: await getHistory('TRANSITIONAL'),
         };
       }
@@ -4357,7 +4357,7 @@ export default function createACDRouter(io) {
             // Read from liveStats._opt[type].stop (sweep-optimal, not p75_mae).
             // Fallback 50/80pt from 2026-07-05 sweep research if _opt is unavailable.
             // _ibLS: read the level-fade stats cache directly here (liveStats is declared later in the level-fade block)
-            const _ibLS = getCached(todayET, 'levelFadeStats');
+            const _ibLS = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
             const ibTypeName = isBull ? 'IB_BULLISH' : 'IB_BEARISH';
             // Day-type-conditioned calibration (2026-08-03, OPEN_DECISION
             // ib_bearish_optimal_stop_not_day_type_conditioned) — the execution-efficiency
@@ -4442,8 +4442,8 @@ export default function createACDRouter(io) {
           // (orH + orRange) has no realistic-distance cap and can sit far past what real MFE data
           // supports. Now uses the real sweep-optimal OPTIMAL_STOP target instead.
           const _odTargetPts = isBull
-            ? (getCached(todayET, 'levelFadeStats')?._opt?.OPEN_DRIVE_LONG?.target ?? 50)
-            : (getCached(todayET, 'levelFadeStats')?._opt?.OPEN_DRIVE_SHORT?.target ?? 40);
+            ? (getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.OPEN_DRIVE_LONG?.target ?? 50)
+            : (getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.OPEN_DRIVE_SHORT?.target ?? 40);
           openDrive = {
             type: isBull ? 'OPEN_DRIVE_LONG' : 'OPEN_DRIVE_SHORT',
             label: isBull ? 'OPEN DRIVE (LONG)' : 'OPEN DRIVE (SHORT)',
@@ -4461,8 +4461,8 @@ export default function createACDRouter(io) {
             // and WR is ~46-47%, ~19pp lower than the hardcoded claim. Same "never fabricate a stat"
             // violation fixed elsewhere this session (docs/OPEN_THREADS.md).
             description: isBull
-              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_DRIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Buy the pullback to OR High. Stop below OR Low −1× OR Range (${+(orL - (orH - orL)).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('OPEN_DRIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
+              ? `Open Drive up confirmed. Pullback to near OR High (${orH?.toFixed(0)}) — first test of the breakout level.\n\nEDGE: OPEN_DRIVE_LONG ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('OPEN_DRIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Buy the pullback to OR High. Stop below OR Low −1× OR Range (${+(orL - (orH - orL)).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal. Do NOT fade this drive before 1:30 PM.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `Open Drive down confirmed. Rally toward OR Low (${orL?.toFixed(0)}) — first test of the breakdown level.\n\nEDGE: OPEN_DRIVE_SHORT ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('OPEN_DRIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Short the rally to OR Low. Stop above OR High +2pt (${+(orH + 2).toFixed(0)}). Target ${_odTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction zone.' : ''}`,
             history: await getHistory('TRENDING_UP'),
           };
         }
@@ -4563,10 +4563,13 @@ export default function createACDRouter(io) {
         // FIXED 2026-07-17 (same "unbounded structural-level target" bug found and fixed for
         // IB_BULLISH/BEARISH, OPEN_DRIVE, VALUE_AREA_RESPONSIVE, BRACKET_BREAKOUT — see
         // docs/OPEN_THREADS.md): pdVAL/pdVAH picked first via t1Guard regardless of realistic
-        // distance. Both FAILED_AUCTION_LONG/SHORT are THIN_N (N=3/N=9) with no OPTIMAL_STOP row
-        // yet, so there's no per-type sweep to read — using the same conservative generic
-        // fallback distance as other uncalibrated setups instead of an unbounded structural level.
-        const _faOpt = getCached(todayET, 'levelFadeStats')?._opt;
+        // distance. FAILED_AUCTION_LONG/SHORT were THIN_N (N=3/N=9) with no OPTIMAL_STOP row at
+        // the time of that fix, so the 40/35 fallback below was the only option — using the same
+        // conservative generic fallback distance as other uncalibrated setups instead of an
+        // unbounded structural level. FAILED_AUCTION_LONG has since cleared N≥20 (2026-08-03,
+        // stop=54/target=26) — _faOpt now reads that row for new fires; the 40/35 fallback only
+        // still applies to FAILED_AUCTION_SHORT (still THIN_N) or if _opt is momentarily unavailable.
+        const _faOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
         if (pwHighTested && !pwHighBroken && currentPrice && currentPrice < (orH || currentPrice + 50)) {
           const _faStopPts = _faOpt?.FAILED_AUCTION_SHORT?.stop ?? 40;
           const _faTargetPts = _faOpt?.FAILED_AUCTION_SHORT?.target ?? 35;
@@ -4578,7 +4581,7 @@ export default function createACDRouter(io) {
             target: +(currentPrice - _faTargetPts).toFixed(0),
             targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'Prior Week High',
-            description: `Prior week high was tested but price failed to close above it — supply waiting. Bulls pushed to last week's extreme, found sellers, retreated. Fade the failed breakout.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_SHORT') ?? 'not yet calibrated'} overall.`,
+            description: `Prior week high was tested but price failed to close above it — supply waiting. Bulls pushed to last week's extreme, found sellers, retreated. Fade the failed breakout.\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('FAILED_AUCTION_SHORT') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('BALANCE'),
           };
         } else if (pwLowTested && !pwLowBroken && currentPrice && currentPrice > (orL || currentPrice - 50)) {
@@ -4592,7 +4595,7 @@ export default function createACDRouter(io) {
             target: +(currentPrice + _faTargetPts).toFixed(0),
             targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'Prior Week Low',
-            description: `Prior week low tested but price failed to close below — buyers defended. Fade the failed breakdown.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
+            description: `Prior week low tested but price failed to close below — buyers defended. Fade the failed breakdown.\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('BALANCE'),
           };
         } else if (gLineLost && gLineReclaimed && currentPrice) {
@@ -4606,7 +4609,7 @@ export default function createACDRouter(io) {
             target: +(currentPrice + _faTargetPts).toFixed(0),
             targetLabel: `T1: ${_faTargetPts}pt sweep-optimal · Stop: ${_faStopPts}pt`,
             keyLevel: null, keyLevelLabel: 'G-Line (weekly open)',
-            description: `G-Line lost then reclaimed — bears failed to hold below weekly open. ${highVolume ? 'High volume on reclaim confirms conviction.' : ''}\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
+            description: `G-Line lost then reclaimed — bears failed to hold below weekly open. ${highVolume ? 'High volume on reclaim confirms conviction.' : ''}\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('FAILED_AUCTION_LONG') ?? 'not yet calibrated'} overall.`,
             history: await getHistory('TRANSITIONAL'),
           };
         }
@@ -4630,7 +4633,7 @@ export default function createACDRouter(io) {
           // violation, plus the same "unbounded structural-level target" bug (raw VA-extension
           // distance, no cap) fixed elsewhere this session (docs/OPEN_THREADS.md). Stop/target now
           // read the real sweep-optimal OPTIMAL_STOP calibration.
-          const _bbOpt = getCached(todayET, 'levelFadeStats')?._opt?.[isBull ? 'BRACKET_BREAKOUT_LONG' : 'BRACKET_BREAKOUT_SHORT'];
+          const _bbOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[isBull ? 'BRACKET_BREAKOUT_LONG' : 'BRACKET_BREAKOUT_SHORT'];
           const _bbStopPts = _bbOpt?.stop ?? 80;
           const _bbTargetPts = _bbOpt?.target ?? 30;
           bracketBreakout = {
@@ -4644,8 +4647,8 @@ export default function createACDRouter(io) {
             keyLevel: +(isBull ? bracketTop : bracketBot).toFixed(0),
             keyLevelLabel: isBull ? 'Prior Bracket Top' : 'Prior Bracket Bottom',
             description: isBull
-              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}.\n\nEDGE: BRACKET_BREAKOUT_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('BRACKET_BREAKOUT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket top becomes support. Buy pullbacks to the bracket boundary. Stop ${_bbStopPts}pt below entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}.\n\nEDGE: BRACKET_BREAKOUT_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('BRACKET_BREAKOUT_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket bottom becomes resistance. Short rallies to bracket boundary. Stop ${_bbStopPts}pt above entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
+              ? `5-session bracket top (${bracketTop?.toFixed(0)}) exceeded with NL30 +${nl30}.\n\nEDGE: BRACKET_BREAKOUT_LONG ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('BRACKET_BREAKOUT_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket top becomes support. Buy pullbacks to the bracket boundary. Stop ${_bbStopPts}pt below entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+              : `5-session bracket bottom (${bracketBot?.toFixed(0)}) broken with NL30 ${nl30}.\n\nEDGE: BRACKET_BREAKOUT_SHORT ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('BRACKET_BREAKOUT_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Prior bracket bottom becomes resistance. Short rallies to bracket boundary. Stop ${_bbStopPts}pt above entry. Target ${_bbTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
             history: await getHistory(isBull ? 'TRENDING_UP' : 'TRENDING_DOWN'),
           };
         }
@@ -4663,7 +4666,7 @@ export default function createACDRouter(io) {
           // +18/-8pt, contradicted its own description text which claimed a different "recalibrated"
           // value) and target (raw PD POC/VAH/VAL distance, unbounded) now read the real sweep-
           // optimal OPTIMAL_STOP calibration instead.
-          const _varOpt = getCached(todayET, 'levelFadeStats')?._opt?.[isFade ? 'VALUE_AREA_RESPONSIVE_SHORT' : 'VALUE_AREA_RESPONSIVE_LONG'];
+          const _varOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[isFade ? 'VALUE_AREA_RESPONSIVE_SHORT' : 'VALUE_AREA_RESPONSIVE_LONG'];
           const _varStopPts = _varOpt?.stop ?? 30;
           const _varTargetPts = _varOpt?.target ?? 28;
           valueAreaResp = {
@@ -4682,8 +4685,8 @@ export default function createACDRouter(io) {
             // positive EV). Same "never fabricate a stat" violation fixed elsewhere this session
             // (docs/OPEN_THREADS.md).
             description: isFade
-              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_SHORT ${getCached(todayET, 'levelFadeStats')?._edgeText?.('VALUE_AREA_RESPONSIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt above entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
-              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}) — responsive buyers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_LONG ${getCached(todayET, 'levelFadeStats')?._edgeText?.('VALUE_AREA_RESPONSIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt below entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
+              ? `Price opened inside prior value and is testing VAH (${pdVAH?.toFixed(0)}) — responsive sellers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_SHORT ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('VALUE_AREA_RESPONSIVE_SHORT') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt above entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`
+              : `Price opened inside prior value and is testing VAL (${pdVAL?.toFixed(0)}) — responsive buyers defend this level.\n\nEDGE: VALUE_AREA_RESPONSIVE_LONG ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('VALUE_AREA_RESPONSIVE_LONG') ?? 'not yet calibrated'} overall. EXECUTION: Stop ${_varStopPts}pt below entry. Target ${_varTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — highest conviction.' : ''}`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -4716,7 +4719,7 @@ export default function createACDRouter(io) {
             target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80)),
             targetLabel: 'T1: PD VAH (half off) · Runner: 45pt',
             keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High',
-            description: `No A signal today. C Up — price closing above OR High (${orH?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('C_STANDALONE_UP') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
+            description: `No A signal today. C Up — price closing above OR High (${orH?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('C_STANDALONE_UP') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
             history: await getHistory('BALANCE'),
           };
         } else if (currentPrice < orL && nearPD2VA) {
@@ -4728,7 +4731,7 @@ export default function createACDRouter(io) {
             target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
             targetLabel: 'T1: PD VAL (half off) · Runner: 45pt',
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
-            description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('C_STANDALONE_DOWN') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
+            description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('C_STANDALONE_DOWN') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
             history: await getHistory('BALANCE'),
           };
         }
@@ -4921,8 +4924,8 @@ export default function createACDRouter(io) {
               // FIXED 2026-07-17: hand-typed "71.4% WR (N=35)... 90.9% WR (N=11)" with zero backing
               // data (ABSORPTION_LONG has never fired in active_setups) — same "never fabricate a
               // stat" violation as RSI_DIV above. Now reads liveStats._setupStats honestly.
-              const _absorpStats = getCached(todayET, 'levelFadeStats')?._setupStats?.ABSORPTION_LONG;
-              const _absorpEdge = getCached(todayET, 'levelFadeStats')?._edgeText?.('ABSORPTION_LONG') ?? 'not yet calibrated';
+              const _absorpStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.ABSORPTION_LONG;
+              const _absorpEdge = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('ABSORPTION_LONG') ?? 'not yet calibrated';
               absorptionSetup = {
                 type: 'ABSORPTION_LONG',
                 direction: 'LONG',
@@ -4988,8 +4991,8 @@ export default function createACDRouter(io) {
           // with zero backing data (COIL_SURGE has never fired in active_setups) — same "never
           // fabricate a stat" violation as RSI_DIV/ABSORPTION_LONG above.
           const _coilType = isLong ? 'COIL_SURGE_LONG' : 'COIL_SURGE_SHORT';
-          const _coilStats = getCached(todayET, 'levelFadeStats')?._setupStats?.[_coilType];
-          const _coilEdge = getCached(todayET, 'levelFadeStats')?._edgeText?.(_coilType) ?? 'not yet calibrated';
+          const _coilStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.[_coilType];
+          const _coilEdge = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.(_coilType) ?? 'not yet calibrated';
           coilSurgeSetup = {
             type: _coilType,
             direction: isLong ? 'LONG' : 'SHORT',
@@ -5057,7 +5060,7 @@ export default function createACDRouter(io) {
                 // zero fired trades in active_setups, a direct "never fabricate a stat" violation
                 // (see CLAUDE.md, docs/OPEN_THREADS.md). Now reads liveStats._setupStats honestly via
                 // _edgeText(), which reports real N/WR or says plainly there's no calibration yet.
-                const _rsiBullStats = getCached(todayET, 'levelFadeStats')?._setupStats?.RSI_DIV_BULLISH;
+                const _rsiBullStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.RSI_DIV_BULLISH;
                 rsiDivSetup = {
                   type: 'RSI_DIV_BULLISH',
                   direction: 'LONG',
@@ -5065,7 +5068,7 @@ export default function createACDRouter(io) {
                   stop: currentPrice - stopDist,
                   target: t1Guard('LONG', currentPrice, currentPrice + stopDist * 2),
                   targetLabel: '2R Target',
-                  description: `15min RSI BULLISH divergence CONFIRMED. Price made lower low (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made higher low (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ+${rsiDelta}). Confirmation bar closed higher — selling exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('RSI_DIV_BULLISH') ?? 'not yet calibrated'}. Scalp long — hold 3 bars (45min) max. Take profit at value area midpoint or 2R.`,
+                  description: `15min RSI BULLISH divergence CONFIRMED. Price made lower low (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made higher low (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ+${rsiDelta}). Confirmation bar closed higher — selling exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('RSI_DIV_BULLISH') ?? 'not yet calibrated'}. Scalp long — hold 3 bars (45min) max. Take profit at value area midpoint or 2R.`,
                   history: (_rsiBullStats && _rsiBullStats.n >= 20)
                     ? { winRate: _rsiBullStats.wr, occurrences: _rsiBullStats.n, avgPnl: _rsiBullStats.ev, t1HitRate: _rsiBullStats.wr }
                     : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -5085,7 +5088,7 @@ export default function createACDRouter(io) {
                 const rsiDelta = (prev.rsi - curr.rsi).toFixed(1);
                 // FIXED 2026-07-17: see the matching RSI_DIV_BULLISH comment above — same fabricated-
                 // stat bug, same fix (RSI_DIV_BEARISH also has zero fired trades in active_setups).
-                const _rsiBearStats = getCached(todayET, 'levelFadeStats')?._setupStats?.RSI_DIV_BEARISH;
+                const _rsiBearStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.RSI_DIV_BEARISH;
                 rsiDivSetup = {
                   type: 'RSI_DIV_BEARISH',
                   direction: 'SHORT',
@@ -5093,7 +5096,7 @@ export default function createACDRouter(io) {
                   stop: currentPrice + stopDist,
                   target: t1Guard('SHORT', currentPrice, currentPrice - stopDist * 2),
                   targetLabel: '2R Target',
-                  description: `15min RSI BEARISH divergence CONFIRMED. Price made higher high (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made lower high (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ-${rsiDelta}). Confirmation bar closed lower — buying exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('RSI_DIV_BEARISH') ?? 'not yet calibrated'}. Scalp short — hold 2-3 bars (30-45min) max. Take profit at value area midpoint or 2R.`,
+                  description: `15min RSI BEARISH divergence CONFIRMED. Price made higher high (${Math.round(curr.price)} vs ${Math.round(prev.price)}) but RSI made lower high (${curr.rsi.toFixed(0)} vs ${prev.rsi.toFixed(0)}, Δ-${rsiDelta}). Confirmation bar closed lower — buying exhaustion confirmed. WR with confirmation: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('RSI_DIV_BEARISH') ?? 'not yet calibrated'}. Scalp short — hold 2-3 bars (30-45min) max. Take profit at value area midpoint or 2R.`,
                   history: (_rsiBearStats && _rsiBearStats.n >= 20)
                     ? { winRate: _rsiBearStats.wr, occurrences: _rsiBearStats.n, avgPnl: _rsiBearStats.ev, t1HitRate: _rsiBearStats.wr }
                     : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -5456,13 +5459,13 @@ export default function createACDRouter(io) {
             // SETUP_STATUS data is THIN_N with N=2-3, nowhere close to 460. Same "never fabricate a
             // stat" violation as the other setups fixed this session (docs/OPEN_THREADS.md).
             const _vwapMagType = isLong ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT';
-            const _vwapMagStats = getCached(todayET, 'levelFadeStats')?._setupStats?.[_vwapMagType];
+            const _vwapMagStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.[_vwapMagType];
             // FIXED 2026-08-02 (OPEN_DECISION vwap_magnet_hardcoded_stop_target_never_calibrated):
             // stop/target were hardcoded 30/20, never reading OPTIMAL_STOP -- a live No-Static-
             // Thresholds violation on this system's highest-volume setup family. Mirrors the exact
             // getCached(...)?._opt?.[type] pattern already used everywhere else in this file
             // (e.g. OPEN_DRIVE_LONG ~line 4436), same fallback numbers as before if uncalibrated.
-            const _vwapMagOpt = getCached(todayET, 'levelFadeStats')?._opt?.[_vwapMagType];
+            const _vwapMagOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[_vwapMagType];
             const _vwapStopPts = _vwapMagOpt?.stop ?? 30;
             const _vwapT1Pts = _vwapMagOpt?.target ?? 20;
             vwapMagnetSetup = {
@@ -5472,7 +5475,7 @@ export default function createACDRouter(io) {
               stop: isLong ? currentPrice - _vwapStopPts : currentPrice + _vwapStopPts,
               target: isLong ? currentPrice + _vwapT1Pts : currentPrice - _vwapT1Pts,
               targetLabel: `T1: ${_vwapT1Pts}pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
-              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at ${_vwapT1Pts}pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
+              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at ${_vwapT1Pts}pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
               history: (_vwapMagStats && _vwapMagStats.n >= 20)
                 ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
                 : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -5516,7 +5519,7 @@ export default function createACDRouter(io) {
               // the RTH-fired copy of these setups, unlike detectGlobexSetup()'s real Globex-hours
               // path (~line 1023/1053, widerOptMap[type]?.stop ?? fallback), which was already
               // correctly wired. Same fallback numbers preserved if calibration is unavailable.
-              const _rthGlobexOpt = getCached(todayET, 'levelFadeStats')?._opt;
+              const _rthGlobexOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
               if (Math.abs(dist24) >= std24.threshold) {
                 const isLong = dist24 < 0;
                 const type = isLong ? 'GLOBEX_VWAP_MAGNET_LONG' : 'GLOBEX_VWAP_MAGNET_SHORT';
@@ -5697,9 +5700,21 @@ export default function createACDRouter(io) {
           };
 
           // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
-          // Cached 60s — backtests run at most weekly so freshness is fine.
-          // Falls back to hardcoded defaults if DB is unavailable or level is missing.
-          const cachedLevelStats = getCached(todayET, 'levelFadeStats');
+          // Cached with DAY_CACHE_TTL (was a bare 60s default until 2026-08-04) — backtests
+          // run at most weekly so freshness is fine, and this whole populating block only runs
+          // when etMinNow < 960 (4:00 PM ET). At 60s TTL, every getCached(todayET,'levelFadeStats')
+          // read anywhere in this file (there are ~45 of them, including VWAP_MAGNET's stop/target
+          // lookup and the ibSetup _suppressedSetups/_dowSuppressToday suppression check) would go
+          // stale ~60s after the last pre-4pm poll and silently fall back to null/hardcoded defaults
+          // for the rest of the 4-6PM window — confirmed live via VWAP_MAGNET_LONG/SHORT fires in
+          // that window using the hardcoded 30pt/20pt fallback instead of the real calibrated
+          // stop/target (VWAP_MAGNET_SHORT's OPTIMAL_STOP row said stop=29/target=25 the same day
+          // several of its own SHADOW fires used stop=30/target=20 instead). The suppression-check
+          // side of this was never a live-alert risk (inNewEntryDeadZone force-SHADOWs everything in
+          // that exact same 4-6PM window regardless), but it did corrupt SHADOW forward-validation
+          // data with the wrong stop/target baked into mae_points/mfe_points/actual_pnl. Since the
+          // cache key already includes todayET, a day-long TTL can never leak into a different day.
+          const cachedLevelStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
           let liveStats = cachedLevelStats;
           if (!liveStats) {
             // DOW as integer (0=Sun, 1=Mon...5=Fri, 6=Sat) for SETUP_STATUS_DOW lookup
@@ -6790,7 +6805,7 @@ export default function createACDRouter(io) {
               // FIXED 2026-07-17: hand-typed history{winRate:0.55, occurrences:198} — real SETUP_STATUS
               // data is THIN_N with N=3-7. Same "never fabricate a stat" violation fixed elsewhere
               // this session (docs/OPEN_THREADS.md).
-              const _sweepLongStats = getCached(todayET, 'levelFadeStats')?._setupStats?.STOP_SWEEP_LONG;
+              const _sweepLongStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.STOP_SWEEP_LONG;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_LONG',
                 direction: 'LONG',
@@ -6798,7 +6813,7 @@ export default function createACDRouter(io) {
                 stop: Math.round(recentLow - 5),
                 target: Math.round(currentPrice + 30),
                 targetLabel: `${level.name} sweep bounce`,
-                description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('STOP_SWEEP_LONG') ?? 'not yet calibrated'} overall.`,
+                description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_LONG') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepLongStats && _sweepLongStats.n >= 20)
                   ? { winRate: _sweepLongStats.wr, occurrences: _sweepLongStats.n, avgPnl: _sweepLongStats.ev, t1HitRate: _sweepLongStats.wr }
                   : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -6812,7 +6827,7 @@ export default function createACDRouter(io) {
             const drop = recentHigh - currentPrice;
             if (brokeAbove && nowBelow && extension > 3 && extension < 50 && drop > 15) {
               // FIXED 2026-07-17: same fabricated-history fix as STOP_SWEEP_LONG above.
-              const _sweepShortStats = getCached(todayET, 'levelFadeStats')?._setupStats?.STOP_SWEEP_SHORT;
+              const _sweepShortStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.STOP_SWEEP_SHORT;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_SHORT',
                 direction: 'SHORT',
@@ -6820,7 +6835,7 @@ export default function createACDRouter(io) {
                 stop: Math.round(recentHigh + 5),
                 target: Math.round(currentPrice - 30),
                 targetLabel: `${level.name} sweep fade`,
-                description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('STOP_SWEEP_SHORT') ?? 'not yet calibrated'} overall.`,
+                description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_SHORT') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepShortStats && _sweepShortStats.n >= 20)
                   ? { winRate: _sweepShortStats.wr, occurrences: _sweepShortStats.n, avgPnl: _sweepShortStats.ev, t1HitRate: _sweepShortStats.wr }
                   : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -6954,13 +6969,13 @@ export default function createACDRouter(io) {
               // FIXED 2026-07-17: hand-typed "45% WR, +$736/yr... zone edges fade back 84% of the
               // time" — real SETUP_STATUS data is THIN_N with N=1, EV=-$7. Same "never fabricate a
               // stat" violation fixed elsewhere this session (docs/OPEN_THREADS.md).
-              const _zoneEdgeStats = getCached(todayET, 'levelFadeStats')?._setupStats?.ZONE_EDGE_FADE;
+              const _zoneEdgeStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.ZONE_EDGE_FADE;
               zoneEdgeFade = {
                 type: 'ZONE_EDGE_FADE',
                 direction: isLong ? 'LONG' : 'SHORT',
                 entry, stop, target,
                 targetLabel: `${targetDist}pt fade (5%×ATR)`,
-                description: `Price at balance ${edgeLabel}. ATR-scaled fade: ${stopDist}pt stop, ${targetDist}pt target. EDGE: ${getCached(todayET, 'levelFadeStats')?._edgeText?.('ZONE_EDGE_FADE') ?? 'not yet calibrated'} overall.`,
+                description: `Price at balance ${edgeLabel}. ATR-scaled fade: ${stopDist}pt stop, ${targetDist}pt target. EDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('ZONE_EDGE_FADE') ?? 'not yet calibrated'} overall.`,
                 history: (_zoneEdgeStats && _zoneEdgeStats.n >= 20)
                   ? { winRate: _zoneEdgeStats.wr, occurrences: _zoneEdgeStats.n, avgPnl: _zoneEdgeStats.ev, t1HitRate: _zoneEdgeStats.wr }
                   : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
@@ -6973,7 +6988,7 @@ export default function createACDRouter(io) {
       // Re-read from cache — liveStats is block-scoped inside the level-fade block above.
       // The block writes it to cache via setCached before closing; this recovers it for the
       // candidates array, the INSERT loop, and any other outer-scope usage.
-      const liveStats = getCached(todayET, 'levelFadeStats');
+      const liveStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
 
       // ACTIVE candidates — ONLY the 9 KEEP level fades from system backtest.
       // These fire banners, show as actionable setups, and count as trade entries.
@@ -6986,8 +7001,8 @@ export default function createACDRouter(io) {
         // strong) — see the day-type nulling above this candidates array for its per-type gate.
         // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27 suppressed as of 2026-07-09.
         (ibSetup
-          && !getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(ibSetup.type)
-          && !getCached(todayET, 'levelFadeStats')?._dowSuppressToday?.has(ibSetup.type)
+          && !getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(ibSetup.type)
+          && !getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._dowSuppressToday?.has(ibSetup.type)
         ) ? ibSetup : null,
       ];
       // SHADOW candidates — tracked for forward-testing but NO banners, NO trade alerts.
@@ -7137,7 +7152,7 @@ export default function createACDRouter(io) {
           // construct again later the same night (user directive: shadow every confirmed-
           // losing setup instead of freezing its data collection entirely), so both have real
           // PROFILES entries again below.
-          const _profLS = getCached(todayET, 'levelFadeStats');
+          const _profLS = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
           function liveProfile(setupType, style, pace, hold) {
             const stat = _profLS?._setupStats?.[setupType];
             const opt = _profLS?._opt?.[setupType];
@@ -7613,7 +7628,7 @@ export default function createACDRouter(io) {
           inRefireCooldown = cooldownQ.rows.length > 0;
         }
         const forceShadow = isTrailMechanism
-          || getCached(todayET, 'levelFadeStats')?._suppressedSetups?.has(active.type)
+          || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
           || inNewEntryDeadZone
           || inRefireCooldown;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
