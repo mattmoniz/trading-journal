@@ -21,6 +21,7 @@ const RECHECK_INTERVAL_DAYS = 30;
 export async function recordClaim({
   slug, claimText, sourceFile, sourceDate = null, sampleSize = null,
   winRate = null, evPerTrade = null, rigorStatus = 'not_checked', status = 'PROVISIONAL',
+  unblockCondition = null,
 }) {
   if (!slug || !claimText || !sourceFile) {
     throw new Error('recordClaim requires slug, claimText, sourceFile');
@@ -31,11 +32,33 @@ export async function recordClaim({
   if (slug.length > 60) {
     throw new Error(`recordClaim: slug '${slug}' is ${slug.length} chars, signal_name column is VARCHAR(60) -- shorten it`);
   }
+  // unblockCondition (2026-08-04, Opus-originated convention): any claim deferred for a reason
+  // that could resolve itself over time (most commonly "not enough real data yet") should name
+  // its unblock condition in a MACHINE-CHECKABLE form, not just prose like "revisit once N
+  // grows" -- test_invariants.mjs check [11] evaluates this automatically every run and fails
+  // loudly the moment it's met, instead of the claim sitting as "a note in a drawer" that only
+  // resurfaces if a future session happens to notice the 30-day next_recheck_due flag. Currently
+  // one supported shape: { type: 'min_real_n_per_type', setupTypes: [...], minN, description }
+  // -- deliberately a small structured spec, not raw SQL (injection risk, and a structured shape
+  // is easier for a future check to extend safely). A claim MAY omit this (not every deferral is
+  // data-volume-shaped -- e.g. "waiting on a product decision" belongs in OPEN_DECISION instead,
+  // not here), but if rigorStatus indicates a data block, check [11] will WARN that no
+  // unblockCondition was given, prompting whoever wrote the claim to add one rather than leave it
+  // unmonitored.
+  if (unblockCondition && unblockCondition.type === 'min_real_n_per_type') {
+    if (!Array.isArray(unblockCondition.setupTypes) || unblockCondition.setupTypes.length === 0) {
+      throw new Error('recordClaim: unblockCondition.setupTypes must be a non-empty array');
+    }
+    if (typeof unblockCondition.minN !== 'number' || unblockCondition.minN <= 0) {
+      throw new Error('recordClaim: unblockCondition.minN must be a positive number');
+    }
+  }
   const { rows } = await query(`SELECT CURRENT_DATE::text as today, (CURRENT_DATE + INTERVAL '${RECHECK_INTERVAL_DAYS} days')::date::text as next_recheck`);
   const { today, next_recheck } = rows[0];
   const notes = JSON.stringify({
     claim_text: claimText, source_file: sourceFile, source_date: sourceDate,
     rigor_status: rigorStatus, status, last_verified_date: today, next_recheck_due: next_recheck,
+    unblock_condition: unblockCondition,
   });
   await query(`
     INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, notes)
@@ -69,6 +92,9 @@ async function main() {
       console.log(`[${c.notes.status}${overdue ? ' — OVERDUE FOR RECHECK' : ''}] ${c.slug}`);
       console.log(`  ${c.notes.claim_text}`);
       console.log(`  N=${c.sample_size ?? '?'} WR=${c.win_rate ?? '?'} EV=${c.ev_per_trade ?? '?'} rigor=${c.notes.rigor_status} source=${c.notes.source_file} next_recheck=${c.notes.next_recheck_due}`);
+      if (c.notes.unblock_condition) {
+        console.log(`  unblock: ${JSON.stringify(c.notes.unblock_condition)}`);
+      }
       console.log('');
     }
     console.log(`${claims.length} claims total.`);

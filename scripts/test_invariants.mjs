@@ -110,6 +110,7 @@ import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCAL
 import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget } from '../server/services/targetCalibrationService.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { listClaims } from './record_claim.mjs';
 
 config();
 const pool = new pg.Pool({
@@ -790,6 +791,54 @@ async function main() {
           unscheduled.join('\n') + '\n');
         warn(`${unscheduled.length} of ${seenSourceFiles.size} distinct RESEARCH_CLAIM source scripts are not wired into a recurring cron -- full list in ${detailFile} (not printed here individually, mostly expected for settled findings)`);
       }
+    }
+
+    // ── 11. Parked RESEARCH_CLAIM unblock conditions ──────────────────────────────
+    // Added 2026-08-04, direct Opus feedback relayed by the user: "revisit as N grows" with
+    // nothing watching N is a note in a drawer, not a plan -- the gap isn't memory (check [10]
+    // already guarantees the CLAIM itself can't be silently forgotten), it's that a claim can be
+    // deferred with no MACHINE-CHECKABLE condition for when it's no longer blocked. This check
+    // does two things for every current RESEARCH_CLAIM: (a) FAILs loudly if a claim's own
+    // recorded unblockCondition (see recordClaim()'s JSDoc, scripts/record_claim.mjs) is now
+    // actually met -- e.g. real N has grown past the threshold the claim itself named -- so a
+    // deferred finding surfaces for action the moment it's actionable, not whenever a future
+    // session happens to remember to look; (b) WARNs (not fails) on any claim whose rigor_status
+    // string suggests a data-volume block (contains "DATA_LIMITED" or "THIN") but carries no
+    // unblockCondition at all -- per the convention this check exists to enforce, a deferral
+    // needs a named, checkable condition or it isn't a deferral, it's a decision that was never
+    // made. Currently only the 'min_real_n_per_type' unblockCondition shape is supported; a
+    // future claim needing a different shape should extend this check, not invent an unchecked one.
+    console.log('\n[11] Parked RESEARCH_CLAIM unblock conditions');
+    {
+      const claims = await listClaims();
+      let unblockedCount = 0, unnamedCount = 0;
+      for (const c of claims) {
+        const n = c.notes || {};
+        const uc = n.unblock_condition;
+        if (uc && uc.type === 'min_real_n_per_type') {
+          const { rows: nRows } = await client.query(`
+            SELECT setup_type, COUNT(*) as real_n
+            FROM active_setups
+            WHERE setup_type = ANY($1) AND origin_status IN ('ACTIVE','SHADOW')
+              AND resolution IN ('TARGET_HIT','STOP_HIT')
+            GROUP BY setup_type
+          `, [uc.setupTypes]);
+          const ns = uc.setupTypes.map(t => {
+            const r = nRows.find(x => x.setup_type === t);
+            return r ? +r.real_n : 0;
+          }).sort((a, b) => a - b);
+          const medianN = ns.length ? ns[Math.floor(ns.length / 2)] : 0;
+          if (medianN >= uc.minN) {
+            unblockedCount++;
+            fail(`${c.slug}: unblock condition MET -- median real N across ${uc.setupTypes.length} tracked setup_types is now ${medianN} (threshold ${uc.minN}). Re-run the referenced diagnostic (${n.source_file}) -- this claim's "wait for data" state is over.`);
+          }
+        } else if (!uc && /DATA_LIMITED|THIN/i.test(n.rigor_status || '') && n.status !== 'CONFIRMED') {
+          unnamedCount++;
+          warn(`${c.slug}: rigor_status ("${n.rigor_status}") suggests a data-volume deferral but no unblockCondition was recorded -- per convention, add one (recordClaim()'s unblockCondition param) so this can be watched automatically instead of relying on a future session noticing.`);
+        }
+      }
+      if (unblockedCount === 0 && unnamedCount === 0) ok('no parked claims are unblocked, and every data-limited claim names a checkable condition');
+      else if (unblockedCount === 0) ok(`no parked claims are unblocked yet (${unnamedCount} claim(s) flagged above for missing an unblock condition)`);
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────
