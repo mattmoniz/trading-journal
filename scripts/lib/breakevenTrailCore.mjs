@@ -266,7 +266,10 @@ export function testTrailForPopulation({ trades, long, stop, originalTarget, all
   if (!(oosEv > 0 && fullEv > baselineEv && oosEv > baselineOosEv)) return { funnelReason: 'failedOosOrBaseline' };
 
   const rigor = computeRigor(bestInSample.events, { dateField: 'date', pnlFn: e => e.tradeEv });
-  if (!rigor.clean) return { funnelReason: 'notRigorClean' };
+  // Diagnostic-only: surfaces the rigor breakdown even on a FAIL so a caller can tell
+  // decay from emergence (or a clustering issue) on a near-miss without re-deriving it.
+  // Does not change pass/fail behavior — funnelReason is still 'notRigorClean'.
+  if (!rigor.clean) return { funnelReason: 'notRigorClean', diagnosticRigor: rigor, diagnosticOosEv: oosEv, diagnosticFullEv: fullEv };
 
   const scratchRate = bestInSample.scratches / bestInSample.t1Wins;
   return {

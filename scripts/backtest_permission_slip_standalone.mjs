@@ -178,7 +178,7 @@ async function main() {
     const rigor = computeRigor(events, { dateField: 'date', pnlFn: e => e.pnl });
 
     results.push({ bucket: bucket.name, n: events.length, realWR, realEv, openWR, avgEntryClock: entryClock, rigor });
-    console.log(`${bucket.name}: N=${events.length}  avgEntry=${entryClock}ET  openAnchoredWR=${(openWR*100).toFixed(1)}%  realWR=${(realWR*100).toFixed(1)}%  realEV=$${realEv.toFixed(2)}  rigorClean=${rigor.clean}`);
+    console.log(`${bucket.name}: N=${events.length}  avgEntry=${entryClock}ET  openAnchoredWR=${(openWR*100).toFixed(1)}%  realWR=${(realWR*100).toFixed(1)}%  realEV=$${realEv.toFixed(2)}  rigorClean=${rigor.clean}  clustered=${rigor.clustered}  thirds=${JSON.stringify(rigor.thirds)}`);
   }
 
   console.log('\n=== Summary: original open-anchored WR vs. real entry-timed EV ===\n');
