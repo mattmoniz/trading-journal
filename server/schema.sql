@@ -350,7 +350,26 @@ CREATE TABLE public.active_setups (
     bar6_exit_recommended boolean,
     extend_target_level numeric,
     extend_decision character varying(20),
-    delta_confirmation_state character varying(20)
+    delta_confirmation_state character varying(20),
+    cluster_attributed_setups text[],
+    hivol_lopace_at_detection boolean,
+    regime_pos_10d numeric(8,4),
+    regime_label_10d character varying(4),
+    regime_pos_20d numeric(8,4),
+    regime_label_20d character varying(4),
+    regime_pos_30d numeric(8,4),
+    regime_label_30d character varying(4),
+    regime_pos_45d numeric(8,4),
+    regime_label_45d character varying(4),
+    regime_pos_60d numeric(8,4),
+    regime_label_60d character varying(4),
+    regime_pos_90d numeric(8,4),
+    regime_label_90d character varying(4),
+    regime_pos_180d numeric(8,4),
+    regime_label_180d character varying(4),
+    va_width_pctile_60d numeric,
+    va_overlap_streak integer,
+    ib_range_pctile_60d numeric
 );
 
 
@@ -554,6 +573,130 @@ CREATE TABLE public.active_setups_duplicate_touch_backup_20260717 (
     touch_quality character varying(20),
     touch_quality_vol_z numeric,
     origin_status character varying(12)
+);
+
+
+--
+-- Name: active_setups_globex_vwap_fade_backfill_backup_20260728; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_globex_vwap_fade_backfill_backup_20260728 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20)
+);
+
+
+--
+-- Name: active_setups_globex_vwap_magnet_backfill_backup_20260728; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_globex_vwap_magnet_backfill_backup_20260728 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20)
 );
 
 
@@ -1032,6 +1175,68 @@ CREATE TABLE public.active_setups_resolved_at_tz_bug_backup_20260727 (
 
 
 --
+-- Name: active_setups_rth_vwap_fade_backfill_backup_20260728; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_rth_vwap_fade_backfill_backup_20260728 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20)
+);
+
+
+--
 -- Name: active_setups_top8_window_backup_20260714; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1134,6 +1339,68 @@ CREATE TABLE public.active_setups_unified_levels_backup_20260718 (
     exhaustion_signal_at_detection boolean,
     bar6_checkpoint character varying(20),
     bar6_exit_recommended boolean
+);
+
+
+--
+-- Name: active_setups_vwap_magnet_backfill_backup_20260728; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_vwap_magnet_backfill_backup_20260728 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20)
 );
 
 
@@ -2312,6 +2579,43 @@ CREATE SEQUENCE public.morning_briefs_id_seq
 --
 
 ALTER SEQUENCE public.morning_briefs_id_seq OWNED BY public.morning_briefs.id;
+
+
+--
+-- Name: optimal_stop_circuit_breaker_backup_20260804; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.optimal_stop_circuit_breaker_backup_20260804 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
 
 
 --
@@ -4927,6 +5231,42 @@ ALTER SEQUENCE public.trading_sessions_id_seq OWNED BY public.trading_sessions.i
 
 
 --
+-- Name: value_area_regime_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.value_area_regime_snapshots (
+    id integer NOT NULL,
+    snapshot_date date NOT NULL,
+    lookback_days integer NOT NULL,
+    vah numeric(10,2),
+    val numeric(10,2),
+    poc numeric(10,2),
+    total_vol numeric(14,2),
+    computed_at timestamp without time zone DEFAULT now()
+);
+
+
+--
+-- Name: value_area_regime_snapshots_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.value_area_regime_snapshots_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: value_area_regime_snapshots_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.value_area_regime_snapshots_id_seq OWNED BY public.value_area_regime_snapshots.id;
+
+
+--
 -- Name: vol_backtest_cache; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5840,6 +6180,13 @@ ALTER TABLE ONLY public.trades ALTER COLUMN id SET DEFAULT nextval('public.trade
 --
 
 ALTER TABLE ONLY public.trading_sessions ALTER COLUMN id SET DEFAULT nextval('public.trading_sessions_id_seq'::regclass);
+
+
+--
+-- Name: value_area_regime_snapshots id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.value_area_regime_snapshots ALTER COLUMN id SET DEFAULT nextval('public.value_area_regime_snapshots_id_seq'::regclass);
 
 
 --
@@ -7088,6 +7435,22 @@ ALTER TABLE ONLY public.dynamic_edges_mining
 
 
 --
+-- Name: value_area_regime_snapshots value_area_regime_snapshots_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.value_area_regime_snapshots
+    ADD CONSTRAINT value_area_regime_snapshots_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: value_area_regime_snapshots value_area_regime_snapshots_snapshot_date_lookback_days_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.value_area_regime_snapshots
+    ADD CONSTRAINT value_area_regime_snapshots_snapshot_date_lookback_days_key UNIQUE (snapshot_date, lookback_days);
+
+
+--
 -- Name: vol_backtest_cache vol_backtest_cache_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7559,6 +7922,13 @@ CREATE INDEX idx_tte_event_time ON public.trade_timeline_events USING btree (eve
 --
 
 CREATE INDEX idx_tte_trade_date ON public.trade_timeline_events USING btree (trade_date);
+
+
+--
+-- Name: idx_vars_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_vars_date ON public.value_area_regime_snapshots USING btree (snapshot_date);
 
 
 --

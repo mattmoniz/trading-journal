@@ -80,6 +80,71 @@ export const CONTEXTUAL_DIRECTION_TYPES = new Set([
   'ZONE_EDGE_FADE', // direction = LONG/SHORT set at fire time based on zone position (ceiling vs floor)
 ]);
 
+/**
+ * Strategy family: MEAN_REVERSION (betting price reverts off a touched level) vs
+ * CONTINUATION (betting price keeps moving the direction it's already moving).
+ *
+ * Built 2026-08-04 for docs/COMPRESSION_TAIL_MFE_SPEC.md Part 3, which requires every
+ * setup_type be pre-registered into one of these two families BEFORE looking at any
+ * tail-MFE result (the whole point: a real compression->expansion effect should plausibly
+ * help CONTINUATION and hurt/neutral MEAN_REVERSION, so pooling both into one test would
+ * let a true bidirectional effect cancel into apparent noise -- the same shape of dilution
+ * that muted docs/REGIME_INTELLIGENCE_SPEC.md's Attempt 1 to $1.24/trade). Not a live
+ * gating mechanism -- purely an analysis-time classification.
+ *
+ * Default rule: every '*_FADE_*' name (the large majority -- LEVEL_FADE_DEFINITIONS,
+ * VWAP_MAGNET/GLOBEX_VWAP_MAGNET's own "mean-reversion ... back toward" criteria text,
+ * ZONE_EDGE_FADE) is MEAN_REVERSION. Everything else is an explicit, individually-checked
+ * override below -- verified against each setup's real detection criteria (acd.js
+ * comments/descriptions, OTHER_SETUP_DEFINITIONS' criteria text, setups.js's
+ * COUNTER_TREND_SETUPS set), not guessed from the name alone:
+ *   - FAILED_AUCTION_*, STOP_SWEEP_*, GAP_FILL_*, OPEN_TEST_DRIVE_*: explicit "fade the
+ *     failed breakout" / "now reversing" / gap-fill / open-rejection criteria text ->
+ *     MEAN_REVERSION.
+ *   - TRT_*, TRT_MAH_*, VALUE_AREA_RESPONSIVE_*: setups.js's own COUNTER_TREND_SETUPS set
+ *     -> MEAN_REVERSION.
+ *   - MOMENTUM_60m_60m_BALANCE_FADE (fades the move) -> MEAN_REVERSION;
+ *     MOMENTUM_60m_60m_TREND ("trades with the move, not against it") -> CONTINUATION.
+ *   - IB_BULLISH/IB_BEARISH (IB breaks and price closes beyond it), OPEN_DRIVE_*,
+ *     BRACKET_BREAKOUT_*, STACK_VOL_BREAK_LIVE_* (spec's own examples), C_STANDALONE_*
+ *     (targets an extension beyond OR high/low), A_UP_STRONG/A_DOWN_STRONG/A_UP_WEAK/
+ *     A_DOWN_WEAK and C_PAIRED_* (all target a measured-move EXTENSION of an already-fired
+ *     directional signal, per acd.js's t1GuardLabeled targets) -> CONTINUATION.
+ * A setup_type absent from both the default rule and this override list returns null
+ * (unclassified) rather than a silent guess -- callers must treat null as "needs
+ * classifying before use," never default it to either family.
+ */
+const CONTINUATION_TYPES = new Set([
+  'STACK_VOL_BREAK_LIVE_LONG', 'STACK_VOL_BREAK_LIVE_SHORT',
+  'OPEN_DRIVE_LONG', 'OPEN_DRIVE_SHORT',
+  'BRACKET_BREAKOUT_LONG', 'BRACKET_BREAKOUT_SHORT',
+  'IB_BULLISH', 'IB_BEARISH',
+  'MOMENTUM_60m_60m_TREND',
+  'C_STANDALONE_UP', 'C_STANDALONE_DOWN',
+  'A_UP_STRONG', 'A_DOWN_STRONG', 'A_UP_WEAK', 'A_DOWN_WEAK',
+  'C_PAIRED_LONG', 'C_PAIRED_SHORT',
+]);
+const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
+  'FAILED_AUCTION_LONG', 'FAILED_AUCTION_SHORT',
+  'STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT',
+  'GAP_FILL_LONG', 'GAP_FILL_SHORT',
+  'OPEN_TEST_DRIVE_LONG', 'OPEN_TEST_DRIVE_SHORT',
+  'TRT_LONG', 'TRT_SHORT', 'TRT_LONG_V2', 'TRT_SHORT_V2',
+  'TRT_MAH_LONG', 'TRT_MAH_SHORT',
+  'VALUE_AREA_RESPONSIVE_LONG', 'VALUE_AREA_RESPONSIVE_SHORT',
+  'VWAP_MAGNET_LONG', 'VWAP_MAGNET_SHORT',
+  'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT',
+  'MOMENTUM_60m_60m_BALANCE_FADE',
+  'C_REVERSAL_LONG', 'C_REVERSAL_SHORT',
+]);
+
+export const inferStrategyFamily = (setupType) => {
+  if (!setupType) return null;
+  if (setupType.includes('_FADE') || MEAN_REVERSION_OVERRIDE_TYPES.has(setupType)) return 'MEAN_REVERSION';
+  if (CONTINUATION_TYPES.has(setupType)) return 'CONTINUATION';
+  return null;
+};
+
 export const CONDITIONAL_VARIANTS = {
   WPP_FADE_SHORT_GAP_UP: {
     baseType: 'WPP_FADE_SHORT',
