@@ -100,6 +100,41 @@
  *    population's median stop:target ratio under BOTH methodologies side by side, so that
  *    divergence is visible every single run rather than requiring a from-scratch investigation
  *    to rediscover it.
+ *
+ * 13. Aggregate OPTIMAL_STOP distribution hasn't shifted materially, and no live stop sits
+ *    inside real market noise (added 2026-08-04). The transferable lesson from the same
+ *    incident as check 12: a data-CORRECTNESS fix (restricting computeCorrectedTarget()'s
+ *    population to origin_status IN ('ACTIVE','SHADOW'), the right change on its own terms)
+ *    silently rewrote live risk parameters on ~130 setups two days later, through two layers
+ *    of indirection, with nothing connecting the data fix to the live stop values. Per-type
+ *    circuit breakers (check 12) catch an individual type moving too far too fast; this check
+ *    catches the SYSTEM-WIDE symptom even when no single day-over-day type change looks
+ *    alarming on its own. Two parts: (a) any live (non-SUPPRESS/THIN_N) type whose current
+ *    optimal_stop sits below 1.5x the market's own real median 1-min NQ bar range (computed
+ *    fresh from price_bars_primary, not hardcoded -- this exact floor concept already exists
+ *    in this codebase for trailing-stop candidate widths, just never applied to the base stop
+ *    sweep itself) is flagged directly -- this alone would have caught GLOBEX_VWAP_FADE_LONG's
+ *    8pt stop before it was found by hand; (b) the population's aggregate median optimal_stop
+ *    is compared against its own value from ~7 days ago (same performance_audit history, no
+ *    new table), WARNing on a large aggregate swing that no single per-type check would
+ *    necessarily flag on its own.
+ *
+ * 12. OPTIMAL_STOP circuit breaker never sits in a TRIPPED (pct_change_exceeded) state
+ *    unresolved (added 2026-08-04). update_optimal_stops.mjs's circuit breaker
+ *    (applyCircuitBreaker()) rejects a freshly-computed stop/target that moved too far from
+ *    its own prior value off too little new data, freezing at the prior value instead --
+ *    built the same night GLOBEX_VWAP_FADE_LONG's live optimal_stop was found oscillating
+ *    83pt<->8pt (inside normal 1-min NQ bar noise) across consecutive runs, both under the
+ *    guarded AND unguarded calibration methods. `reason:'min_delta_n_not_met'` is normal,
+ *    expected, everyday behavior (most types don't gain enough real N day to day to even
+ *    attempt a recalibration) and does NOT fail here. `reason:'pct_change_exceeded'` means
+ *    the breaker actually caught something -- the sweep tried to move a stop/target by more
+ *    than 35% off a population that had grown enough to qualify, and got rejected. This FAILs
+ *    loudly on any setup_type whose LATEST OPTIMAL_STOP row has `circuitBreaker.tripped ===
+ *    true` -- a tripped breaker is exactly the kind of thing this file's own standing rule
+ *    (a routine check's own output is not itself an investigation) says must never sit
+ *    silently in a log nobody reads. See OPEN_DECISION
+ *    optimal_stop_100pct_unguarded_fallback_needs_new_formula for the still-open root cause.
  */
 
 import pg from 'pg';
@@ -475,6 +510,26 @@ async function main() {
       // get the (stop, anchor-target) pair, THEN the corrected-resim override on top).
       let usedNotes = null;
       try { usedNotes = JSON.parse(row.notes); } catch { /* not JSON / no notes -- normal case */ }
+
+      // Circuit breaker (2026-08-04, applyCircuitBreaker() in update_optimal_stops.mjs) can
+      // deliberately hold the stored row at a PRIOR value instead of whatever a fresh sweep
+      // computes right now -- that's the mechanism working as designed (see check [12]/[13]
+      // and CLAUDE.md's circuit-breaker entry), not the drift bug this check exists to catch.
+      // Without this exception, any circuit-breaker-protected type would FAIL here forever,
+      // permanently misrepresenting a working safeguard as an unresolved bug -- the exact
+      // "routine check's own output isn't itself an investigation" trap this file's own
+      // standing rule warns about. WARN instead (still visible, not silently swallowed).
+      if (usedNotes?.circuitBreaker && usedNotes.circuitBreaker.reason === 'min_delta_n_not_met') {
+        // Routine, expected on most types most days (real N rarely grows enough in 24h to
+        // even attempt a recalibration) -- not worth a WARN every run, that's just noise.
+        continue;
+      }
+      if (usedNotes?.circuitBreaker && (usedNotes.circuitBreaker.reason === 'pct_change_exceeded' || usedNotes.circuitBreaker.reason?.startsWith('manual_revert'))) {
+        const cb = usedNotes.circuitBreaker;
+        warn(`${row.signal_name}: stored stop=${stored.stop}/target=${stored.target}/ev=$${stored.ev.toFixed(2)} differs from a fresh sweep -- EXPECTED, held by the circuit breaker (reason=${cb.reason}${cb.reason === 'pct_change_exceeded' ? `, attempted stop=${cb.attemptedStop}/target=${cb.attemptedTarget}` : ''}), not an unresolved drift bug. See OPEN_DECISION optimal_stop_100pct_unguarded_fallback_needs_new_formula for the underlying formula issue the breaker is protecting against.`);
+        continue;
+      }
+
       if (usedNotes?.method === 'corrected-resim') {
         if (!swept) {
           fail(`${row.signal_name}: stored notes claim method='corrected-resim' but a fresh EV-sweep returns null (no valid stop/target pair) -- the corrected-resim override should never have been reachable without a swept base to anchor from`);
@@ -839,6 +894,82 @@ async function main() {
       }
       if (unblockedCount === 0 && unnamedCount === 0) ok('no parked claims are unblocked, and every data-limited claim names a checkable condition');
       else if (unblockedCount === 0) ok(`no parked claims are unblocked yet (${unnamedCount} claim(s) flagged above for missing an unblock condition)`);
+    }
+
+    console.log('\n[12] OPTIMAL_STOP circuit breaker never sits TRIPPED unresolved');
+    {
+      const { rows: cbRows } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes, optimal_stop::float as optimal_stop,
+               optimal_target::float as optimal_target
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `);
+      let trippedCount = 0;
+      for (const row of cbRows) {
+        let n; try { n = JSON.parse(row.notes); } catch (_) { n = null; }
+        const cb = n?.circuitBreaker;
+        if (cb?.tripped && cb.reason !== 'manual_revert_20260804') {
+          trippedCount++;
+          fail(`${row.signal_name}: circuit breaker TRIPPED (reason=${cb.reason}) -- attempted stop=${cb.attemptedStop}/target=${cb.attemptedTarget} rejected, currently frozen at stop=${row.optimal_stop}/target=${row.optimal_target} (prior stop=${cb.priorStop}/target=${cb.priorTarget}, stopPctChange=${cb.stopPctChange}, targetPctChange=${cb.targetPctChange}). This means the sweep is trying to move this stop/target by more than ${cb.maxPctChange * 100}% -- investigate before manually clearing (see optimal_stop_100pct_unguarded_fallback_needs_new_formula), don't just re-run and let it silently keep failing.`);
+        }
+      }
+      if (trippedCount === 0) ok('no OPTIMAL_STOP row is currently sitting in a tripped circuit-breaker state');
+    }
+
+    console.log('\n[13] Aggregate OPTIMAL_STOP distribution -- noise-floor check + week-over-week shift');
+    {
+      // Market's own real noise floor, computed fresh (no static threshold) -- same convention
+      // already established in this codebase for trailing-stop candidate widths, applied here
+      // to the base stop sweep for the first time.
+      const { rows: barRows } = await client.query(`
+        SELECT (high::float - low::float) AS rng
+        FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - interval '30 days'
+      `);
+      const ranges = barRows.map(r => r.rng).filter(x => x != null).sort((a, b) => a - b);
+      const medianBarRange = ranges.length ? ranges[Math.floor(ranges.length / 2)] : null;
+      const noiseFloor = medianBarRange != null ? medianBarRange * 1.5 : null;
+
+      const liveTypes = new Set(
+        ssRows.rows.filter(r => !['SUPPRESS', 'THIN_N'].includes(r.recommendation)).map(r => r.signal_name)
+      );
+      const { rows: curOpt } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float AS stop, run_date
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `);
+
+      let noiseFloorHits = 0;
+      if (noiseFloor != null) {
+        for (const row of curOpt) {
+          if (!liveTypes.has(row.signal_name) || row.stop == null) continue;
+          if (row.stop < noiseFloor) {
+            noiseFloorHits++;
+            fail(`${row.signal_name}: live optimal_stop=${row.stop}pt sits below ${noiseFloor.toFixed(1)}pt (1.5x the real trailing-30-day median 1-min NQ bar range, ${medianBarRange.toFixed(1)}pt) -- this stop is inside normal single-bar noise and will likely get clipped on nearly every trade. Investigate before trusting it, same signature as the GLOBEX_VWAP_FADE_LONG 8pt incident this check was built from.`);
+          }
+        }
+      }
+      if (noiseFloorHits === 0) ok(`no live optimal_stop sits inside the real market noise floor (${noiseFloor != null ? noiseFloor.toFixed(1) + 'pt' : 'n/a'})`);
+
+      // Week-over-week aggregate median shift, live types only.
+      const median = (arr) => { const s = arr.filter(x => x != null).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
+      const { rows: weekAgoOpt } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float AS stop
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP' AND run_date <= CURRENT_DATE - interval '7 days'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const curLiveStops = curOpt.filter(r => liveTypes.has(r.signal_name)).map(r => r.stop);
+      const weekAgoLiveStops = weekAgoOpt.filter(r => liveTypes.has(r.signal_name)).map(r => r.stop);
+      const curMedian = median(curLiveStops), weekAgoMedian = median(weekAgoLiveStops);
+      if (curMedian != null && weekAgoMedian != null && weekAgoMedian > 0) {
+        const pctShift = Math.abs(curMedian - weekAgoMedian) / weekAgoMedian;
+        if (pctShift > 0.20) {
+          warn(`Live-type aggregate median optimal_stop shifted ${(pctShift * 100).toFixed(0)}% over the last 7 days (${weekAgoMedian}pt -> ${curMedian}pt) -- worth checking whether a recent change to what data feeds calibration (an origin_status/population filter, a guardrail change) is behind a system-wide shift, not just per-type noise.`);
+        } else {
+          ok(`live-type aggregate median optimal_stop stable over 7 days (${weekAgoMedian}pt -> ${curMedian}pt, ${(pctShift * 100).toFixed(1)}% shift)`);
+        }
+      } else {
+        ok('not enough 7-day-old history yet to compare aggregate median shift');
+      }
     }
 
     // ── Summary ──────────────────────────────────────────────────────────────────

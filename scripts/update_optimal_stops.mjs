@@ -36,6 +36,68 @@ import { computeCorrectedTarget } from '../server/services/targetCalibrationServ
 const MIN_N = 20;
 const DEFAULT_STOP = 65;
 const DEFAULT_TARGET = 35;
+
+// Circuit breaker (2026-08-04, shipped same-night per direct user/Opus instruction after
+// GLOBEX_VWAP_FADE_LONG's live optimal_stop was found oscillating 83pt<->8pt across
+// consecutive runs -- 8pt sits inside normal 1-min NQ bar noise, meaning that stop would
+// get clipped on nearly every real trade. This is deliberately a PLAUSIBILITY GUARD, not
+// a better calibration formula -- every attempt so far at computing a smarter fallback
+// (the structural-conservative attempt tested and reverted the same day, see
+// RESEARCH_CLAIM structural_conservative_fallback_worse_ev_reverted_20260804) has
+// introduced its own new failure mode. This computes nothing: it just refuses to accept
+// a new stop/target that moved too far, too fast, off too little new data, and keeps
+// yesterday's number instead -- a strictly safer failure mode than silently shipping
+// whatever the sweep produced.
+//
+// MAX_PCT_CHANGE reasoned (not swept/optimized -- this is a safety threshold, not a
+// trading threshold) from the real spread observed the night this was built: genuinely
+// stable, healthy types (FLOOR_R2_FADE_SHORT 38->42, PD_POC_FADE_LONG flat at 29 for
+// weeks) moved single-digit percent run to run; the two confirmed-dangerous oscillations
+// (GLOBEX_VWAP_FADE_LONG 83pt<->8pt, ~90%; PD_POC_FADE_SHORT 26pt<->40pt, ~54%) both blew
+// well past 35%. Sits between the two with margin either way.
+const CIRCUIT_BREAKER_MAX_PCT_CHANGE = 0.35;
+// MIN_DELTA_N: every dangerous swing found the same night was triggered by exactly ONE
+// new resolved trade moving the argmax (GLOBEX_VWAP_FADE_LONG N 211->212,
+// PD_POC_FADE_SHORT N 123->124, FLOOR_R3_FADE_SHORT N 28->29) -- an argmax steered by a
+// single observation is the root cause the pct-change check alone can't fully address
+// (it only catches it AFTER the fact). Require real growth since the last time a
+// recalibration was actually accepted (tracked via notes.lastRecalibratedN, not just
+// yesterday's stored N, so slow +1/day growth still eventually accumulates enough to
+// re-check) before even attempting a new value.
+function minDeltaNRequired(baselineN) {
+  return Math.max(3, Math.ceil((baselineN || 0) * 0.05));
+}
+// Applies both gates to a freshly-computed (stop, target, ev) candidate against the prior
+// stored row for the same setup_type. Returns { stop, target, ev, notes } -- notes always
+// includes a circuitBreaker object recording what happened, even when nothing tripped,
+// so the decision is inspectable without re-deriving it.
+function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, prior }) {
+  if (!prior || prior.stop == null || prior.target == null) {
+    // No prior row (or a null prior stop/target) -- nothing to compare against yet, let
+    // the natural pipeline output through and establish the first baseline.
+    return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+      circuitBreaker: { tripped: false, reason: 'no_prior_baseline', lastRecalibratedN: currentN } };
+  }
+  const baselineN = prior.lastRecalibratedN != null ? prior.lastRecalibratedN : prior.sampleSize;
+  const deltaN = baselineN != null ? currentN - baselineN : Infinity;
+  const required = minDeltaNRequired(baselineN);
+  if (deltaN < required) {
+    return { stop: prior.stop, target: prior.target, ev: prior.ev,
+      circuitBreaker: { tripped: false, reason: 'min_delta_n_not_met', baselineN, currentN, deltaN, minDeltaNRequired: required,
+        attemptedStop, attemptedTarget, lastRecalibratedN: baselineN } };
+  }
+  const stopPctChange = prior.stop ? Math.abs(attemptedStop - prior.stop) / prior.stop : 0;
+  const targetPctChange = prior.target ? Math.abs(attemptedTarget - prior.target) / prior.target : 0;
+  if (stopPctChange > CIRCUIT_BREAKER_MAX_PCT_CHANGE || targetPctChange > CIRCUIT_BREAKER_MAX_PCT_CHANGE) {
+    console.error(`  [CIRCUIT BREAKER TRIPPED] ${setupType}: attempted stop=${attemptedStop}(${(stopPctChange * 100).toFixed(0)}%) target=${attemptedTarget}(${(targetPctChange * 100).toFixed(0)}%) vs prior stop=${prior.stop} target=${prior.target} -- keeping prior, see test_invariants.mjs`);
+    return { stop: prior.stop, target: prior.target, ev: prior.ev,
+      circuitBreaker: { tripped: true, reason: 'pct_change_exceeded', maxPctChange: CIRCUIT_BREAKER_MAX_PCT_CHANGE,
+        attemptedStop, attemptedTarget, attemptedEv, priorStop: prior.stop, priorTarget: prior.target,
+        stopPctChange: +stopPctChange.toFixed(3), targetPctChange: +targetPctChange.toFixed(3), lastRecalibratedN: baselineN } };
+  }
+  return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+    circuitBreaker: { tripped: false, reason: 'accepted', baselineN, currentN, deltaN, lastRecalibratedN: currentN } };
+}
 // Fallback $/pt when a setup_type has too few resolved trades to derive its own real
 // value (see the dppRes query below). CORRECTED 2026-07-17: this was hardcoded to 5,
 // justified by a comment claiming "real $/pt is cleanly bimodal... ~$5 for the
@@ -216,21 +278,25 @@ async function main() {
   const rows = statsRes.rows;
   console.log(`Found ${rows.length} setup types with N≥${MIN_N}`);
 
-  // Currently-stored values, fetched once, for the --dry-run before/after comparison below.
-  // Not used when writing for real (that path already reads its own fresh state via optStop/
-  // optTarget computed in the loop) — this is diagnostic-only.
+  // Currently-stored values, fetched once. Used for the --dry-run before/after comparison
+  // AND (2026-08-04) as the circuit breaker's comparison baseline on every real run too --
+  // no longer diagnostic-only, see applyCircuitBreaker() above.
   let priorStoredByType = {};
-  if (DRY_RUN) {
+  {
     const priorRes = await query(`
-      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade
+      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade, sample_size, notes
       FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP'
       ORDER BY signal_name, run_date DESC
     `);
     for (const p of priorRes.rows) {
+      let priorNotes = null;
+      try { priorNotes = JSON.parse(p.notes); } catch (_) { /* not JSON or null */ }
       priorStoredByType[p.signal_name] = {
         stop: p.optimal_stop != null ? parseFloat(p.optimal_stop) : null,
         target: p.optimal_target != null ? parseFloat(p.optimal_target) : null,
         ev: p.ev_per_trade != null ? parseFloat(p.ev_per_trade) : null,
+        sampleSize: p.sample_size != null ? parseInt(p.sample_size) : null,
+        lastRecalibratedN: priorNotes?.circuitBreaker?.lastRecalibratedN ?? null,
       };
     }
   }
@@ -442,13 +508,35 @@ async function main() {
       correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: false, exclusionReason: !direction ? 'no_inferred_direction' : 'insufficient_trade_count', exclusionDetail: `expandedTrades=${expandedTrades.length}` });
     }
 
+    // Circuit breaker (see applyCircuitBreaker() above) -- the LAST gate applied to
+    // whatever method chain produced optStop/optTarget/optEV above, regardless of which
+    // method it was. Reassigns optStop/optTarget/optEV to the frozen prior value if
+    // either gate rejects the freshly-computed candidate; everything downstream (DRY_RUN
+    // print, the real INSERT) uses these post-breaker values.
+    {
+      const attemptedStop = optStop, attemptedTarget = optTarget, attemptedEv = optEV;
+      const decision = applyCircuitBreaker({
+        setupType: r.setup_type, currentN: parseInt(r.n),
+        attemptedStop, attemptedTarget, attemptedEv,
+        prior: priorStoredByType[r.setup_type],
+      });
+      optStop = decision.stop; optTarget = decision.target; optEV = decision.ev;
+      let baseNotes = null;
+      try { baseNotes = JSON.parse(correctedNotes); } catch (_) { baseNotes = { method: targetMethod }; }
+      correctedNotes = JSON.stringify({ ...baseNotes, circuitBreaker: decision.circuitBreaker });
+    }
+
     if (DRY_RUN) {
       const prior = priorStoredByType[r.setup_type];
       const stopDelta = prior?.stop != null ? optStop - prior.stop : null;
       const targetDelta = prior?.target != null ? optTarget - prior.target : null;
       const evDelta = prior?.ev != null ? optEV - prior.ev : null;
       const flippedToStructural = targetMethod === 'structural-conservative';
-      const marker = flippedToStructural ? ' ← NOW STRUCTURAL-CONSERVATIVE' : '';
+      let breakerNotes = null; try { breakerNotes = JSON.parse(correctedNotes)?.circuitBreaker; } catch (_) {}
+      const marker = flippedToStructural ? ' ← NOW STRUCTURAL-CONSERVATIVE'
+        : breakerNotes?.tripped ? ` ← CIRCUIT BREAKER TRIPPED (attempted stop=${breakerNotes.attemptedStop} target=${breakerNotes.attemptedTarget})`
+        : breakerNotes?.reason === 'min_delta_n_not_met' ? ` ← held (ΔN=${breakerNotes.deltaN}<${breakerNotes.minDeltaNRequired})`
+        : '';
       console.log(`  ${r.setup_type.padEnd(40)} OLD stop=${prior?.stop ?? '?'} t1=${prior?.target ?? '?'} EV=$${prior?.ev?.toFixed(2) ?? '?'}  ->  NEW stop=${optStop}(${stopDelta != null ? (stopDelta >= 0 ? '+' : '') + stopDelta : '?'}) t1=${optTarget}(${targetDelta != null ? (targetDelta >= 0 ? '+' : '') + targetDelta : '?'}) EV=$${optEV.toFixed(2)}(${evDelta != null ? (evDelta >= 0 ? '+$' : '-$') + Math.abs(evDelta).toFixed(2) : '?'}) method=${targetMethod}${marker}`);
       upserted++; // counts "would upsert", matches the real-run semantics for the summary line below
       continue;
