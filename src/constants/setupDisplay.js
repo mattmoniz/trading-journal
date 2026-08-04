@@ -34,6 +34,7 @@ export const SETUP_DISPLAY_LABELS = {
   CAM_S2_FADE_LONG_TRAIL:     'Cam S2 Fade ↑ (Trail)',
   STACK_VOL_BREAK_LIVE_LONG:  'Stack Vol Break ↑',
   STACK_VOL_BREAK_LIVE_SHORT: 'Stack Vol Break ↓',
+  VWAP_RECLAIM_SHORT:         'VWAP Reclaim ↓',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level

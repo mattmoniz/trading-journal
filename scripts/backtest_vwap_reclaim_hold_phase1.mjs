@@ -294,12 +294,18 @@ async function run() {
       
       const rigor = candTrades.length >= 20 ? computeRigor(candTrades, { dateField: 'date', pnlFn: t => t.pnl }) : { clean: false, thirds: null };
       const wrCand = candTrades.filter(t => t.pnl > 0).length / candTrades.length;
-      
+      // p75 MAE of the candidate population -- surfaced so a live implementation has a real,
+      // data-derived fallback stop distance to use before real forward N>=20 accumulates and
+      // update_optimal_stops.mjs's own generic sweep takes over, matching the "no static
+      // thresholds" convention every other new setup type's bootstrap fallback follows.
+      const p75MaeCand = percentiles(simCand.map(r => r.mae_points))?.p75 ?? null;
+
       FINAL_RESULTS.push({
         K, dir, N: candTrades.length,
         wr: wrCand,
         ev: finalEvCand,
         target: bestT_cand,
+        p75Mae: p75MaeCand,
         rigorClean: rigor.clean,
         rigorThirds: rigor.thirds,
         ctrlN: simCtrl.length,
@@ -324,12 +330,12 @@ async function run() {
   }
   
   let mdOut = '# VWAP Reclaim and Hold Backtest Results\n\n';
-  mdOut += '| K | Dir | N | WR | EV (Cand) | Target (Cand) | Rigor Clean | Rigor Thirds | Control EV | Control Target | Passes Control? |\n';
-  mdOut += '|---|---|---|---|---|---|---|---|---|---|---|\n';
-  
+  mdOut += '| K | Dir | N | WR | EV (Cand) | Target (Cand) | P75 MAE (Cand) | Rigor Clean | Rigor Thirds | Control EV | Control Target | Passes Control? |\n';
+  mdOut += '|---|---|---|---|---|---|---|---|---|---|---|---|\n';
+
   for (const r of FINAL_RESULTS) {
     const passes = r.ev > r.ctrlEv ? 'YES' : 'NO';
-    mdOut += `| ${r.K} | ${r.dir} | ${r.N} | ${(r.wr * 100).toFixed(1)}% | $${r.ev.toFixed(2)} | ${r.target ? r.target + 'pt' : 'None'} | ${r.rigorClean} | ${JSON.stringify(r.rigorThirds)} | $${r.ctrlEv.toFixed(2)} | ${r.ctrlTarget ? r.ctrlTarget + 'pt' : 'None'} | ${passes} |\n`;
+    mdOut += `| ${r.K} | ${r.dir} | ${r.N} | ${(r.wr * 100).toFixed(1)}% | $${r.ev.toFixed(2)} | ${r.target ? r.target + 'pt' : 'None'} | ${r.p75Mae != null ? r.p75Mae.toFixed(1) + 'pt' : 'None'} | ${r.rigorClean} | ${JSON.stringify(r.rigorThirds)} | $${r.ctrlEv.toFixed(2)} | ${r.ctrlTarget ? r.ctrlTarget + 'pt' : 'None'} | ${passes} |\n`;
   }
   
   const fs = await import('fs');

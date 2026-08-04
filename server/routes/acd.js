@@ -5426,6 +5426,7 @@ export default function createACDRouter(io) {
       let vwapMagnetSetup = null;
       let globexVwapMagnetRTH = null;
       let globexVwapFadeRTH = null;
+      let vwapReclaimShortSetup = null;
       // Early-touch backfill: levels touched before a previous poll could catch them
       // (touched-and-already-moved-on between polls) but never got a live banner.
       // Recorded SHADOW-only for stats integrity — never fires a live alert, since the
@@ -5481,6 +5482,85 @@ export default function createACDRouter(io) {
                 ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
                 : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
             };
+          }
+        }
+
+        // ── VWAP Reclaim-and-Hold, SHORT only — SHADOW-only, 2026-08-04 ──────────
+        // docs/VWAP_RECLAIM_HOLD_SPEC.md: price crosses developing RTH VWAP and holds the
+        // SHORT side for 2 consecutive 5-min bar closes (not an immediate snapback) ->
+        // trend-continuation bet, trade AWAY from VWAP (the opposite bet from RTH_VWAP_FADE
+        // just above/below, which bets reversion TOWARD VWAP). K=2 SHORT is the ONLY cell
+        // that survived Phase 1's full audit (N=919, EV=$5.96/trade backtest, rigor-clean
+        // across all 3 chronological thirds, beats a properly independent control, passes
+        // computeReplication() against the other 5 swept cells) -- LONG and every other K
+        // value failed, and the Globex/overnight window failed entirely (does not transfer
+        // -- see the spec's Globex results section). RTH only, SHORT only, by design.
+        //
+        // LIVE SIMPLIFICATION, not yet the exact backtested mechanism: Phase 1's stop was
+        // STRUCTURAL (price closes a 5-min bar back on the wrong side of VWAP) -- building
+        // that live would need a genuinely new bar-by-bar VWAP-tracking resolution path
+        // inside resolveSetupsByPrice(), real additional risk to that shared, already
+        // heavily-loaded function (it already does double duty for STOP_HIT/TARGET_HIT/
+        // TRAIL). For this first SHADOW-only version, stop/target use the same fixed-point
+        // mechanism every other setup already uses, with the point distances taken directly
+        // from Phase 1's own real data (p75 MAE of the K=2 SHORT candidate population =
+        // 44.8pt, rounded to 45; target = 70pt, the swept value) rather than a guessed
+        // number -- but this is NOT yet the same stop mechanism Phase 1 validated, and
+        // hasn't been re-tested under it. Flagged: OPEN_DECISION
+        // vwap_reclaim_short_structural_stop_not_yet_built. Once real forward N>=20
+        // accumulates on this fixed-stop version, update_optimal_stops.mjs's generic sweep
+        // picks it up automatically like any other setup_type (liveStats._opt lookup below).
+        // (Declared at the outer scope above, same escape-the-block pattern vwapMagnetSetup
+        // already uses, so shadowCandidates far below can read it.)
+        if (earlyVwap && allRthBarsRow.rows.length >= 15) {
+          const RECLAIM_K = 2;
+          // Roll today's RTH 1-min bars into 5-min bars -- same bucketing convention as
+          // scripts/backtest_vwap_reclaim_hold_phase1.mjs's build5MinBars() (RTH_START=570).
+          const bars5m = [];
+          let cur5 = null;
+          for (const b of allRthBarsRow.rows) {
+            const intervalStart = 570 + Math.floor((b.et_min - 570) / 5) * 5;
+            if (!cur5 || cur5.mod !== intervalStart) {
+              if (cur5) bars5m.push(cur5);
+              cur5 = { mod: intervalStart, high: b.high, low: b.low, close: b.close, volume: (b.ask_vol || 0) + (b.bid_vol || 0) };
+            } else {
+              cur5.high = Math.max(cur5.high, b.high);
+              cur5.low = Math.min(cur5.low, b.low);
+              cur5.close = b.close;
+              cur5.volume += (b.ask_vol || 0) + (b.bid_vol || 0);
+            }
+          }
+          if (cur5) bars5m.push(cur5);
+          if (bars5m.length >= RECLAIM_K + 1) {
+            const vwapSeries = computeRunningVwapSeries(bars5m);
+            const last = bars5m.length - 1;
+            const isBelow = (i) => vwapSeries[i] != null && bars5m[i].close < vwapSeries[i];
+            const isAbove = (i) => vwapSeries[i] != null && bars5m[i].close > vwapSeries[i];
+            const heldShort = isBelow(last) && isBelow(last - 1);
+            const crossedFromAbove = isAbove(last - RECLAIM_K);
+            if (heldShort && crossedFromAbove) {
+              // Mutual-exclusion gate vs RTH_VWAP_FADE (docs/VWAP_RECLAIM_HOLD_SPEC.md
+              // must-fix #2, DeepSeek finding, HIGH severity): RTH_VWAP_FADE fires on ANY
+              // close-range VWAP touch within the standard 15pt band (nearLevels' own
+              // convention, acd.js ~line 6142) and bets the OPPOSITE direction (reversion
+              // toward VWAP). Never insert two directly-contradicting rows for the same
+              // VWAP touch on the same poll.
+              const nearVwapForFade = Math.abs(currentPrice - earlyVwap) <= 15;
+              if (!nearVwapForFade) {
+                const _reclaimOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.VWAP_RECLAIM_SHORT;
+                const _reclaimStopPts = _reclaimOpt?.stop ?? 45;
+                const _reclaimTargetPts = _reclaimOpt?.target ?? 70;
+                vwapReclaimShortSetup = {
+                  type: 'VWAP_RECLAIM_SHORT',
+                  direction: 'SHORT',
+                  entry: currentPrice,
+                  stop: currentPrice + _reclaimStopPts,
+                  target: currentPrice - _reclaimTargetPts,
+                  targetLabel: `T1: ${_reclaimTargetPts}pt (VWAP reclaim-hold continuation)`,
+                  description: `Price crossed below developing VWAP (${Math.round(earlyVwap)}) and held for 2 consecutive 5-min bar closes -- a trend-continuation bet AWAY from VWAP, not a fade toward it. SHADOW-only Phase 1 finding (N=919 backtest, EV=$5.96/trade, rigor-clean, beats an independent control). Stop/target use a fixed-point approximation of the backtest's structural VWAP-cross-back stop, not yet the exact validated mechanism -- see docs/VWAP_RECLAIM_HOLD_SPEC.md.`,
+                };
+              }
+            }
           }
         }
 
@@ -7014,6 +7094,7 @@ export default function createACDRouter(io) {
         vwapMagnetSetup,
         globexVwapMagnetRTH,
         globexVwapFadeRTH,
+        vwapReclaimShortSetup,
         absorptionSetup,
         coilSurgeSetup,
         zoneEdgeFade,

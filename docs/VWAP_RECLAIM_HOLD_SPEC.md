@@ -1,6 +1,6 @@
 # VWAP Reclaim-and-Hold — trend-continuation entry spec
 
-**Status: Phase 1 (backtest-only) DONE for BOTH RTH and Globex, 2026-08-04, per CLAUDE.md's standing rule to test both windows before calling anything complete. RTH: one real survivor (K=2 SHORT). Globex: clean negative, does NOT replicate — 0 of 6 cells pass rigor. Not yet built as a live setup — that's Phase 2/3, not started, and the Globex result argues against building a Globex variant at all. See "Phase 1 results" section at the bottom.**
+**Status: LIVE (SHADOW-only), 2026-08-04.** Phase 1 (backtest-only) is DONE for both RTH and Globex — RTH: one real survivor (K=2 SHORT, N=919, EV=$5.96/trade backtest, rigor-clean, beats an independent control, replicates against the other 5 swept cells). Globex: clean negative, does not replicate (0 of 6 cells pass rigor) — no Globex variant was built. `VWAP_RECLAIM_SHORT` (RTH, SHORT only) is now wired into `acd.js` and firing SHADOW-only (no live alert, no capital risk) — see "Live build" section at the bottom for what shipped and what's still a known simplification.
 
 ## Why this exists
 
@@ -149,3 +149,40 @@ VWAP-continuation effect. Building a live Globex variant of this setup is not su
 data. Whether the RTH-only finding is still worth building (Phase 2/3) given it's one cell out of
 six, on one instrument, is the open question left in `OPEN_DECISION
 vwap_reclaim_hold_phase1_build_next_or_not`.
+
+## Live build (2026-08-04) — SHADOW-only
+
+`vwapReclaimShortSetup` in `server/routes/acd.js` (search that name to find every touched line):
+same shape as `vwapMagnetSetup` just above it — 1-min RTH bars rolled into 5-min in-memory,
+`computeRunningVwapSeries()` reused (not reimplemented) for both the mutual-exclusion gate's VWAP
+value (1-min-cumulative, matching what `RTH_VWAP_FADE` sees) and the K=2 hold condition's VWAP
+series (5-min resolution, matching what Phase 1 actually backtested — these are two intentionally
+different computations, not a bug, confirmed by independent code review). Fires SHADOW-only via
+`shadowCandidates`, never touches the `candidates` array — no live alert, no capital risk.
+
+**Mutual-exclusion gate vs `RTH_VWAP_FADE`** (the must-fix #2 from the pre-build review): skips
+firing `VWAP_RECLAIM_SHORT` whenever price is within the same 15pt band `RTH_VWAP_FADE`/`nearLevels`
+already uses, since the two bet opposite directions (fade = reversion toward VWAP, reclaim =
+continuation away from it) and could otherwise insert two directly-contradicting rows on the same
+poll. Known limitation, judged acceptable for a SHADOW-only first version: the gate only checks
+distance, not whether `RTH_VWAP_FADE` is actually eligible to fire (it could be suppressed by
+`SETUP_STATUS`/DOW/trend-counter checks) — so it occasionally blocks a reclaim candidate even when
+no real fade would have fired, costing a little SHADOW data in a narrow edge case, never capital.
+
+**Known, deliberate simplification — not yet the exact backtested mechanism**: Phase 1's stop was
+*structural* (price closes a 5-min bar back on the wrong side of VWAP). Building that live would
+need a new bar-by-bar VWAP-tracking resolution path inside `resolveSetupsByPrice()` — real added
+risk to that shared, already heavily-loaded function. This first version uses a **fixed-point**
+stop/target instead (45pt/70pt — 45 is Phase 1's own real p75 MAE for the K=2 SHORT population,
+rounded; 70 is the swept target), which has **not itself been re-validated** — Phase 1's N=919/
+EV=$5.96 numbers describe the structural-stop version, not this one. Tracked as `OPEN_DECISION
+vwap_reclaim_short_structural_stop_not_yet_built`. Once real forward SHADOW data accumulates
+(N≥20), it joins the standard `SETUP_STATUS`/`OPTIMAL_STOP` pipeline automatically like any other
+setup_type — no extra wiring needed for that part.
+
+**Review**: Gemini built the Phase 1 backtests (both caught and corrected mid-flight — see the
+Phase 1 results sections above); the live-wiring diff was independently code-reviewed by DeepSeek
+(0 real bugs found; every specific line citation spot-checked against the actual file and
+confirmed accurate) before being finalized. `test_invariants.mjs`, `npm run lint`, and
+`npm run lint:frontend` all clean; server restarted and confirmed crash-free across multiple real
+poll cycles before commit.
