@@ -74,6 +74,24 @@ const DEFAULT_TARGET = 35;
 // threshold from contaminated history would be circular, not principled -- a reasoned,
 // documented constant is the more honest choice here, the same way MIN_N=20 above is a
 // reasoned floor, not something swept from a distribution.
+//
+// SECOND ATTEMPT (2026-08-04, same night, per direct follow-up question): normalize by
+// realized market volatility instead of using the raw calibration history directly --
+// "a legitimate stop change should track realized volatility" (external ground truth,
+// same source check [13]'s noise floor already uses). Tested k = stop / trailing-30-day
+// median 1-min NQ bar range (computed AS OF each historical run_date, not just today),
+// then compared the distribution of day-over-day |Δk/k| against the raw |Δstop/stop|
+// distribution above. Result: nearly IDENTICAL (p50 0.20->0.19, p90 0.87->0.86, p95
+// 1.39->1.39 essentially unchanged) -- normalizing by volatility did not meaningfully
+// separate legitimate from pathological changes. Root cause checked directly: NQ's
+// trailing-30-day median bar range stayed in an 11.75-13pt band across this ENTIRE
+// calibration history (2026-07-05 through today) -- there was no volatility regime
+// shift within the window this data spans, so a vol-normalized measure and a raw
+// point measure are nearly the same thing when the normalizer barely moves. The idea
+// itself is sound and worth retrying once real calibration history spans a genuine
+// vol regime change (a real basis to re-test would be: pick a period straddling a
+// >=30% shift in the trailing-30d median bar range, then re-run this same comparison)
+// -- it just has nothing to prove itself against yet in a ~1-month-old dataset.
 const CIRCUIT_BREAKER_MAX_PCT_CHANGE = 0.35;
 // MIN_DELTA_N: every dangerous swing found the same night was triggered by exactly ONE
 // new resolved trade moving the argmax (GLOBEX_VWAP_FADE_LONG N 211->212,
