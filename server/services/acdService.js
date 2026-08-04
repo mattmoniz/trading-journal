@@ -77,11 +77,11 @@ export async function computeACDFromBars(date, orMinutes, aMultiplier, sustainMi
 
   // C signal (bar closing above OR High or below OR Low, after 10:00)
   const lateBars = bars.rows.filter(b => minsFromBar(b.ts) >= 10 * 60);
-  let cUpConfirmed = false, cDownConfirmed = false;
+  let cUpConfirmed = false, cDownConfirmed = false, cUpTime = null, cDownTime = null;
   for (const bar of lateBars) {
     const c = parseFloat(bar.close);
-    if (aUpFired   && c > orHigh) { cUpConfirmed   = true; break; }
-    if (aDownFired && c < orLow)  { cDownConfirmed = true; break; }
+    if (aUpFired   && c > orHigh) { cUpConfirmed   = true; cUpTime   = new Date(bar.ts).toISOString().slice(11, 16); break; }
+    if (aDownFired && c < orLow)  { cDownConfirmed = true; cDownTime = new Date(bar.ts).toISOString().slice(11, 16); break; }
   }
 
   // Session close
@@ -99,7 +99,7 @@ export async function computeACDFromBars(date, orMinutes, aMultiplier, sustainMi
   const aUpLevel   = Math.round(aUp   * 100) / 100;
   const aDownLevel = Math.round(aDown * 100) / 100;
 
-  return { date, orHigh, orLow, orRange, aUpLevel, aDownLevel, aUpFired, aUpTime, aDownFired, aDownTime, cUpConfirmed, cDownConfirmed, score, sessionClose, sessionHigh, sessionLow };
+  return { date, orHigh, orLow, orRange, aUpLevel, aDownLevel, aUpFired, aUpTime, aDownFired, aDownTime, cUpConfirmed, cDownConfirmed, cUpTime, cDownTime, score, sessionClose, sessionHigh, sessionLow };
 }
 
 // Get best ACD parameters from risk_settings or backtest results
