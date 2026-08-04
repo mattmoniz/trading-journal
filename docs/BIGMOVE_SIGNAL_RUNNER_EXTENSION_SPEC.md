@@ -1,7 +1,8 @@
-# BIGMOVE_LIVE_SIGNAL bug fix + runner-extension idea (ready to design)
+# BIGMOVE_LIVE_SIGNAL bug fix + runner-extension idea (RESOLVED NEGATIVE)
 
-**Status: bugs fixed and live (commit `1347d50`, 2026-08-04). Runner-extension idea corrected and
-ready for Phase 0 design — not started. Written to be self-contained across a context clear.**
+**Status: bugs fixed and live (commit `1347d50`, 2026-08-04). Runner-extension idea taken through
+the full 3-phase workflow the same day and RESOLVED NEGATIVE — see "Resolution" section at the
+bottom. Nothing built or wired live. Written to be self-contained across a context clear.**
 
 ## What happened, in order
 
@@ -139,3 +140,61 @@ in that same function).
   bigmove_realtime_price_progress_promising_volume_weak` (the original signal validation, N=180,
   57.2% vs 36.9% baseline for finishing ≥400pt).
 - Reusable infra for the mechanism itself: `scripts/lib/breakevenTrailCore.mjs`.
+
+## Resolution (2026-08-04, same day) — RESOLVED NEGATIVE
+
+Followed the standing 3-phase workflow before writing any live-facing code.
+
+**Phase 0 — design critique, before code.** Wrote up my own reading of the underlying backtest
+(`scratch/bigmove_runner_extension_design_v1.md`) and dispatched it, independently and blind (each
+reviewer unaware of the other's response), to both Gemini (`scratch/antigravity_response.md`) and
+DeepSeek (`scratch/deepseek_response.md`). Both converged on the same corrections, unprompted:
+
+1. **The "let it ride" / runner-extension framing was wrong.** Re-reading
+   `scripts/backtest_bigmove_signal_exit_trigger_fade_direction.mjs` line by line: `triggerOffset`
+   is only ever found via `off < t.bars_to_resolution` — the signal-gated exit is ALWAYS earlier
+   than the trade's real historical resolution, by construction. What the N=53 "riding with trend"
+   finding actually validated (if it held up) was a full-position EARLY exit at the
+   `BIGMOVE_LIVE_SIGNAL` trigger bar's close, not a hold-longer/wider mechanism. `scratch/
+   correct_bigmove_runner_claim.mjs`'s own claim text ("keep the calibrated target on a portion of
+   the position, trail the remainder using `breakevenTrailCore.mjs`") mis-described this — that's a
+   different, never-tested mechanism.
+2. **A real structural confound was flagged.** A trade "riding with the day's established
+   direction" at the trigger moment is, by construction, in meaningful unrealized profit right then
+   (the day just moved ≥250pt in its favor). Exiting there vs. waiting for a resolution that
+   includes STOP_HIT/TIME_EXPIRED outcomes has a built-in structural edge independent of whether
+   the specific 250pt/180min threshold carries any real information.
+3. Both reviewers also recommended: re-derive on the full trade history (not 365 days) with
+   `origin_status` filtering, run a threshold-sensitivity sweep as the confound control, and (if
+   anything is built at all) use a standalone function rather than threading a 4th resolution
+   branch into the already-fragile `resolveSetupsByPrice()`.
+
+**Phase 1 — mine-and-run, corrected mechanism.** Built
+`scripts/backtest_bigmove_early_exit_riding_with_trend.mjs`: full available bar history (2022-12-14
+through today, not 365 days), `origin_status IN ('ACTIVE','SHADOW')` filtering from the start (the
+original N=53/N=311 finding never filtered this — and this exact signal family's sibling mechanism,
+`checkFadeAgainstBigMoveExit`, already had a confirmed 98.4%-`BACKFILL`-contamination incident, see
+`acd.js` ~line 240-247), a per-setup_type breakdown, and a threshold-sensitivity sweep (range
+150-350pt × minutes-remaining 90-240min) as the confound control from item 2 above.
+
+First run: 0 real trades matched by bar timestamp at all — caught before trusting it, because it
+reproduced a bug already documented in this exact codebase for this exact signal family
+(`RESEARCH_CLAIM bigmove_fade_exit_real_occurrences_corrected_20260727`): an exact-epoch match
+against `fired_at` silently drops real trades, which carry genuine sub-minute precision, against
+bars that are always on-the-minute. Fixed (floor `fired_at` to the minute before the lookup) BEFORE
+trusting any result, not after — unlike the historical incident this precedent comes from.
+
+**Result, on the corrected full-history real-only population**: the "riding with the day's
+direction" trigger condition occurred **zero times** in real trading history. Not thin — genuinely
+zero. All 5 real triggers that did occur were in the fading-against bucket (a separate,
+already-shipped, currently-disabled mechanism — `checkFadeAgainstBigMoveExit`). The original N=53
+finding was, in effect, showing what a fabricated/`BACKFILL` population looks like, not what real
+trading looks like — exactly the same failure mode already documented for this signal family's
+sibling.
+
+**Outcome**: `OPEN_DECISION bigmove_runner_extension_ready_to_design` RESOLVED (negative).
+`RESEARCH_CLAIM bigmove_runner_extension_design_ready` corrected in place — `status='CONFIRMED'`,
+`rigor_status='zero_real_occurrences_over_full_history'`. Nothing was built or wired live. Full
+results table (per-setup breakdown, sensitivity sweep): `scratch/
+bigmove_early_exit_riding_with_trend_RESULTS.md`. Not a permanent dead end — the population will
+grow as real trades accumulate; re-run the same script if real N crosses 20 in the future.
