@@ -1,7 +1,34 @@
 # Compression → Tail-MFE Spec (does pre-trade compression predict outsized moves?)
 
-**Status: spec only, 2026-08-04. Not built. Written to be self-contained across a context clear —
-read this doc plus `CLAUDE.md` and you should not need the prior conversation.**
+**Status: RESOLVED 2026-08-04, negative for the spec's original purpose (deciding whether to hold a
+runner longer). Full account: `docs/OPEN_THREADS.md`'s 2026-08-04 entries. Short version:**
+- Parts 1/4-selection built directly by Claude (`scripts/backfill_compression_metrics.mjs`,
+  `inferStrategyFamily()` in `server/config/setupTypes.js`), independently verified correct.
+- **Part 2/3's first version (`scripts/analyze_compression_tail_mfe.mjs`) was mis-routed** — it
+  tested compression against trade-level MFE, which only exists for a fired trade, forcing the
+  question through `active_setups` (a thin, ~3-week-old, setup-gated population) instead of raw bar
+  history — exactly the CLAUDE.md standing-rule violation ("route a market-behavior hypothesis
+  through bar history first") an external review caught. Kept on record as a real, narrower,
+  correctly-labeled finding (`RESEARCH_CLAIM compression_tail_mfe_mean_reversion`/`_continuation`),
+  not deleted, but superseded as the answer to this spec's actual question.
+- **The corrected, session-level, non-gated version (`scripts/analyze_compression_session_range.mjs`,
+  369 real NQ RTH trading days, full multi-year bar history) is the real answer**: a REAL,
+  Bonferroni-significant, independently-verified effect exists — but in the OPPOSITE direction from
+  the hypothesis this spec was built to test. Compression (tight value-area width, tight Initial
+  Balance) predicts a QUIETER following session, not a bigger one — volatility clustering, not
+  squeeze-then-expansion. This independently corroborates an already-existing, differently-derived
+  finding in this codebase (`RESEARCH_CLAIM volatility_squeeze_bigmove_inverted`). `RESEARCH_CLAIM
+  compression_session_range_prediction`.
+- Part 4's pilot (`scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs`) independently failed its own
+  plateau-check guardrail. Two real bugs found auditing Gemini's draft and fixed before trusting the
+  number (a missing `ORDER BY` breaking the chronological split; a same-bar tie-break PnL gap) — the
+  corrected re-run holds the negative result, more decisively than the buggy version.
+- **Net**: two independent, well-powered tests (a market-wide bar-history test and a trade-level
+  pilot) both point away from "compression → hold the runner longer," not just fail to support it.
+  Nothing wired live. Historical text below is the original spec, kept for the reasoning trail.
+
+**Original status line, 2026-08-04: spec only, not built. Written to be self-contained across a
+context clear — read this doc plus `CLAUDE.md` and you should not need the prior conversation.**
 
 ## Why this exists — full lineage, so this isn't re-derived from scratch
 
