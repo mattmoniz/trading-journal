@@ -152,20 +152,35 @@ export function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, 
   return best;
 }
 
+// --dry-run (2026-08-04, DeepSeek-recommended before shipping the structural-conservative
+// fallback below, given its blast radius — it can change the stored stop/target for every
+// setup_type simultaneously on the next real run, with no other staging point). Computes
+// everything identically but writes nothing to the database; prints a before/after comparison
+// (old stop/target/EV vs new) for every row instead of the normal per-row summary line, plus an
+// aggregate count of how many rows would flip to structural-conservative and how their EV
+// compares to the swept EV they'd otherwise have kept. Run once, review the output, then run for
+// real without the flag — this codebase has a real history (optStopQ, ev_per_trade, the
+// origin_status fix) of a technically-correct calibration change producing an unanticipated
+// large-scale recalibration that nobody noticed until queried directly.
+const DRY_RUN = process.argv.includes('--dry-run');
+
 async function main() {
-  console.log('Computing optimal stops + EV-sweep targets from active_setups MAE/MFE data...');
+  console.log(`Computing optimal stops + EV-sweep targets from active_setups MAE/MFE data...${DRY_RUN ? ' [DRY RUN — no writes]' : ''}`);
 
   // 0. Mark corrupted MAE/MFE rows as BAD_DATA so they're excluded from all analysis.
   //    Opus audit 2026-07-07: 303/304 rows from 2023 have mae or mfe > 300pt (max 11,766pt).
   //    Root cause: bad bar data in price_bars_primary for Nov–Dec 2023 (price_at_resolution IS NULL).
   //    300pt is the clear boundary — 2024+ data is clean (0/1083 bad in 2024).
-  const badRows = await query(`
-    UPDATE active_setups
-    SET replay_resolution = 'BAD_DATA'
-    WHERE (mae_points > 300 OR mfe_points > 300)
-      AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
-    RETURNING id
-  `);
+  let badRows = { rows: [] };
+  if (!DRY_RUN) {
+    badRows = await query(`
+      UPDATE active_setups
+      SET replay_resolution = 'BAD_DATA'
+      WHERE (mae_points > 300 OR mfe_points > 300)
+        AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+      RETURNING id
+    `);
+  }
   if (badRows.rows.length > 0) console.log(`Marked ${badRows.rows.length} corrupted MAE/MFE rows as BAD_DATA`);
 
   // 1. Compute p75_mae (optimal stop) and p50_mfe (optimal target) per setup_type
@@ -200,6 +215,25 @@ async function main() {
 
   const rows = statsRes.rows;
   console.log(`Found ${rows.length} setup types with N≥${MIN_N}`);
+
+  // Currently-stored values, fetched once, for the --dry-run before/after comparison below.
+  // Not used when writing for real (that path already reads its own fresh state via optStop/
+  // optTarget computed in the loop) — this is diagnostic-only.
+  let priorStoredByType = {};
+  if (DRY_RUN) {
+    const priorRes = await query(`
+      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target, ev_per_trade
+      FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP'
+      ORDER BY signal_name, run_date DESC
+    `);
+    for (const p of priorRes.rows) {
+      priorStoredByType[p.signal_name] = {
+        stop: p.optimal_stop != null ? parseFloat(p.optimal_stop) : null,
+        target: p.optimal_target != null ? parseFloat(p.optimal_target) : null,
+        ev: p.ev_per_trade != null ? parseFloat(p.ev_per_trade) : null,
+      };
+    }
+  }
 
   // 1a2. Real per-setup_type dollars-per-point, derived from resolved trades' actual dollar
   // P&L vs. their real point distance to stop/target — NOT a flat assumed constant, though
@@ -324,7 +358,7 @@ async function main() {
     const trades    = rawByType[r.setup_type] || [];
     const { stopDpp, targetDpp } = dppByType[r.setup_type] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
     const swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
-    const optStop   = swept ? swept.stop : Math.round(p75mae);
+    let optStop     = swept ? swept.stop : Math.round(p75mae);
     let optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
     let targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
     // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
@@ -370,17 +404,54 @@ async function main() {
         correctedNotes = JSON.stringify({ method: 'corrected-resim', oldTarget: preCorrectionTarget, ...corrected });
         correctedCount++;
       } else {
-        // Persist WHY corrected-resim was attempted but didn't qualify — this used to be
-        // computed and silently discarded (notes stayed null), so "why aren't all setups
-        // using the corrected method" had no answer without re-running the guardrail logic
-        // by hand. Found 2026-07-19 answering exactly that question. method stays whatever
-        // the fallback methodology actually is (EV-sweep / p50_mfe fallback) — this is
-        // diagnostic-only, never read as authoritative by test_invariants.mjs check [5]
-        // (which only special-cases method==='corrected-resim').
-        correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: true, exclusionReason: corrected.exclusionReason, exclusionDetail: corrected.exclusionDetail });
+        // Structural-conservative fallback: DESIGNED, DRY-RUN TESTED, REVERTED before going
+        // live (2026-08-04) -- do not re-enable without redesigning the formula first.
+        //
+        // Original proposal (Opus via user, DeepSeek design-reviewed): when corrected-resim
+        // fails (100% of the time as of 2026-08-04 -- see the claim below), stop falling
+        // through to the unguarded, confirmed order-blind EV-sweep -- use a non-optimized
+        // structural stop/target instead (p40 MAE as stop, target = stop*(p50_mfe/p75_mae)
+        // capped at p75_mfe). DeepSeek's review required a target cap, defensive guards, EV
+        // computed at the stored pair (not the swept EV), and — critically — a `--dry-run`
+        // mode before deploying, given the blast radius (all 130 types simultaneously, no
+        // staging point). That dry-run is exactly what caught this: run against real current
+        // data, ALL 11 rows that would have flipped to structural-conservative showed WORSE
+        // EV than their current swept value, and several (VWAP_MAGNET_LONG/SHORT,
+        // GLOBEX_VWAP_MAGNET_LONG/SHORT) flipped from POSITIVE EV to STRONGLY NEGATIVE EV --
+        // directly contradicting the design review's own stated worst case ("lower EV, not
+        // negative EV"). p40 MAE is apparently too tight a stop for these real populations,
+        // producing far more premature stop-outs than the current (biased but empirically
+        // less harmful) EV-sweep stop. Reverted before this could reach the live cron.
+        //
+        // Diagnostic-only: report what the structural fallback WOULD compute, without
+        // applying it, so this remains inspectable without repeating the dry-run by hand.
+        // Recorded via RESEARCH_CLAIM structural_conservative_fallback_worse_ev_reverted_20260804.
+        const p40 = parseFloat(r.p40_mae) || DEFAULT_STOP;
+        const p50mfeRaw = parseFloat(r.p50_mfe) || DEFAULT_TARGET;
+        const p75maeRaw = parseFloat(r.p75_mae) || 1; // denominator guard, never 0
+        const wouldBeStop = Math.round(p40);
+        const wouldBeTarget = Math.round(Math.min(wouldBeStop * (p50mfeRaw / p75maeRaw), p75mfe || DEFAULT_TARGET));
+        const wouldBeEv = computeEvAtStopTarget(trades, wouldBeStop, wouldBeTarget, stopDpp, targetDpp);
+        correctedNotes = JSON.stringify({
+          method: targetMethod, correctionAttempted: true,
+          exclusionReason: corrected.exclusionReason, exclusionDetail: corrected.exclusionDetail,
+          structuralFallbackNotApplied: { stop: wouldBeStop, target: wouldBeTarget, ev: wouldBeEv, evDelta: +(wouldBeEv - optEV).toFixed(2) },
+        });
       }
     } else {
       correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: false, exclusionReason: !direction ? 'no_inferred_direction' : 'insufficient_trade_count', exclusionDetail: `expandedTrades=${expandedTrades.length}` });
+    }
+
+    if (DRY_RUN) {
+      const prior = priorStoredByType[r.setup_type];
+      const stopDelta = prior?.stop != null ? optStop - prior.stop : null;
+      const targetDelta = prior?.target != null ? optTarget - prior.target : null;
+      const evDelta = prior?.ev != null ? optEV - prior.ev : null;
+      const flippedToStructural = targetMethod === 'structural-conservative';
+      const marker = flippedToStructural ? ' ← NOW STRUCTURAL-CONSERVATIVE' : '';
+      console.log(`  ${r.setup_type.padEnd(40)} OLD stop=${prior?.stop ?? '?'} t1=${prior?.target ?? '?'} EV=$${prior?.ev?.toFixed(2) ?? '?'}  ->  NEW stop=${optStop}(${stopDelta != null ? (stopDelta >= 0 ? '+' : '') + stopDelta : '?'}) t1=${optTarget}(${targetDelta != null ? (targetDelta >= 0 ? '+' : '') + targetDelta : '?'}) EV=$${optEV.toFixed(2)}(${evDelta != null ? (evDelta >= 0 ? '+$' : '-$') + Math.abs(evDelta).toFixed(2) : '?'}) method=${targetMethod}${marker}`);
+      upserted++; // counts "would upsert", matches the real-run semantics for the summary line below
+      continue;
     }
 
     await query(`
@@ -427,8 +498,9 @@ async function main() {
     console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${optEV.toFixed(2)}  (raw avg pnl=$${r.ev})`);
   }
 
-  console.log(`\nDone. ${upserted} rows upserted into performance_audit (signal_type=OPTIMAL_STOP). ${correctedCount} used the corrected-resim target methodology this run.`);
+  console.log(`\n${DRY_RUN ? '[DRY RUN] Would upsert' : 'Done.'} ${upserted} rows ${DRY_RUN ? '' : 'upserted '}into performance_audit (signal_type=OPTIMAL_STOP). ${correctedCount} used the corrected-resim target methodology this run.`);
   console.log('Every setup_type now gets its own stop swept across its own MAE percentiles (p25/p40/p50/p60/p75/p90), not a blanket p75_mae rule.');
+  if (DRY_RUN) console.log('DRY RUN — nothing was written. Re-run without --dry-run to commit.');
   process.exit(0);
 }
 
