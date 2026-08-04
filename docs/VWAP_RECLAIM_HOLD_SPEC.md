@@ -1,6 +1,6 @@
-# VWAP Reclaim-and-Hold — trend-continuation entry spec (not yet built)
+# VWAP Reclaim-and-Hold — trend-continuation entry spec
 
-**Status: spec only, 2026-08-04. Not built. DeepSeek infra-risk critique + Gemini pre-build bug scan both in progress before any code is written — see the bottom of this doc once they land.**
+**Status: Phase 1 (backtest-only) DONE, 2026-08-04. Real setup, honest negative on 5 of 6 cells, one real survivor (K=2 SHORT). Not yet built as a live setup — that's Phase 2/3, not started. See "Phase 1 results" section at the bottom.**
 
 ## Why this exists
 
@@ -50,3 +50,59 @@ Every VWAP variant currently live in this codebase (`RTH_VWAP`, `WEEKLY_VWAP`, `
 - The `Promise.all` positional-destructuring footgun (CLAUDE.md) lives in `antigravityEdges.js`, not in this part of `acd.js` — not a risk for this specific build.
 
 Full reviews: `scratch/antigravity_response.md` (Gemini), `scratch/deepseek_response.md` (DeepSeek, ANSI-noisy but complete — cleaned copy easier to read).
+
+## Phase 1 results (2026-08-04) — real backtest, honest negative on 5/6 cells, K=2 SHORT survives
+
+Built `scripts/backtest_vwap_reclaim_hold_phase1.mjs` per the design above (NQ RTH only, 1-min bars
+rolled into 5-min in-memory, `computeRunningVwapSeries()` reused directly, K∈{1,2,3}×{LONG,SHORT},
+no-lookahead entry at the open of the bar following the Kth confirming close, structural
+cross-back-through-VWAP stop, session-close cap).
+
+**Dispatch note, for future reference on this thread**: Gemini's first build had two real bugs
+Claude's code review caught before trusting anything — (1) the "blind control arm" wasn't actually
+independent of the candidate population (every full K-bar hold trivially also satisfied the raw
+2-bar "control" check, so the control was a superset containing 100% of the candidates, not a
+separate counterfactual), and (2) `sweepOptimalStopAndTarget()` was imported but never called — a
+hand-rolled, unguarded EV-max grid search was used instead, the exact "isolated spike" failure mode
+this codebase has hit before. One correction round was sent; Gemini's own report of the "fixed" run
+was not trusted at face value (the response file was corrupted by a file-collision bug a second
+time despite explicit instruction to avoid it, and the reported numbers looked suspiciously
+identical to the pre-fix numbers) — Claude independently re-ran the corrected script directly and
+got the same numbers, which turned out to be genuine, not fabricated: for K=1 the control correctly
+collapsed to a real, distinct population (N=0, since a full 1-bar hold *is* the raw cross — no
+separate control population can exist for K=1 by construction), and for K=2/3 the candidate
+population is apparently a small enough fraction of the raw-cross population that excluding it
+barely shifted the pooled control EV. Lesson for future dispatches on this codebase: always
+independently re-execute a script yourself when a "corrected" report's numbers look too similar to
+the pre-fix ones — don't assume a coincidence is fabrication OR assume a report is honest without
+checking; this one turned out to be real.
+
+**Results** (N = candidate count, structural VWAP-cross-back stop, target swept via the real
+`sweepOptimalStopAndTarget()`):
+
+| K | Dir | N | WR | EV (cand) | Target | Rigor clean | Control EV | Beats control? |
+|---|-----|---|----|-----------|--------|--------------|------------|-----------------|
+| 1 | LONG  | 1384 | 45.3% | $0.87  | 35pt | NO  | $0.00 (N=0, degenerate — see above) | n/a |
+| 1 | SHORT | 1351 | 37.9% | $1.36  | 50pt | NO  | $0.00 (N=0, degenerate — see above) | n/a |
+| 2 | LONG  | 1000 | 62.0% | $2.21  | 20pt | NO (thirds: -0.51, 2.87, 4.26 — sign-unstable) | -$0.22 | yes, but not rigor-clean |
+| 2 | SHORT | 919  | 37.0% | **$5.96** | 70pt | **YES** (thirds: 8.83, 8.13, 0.95 — all positive) | $2.02 | **YES** |
+| 3 | LONG  | 807  | 35.6% | -$0.59 | 80pt | NO  | -$3.95 | negative EV regardless |
+| 3 | SHORT | 725  | 39.0% | $4.58  | 70pt | NO (thirds: 7.94, 8.97, -3.11 — collapses late) | -$2.19 | yes, but not rigor-clean |
+
+**Only K=2 SHORT survives every gate**: N≥20, `computeRigor` clean (stable sign across all 3
+chronological thirds), and beats its properly mutually-exclusive control arm ($5.96 vs $2.02).
+Additionally ran `computeReplication()` (per CLAUDE.md's confound checklist item 4 — required
+whenever reporting the single best cell out of a sweep) treating the 6 (K,dir) cells as units: the
+held-out pool of the other 5 cells is $1.54/trade (N=5267, 4/5 favorable) — same sign as the
+selected cell, and K=2 SHORT ($5.96) stands clearly above that pool rather than just riding a
+universally-positive family. `replicates: true`.
+
+Every cell persisted via `recordClaim()` regardless of outcome (slugs
+`vwap_reclaim_hold_k{K}_{long|short}_phase1`, `PROVISIONAL` status — this is a real backtest result,
+not yet independently re-verified or live-forward-validated, so it doesn't earn `CONFIRMED` yet).
+
+**Not yet done — the honest gap**: this is Phase 1 (does the thesis have any real edge at all) —
+Phase 2 (an actual code review of a would-be live implementation) and the real build (the "genuinely
+new plumbing" + the mutual-exclusion gate against `RTH_VWAP_FADE`, both flagged as must-haves in the
+pre-build review above) have not started. One surviving cell out of six, on one instrument, RTH-only,
+backtest-only, is a real result worth building on — not yet a validated live setup.
