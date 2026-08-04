@@ -7522,7 +7522,135 @@ export default function createACDRouter(io) {
         })();
       }
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, cascadeBreaker });
+      // bigMoveSignal/sigmaContinuation/stackVolSignal — informational-only, do NOT gate/suppress
+      // any setup. MOVED HERE 2026-08-04 (was previously below the `if (!active) return` early
+      // return just below) — confirmed live via a real missed move: 2026-08-04 was a 926pt RTH
+      // trend day (price rode the 9-EMA up all session, per direct user chart review) and NONE
+      // of these three signals fired even once all day, despite bigMoveSignal's own trigger
+      // condition (rangeSoFar>=250 AND minutesRemaining>=180) being independently re-verified as
+      // true for hours. Root cause: on a sustained one-directional trend day, no fade-family
+      // candidate naturally becomes `active` (price keeps running through/away from levels
+      // instead of holding one), so every single poll hit this early return before ever reaching
+      // the signal computations that used to live below it — the exact days these signals exist
+      // to flag are the days a fade candidate is LEAST likely to be active, making the bug
+      // maximally self-defeating. Same failure class as the 2026-07-27 STACK_VOL_BREAK_LIVE
+      // Globex-unreachability bug (an early return before the code that computes a signal), just
+      // a second, previously-uncaught instance gating the RTH path instead of the Globex path.
+      // Real per-trade dollar risk is unaffected either way (these are informational-only), but
+      // the entire point of a "watch for a big move happening" signal is defeated if it can only
+      // ever fire on days a live-alert fade candidate also happens to be active.
+      let bigMoveSignal = { active: false, rangeSoFar: null, minutesRemaining: null };
+      if (allRthBarsRow.rows.length > 0) {
+        const sessionQ = await query(`
+          WITH recent AS (
+            SELECT ts, high::float, low::float,
+                   ts - LAG(ts) OVER (ORDER BY ts) AS gap
+            FROM price_bars_primary
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
+          ),
+          session_start AS (
+            SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
+          )
+          SELECT MAX(high) AS h, MIN(low) AS l, COUNT(*) AS n
+          FROM recent, session_start
+          WHERE ts >= start_ts
+        `);
+        const row = sessionQ.rows[0];
+        if (row?.h != null && row?.l != null && Number(row.n) > 0) {
+          const rangeSoFar = row.h - row.l;
+          const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
+          const minutesRemaining = nowEtMin < 1020 ? (1020 - nowEtMin) : (1440 - nowEtMin + 1020);
+          const isActive = rangeSoFar >= 250 && minutesRemaining >= 180;
+          bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
+          if (isActive) {
+            // FIXED 2026-08-04: was `$1` used for BOTH run_date (date) and signal_name (varchar)
+            // in the same statement -- Postgres can't infer one consistent type for a single
+            // parameter placeholder used in two different type contexts, and threw a real
+            // "42P08 date versus character varying" error on every single attempt, always
+            // swallowed silently by the .catch(() => {}) below. Confirmed via server logs the
+            // moment this code became reachable for the first time (see the reachability fix
+            // above) -- this INSERT had never once succeeded, on any day, since it was written.
+            // Separate $3 parameter for signal_name, same todayET value, resolves the ambiguity.
+            query(`
+              INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+              VALUES ($1, 0, 'BIGMOVE_LIVE_SIGNAL', $3, 1, $2)
+              ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+            `, [todayET, JSON.stringify({ rangeSoFar: Math.round(rangeSoFar), minutesRemaining, triggeredAt: new Date().toISOString() }), todayET]).catch(e => console.error('[BIGMOVE_LIVE_SIGNAL insert failed]', e.message));
+          }
+        }
+      }
+
+      let sigmaContinuation = { active: false, sigma: null, expectedExtraPts: null };
+      try {
+        const sigBarsQ = await query(`
+          SELECT ts, close::float, gap
+          FROM (
+            SELECT ts, close::float,
+                   EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
+            FROM price_bars_primary
+            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '8 hours'
+          ) t ORDER BY ts ASC
+        `);
+        const sBars = sigBarsQ.rows;
+        const SIG_WIN = 100, H = 60, GAP_CUTOFF = 45;
+        if (sBars.length > SIG_WIN + H) {
+          let volWindow = [], sumLogRet = 0, sumSqLogRet = 0;
+          for (let i = 1; i < sBars.length; i++) {
+            const gapMin = sBars[i].gap == null ? Infinity : sBars[i].gap;
+            const logRet = Math.log(sBars[i].close / sBars[i - 1].close);
+            if (gapMin > GAP_CUTOFF) { volWindow = []; sumLogRet = 0; sumSqLogRet = 0; }
+            else {
+              volWindow.push(logRet);
+              sumLogRet += logRet; sumSqLogRet += logRet * logRet;
+              if (volWindow.length > SIG_WIN) { const rm = volWindow.shift(); sumLogRet -= rm; sumSqLogRet -= rm * rm; }
+            }
+          }
+          const i = sBars.length - 1;
+          let lookbackHasGap = false;
+          for (let j = Math.max(1, i - H + 1); j <= i; j++) {
+            const g = sBars[j].gap == null ? Infinity : sBars[j].gap;
+            if (g > GAP_CUTOFF) { lookbackHasGap = true; break; }
+          }
+          if (volWindow.length === SIG_WIN && i >= H && !lookbackHasGap) {
+            const mean = sumLogRet / SIG_WIN;
+            const variance = Math.max(0, sumSqLogRet / SIG_WIN - mean * mean);
+            const stdDevLogRet = Math.sqrt(variance);
+            if (stdDevLogRet > 0) {
+              const bar = sBars[i];
+              const moveInPoints = bar.close - sBars[i - H].close;
+              const expectedMove = bar.close * stdDevLogRet * Math.sqrt(H);
+              if (moveInPoints < 0) {
+                const downMagnitude = Math.abs(moveInPoints) / expectedMove;
+                if (downMagnitude >= 1.0) {
+                  const calibQ = await query(`SELECT notes FROM performance_audit WHERE signal_type='SIGMA_CONTINUATION_CALIB' AND signal_name='LIVE_CUTOFFS' ORDER BY run_date DESC LIMIT 1`);
+                  const calib = calibQ.rows[0] ? JSON.parse(calibQ.rows[0].notes) : null;
+                  let bucket = null;
+                  if (calib) {
+                    for (const c of calib.cutoffs) { if (downMagnitude >= c.sigma) bucket = c; }
+                  }
+                  sigmaContinuation = {
+                    active: true,
+                    sigma: Math.round(downMagnitude * 100) / 100,
+                    expectedExtraPts: bucket ? bucket.extraPts : null,
+                  };
+                  const hourEt = allRthBarsRow.rows.length ? Math.floor(allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min / 60) : 0;
+                  const bucketSigma = bucket ? bucket.sigma : Math.floor(downMagnitude * 2) / 2;
+                  const dedupeKey = `${todayET}_${hourEt}_${bucketSigma}`;
+                  query(`
+                    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+                    VALUES ($1, 0, 'SIGMA_CONTINUATION_LIVE', $2, 1, $3)
+                    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
+                  `, [todayET, dedupeKey, JSON.stringify({ sigma: sigmaContinuation.sigma, expectedExtraPts: sigmaContinuation.expectedExtraPts, triggeredAt: new Date().toISOString() })]).catch(() => {});
+                }
+              }
+            }
+          }
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
+      const stackVolSignal = await computeStackVolSignal(todayET);
+
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, cascadeBreaker, bigMoveSignal, sigmaContinuation, stackVolSignal });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
@@ -7853,144 +7981,8 @@ export default function createACDRouter(io) {
         })();
       }
 
-      // Real-time "is today becoming a big-move day" signal — informational only, does NOT
-      // gate/suppress any setup.
-      //
-      // REBUILT 2026-07-24 (same day as the original wiring and the same-day disable) — the
-      // first version scoped rangeSoFar to sessionHiLoRow (RTH-only, 9:30am-4pm), but the
-      // RESEARCH_CLAIM this cites (bigmove_realtime_price_progress_promising_volume_weak) was
-      // validated against sessions with NO time-of-day filter — scripts/backtest_bigmove_realtime_detectors.mjs
-      // groups price_bars_primary purely on >45min gaps, so each validated session spans the
-      // full ~23hr Globex+RTH combined trading day (roughly 6PM ET reopen to the next day's 5PM
-      // ET maintenance close — server/index.js's isDailyMaintenanceBreak, etMin 1020-1080, is
-      // this codebase's own established convention for that boundary). User caught this
-      // ("why not globex") when asking to see the signal fire.
-      //
-      // Fixed by finding the CURRENT session's actual start via the same >45min gap-detection
-      // logic the backtest itself uses (a live SQL query, not a hardcoded RTH/Globex schedule
-      // guess) and computing rangeSoFar across that whole session, not just the RTH portion.
-      // minutesRemaining still uses the simple etMin-based next-5PM-ET-close formula — this part
-      // IS schedule-based (unavoidable: the future close time can't be read from past data the
-      // way session start can), but reuses this codebase's own already-established boundary
-      // (1020/1440 minute constants), not a newly-invented one. Only reachable from the RTH
-      // response path (a separate, earlier Globex-mode early-return exists in this same route
-      // handler) — the underlying measurement is now correctly Globex-inclusive, but the signal
-      // can still only be CHECKED/displayed while the RTH view is being polled, not literally
-      // overnight. That's a deliberate, smaller scoping choice, not the bug that was just fixed.
-      let bigMoveSignal = { active: false, rangeSoFar: null, minutesRemaining: null };
-      if (allRthBarsRow.rows.length > 0) {
-        const sessionQ = await query(`
-          WITH recent AS (
-            SELECT ts, high::float, low::float,
-                   ts - LAG(ts) OVER (ORDER BY ts) AS gap
-            FROM price_bars_primary
-            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '30 hours'
-          ),
-          session_start AS (
-            SELECT COALESCE(MAX(ts), (SELECT MIN(ts) FROM recent)) AS start_ts FROM recent WHERE gap > interval '45 minutes'
-          )
-          SELECT MAX(high) AS h, MIN(low) AS l, COUNT(*) AS n
-          FROM recent, session_start
-          WHERE ts >= start_ts
-        `);
-        const row = sessionQ.rows[0];
-        if (row?.h != null && row?.l != null && Number(row.n) > 0) {
-          const rangeSoFar = row.h - row.l;
-          const nowEtMin = allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min;
-          const minutesRemaining = nowEtMin < 1020 ? (1020 - nowEtMin) : (1440 - nowEtMin + 1020);
-          const isActive = rangeSoFar >= 250 && minutesRemaining >= 180;
-          bigMoveSignal = { active: isActive, rangeSoFar: Math.round(rangeSoFar), minutesRemaining };
-          if (isActive) {
-            query(`
-              INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-              VALUES ($1, 0, 'BIGMOVE_LIVE_SIGNAL', $1, 1, $2)
-              ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-            `, [todayET, JSON.stringify({ rangeSoFar: Math.round(rangeSoFar), minutesRemaining, triggeredAt: new Date().toISOString() })]).catch(() => {});
-          }
-        }
-      }
-
-      // Real-time sigma-conditioned down-move continuation signal — informational only, does
-      // NOT gate/suppress any setup. Added 2026-07-26, reuses the exact validated methodology
-      // from RESEARCH_CLAIM sigma_continuation_down_moves (scripts/backtest_sigma_continuation.mjs):
-      // rolling 100-bar log-return stdev as sigma, a 60-minute lookback for the initiating move,
-      // with gap-guards matching the backtest exactly (reset the rolling window on a >45min gap,
-      // require the lookback itself to be gap-free) rather than the RTH-only mistake made
-      // earlier this session with the big-move signal. Only DOWN moves were validated -- this
-      // does not fire on up-moves.
-      let sigmaContinuation = { active: false, sigma: null, expectedExtraPts: null };
-      try {
-        const sigBarsQ = await query(`
-          SELECT ts, close::float, gap
-          FROM (
-            SELECT ts, close::float,
-                   EXTRACT(EPOCH FROM (ts - LAG(ts) OVER (ORDER BY ts))) / 60 AS gap
-            FROM price_bars_primary
-            WHERE symbol='NQ' AND ts >= (SELECT MAX(ts) FROM price_bars_primary WHERE symbol='NQ') - interval '8 hours'
-          ) t ORDER BY ts ASC
-        `);
-        const sBars = sigBarsQ.rows;
-        const SIG_WIN = 100, H = 60, GAP_CUTOFF = 45;
-        if (sBars.length > SIG_WIN + H) {
-          let volWindow = [], sumLogRet = 0, sumSqLogRet = 0;
-          for (let i = 1; i < sBars.length; i++) {
-            const gapMin = sBars[i].gap == null ? Infinity : sBars[i].gap;
-            const logRet = Math.log(sBars[i].close / sBars[i - 1].close);
-            if (gapMin > GAP_CUTOFF) { volWindow = []; sumLogRet = 0; sumSqLogRet = 0; }
-            else {
-              volWindow.push(logRet);
-              sumLogRet += logRet; sumSqLogRet += logRet * logRet;
-              if (volWindow.length > SIG_WIN) { const rm = volWindow.shift(); sumLogRet -= rm; sumSqLogRet -= rm * rm; }
-            }
-          }
-          const i = sBars.length - 1;
-          let lookbackHasGap = false;
-          for (let j = Math.max(1, i - H + 1); j <= i; j++) {
-            const g = sBars[j].gap == null ? Infinity : sBars[j].gap;
-            if (g > GAP_CUTOFF) { lookbackHasGap = true; break; }
-          }
-          if (volWindow.length === SIG_WIN && i >= H && !lookbackHasGap) {
-            const mean = sumLogRet / SIG_WIN;
-            const variance = Math.max(0, sumSqLogRet / SIG_WIN - mean * mean);
-            const stdDevLogRet = Math.sqrt(variance);
-            if (stdDevLogRet > 0) {
-              const bar = sBars[i];
-              const moveInPoints = bar.close - sBars[i - H].close;
-              const expectedMove = bar.close * stdDevLogRet * Math.sqrt(H);
-              if (moveInPoints < 0) {
-                const downMagnitude = Math.abs(moveInPoints) / expectedMove;
-                if (downMagnitude >= 1.0) {
-                  const calibQ = await query(`SELECT notes FROM performance_audit WHERE signal_type='SIGMA_CONTINUATION_CALIB' AND signal_name='LIVE_CUTOFFS' ORDER BY run_date DESC LIMIT 1`);
-                  const calib = calibQ.rows[0] ? JSON.parse(calibQ.rows[0].notes) : null;
-                  let bucket = null;
-                  if (calib) {
-                    for (const c of calib.cutoffs) { if (downMagnitude >= c.sigma) bucket = c; }
-                  }
-                  sigmaContinuation = {
-                    active: true,
-                    sigma: Math.round(downMagnitude * 100) / 100,
-                    expectedExtraPts: bucket ? bucket.extraPts : null,
-                  };
-                  const hourEt = allRthBarsRow.rows.length ? Math.floor(allRthBarsRow.rows[allRthBarsRow.rows.length - 1].et_min / 60) : 0;
-                  const bucketSigma = bucket ? bucket.sigma : Math.floor(downMagnitude * 2) / 2;
-                  const dedupeKey = `${todayET}_${hourEt}_${bucketSigma}`;
-                  query(`
-                    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
-                    VALUES ($1, 0, 'SIGMA_CONTINUATION_LIVE', $2, 1, $3)
-                    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO NOTHING
-                  `, [todayET, dedupeKey, JSON.stringify({ sigma: sigmaContinuation.sigma, expectedExtraPts: sigmaContinuation.expectedExtraPts, triggeredAt: new Date().toISOString() })]).catch(() => {});
-                }
-              }
-            }
-          }
-        }
-      } catch (_) { /* informational only, never block the response */ }
-
-      // Real-time level-stack break + volume/delta confirmation signal — informational
-      // only, does NOT gate/suppress any setup. Full definition/history in
-      // computeStackVolSignal() above (extracted 2026-07-27 so it actually runs in
-      // BOTH this RTH branch and the Globex branch above, not just this one).
-      const stackVolSignal = await computeStackVolSignal(todayET);
+      // bigMoveSignal/sigmaContinuation/stackVolSignal computation MOVED from here to before
+      // the `if (!active) return` early return above (2026-08-04) — see that block for why.
 
       res.json({
         setup: {
