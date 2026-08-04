@@ -55,6 +55,25 @@ const DEFAULT_TARGET = 35;
 // weeks) moved single-digit percent run to run; the two confirmed-dangerous oscillations
 // (GLOBEX_VWAP_FADE_LONG 83pt<->8pt, ~90%; PD_POC_FADE_SHORT 26pt<->40pt, ~54%) both blew
 // well past 35%. Sits between the two with margin either way.
+//
+// TRIED deriving this from the real historical distribution instead (2026-08-04,
+// same night, per direct question about the no-static-thresholds rule) -- deliberately
+// NOT done, and the reason is itself worth recording so a future session doesn't repeat
+// the attempt expecting a different answer. Computed day-over-day |Δstop%| across every
+// OPTIMAL_STOP row in this table's full history: raw p90=87%, p95=139%. Restricted to
+// transitions where BOTH endpoints sit above the real market noise floor (excluding the
+// most obviously degenerate cases specifically) still gives p90=63%, p95=74%. Both are
+// far too loose to serve as a breaker threshold -- they'd barely ever trip. Root cause:
+// unlike the noise floor (check [13], anchored to real market bar-range data, external
+// to this system's own calibration history), there is no clean external ground truth
+// for "how much should a stop legitimately move run to run" -- the distribution to
+// derive it FROM is this system's own OPTIMAL_STOP history, which is substantially
+// populated by the exact argmax-instability pathology this breaker exists to prevent
+// (see RESEARCH_CLAIM corrected_resim_guardrail_was_cleared_by_synthetic_data --
+// most of this history was never real-data-validated to begin with). Deriving the
+// threshold from contaminated history would be circular, not principled -- a reasoned,
+// documented constant is the more honest choice here, the same way MIN_N=20 above is a
+// reasoned floor, not something swept from a distribution.
 const CIRCUIT_BREAKER_MAX_PCT_CHANGE = 0.35;
 // MIN_DELTA_N: every dangerous swing found the same night was triggered by exactly ONE
 // new resolved trade moving the argmax (GLOBEX_VWAP_FADE_LONG N 211->212,
