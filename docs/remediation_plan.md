@@ -5,6 +5,40 @@ the author's own request. See `docs/DECISIONS_LOG.md` for what was actually veri
 where reality diverged from this plan's assumptions (notably §Phase 1's framing of the holdout
 test — see the log for the correction).**
 
+**REVISIONS (2026-08-05, same day, later pass) — read before executing anything below:**
+- **Phase 2.1 is dropped entirely, not just superseded.** Quantified: 86.5% of all real trade data
+  (1,215 of 1,404 trades) fired before the optStopQ fix, on stops/targets that don't match today's
+  calibration. Trade-level `mae_points`/`mfe_points` can't be repaired as calibration input at that
+  contamination rate — 2.2 (the bar-history stop-out/target-hit surface) is the only viable path,
+  not the better of two options. See `RESEARCH_CLAIM optstopq_bug_contaminates_real_n_census`.
+- **§4.1 pre-flight assertions: add two.** (6) Outcome determination in any new backtest/evaluation
+  script must call the shared, order-aware resolver (`scripts/backtest_unified.js`'s `resolve()`,
+  or `resolveSetupsByPrice()`'s own convention) — never inline its own `mae > stop` / `mfe >=
+  target` threshold check. A real, serious defect of exactly this shape was found in the RTH
+  holdout test itself (see below) — see `OPEN_DECISION order_blind_evaluation_pattern_sweep` for
+  the required next-session-first grep sweep across every existing evaluation/backtest script
+  before trusting any comparison-style finding. (7) Exact-timestamp joins against `fired_at`
+  before comparing a historical fire's stop/target against current calibration — check [8]'s own
+  table conflated pre-fix and post-fix fires this way; see `docs/DECISIONS_LOG.md`.
+- **§8/§4.4 "wire check [8] WARN→FAIL" — do NOT do this as originally written.** Check [8]
+  compares historical fires against CURRENT config, which manufactures mismatches whenever
+  calibration has changed since a trade fired (the common case, not the exception) — most of its
+  9 warnings turned out to be exactly this, not a disconnected pipeline. Fix the check to compare
+  each fire against whatever calibration was live AT FIRE TIME before making it load-bearing.
+- **§7.3 promoted from a footnote to an explicit decision** — see `OPEN_DECISION
+  prioritize_risk_management_over_signal_research`'s 2026-08-05 update: the R:R number that
+  motivated this whole priority was itself a measurement artifact, real but smaller than assumed,
+  and now sits on top of a calibration foundation with its own unresolved defects. Needs an
+  explicit keep-or-demote call, not a parenthetical.
+- **A 5th defect was found the same night**: an order-blind evaluation pattern (same class as
+  optStopQ's own EV-selection bug) inside `scripts/backtest_rth_calibration_genuine_holdout.mjs`'s
+  comparison logic — confirmed via direct re-run to systematically favor whichever compared arm
+  has the wider stop (winning arm averaged 79.7pt vs the losing arms' 52.9pt/32pt). This means the
+  RTH-calibration-vs-flat question (Phase 1's own headline test) is **still open, not answered
+  either direction** — the original Gemini dispatch's "calibration wins" result should not be
+  trusted as-is. Checked and confirmed NOT shared by the original 2026-07-20 overnight holdout
+  finding (which correctly used the shared `resolve()` function) — that finding stands.
+
 Sequenced so each phase gates the next. **Do not skip ahead** — Phase 1 can make Phases 2–3 unnecessary, and Phase 2 makes Phase 3 meaningful. Every phase has an explicit stop condition.
 
 ---
