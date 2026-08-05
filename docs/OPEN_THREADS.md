@@ -2,7 +2,9 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
-## ✅ 2026-08-05 (corrected twice, same thread): Compression research lands on a real, positive, actionable finding — read this entry, it supersedes both entries below it
+## 🔶 2026-08-05 (corrected three times, same thread): Compression research finds a real, mixed, NOT-yet-actionable signal — read this entry, it supersedes both entries below it; next session should start here
+
+**Session ended deliberately at this point** — the trade-level validation, and the two new leads below, were parked for a fresh session rather than chased on a tired one.
 
 **Supersedes the trade-gated Part 2/3 entry two below AND the first "session range, negative for the hypothesis" write-up of this same test — both kept on record below for the reasoning trail, neither is the final word.**
 
@@ -25,6 +27,10 @@ This thread was corrected twice in one day, both times by catching a framing mis
 **Two smaller corrections made the same pass**: (1) winner's-curse check — re-selecting the P90 cutoff using only the train-chronological-2/3 (never seeing the full sample) still picks the same level, and its true held-out test rate was 75% vs 28% (N=12/111) — didn't decay in this specific slice, but N=12 is too thin to read as confirmation either way; plan around the low 60s for the raw split until real forward data says otherwise. (2) outcome-window independence explicitly confirmed (not just asserted) — the remainder range is a direct max/min over only the post-10:30 bars, zero bar overlap with the IB window, verified via a sample-day bar-count printout — not an arithmetic artifact of subtracting IB from the total.
 
 **Parked deliberately**: the trade-level validation (does IB-top-decile at a specific setup's target-hit time predict that trade's own runner performance) is NOT being started this session — per direct instruction, high-stakes work that eventually touches live behavior should wait for a fresh session rather than continue into a long one.
+
+**Two more leads flagged for that fresh session (recorded on `OPEN_DECISION wire_intraday_ib_range_exit_signal`, not chased tonight)**:
+1. **The day-type finding may itself be sign-flipped, not a null** — the second inversion in one day. If wide IB predicts TURBULENT at 52.8% (vs 17.3% base) and TREND comes in *below* baseline (16.7% vs 21.6%), the usable rule might be the mirror of what was tested: **take profits faster on wide-IB days** (more likely in chop than in a run), not hold longer. Distinct, untested claim — worth testing directly alongside the day-type-conditioned "hold" version, not instead of it.
+2. **Tension with classic Dalton market-profile theory worth resolving with a clear head**: Dalton reads a large Initial Balance as initiative participation and a trend-day tell — the opposite of what this data shows for NQ. Two live explanations, not yet distinguished: a genuine difference between modern index futures and Dalton's original context, or this codebase's `day_type` TREND definition (`scripts/derive_day_types.js`) not actually lining up with what Dalton means by a trend day. Check against real Dalton source material before concluding either way — per this codebase's own standing rule not to guess on a named framework's specifics.
 
 ## ✅ 2026-08-04: Compression → Tail-MFE test — RESOLVED, all 3 parts negative (a third, differently-framed rejection of the same underlying question)
 
