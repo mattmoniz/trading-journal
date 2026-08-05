@@ -1,5 +1,57 @@
 # Decisions Log
 
+## 2026-08-05 (same day, second pass) — a sharper external review caught real gaps in the first pass
+
+A second round of Opus pushback on the entry below found genuine problems, verified with real
+output before accepting or rejecting each one (per the standing "produce output, not narration"
+discipline this whole thread has been about):
+
+1. **The "6 of 7 confirmed as timing artifacts" claim was itself under-verified.** Direct
+   comparison of fired stop/target distances against the FULL calibration row history (not just
+   "did a row exist") found 3 of the 6 (`CAM_S4_FADE_LONG`, `GLOBEX_VWAP_MAGNET_LONG`,
+   `IB_MID_SCALP_FADE_LONG`) never matched the `optimal_stop`/`optimal_target` columns at ANY
+   point in their history — because before 2026-08-03, `acd.js`'s `optStopQ` read `p75_mae`/
+   `p50_mfe` instead (the already-documented column-read bug). `CAM_S4_FADE_LONG`'s fired
+   stop=90.0/target=43.0 matches `p75_mae`=90.0/`p50_mfe`=43.0 EXACTLY once you look at the right
+   columns. `GLOBEX_VWAP_MAGNET_LONG`/`VWAP_MAGNET_LONG` match the literal code fallback exactly
+   because those blocks were hardcoded with no calibration read at all until 2026-08-02. All now
+   precisely explained with matching numbers, not narration — but the first pass's explanation,
+   while directionally right, hadn't actually done this check.
+2. **Cascade-breaker "correctly suppressed 12 fades" was asserted, not measured, and overstated.**
+   The specific 12-row window really was all losers, but the FULL day's 51 cascade-suppressed rows
+   resolved 22W/28L, net -$6 — close to breakeven, not a clean "avoided bad trades" story.
+3. **`STOP_SWEEP_LONG` is genuinely `ACTIVE` (real N=34, blended EV=+$10.44)**, so the fix has
+   immediate live effect (target 30pt flat -> 35pt calibrated), not a safe SHADOW-only change. The
+   calibration source (`sweepOptimalStopAndTarget()`) has a confirmed, real, order-blind EV
+   check (`if (mae > stop) ... else if (mfe >= target)` with no regard for which happened first
+   chronologically -- `update_optimal_stops.mjs` lines 196-198) plus the already-known censoring
+   feedback loop. Not unique exposure (every other live ACTIVE setup already depends on the same
+   function with the same defects), but the fix wasn't run through the same scrutiny before
+   shipping to ACTIVE that this codebase's own standing rule calls for on live-risk changes.
+   **Decision on whether to pause it deferred to the user, not made unilaterally.**
+4. **"Overnight" in the holdout-failure claim precisely confirmed**: `OVERNIGHT_OPTIMAL_STOP` is
+   written by exactly one script and read by ZERO live-serving code (grepped `server/` in full).
+   It refers to the Globex/overnight session scope, not a cron schedule, and — stronger than
+   originally stated — it was never wired into live trading at all, only into a standalone
+   backtest/prop-simulation script.
+5. **DLL sweep reconciled — no contradiction, just a misattribution.** The three different numbers
+   ($27,678/$19,416/$11,602) belong to `LEGACY_ROLLING` (3,034-4,001 trades, plausibly hits caps).
+   The identical number (-$954.50 x3) belongs to `CURRENT_VALIDATED_ROSTER` (38 trades, never
+   binds any cap) — internally consistent, not contradictory, once correctly attributed.
+6. **Priority inversion acknowledged and acted on.** `current_validated_roster_2yr_walkforward_net_negative`'s
+   real headline (real-N-gated roster is thin and net-negative while a looser gate makes money) was
+   mentioned but not acted on in the first pass, unlike the overnight-holdout finding which got a
+   fresh Gemini dispatch. Flagged `OPEN_DECISION validated_roster_thinness_needs_fresh_test` (HIGH)
+   to run a fresh version of this comparison against today's actual roster/calibration state once
+   the current holdout dispatch completes -- the 2026-07-20 numbers describe a roster that no
+   longer exists in that form.
+7. **`IB_HIGH_FADE_SHORT` SHADOW-with-no-suppression_reason fully resolved** (not left as an open
+   curiosity): it's the `shadowCandidates` insert path (`server/routes/acd.js` ~line 7978), which
+   deliberately omits `suppression_reason` from its column list. The setup wasn't suppressed by
+   any rule — it was a genuinely eligible candidate that lost the "one alert per poll" selection to
+   a different simultaneously-eligible touch. Real, minor visibility gap (no record of which
+   candidate won instead), not a live-risk bug.
+
 Why this exists: `docs/audit_findings.md`/`remediation_plan.md` tell you what an external review
 concluded. This file tells you what actually happened when Claude Code checked those conclusions
 against live data, and why the system is operating the way it is right now. Findings tell you
