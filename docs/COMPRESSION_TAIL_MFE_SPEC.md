@@ -1,31 +1,38 @@
 # Compression → Tail-MFE Spec (does pre-trade compression predict outsized moves?)
 
-**Status: RESOLVED 2026-08-04, negative for the spec's original purpose (deciding whether to hold a
-runner longer). Full account: `docs/OPEN_THREADS.md`'s 2026-08-04 entries. Short version:**
+**Status: RESOLVED 2026-08-05, POSITIVE — a real, actionable, same-day exit-timing signal was found,
+just not the one originally hypothesized. Full account: `docs/OPEN_THREADS.md`'s 2026-08-05 entry
+(itself a correction of an earlier 2026-08-04 write-up that filed this same underlying result as a
+flat negative — read that entry, it explains both corrections). Short version:**
 - Parts 1/4-selection built directly by Claude (`scripts/backfill_compression_metrics.mjs`,
   `inferStrategyFamily()` in `server/config/setupTypes.js`), independently verified correct.
 - **Part 2/3's first version (`scripts/analyze_compression_tail_mfe.mjs`) was mis-routed** — it
   tested compression against trade-level MFE, which only exists for a fired trade, forcing the
   question through `active_setups` (a thin, ~3-week-old, setup-gated population) instead of raw bar
-  history — exactly the CLAUDE.md standing-rule violation ("route a market-behavior hypothesis
-  through bar history first") an external review caught. Kept on record as a real, narrower,
-  correctly-labeled finding (`RESEARCH_CLAIM compression_tail_mfe_mean_reversion`/`_continuation`),
-  not deleted, but superseded as the answer to this spec's actual question.
-- **The corrected, session-level, non-gated version (`scripts/analyze_compression_session_range.mjs`,
-  369 real NQ RTH trading days, full multi-year bar history) is the real answer**: a REAL,
-  Bonferroni-significant, independently-verified effect exists — but in the OPPOSITE direction from
-  the hypothesis this spec was built to test. Compression (tight value-area width, tight Initial
-  Balance) predicts a QUIETER following session, not a bigger one — volatility clustering, not
-  squeeze-then-expansion. This independently corroborates an already-existing, differently-derived
-  finding in this codebase (`RESEARCH_CLAIM volatility_squeeze_bigmove_inverted`). `RESEARCH_CLAIM
-  compression_session_range_prediction`.
-- Part 4's pilot (`scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs`) independently failed its own
-  plateau-check guardrail. Two real bugs found auditing Gemini's draft and fixed before trusting the
-  number (a missing `ORDER BY` breaking the chronological split; a same-bar tie-break PnL gap) — the
-  corrected re-run holds the negative result, more decisively than the buggy version.
-- **Net**: two independent, well-powered tests (a market-wide bar-history test and a trade-level
-  pilot) both point away from "compression → hold the runner longer," not just fail to support it.
-  Nothing wired live. Historical text below is the original spec, kept for the reasoning trail.
+  history. Kept on record as a real, narrower, correctly-labeled finding about this system's own
+  fired trades, not deleted, but superseded as the answer to this spec's actual question.
+- **The session-level, non-gated CROSS-DAY version (`scripts/analyze_compression_session_range.mjs`,
+  369 real NQ RTH trading days) found a real, Bonferroni-significant effect** — volatility
+  clustering (an uncompressed/wide prior day predicts a real lift toward a top-quartile-range day,
+  over a verified 32.8% base rate), independently corroborating `RESEARCH_CLAIM
+  volatility_squeeze_bigmove_inverted`. `RESEARCH_CLAIM compression_session_range_prediction`.
+- **The SAME-DAY (intraday) follow-up this motivated is the real payoff**
+  (`scripts/analyze_intraday_ib_range_remainder.mjs`): today's own Initial Balance range, known by
+  10:30 ET, in the top DECILE of its trailing-60-day distribution → the rest of that session is a
+  top-quartile-range day 73% of the time vs 27% otherwise (N=37/332, p=9.6e-9, Bonferroni-clean,
+  rigor-clean, ~zero out-of-sample decay). The strongest, cleanest finding in this whole thread —
+  usable in real time for a hold-runner-vs-take-profit decision on any setup resolving after 10:30.
+  `RESEARCH_CLAIM intraday_ib_range_predicts_remainder`. **Not wired live** —
+  `OPEN_DECISION wire_intraday_ib_range_exit_signal` (HIGH) — needs a trade-level validation and a
+  real design pass first, and is hard-scoped to exit timing only, never position sizing (wide
+  sessions carry wide adverse excursion too).
+- Part 4's original pilot (`scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs`, unconditional —
+  no IB-range conditioning) still failed its own plateau check. That's now explainable: it never
+  conditioned on the one variable that turned out to matter.
+- **Net**: the original hypothesis (compression precedes expansion) is dead, but the underlying
+  research surfaced a real, positive, out-of-sample, independently-corroborated signal by inverting
+  it — hold runners longer on days that are *already* active, not quiet ones. Historical text below
+  is the original spec, kept for the reasoning trail.
 
 **Original status line, 2026-08-04: spec only, not built. Written to be self-contained across a
 context clear — read this doc plus `CLAUDE.md` and you should not need the prior conversation.**
