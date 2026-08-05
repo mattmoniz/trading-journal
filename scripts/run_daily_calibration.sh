@@ -34,4 +34,11 @@ echo "=== Daily calibration: $(date) ==="
 # read the output, don't treat exit code as build-breaking in this cron.
 /usr/bin/node scripts/test_invariants.mjs
 
+# Docs-split enforcement (2026-08-05, per external audit finding: this tool already existed
+# but nothing ever ran it, so OPEN_THREADS.md silently grew back to 386KB/97K tokens between
+# runs -- the mechanism was real, the cadence wasn't). --apply is safe/idempotent: it only
+# moves already-dated sections older than the keep-window into OPEN_THREADS_ARCHIVE.md,
+# nothing is deleted, and it no-ops cleanly when there's nothing old enough to move.
+/usr/bin/node scripts/archive_open_threads.mjs --apply
+
 echo "=== Daily calibration complete: $(date) ==="

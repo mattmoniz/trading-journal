@@ -55,6 +55,15 @@ function classifyRejectionReason(text, status) {
     || /real,? positive,? consistent improvement/i.test(text);
   if (isPositive || explicitlyPositive) return 'POSITIVE_FINDING_NOT_A_REJECTION';
 
+  // Added 2026-08-05 per external review: "a load-bearing assumption was tested and it failed" is
+  // neither a rejected idea (it wasn't proposing something new) nor a positive finding (the result
+  // is bad news) -- the original 5-way taxonomy had no bucket for this and such rows fell to N/A,
+  // silently excluding exactly the kind of row a self-deception audit most needs to surface.
+  if (/calibrat(ion|ing) makes things WORSE|does not generalize (with|to)|net.?negative|flat negative|not.{0,20}ready|legacy.{0,20}(is )?healthy|healthy.{0,40}legacy|core premise|too thin.{0,30}net/i.test(text)
+      && /held-?out|walk-?forward|genuinely new data|fresh holdout/i.test(text)) {
+    return 'SYSTEM_PREMISE_FAILED';
+  }
+
   if (/contaminat|synthetic|BACKFILL-origin|ES contamination|unfiltered by origin_status|93-97% synthetic|censor(ed|ing)|self-censoring/i.test(text)) {
     return 'contaminated-data';
   }
@@ -147,7 +156,7 @@ async function main() {
     const sameDayAsDefect = date === DEFECT_CUTOFF_DATE;
     // Decisions aren't "rejected ideas" in the RESEARCH_CLAIM sense -- only a RESOLVED decision
     // whose resolution reads as a negative/rejection is even eligible for the revisit list.
-    const resolvedNegative = status === 'RESOLVED' && /reject|revert|does not hold|debunk|negative|refuted|closed negative/i.test(d.notes?.resolution_text || '');
+    const resolvedNegative = status === 'RESOLVED' && /reject|revert|does not hold|debunk|negative|refuted|closed negative|makes things WORSE|does not generalize/i.test(d.notes?.resolution_text || '');
     const decisionClass = resolvedNegative ? classifyRejectionReason(text, status) : 'N/A (not a tested claim)';
     const onRevisitList = resolvedNegative && decisionClass !== 'UNCLASSIFIED' && decisionClass !== 'POSITIVE_FINDING_NOT_A_REJECTION' && touchesAnyBrokenMachinery && targetsRrOrBigmove && preDefectDiscovery;
 

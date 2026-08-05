@@ -323,7 +323,12 @@ async function main() {
 
   md += `### Key Interpretations\n`;
   md += `1. **Residual Runway**: Fades and breakouts that hit T1 show significant follow-through, often exceeding T1 by 50-100pt, particularly on Trend or Turbulent sessions.\n`;
-  md += `2. **IB Range Predictive Power**: Tight IB range days indeed lead to significantly larger MFE extensions after breakout, confirming the squeeze hypothesis.\n`;
+  // Line 2 here used to assert "tight IB range days lead to larger MFE extensions, confirming
+  // the squeeze hypothesis" -- a hand-typed conclusion that was never persisted via recordClaim(),
+  // never origin_status-filtered, and directly CONTRADICTED by the real, verified result:
+  // RESEARCH_CLAIM intraday_ib_range_predicts_remainder (369 real NQ RTH days, independently
+  // re-derived) found the OPPOSITE -- tight IB precedes a QUIETER remainder, wide IB precedes a
+  // wider one. Removed 2026-08-05, OPEN_DECISION audit_stale_ib_range_squeeze_claim resolved.
   md += `3. **Data Quality & Outliers**: Where \`avg_mfe >> p90\`, we observe large outlier tail-risk events. We have adjusted recommended runner targets using p75 and median (p50) metrics to ensure they are robust and not contaminated by single black-swan moves.\n\n`;
 
   // Add the Error Watcher log at the end

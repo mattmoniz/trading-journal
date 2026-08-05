@@ -972,6 +972,42 @@ async function main() {
       }
     }
 
+    // ── 14. Standing docs-size cap (added 2026-08-05) ───────────────────────────────
+    // An external audit found CLAUDE.md (219KB) + OPEN_THREADS.md (386KB, despite
+    // scripts/archive_open_threads.mjs already existing to prevent exactly this) had grown to
+    // ~152K combined tokens -- past the point where a session can hold both in working memory,
+    // which is the documented mechanism behind at least one real rediscovery-from-scratch
+    // incident this session (volatility clustering, confirmed 2026-07-23, re-derived 2026-08-04).
+    // A convention written inside a 55K-token file is a rule nobody reads; only a check that
+    // fires every night is guaranteed to be seen. This does not enforce a redesign of CLAUDE.md's
+    // structure (that's a real, separate editorial project, not a mechanical fix) -- it only
+    // keeps the SIZE regression from being invisible the way it was before.
+    console.log('\n[14] Standing docs-size cap');
+    {
+      const CLAUDE_MD_MAX_LINES = 300;
+      const CLAUDE_MD_MAX_KB = 40; // the line cap alone is gameable by long single-line paragraphs
+      const OPEN_THREADS_MAX_KB = 250;
+      const claudeMdPath = path.resolve('CLAUDE.md');
+      const openThreadsPath = path.resolve('docs/OPEN_THREADS.md');
+      if (existsSync(claudeMdPath)) {
+        const lines = fs.readFileSync(claudeMdPath, 'utf8').split('\n').length;
+        const kb = fs.statSync(claudeMdPath).size / 1024;
+        if (lines > CLAUDE_MD_MAX_LINES || kb > CLAUDE_MD_MAX_KB) {
+          warn(`CLAUDE.md is ${lines} lines / ${kb.toFixed(0)}KB (caps: ${CLAUDE_MD_MAX_LINES} lines, ${CLAUDE_MD_MAX_KB}KB -- the KB cap is the one that actually matters here, since long individual paragraphs can pass a line-count cap while still costing real context) -- this is a known, not-yet-executed restructuring (split into docs/ per-topic files, keep only hard rules + a pointer index here), not something this check can fix by itself. WARN, not FAIL, since forcing this line-by-line tonight would risk losing hard-won context faster than a careful split would.`);
+        } else {
+          ok(`CLAUDE.md within size cap (${lines}/${CLAUDE_MD_MAX_LINES} lines, ${kb.toFixed(0)}/${CLAUDE_MD_MAX_KB}KB)`);
+        }
+      }
+      if (existsSync(openThreadsPath)) {
+        const kb = fs.statSync(openThreadsPath).size / 1024;
+        if (kb > OPEN_THREADS_MAX_KB) {
+          warn(`docs/OPEN_THREADS.md is ${kb.toFixed(0)}KB (cap ${OPEN_THREADS_MAX_KB}KB) -- run node scripts/archive_open_threads.mjs --apply (now wired into run_daily_calibration.sh as of 2026-08-05, so this should self-correct within a day; a WARN here means it's still catching up or the cron didn't run).`);
+        } else {
+          ok(`docs/OPEN_THREADS.md within size cap (${kb.toFixed(0)}/${OPEN_THREADS_MAX_KB}KB)`);
+        }
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

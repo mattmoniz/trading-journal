@@ -6887,12 +6887,19 @@ export default function createACDRouter(io) {
               // data is THIN_N with N=3-7. Same "never fabricate a stat" violation fixed elsewhere
               // this session (docs/OPEN_THREADS.md).
               const _sweepLongStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.STOP_SWEEP_LONG;
+              // Target was a flat hardcoded entry+30 until 2026-08-05 (test_invariants.mjs check [8]
+              // flagged this live -- the ONE of 7 flagged types that turned out to be a genuine
+              // "never reads OPTIMAL_STOP" bug, not a fired-before-calibration-existed timing
+              // artifact like the other 6). Stop stays structural (recentLow-5, below the sweep
+              // extreme that invalidates the reversal thesis) -- a deliberate design choice, not
+              // the bug that was found; only the target ever ignored calibration.
+              const _sweepLongOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.STOP_SWEEP_LONG;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_LONG',
                 direction: 'LONG',
                 entry: currentPrice,
                 stop: Math.round(recentLow - 5),
-                target: Math.round(currentPrice + 30),
+                target: Math.round(currentPrice + (_sweepLongOpt?.target ?? 30)),
                 targetLabel: `${level.name} sweep bounce`,
                 description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_LONG') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepLongStats && _sweepLongStats.n >= 20)
@@ -6909,12 +6916,13 @@ export default function createACDRouter(io) {
             if (brokeAbove && nowBelow && extension > 3 && extension < 50 && drop > 15) {
               // FIXED 2026-07-17: same fabricated-history fix as STOP_SWEEP_LONG above.
               const _sweepShortStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.STOP_SWEEP_SHORT;
+              const _sweepShortOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.STOP_SWEEP_SHORT;
               stopSweepSetup = {
                 type: 'STOP_SWEEP_SHORT',
                 direction: 'SHORT',
                 entry: currentPrice,
                 stop: Math.round(recentHigh + 5),
-                target: Math.round(currentPrice - 30),
+                target: Math.round(currentPrice - (_sweepShortOpt?.target ?? 30)),
                 targetLabel: `${level.name} sweep fade`,
                 description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_SHORT') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepShortStats && _sweepShortStats.n >= 20)
