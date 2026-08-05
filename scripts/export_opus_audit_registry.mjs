@@ -3,35 +3,52 @@
 // RESEARCH_CLAIM and OPEN_DECISION row so an idea "killed by the instrument" (a now-known-broken
 // piece of calibration machinery) can be told apart from an idea genuinely killed by evidence.
 //
-// Three specific defects, all discovered/fixed on 2026-08-04, are the "now-known-broken
-// machinery" this export cross-references against:
+// FOUR specific defects are the "now-known-broken machinery" this export cross-references
+// against. Three discovered/fixed on 2026-08-04 (a 2.5-hour window); the fourth (added
+// 2026-08-05, per external review connecting audit_findings.md's own §3 and §7.3 as the same
+// underlying defect) is much older and wider-reaching -- NOT per-category flat dates anymore,
+// since this one needs a genuinely different window than the other three:
 //   1. optimal_stop_candidate_grid_self_censoring_feedback_loop -- sweepOptimalStopAndTarget()'s
 //      MAE-percentile candidate grid is right-censored by whatever stop was live when each trade
-//      fired (tight stop -> tight censored MAE -> tight candidate grid -> tight stop again).
-//      Discovered/committed 2026-08-04 18:22:51 ET (git 2ef7b36).
+//      fired. Discovered/committed 2026-08-04 18:22:51 ET (git 2ef7b36).
 //   2. live_stop_population_synthetic_composition_audit_20260804 -- this system's highest-volume
-//      live setups have their stop built on 93-97% synthetic BACKFILL data, not the general
-//      "~80% of active_setups is synthetic" fact (known since 2026-07-17), but the deeper finding
-//      that origin_status-filtering alone doesn't leave enough real N to trust. Discovered/
-//      committed 2026-08-04 17:32:35 ET (git e12238f).
-//   3. optimal_stop_100pct_unguarded_fallback_needs_new_formula -- the circuit-breaker incident:
-//      an origin_status data-correctness fix on 2026-08-02 had a second-order effect that pushed
-//      ~100% of live setup_types onto an unguarded, chronologically order-blind base sweep.
-//      Discovered/shipped 2026-08-04 16:09:26-16:29:02 ET (git eecdc94/7534fe7).
+//      live setups have their stop built on 93-97% synthetic BACKFILL data. Discovered/committed
+//      2026-08-04 17:32:35 ET (git e12238f).
+//   3. optimal_stop_100pct_unguarded_fallback_needs_new_formula -- the circuit-breaker incident,
+//      an unguarded, chronologically order-blind base sweep. Discovered/shipped 2026-08-04
+//      16:09:26-16:29:02 ET (git eecdc94/7534fe7).
+//   4. optstopq_bug_contaminates_real_n_census -- acd.js's optStopQ read p75_mae/p50_mfe instead
+//      of optimal_stop/optimal_target for the ENTIRE generic level-fade live-firing path, live
+//      2026-07-09 through 2026-08-02, fixed 2026-08-03. Unlike defects 1-3, this doesn't just
+//      affect a calibration TABLE's own quality -- it means every REAL (origin_status
+//      ACTIVE/SHADOW) trade fired in that ~1-month window ran on a stop/target that isn't what
+//      today's calibration says, contaminating the real-trade DATA itself (mae/mfe/actual_pnl),
+//      not just a downstream analysis of it. Quantified 2026-08-05: 1,215 of 1,404 real trades
+//      (86.5%) fired in this window; of 14 setup_types currently clearing real N>=20, only 1
+//      would survive using clean post-fix data alone (RESEARCH_CLAIM
+//      optstopq_bug_contaminates_real_n_census). Given this scale, ANY claim analyzing
+//      active_setups/real-N data is treated as potentially touching this defect regardless of
+//      the claim's own run_date, not gated by a "claim written before discovery" cutoff the way
+//      1-3 are -- the defect's reach is in the DATA, not in when someone happened to write about it.
 // performance_audit.run_date is a DATE column (no time-of-day), so the finest safe cutoff
 // available from the data itself is "same calendar day or earlier" -- every claim/decision dated
 // 2026-08-04 or later is flagged separately for manual same-day cross-check, never silently
 // bucketed either way.
 //
 // Usage: node scripts/export_opus_audit_registry.mjs
-// Writes scratch/opus_registry_export/registry.md (the main artifact) and
-// scratch/opus_registry_export/registry.json (same data, machine-readable).
+// Writes docs/audit_registry_export/registry.md (the main artifact, tracked in git -- moved out
+// of scratch/ 2026-08-05, since a gitignored export is exactly the "drawer note" problem this
+// whole registry exists to solve) and registry.json (same data, machine-readable).
 import fs from 'fs';
 import { listClaims } from './record_claim.mjs';
 import { listDecisions } from './flag_decision.mjs';
 
-const OUT_DIR = 'scratch/opus_registry_export';
+const OUT_DIR = 'docs/audit_registry_export';
 const DEFECT_CUTOFF_DATE = '2026-08-04'; // claims/decisions dated on/after this need manual same-day time cross-check
+// Defect #4's window is in the DATA (which trades fired), not in claim authorship dates -- see
+// header comment. Any claim touching active_setups/real-N is treated as potentially affected
+// regardless of when it was written, so it doesn't get its own "preDefectDiscovery" date gate
+// the way defects 1-3 do -- it's folded into the machinery-touch flag itself (see below).
 
 // ── Machinery-touch detectors (mechanical keyword match against the full text) ──────────────
 const RX_MAE_PERCENTILE = /\bMAE\b.*percentile|percentile.*\bMAE\b|p75_mae|p50_mfe|mae_points.*percentile|unconstrained MAE|censor(ed|ing)|self-censoring|MAE.?\/.?MFE percentile/i;
@@ -112,7 +129,15 @@ async function main() {
     const touchesBaseSweep = RX_BASE_SWEEP.test(text);
     const touchesAnyBrokenMachinery = touchesMae || touchesActiveSetupsN || touchesBaseSweep;
     const targetsRrOrBigmove = RX_RR_OR_BIGMOVE.test(text);
-    const preDefectDiscovery = date != null && date < DEFECT_CUTOFF_DATE;
+    // Defects 1-3: claim must predate the 08-04 discovery to be "built on broken machinery".
+    // Defect 4 (optStopQ): the contamination is in the DATA (which real trades a claim's own
+    // analysis pulled in), not in when the claim was written -- any claim touching active_setups
+    // N is treated as potentially affected as long as it was written on/after 2026-07-09 (when
+    // the contamination window started; a claim written before that couldn't have included any
+    // contaminated trades yet, since they hadn't fired).
+    const preDefect13 = date != null && date < DEFECT_CUTOFF_DATE;
+    const preDefect4 = touchesActiveSetupsN && date != null && date >= '2026-07-09';
+    const preDefectDiscovery = preDefect13 || preDefect4;
     const sameDayAsDefect = date === DEFECT_CUTOFF_DATE;
     const rejectionReason = classifyRejectionReason(text, status);
     // Only a CONFIDENTLY-classified rejection qualifies -- UNCLASSIFIED means the classifier
@@ -152,7 +177,9 @@ async function main() {
     const touchesBaseSweep = RX_BASE_SWEEP.test(text);
     const touchesAnyBrokenMachinery = touchesMae || touchesActiveSetupsN || touchesBaseSweep;
     const targetsRrOrBigmove = RX_RR_OR_BIGMOVE.test(text);
-    const preDefectDiscovery = date != null && date < DEFECT_CUTOFF_DATE;
+    const preDefect13 = date != null && date < DEFECT_CUTOFF_DATE;
+    const preDefect4 = touchesActiveSetupsN && date != null && date >= '2026-07-09';
+    const preDefectDiscovery = preDefect13 || preDefect4;
     const sameDayAsDefect = date === DEFECT_CUTOFF_DATE;
     // Decisions aren't "rejected ideas" in the RESEARCH_CLAIM sense -- only a RESOLVED decision
     // whose resolution reads as a negative/rejection is even eligible for the revisit list.
