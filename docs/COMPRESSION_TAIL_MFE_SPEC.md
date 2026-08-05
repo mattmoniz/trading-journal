@@ -1,9 +1,12 @@
 # Compression → Tail-MFE Spec (does pre-trade compression predict outsized moves?)
 
-**Status: RESOLVED 2026-08-05, POSITIVE — a real, actionable, same-day exit-timing signal was found,
-just not the one originally hypothesized. Full account: `docs/OPEN_THREADS.md`'s 2026-08-05 entry
-(itself a correction of an earlier 2026-08-04 write-up that filed this same underlying result as a
-flat negative — read that entry, it explains both corrections). Short version:**
+**Status: RESOLVED 2026-08-05, MIXED — real statistical effects were found at both the cross-day and
+same-day level, but a day-type conditioning check found the same-day signal likely predicts the
+WRONG behavior (turbulence, not trend) for a naive hold-longer rule. NOT ready to design or wire —
+needs day-type as a required second condition first. Full account: `docs/OPEN_THREADS.md`'s
+2026-08-05 entry (itself a correction of an earlier 2026-08-04 write-up that filed the underlying
+cross-day result as a flat negative — read that entry, it explains all three corrections). Short
+version:**
 - Parts 1/4-selection built directly by Claude (`scripts/backfill_compression_metrics.mjs`,
   `inferStrategyFamily()` in `server/config/setupTypes.js`), independently verified correct.
 - **Part 2/3's first version (`scripts/analyze_compression_tail_mfe.mjs`) was mis-routed** — it
@@ -16,16 +19,20 @@ flat negative — read that entry, it explains both corrections). Short version:
   clustering (an uncompressed/wide prior day predicts a real lift toward a top-quartile-range day,
   over a verified 32.8% base rate), independently corroborating `RESEARCH_CLAIM
   volatility_squeeze_bigmove_inverted`. `RESEARCH_CLAIM compression_session_range_prediction`.
-- **The SAME-DAY (intraday) follow-up this motivated is the real payoff**
+- **The SAME-DAY (intraday) follow-up this motivated found a real effect, but with a decisive catch**
   (`scripts/analyze_intraday_ib_range_remainder.mjs`): today's own Initial Balance range, known by
   10:30 ET, in the top DECILE of its trailing-60-day distribution → the rest of that session is a
   top-quartile-range day 73% of the time vs 27% otherwise (N=37/332, p=9.6e-9, Bonferroni-clean,
-  rigor-clean, ~zero out-of-sample decay). The strongest, cleanest finding in this whole thread —
-  usable in real time for a hold-runner-vs-take-profit decision on any setup resolving after 10:30.
-  `RESEARCH_CLAIM intraday_ib_range_predicts_remainder`. **Not wired live** —
-  `OPEN_DECISION wire_intraday_ib_range_exit_signal` (HIGH) — needs a trade-level validation and a
-  real design pass first, and is hard-scoped to exit timing only, never position sizing (wide
-  sessions carry wide adverse excursion too).
+  rigor-clean). **But a day-type conditioning check (`scripts/analyze_intraday_ib_range_daytype.mjs`,
+  joined against the real `acd_daily_log.day_type` TREND/TURBULENT/BALANCE classifier) found that
+  wide-IB days are disproportionately TURBULENT (52.8% vs a 17.3% base rate), not TREND (16.7%,
+  below the 21.6% base rate)** — a wide IB mostly predicts whipsaw, not clean continuation, so
+  "hold the runner longer on wide-IB days" as originally framed is likely WRONG, not just
+  unvalidated, since it would disproportionately hold into the day-type where holding hurts.
+  `RESEARCH_CLAIM intraday_ib_range_predicts_remainder` / `intraday_ib_range_daytype_conditioning`.
+  **Not wired live** — `OPEN_DECISION wire_intraday_ib_range_exit_signal` (HIGH), revised: needs
+  day-type (or a real-time proxy) as a REQUIRED second condition before any trade-level validation,
+  and is hard-scoped to exit timing only, never position sizing.
 - Part 4's original pilot (`scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs`, unconditional —
   no IB-range conditioning) still failed its own plateau check. That's now explainable: it never
   conditioned on the one variable that turned out to matter.
