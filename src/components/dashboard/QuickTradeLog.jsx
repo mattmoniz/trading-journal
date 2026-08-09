@@ -541,9 +541,25 @@ function SystemHealthSummary({ onNavigate }) {
   const redCount = data?.redCount || 0;
   const dotColor = !data ? '#64748b' : redCount > 0 ? '#ef4444' : '#22c55e';
   const label = !data ? 'Checking...' : redCount > 0 ? `⚠ ${redCount} process${redCount > 1 ? 'es' : ''} need attention` : 'All processes running';
+  // Added 2026-08-09: every check above is application-layer (scheduled-job freshness, an
+  // in-memory heartbeat) -- none of them can tell "the managed systemd process is serving
+  // this" from "an orphaned dev session happens to be healthy in its place," which is
+  // exactly how a 4-day outage went undetected (see docs/DECISIONS_LOG.md). This is a
+  // distinct, louder banner rather than folding into redCount/label above -- a process-
+  // schedule problem and "you are talking to the wrong server entirely" are different
+  // severities and shouldn't be visually conflated into the same generic amber dot.
+  const mismatch = data?.managedProcessMismatch;
 
   return (
     <>
+      {mismatch && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 14px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 8, fontSize: 13 }}>
+          <span style={{ fontSize: 16 }}>🔴</span>
+          <span style={{ color: '#ef4444', fontWeight: 600 }}>
+            Not the managed server (PID {mismatch.myPid} vs. systemd's {mismatch.systemdMainPid}) — likely an orphaned dev session serving in its place. Run ./stop.sh.
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, padding: '8px 14px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 8, fontSize: 13 }}>
         <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
         <span style={{ color: dotColor === '#22c55e' ? '#22c55e' : dotColor === '#ef4444' ? '#ef4444' : 'var(--text-muted)' }}>{label}</span>

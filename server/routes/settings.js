@@ -331,7 +331,33 @@ router.get('/settings/process-health', async (req, res) => {
     let dllStatus = null;
     try { dllStatus = await computeDLLStatus(); } catch (_) {}
 
-    res.json({ processes, checkedAt: fmtTime(nowET, nowET) || 'now', redCount, criticallyStaleProcesses, dllStatus });
+    // Managed-process identity check (added 2026-08-09, after a 4-day undetected outage --
+    // see docs/DECISIONS_LOG.md). Every other check on this page is application-layer (are
+    // scheduled jobs running on time, is a heartbeat fresh) -- all of those looked perfectly
+    // healthy the whole 4 days, because an UNMANAGED orphaned ./start.sh dev session was
+    // genuinely, honestly running them the entire time. None of that can tell "the correct,
+    // systemd-managed process is the one serving this request" from "something else is
+    // standing in for it and happens to be healthy too." This check can, because it's
+    // self-referential: THIS running process asks systemd who its own designated Main PID
+    // is, and compares it against its own real PID -- a check any process can run about
+    // itself regardless of which one is currently answering the request, unlike the
+    // heartbeat/schedule checks above. `Type=simple` in the unit file means MainPID IS the
+    // literal node process's own PID, no forking/PID-file indirection to account for.
+    let managedProcessMismatch = null;
+    try {
+      const { execSync } = await import('child_process');
+      const mainPidOut = execSync('systemctl --user show trading-journal-server.service -p MainPID --value', { timeout: 3000 }).toString().trim();
+      const managedPid = parseInt(mainPidOut, 10);
+      if (managedPid && managedPid !== process.pid) {
+        managedProcessMismatch = {
+          myPid: process.pid,
+          systemdMainPid: managedPid,
+          message: `This server (PID ${process.pid}) is NOT the systemd-managed process (PID ${managedPid}) -- an unmanaged process (likely an orphaned ./start.sh dev session) is serving requests instead. Run ./stop.sh or kill the stray process, then verify 'systemctl --user status trading-journal-server.service' shows this PID.`,
+        };
+      }
+    } catch (_) { /* systemctl unavailable or check failed -- don't block the response over it */ }
+
+    res.json({ processes, checkedAt: fmtTime(nowET, nowET) || 'now', redCount, criticallyStaleProcesses, dllStatus, managedProcessMismatch });
   } catch (err) {
     console.error('[process-health]', err.message);
     res.status(500).json({ error: err.message });

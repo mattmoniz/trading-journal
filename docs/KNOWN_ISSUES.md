@@ -21,8 +21,41 @@ Living tracker. Originally compiled 2026-06-07 (see archived `docs/ARCHITECTURE_
 6. **`caseEngine.js`'s overnight-range query (`onQ`, ~line 886) may leak lookahead when run for historical/past dates.** It filters `ts::date = $1 AND (hour>=18 OR hour<9)` — a *single*-date equality, not `$1::date - 1` for the evening leg like the equivalent (correct) 24hr-VWAP query in `morningBrief.js` does. In live/intraday use this accidentally "works" because tonight's evening bars for `$1` don't exist yet when the case is built each morning. But if `computeCase` is ever called for a past date with a full day of bars already in the DB (replay, backfill, or historical case re-derivation), `hour>=18` would pull tonight's (i.e. *after* tradeDate's own session close) bars into "overnight," not last night's. Found 2026-06-30 while wiring `OVERNIGHT_HIGH/LOW` into `phaseChangeDetector.js` (which uses the correct `priorDate`-qualified version) — not fixed yet because it needs confirmation of whether `computeCase` is ever actually invoked in a historical-replay context before changing live-session behavior.
 
 ## Re-verified fixed / no longer applicable (removed from list 2026-06-30)
-- "SierraWatcher dead code, never `.start()`'d" — `index.js:235` now instantiates and mounts it via `createSierraRouter(io, sierraWatcher)`; appears wired.
 - "Empty/unused tables" list — `auction_reads` is now actively populated (395 rows, used by 11 files) — no longer dormant. The remaining dormant tables are listed in item 6 above.
+
+8. **CORRECTION 2026-08-09: "SierraWatcher dead code, never `.start()`'d" was WRONGLY marked
+   fixed above on 2026-06-30 — it is still genuinely dead code today.** The 2026-06-30 note
+   only verified that `sierraWatcher` is instantiated (`server/index.js` ~line 302, `const
+   sierraWatcher = new SierraWatcher(SIERRA_DATA_DIR);`) and passed into
+   `createSierraRouter(io, sierraWatcher)` — a superficial "appears wired" check, not a check
+   that `.start()` is actually called anywhere. It is not: grepped `server/index.js` and
+   `server/routes/sierra.js` in full, zero matches for `sierraWatcher.start(` or any call to
+   `.start()` on this instance. `createSierraRouter` only uses the injected instance for a
+   read-only `/api/sierra/watcher/status`-style `.getStatus()` call — it never starts the
+   watcher either. Found while investigating a 2026-08-09 process-health incident (the
+   managed server was down for 4 days undetected, see `docs/DECISIONS_LOG.md`), checking
+   whether this gap put the trade-import pipeline at risk. **It doesn't, practically** — Trade
+   Activity Log import runs via a separate, real, currently-working mechanism: the
+   `AUTO_IMPORT_4PM` cron (`server/index.js`, `cron.schedule('0 16 * * 1-5', ...)`, comment:
+   "replaces setInterval below") calls `manualImportFromFile()` →
+   `tradeImportService.js`'s `importSierraTrades()` once daily at 4PM ET — the exact same
+   function `SierraWatcher._scan()` would have called continuously, had it ever started. So
+   the `trades` table (personal broker activity log) updates once/day via cron, not
+   continuously via a live file watcher, but it does update — this is a real, narrower gap
+   (no near-real-time trade visibility intraday) than "trade import is broken," and not
+   related to `active_setups`/live setup-detection at all. **Separately confirmed market-data
+   (price bar) ingestion is NOT affected by this gap and has no DTC dependency** — it runs via
+   two independent `setInterval` file-scanners (`server/index.js`'s unconditional 60s poll,
+   `server/routes/priceBars.js`'s RTH-gated 60s poll), both calling
+   `priceBarService.js`'s `scanAndIngestNewBarFiles()` against Sierra Chart's exported
+   `*-BarData.txt` files — confirmed running normally via a live `./start.sh` test the same
+   session ("📊 Ingesting price bars: NQU6.CME-BarData.txt" in the real startup log). There is
+   no live DTC-protocol connection anywhere in the running app — `scripts/archive/dtc_phase0_test.cjs`
+   remains exactly what item 4 above already says: a standalone prototype, never integrated.
+   **General lesson, worth restating even though this exact lesson was already learned once
+   this session in a different context**: "instantiated and passed to a router" is not the
+   same claim as "started" — a note marking something "re-verified fixed" needs to show the
+   actual call that proves it, not just that the object exists somewhere in scope.
 - 6 confirmed-dead tables (`price_bars_old`, `trades_backup_tz_fix`, `calibration_snapshots`, `session_volume_summary`, `sot_signals`, `intraday_snapshots`) were dropped 2026-06-30 — see [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 7. **`ACDSessionState` in `App.jsx` (~line 10875) is dead code** — defined with props `{ todayData, nl, pivot }` but never rendered anywhere in the app. The correct vehicle for ACD-related pre-session UI is `SessionForecastPanel.jsx` and the morning prep view. Do not edit `ACDSessionState` expecting users to see the result.

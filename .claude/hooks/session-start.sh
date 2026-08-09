@@ -3,14 +3,47 @@
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 
-export WATCHER_STATUS SERVER_STATUS ALERT_COUNT LAST_ALERT
+export WATCHER_STATUS SERVER_STATUS SERVER_PORT_PID SERVER_MAIN_PID ALERT_COUNT LAST_ALERT
 WATCHER_STATUS=$(systemctl --user is-active trading-journal-watcher.service 2>/dev/null || echo "unknown")
 SERVER_STATUS=$(systemctl --user is-active trading-journal-server.service 2>/dev/null || echo "unknown")
+# PID-identity check (added 2026-08-09, after SERVER_STATUS above sat printing "activating"
+# for 4 real days -- see docs/DECISIONS_LOG.md -- as a bare, unstyled status line nobody
+# (including Claude, at the actual start of the incident-discovery session) registered as
+# significant. Two things now get surfaced loudly below instead of quietly: (a) SERVER_STATUS
+# itself, whenever it isn't exactly "active"; (b) whether the process actually holding port
+# 3002 right now is the SAME pid systemd thinks is its MainPID -- catches an orphaned
+# ./start.sh dev session serving in place of the managed process even in the (normal, common)
+# case where SERVER_STATUS still reads "active" because systemd successfully started once and
+# just never got the port back.
+SERVER_PORT_PID=$(ss -ltnp 2>/dev/null | grep ':3002 ' | grep -oP 'pid=\K[0-9]+' | head -1)
+SERVER_MAIN_PID=$(systemctl --user show trading-journal-server.service -p MainPID --value 2>/dev/null)
 ALERT_COUNT=0
 LAST_ALERT=""
 if [ -f "$REPO/scratch/gemini_alerts.txt" ]; then
   ALERT_COUNT=$(grep -c "^\[" "$REPO/scratch/gemini_alerts.txt" 2>/dev/null || echo 0)
   LAST_ALERT=$(tail -1 "$REPO/scratch/gemini_alerts.txt" 2>/dev/null || echo "")
+fi
+
+# Recent SERVER_DOWN/SERVER_DOWN_PERSISTENT alerts (added 2026-08-09). Confirmed directly
+# against the real 2026-08-05->08-07 outage: trading-journal-watcher.service's error watcher
+# DID fire 10 real SERVER_DOWN/SERVER_DOWN_PERSISTENT alerts during that window -- the
+# detection mechanism worked. The gap was visibility: those alerts sat in a 2000+-line file
+# with only the single most-recent line ever surfaced (LAST_ALERT above), so they got buried
+# under whatever unrelated Gemini alert happened to log next. This scans the last 3 days
+# specifically for this one alert TYPE and surfaces a dedicated count/list, the same
+# "don't rely on one bare summary line" fix already applied to SERVER_STATUS above.
+export RECENT_SERVER_DOWN_ALERTS
+RECENT_SERVER_DOWN_ALERTS=""
+if [ -f "$REPO/scratch/gemini_alerts.txt" ]; then
+  CUTOFF_TS=$(date -d '3 days ago' +%s 2>/dev/null || echo 0)
+  RECENT_SERVER_DOWN_ALERTS=$(grep "SERVER_DOWN" "$REPO/scratch/gemini_alerts.txt" 2>/dev/null | awk -v cutoff="$CUTOFF_TS" '
+    match($0, /\[([0-9]+\/[0-9]+\/[0-9]+), ([0-9]+:[0-9]+:[0-9]+)/, m) {
+      cmd = "date -d \"" m[1] " " m[2] "\" +%s 2>/dev/null"
+      cmd | getline ts
+      close(cmd)
+      if (ts >= cutoff) print
+    }
+  ' 2>/dev/null | tail -20)
 fi
 
 # Check mining script staleness — query performance_audit for last run_date per signal_type
@@ -321,6 +354,15 @@ fi
 
 node - <<'JSEOF'
 const s = process.env.SERVER_STATUS || 'unknown';
+const portPid = process.env.SERVER_PORT_PID || '';
+const mainPid = process.env.SERVER_MAIN_PID || '';
+// mainPid is '0' (not empty) when the unit isn't running at all -- only a genuine,
+// nonzero mismatch against whatever's actually holding the port counts as the "wrong
+// process is serving" signal; an unbound port with mainPid=0 is just "server is down",
+// already covered by the s !== 'active' check below.
+const pidMismatch = portPid && mainPid && mainPid !== '0' && portPid !== mainPid;
+const recentServerDownRaw = process.env.RECENT_SERVER_DOWN_ALERTS || '';
+const recentServerDownLines = recentServerDownRaw.split('\n').filter(Boolean);
 const w = process.env.WATCHER_STATUS || 'unknown';
 const n = process.env.ALERT_COUNT || '0';
 const last = process.env.LAST_ALERT || '';
@@ -482,7 +524,7 @@ const lines = [
   'OPEN_THREADS.md has pending work, unconfirmed proposals, and stale stats.',
   '',
   '=== SYSTEM STATUS ===',
-  `Trading journal server : ${s}`,
+  `Trading journal server : ${s}${s !== 'active' ? '  <-- NOT "active", see the 🔴 alert below' : ''}`,
   `Error watcher service  : ${w}`,
   `Gemini alert count     : ${n} lines in scratch/gemini_alerts.txt`,
   last ? `Last alert             : ${last}` : '',
@@ -509,6 +551,23 @@ const lines = [
   strayWorktrees.length > 0
     ? `🔴 ORPHANED WORKTREE(S) — ${strayWorktrees.length} besides the main checkout:\n${strayWorktrees.join('\n')}\n  ACTION: investigate (git -C <path> status / git log), then commit+merge or discard — don't let it sit`
     : '✅ No orphaned worktrees',
+  '',
+  // Added 2026-08-09 -- see docs/DECISIONS_LOG.md's 2026-08-09 entry. A 4-day outage of the
+  // managed server sat undetected because the ONLY existing surface for this (the bare
+  // "Trading journal server : activating" line above) was easy to read past -- it happened
+  // at the very start of the session that eventually found the incident, and even a careful
+  // read-through missed its significance. This block is the loud version: fires whenever
+  // SERVER_STATUS isn't exactly "active", OR whenever something other than systemd's own
+  // MainPID is holding port 3002 (the "an orphaned dev session is silently standing in"
+  // case, which can be true even while SERVER_STATUS still reads "active" from a stale
+  // successful start much earlier).
+  (s !== 'active' || pidMismatch)
+    ? `🔴 TRADING JOURNAL SERVER NOT HEALTHY -- ${s !== 'active' ? `systemd reports "${s}", not "active"` : `port 3002 is held by PID ${portPid}, not systemd's managed PID ${mainPid} -- an orphaned process (likely ./start.sh left running) is serving in its place`}.\n  ACTION: check \`systemctl --user status trading-journal-server.service\` and \`journalctl --user -u trading-journal-server.service -n 50\` before assuming a simple restart fixes it -- if something else is still holding port 3002, a restart will just crash-loop again. Kill the stray process (or run ./stop.sh, which also kills the managed service -- restart it after) first.`
+    : '',
+  '',
+  recentServerDownLines.length > 0
+    ? `🔴 SERVER_DOWN alerts in the last 3 days (${recentServerDownLines.length} line(s), from trading-journal-watcher.service -- the detection mechanism works, it's real downtime, not a false alarm):\n${recentServerDownLines.map(l => '  ' + l).join('\n')}\n  ACTION: don't dismiss as noise even if the server looks fine right now -- this is exactly how the 2026-08-05->08-09 outage sat undetected for 4 days (docs/DECISIONS_LOG.md). Check whether each gap is explained (a deliberate ./start.sh takeover, a deploy) or a real recurring problem.`
+    : '',
   '',
   dtmLines.length > 0
     ? `${dtmFragile > 0 ? '⚠️ ' : '✅'} DAY_TYPE_MANAGED WATCH — live per-day-type-carve-out types, not gated by the standard SUPPRESS check:\n${dtmLines.join('\n')}${dtmFragile > 0 ? `\n  ${dtmFragile} type(s) have ⚠️ flagged buckets — only reason not SUPPRESSed is a bucket within $10 of the bar or N<50. Re-read before trusting; this is exactly how IB_BULLISH regressed 2026-07-15 (docs/OPEN_THREADS.md).` : ''}`

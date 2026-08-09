@@ -1,0 +1,185 @@
+TRADING JOURNAL — WEEKLY REPORT
+Week ending : 2026-08-09  (2026-08-03 – 2026-08-09)
+Generated   : 2026-08-09T22:30:08.168Z
+============================================================
+
+PERFORMANCE SUMMARY
+----------------------------------------
+Trading days  : 0
+Total P&L     : +$0.00
+Daily avg     : N/A
+Win days      : 0 / 0 (N/A)
+
+
+SETUP STATISTICS
+----------------------------------------
+10D_IB_MID_FADE_SHORT_OVERNIGHT fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$91.00
+3M_VAL_FADE_SHORT_OVERNIGHT    fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$91.00
+CAM_R1_FADE_LONG               fired: 5 | wins: 1 | losses: 4 | expired: 0 | wr: 20% | avg -$23.40
+CAM_R1_FADE_SHORT              fired: 7 | wins: 5 | losses: 2 | expired: 0 | wr: 71% | avg +$41.86
+CAM_R2_FADE_LONG               fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$51.00
+CAM_R2_FADE_SHORT              fired: 3 | wins: 3 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+CAM_R4_FADE_LONG               fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg +$3.00
+CAM_R4_FADE_SHORT              fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$33.00
+CAM_S1_FADE_LONG               fired: 20 | wins: 6 | losses: 14 | expired: 0 | wr: 30% | avg -$6.40
+CAM_S1_FADE_SHORT              fired: 9 | wins: 6 | losses: 3 | expired: 0 | wr: 67% | avg +$39.67
+CAM_S2_FADE_LONG_TRAIL         fired: 8 | wins: 6 | losses: 1 | expired: 1 | wr: 86% | avg +$38.50
+CAM_S2_FADE_SHORT              fired: 13 | wins: 3 | losses: 9 | expired: 1 | wr: 25% | avg -$13.65
+CAM_S3_FADE_LONG               fired: 6 | wins: 4 | losses: 1 | expired: 1 | wr: 80% | avg +$24.83
+CAM_S3_FADE_SHORT              fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$51.00
+C_PAIRED_LONG                  fired: 4 | wins: 0 | losses: 0 | expired: 4 | wr: unresolved | avg +$642.75
+C_PAIRED_SHORT                 fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$184.00
+C_STANDALONE_DOWN              fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$279.00
+C_STANDALONE_UP                fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$243.00
+FAILED_AUCTION_LONG            fired: 19 | wins: 8 | losses: 5 | expired: 6 | wr: 62% | avg +$8.42
+FLOOR_PIVOT_FADE_LONG          fired: 1 | wins: 0 | losses: 0 | expired: 1 | wr: unresolved | avg -$52.00
+FLOOR_R1_FADE_LONG             fired: 16 | wins: 7 | losses: 9 | expired: 0 | wr: 44% | avg +$12.75
+FLOOR_R1_FADE_SHORT_TRAIL      fired: 5 | wins: 1 | losses: 4 | expired: 0 | wr: 20% | avg -$123.80
+FLOOR_R2_FADE_SHORT            fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$77.00
+FLOOR_R3_FADE_LONG             fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$81.00
+FLOOR_R3_FADE_SHORT            fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$29.00
+FLOOR_S1_FADE_SHORT            fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$31.00
+FLOOR_S2_FADE_LONG             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$139.00
+GLOBEX_VWAP_FADE_LONG          fired: 12 | wins: 7 | losses: 4 | expired: 1 | wr: 64% | avg -$8.96
+GLOBEX_VWAP_FADE_SHORT         fired: 22 | wins: 8 | losses: 13 | expired: 1 | wr: 38% | avg -$7.95
+GLOBEX_VWAP_MAGNET_SHORT       fired: 17 | wins: 8 | losses: 9 | expired: 0 | wr: 47% | avg -$11.47
+IB_BEARISH                     fired: 7 | wins: 3 | losses: 4 | expired: 0 | wr: 43% | avg -$18.71
+IB_BULLISH                     fired: 27 | wins: 18 | losses: 7 | expired: 2 | wr: 72% | avg +$20.59
+IB_HIGH_FADE_LONG              fired: 4 | wins: 1 | losses: 2 | expired: 1 | wr: 33% | avg -$35.63
+IB_HIGH_FADE_SHORT             fired: 14 | wins: 8 | losses: 5 | expired: 1 | wr: 62% | avg +$15.50
+IB_LOW_FADE_LONG               fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$85.00
+IB_MID_SCALP_FADE_LONG         fired: 11 | wins: 6 | losses: 5 | expired: 0 | wr: 55% | avg +$13.55
+IB_MID_SCALP_FADE_SHORT        fired: 3 | wins: 2 | losses: 1 | expired: 0 | wr: 67% | avg +$21.00
+MONTHLY_VWAP_FADE_SHORT        fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$57.00
+MPP_FADE_SHORT                 fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$145.00
+MPP_FADE_SHORT_OVERNIGHT       fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$59.00
+MR1_FADE_SHORT                 fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$87.00
+ONH_FADE_LONG                  fired: 4 | wins: 3 | losses: 1 | expired: 0 | wr: 75% | avg +$34.00
+ONH_FADE_SHORT                 fired: 3 | wins: 3 | losses: 0 | expired: 0 | wr: 100% | avg +$119.00
+ONL_FADE_LONG                  fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$93.00
+ONL_FADE_SHORT                 fired: 7 | wins: 2 | losses: 5 | expired: 0 | wr: 29% | avg +$16.14
+OR_HIGH_FADE_LONG              fired: 7 | wins: 2 | losses: 5 | expired: 0 | wr: 29% | avg -$34.43
+OR_HIGH_FADE_SHORT             fired: 12 | wins: 5 | losses: 7 | expired: 0 | wr: 42% | avg +$5.67
+OR_LOW_FADE_LONG               fired: 10 | wins: 7 | losses: 3 | expired: 0 | wr: 70% | avg +$25.80
+OR_LOW_FADE_SHORT              fired: 6 | wins: 3 | losses: 3 | expired: 0 | wr: 50% | avg +$43.00
+OR_MID_AFTER_IB_FADE_LONG      fired: 16 | wins: 6 | losses: 10 | expired: 0 | wr: 38% | avg -$3.50
+OR_MID_AFTER_IB_FADE_SHORT     fired: 10 | wins: 3 | losses: 7 | expired: 0 | wr: 30% | avg -$22.00
+PD2_VAL_FADE_LONG              fired: 10 | wins: 8 | losses: 1 | expired: 1 | wr: 89% | avg +$41.70
+PD2_VAL_FADE_SHORT             fired: 8 | wins: 4 | losses: 3 | expired: 1 | wr: 57% | avg -$23.38
+PD_CLOSE_FADE_LONG             fired: 8 | wins: 1 | losses: 7 | expired: 0 | wr: 13% | avg -$28.50
+PD_CLOSE_FADE_SHORT            fired: 8 | wins: 6 | losses: 2 | expired: 0 | wr: 75% | avg +$70.00
+PD_HIGH_FADE_LONG              fired: 4 | wins: 2 | losses: 2 | expired: 0 | wr: 50% | avg +$7.00
+PD_HIGH_FADE_SHORT             fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$99.00
+PD_IB_HIGH_FADE_LONG           fired: 6 | wins: 3 | losses: 3 | expired: 0 | wr: 50% | avg +$20.00
+PD_LOW_FADE_LONG               fired: 3 | wins: 0 | losses: 3 | expired: 0 | wr: 0% | avg -$75.00
+PD_LOW_FADE_SHORT              fired: 7 | wins: 1 | losses: 6 | expired: 0 | wr: 14% | avg +$3.57
+PD_POC_FADE_LONG               fired: 4 | wins: 4 | losses: 0 | expired: 0 | wr: 100% | avg +$80.50
+PD_POC_FADE_LONG_TRAIL         fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$92.33
+PD_POC_FADE_SHORT              fired: 9 | wins: 5 | losses: 4 | expired: 0 | wr: 56% | avg +$12.78
+PD_SESSION_MID_FADE_LONG       fired: 3 | wins: 1 | losses: 2 | expired: 0 | wr: 33% | avg -$19.67
+PD_VAH_FADE_LONG               fired: 8 | wins: 4 | losses: 4 | expired: 0 | wr: 50% | avg +$8.00
+PD_VAH_FADE_SHORT              fired: 5 | wins: 4 | losses: 1 | expired: 0 | wr: 80% | avg +$39.10
+PD_VAL_FADE_LONG               fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$89.50
+PW_HIGH_FADE_LONG_TRAIL        fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$85.00
+RTH_VWAP_FADE_LONG             fired: 22 | wins: 7 | losses: 15 | expired: 0 | wr: 32% | avg -$11.00
+RTH_VWAP_FADE_SHORT            fired: 15 | wins: 6 | losses: 8 | expired: 1 | wr: 43% | avg +$2.70
+STACK_VOL_BREAK_LIVE_LONG      fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$81.00
+STACK_VOL_BREAK_LIVE_SHORT     fired: 2 | wins: 2 | losses: 0 | expired: 0 | wr: 100% | avg +$79.00
+STOP_SWEEP_SHORT               fired: 2 | wins: 0 | losses: 2 | expired: 0 | wr: 0% | avg -$90.00
+VWAP_MAGNET_SHORT              fired: 25 | wins: 9 | losses: 11 | expired: 5 | wr: 45% | avg -$11.16
+VWAP_RECLAIM_SHORT             fired: 6 | wins: 0 | losses: 5 | expired: 1 | wr: 0% | avg -$77.42
+WEEKLY_VWAP_FADE_SHORT         fired: 1 | wins: 0 | losses: 1 | expired: 0 | wr: 0% | avg -$119.00
+WR1_FADE_SHORT_OVERNIGHT       fired: 1 | wins: 1 | losses: 0 | expired: 0 | wr: 100% | avg +$179.00
+WR2_FADE_LONG                  fired: 8 | wins: 6 | losses: 1 | expired: 1 | wr: 86% | avg +$25.88
+WR2_FADE_SHORT                 fired: 9 | wins: 6 | losses: 3 | expired: 0 | wr: 67% | avg -$11.00
+ZONE_EDGE_FADE                 fired: 5 | wins: 0 | losses: 0 | expired: 5 | wr: unresolved | avg +$44.90
+
+DYNAMIC MINED EDGES (Statistical shifts)
+----------------------------------------
+  🚀 Active Boosters (Size Up / Confirm):
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_LOW_FADE_LONG             | Midday (11:30-13:30)   | WR: 62.5% vs Base: 41.0% (+21.5%) (p=0.0109)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · IB_BEARISH                   | Friday                 | WR: 69.6% vs Base: 48.6% (+20.9%) (p=0.0286)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · WEEKLY_VWAP_FADE_SHORT       | Normal OR              | WR: 68.2% vs Base: 52.2% (+16.0%) (p=0.0374)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · C_STANDALONE_UP              | Wednesday              | WR: 52.8% vs Base: 37.1% (+15.7%) (p=0.0311)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+    · IB_HIGH_FADE_SHORT           | Normal OR              | WR: 83.3% vs Base: 70.5% (+12.9%) (p=0.0114)
+
+  🛑 Active Drags (Size Down / Filter):
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · IB_HIGH_FADE_SHORT           | Tight OR               | WR: 50.0% vs Base: 70.5% (-20.5%) (p=0.0025)
+    · C_STANDALONE_UP              | Wide OR                | WR: 23.8% vs Base: 37.1% (-13.3%) (p=0.0078)
+    · BRACKET_BREAKOUT_LONG        | Normal OR              | WR: 8.6% vs Base: 17.2% (-8.6%) (p=0.0447)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+    · C_STANDALONE_UP              | Wide OR                | WR: 28.6% vs Base: 37.1% (-8.5%) (p=0.0314)
+
+ACD SIGNAL ACCURACY
+----------------------------------------
+A Up fired    : 4 day(s) | C confirm: 4 (100%)
+A Down fired  : 1 day(s) | C confirm: 1 (100%)
+Net score Δ   : +12
+Day types     : TREND: 3, BALANCE: 2
+
+  2026-08-03  score: +4  A↑ C↑  [TREND]
+  2026-08-04  score: +4  A↑ C↑  [TREND]
+  2026-08-05  score: +4  A↑ C↑  [TREND]
+  2026-08-06  score: +4  A↑ C↑  [BALANCE]
+  2026-08-07  score: -4  A↓ C↓  [BALANCE]
+
+TRADE QUALITY
+----------------------------------------
+No trade data this week.
+
+GIVE-BACK / PEAK VS CLOSE
+----------------------------------------
+No coaching data this week.
+
+FLAGS (auto-detected)
+----------------------------------------
+No notable flags this week.
+
+INTERPRETATION (AI)
+----------------------------------------
+## Week Ending 2026-08-09 — Flag Interpretation
+
+A clean week with no notable flags is itself a meaningful signal — it indicates the trader operated within expected parameters, avoided overtrading, and likely respected ACD levels without forcing trades in ambiguous conditions. This can reflect either a disciplined, patient approach or a low-volatility environment where NQ/ES failed to generate high-conviction A-up/A-down setups worth flagging. The absence of flags doesn't mean the week was necessarily profitable, but it does suggest behavioral consistency and rule adherence. Going into next week, the actionable adjustment is to document specifically **which setups were passed on and why** — maintaining a brief "no-trade log" will distinguish genuine discipline from missed opportunity, and will sharpen decision criteria if volatility expands and setup frequency increases.
+
+WEEKLY ASSESSMENT
+----------------------------------------
+Process Grade : F
+
+WEEK SUMMARY:
+Zero trades, zero P&L, zero annotations across five trading days. No signals were taken, no fills were recorded, and no observations were logged despite multiple high-probability setups firing and resolving each day. This was a blank week in every measurable sense.
+
+STRONGEST MOMENT:
+Insufficient trade data.
+
+BIGGEST LEAK:
+Annotation absence — five consecutive sessions, zero notes. This is not a weekly issue; daily coaching flags it in 25 of your last 30 sessions. The all-time record shows REACTION-context trades carry a 75% win rate (n=24) and net +$620.00, but that edge is only accessible if you're logging what you see and why. Every session without annotation is a session that cannot be reviewed, corrected, or built upon. The cost isn't this week's $0 P&L — it's five more days of compounding nothing.
+
+PROCESS GRADE: F
+Zero engagement with documented setups, zero annotation on any observed structure, and an entrenched absence pattern spanning the majority of recent history.
+
+FOCUS FOR NEXT WEEK:
+Write one sentence per session — trade or no trade. Note one setup you observed, the signal context, and whether it resolved. That is the minimum floor. Five sessions, five sentences. If that happens, next week's review has something real to work with.
+
+============================================================

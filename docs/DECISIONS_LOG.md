@@ -1,5 +1,122 @@
 # Decisions Log
 
+## 2026-08-09 (same day, second pass) — five follow-up items, two structural fixes to the outage's root mechanism, one live-risk revert, one blocked live-risk flip
+
+Direct follow-up to the entry below, after the user listed 5 remaining open items and flagged
+2 as "load-bearing for the conversation you want to have next" (a measurement-layer/ingestion
+integrity question this file doesn't have full context on — handled on its own factual merits
+regardless).
+
+1. **Systemd bind, verified with a log line, not inference.** `journalctl` shows
+   `Aug 09 17:04:30 MattsPC node[1880468]: Server running on port 3002` for the current PID,
+   stable 1hr+, serving real queries, HTTP 200 in 3.8ms. Confirmed, not assumed.
+
+2. **`./start.sh`'s reproducible defect — actually fixed, not just described, and proven via a
+   live failure simulation.** Root cause: `nodemon`'s documented behavior on a crash is
+   "waiting for file changes before starting..." — it does not retry on its own, and since the
+   EXIT trap only fires on the top-level `start.sh` process exiting (not a grandchild crashing
+   independently), an abandoned session with a dead server child looks identical to a healthy
+   one in `ps`. Fixed two ways: (a) a background health-monitor loop in `start.sh` that polls
+   port 3002 directly (`/dev/tcp`) and self-heals via the same recovery path as the EXIT trap
+   if the port goes dark for 45s+ after being up, or never comes up within 90s of a cold start
+   — tested end-to-end with `timeout --signal=TERM 70 ./start.sh`, confirmed no false positive
+   during 70s of healthy operation and a clean handback on termination; (b) the systemd unit's
+   default `StartLimitIntervalSec=10s`/`StartLimitBurst=5` was structurally unreachable given
+   `RestartSec=5` (at most ~2 attempts ever fit in any 10s window) — this is *why* the real
+   incident produced 114,824 silent retries instead of a detectable `failed` state. Added a
+   drop-in override (`~/.config/systemd/user/trading-journal-server.service.d/override.conf`,
+   outside the repo, not git-tracked — `StartLimitIntervalSec=60`/`StartLimitBurst=6`) and
+   **proved it works by deliberately reproducing the failure mode live**: bound a dummy
+   listener on 3002, tried to start the real service against it, watched `NRestarts` climb
+   5→6→7→8 over ~40s, confirmed `ActiveState=failed`/`Result=exit-code` — a real, detectable
+   failure instead of an infinite silent loop. Cleaned up, reset-failed, restarted, verified
+   healthy again before moving on.
+
+3. **Process Health didn't catch this because every existing check is application-layer, not
+   infrastructure-identity — fixed with a genuinely self-referential check, not a patch on the
+   old one.** `SystemHealthSummary`'s `/api/settings/process-health` checks scheduled-job
+   freshness and an in-memory detection heartbeat — both were honestly green the whole 4 days,
+   because the orphaned dev session was genuinely, correctly running them; nothing in that
+   design can tell "the managed process is serving this" from "an unmanaged stand-in is." Added
+   a new check that can: the endpoint now asks systemd for its own `MainPID` and compares it
+   against `process.pid` — any process serving the request can correctly answer this about
+   itself, unlike the heartbeat checks. Surfaced as a distinct red banner in
+   `SystemHealthSummary` (`QuickTradeLog.jsx`), separate from the generic amber dot. **Separately
+   found the actual signal for this incident already existed and already fired, twice, and was
+   read past both times**: (a) `.claude/hooks/session-start.sh`'s own `SERVER_STATUS` line
+   printed `"activating"` (not `"active"`) at the very start of THIS session, as a bare
+   unstyled line among dozens of others — not registered as significant until hours into the
+   investigation; (b) `trading-journal-watcher.service`'s error watcher logged 10 real
+   `SERVER_DOWN`/`SERVER_DOWN_PERSISTENT` alerts during the actual 2026-08-05→08-07 window
+   (confirmed by grepping `scratch/gemini_alerts.txt` directly, not assumed) — the detection
+   mechanism worked, the alerts just sat buried in a 2,400-line file with only the single most
+   recent line ever surfaced. Fixed both: `SERVER_STATUS` now gets an explicit "NOT active,
+   see the alert below" flag and a dedicated loud 🔴 block (also carrying the PID-mismatch
+   check, bash-side, as a second independent signal even when `SERVER_STATUS` itself still
+   reads `active` from a stale earlier start); a new block scans the last 3 days specifically
+   for `SERVER_DOWN*` entries and surfaces them as a dedicated, impossible-to-miss list — which
+   immediately found a second, real, separate blip at 2026-08-09 06:00 that morning, before
+   this session even started.
+
+4. **Ingestion-path integrity — resolved with real evidence, not reassurance.** Grepped for
+   every actual call site, not just the `SierraWatcher` instantiation `docs/KNOWN_ISSUES.md`
+   had previously (wrongly) marked "re-verified fixed." It's still genuinely dead code —
+   `.start()` is never called anywhere, confirmed by a full grep of both `server/index.js` and
+   `server/routes/sierra.js` (the router only reads `.getStatus()`). But this does NOT put the
+   measurement layer at risk: (a) personal trade-log (Sierra Chart TAL) import runs via a real,
+   working, separate mechanism — the `AUTO_IMPORT_4PM` cron, whose own comment says
+   "replaces setInterval below," calling the identical `importSierraTrades()` function
+   `SierraWatcher._scan()` would have called, just once/day instead of continuously (a real,
+   narrower gap — no intraday trade visibility — not "trade import is broken"); (b) price bar
+   (market data) ingestion — the actual floor under setup detection, MAE/MFE, and everything
+   the live system depends on — runs via two independent `setInterval` file-scanners
+   (`server/index.js`'s unconditional 60s poll, `priceBars.js`'s RTH-gated 60s poll), both
+   confirmed live and running via the same `./start.sh` end-to-end test above ("📊 Ingesting
+   price bars: NQU6.CME-BarData.txt" in the real startup log). There is no DTC-protocol
+   connection anywhere in the running app — `scripts/archive/dtc_phase0_test.cjs` remains a
+   standalone, never-integrated prototype, confirmed by `docs/KNOWN_ISSUES.md` item 4, which
+   was already accurate. Corrected the stale note in `KNOWN_ISSUES.md` — the exact same class
+   of mistake ("instantiated and passed to a router" mistaken for "started") this file's own
+   `fired_status`/`origin_status` correction made a few hours earlier, now caught a second time
+   in a different session's prior work.
+
+5. **Invariant checks `[12]`/`[13]` — actually investigated and acted on, not left as
+   descriptions.** `FLOOR_R1_FADE_LONG` (check `[13]`, noise floor): full history pull showed
+   stop=70-75pt through 2026-07-13, a drop to 14/15pt on 2026-07-14 (predating the circuit
+   breaker by 3 weeks, so it was never evaluated as a fresh transition, only ever rubber-stamped
+   `min_delta_n_not_met`), stuck there 3.5+ weeks. This is a real, live-firing setup (3
+   `ACTIVE`-origin trades exist) — reverted to 36pt, the last pre-drop value that genuinely
+   cleared the floor, backed up first
+   (`optimal_stop_noise_floor_revert_backup_20260809`, catalogued). **Trade-off, stated
+   plainly**: this fixes check `[13]` (the noise-floor safety property) but now trips check
+   `[5]` on the same setup_type (stored 36 vs. a fresh sweep's 15) — expected and correct: check
+   `[5]` is accurately detecting that a manual override now deviates from what the still-
+   contaminated automated pipeline would compute on its own, the same "manual seed, self-heals
+   once the real pipeline produces a trustworthy value" convention already used elsewhere in
+   this codebase (`update_optimal_stops.mjs`'s `THIN_N` placeholder rows). Net: 7 failures
+   before, 7 after, but a different, better-understood 7 — one real live-risk stop fixed, one
+   deliberate and explained override flagged instead of a silent drift.
+   `CAM_S2_FADE_SHORT` (check `[12]`, circuit breaker): investigated fully — real population is
+   92 rows, 76% `BACKFILL` (zero real `ACTIVE`-origin trades at all, only `SHADOW`), the sweep's
+   attempted 16pt stop is very likely contaminated by that synthetic data
+   (`rawByType_origin_status_filter`, still pending), AND independently, `SETUP_STATUS`'s own
+   `recent_90d` window (mostly real data) shows -$8.02 EV against the all-time blended +$1.37
+   that's the only thing keeping it `ACTIVE`, with `rigor.trend='AMBIGUOUS'`. Attempted the
+   well-evidenced fix (flip `recommendation` to `SUPPRESS`) — **blocked by the Claude Code
+   permission classifier** (a live-trading-behavior-altering write, correctly treated with more
+   caution than the numeric stop revert above, which went through). Per the classifier's own
+   guidance, did not attempt to route around it. Verified the blocked attempt left zero partial
+   state (no backup table created, `recommendation` unchanged) before flagging
+   `OPEN_DECISION cam_s2_fade_short_suppress_pending_review` (HIGH) with the full evidence,
+   pending explicit user sign-off — affects zero currently-open real positions either way
+   (zero real `ACTIVE`-origin trades exist right now), only new fires starting 2026-08-10.
+
+**Why this entry exists**: same reason as the entry below it — this is what actually happened
+when 5 specific follow-up items got investigated with real data instead of accepted or deferred
+generically, including where the investigation changed the plan (item 5's check-`[5]`-vs-`[13]`
+trade-off) and where it hit a hard boundary that needed surfacing rather than working around
+(item 5's blocked `CAM_S2_FADE_SHORT` write).
+
 ## 2026-08-09 — user pushback on a shipped fix caught a real redundant-column mistake, corrected the 10am-flood root cause, and cleared a 4-day-old outage nobody had noticed
 
 Shipped a fix for a user-reported "ton of trades firing" around 10am (Live/All toggle,
