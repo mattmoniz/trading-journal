@@ -30,7 +30,7 @@
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { inferDirection } from '../server/config/setupTypes.js';
-import { computeCorrectedTarget } from '../server/services/targetCalibrationService.js';
+import { computeCorrectedTarget, makeBarIndex, WALK_WINDOW_BARS } from '../server/services/targetCalibrationService.js';
 
 // Minimum N before we trust a computed optimal stop
 const MIN_N = 20;
@@ -251,6 +251,128 @@ export function sweepOptimalStopAndTarget(trades, maeCandidates, maxT, stopDpp, 
   return best;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CHRONOLOGICAL (order-aware) sweep -- fixes the order-blindness bug above.
+// Added 2026-08-05. computeEvAtStopTarget()/sweepOptimalStopAndTarget() above check
+// `if (mae > stop) ... else if (mfe >= target)` against pre-aggregated mae_points/
+// mfe_points, with no information about WHICH happened first -- a trade that dipped
+// -40 then rallied +80 is indistinguishable from one that rallied +80 then dipped -40,
+// but a real 30pt stop survives one and not the other. This systematically biases
+// candidate selection toward WIDER stops (less likely to trip `mae > stop` at all).
+// Confirmed via docs/DECISIONS_LOG.md 2026-08-05; design reviewed by DeepSeek before
+// writing (see scratch/deepseek_response.md) -- this implementation follows its
+// recommended approach: ONE bar walk per trade (not one per stop x target candidate --
+// a naive per-candidate resolve() call would be ~75x more work per trade), reusing
+// makeBarIndex() (targetCalibrationService.js, already used by computeCorrectedTarget's
+// identical fired_at -> bar-index lookup) rather than reinventing timestamp flooring.
+//
+// Deliberately does NOT call scripts/backtest_unified.js's resolve() -- that function
+// hardcodes PT=2/COMM=1 (its own file, lines 18-19), but this sweep needs per-setup_type
+// empirically-derived stopDpp/targetDpp (see dppRes above). Instead this walks bars
+// itself using the exact same conservative same-bar tie-break resolve() uses (stop wins
+// if both trip on the same bar), so results stay comparable, without inheriting its
+// flat $/pt constants.
+
+// Precomputes, for ONE trade, the first bar (relative to entry) where cumulative MAE
+// exceeds each stop candidate and where cumulative MFE reaches each target candidate.
+// trade must have { barIdx (entry index into allBars), direction ('LONG'/'SHORT'), entry }.
+// Returns null if the trade has no bars available at all (predates the bar history, or
+// fired at/after the last available bar).
+export function precomputeCrossovers(trade, allBars, stopCandidates, targetCandidates, maxBars = WALK_WINDOW_BARS) {
+  const isLong = trade.direction === 'LONG';
+  const entry = trade.entry;
+  const endIdx = Math.min(allBars.length, trade.barIdx + maxBars);
+  if (trade.barIdx >= endIdx) return null;
+
+  const stopSorted = [...new Set(stopCandidates)].sort((a, b) => a - b);
+  const targetSorted = [...new Set(targetCandidates)].sort((a, b) => a - b);
+  const stopHitAt = {}, targetHitAt = {};
+  let stopPtr = 0, targetPtr = 0;
+  let mae = 0, mfe = 0;
+  let lastClose = null;
+
+  for (let i = trade.barIdx; i < endIdx; i++) {
+    const b = allBars[i];
+    const rel = i - trade.barIdx;
+    const adverse = isLong ? entry - b.low : b.high - entry;
+    const favorable = isLong ? b.high - entry : entry - b.low;
+    if (adverse > mae) mae = adverse;
+    if (favorable > mfe) mfe = favorable;
+    // Conservative same-bar tie-break (matches backtest_unified.js's resolve()): if a bar
+    // crosses BOTH a stop and target candidate for the first time on the same bar, the
+    // stop-crossing loop below still runs first, so stopHitAt gets recorded -- the
+    // comparator in computeEvAtStopTargetChronological then prefers stop on a tie.
+    while (stopPtr < stopSorted.length && mae > stopSorted[stopPtr]) {
+      stopHitAt[stopSorted[stopPtr]] = rel; stopPtr++;
+    }
+    while (targetPtr < targetSorted.length && mfe >= targetSorted[targetPtr]) {
+      targetHitAt[targetSorted[targetPtr]] = rel; targetPtr++;
+    }
+    lastClose = b.close ?? b.high; // fallback if this bar shape has no close field
+    if (stopPtr >= stopSorted.length && targetPtr >= targetSorted.length) break;
+  }
+  // Mark-to-market at the walk's own cutoff for any candidate neither leg reached --
+  // matches the live system's own TIME_EXPIRED convention (mark-to-market at the last
+  // available bar, not a circular fallback to the trade's real actual_pnl under whatever
+  // stop/target was actually live when it fired -- DeepSeek design review flagged the old
+  // computeEvAtStopTarget()'s actual_pnl fallback as exactly this kind of circularity).
+  const mtmPts = lastClose == null ? 0 : (isLong ? lastClose - entry : entry - lastClose);
+  return { stopHitAt, targetHitAt, mtmPts };
+}
+
+// EV for ONE (stop, target) candidate pair against a precomputed crossover set. Returns
+// dollars, or null if crossovers is null (trade had no usable bars).
+export function computeEvAtStopTargetChronological(crossovers, stop, target, stopDpp, targetDpp, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
+  if (!crossovers) return null;
+  const stopBar = crossovers.stopHitAt[stop];
+  const targetBar = crossovers.targetHitAt[target];
+  if (stopBar != null && (targetBar == null || stopBar <= targetBar)) {
+    return -stop * stopDpp - commission;
+  }
+  if (targetBar != null) {
+    return target * targetDpp - commission;
+  }
+  // Neither leg reached within the walk window -- self-contained mark-to-market, not the
+  // old actual_pnl circularity.
+  return crossovers.mtmPts * LIVE_INSTRUMENT.dollarsPerPoint - commission;
+}
+
+// Joint chronological stop+target sweep -- same candidate structure as
+// sweepOptimalStopAndTarget() above, but genuinely order-aware. trades must already carry
+// `barIdx`/`direction`/`entry` (attach via makeBarIndex() + inferDirection() before calling).
+// Precomputes crossovers ONCE per trade (not once per candidate pair), per DeepSeek's design
+// review -- for a 300-trade setup_type with ~75 (stop,target) pairs, this is 300 bar walks
+// instead of 22,500.
+export function sweepOptimalStopAndTargetChronological(trades, allBars, maeCandidates, maxT, stopDpp, targetDpp, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
+  if (trades.length < MIN_N) return null;
+  const targetCandidates = TARGET_SWEEP.filter(T => T <= maxT);
+  if (!targetCandidates.length) return null;
+  const stopCandidates = maeCandidates.map(c => Math.round(c.value));
+
+  const crossoversByTrade = trades.map(t => precomputeCrossovers(t, allBars, stopCandidates, targetCandidates));
+  const usable = crossoversByTrade.filter(c => c != null).length;
+  if (usable < MIN_N) return { insufficientBarData: true, usable, total: trades.length };
+
+  let best = null;
+  for (const { value, pct } of maeCandidates) {
+    const S = Math.round(value);
+    const requiredN = Math.ceil(MIN_N / (1 - pct));
+    if (trades.length < requiredN) continue;
+    for (const T of targetCandidates) {
+      let evSum = 0, n = 0;
+      for (const cx of crossoversByTrade) {
+        const ev = computeEvAtStopTargetChronological(cx, S, T, stopDpp, targetDpp, commission);
+        if (ev == null) continue;
+        evSum += ev; n++;
+      }
+      if (n < MIN_N) continue;
+      const ev = evSum / n;
+      if (!best || ev > best.ev) best = { stop: S, target: T, ev, n };
+    }
+  }
+  return best;
+}
+
 // --dry-run (2026-08-04, DeepSeek-recommended before shipping the structural-conservative
 // fallback below, given its blast radius — it can change the stored stop/target for every
 // setup_type simultaneously on the next real run, with no other staging point). Computes
@@ -436,7 +558,59 @@ async function main() {
   const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
   console.log(`${allBars.length} bars loaded.`);
 
-  let upserted = 0, correctedCount = 0;
+  // ── Volatility-scaled default for real-N-thin setup_types (2026-08-05) ──────────────
+  // Replaces "run the sweep on whatever data exists, clamp the result against a noise-floor
+  // guard" with "don't run the sweep at all below a real-N floor -- use a default scaled to
+  // CURRENT real market volatility instead." A noise-floor CLAMP was tried first and
+  // rejected: it makes a degenerate sweep result look plausible with the same false
+  // confidence a real calibration carries (proven live the same night -- VWAP_MAGNET_LONG's
+  // chronological sweep picked a 7pt stop on unfiltered ~93%-synthetic data; a floor would
+  // have silently substituted 18.4pt with zero indication that number wasn't actually
+  // computed from anything). Re-verified directly before building this: on VWAP_MAGNET_LONG's
+  // REAL-only population (origin_status IN ACTIVE/SHADOW, N=78 -- well above MIN_N=20), the
+  // SAME chronological sweep produces a perfectly sane 29pt/25pt (ratio 2.37x the trailing
+  // bar range, right at this cohort's own 2.45x median) -- confirming the 7pt result was
+  // specifically an artifact of missing the origin_status filter (rawByType_origin_status_filter,
+  // still pending), not evidence this type's data can't support calibration at all. The
+  // real-N gate below is still the right general mechanism regardless -- most of this
+  // system's ~130 live-ish setup_types have real N in the single digits (RESEARCH_CLAIM
+  // live_stop_population_synthetic_composition_audit_20260804, the "7.2% real census"), and
+  // those genuinely should not be calibrated off contaminated data no matter how the sweep
+  // is implemented.
+  // Reuses rawByTypeExpanded (already origin_status IN ('ACTIVE','SHADOW')-filtered, see the
+  // corrected-target path above) as the single source of truth for "real N" -- deliberately
+  // not a second, separately-defined real-N query, matching this codebase's own single-
+  // source-of-truth discipline.
+  const realNByType = Object.fromEntries(Object.entries(rawByTypeExpanded).map(([type, arr]) => [type, arr.length]));
+
+  const medianBarRangeRes = await query(`
+    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (high - low)) as median_range
+    FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '30 days'
+  `);
+  const medianBarRange = +medianBarRangeRes.rows[0].median_range;
+
+  // Ratios derived FRESH each run from whichever setup_types currently clear the real-N
+  // floor and have a prior stored calibration -- not a hardcoded multiplier. This is
+  // deliberately circular in a SAFE way (using well-calibrated types' own real ratio to
+  // scale a default for poorly-calibrated ones), not the self-referential CENSORING loop
+  // documented in optimal_stop_candidate_grid_self_censoring_feedback_loop -- that defect is
+  // a single type's OWN thin/censored MAE feeding its OWN candidate grid; this instead pools
+  // ACROSS every type that already has enough real data to trust, so no single thin type can
+  // feed back into its own default.
+  const qualifyingRatios = [];
+  for (const [type, stored] of Object.entries(priorStoredByType)) {
+    const n = realNByType[type] || 0;
+    if (n >= MIN_N && stored.stop != null && stored.stop > 0 && stored.target != null) {
+      qualifyingRatios.push({ stopToBarRange: stored.stop / medianBarRange, targetToStop: stored.target / stored.stop });
+    }
+  }
+  function median(arr) { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; }
+  const volScaleRatio = median(qualifyingRatios.map(r => r.stopToBarRange));
+  const targetStopRatio = median(qualifyingRatios.map(r => r.targetToStop));
+  console.log(`Volatility-scaled default: ${qualifyingRatios.length} real-N-qualified types (n>=${MIN_N}) inform the ratio -- stop=${volScaleRatio?.toFixed(2)}x median bar range (${medianBarRange.toFixed(1)}pt), target=${targetStopRatio?.toFixed(2)}x stop.`);
+  const canComputeVolDefault = volScaleRatio != null && targetStopRatio != null && medianBarRange > 0;
+
+  let upserted = 0, correctedCount = 0, volDefaultCount = 0;
   for (const r of rows) {
     const p75mae    = parseFloat(r.p75_mae) || DEFAULT_STOP;
     const p75mfe    = Math.round(parseFloat(r.p75_mfe) || DEFAULT_TARGET);
@@ -460,10 +634,26 @@ async function main() {
     ].map(c => ({ ...c, value: parseFloat(c.value) })).filter(c => !isNaN(c.value) && c.value > 0);
     const trades    = rawByType[r.setup_type] || [];
     const { stopDpp, targetDpp } = dppByType[r.setup_type] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
-    const swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
-    let optStop     = swept ? swept.stop : Math.round(p75mae);
-    let optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
-    let targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
+    const realN = realNByType[r.setup_type] || 0;
+
+    let swept, optStop, optTarget, targetMethod, usedVolDefault = false;
+    if (realN < MIN_N && canComputeVolDefault) {
+      // Real-N-thin: don't attempt a sweep on a population that's mostly/entirely synthetic
+      // (rawByType/`trades` here is still unfiltered -- see rawByType_origin_status_filter,
+      // not yet applied). Use the volatility-scaled default computed above instead of running
+      // a sweep whose result would carry false confidence.
+      swept = null;
+      optStop = Math.round(volScaleRatio * medianBarRange);
+      optTarget = Math.round(optStop * targetStopRatio);
+      targetMethod = 'volatility-scaled-default';
+      usedVolDefault = true;
+      volDefaultCount++;
+    } else {
+      swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
+      optStop     = swept ? swept.stop : Math.round(p75mae);
+      optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
+      targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
+    }
     // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
     // a raw historical average using whatever stop/target each trade ACTUALLY fired with --
     // completely disconnected from optStop/optTarget above (the EV-sweep's real chosen pair).
@@ -474,7 +664,11 @@ async function main() {
     // docs/OPEN_THREADS.md. optEV now reports the EV *of* optStop/optTarget specifically --
     // falls back to the raw average only when no sweep candidate was valid (thin-tail gate
     // rejected every percentile candidate), matching optStop/optTarget's own fallback.
-    let optEV     = swept ? swept.ev : parseFloat(r.ev);
+    // usedVolDefault: optEV deliberately left null, not the raw historical average -- that
+    // average describes whatever stop/target each trade ACTUALLY fired with historically,
+    // not this default pairing, and borrowing it would misrepresent an untested default as
+    // having a real backtested EV.
+    let optEV     = usedVolDefault ? null : (swept ? swept.ev : parseFloat(r.ev));
     let correctedNotes = null;
 
     // Corrected target attempt (2026-07-19): chronologically-resimulated, guardrailed
@@ -574,7 +768,10 @@ async function main() {
         : breakerNotes?.tripped ? ` ← CIRCUIT BREAKER TRIPPED (attempted stop=${breakerNotes.attemptedStop} target=${breakerNotes.attemptedTarget})`
         : breakerNotes?.reason === 'min_delta_n_not_met' ? ` ← held (ΔN=${breakerNotes.deltaN}<${breakerNotes.minDeltaNRequired})`
         : '';
-      console.log(`  ${r.setup_type.padEnd(40)} OLD stop=${prior?.stop ?? '?'} t1=${prior?.target ?? '?'} EV=$${prior?.ev?.toFixed(2) ?? '?'}  ->  NEW stop=${optStop}(${stopDelta != null ? (stopDelta >= 0 ? '+' : '') + stopDelta : '?'}) t1=${optTarget}(${targetDelta != null ? (targetDelta >= 0 ? '+' : '') + targetDelta : '?'}) EV=$${optEV.toFixed(2)}(${evDelta != null ? (evDelta >= 0 ? '+$' : '-$') + Math.abs(evDelta).toFixed(2) : '?'}) method=${targetMethod}${marker}`);
+      // optEV can be null now (volatility-scaled-default's EV is deliberately unknown, not
+      // borrowed from a differently-computed stat) -- guard the print, don't assume a number.
+      const optEvStr = optEV != null ? optEV.toFixed(2) : 'n/a';
+      console.log(`  ${r.setup_type.padEnd(40)} OLD stop=${prior?.stop ?? '?'} t1=${prior?.target ?? '?'} EV=$${prior?.ev?.toFixed(2) ?? '?'}  ->  NEW stop=${optStop}(${stopDelta != null ? (stopDelta >= 0 ? '+' : '') + stopDelta : '?'}) t1=${optTarget}(${targetDelta != null ? (targetDelta >= 0 ? '+' : '') + targetDelta : '?'}) EV=$${optEvStr}(${evDelta != null ? (evDelta >= 0 ? '+$' : '-$') + Math.abs(evDelta).toFixed(2) : '?'}) method=${targetMethod}${marker}`);
       upserted++; // counts "would upsert", matches the real-run semantics for the summary line below
       continue;
     }

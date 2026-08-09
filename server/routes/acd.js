@@ -920,6 +920,15 @@ async function detectGlobexSetup(sessionDate, io) {
     const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
+      // FIXED 2026-08-05 (RESEARCH_CLAIM globexparams_raw_percentile_bug_pd_poc_vah_val): this
+      // used to be the LIVE stop/target source for PD_VAH/VAL/POC via globexParams() below --
+      // raw p75_mae/p50_mfe from UNIFIED_BACKTEST, the exact same bug class as the optStopQ
+      // bug the 2026-08-03 fix addressed elsewhere, just in a path that fix never touched (its
+      // own commit message only verified widerOptMap "was already correct", never audited this
+      // separate query). Confirmed live: PD_POC_LONG's p75_mae drifted 68.75->84.0625 across
+      // weeks, landing on sixteenths (PERCENTILE_CONT interpolation), while real OPTIMAL_STOP
+      // for the same type sat at a stable, round stop=29. No longer the stop/target source --
+      // kept ONLY as a divergence check against the real widerOptMap value (see auditMap below).
       query(`SELECT signal_name, p75_mae, p50_mfe FROM performance_audit
              WHERE signal_type='UNIFIED_BACKTEST' AND window_days=9999
                AND signal_name IN ('PD_VAH_SHORT','PD_VAL_LONG','PD_POC_SHORT','PD_POC_LONG')
@@ -940,7 +949,11 @@ async function detectGlobexSetup(sessionDate, io) {
         FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
           AND signal_name = ANY($1)
         ORDER BY signal_name, run_date DESC
-      `, [[...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type), 'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT']]),
+      `, [[...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => l.type), 'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT',
+          // Added 2026-08-05: the 3 original PD candidates now read the same real, EV-swept
+          // calibration every other overnight level already uses -- see the auditRow comment
+          // above for why they didn't before.
+          'PD_VAH_FADE_SHORT', 'PD_VAL_FADE_LONG', 'PD_POC_FADE_SHORT', 'PD_POC_FADE_LONG']]),
       query(`SELECT signal_name, recommendation FROM performance_audit
              WHERE signal_type='CONFLUENCE_AUDIT_OVERNIGHT' AND signal_name LIKE 'PAIR:%'`),
     ]);
@@ -948,12 +961,38 @@ async function detectGlobexSetup(sessionDate, io) {
     const px = priceRow.rows[0].price;
     const { vah, val, poc } = pdRow.rows[0];
 
+    // Divergence assertion (2026-08-05): auditMap/globexParams are NO LONGER the live stop/
+    // target source (see the auditRow query comment above) -- kept only to catch, loudly, if
+    // this independent UNIFIED_BACKTEST-derived estimate and the real OPTIMAL_STOP sweep ever
+    // drift far apart, which is either a sign one of the two pipelines broke, or a sign this
+    // divergence check itself needs revisiting. DIVERGENCE_WARN_PCT=0.5 (50%) is a deliberately
+    // loose plausibility bound, not a trading threshold -- the two are computed by genuinely
+    // different methods (raw percentile vs EV-swept grid) and are not expected to match
+    // closely, only to stay in the same neighborhood.
     const auditMap = {};
     for (const r of auditRow.rows) if (!auditMap[r.signal_name]) auditMap[r.signal_name] = r;
-    const globexParams = (key) => ({
-      stop: parseFloat(auditMap[key]?.p75_mae ?? 65),
-      t1:   parseFloat(auditMap[key]?.p50_mfe ?? 40),
-    });
+    const DIVERGENCE_WARN_PCT = 0.5;
+    // Once-per-day-per-key dedup (2026-08-05): all 4 original PD types are KNOWN to diverge
+    // right now (PD_POC_LONG ~190% apart -- that's the whole reason they were shadowed the
+    // same night, see the PAUSED_UNTIL_ORIGIN_FILTER comment below). Logging that on every
+    // ~15-60s poll from day one would bury the signal this check exists to surface -- if
+    // every fire screams, the scream gets ignored within a week. Reuses the existing day-
+    // scoped cache helper (getCached/setCached, already used throughout this file) rather
+    // than a new mechanism. This does NOT silence a genuinely NEW divergence on a different
+    // type -- that still logs the first time it's seen each day.
+    function checkCalibrationDivergence(auditKey, liveStop, liveTarget) {
+      const a = auditMap[auditKey];
+      if (!a || liveStop == null) return;
+      const auditStop = parseFloat(a.p75_mae);
+      if (!auditStop || !isFinite(auditStop)) return;
+      const pctDiff = Math.abs(liveStop - auditStop) / auditStop;
+      if (pctDiff > DIVERGENCE_WARN_PCT) {
+        const dedupKey = `globexDivergenceLogged:${auditKey}`;
+        if (getCached(sessionDate, dedupKey, DAY_CACHE_TTL)) return;
+        setCached(sessionDate, dedupKey, true);
+        console.error(`[globex-calib-divergence] ${auditKey}: live OPTIMAL_STOP stop=${liveStop} vs UNIFIED_BACKTEST p75_mae=${auditStop} (${(pctDiff * 100).toFixed(0)}% apart, warn threshold ${DIVERGENCE_WARN_PCT * 100}%) -- one of these two independently-computed calibrations may be stale or wrong, investigate before trusting either. (logged once per day per key)`);
+      }
+    }
 
     // Live confluence pair-bonus lookup for Globex — same convention as the RTH
     // liveStats._pairBonus (server/routes/acd.js ~line 5202), just built fresh per poll
@@ -1038,9 +1077,16 @@ async function detectGlobexSetup(sessionDate, io) {
     const globexVwapFadeDir = vwap24 != null ? (px >= vwap24 ? 'SHORT' : 'LONG') : null;
 
     const candidates = [
-      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT', levelBase: 'PD_VAH' },
-      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG',  levelBase: 'PD_VAL' },
-      { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}`, levelBase: 'PD_POC' },
+      // FIXED 2026-08-05: these 3 now carry widerStop/widerTarget from the real OPTIMAL_STOP
+      // source too (widerOptMap, extended above), matching every other candidate here --
+      // auditKey is kept only so checkCalibrationDivergence() below can still compare against
+      // the old UNIFIED_BACKTEST estimate as a sanity check, not as the value actually used.
+      { level: vah, name: 'PD VAH', type: 'PD_VAH_FADE_SHORT', dir: 'SHORT', auditKey: 'PD_VAH_SHORT', levelBase: 'PD_VAH',
+        widerWindowNew: true, widerStop: widerOptMap['PD_VAH_FADE_SHORT']?.stop ?? flatStop, widerTarget: widerOptMap['PD_VAH_FADE_SHORT']?.target ?? flatTarget },
+      { level: val, name: 'PD VAL', type: 'PD_VAL_FADE_LONG',  dir: 'LONG',  auditKey: 'PD_VAL_LONG',  levelBase: 'PD_VAL',
+        widerWindowNew: true, widerStop: widerOptMap['PD_VAL_FADE_LONG']?.stop ?? flatStop, widerTarget: widerOptMap['PD_VAL_FADE_LONG']?.target ?? flatTarget },
+      { level: poc, name: 'PD POC', type: `PD_POC_FADE_${pocDir}`, dir: pocDir, auditKey: `PD_POC_${pocDir}`, levelBase: 'PD_POC',
+        widerWindowNew: true, widerStop: widerOptMap[`PD_POC_FADE_${pocDir}`]?.stop ?? flatStop, widerTarget: widerOptMap[`PD_POC_FADE_${pocDir}`]?.target ?? flatTarget },
       ...WIDER_WINDOW_OVERNIGHT_LEVELS.map(l => ({
         level: widerLevelPrices[l.levelName] ?? null, name: l.displayName, type: l.type, dir: l.dir,
         widerWindowNew: true,
@@ -1065,21 +1111,38 @@ async function detectGlobexSetup(sessionDate, io) {
       );
       if (existing.rows.length) continue;
 
-      const { stop: STOP, t1: T1 } = c.widerWindowNew
-        ? { stop: c.widerStop, t1: c.widerTarget }
-        : globexParams(c.auditKey);
+      // Every candidate now carries widerStop/widerTarget from the real OPTIMAL_STOP source
+      // (see the candidates array above) -- the old widerWindowNew-vs-globexParams() branch
+      // is gone, this is unconditional now.
+      const STOP = c.widerStop, T1 = c.widerTarget;
+      if (c.auditKey) checkCalibrationDivergence(c.auditKey, STOP, T1);
       const isLong = c.dir === 'LONG';
       const entry  = px;
       const stop   = isLong ? px - STOP  : px + STOP;
       const target = isLong ? px + T1    : px - T1;
 
-      // The 3 original PD candidates fire straight to ACTIVE (existing, unchanged
-      // behavior). The 4 wider-window candidates are brand new (N=0 live history) —
-      // dynamically SHADOW-gated via getOvernightLevelLiveStatus(), same discipline
-      // as minuteBarSignalDetector.js, until N>=20 real resolutions clear the bar.
+      // The 3 original PD candidates USED to fire straight to ACTIVE unconditionally. The 4
+      // wider-window candidates are brand new (N=0 live history) — dynamically SHADOW-gated
+      // via getOvernightLevelLiveStatus(), same discipline as minuteBarSignalDetector.js,
+      // until N>=20 real resolutions clear the bar.
+      //
+      // PAUSED 2026-08-05 (all 4 original-PD directions, not just 3 -- PD_POC covers both):
+      // the same-night globexParams unification fix moved these onto the real OPTIMAL_STOP
+      // sweep, correctly, but that sweep's STOP side has never been origin_status-filtered
+      // (rawByType_origin_status_filter, still pending) and these 4 types' populations are
+      // 79-89% BACKFILL/UNKNOWN. Confirmed live: PD_POC_FADE_LONG cut from a wrong-but-wide
+      // 84.0625pt fired stop to an unaudited 29pt -- a ~65% tightening, on the only types
+      // that were still firing live, in the same motion as the fix that was needed for a
+      // different reason. 29pt clears the noise floor but sits well under the discretionary
+      // level±1.5xATR (~52pt) reference. Shadowed rather than reverted -- the new calibration
+      // source is still the right end state, just not yet trustworthy enough to size real
+      // risk with. Re-enable once the stop-side re-baseline lands (same OPEN_DECISION).
+      const PAUSED_UNTIL_ORIGIN_FILTER = new Set(['PD_VAH_FADE_SHORT', 'PD_VAL_FADE_LONG', 'PD_POC_FADE_SHORT', 'PD_POC_FADE_LONG']);
       const live = c.widerWindowNew
         ? await getOvernightLevelLiveStatus(c.type)
-        : { status: 'ACTIVE', reason: null };
+        : PAUSED_UNTIL_ORIGIN_FILTER.has(c.type)
+          ? { status: 'SHADOW', reason: 'PD_ORIGIN_STATUS_UNAUDITED_STOP' }
+          : { status: 'ACTIVE', reason: null };
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
       // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
@@ -4838,7 +4901,7 @@ export default function createACDRouter(io) {
       // this fragile function.
       if (ibSetup) {
         const ibDtaQ = await query(`
-          SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade, notes
+          SELECT DISTINCT ON (signal_name) signal_name, sample_size, ev_per_trade, notes, run_date::text
           FROM performance_audit
           WHERE signal_type='DAY_TYPE_ALPHA' AND signal_name = ANY($1::text[])
           ORDER BY signal_name, run_date DESC
@@ -4868,7 +4931,18 @@ export default function createACDRouter(io) {
           const realEv = dtaNotes.real_ev;
           const unproven = realN < REAL_N_FLOOR;
           const realBad = !unproven && realEv != null && realEv < -5;
-          if (unproven || realBad) ibSetup = null;
+          if (unproven || realBad) {
+            // FIXED 2026-08-05 (RESEARCH_CLAIM ib_bullish_blocked_by_stale_daytype_alpha_realn0):
+            // this gate previously nulled ibSetup with zero trace anywhere -- not a console
+            // line, not a DB row, nothing. It silently blocked every IB_BULLISH RTH candidate
+            // for 2+ days (a stale DAY_TYPE_ALPHA row reading real_n=0) and was only found by
+            // reasoning backward from an unexplained outage. A gate that nulls a candidate
+            // must say why, in real time, not just in a scratch/*.log line that scrolls away --
+            // console.error so it lands in scratch/server_errors.jsonl (the standing error
+            // watcher already tails this) and is queryable/greppable after the fact.
+            console.error(`[ib-gate] ${ibSetup.type} NULLED by DAY_TYPE_ALPHA real-N floor: cell=${ibDtaRow.signal_name} run_date=${ibDtaRow.run_date} real_n=${realN} (floor=${REAL_N_FLOOR}) real_ev=${realEv ?? 'n/a'} reason=${unproven ? 'unproven (real_n<floor)' : 'realBad (real_ev<-5)'}`);
+            ibSetup = null;
+          }
         }
       }
 
@@ -6231,6 +6305,17 @@ export default function createACDRouter(io) {
           // Now mirrors the suppressed-near-level-audit fix exactly: resolves a real
           // direction+type per level and computes the same entry/stop/target a live
           // candidate at that level would have gotten.
+          // DISABLED 2026-08-05 as an ACTING gate -- kept as a logging-only audit trail.
+          // Full-history validation the same night (RESEARCH_CLAIM
+          // cascade_breaker_validation_single_day_artifact) found its entire apparent value
+          // rested on a single outlier day (1 of 7); on 5 of the other 6 days it demonstrably
+          // blocked trades that outperformed the normal population that was let through,
+          // including the day this was checked. A live layer between signal and execution
+          // with a negative case behind it doesn't get to keep acting while under review --
+          // see OPEN_DECISION cascade_breaker_validate_or_remove. The audit-row insert below
+          // (suppression_reason='CASCADE_BREAKER') still runs whenever the trigger condition
+          // is met, so the data keeps accumulating for a future re-decision -- only the
+          // downstream gating (the `!cascadeBreaker.active` check further below) was removed.
           if (cascadeBreaker.active && nearLevels.length > 0) {
             const cbIsLong = approachDir === 'FROM_ABOVE';
             const cbDir = cbIsLong ? 'LONG' : 'SHORT';
@@ -6265,7 +6350,9 @@ export default function createACDRouter(io) {
               ]).catch(() => {});
             }
           }
-          if (!cascadeBreaker.active && nearLevels.length > 0) {
+          // Was `if (!cascadeBreaker.active && nearLevels.length > 0)` -- the cascadeBreaker
+          // condition no longer gates this. See the disable note above the audit-log block.
+          if (nearLevels.length > 0) {
             const primary = nearLevels.reduce((best, lv) =>
               (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
             const lv = primary;
@@ -6299,11 +6386,19 @@ export default function createACDRouter(io) {
             // later. Adding `status IN ('ACTIVE','SHADOW')` means only a STILL-OPEN anchor
             // blocks the cluster; once it resolves, the cluster is immediately re-eligible for
             // the rest of the 15-minute window.
+            // suppression_reason != 'CASCADE_BREAKER' excludes the audit-only rows inserted
+            // just above (2026-08-05, cascade breaker disabled as an acting gate but kept
+            // logging) -- those rows share the same setup_type/status='SHADOW' shape as a
+            // real touch, and without this exclusion the real candidate for the SAME level
+            // (now unconditionally allowed to fire) would see its own audit row as "already
+            // fired in this cluster" and get silently swallowed by dedup logic instead of
+            // firing independently.
             const clusterAnchorRes = await query(`
               SELECT id, setup_type FROM active_setups
               WHERE trade_date = $1 AND setup_type = ANY($2)
                 AND origin_status IN ('ACTIVE','SHADOW')
                 AND status IN ('ACTIVE','SHADOW')
+                AND (suppression_reason IS NULL OR suppression_reason != 'CASCADE_BREAKER')
                 AND fired_at >= NOW() - INTERVAL '15 minutes'
               ORDER BY fired_at ASC LIMIT 1
             `, [todayET, clusterTypes]).catch(() => ({ rows: [] }));
@@ -6890,16 +6985,20 @@ export default function createACDRouter(io) {
               // Target was a flat hardcoded entry+30 until 2026-08-05 (test_invariants.mjs check [8]
               // flagged this live -- the ONE of 7 flagged types that turned out to be a genuine
               // "never reads OPTIMAL_STOP" bug, not a fired-before-calibration-existed timing
-              // artifact like the other 6). Stop stays structural (recentLow-5, below the sweep
-              // extreme that invalidates the reversal thesis) -- a deliberate design choice, not
-              // the bug that was found; only the target ever ignored calibration.
-              const _sweepLongOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.STOP_SWEEP_LONG;
+              // artifact like the other 6). PAUSED same day, before any live fire occurred:
+              // STOP_SWEEP_LONG/SHORT are two of this system's few genuinely real-data-dominated
+              // stop populations (zero BACKFILL contamination), and the calibration source
+              // (sweepOptimalStopAndTarget()) has a confirmed order-blind EV check (defect #5,
+              // OPEN_DECISION order_blind_evaluation_pattern_sweep) -- reverted to the flat 30pt
+              // value deliberately rather than trust a calibrated number from a known-biased
+              // selector on a population worth protecting. Re-enable only after that defect is
+              // fixed. See OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep.
               stopSweepSetup = {
                 type: 'STOP_SWEEP_LONG',
                 direction: 'LONG',
                 entry: currentPrice,
                 stop: Math.round(recentLow - 5),
-                target: Math.round(currentPrice + (_sweepLongOpt?.target ?? 30)),
+                target: Math.round(currentPrice + 30),
                 targetLabel: `${level.name} sweep bounce`,
                 description: `Price swept below ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop below sweep low (${Math.round(recentLow)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_LONG') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepLongStats && _sweepLongStats.n >= 20)
@@ -6916,13 +7015,14 @@ export default function createACDRouter(io) {
             if (brokeAbove && nowBelow && extension > 3 && extension < 50 && drop > 15) {
               // FIXED 2026-07-17: same fabricated-history fix as STOP_SWEEP_LONG above.
               const _sweepShortStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._setupStats?.STOP_SWEEP_SHORT;
-              const _sweepShortOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.STOP_SWEEP_SHORT;
+              // PAUSED 2026-08-05 alongside STOP_SWEEP_LONG -- see comment there and
+              // OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep.
               stopSweepSetup = {
                 type: 'STOP_SWEEP_SHORT',
                 direction: 'SHORT',
                 entry: currentPrice,
                 stop: Math.round(recentHigh + 5),
-                target: Math.round(currentPrice - (_sweepShortOpt?.target ?? 30)),
+                target: Math.round(currentPrice - 30),
                 targetLabel: `${level.name} sweep fade`,
                 description: `Price swept above ${level.name} (${Math.round(level.price)}) by ${Math.round(extension)}pt, now reversing. Confluence: ${confNames.join(', ')}. Stop above sweep high (${Math.round(recentHigh)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('STOP_SWEEP_SHORT') ?? 'not yet calibrated'} overall.`,
                 history: (_sweepShortStats && _sweepShortStats.n >= 20)

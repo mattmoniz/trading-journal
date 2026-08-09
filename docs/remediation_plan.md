@@ -5,6 +5,28 @@ the author's own request. See `docs/DECISIONS_LOG.md` for what was actually veri
 where reality diverged from this plan's assumptions (notably §Phase 1's framing of the holdout
 test — see the log for the correction).**
 
+**STATUS UPDATE (2026-08-05, third pass, same day):**
+- §4.1 pre-flight assertions — **built**: `scripts/preflight_backtest_assertions.mjs`, all 5
+  original assertions plus #6 (shared resolver) implemented as static checks across every
+  `backtest_*`/`calibrate_*`/`mine_*`/`pilot_*` script. Verified it actually catches the real
+  defect it exists to catch: flags `scripts/backtest_rth_calibration_genuine_holdout.mjs` on
+  check [6] by name. #7 (exact-timestamp/point-in-time joins) not yet a static check — folded
+  into check [8]'s fix instead (below), not generalized into this script yet.
+- §8/§4.4 check [8] fix — **done**. `test_invariants.mjs` check [8] now does a point-in-time
+  join (each fired trade compared against whatever `OPTIMAL_STOP` was live on its own `fired_at`
+  date, not today's snapshot). Verified real, not cosmetic: `PD_CLOSE_FADE_LONG` dropped off the
+  WARN list post-fix (a genuine calibration-drift false positive), the other 7 flagged types
+  persisted unchanged (genuine hardcode signatures). WARN→FAIL still deliberately not wired —
+  the check is now trustworthy, but promoting it is a separate call.
+- §7.3 keep-or-demote — still **open**, `OPEN_DECISION prioritize_risk_management_over_signal_research`.
+- Defect #5 (order-blind evaluation) — **fixed at the root**, not just documented.
+  `scripts/update_optimal_stops.mjs` now has `sweepOptimalStopAndTargetChronological()` (design
+  reviewed by DeepSeek first, factual claims independently verified). Validated via
+  `scripts/validate_chronological_sweep_20260805.mjs` against all 17 live setup_types — NOT yet
+  wired into the live cron, see `OPEN_DECISION wire_chronological_sweep_into_live_cron` for why
+  (surfaced a new risk: some chronologically-correct stops land below the real market noise floor
+  on synthetic-data-heavy setup_types) and what has to land first.
+
 **REVISIONS (2026-08-05, same day, later pass) — read before executing anything below:**
 - **Phase 2.1 is dropped entirely, not just superseded.** Quantified: 86.5% of all real trade data
   (1,215 of 1,404 trades) fired before the optStopQ fix, on stops/targets that don't match today's

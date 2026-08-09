@@ -1,5 +1,64 @@
 # Decisions Log
 
+## 2026-08-05 (same day, third pass) — live-capital approvals + check [8] methodology fix
+
+1. **`noise_floor_stop_revert_pending_dbwrite` APPROVED and executed.** `GLOBEX_VWAP_FADE_SHORT`
+   (10pt) and `PD_CLOSE_FADE_LONG` (14pt) reverted to their last known non-degenerate values
+   (33/40 and 32/60 respectively — independently re-verified against full `OPTIMAL_STOP` history
+   before running, matching the already-written script's values exactly). Backup table
+   `optimal_stop_noise_floor_revert_backup_20260805`. `test_invariants.mjs` check `[13]` clean
+   after.
+2. **`stop_sweep_long_calibrated_target_pause_or_keep` — PAUSED, both LONG and SHORT.** The
+   original decision only named `STOP_SWEEP_LONG`; checked `STOP_SWEEP_SHORT`'s `origin_status`
+   mix directly (13 SHADOW + 4 UNKNOWN, zero BACKFILL — same real-dominated profile as LONG) and
+   paused both for consistency, not just the one named in the flagged decision. Reverted
+   `server/routes/acd.js` to the flat 30pt target for both; stop stays structural (unaffected).
+3. **Cascade breaker validation dispatched to Gemini, and its "genuine discrimination" framing
+   was WRONG on independent re-verification.** Gemini's response file arrived truncated/corrupted
+   (missing sections 1-3 and the day-by-day breakdown) — read and ran its actual script
+   (`scratch/cascade_analysis.js`) directly rather than trust the summary, per standing practice.
+   Real finding: cascade suppression only outperformed the normal population on 1 of 7 days
+   (2026-07-29) and was neutral on 1 more (07-31, a systemic bad day for both populations); on
+   the other 5 days — including today — suppressed trades had BETTER EV than what fired normally.
+   The entire aggregate case (-$7.27 EV suppressed vs -$0.76 normal) rests on the single 07-29
+   outlier (136/410 = 33% of the suppressed sample); excluding it, suppressed-pool EV flips to
+   +$5.01/trade. `RESEARCH_CLAIM cascade_breaker_validation_single_day_artifact` (PROVISIONAL),
+   `OPEN_DECISION cascade_breaker_validate_or_remove` (HIGH) — not resolved unilaterally, this
+   gates live entries for every fade setup_type.
+4. **`sweepOptimalStopAndTarget()`'s order-blind EV check** (the root cause blocking
+   `rth_holdout_test_needs_chronological_evaluation`) — design critique dispatched to DeepSeek
+   before writing the fix, per the standing phase-0 rule for anything touching the core
+   calibration engine every live setup_type depends on. Proposed approach: reuse the exact
+   bar-loading + `resolve()` pattern already proven in
+   `calibrate_overnight_optimal_stops_fresh_holdout_20260720.mjs` (load bars once per
+   setup_type's trade population, re-index each trade to its bar-array position via
+   minute-floored `fired_at`, call the shared chronological `resolve()` per stop/target
+   candidate instead of the order-blind `mae_points`/`mfe_points` comparison). Not yet
+   implemented — waiting on DeepSeek's critique before coding.
+5. **Stop-side `origin_status` filter (Phase 0.3) — confirmed missing, deliberately NOT
+   patched yet.** `update_optimal_stops.mjs`'s `rawRes` query (feeds `rawByType`, the STOP-side
+   sweep population) has zero `origin_status` filter — only the separate target-only
+   `rawResExpanded` query got this filter on 2026-08-02. Per this codebase's own established
+   precedent for this exact class of change (see the circuit-breaker entry in CLAUDE.md:
+   "must ship as a deliberate one-time re-baseline... never a quiet formula tweak on a normal
+   nightly run"), this should NOT be patched in isolation right now — it collides with item 4
+   above (both feed the same sweep), and applying them separately would mean two disruptive
+   re-baselines instead of one. Sequenced to land together once the order-blind fix is ready.
+6. **`test_invariants.mjs` check [8] had a real methodology flaw, now fixed.** It compared every
+   one of the last 10 real fired trades against a single LATEST `OPTIMAL_STOP` snapshot,
+   regardless of when each trade actually fired — calibration legitimately drifts over time
+   (`CAM_R1_FADE_SHORT`'s own history: 66pt in early July, 24pt mid-July, 25pt now), so an old
+   trade fired under a superseded calibration value could manufacture a "mismatch" against
+   today's snapshot even when the live code correctly read whatever was live at the time. Fixed
+   to a point-in-time join: each trade now compared against the `OPTIMAL_STOP` row that was
+   actually live on its own `fired_at` date. Verified the fix is real, not cosmetic:
+   `PD_CLOSE_FADE_LONG` dropped off the WARN list entirely post-fix (its stop was just reverted
+   to 32, matching its historical value, and now resolves cleanly against contemporaneous
+   calibration) while the other 7 flagged types persisted unchanged — confirming the fix
+   separates true hardcode signatures from calibration-drift artifacts rather than just
+   suppressing warnings generally. WARN->FAIL wiring (per the remediation plan) deliberately NOT
+   done yet — the check is now trustworthy, but promoting it to FAIL is a separate judgment call.
+
 ## 2026-08-05 (same day, second pass) — a sharper external review caught real gaps in the first pass
 
 A second round of Opus pushback on the entry below found genuine problems, verified with real

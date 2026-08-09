@@ -667,8 +667,20 @@ async function main() {
       }
     }
 
-    // ── 8. Live-fired stop/target actually matches current calibration ─────────────
-    console.log('\n[8] Live-fired stop/target matches current OPTIMAL_STOP calibration');
+    // ── 8. Live-fired stop/target actually matches POINT-IN-TIME calibration ───────
+    // FIXED 2026-08-05 (real methodology flaw, flagged by external review, confirmed against
+    // CAM_R1_FADE_SHORT's own OPTIMAL_STOP history -- 66pt in early July, drifted to 24pt
+    // mid-July, 25pt now): this check used to compare every one of the last 10 real fired
+    // trades against a single LATEST OPTIMAL_STOP snapshot, regardless of when each trade
+    // actually fired. Calibration legitimately changes over time (daily/weekly recalibration
+    // runs), so a trade fired weeks ago under an older, since-superseded calibration value can
+    // manufacture a "mismatch" against today's snapshot even though the live code correctly
+    // read whatever calibration was live AT THE TIME it fired -- a false hardcode signature for
+    // a genuinely well-wired setup. Fixed to a point-in-time join: each fired trade is now
+    // compared against the OPTIMAL_STOP row that was actually live on its own fired_at date
+    // (most recent run_date <= that date), the same no-lookahead discipline this codebase
+    // already requires of every backtest/replay script, just applied to this diagnostic too.
+    console.log('\n[8] Live-fired stop/target matches POINT-IN-TIME OPTIMAL_STOP calibration');
     {
       const TOLERANCE_PT = 2; // small rounding slack, not a "static threshold" for sizing/entries -- just a float-compare tolerance
       const RECENT_N = 10;
@@ -685,20 +697,29 @@ async function main() {
       if (liveNames.length === 0) {
         warn('no live (non-SUPPRESS/THIN_N) setup_types found -- check [8] has nothing to verify this run');
       } else {
-        const { rows: optRows } = await client.query(`
-          SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
+        // Full history per type now, not just the latest row -- needed for the point-in-time lookup.
+        const { rows: optHistRows } = await client.query(`
+          SELECT signal_name, run_date, optimal_stop::float as stop, optimal_target::float as target
           FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP' AND signal_name = ANY($1)
-          ORDER BY signal_name, run_date DESC
+            AND optimal_stop IS NOT NULL AND optimal_target IS NOT NULL
+          ORDER BY signal_name, run_date ASC
         `, [liveNames]);
-        const optByName = Object.fromEntries(optRows.map(r => [r.signal_name, r]));
+        const optHistByName = {};
+        for (const r of optHistRows) (optHistByName[r.signal_name] ||= []).push(r);
+        // Latest-per-type still used to report "current calibration says" in the warning text,
+        // and to skip types with no calibration row at all (check [2] already covers that gap).
+        const optByName = {};
+        for (const r of optHistRows) optByName[r.signal_name] = r; // ASC order -> last write wins -> latest
 
-        let checkedCount = 0, mismatchCount = 0;
+        let checkedCount = 0, mismatchCount = 0, skippedNoHistoryAtFire = 0;
         for (const type of liveNames) {
           const opt = optByName[type];
-          if (!opt || opt.stop == null || opt.target == null) continue; // check [2] already covers missing OPTIMAL_STOP rows
+          const hist = optHistByName[type] || [];
+          if (!opt) continue; // check [2] already covers missing OPTIMAL_STOP rows
 
           const { rows: recent } = await client.query(`
-            SELECT ABS(stop_level::float - COALESCE(entry_zone_high::float, entry_zone_low::float)) as stop_dist,
+            SELECT fired_at,
+              ABS(stop_level::float - COALESCE(entry_zone_high::float, entry_zone_low::float)) as stop_dist,
               ABS(t1_level::float - COALESCE(entry_zone_high::float, entry_zone_low::float)) as target_dist
             FROM active_setups
             WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
@@ -707,18 +728,44 @@ async function main() {
           `, [type, RECENT_N]);
           if (recent.length < 3) continue; // too thin to draw a conclusion either way
 
+          // Point-in-time join: for each trade, find the calibration row live on its own
+          // fired_at date. FIXED 2026-08-05 (found while building the Opus row-level export,
+          // same night): run_date <= firedDate is wrong -- run_date is a DATE column with no
+          // time component, but the daily calibration cron writes its row at 4:20pm ET
+          // (run_daily_calibration.sh), so a `<=` same-day match credits a fire from EARLIER
+          // THAT SAME DAY (confirmed live: 3 real fires at 04:20-07:52 ET on 2026-08-03 were
+          // matched against that day's OWN 4:20pm calibration run, which didn't exist yet at
+          // fire time) with calibration that hadn't been computed yet -- a real lookahead
+          // bug, the exact class of error this codebase's own no-lookahead rule exists to
+          // catch. Since run_date has no time-of-day to compare against precisely, the
+          // defensible fix is strictly `<` (never same-day) -- conservative (a legitimate
+          // late-day match after the real 4:20pm cron gets slightly stale-attributed to the
+          // prior day instead), but never credits calibration before it existed, which is
+          // the worse direction of error. A trade that fired before this type's first-ever
+          // OPTIMAL_STOP row can't be judged against anything -- skip it, same convention as
+          // check [10]'s "absent row != THIN_N row" handling elsewhere.
+          const withContemporaneous = [];
+          for (const r of recent) {
+            const firedDate = r.fired_at.toISOString().slice(0, 10);
+            let asOf = null;
+            for (const h of hist) { if (h.run_date < firedDate) asOf = h; else break; }
+            if (!asOf) { skippedNoHistoryAtFire++; continue; }
+            withContemporaneous.push({ ...r, asOf });
+          }
+          if (withContemporaneous.length < 3) continue; // too thin post-join to draw a conclusion
+
           checkedCount++;
           // Require BOTH stop AND target to match -- "either one matches" is too lenient and
           // produces a real false negative: VWAP_MAGNET_LONG's hardcoded 30pt stop happened to
           // coincidentally equal its current calibrated stop (both 30), masking that its target
           // (hardcoded 20 vs calibrated 30) never matches at all. A genuinely-wired setup should
           // track BOTH legs of its own calibration, not just one by chance.
-          const stopMatches = recent.some(r => Math.abs(r.stop_dist - opt.stop) <= TOLERANCE_PT);
-          const targetMatches = recent.some(r => Math.abs(r.target_dist - opt.target) <= TOLERANCE_PT);
+          const stopMatches = withContemporaneous.some(r => Math.abs(r.stop_dist - r.asOf.stop) <= TOLERANCE_PT);
+          const targetMatches = withContemporaneous.some(r => Math.abs(r.target_dist - r.asOf.target) <= TOLERANCE_PT);
           if (!stopMatches || !targetMatches) {
             mismatchCount++;
-            const sampleStops = [...new Set(recent.map(r => r.stop_dist))].slice(0, 3).join(',');
-            const sampleTargets = [...new Set(recent.map(r => r.target_dist))].slice(0, 3).join(',');
+            const sampleStops = [...new Set(withContemporaneous.map(r => r.stop_dist))].slice(0, 3).join(',');
+            const sampleTargets = [...new Set(withContemporaneous.map(r => r.target_dist))].slice(0, 3).join(',');
             const mismatchedLeg = !stopMatches && !targetMatches ? 'stop AND target' : !stopMatches ? 'stop' : 'target';
             // DAY_TYPE_MANAGED types (IB_BULLISH/IB_BEARISH) deliberately use a per-day-type
             // bucket mechanism instead of a single blended OPTIMAL_STOP row -- a mismatch here
@@ -729,8 +776,11 @@ async function main() {
             const caveat = recByName[type] === 'DAY_TYPE_MANAGED'
               ? ` NOTE: this type is DAY_TYPE_MANAGED -- it may legitimately read a per-day-type calibration bucket instead of this single blended OPTIMAL_STOP row, so this mismatch is NOT necessarily a hardcode bug. Verify against the day-type-specific stop/target logic before concluding anything.`
               : ` This is the signature of a live code path that never reads OPTIMAL_STOP for its ${mismatchedLeg} (a hardcoded value, or a different field entirely) -- verify the actual INSERT/setup-construction code for this type before assuming the calibration is simply stale.`;
-            warn(`${type}: current calibration says stop=${opt.stop}/target=${opt.target}, but the ${mismatchedLeg} never matches across the last ${recent.length} real fired trades -- actual stop distances seen: ${sampleStops}, target distances: ${sampleTargets}.${caveat}`);
+            warn(`${type}: current calibration says stop=${opt.stop}/target=${opt.target}, but the ${mismatchedLeg} never matches its OWN CONTEMPORANEOUS calibration across the last ${withContemporaneous.length} real fired trades (each compared against whatever OPTIMAL_STOP was live on its own fired_at date, not today's snapshot) -- actual stop distances seen: ${sampleStops}, target distances: ${sampleTargets}.${caveat}`);
           }
+        }
+        if (skippedNoHistoryAtFire > 0) {
+          console.log(`  (info: ${skippedNoHistoryAtFire} recent fire(s) predated their setup_type's first OPTIMAL_STOP row -- excluded from the point-in-time comparison, not counted as a mismatch either way)`);
         }
         if (checkedCount > 0 && mismatchCount === 0) {
           ok(`all ${checkedCount} live setup_types with enough recent real trades show their calibrated stop/target actually in use`);

@@ -71,6 +71,30 @@ export async function flagDecision({ slug, decisionText, sourceFile, sourceDate 
     ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
       SET notes = EXCLUDED.notes
   `, [today, slug, notes]);
+
+  // HIGH-queue soft cap (2026-08-05, user request: "worth a cap -- if everything's HIGH, the
+  // ordering does no work"). Fires immediately at flag time, not just at next session start
+  // (.claude/hooks/session-start.sh has the matching display-side cap) -- a mid-session flag
+  // should get the same signal a fresh session would. Advisory only, same convention as
+  // post-edit-filesize.sh/the docs-size check: this never blocks the flag from being written,
+  // it just makes queue overload visible at the moment it happens instead of only at the next
+  // session boundary.
+  if (priority === 'HIGH') {
+    const { rows: highCountRows } = await query(`
+      SELECT COUNT(*) as n FROM (
+        SELECT DISTINCT ON (signal_name) signal_name, notes::jsonb as notes
+        FROM performance_audit WHERE signal_type = 'OPEN_DECISION'
+        ORDER BY signal_name, run_date DESC
+      ) latest
+      WHERE notes->>'status' = 'PENDING' AND COALESCE(notes->>'priority', 'MEDIUM') = 'HIGH'
+    `);
+    const highCount = parseInt(highCountRows[0].n, 10);
+    const HIGH_QUEUE_CAP = 8;
+    if (highCount > HIGH_QUEUE_CAP) {
+      console.warn(`⚠️  HIGH-priority OPEN_DECISION queue is now ${highCount} (cap: ${HIGH_QUEUE_CAP}). Consider whether this genuinely needs HIGH, or whether an existing HIGH item is actually resolved and should be closed out via --resolve.`);
+    }
+  }
+
   return { slug, today, firstFlagged, priority };
 }
 

@@ -377,10 +377,32 @@ const overdueClaims = overdueClaimsRaw.split('\n').filter(Boolean).map(line => {
 // genuinely-ignored-too-long one stands out over time. Age computed in SQL (CURRENT_DATE -
 // date), not JS Date() -- this codebase's own hard rule against naive local-timezone date
 // arithmetic (see CLAUDE.md's parseDateTime writeup).
-const openDecisions = openDecisionsRaw.split('\n').filter(Boolean).map(line => {
+const openDecisionsParsed = openDecisionsRaw.split('\n').filter(Boolean).map(line => {
   const [slug, decisionText, ageDays, priority] = line.split('\t');
-  return `  [${priority || 'MEDIUM'}] [${ageDays || '?'}d] ${slug}\n      ${decisionText || ''}`;
+  return { slug, decisionText: decisionText || '', ageDays: ageDays || '?', priority: priority || 'MEDIUM' };
 });
+const openDecisions = openDecisionsParsed.map(d =>
+  `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${d.decisionText}`
+);
+// HIGH-priority queue cap (2026-08-05, user request: "worth a cap -- if everything's HIGH,
+// the ordering does no work"). Query is already sorted HIGH->MEDIUM->LOW then oldest-first
+// (see the SQL above), so this is a pure display cap, not a re-sort -- HIGH always prints in
+// full since that's the whole point of the tier, but MEDIUM/LOW beyond a small cap collapse
+// to a count so the section doesn't just become a second OPEN_THREADS.md wall of text. If the
+// HIGH tier itself is overloaded, that's a distinct, louder problem (a triage prompt, not a
+// display issue) -- see HIGH_QUEUE_CAP below.
+const HIGH_QUEUE_CAP = 8; // matches the threshold already used in flag_decision.mjs's own nudge
+const MED_LOW_DISPLAY_CAP = 5;
+const highDecisions = openDecisionsParsed.filter(d => d.priority === 'HIGH');
+const medLowDecisions = openDecisionsParsed.filter(d => d.priority !== 'HIGH');
+const openDecisionsCapped = [
+  ...highDecisions.map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${d.decisionText}`),
+  ...medLowDecisions.slice(0, MED_LOW_DISPLAY_CAP).map(d => `  [${d.priority}] [${d.ageDays}d] ${d.slug}\n      ${d.decisionText}`),
+  ...(medLowDecisions.length > MED_LOW_DISPLAY_CAP
+    ? [`  ... and ${medLowDecisions.length - MED_LOW_DISPLAY_CAP} more MEDIUM/LOW pending -- node scripts/flag_decision.mjs --list for the full set`]
+    : []),
+];
+const highQueueOverloaded = highDecisions.length > HIGH_QUEUE_CAP;
 
 // Orphaned worktrees: any worktree besides the main repo checkout
 const strayWorktrees = strayWorktreesRaw.split('\n').filter(Boolean).map(line => {
@@ -478,8 +500,11 @@ const lines = [
     : '✅ RESEARCH_CLAIM ledger: no claims currently overdue for recheck',
   '',
   openDecisions.length > 0
-    ? `🟡 OPEN DECISIONS — ${openDecisions.length} pending, oldest first (nothing gets buried until resolved):\n${openDecisions.join('\n')}\n  ACTION: resolve one via node scripts/flag_decision.mjs --resolve <slug> '<resolution text>', or discuss with the user`
+    ? `🟡 OPEN DECISIONS — ${openDecisions.length} pending (${highDecisions.length} HIGH), oldest first (nothing gets buried until resolved):\n${openDecisionsCapped.join('\n')}\n  ACTION: resolve one via node scripts/flag_decision.mjs --resolve <slug> '<resolution text>', or discuss with the user`
     : '✅ No open decisions pending.',
+  highQueueOverloaded
+    ? `⚠️  HIGH-priority queue is overloaded: ${highDecisions.length} pending HIGH decisions (cap: ${HIGH_QUEUE_CAP}). Past this point HIGH stops meaning "the next thing to look at" and starts meaning "everything" -- the ordering does no work. Triage before flagging new HIGH items: resolve what's actually done, or re-flag genuinely-non-urgent ones at MEDIUM.`
+    : '',
   '',
   strayWorktrees.length > 0
     ? `🔴 ORPHANED WORKTREE(S) — ${strayWorktrees.length} besides the main checkout:\n${strayWorktrees.join('\n')}\n  ACTION: investigate (git -C <path> status / git log), then commit+merge or discard — don't let it sit`

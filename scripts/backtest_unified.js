@@ -65,7 +65,18 @@ function resolve(bars, entryIdx, direction, entry, stop, target, maxBars = 240) 
     if (stopHit)   return { result: 'STOP_HIT',   pnl: -(Math.abs(entry - stop))   * PT - COMM, mae, mfe, barsHeld: i - entryIdx };
     if (targetHit) return { result: 'TARGET_HIT', pnl:  (Math.abs(target - entry)) * PT - COMM, mae, mfe, barsHeld: i - entryIdx };
   }
-  return { result: 'EXPIRED', pnl: 0, mae, mfe, barsHeld: maxBars };
+  // FIXED 2026-08-05: this used to unconditionally return barsHeld: maxBars on the EXPIRED
+  // path, regardless of how many bars the loop actually examined -- wrong whenever the walk
+  // ran out of real bar data (bars.length) before reaching maxBars, which is the normal case
+  // for any near-real-time use (a fire close to "now" simply doesn't have maxBars of future
+  // data yet). Found auditing scripts/export_row_level_audit_20260805.mjs's "uncensored MAE/
+  // MFE" column: every single row reported barsHeld=390 (=maxBars) including a fire only ~30
+  // real minutes before the export ran -- confirmed via a direct bar-count check that only 31
+  // real bars actually existed and were walked, not 390. The mae/mfe VALUES were already
+  // correct (the loop's own bounds -- `i < bars.length` -- were never wrong), only this
+  // diagnostic field was. Now reports the actual number of bars examined either way.
+  const lastIdxExamined = Math.min(bars.length - 1, entryIdx + maxBars);
+  return { result: 'EXPIRED', pnl: 0, mae, mfe, barsHeld: Math.max(0, lastIdxExamined - entryIdx) };
 }
 
 // ── Scale-out resolver: T1 (half off) then runner after stop moves to BE ─────

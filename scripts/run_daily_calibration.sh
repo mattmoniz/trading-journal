@@ -24,6 +24,15 @@ echo "=== Daily calibration: $(date) ==="
 # (setup_type, day_type) population join.
 /usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
 
+# DAY_TYPE_ALPHA (2026-08-05, RESEARCH_CLAIM ib_bullish_blocked_by_stale_daytype_alpha_realn0)
+# -- was weekly-only (run_weekly_backtests.sh), while acd.js's IB real-N floor (~line 4839)
+# consults it on EVERY poll to decide whether IB_BULLISH/BEARISH can fire at all. A stale
+# real_n=0 cell silently nulled every IB_BULLISH candidate for 2+ days with zero trace, only
+# found by reasoning backward from an unexplained RTH outage. This is the class fix: a live
+# gate must never be staler than what it gates. Small/cheap (~seconds), safe to run daily
+# alongside the IB stop/target calibration right above it.
+/usr/bin/node scripts/backtest_day_type_alpha.js
+
 # Standing invariant check (2026-07-17) -- previously only ever run manually ("run after
 # any change touching acd.js..."), which meant its checks (including [6]'s
 # UNCALIBRATED_SHADOW_TYPES staleness re-verification) only caught a real drift whenever
