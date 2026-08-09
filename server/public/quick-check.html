@@ -369,21 +369,22 @@ function renderTimeline() {
   // AND, once >=6PM ET, tomorrow's Globex date simultaneously) -- see currentSessionDateET()
   // above for the full writeup. Now scoped to the ONE session that's actually open.
   //
-  // live/all toggle (added 2026-08-09, user request): 'live' = fired_status==='ACTIVE' --
+  // live/all toggle (added 2026-08-09, user request): 'live' = origin_status==='ACTIVE' --
   // rows that were actually shown as a real, actionable alert at the moment they fired.
   // 'all' includes SHADOW-at-fire rows too (background-tracked touches: cascade-breaker
   // audit rows, suppressed/uncalibrated candidates, cluster-dedup audit entries -- all real
   // price events the system tracked, none of them ever surfaced to the user as a trade to
-  // take). fired_status is captured immutably at INSERT (same convention as origin_status --
-  // status itself gets overwritten to RESOLVED/EXPIRED on resolution, so it can't answer
-  // this after the fact). Rows fired before 2026-08-09 have fired_status=NULL (not
-  // recoverable retroactively, same documented gap as origin_status's own pre-2026-07-09
-  // UNKNOWN population) -- those are excluded from 'live' (treated as unknown, not assumed
-  // live) but included in 'all'.
+  // take). CORRECTED same session: originally built a new `fired_status` column for this
+  // before realizing `origin_status` (added 2026-07-17) already IS it -- every live-firing
+  // INSERT site binds origin_status to the exact same ACTIVE/SHADOW value as `status` at
+  // insert time, so a second column was pure duplication, and using the existing one is
+  // strictly better since it's already populated back to 2026-07-17, not just from today.
+  // Rows with origin_status IN ('BACKFILL','UNKNOWN') or null are excluded from 'live'
+  // (genuinely never shown as a real alert, not just "unknown") and included in 'all'.
   const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate);
   const resolved = scoped
     .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
-    .filter(s => timelineFilter === 'all' || s.fired_status === 'ACTIVE')
+    .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 

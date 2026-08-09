@@ -1,5 +1,87 @@
 # Decisions Log
 
+## 2026-08-09 — user pushback on a shipped fix caught a real redundant-column mistake, corrected the 10am-flood root cause, and cleared a 4-day-old outage nobody had noticed
+
+Shipped a fix for a user-reported "ton of trades firing" around 10am (Live/All toggle,
+6PM session-reset bug, MAE/MFE display, commission/drawdown display) and reported it done.
+User pushback caught four real gaps before the loop actually closed — each independently
+verified against real data, not just accepted:
+
+1. **The orphaned dev session wasn't "harmless" — investigated properly instead of just
+   killing it.** `journalctl --user -u trading-journal-server.service` showed the managed
+   systemd service was in an **unbroken crash loop from 2026-08-05 11:36:58 through
+   2026-08-09 16:09:46** — 114,824 consecutive `EADDRINUSE` failures, zero successful binds
+   in that entire window, confirmed by grepping the full log. `./start.sh`'s own documented
+   behavior (`systemctl --user stop trading-journal-server.service` on takeover) is exactly
+   why: a prior session ran `./start.sh` in the background, it correctly stopped the managed
+   service once, and then nothing ever stopped the dev session itself — its `nodemon`-spawned
+   child held port 3002 alone, unmonitored, for 4 straight days, exactly the incident CLAUDE.md
+   already documents as a known risk, now with a concrete real instance. **This means only ONE
+   server process could have been writing during the flood window, not two** — checked directly
+   (a self-join for same-`setup_type`/same-`trade_date` rows within 5 seconds of each other in
+   the 08-05→08-07 window) and found zero near-duplicate pairs, confirming no dual-writer
+   corruption occurred. Separately confirmed the Sierra Chart watcher was never actually a risk
+   either way — `SierraWatcher.start()` is never called anywhere in `server/index.js` (a real,
+   separate, still-open gap, not investigated further this session). The dev session was killed
+   directly by PID (not `./stop.sh`, which would have also killed the now-correctly-running
+   systemd service on the same port) — its own `EXIT` trap fired correctly on the kill
+   ("Dev session ending -- handing port 3002 back to trading-journal-server.service"), confirming
+   that mechanism works; it just has a blind spot the incident exposed — it only fires on the
+   *top-level* `start.sh` process exiting, not on a `nodemon`-spawned child crashing independently
+   while the supervisor lingers, which is what let this run undetected for 4 days.
+2. **The original root-cause framing overstated the 2026-08-05 cascade-breaker gate removal's
+   role — corrected with real counts, not re-asserted.** Queried `origin_status='ACTIVE'` (real,
+   live-shown) vs `'SHADOW'` fire counts in the 9:30-11:30am ET window for every day back to
+   2026-07-01. Result: ACTIVE counts on the three "flood" days (08-05: 0, 08-06: 9, 08-07: 3) are
+   **not elevated** versus comparable pre-08-05 sessions (07-29: 10, 07-30: 11, 07-31: 15) — if
+   anything lower. The SHADOW/total volume that actually spiked (`cascade_audit` rows: 92 on
+   07-31, 51/71/61 on 08-05/06/07) has been building since **2026-07-28**, when the
+   cascade-breaker audit-logging mechanism itself (as opposed to its gate, removed 08-05) started
+   generating rows — a full week before the gate-removal change I'd originally blamed. Per the
+   user's own stated test ("if Live-filtered counts are still elevated, the gate decision needs
+   revisiting") — they are not, so the display fix (the Live/All toggle) is the right and
+   sufficient primary resolution; the cascade-breaker gate-removal decision does not need
+   revisiting on this evidence.
+3. **The `fired_status` column shipped in the original fix was genuinely redundant — found,
+   admitted, and reverted, not left in place.** Re-reading the actual INSERT SQL at all 8
+   live-firing sites (not just the column's stated purpose) found `origin_status` (added
+   2026-07-17) was *already* bound to the identical ACTIVE/SHADOW value as `status` at insert
+   time in every one of them — confirmed further by `scripts/export_row_level_audit_20260805.mjs`,
+   written the very session that built the cascade-breaker logic, already using
+   `origin_status==='ACTIVE'` this exact way. `fired_status` was pure duplication, and a strictly
+   worse one: it would only have been populated from 2026-08-09 forward, while `origin_status`
+   already covers all of history back to 2026-07-17. Reverted from all 8 INSERT sites, the
+   `range-summary` endpoint, and both frontend consumers (`App.jsx`, `quick-check.html`) the same
+   session — the Live/All toggle now reads `origin_status` instead, which directly and
+   retroactively answers point 2 above using existing data rather than needing to wait for new
+   fires. The DB column itself is still present (empty, zero rows ever populated) —
+   `DROP COLUMN` was attempted and blocked by the Claude Code permission classifier (a genuinely
+   destructive schema change); flagged as `OPEN_DECISION drop_redundant_fired_status_column`
+   rather than worked around.
+4. **This also exposed a real, standing gap, not just this one mistake — flagged, not just
+   fixed once.** Nothing in `test_invariants.mjs` verifies that `origin_status` and `status` stay
+   bound to the same value at every `active_setups` INSERT site — the exact property this whole
+   incident depended on, and the property a future careless edit could just as easily break again
+   with nothing catching it. Not built this session (a naive text-based SQL-block parser risks
+   being wrong in a way that gives false confidence, and deserved more design time than was
+   available) — flagged as `OPEN_DECISION no_invariant_checks_origin_status_matches_status_at_insert`.
+   The 7 pre-existing `test_invariants.mjs` failures checked this session (5×missing
+   `BREAKEVEN_TRAIL_TEST` rows for TRAIL variants, `CAM_S2_FADE_SHORT`'s circuit breaker tripped,
+   `FLOOR_R1_FADE_LONG` below the noise floor — confirmed identical with/without this session's
+   diff via `git stash`) are all in the stop/target-calibration domain, not the alert-status
+   domain — none of them were masking this class of bug, because no check in that domain
+   currently exists at all, which is a different (and arguably worse) problem than a check
+   quietly failing.
+
+**Why this entry exists**: every one of these four corrections came from the user pushing back
+on a "solid shipment" summary rather than accepting it — a direct, current-session instance of
+this file's own standing purpose (verify a claim against real data before trusting it, including
+Claude's own claims from earlier the same session). The original fix (Live/All toggle, 6PM reset,
+MAE/MFE display) was directionally right the whole time; what needed correcting was the causal
+story behind it and one piece of unnecessary, duplicate infrastructure — worth recording
+precisely because "the feature works" and "the story I told about why it was needed is accurate"
+turned out to be two different claims.
+
 ## 2026-08-05 (same day, third pass) — live-capital approvals + check [8] methodology fix
 
 1. **`noise_floor_stop_revert_pending_dbwrite` APPROVED and executed.** `GLOBEX_VWAP_FADE_SHORT`

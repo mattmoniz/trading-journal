@@ -1140,16 +1140,20 @@ function LiveSessionPanel() {
   React.useEffect(() => {
     try { sessionStorage.setItem('session-timeline-filter', timelineSession); } catch (_) {}
   }, [timelineSession]);
-  // Live/All filter — added 2026-08-09, user request, after a session where the timeline's
-  // real fire-count jump (traced to the 2026-08-05 cascade-breaker gate removal, see
-  // docs/DECISIONS_LOG.md) turned out to be indistinguishable from routine SHADOW background
-  // tracking without this. 'live' = fired_status==='ACTIVE' (shown as a real, actionable
-  // alert at the moment it fired). fired_status is captured immutably at INSERT (mirrors
-  // origin_status's own convention — `status` itself gets overwritten to RESOLVED/EXPIRED on
-  // resolution, so it can't answer "was this ever ACTIVE" after the fact). Rows fired before
-  // 2026-08-09 have fired_status=NULL — excluded from 'live' (unknown, not assumed live),
-  // included in 'all', same documented-gap convention as origin_status's pre-2026-07-09
-  // UNKNOWN population.
+  // Live/All filter — added 2026-08-09, user request, after a report of "a ton of trades
+  // firing" that turned out to be routine SHADOW background tracking rendering
+  // indistinguishably from a real alert once both resolve to the same post-resolution
+  // `status`. CORRECTED same session: originally built a brand-new `fired_status` column for
+  // this, before realizing `origin_status` (added 2026-07-17) already IS this signal — every
+  // live-firing INSERT site binds `origin_status` to the exact same ACTIVE/SHADOW value as
+  // `status` at insert time (verified directly against all 8 sites), so a dedicated second
+  // column was pure duplication. Using the existing column instead is strictly better: it's
+  // already populated back to 2026-07-17 (fired_status would have been NULL before
+  // 2026-08-09), not just from today forward. 'live' = origin_status==='ACTIVE'. Rows with
+  // origin_status IN ('BACKFILL','UNKNOWN') or NULL are excluded from 'live' (unknown/
+  // synthetic, not assumed live) and included in 'all' — a deliberate choice, not an
+  // accident: 'BACKFILL'/'UNKNOWN' genuinely were never shown as a real alert, so hiding them
+  // from 'live' is correct, not just conservative.
   const [timelineLive, setTimelineLive] = React.useState(() => {
     try { return sessionStorage.getItem('session-timeline-live-filter') || 'live'; } catch (_) { return 'live'; }
   });
@@ -1403,7 +1407,7 @@ function LiveSessionPanel() {
           _pnl: s.actual_pnl,
           _mae: s.mae_points,
           _mfe: s.mfe_points,
-          _firedStatus: s.fired_status,
+          _originStatus: s.origin_status,
           _winRate: s.historical_win_rate,
           _sessions: s.historical_sessions,
           _bar6Checkpoint: s.bar6_checkpoint,
@@ -1422,11 +1426,10 @@ function LiveSessionPanel() {
           if (timelineSession === 'overnight') return e._isRth === false;
           return true; // 'both'
         };
-        // Live/All: fired_status is captured immutably at INSERT (see timelineLive's
-        // declaration above) -- 'live' excludes both SHADOW-at-fire AND unknown
-        // (pre-2026-08-09, fired_status IS NULL) rows, since a null here means "we don't
-        // know," not "assume it was live."
-        const matchesLiveFilter = (e) => timelineLive === 'all' || e._firedStatus === 'ACTIVE';
+        // Live/All: origin_status is captured immutably at INSERT (see timelineLive's
+        // declaration above) -- 'live' excludes SHADOW-at-fire, BACKFILL, UNKNOWN, and null
+        // origin_status rows alike, since none of those were ever shown as a real alert.
+        const matchesLiveFilter = (e) => timelineLive === 'all' || e._originStatus === 'ACTIVE';
         const allEvents = caseEvents
           .filter(e => {
             if (!e.fired_time || e._status === 'SHADOW' || e._status === 'ACTIVE') return false;
