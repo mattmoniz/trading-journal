@@ -185,6 +185,7 @@
     </div>
     <div id="range-label" class="range-label"></div>
     <div id="origin-banner" class="origin-banner"></div>
+    <div id="range-stats" style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border);"></div>
     <canvas id="range-equity" class="equity"></canvas>
     <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
   </div>
@@ -218,6 +219,29 @@ async function loadPulse() {
 
 function todayET() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+// Current session's own trade_date -- mirrors server/routes/acd.js's nextTradingDay() +
+// /api/setups/today-summary's currentSessionDate logic exactly. FIXED 2026-08-09: the
+// Session Timeline used to show BOTH today's RTH trade_date AND (once >=6PM ET) the next
+// session's trade_date simultaneously (that's /api/setups/today's own, deliberately wider,
+// "today + tomorrow" contract -- still correct for that endpoint's other use), so from 6PM
+// until local midnight the timeline kept accumulating the day that had already closed
+// instead of resetting the moment the new Globex session opened. User-reported: "the trades
+// dont reset from the trade day... they keep going until midnight... should reset at the
+// 6pm est globex start." Fixed by filtering client-side to ONE trade_date -- the session
+// that's actually open right now -- rather than changing /api/setups/today's contract
+// (only this page consumes it; grepped 2026-08-09, confirmed the only caller).
+function nextTradingDayET(nowET) {
+  const d = new Date(nowET);
+  d.setDate(d.getDate() + 1);
+  if (d.getDay() === 0) d.setDate(d.getDate() + 1); // Sun -> Mon
+  if (d.getDay() === 6) d.setDate(d.getDate() + 2); // Sat -> Mon
+  return d.toLocaleDateString('en-CA');
+}
+function currentSessionDateET() {
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  return nowET.getHours() >= 18 ? nextTradingDayET(nowET) : todayET();
 }
 
 function renderPulseBar(pulse, setupData, ctx) {
@@ -314,36 +338,88 @@ function renderSetupCard(setupData) {
 }
 
 // ---- Session timeline ----
+// COMMISSION/PNL_PER_POINT match server/routes/acd.js's live resolution constants exactly
+// (CLAUDE.md hard rule: this journal trades MNQ, $2/pt, $1 round-trip commission -- never
+// copy a different $/pt or commission constant). actual_pnl is already NET of commission
+// (every resolution path subtracts COMMISSION before storing it) -- "commission spent" and
+// "gross P&L" below are both DERIVED from that stored net figure, not separately fetched.
+const COMMISSION_PER_TRADE = 1;
+
+let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
+let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
+let timelineFilter = localStorage.getItem('timelineFilter') || 'live'; // 'live' | 'all'
+
 async function loadTimeline() {
   try {
     const data = await fetch('/api/setups/today').then(r => r.json());
-    renderTimeline(Array.isArray(data?.setups) ? data.setups : []);
+    allTimelineRows = Array.isArray(data?.setups) ? data.setups : [];
+    renderTimeline();
   } catch (e) { /* keep last good render */ }
 }
 
-let timelineRows = []; // full setup rows, keyed for the modal lookup
+function setTimelineFilter(f) {
+  timelineFilter = f;
+  localStorage.setItem('timelineFilter', f);
+  renderTimeline();
+}
 
-function renderTimeline(setups) {
-  const resolved = setups
+function renderTimeline() {
+  const sessionDate = currentSessionDateET();
+  // FIXED 2026-08-09: was showing every date /api/setups/today returned (today's RTH date
+  // AND, once >=6PM ET, tomorrow's Globex date simultaneously) -- see currentSessionDateET()
+  // above for the full writeup. Now scoped to the ONE session that's actually open.
+  //
+  // live/all toggle (added 2026-08-09, user request): 'live' = fired_status==='ACTIVE' --
+  // rows that were actually shown as a real, actionable alert at the moment they fired.
+  // 'all' includes SHADOW-at-fire rows too (background-tracked touches: cascade-breaker
+  // audit rows, suppressed/uncalibrated candidates, cluster-dedup audit entries -- all real
+  // price events the system tracked, none of them ever surfaced to the user as a trade to
+  // take). fired_status is captured immutably at INSERT (same convention as origin_status --
+  // status itself gets overwritten to RESOLVED/EXPIRED on resolution, so it can't answer
+  // this after the fact). Rows fired before 2026-08-09 have fired_status=NULL (not
+  // recoverable retroactively, same documented gap as origin_status's own pre-2026-07-09
+  // UNKNOWN population) -- those are excluded from 'live' (treated as unknown, not assumed
+  // live) but included in 'all'.
+  const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate);
+  const resolved = scoped
     .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
+    .filter(s => timelineFilter === 'all' || s.fired_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
-  let wins = 0, losses = 0, pnl = 0;
+  let wins = 0, losses = 0, netPnl = 0, commission = 0;
   for (const s of resolved) {
     if (s.resolution === 'TARGET_HIT') wins++;
     else if (s.resolution === 'STOP_HIT') losses++;
-    if (s.actual_pnl != null) pnl += parseFloat(s.actual_pnl);
+    if (s.actual_pnl != null) {
+      netPnl += parseFloat(s.actual_pnl);
+      commission += COMMISSION_PER_TRADE; // every non-null actual_pnl paid a real round-trip commission
+    }
   }
+  const grossPnl = netPnl + commission;
 
   $('timeline-title').textContent = 'Session Timeline (' + resolved.length + ')';
+  $('timeline-head').querySelector('#timeline-toggle')?.remove();
+  const toggle = document.createElement('div');
+  toggle.id = 'timeline-toggle';
+  toggle.style.cssText = 'display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);';
+  toggle.innerHTML = [['live', 'Live'], ['all', 'All']].map(([val, label]) =>
+    '<button data-tf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
+    'background:' + (timelineFilter === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)') + ';' +
+    'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + '</button>'
+  ).join('');
+  $('timeline-head').appendChild(toggle);
+  toggle.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setTimelineFilter(b.dataset.tf)));
+
   $('timeline-stats').innerHTML =
     '<span>Wins <b style="color:var(--green)">' + wins + '</b></span>' +
     '<span>Losses <b style="color:var(--red)">' + losses + '</b></span>' +
-    '<span>P&L <b style="color:' + (pnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(0) + '</b></span>';
+    '<span>Net P&L <b style="color:' + (netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (netPnl >= 0 ? '+' : '') + '$' + netPnl.toFixed(0) + '</b></span>' +
+    '<span title="Gross P&L before commission">Gross <b class="mono" style="color:var(--muted)">' + (grossPnl >= 0 ? '+' : '') + '$' + grossPnl.toFixed(0) + '</b></span>' +
+    '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + (wins + losses + (resolved.length - wins - losses)) + ' resolved">Comm <b class="mono" style="color:var(--dim)">-$' + commission.toFixed(0) + '</b></span>';
 
   if (resolved.length === 0) {
-    $('timeline-list').innerHTML = '<div class="loading">Nothing fired yet today</div>';
+    $('timeline-list').innerHTML = '<div class="loading">' + (timelineFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session') + '</div>';
     return;
   }
 
@@ -391,7 +467,20 @@ function openTradeModal(id) {
   html += mSection('Outcome');
   html += mRow('Resolution', s.resolution, color);
   html += mRow('Method', s.resolution_method);
-  html += mRow('P&L', pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : null, pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('P&L (net)', pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : null, pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  // Claimed vs. possible (2026-08-09, user request): pnl is net of the $1 round-trip
+  // commission (server/routes/acd.js's live resolution constants) -- back out the points
+  // actually captured (signedPts = (pnl + COMMISSION) / PNL_PER_POINT, valid for both a win
+  // and a loss since commission is always subtracted regardless of direction) and compare
+  // against mfe_points, the best favorable excursion that was actually available during the
+  // trade's life. Only shown when both are known -- MAE/MFE aren't captured on every
+  // resolution path (e.g. some pre-2026-07 rows, or a resolution with no price data at all).
+  if (pnl != null && s.mfe_points != null && Number(s.mfe_points) > 0) {
+    const capturedPts = (pnl + 1) / 2; // MNQ: $2/pt, $1 commission -- see CLAUDE.md hard rule
+    const pct = Math.max(0, Math.min(999, (capturedPts / Number(s.mfe_points)) * 100));
+    html += mRow('Captured vs. available', capturedPts.toFixed(1) + 'pt of ' + Number(s.mfe_points).toFixed(1) + 'pt MFE (' + pct.toFixed(0) + '%)',
+      pct >= 70 ? 'var(--green)' : pct >= 35 ? 'var(--amber)' : 'var(--red)');
+  }
   html += mRow('Bars to resolve', s.bars_to_resolution);
 
   html += mSection('Levels');
@@ -506,6 +595,46 @@ function fmtAxisTime(firedAtStr, useTime) {
   return mo + '/' + d;
 }
 
+// Net P&L, gross P&L, commission, and max intraday drawdown -- 2026-08-09, user request
+// ("show the max drawdown... to gauge how it perform on a prop account. Need to try and
+// prevent hitting DLLs" + "show the pnl, the commission spent... and the pnl net"). Max
+// drawdown is peak-to-trough on the CHRONOLOGICAL cumulative P&L curve (running peak minus
+// current running total, maximized over the sequence) -- the standard prop-account DLL-risk
+// framing, not just "worst single loss." Reuses the exact same `decided` population
+// (TARGET_HIT/STOP_HIT/TIME_EXPIRED/SESSION_CLOSED with a real actual_pnl) and chronological
+// sort as renderEquityCurve() so the two stay self-consistent -- computing this from a
+// differently-filtered/ordered set would silently disagree with what the chart shows.
+function computeRangeStats(rows) {
+  const decided = rows
+    .filter(s => s.actual_pnl != null && (s.resolution === 'TARGET_HIT' || s.resolution === 'STOP_HIT' || s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED'))
+    .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+
+  let running = 0, peak = 0, maxDD = 0;
+  let wins = 0, losses = 0;
+  for (const s of decided) {
+    running += parseFloat(s.actual_pnl);
+    if (s.resolution === 'TARGET_HIT') wins++; else if (s.resolution === 'STOP_HIT') losses++;
+    if (running > peak) peak = running;
+    const dd = peak - running;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const netPnl = running;
+  const commission = decided.length * COMMISSION_PER_TRADE;
+  const grossPnl = netPnl + commission;
+  return { n: decided.length, wins, losses, netPnl, grossPnl, commission, maxDD };
+}
+
+function renderRangeStats(containerId, rows) {
+  const s = computeRangeStats(rows);
+  if (s.n === 0) { $(containerId).innerHTML = ''; return; }
+  const clr = (v) => v >= 0 ? 'var(--green)' : 'var(--red)';
+  $(containerId).innerHTML =
+    '<span>Net <b class="mono" style="color:' + clr(s.netPnl) + '">' + (s.netPnl >= 0 ? '+' : '') + '$' + s.netPnl.toFixed(0) + '</b></span>' +
+    '<span title="Before commission">Gross <b class="mono" style="color:var(--muted)">' + (s.grossPnl >= 0 ? '+' : '') + '$' + s.grossPnl.toFixed(0) + '</b></span>' +
+    '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + s.n + '">Comm <b class="mono" style="color:var(--dim)">-$' + s.commission.toFixed(0) + '</b></span>' +
+    '<span title="Peak-to-trough on the cumulative P&L curve -- the DLL-risk figure">Max DD <b class="mono" style="color:' + (s.maxDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + s.maxDD.toFixed(0) + '</b></span>';
+}
+
 function renderEquityCurve(canvasId, rows, range) {
   const canvas = $(canvasId);
   const decided = rows
@@ -613,6 +742,7 @@ async function loadRange(range) {
       banner.classList.remove('show');
     }
 
+    renderRangeStats('range-stats', rows);
     renderAggTable('range-agg', rows);
     renderEquityCurve('range-equity', rows, range);
   } catch (e) { /* keep last good render */ }

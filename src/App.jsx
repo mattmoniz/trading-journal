@@ -992,6 +992,16 @@ function CaseSetupDetailModal({ setup, onClose }) {
   const resInfo = resolution ? SETUP_RESOLUTION_TEXT[resolution] : null;
   const pnl = setup.pnl || setup._pnl;
   const timeStr = setup.detectedAt || (setup.fired_time ? fmtEventTime(setup.fired_time) : null);
+  // MAE/MFE achieved, next to P&L (2026-08-09, user request: "so i can see what i got in
+  // mfe from what was available"). pnl is already NET of the $1 round-trip commission
+  // (every resolution path subtracts it before storing actual_pnl -- CLAUDE.md hard rule),
+  // so signedPts = (pnl + COMMISSION) / PNL_PER_POINT backs out points captured regardless
+  // of win/loss sign. mae/mfe come through as setup.mae/setup.mfe (see the caseEvents
+  // mapping's _mae/_mfe -- active_setups.mae_points/mfe_points, wired 2026-08-09).
+  const mae = setup.mae != null ? parseFloat(setup.mae) : null;
+  const mfe = setup.mfe != null ? parseFloat(setup.mfe) : null;
+  const capturedPts = pnl != null ? (parseFloat(pnl) + 1) / 2 : null; // MNQ: $2/pt, $1 commission
+  const capturedPct = capturedPts != null && mfe > 0 ? Math.max(0, Math.min(999, (capturedPts / mfe) * 100)) : null;
 
 
   return (
@@ -1009,9 +1019,22 @@ function CaseSetupDetailModal({ setup, onClose }) {
 
         {/* Resolution badge if already resolved */}
         {resInfo && (
-          <div style={{ marginBottom: 12, padding: '6px 10px', background: `${resInfo.color}15`, border: `1px solid ${resInfo.color}40`, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ marginBottom: mae != null || mfe != null ? 4 : 12, padding: '6px 10px', background: `${resInfo.color}15`, border: `1px solid ${resInfo.color}40`, borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 12, fontWeight: 800, color: resInfo.color, letterSpacing: '0.06em' }}>{resInfo.label}</span>
             {pnl != null && <span style={{ fontSize: 13, fontWeight: 700, fontFamily: 'monospace', color: pnl >= 0 ? '#22c55e' : '#ef4444', marginLeft: 'auto' }}>{pnl >= 0 ? '+' : ''}${Math.round(pnl)}</span>}
+          </div>
+        )}
+
+        {/* MAE/MFE achieved -- what was actually available vs. what got captured */}
+        {(mae != null || mfe != null) && (
+          <div style={{ marginBottom: 12, display: 'flex', gap: 10, fontSize: 11, color: '#94a3b8' }}>
+            {mae != null && <span>MAE <b style={{ color: '#f87171', fontFamily: 'monospace' }}>{mae.toFixed(1)}pt</b></span>}
+            {mfe != null && <span>MFE <b style={{ color: '#4ade80', fontFamily: 'monospace' }}>{mfe.toFixed(1)}pt</b></span>}
+            {capturedPct != null && (
+              <span title="Points captured vs. best favorable excursion available">
+                Captured <b style={{ fontFamily: 'monospace', color: capturedPct >= 70 ? '#4ade80' : capturedPct >= 35 ? '#fbbf24' : '#f87171' }}>{capturedPts.toFixed(1)}pt ({capturedPct.toFixed(0)}%)</b>
+              </span>
+            )}
           </div>
         )}
 
@@ -1117,6 +1140,22 @@ function LiveSessionPanel() {
   React.useEffect(() => {
     try { sessionStorage.setItem('session-timeline-filter', timelineSession); } catch (_) {}
   }, [timelineSession]);
+  // Live/All filter — added 2026-08-09, user request, after a session where the timeline's
+  // real fire-count jump (traced to the 2026-08-05 cascade-breaker gate removal, see
+  // docs/DECISIONS_LOG.md) turned out to be indistinguishable from routine SHADOW background
+  // tracking without this. 'live' = fired_status==='ACTIVE' (shown as a real, actionable
+  // alert at the moment it fired). fired_status is captured immutably at INSERT (mirrors
+  // origin_status's own convention — `status` itself gets overwritten to RESOLVED/EXPIRED on
+  // resolution, so it can't answer "was this ever ACTIVE" after the fact). Rows fired before
+  // 2026-08-09 have fired_status=NULL — excluded from 'live' (unknown, not assumed live),
+  // included in 'all', same documented-gap convention as origin_status's pre-2026-07-09
+  // UNKNOWN population.
+  const [timelineLive, setTimelineLive] = React.useState(() => {
+    try { return sessionStorage.getItem('session-timeline-live-filter') || 'live'; } catch (_) { return 'live'; }
+  });
+  React.useEffect(() => {
+    try { sessionStorage.setItem('session-timeline-live-filter', timelineLive); } catch (_) {}
+  }, [timelineLive]);
 
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
@@ -1362,6 +1401,9 @@ function LiveSessionPanel() {
           _stop: s.stop_level,
           _entry: s.entry_zone_low,
           _pnl: s.actual_pnl,
+          _mae: s.mae_points,
+          _mfe: s.mfe_points,
+          _firedStatus: s.fired_status,
           _winRate: s.historical_win_rate,
           _sessions: s.historical_sessions,
           _bar6Checkpoint: s.bar6_checkpoint,
@@ -1380,10 +1422,15 @@ function LiveSessionPanel() {
           if (timelineSession === 'overnight') return e._isRth === false;
           return true; // 'both'
         };
+        // Live/All: fired_status is captured immutably at INSERT (see timelineLive's
+        // declaration above) -- 'live' excludes both SHADOW-at-fire AND unknown
+        // (pre-2026-08-09, fired_status IS NULL) rows, since a null here means "we don't
+        // know," not "assume it was live."
+        const matchesLiveFilter = (e) => timelineLive === 'all' || e._firedStatus === 'ACTIVE';
         const allEvents = caseEvents
           .filter(e => {
             if (!e.fired_time || e._status === 'SHADOW' || e._status === 'ACTIVE') return false;
-            return matchesSessionFilter(e);
+            return matchesSessionFilter(e) && matchesLiveFilter(e);
           })
           .sort((a, b) => {
             // Sort by the FULL fired_at timestamp (date+time), not just the truncated
@@ -1398,12 +1445,19 @@ function LiveSessionPanel() {
             if (!b._firedAtFull) return -1;
             return b._firedAtFull.localeCompare(a._firedAtFull); // most recent first
           });
-        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e)).length;
+        const sigCount = caseEvents.filter(e => e.fired_time && e._status !== 'SHADOW' && matchesSessionFilter(e) && matchesLiveFilter(e)).length;
 
-        // Running tally stats — respects the same session filter as the timeline list above.
+        // Running tally stats — respects the same session+live filters as the timeline list
+        // above. Commission/gross derived from totalPnl (already NET -- every resolution path
+        // subtracts the $1 round-trip commission before storing actual_pnl) the same way as
+        // quick-check.html's own computeRangeStats() -- COMMISSION_PER_TRADE=$1 matches
+        // server/routes/acd.js's live resolution constant (CLAUDE.md hard rule: MNQ, $2/pt,
+        // $1 round-trip commission).
+        const COMMISSION_PER_TRADE = 1;
         let wins = 0;
         let losses = 0;
         let totalPnl = 0;
+        let commissionCount = 0;
         allEvents.forEach(ev => {
           if (ev._isCaseEngine) {
             if (ev._resolution === 'TARGET_HIT') wins++;
@@ -1417,10 +1471,13 @@ function LiveSessionPanel() {
               const parsedVal = parseFloat(pval);
               if (!isNaN(parsedVal)) {
                 totalPnl += parsedVal;
+                commissionCount++;
               }
             }
           }
         });
+        const commissionTotal = commissionCount * COMMISSION_PER_TRADE;
+        const grossPnl = totalPnl + commissionTotal;
 
         const outcomeColor = (resolution, status) => {
           if (resolution === 'TARGET_HIT') return '#22c55e';
@@ -1446,34 +1503,50 @@ function LiveSessionPanel() {
               <span style={{ fontSize: 12, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>tap to expand</span>
             </div>
 
-            <div style={{ display: 'flex', gap: 1, marginBottom: 8, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)', width: 'fit-content' }}
-              title="Filter by session: RTH = 9:30-4:00 PM ET, Non-RTH = overnight/Globex hours" onClick={e => e.stopPropagation()}>
-              {[['rth', 'RTH'], ['overnight', 'Non-RTH'], ['both', 'Both']].map(([val, label]) => (
-                <button key={val} onClick={(e) => { e.stopPropagation(); setTimelineSession(val); }}
-                  style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, cursor: 'pointer', border: 'none',
-                    background: timelineSession === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
-                    color: timelineSession === val ? '#e2e8f0' : '#64748b' }}>
-                  {label}
-                </button>
-              ))}
+            <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)', width: 'fit-content' }}
+                title="Filter by session: RTH = 9:30-4:00 PM ET, Non-RTH = overnight/Globex hours">
+                {[['rth', 'RTH'], ['overnight', 'Non-RTH'], ['both', 'Both']].map(([val, label]) => (
+                  <button key={val} onClick={(e) => { e.stopPropagation(); setTimelineSession(val); }}
+                    style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, cursor: 'pointer', border: 'none',
+                      background: timelineSession === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
+                      color: timelineSession === val ? '#e2e8f0' : '#64748b' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 1, borderRadius: 6, overflow: 'hidden', border: '1px solid rgba(51,65,85,0.5)', width: 'fit-content' }}
+                title="Live = shown as a real alert when it fired. All = also includes SHADOW-at-fire background touches (cascade-breaker audit, suppressed/uncalibrated candidates, cluster dedup) that were never surfaced as a trade to take.">
+                {[['live', 'Live'], ['all', 'All']].map(([val, label]) => (
+                  <button key={val} onClick={(e) => { e.stopPropagation(); setTimelineLive(val); }}
+                    style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, cursor: 'pointer', border: 'none',
+                      background: timelineLive === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)',
+                      color: timelineLive === val ? '#e2e8f0' : '#64748b' }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Session Stats Running Tally */}
             {sigCount > 0 && (
-              <div style={{ 
-                display: 'flex', 
-                gap: 8, 
-                marginBottom: 10, 
-                padding: '6px 10px', 
-                background: 'rgba(15,23,42,0.6)', 
-                border: '1px solid rgba(51,65,85,0.25)', 
-                borderRadius: 6, 
-                justifyContent: 'space-between', 
-                alignItems: 'center' 
+              <div style={{
+                display: 'flex',
+                gap: 8,
+                marginBottom: 10,
+                padding: '6px 10px',
+                background: 'rgba(15,23,42,0.6)',
+                border: '1px solid rgba(51,65,85,0.25)',
+                borderRadius: 6,
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
               }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>Wins: <span style={{ color: '#22c55e', fontWeight: 700 }}>{wins}</span></div>
                 <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>Losses: <span style={{ color: '#ef4444', fontWeight: 700 }}>{losses}</span></div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>PnL: <span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }}>Net: <span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444', fontWeight: 700 }}>{totalPnl >= 0 ? '+' : ''}${Math.round(totalPnl).toLocaleString()}</span></div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }} title="Before commission">Gross: <span style={{ color: '#cbd5e1', fontWeight: 700 }}>{grossPnl >= 0 ? '+' : ''}${Math.round(grossPnl).toLocaleString()}</span></div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }} title={`$${COMMISSION_PER_TRADE}/round-trip × ${commissionCount}`}>Comm: <span style={{ color: '#64748b', fontWeight: 700 }}>-${commissionTotal.toLocaleString()}</span></div>
               </div>
             )}
 
@@ -1535,7 +1608,7 @@ function LiveSessionPanel() {
                     {/* Card Container */}
                     <div 
                       onClick={() => isCaseEngine
-                        ? setSelectedCaseSetup({ type: ev.setup_type, entry: ev._entry, stop: ev._stop, target: ev._t1, fired_time: ev.fired_time, resolution: ev._resolution, status: ev._status, pnl: ev._pnl })
+                        ? setSelectedCaseSetup({ type: ev.setup_type, entry: ev._entry, stop: ev._stop, target: ev._t1, fired_time: ev.fired_time, resolution: ev._resolution, status: ev._status, pnl: ev._pnl, mae: ev._mae, mfe: ev._mfe })
                         : setSelectedSignal(ev)
                       }
                       style={{ 

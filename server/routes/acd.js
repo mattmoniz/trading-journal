@@ -1185,12 +1185,12 @@ async function detectGlobexSetup(sessionDate, io) {
       const regimeStamp = computeRegimeStamp(entry, await getValueAreaRegimeMap(sessionDate));
       const ins = await query(`
         INSERT INTO active_setups (
-          trade_date, setup_type, fired_at, expires_at, status, origin_status,
+          trade_date, setup_type, fired_at, expires_at, status, origin_status, fired_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
           ${REGIME_STAMP_COLS.join(', ')}
-        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
           ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
@@ -3696,11 +3696,11 @@ export default function createACDRouter(io) {
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const ins = await query(`
                   INSERT INTO active_setups (
-                    trade_date, setup_type, fired_at, expires_at, status, origin_status,
+                    trade_date, setup_type, fired_at, expires_at, status, origin_status, fired_status,
                     entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                     extend_target_level, price_at_detection, confluence_score_at_detection,
                     confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}
-                  ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
+                  ) VALUES ($1,$2,NOW(),$3,$4,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
                     ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')})
                   ON CONFLICT DO NOTHING
                   RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
@@ -6335,11 +6335,11 @@ export default function createACDRouter(io) {
               const cbRegimeStamp = computeRegimeStamp(currentPrice, cbVaMap);
               await query(`
                 INSERT INTO active_setups (
-                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
+                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status, fired_status,
                   suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   ${REGIME_STAMP_COLS.join(', ')}
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7,
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
@@ -6773,12 +6773,12 @@ export default function createACDRouter(io) {
               const auditRegimeStamp = computeRegimeStamp(currentPrice, await getValueAreaRegimeMap(todayET).catch(() => ({})));
               await query(`
                 INSERT INTO active_setups (
-                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
+                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status, fired_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   historical_win_rate, historical_sessions, ${REGIME_STAMP_COLS.join(', ')}
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${14 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
@@ -7615,8 +7615,8 @@ export default function createACDRouter(io) {
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')})
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
+                  status, origin_status, fired_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')})
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
                 ON CONFLICT DO NOTHING
               `, [
@@ -7956,7 +7956,7 @@ export default function createACDRouter(io) {
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const ins = await query(`
           INSERT INTO active_setups (
-            trade_date, setup_type, fired_at, expires_at, status, origin_status,
+            trade_date, setup_type, fired_at, expires_at, status, origin_status, fired_status,
             entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
             price_at_detection,
             historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
@@ -7965,7 +7965,7 @@ export default function createACDRouter(io) {
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection,
             ${REGIME_STAMP_COLS.join(', ')}
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,
+          ) VALUES ($1,$2,$3,$4,$18,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,
             ${REGIME_STAMP_COLS.map((_, i) => `$${25 + i}`).join(', ')})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
@@ -8077,8 +8077,8 @@ export default function createACDRouter(io) {
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')})
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')})
+                status, origin_status, fired_status, ${REGIME_STAMP_COLS.join(', ')})
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
@@ -8340,11 +8340,19 @@ export default function createACDRouter(io) {
 
       let whereClause, params, rangeLabel;
       if (range === 'today') {
-        const dates = [todayET];
-        if (nowET.getHours() >= 18) dates.push(nextTradingDay(nowET));
-        whereClause = 's.trade_date = ANY($1)';
-        params = [dates];
-        rangeLabel = todayET;
+        // FIXED 2026-08-09: was `[todayET]` + next day appended once >=6PM ET (matching
+        // /api/setups/today's own deliberately wider "today + tomorrow" contract) -- for
+        // THIS endpoint (the Performance tab's "Today" filter) that meant the tab kept
+        // showing the RTH session that had already closed, blended with the new Globex
+        // session, from 6PM until local midnight, instead of resetting the moment the new
+        // session opened. Same user report, same fix as the Session Timeline's own
+        // currentSessionDateET() -- single session date, not an accumulating pair. Only
+        // consumer is quick-check.html (grepped 2026-08-09), so this is safe to change here
+        // directly rather than filtering client-side.
+        const sessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
+        whereClause = 's.trade_date = $1';
+        params = [sessionDate];
+        rangeLabel = sessionDate;
       } else if (range === 'week') {
         const dow = nowET.getDay(); // 0=Sun...6=Sat
         // Sunday: the week opening tonight starts TOMORROW (Monday) -- post-6PM Sunday
@@ -8379,6 +8387,7 @@ export default function createACDRouter(io) {
 
       const setupsRes = await query(`
         SELECT s.id, s.setup_type, s.trade_date, s.status, s.resolution, s.actual_pnl, s.is_rth, s.origin_status,
+          s.fired_status, s.mae_points, s.mfe_points,
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups s
         WHERE ${whereClause}
