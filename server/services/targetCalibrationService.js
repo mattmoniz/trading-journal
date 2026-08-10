@@ -38,6 +38,58 @@ function percentile(sortedArr, p) {
   return sortedArr[idx];
 }
 
+// Plateau selection (2026-08-10, roadmap item "plateau selection instead of argmax" --
+// replaces argmax-then-validate-neighbors as the PRIMARY selection rule, not just an
+// add-on check). Argmax picks whichever single candidate has the highest in-sample EV --
+// exactly the statistic most prone to picking a noisy spike. The prior version already knew
+// this (a plateau-neighbor check existed as a guardrail), but only ever validated the ARGMAX
+// WINNER's own two immediate neighbors: if that specific candidate wasn't part of a genuine
+// plateau, the whole computation was excluded (`failed_plateau_check`) even when a real
+// plateau existed elsewhere in the candidate grid. This version searches the FULL candidate
+// range for the widest contiguous run (by value-adjacency in the grid) of candidates that are
+// both thin-tail-eligible and in-sample-positive, and selects from within the widest run found
+// -- so a genuine, wide plateau anywhere in the grid wins over an isolated spike, rather than
+// only ever checking the one candidate argmax happened to prefer.
+function selectPlateauTarget(eligible, sortedCandidates, splitIdx) {
+  const isEvOf = (c) => c.events.slice(0, splitIdx).reduce((s, e) => s + e.pnl, 0) / splitIdx;
+  const good = new Map(); // target -> { ...candidateResult, isEv }
+  for (const c of eligible) {
+    const isEv = isEvOf(c);
+    if (isEv > 0) good.set(c.target, { ...c, isEv });
+  }
+  if (good.size === 0) return null;
+
+  // Walk the FULL candidate grid (not just the "good" subset) so a gap -- a candidate that
+  // exists in the grid but isn't thin-tail-eligible or isn't in-sample-positive -- correctly
+  // breaks a run, matching what "contiguous" means for this candidate set.
+  const runs = [];
+  let current = [];
+  for (const T of sortedCandidates) {
+    if (good.has(T)) {
+      current.push(good.get(T));
+    } else if (current.length) {
+      runs.push(current);
+      current = [];
+    }
+  }
+  if (current.length) runs.push(current);
+
+  // Minimum width 2 -- matches the old check's own strictness (it required at least one good
+  // neighbor, never accepted a fully isolated candidate). A run of exactly 1 is not a plateau.
+  const plateauRuns = runs.filter(r => r.length >= 2);
+  if (!plateauRuns.length) return null;
+
+  // Widest run wins; ties broken by highest average in-sample EV within the run -- width is
+  // the primary signal of a genuine region (per the roadmap's own framing), not peak height.
+  plateauRuns.sort((a, b) => (b.length - a.length) || ((b.reduce((s, m) => s + m.isEv, 0) / b.length) - (a.reduce((s, m) => s + m.isEv, 0) / a.length)));
+  const bestRun = plateauRuns[0];
+  // Within the winning run, select its own best-EV member (not the grid's global best, and not
+  // a plain average across the run either -- still requires the specific candidate to prove
+  // itself, just now scoped to a run that's already shown to be a genuine region).
+  const winner = bestRun.reduce((best, m) => (!best || m.isEv > best.isEv) ? m : best, null);
+  return { ...winner, plateauWidth: bestRun.length, plateauMembers: bestRun.map(m => m.target) };
+}
+
 export function makeBarIndex(allBars) {
   return (t) => {
     let lo = 0, hi = allBars.length;
@@ -127,22 +179,14 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
   const eligible = candidateResults.filter(c => c.targetHits >= MIN_TARGET_HITS);
   if (!eligible.length) return { exclusionReason: 'no_candidate_cleared_thin_tail', exclusionDetail: `best candidate targetHits=${Math.max(...candidateResults.map(c => c.targetHits), 0)} (need >=${MIN_TARGET_HITS})` };
 
-  let bestInSample = null;
-  for (const c of eligible) {
-    const isSlice = c.events.slice(0, splitIdx);
-    const isEv = isSlice.reduce((s, e) => s + e.pnl, 0) / splitIdx;
-    if (!bestInSample || isEv > bestInSample.isEv) bestInSample = { ...c, isEv };
+  const bestInSample = selectPlateauTarget(eligible, candidates, splitIdx);
+  if (!bestInSample) {
+    const argmaxPeek = eligible.reduce((best, c) => {
+      const isEv = c.events.slice(0, splitIdx).reduce((s, e) => s + e.pnl, 0) / splitIdx;
+      return (!best || isEv > best.isEv) ? { target: c.target, isEv } : best;
+    }, null);
+    return { exclusionReason: 'no_plateau_found', exclusionDetail: `no contiguous run of >=2 thin-tail-eligible, in-sample-positive candidates exists across ${candidates.length} candidates (${eligible.length} cleared thin-tail)${argmaxPeek ? ` -- single best-by-EV candidate was T=${argmaxPeek.target} (isEv=$${argmaxPeek.isEv.toFixed(2)}), an isolated spike with no qualifying neighbor` : ''}` };
   }
-
-  const idx = candidates.indexOf(bestInSample.target);
-  const neighborTargets = [candidates[idx - 1], candidates[idx + 1]].filter(t => t !== undefined);
-  const neighborResults = neighborTargets.map(t => candidateResults.find(c => c.target === t));
-  const plateauPassed = neighborResults.length > 0 && neighborResults.every(n => {
-    if (n.targetHits < MIN_TARGET_HITS) return false;
-    const isEv = n.events.slice(0, splitIdx).reduce((s, e) => s + e.pnl, 0) / splitIdx;
-    return isEv > 0;
-  });
-  if (!plateauPassed) return { exclusionReason: 'failed_plateau_check', exclusionDetail: `best candidate T=${bestInSample.target} (isEv=$${bestInSample.isEv.toFixed(2)}) is an isolated spike` };
 
   const oosSlice = bestInSample.events.slice(splitIdx);
   const oosEv = oosSlice.reduce((s, e) => s + e.pnl, 0) / (numWalked - splitIdx);
@@ -163,5 +207,9 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
     isEv: +bestInSample.isEv.toFixed(2), oosEv: +oosEv.toFixed(2), fullEv: +fullEv.toFixed(2),
     targetHits: bestInSample.targetHits, n: numWalked, candidatesTested: candidates, rigor,
     outliersDiscarded,
+    // Surfaced so a consumer can distinguish "picked from a wide, robust region" from "barely
+    // cleared the width-2 floor" -- not gated on anywhere yet, but per the no-dead-ends rule this
+    // needs to be visible/queryable, not just computed and dropped, the moment it exists.
+    plateauWidth: bestInSample.plateauWidth, plateauMembers: bestInSample.plateauMembers,
   };
 }
