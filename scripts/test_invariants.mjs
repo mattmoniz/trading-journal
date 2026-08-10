@@ -998,9 +998,17 @@ async function main() {
         WHERE signal_type = 'RESEARCH_CLAIM'
         ORDER BY signal_name, run_date DESC
       `);
-      const weeklyCron = fs.readFileSync(path.resolve('scripts/run_weekly_backtests.sh'), 'utf8');
-      const dailyCron = fs.readFileSync(path.resolve('scripts/run_daily_calibration.sh'), 'utf8');
-      const scheduled = weeklyCron + dailyCron;
+      // Fixed 2026-08-10: this used to read only the 2 "main" cron files, but 3 more
+      // (run_confluence_backtest.sh, run_context_analysis.sh, run_session_bias.sh) are also
+      // real, live crontab entries -- confirmed via `crontab -l` directly, not assumed. A
+      // script scheduled only via one of those 3 was a false positive in the "unscheduled"
+      // list (confluence_exhaustion_interaction's own claim text already said
+      // "weekly-rechecked" while this check still flagged its source script as unscheduled --
+      // caught while triaging the roadmap's "cron the claim scripts" item). Reads every
+      // scripts/run_*.sh file present on disk rather than a hardcoded list of 5, so a future
+      // 6th cron file doesn't silently reintroduce this same gap.
+      const cronFiles = fs.readdirSync(path.resolve('scripts')).filter(f => /^run_.*\.sh$/.test(f));
+      const scheduled = cronFiles.map(f => fs.readFileSync(path.resolve('scripts', f), 'utf8')).join('\n');
 
       // Detail goes to a dedicated scratch file, NOT one warn()/alert line per claim --
       // the historical backlog is large (~100+ pre-existing one-off scratch/pilot scripts,
@@ -1027,9 +1035,9 @@ async function main() {
         if (existsSync(detailFile)) fs.unlinkSync(detailFile);
       } else {
         fs.writeFileSync(detailFile,
-          `${unscheduled.length} RESEARCH_CLAIM source script(s) not found in run_weekly_backtests.sh or run_daily_calibration.sh, as of ${nowET()} ET.\n` +
+          `${unscheduled.length} RESEARCH_CLAIM source script(s) not found in any of scripts/run_*.sh (${cronFiles.join(', ')}), as of ${nowET()} ET.\n` +
           `Most of these are legitimately settled/rejected one-time findings that don't need a standing recheck -- this is a triage list, not a to-do list.\n` +
-          `Only add a script to one of those two cron files if it's still an open/PROVISIONAL question that should keep re-checking itself as real data accumulates.\n\n` +
+          `Only add a script to one of these cron files if it's still an open/PROVISIONAL question that should keep re-checking itself as real data accumulates.\n\n` +
           unscheduled.join('\n') + '\n');
         warn(`${unscheduled.length} of ${seenSourceFiles.size} distinct RESEARCH_CLAIM source scripts are not wired into a recurring cron -- full list in ${detailFile} (not printed here individually, mostly expected for settled findings)`);
       }
