@@ -108,7 +108,22 @@ function minDeltaNRequired(baselineN) {
 // stored row for the same setup_type. Returns { stop, target, ev, notes } -- notes always
 // includes a circuitBreaker object recording what happened, even when nothing tripped,
 // so the decision is inspectable without re-deriving it.
-function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, prior }) {
+function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, prior, bypass = false }) {
+  // One-time re-baseline escape hatch (2026-08-09, rawByType_origin_status_filter). Named
+  // with the date deliberately so it can't be casually reused as a generic "skip the
+  // breaker" flag later -- this run's whole point is that the population feeding every
+  // candidate is changing (BACKFILL-contaminated -> real-only), which by design can and
+  // should move many stops by more than 35% in one shot; the breaker's normal job (catch a
+  // single new trade steering the argmax) doesn't apply to a deliberate population change.
+  // Still fully logged and still updates lastRecalibratedN to the current real N, so every
+  // NORMAL run after this one compares against today's fresh baseline, not the stale
+  // pre-rebaseline one -- the breaker re-arms itself automatically the moment this flag is
+  // gone, nothing to remember to undo.
+  if (bypass) {
+    console.error(`  [CIRCUIT BREAKER BYPASSED -- one-time 2026-08-09 re-baseline] ${setupType}: accepting attempted stop=${attemptedStop} target=${attemptedTarget} unconditionally (prior stop=${prior?.stop ?? 'none'} target=${prior?.target ?? 'none'})`);
+    return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+      circuitBreaker: { tripped: false, reason: 'bypassed_for_rebaseline_20260809', attemptedStop, attemptedTarget, priorStop: prior?.stop ?? null, priorTarget: prior?.target ?? null, lastRecalibratedN: currentN } };
+  }
   if (!prior || prior.stop == null || prior.target == null) {
     // No prior row (or a null prior stop/target) -- nothing to compare against yet, let
     // the natural pipeline output through and establish the first baseline.
@@ -373,6 +388,103 @@ export function sweepOptimalStopAndTargetChronological(trades, allBars, maeCandi
   return best;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Real-population helpers for the stop-side sweep (2026-08-09 re-baseline). Exported (not
+// left as closures inside main()) specifically so test_invariants.mjs check [5] can import
+// and call the SAME functions to re-derive an expected value, instead of hand-copying a
+// second version of this logic -- exactly the "share modules" principle this codebase's own
+// CLAUDE.md repeatedly documents being violated and fixed elsewhere. See
+// computeStopTargetForType() below for the full decision tree these feed into.
+export function percentileOf(sortedArr, p) {
+  if (!sortedArr.length) return null;
+  const idx = Math.min(sortedArr.length - 1, Math.floor(sortedArr.length * p));
+  return sortedArr[idx];
+}
+// Noise-floor guard added AFTER a first dry-run of this exact re-baseline (2026-08-09)
+// surfaced it live: 6 of 11 types that reached the chronological sweep landed at 1-13pt
+// stops, comfortably inside normal single-bar noise. This is the EXACT "candidate finer
+// than the data's own resolution" failure this codebase already has a named precedent for
+// (CLAUDE.md's backtest_scaleout_runner.mjs trailing-stop-width incident, 2026-07-19) -- a
+// real-N-cleared, statistically-legitimate-looking sweep can still pick a candidate the
+// underlying 1-minute bar data structurally cannot resolve, since OHLC bars record a bar's
+// high/low, not its intra-bar path. Filtering candidates below the floor here (not just
+// checking the FINAL chosen stop after the fact, the way test_invariants.mjs check [13]
+// does) stops the sweep from ever being able to choose one in the first place.
+export function realMaeCandidates(trades, floor) {
+  const maes = trades.map(t => t.mae_points).sort((a, b) => a - b);
+  return [0.25, 0.40, 0.50, 0.60, 0.75]
+    .map(pct => ({ value: percentileOf(maes, pct), pct }))
+    .filter(c => c.value != null && c.value >= floor);
+}
+export function realP75Mfe(trades) {
+  const mfes = trades.map(t => t.mfe_points).sort((a, b) => a - b);
+  return percentileOf(mfes, 0.75);
+}
+
+// Full stop+target decision tree for ONE setup_type, given its real (origin_status-filtered)
+// trades and the run-wide volatility-default parameters. Extracted 2026-08-09 (same session
+// as the re-baseline that needed it) so test_invariants.mjs check [5] can call this EXACT
+// function to re-derive an expected value, rather than a hand-copied second decision tree --
+// the precise bug class check [5]'s own header comment already warns about. Pure function:
+// no DB access, no console output -- callers own logging/side effects.
+//
+// Params: realTradesStop (this type's real TARGET_HIT/STOP_HIT trades), direction ('LONG'/
+// 'SHORT'/null), allBars + firstIndexAfter (shared bar index for the chronological walk),
+// stopDpp/targetDpp (real $/pt for this type), noiseFloorPt, volScaleRatio/targetStopRatio/
+// medianBarRange (run-wide volatility-default parameters, null if canComputeVolDefault is
+// false), canComputeVolDefault.
+// Returns { optStop, optTarget, optEV, targetMethod, usedVolDefault }.
+export function computeStopTargetForType({ realTradesStop, direction, allBars, firstIndexAfter, stopDpp, targetDpp, noiseFloorPt, volScaleRatio, targetStopRatio, medianBarRange, canComputeVolDefault }) {
+  const realNStop = realTradesStop.length;
+  let swept, optStop, optTarget, targetMethod, usedVolDefault = false;
+
+  if (realNStop < MIN_N && canComputeVolDefault) {
+    swept = null;
+    optStop = Math.max(Math.round(volScaleRatio * medianBarRange), Math.ceil(noiseFloorPt));
+    optTarget = Math.round(optStop * targetStopRatio);
+    targetMethod = 'volatility-scaled-default';
+    usedVolDefault = true;
+  } else if (realNStop >= MIN_N) {
+    const realCandidates = realMaeCandidates(realTradesStop, noiseFloorPt);
+    const realMaxT = Math.round(realP75Mfe(realTradesStop) || DEFAULT_TARGET);
+    let chronoResult = null;
+    if (direction) {
+      const chronoTrades = realTradesStop.map(t => ({
+        ...t,
+        entry: t.entry_zone_high ?? t.entry_zone_low,
+        direction,
+        barIdx: firstIndexAfter(new Date(t.fired_at).getTime()),
+      }));
+      chronoResult = sweepOptimalStopAndTargetChronological(chronoTrades, allBars, realCandidates, realMaxT, stopDpp, targetDpp);
+    }
+    if (chronoResult && !chronoResult.insufficientBarData) {
+      swept = chronoResult;
+      targetMethod = 'chronological-sweep-real';
+    } else {
+      swept = sweepOptimalStopAndTarget(realTradesStop, realCandidates, realMaxT, stopDpp, targetDpp);
+      targetMethod = swept ? 'EV-sweep-real' : 'p75mae-real-fallback';
+    }
+    if (swept) {
+      optStop = swept.stop; optTarget = swept.target;
+    } else {
+      const rawP75 = percentileOf([...realTradesStop.map(t => t.mae_points)].sort((a, b) => a - b), 0.75) || DEFAULT_STOP;
+      optStop = Math.max(Math.round(rawP75), Math.ceil(noiseFloorPt));
+      optTarget = Math.round(realMaxT);
+      swept = { stop: optStop, target: optTarget, ev: computeEvAtStopTarget(realTradesStop, optStop, optTarget, stopDpp, targetDpp) };
+    }
+  } else {
+    // realNStop < MIN_N AND canComputeVolDefault false -- only reachable on a genuinely
+    // first-ever run (no setup_type anywhere clears the real-N floor yet). No sane fallback
+    // exists without ANY real-N-qualified type to derive a ratio from -- returns null
+    // (caller must handle; update_optimal_stops.mjs's own pre-2026-08-09 blended fallback
+    // for this one edge case stays inline there, not duplicated here).
+    return { optStop: null, optTarget: null, optEV: null, targetMethod: 'insufficient_data_no_fallback', usedVolDefault: false };
+  }
+
+  const optEV = usedVolDefault ? null : swept.ev;
+  return { optStop, optTarget, optEV, targetMethod, usedVolDefault };
+}
+
 // --dry-run (2026-08-04, DeepSeek-recommended before shipping the structural-conservative
 // fallback below, given its blast radius — it can change the stored stop/target for every
 // setup_type simultaneously on the next real run, with no other staging point). Computes
@@ -384,6 +496,11 @@ export function sweepOptimalStopAndTargetChronological(trades, allBars, maeCandi
 // origin_status fix) of a technically-correct calibration change producing an unanticipated
 // large-scale recalibration that nobody noticed until queried directly.
 const DRY_RUN = process.argv.includes('--dry-run');
+// See applyCircuitBreaker()'s comment above for why this exists and why it's dated rather
+// than a generic name. Deliberately requires the FULL exact flag, not a short alias, so it
+// can't be fat-fingered into a normal run.
+const BYPASS_BREAKER = process.argv.includes('--bypass-breaker-for-rebaseline-20260809');
+if (BYPASS_BREAKER) console.log('⚠️  CIRCUIT BREAKER BYPASSED THIS RUN -- one-time 2026-08-09 re-baseline. Every setup_type accepts its freshly-computed value unconditionally, regardless of size of change. Review the diff carefully before trusting anything.');
 
 async function main() {
   console.log(`Computing optimal stops + EV-sweep targets from active_setups MAE/MFE data...${DRY_RUN ? ' [DRY RUN — no writes]' : ''}`);
@@ -557,6 +674,36 @@ async function main() {
   const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
   const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
   console.log(`${allBars.length} bars loaded.`);
+  const firstIndexAfter = makeBarIndex(allBars);
+
+  // ── Real (origin_status-filtered) population for the STOP sweep (2026-08-09 re-baseline,
+  // resolves rawByType_origin_status_filter, HIGH). rawByType above (feeding the legacy
+  // maeCandidates/sweepOptimalStopAndTarget call in the final else-branch below) has NEVER
+  // been origin_status-filtered -- both the stop CANDIDATE VALUES (MAE percentiles) and the
+  // trades scored against them came from a population that's typically 75-95% synthetic
+  // BACKFILL data (RESEARCH_CLAIM live_stop_population_synthetic_composition_audit_20260804).
+  // Filtering only one side (candidates OR trades) would still let contamination in through
+  // whichever side stayed unfiltered -- this query mirrors rawByType's exact WHERE clause,
+  // adding ONLY the origin_status filter, and both the candidate percentiles AND the EV-
+  // scoring trades below are computed from this SAME array, so there's no half-fixed seam.
+  const rawResReal = await query(`
+    SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
+      fired_at, entry_zone_low::float, entry_zone_high::float
+    FROM active_setups
+    WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+      AND mae_points <= 300 AND mfe_points <= 300
+      AND status = 'RESOLVED'
+      AND replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+      AND origin_status IN ('ACTIVE', 'SHADOW')
+    ORDER BY fired_at ASC
+  `);
+  const rawByTypeReal = {};
+  for (const t of rawResReal.rows) (rawByTypeReal[t.setup_type] ||= []).push(t);
+  console.log(`Loaded ${rawResReal.rows.length} REAL (origin_status-filtered) trades for the stop-side sweep -- ${rawRes.rows.length - rawResReal.rows.length} BACKFILL/UNKNOWN rows excluded from ${rawRes.rows.length} total.`);
+
+  // percentileOf/realMaeCandidates/realP75Mfe: now module-level exports (moved 2026-08-09,
+  // see their definitions above main()) so test_invariants.mjs check [5] can import and call
+  // the SAME functions instead of a second hand-copied version.
 
   // ── Volatility-scaled default for real-N-thin setup_types (2026-08-05) ──────────────
   // Replaces "run the sweep on whatever data exists, clamp the result against a noise-floor
@@ -588,6 +735,10 @@ async function main() {
     FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '30 days'
   `);
   const medianBarRange = +medianBarRangeRes.rows[0].median_range;
+  // Same 1.5x convention as test_invariants.mjs check [13] -- see realMaeCandidates()'s
+  // comment above for why this needs to gate candidate GENERATION, not just be checked
+  // against the final chosen stop after the fact.
+  const NOISE_FLOOR_PT = 1.5 * medianBarRange;
 
   // Ratios derived FRESH each run from whichever setup_types currently clear the real-N
   // floor and have a prior stored calibration -- not a hardcoded multiplier. This is
@@ -634,25 +785,45 @@ async function main() {
     ].map(c => ({ ...c, value: parseFloat(c.value) })).filter(c => !isNaN(c.value) && c.value > 0);
     const trades    = rawByType[r.setup_type] || [];
     const { stopDpp, targetDpp } = dppByType[r.setup_type] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
+    // realN/realNByType (from rawByTypeExpanded) still gates the SEPARATE corrected-target
+    // override below (unchanged, already origin_status-filtered since 2026-08-02) -- kept
+    // distinct from realNStop, which gates THIS stop-sweep decision specifically and is
+    // scoped to the narrower TARGET_HIT/STOP_HIT-only population sweepOptimalStopAndTarget
+    // actually consumes. hoisted here (was further below) so both this block and the
+    // corrected-target block can share one inferDirection() call.
     const realN = realNByType[r.setup_type] || 0;
+    const direction = inferDirection(r.setup_type);
 
-    let swept, optStop, optTarget, targetMethod, usedVolDefault = false;
-    if (realN < MIN_N && canComputeVolDefault) {
-      // Real-N-thin: don't attempt a sweep on a population that's mostly/entirely synthetic
-      // (rawByType/`trades` here is still unfiltered -- see rawByType_origin_status_filter,
-      // not yet applied). Use the volatility-scaled default computed above instead of running
-      // a sweep whose result would carry false confidence.
-      swept = null;
-      optStop = Math.round(volScaleRatio * medianBarRange);
-      optTarget = Math.round(optStop * targetStopRatio);
-      targetMethod = 'volatility-scaled-default';
-      usedVolDefault = true;
-      volDefaultCount++;
-    } else {
+    // ── Real (origin_status-filtered) population + real percentile candidates for THIS
+    // type's stop sweep (2026-08-09 re-baseline). realNStop gates whether we trust a sweep
+    // on real data at all -- the volatility-scaled default (built 2026-08-05, never run
+    // against a properly filtered realN until now) is the fallback below that floor.
+    const realTradesStop = rawByTypeReal[r.setup_type] || [];
+    const realNStop = realTradesStop.length;
+
+    // Decision tree extracted to computeStopTargetForType() (2026-08-09, exported above
+    // main()) so test_invariants.mjs check [5] can call the exact same function to re-derive
+    // an expected value, instead of a second hand-copied version.
+    const decision0 = computeStopTargetForType({
+      realTradesStop, direction, allBars, firstIndexAfter, stopDpp, targetDpp,
+      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, medianBarRange, canComputeVolDefault,
+    });
+    let optStop, optTarget, targetMethod, usedVolDefault, swept;
+    if (decision0.targetMethod === 'insufficient_data_no_fallback') {
+      // Only reachable on a genuinely first-ever run (no setup_type anywhere yet clears the
+      // real-N floor to derive a volatility-scale ratio from) -- computeStopTargetForType()
+      // can't help here since there's no real-data-only fallback possible. Matches this
+      // file's pre-2026-08-09 behavior for this one edge case only; every other path is
+      // real-data-only now.
       swept     = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
       optStop     = swept ? swept.stop : Math.round(p75mae);
       optTarget = swept ? swept.target : Math.round(parseFloat(r.p50_mfe) || DEFAULT_TARGET);
       targetMethod = swept ? 'EV-sweep' : 'p50_mfe fallback';
+      usedVolDefault = false;
+    } else {
+      ({ optStop, optTarget, targetMethod, usedVolDefault } = decision0);
+      swept = { ev: decision0.optEV }; // shape-compatible with the optEV line below
+      if (usedVolDefault) volDefaultCount++;
     }
     // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
     // a raw historical average using whatever stop/target each trade ACTUALLY fired with --
@@ -680,7 +851,7 @@ async function main() {
     // regression risk for setup_types that don't have enough data for the stricter check
     // yet. This is what makes the fix durable: every future run re-evaluates every
     // setup_type automatically instead of relying on a manually-maintained list.
-    const direction = inferDirection(r.setup_type);
+    // (direction hoisted above, shared with the stop-sweep block)
     const expandedTrades = rawByTypeExpanded[r.setup_type] || [];
     if (direction && expandedTrades.length >= 20) {
       const corrected = computeCorrectedTarget({
@@ -746,10 +917,19 @@ async function main() {
     // print, the real INSERT) uses these post-breaker values.
     {
       const attemptedStop = optStop, attemptedTarget = optTarget, attemptedEv = optEV;
+      // currentN: was parseInt(r.n) -- the BLENDED (BACKFILL-inclusive) count from statsRes
+      // -- until 2026-08-09. Now realNStop (this type's own real, origin_status-filtered
+      // TARGET_HIT/STOP_HIT count), matching what the stop sweep itself is actually
+      // computed from as of this same re-baseline. Using the blended count here would have
+      // measured "has blended N grown enough since last accepted recalibration" while the
+      // sweep above measures real N -- two different populations, same footgun class this
+      // whole fix exists to close. lastRecalibratedN in prior/notes is written by this same
+      // (now real-N-based) metric going forward, so this stays self-consistent run to run.
       const decision = applyCircuitBreaker({
-        setupType: r.setup_type, currentN: parseInt(r.n),
+        setupType: r.setup_type, currentN: realNStop,
         attemptedStop, attemptedTarget, attemptedEv,
         prior: priorStoredByType[r.setup_type],
+        bypass: BYPASS_BREAKER,
       });
       optStop = decision.stop; optTarget = decision.target; optEV = decision.ev;
       let baseNotes = null;
@@ -816,8 +996,17 @@ async function main() {
     upserted++;
     // Prints both the (now-correct) swept EV and the raw historical average side by side --
     // deliberately visible so a future divergence this large is caught by eye immediately,
-    // not just by the automated invariant check in test_invariants.mjs.
-    console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${optEV.toFixed(2)}  (raw avg pnl=$${r.ev})`);
+    // not just by the automated invariant check in test_invariants.mjs. optEV can be null
+    // (volatility-scaled-default) -- FIXED 2026-08-09: this real-run print crashed on the
+    // very first null EV it hit (10D_IB_MID_FADE_LONG), a bug that existed since the
+    // volatility-scaled default shipped 2026-08-05 but stayed dormant because vol-default
+    // rarely fired under the old unfiltered real-N gate; today's origin_status fix makes it
+    // the majority path (104 of 123 types), which is what finally triggered it. The DRY_RUN
+    // print branch above already had this exact guard -- this one just never got the same
+    // fix when that one was added, the same "two copies of near-identical logic drift
+    // apart" class of bug this codebase's own conventions warn about repeatedly.
+    const optEvStr = optEV != null ? optEV.toFixed(2) : 'n/a';
+    console.log(`  ${r.setup_type.padEnd(40)} stop=${optStop}pt  t1=${optTarget}pt(${targetMethod})  WR=${r.wr}%  N=${r.n}  EV=$${optEvStr}  (raw avg pnl=$${r.ev})`);
   }
 
   console.log(`\n${DRY_RUN ? '[DRY RUN] Would upsert' : 'Done.'} ${upserted} rows ${DRY_RUN ? '' : 'upserted '}into performance_audit (signal_type=OPTIMAL_STOP). ${correctedCount} used the corrected-resim target methodology this run.`);

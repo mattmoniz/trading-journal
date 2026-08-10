@@ -1,5 +1,114 @@
 # Decisions Log
 
+## 2026-08-09 (same day, third pass) — the stop-side origin_status re-baseline: all three built-not-run pieces shipped in one disruption, two real bugs caught before they reached the database, check [5] rewritten to match
+
+Direct follow-up to the two entries below, executing the user's own explicit sequencing for
+the Sunday-market-closed window: approve CAM_S2_FADE_SHORT, run the full stop-side
+re-baseline (origin_status filter + chronological sweep + real-N/volatility-default gate,
+shipped together per "doing them separately means three disruptions instead of one"),
+un-shadow the 4 Globex PD types, preflight-check, re-verify checks [8]/[13].
+
+1. **CAM_S2_FADE_SHORT suppression applied** — the exact write blocked by the permission
+   classifier two entries below went through this time with explicit user approval.
+   Verified: `recommendation='SUPPRESS'` confirmed in the DB.
+
+2. **The re-baseline itself — full snapshot/filter/run/diff/review/re-arm sequence, two real
+   bugs found and fixed before either dry-run or real output was trusted.** `rawByType` (the
+   stop-sweep's trade population) is now `origin_status IN ('ACTIVE','SHADOW')`-filtered, with
+   the candidate MAE percentiles ALSO computed from that same real-only array (a half-fix
+   filtering only the trades-being-scored, not the candidate values themselves, would have
+   left contamination on the other side). `sweepOptimalStopAndTargetChronological()` is now
+   the primary path for any real-N-qualified type, falling back to the order-blind sweep on
+   the SAME real population (never back to blended) only when the chronological walk can't
+   cover enough trades. The real-N gate correctly decides volatility-scaled-default vs. a
+   real sweep, now gated on `realNStop` (this type's own real TARGET_HIT/STOP_HIT count) —
+   previously the gate used a differently-scoped population (`rawByTypeExpanded`), a second
+   footgun of the same class fixed in the same motion. **Bug #1, caught on the second
+   dry-run review**: 6 of 11 types reaching the chronological sweep landed at 1-13pt stops —
+   comfortably inside normal single-bar noise, the exact "candidate finer than the data's own
+   resolution" failure this codebase already has a named precedent for
+   (`backtest_scaleout_runner.mjs`, 2026-07-19). Fixed by adding a noise-floor guard to
+   candidate GENERATION (not just a post-hoc check on the final chosen stop) — filters
+   candidates below `1.5x` the real trailing-30-day median bar range before either sweep ever
+   sees them, applied to the chronological sweep, the order-blind fallback, AND the
+   volatility-scaled-default formula itself (belt-and-suspenders, since that default's own
+   ratio is built from prior stored stops that could themselves predate this fix). **Bug #2,
+   caught mid-execution on the real (non-dry-run) run**: the actual-write print path had an
+   unguarded `.toFixed()` on a possibly-null EV — dormant since the volatility-default shipped
+   2026-08-05 (rarely triggered under the old unfiltered real-N gate), finally hit once
+   today's origin_status fix made vol-default the majority path (104 of 123 types). Crashed
+   after writing exactly 1 row (idempotent `ON CONFLICT DO UPDATE`, safe to resume); fixed and
+   re-ran clean, all 123 rows. **Full verification chain**: pre-snapshot
+   (`optimal_stop_rebaseline_backup_20260809`, 131 rows) → dry-run reviewed twice → real run
+   with the circuit breaker bypassed via a dated, one-time-only CLI flag
+   (`--bypass-breaker-for-rebaseline-20260809`) → after-snapshot diffed against the reviewed
+   dry-run, 0 mismatches → 17 currently-live setup_types reviewed by hand individually,
+   including `GLOBEX_VWAP_FADE_LONG`'s 83→32pt correction (the exact type whose 83pt↔8pt
+   oscillation motivated building the circuit breaker in the first place) and confirming
+   `VWAP_MAGNET_LONG` independently reproduces the exact 29pt/25pt figure already verified by
+   hand 2026-08-05 → circuit breaker confirmed re-armed (a subsequent normal, non-bypassed
+   dry-run correctly held all 123 types at `ΔN=0<required`, zero trips, zero bypasses).
+
+3. **Un-shadowed the 4 `PAUSED_UNTIL_ORIGIN_FILTER` Globex PD types** in `acd.js`, since the
+   fix they were paused pending has now landed. Checked before flipping, not assumed: only
+   `PD_VAH_FADE_SHORT` is currently `SETUP_STATUS=ACTIVE` (new stop=32, volatility-scaled-
+   default — real N<20 for this type, so a safe default rather than a real sweep, but no
+   longer contaminated); the other 3 (`PD_VAL_FADE_LONG`/`PD_POC_FADE_SHORT`/
+   `PD_POC_FADE_LONG`) are independently gated `SUPPRESS`/`SUPPRESS`/`THIN_N` by the unified
+   `SETUP_STATUS` pipeline regardless of this code-level flag — un-pausing them doesn't put
+   them live. `PD_POC_FADE_SHORT` specifically showed a real, computed **negative EV
+   (-$19.32)** at its new (82pt) real-data calibration — a useful confirmation the pause is
+   being lifted for the right reason (data quality) without blindly trusting every resulting
+   number.
+
+4. **Preflighted the two most directly relevant scripts** (`export_row_level_audit_20260805.mjs`,
+   `update_optimal_stops.mjs`) via `preflight_backtest_assertions.mjs` — both clean on all 6
+   checks. The default broad scan (118 scripts, 77 flagged) was also run in passing; not
+   individually triaged today, see `order_blind_pattern_grep_sweep_other_scripts` below.
+
+5. **test_invariants.mjs checks [8]/[13] re-verified clean** — [13]'s noise-floor check
+   passes and its week-over-week shift (32pt→37pt, 15.6%) is real and expected, not a
+   regression; [8]'s 4 WARNs are the same pre-existing, already-documented hardcode
+   signatures from before today's work (`CAM_S4_FADE_LONG`, `GLOBEX_VWAP_MAGNET_LONG`,
+   `STOP_SWEEP_LONG`, `VWAP_MAGNET_LONG`), unchanged. **Check [5], however, went from ~7 to
+   128 failures the moment the re-baseline landed** — its own header comment had already
+   warned this would happen ("if [update_optimal_stops.mjs's population queries] ever change,
+   this must change with them") and it did. Not a data regression: check [5] was re-deriving
+   against the OLD blended methodology while production had moved to real-only data. Rewrote
+   it to match, importing the exact same logic rather than hand-copying a second version —
+   extracted `computeStopTargetForType()` as a new exported function from
+   `update_optimal_stops.mjs` (verified the extraction itself was behavior-preserving: 0
+   mismatches on the 19 real-sweep-based types across the refactor; a later 104/123 shift on
+   volatility-scaled-default types was confirmed to be the ratio's own legitimate self-
+   referential drift — computed from `priorStoredByType`, which had changed because the real
+   run had just written new values — not a bug). `volatility-scaled-default` rows get a
+   structural consistency check (floor respected, EV null, positive ratio) rather than an
+   exact-match one, since that default's own ratio is a moving target across time by design.
+   Two more real gaps found and correctly scoped rather than silently worked around: (a)
+   day-type-suffixed rows (`IB_BEARISH_TURBULENT` etc.) are produced by a DIFFERENT,
+   never-origin-status-filtered script (`backtest_ib_daytype_stop_target.mjs`) — skipped in
+   check [5] rather than mis-verified against the wrong standard, flagged as
+   `day_type_alpha_stop_needs_origin_status_filter`; (b) `MONTHLY_VWAP_FADE_LONG/SHORT` and
+   similar rows have some blended `active_setups` data but fewer than the `MIN_N=20`
+   `update_optimal_stops.mjs`'s own `HAVING` clause requires, so neither the old nor new
+   methodology has ever touched their stored row (`run_date` still 2026-07-19) — also
+   correctly skipped rather than compared against a standard that was never applied to them.
+   Final state: 5 failures, all pre-existing `BREAKEVEN_TRAIL_TEST` gaps, unrelated to
+   anything touched today.
+
+6. **OPEN_DECISIONs resolved**: `rawByType_origin_status_filter`,
+   `wire_chronological_sweep_into_live_cron` (both fully shipped and verified above),
+   `order_blind_evaluation_pattern_sweep`'s fix-and-wire half (its grep-sweep half split out
+   as a narrower, still-open follow-up: `order_blind_pattern_grep_sweep_other_scripts`).
+   **New decision flagged**: `day_type_alpha_stop_needs_origin_status_filter` (MEDIUM) — the
+   day-type IB calibration script needs the identical fix, not done today (separate script,
+   out of today's explicitly-scoped work).
+
+**Why this entry exists**: same standing reason as every entry in this file — record not
+just what changed but what was checked before trusting it, including the two points where a
+"looks done" dry-run or refactor could have shipped a real bug (the sub-floor stop, the
+null-crash) had the review stopped one step earlier.
+
 ## 2026-08-09 (same day, second pass) — five follow-up items, two structural fixes to the outage's root mechanism, one live-risk revert, one blocked live-risk flip
 
 Direct follow-up to the entry below, after the user listed 5 remaining open items and flagged

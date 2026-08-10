@@ -1121,28 +1121,27 @@ async function detectGlobexSetup(sessionDate, io) {
       const stop   = isLong ? px - STOP  : px + STOP;
       const target = isLong ? px + T1    : px - T1;
 
-      // The 3 original PD candidates USED to fire straight to ACTIVE unconditionally. The 4
-      // wider-window candidates are brand new (N=0 live history) — dynamically SHADOW-gated
-      // via getOvernightLevelLiveStatus(), same discipline as minuteBarSignalDetector.js,
-      // until N>=20 real resolutions clear the bar.
+      // The 3 original PD candidates fire straight to ACTIVE unconditionally (existing,
+      // unchanged behavior). The 4 wider-window candidates are brand new (N=0 live history)
+      // — dynamically SHADOW-gated via getOvernightLevelLiveStatus(), same discipline as
+      // minuteBarSignalDetector.js, until N>=20 real resolutions clear the bar.
       //
-      // PAUSED 2026-08-05 (all 4 original-PD directions, not just 3 -- PD_POC covers both):
-      // the same-night globexParams unification fix moved these onto the real OPTIMAL_STOP
-      // sweep, correctly, but that sweep's STOP side has never been origin_status-filtered
-      // (rawByType_origin_status_filter, still pending) and these 4 types' populations are
-      // 79-89% BACKFILL/UNKNOWN. Confirmed live: PD_POC_FADE_LONG cut from a wrong-but-wide
-      // 84.0625pt fired stop to an unaudited 29pt -- a ~65% tightening, on the only types
-      // that were still firing live, in the same motion as the fix that was needed for a
-      // different reason. 29pt clears the noise floor but sits well under the discretionary
-      // level±1.5xATR (~52pt) reference. Shadowed rather than reverted -- the new calibration
-      // source is still the right end state, just not yet trustworthy enough to size real
-      // risk with. Re-enable once the stop-side re-baseline lands (same OPEN_DECISION).
-      const PAUSED_UNTIL_ORIGIN_FILTER = new Set(['PD_VAH_FADE_SHORT', 'PD_VAL_FADE_LONG', 'PD_POC_FADE_SHORT', 'PD_POC_FADE_LONG']);
+      // UN-PAUSED 2026-08-09: was shadowed 2026-08-05-through-08-09 via
+      // PAUSED_UNTIL_ORIGIN_FILTER pending the stop-side origin_status re-baseline
+      // (rawByType_origin_status_filter) -- that re-baseline landed today (see
+      // docs/DECISIONS_LOG.md), so these 4 now read a stop computed from real
+      // (origin_status-filtered), noise-floor-guarded data instead of the 79-89%-BACKFILL-
+      // contaminated population that caused the pause. Reviewed by hand before re-enabling:
+      // only PD_VAH_FADE_SHORT is actually SETUP_STATUS=ACTIVE right now (new stop=32,
+      // volatility-scaled-default -- real N<20 for this type, so a safe default rather than
+      // a real sweep result, but no longer contaminated); the other 3
+      // (PD_VAL_FADE_LONG/PD_POC_FADE_SHORT/PD_POC_FADE_LONG) are independently gated
+      // SUPPRESS/SUPPRESS/THIN_N by the unified SETUP_STATUS pipeline regardless of this
+      // code-level flag, so un-pausing them here doesn't put them live -- verified directly,
+      // not assumed.
       const live = c.widerWindowNew
         ? await getOvernightLevelLiveStatus(c.type)
-        : PAUSED_UNTIL_ORIGIN_FILTER.has(c.type)
-          ? { status: 'SHADOW', reason: 'PD_ORIGIN_STATUS_UNAUDITED_STOP' }
-          : { status: 'ACTIVE', reason: null };
+        : { status: 'ACTIVE', reason: null };
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
       // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
