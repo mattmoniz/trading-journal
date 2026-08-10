@@ -168,7 +168,25 @@ export function computeCorrectedTarget({ trades, allBars, stop, oldTarget, long,
       let pnl;
       if (outcome === 'TARGET') { pnl = T * pnlPerPoint - commission; targetHits++; }
       else if (outcome === 'STOP') { pnl = -(stop * pnlPerPoint + commission); stopHits++; }
-      else { pnl = w.trade.actual_pnl; unresolved++; }
+      else {
+        // Unresolved under THIS candidate (neither stop nor target price was reached within
+        // the walk window) -- mark to market at the walk window's own last bar, rather than
+        // reusing the trade's own historical actual_pnl. actual_pnl reflects whatever
+        // stop/target/resolution mechanism was ACTUALLY live when the trade fired -- for a
+        // trade whose real resolution_method was MARK_TO_MARKET, that value is ALREADY a
+        // mark-to-market close computed under a different (now-superseded) candidate, so
+        // reusing it here compounds a stale proxy with a fresh "unresolved" situation instead
+        // of ever computing what this specific candidate's outcome would actually have been.
+        // Fixed 2026-08-10 ("MTM exclusion enforced in code, not remembered" -- CLAUDE.md
+        // roadmap): compute a genuine walk-consistent MTM value from the SAME bar data already
+        // loaded for this walk, closing at allBars[w.endIdx-1] -- self-consistent regardless of
+        // how the original trade actually resolved, and correctly reflects THIS candidate's
+        // own stop/target framing rather than a different one's leftover P&L.
+        const lastBar = allBars[w.endIdx - 1];
+        const favorable = long ? lastBar.close - w.entry : w.entry - lastBar.close;
+        pnl = favorable * pnlPerPoint - commission;
+        unresolved++;
+      }
       events.push({ date: w.trade.fired_at.toISOString().slice(0, 10), pnl });
     }
     return { target: T, events, targetHits, stopHits, unresolved, n: walked.length };
