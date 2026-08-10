@@ -555,7 +555,7 @@ async function main() {
       priorStoredByType5[row.signal_name] = { stop: parseFloat(row.optimal_stop), target: parseFloat(row.optimal_target) };
       realNByType5[row.signal_name] = (realTradesByType[row.signal_name] || []).length;
     }
-    const { volScaleRatio: volScaleRatio5, targetStopRatio: targetStopRatio5, canComputeVolDefault: canComputeVolDefault5 } =
+    const { volScaleRatio: volScaleRatio5, targetStopRatio: targetStopRatio5, ceilingRatio: ceilingRatio5, canComputeVolDefault: canComputeVolDefault5 } =
       computeVolatilityDefaultRatios({ priorStoredByType: priorStoredByType5, realNByType: realNByType5, medianBarRange: medianBarRange5 });
 
     let evChecked = 0, evMismatches = 0;
@@ -658,7 +658,7 @@ async function main() {
       const decision5 = computeStopTargetForType({
         realTradesStop, direction, allBars, firstIndexAfter: firstIndexAfter5, stopDpp, targetDpp,
         noiseFloorPt: NOISE_FLOOR_PT5, volScaleRatio: volScaleRatio5, targetStopRatio: targetStopRatio5,
-        medianBarRange: medianBarRange5,
+        ceilingRatio: ceilingRatio5, medianBarRange: medianBarRange5,
         // Day-type sub-keys always force canComputeVolDefault=false here, matching
         // backtest_ib_daytype_stop_target.mjs's own call exactly (it deliberately never gives a
         // thin day-type bucket a synthetic default -- see that script's header comment) --

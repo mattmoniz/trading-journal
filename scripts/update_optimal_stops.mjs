@@ -324,7 +324,12 @@ export function precomputeCrossovers(trade, allBars, stopCandidates, targetCandi
       targetHitAt[targetSorted[targetPtr]] = rel; targetPtr++;
     }
     lastClose = b.close ?? b.high; // fallback if this bar shape has no close field
-    if (stopPtr >= stopSorted.length && targetPtr >= targetSorted.length) break;
+    // Guard added 2026-08-10: with BOTH candidate lists empty (the uncensoredMaeCandidates()
+    // raw-excursion-only use case), stopPtr(0)>=stopSorted.length(0) is vacuously true on the
+    // very first bar -- without this guard the walk would break after just 1 bar instead of
+    // covering the full window, defeating the entire point of computing a genuinely uncensored
+    // mae/mfe. Only allow the early-exit when there's at least one real candidate to satisfy.
+    if (stopSorted.length + targetSorted.length > 0 && stopPtr >= stopSorted.length && targetPtr >= targetSorted.length) break;
   }
   // Mark-to-market at the walk's own cutoff for any candidate neither leg reached --
   // matches the live system's own TIME_EXPIRED convention (mark-to-market at the last
@@ -332,7 +337,14 @@ export function precomputeCrossovers(trade, allBars, stopCandidates, targetCandi
   // stop/target was actually live when it fired -- DeepSeek design review flagged the old
   // computeEvAtStopTarget()'s actual_pnl fallback as exactly this kind of circularity).
   const mtmPts = lastClose == null ? 0 : (isLong ? lastClose - entry : entry - lastClose);
-  return { stopHitAt, targetHitAt, mtmPts };
+  // mae/mfe here are the TRUE (uncensored) max adverse/favorable excursion over the full
+  // maxBars window -- independent of stopCandidates/targetCandidates, computed on every bar
+  // regardless of whether/when a candidate crossing was recorded. Returned (2026-08-10,
+  // "uncensored MAE candidate grid" roadmap item) so a caller can use this same walk to build
+  // an unbiased candidate GRID, not just evaluate EV for an already-chosen one -- see
+  // uncensoredMaeCandidates() below for why the pre-computed mae_points column can't be used
+  // for this (it's right-censored by whatever stop was live when each trade fired).
+  return { stopHitAt, targetHitAt, mtmPts, mae, mfe };
 }
 
 // EV for ONE (stop, target) candidate pair against a precomputed crossover set. Returns
@@ -421,6 +433,42 @@ export function realP75Mfe(trades) {
   return percentileOf(mfes, 0.75);
 }
 
+// Uncensored MAE candidate grid (2026-08-10, roadmap "MAE candidate grid... breaks the
+// self-referential loop" -- the last named structural defect in the measurement layer).
+// realMaeCandidates() above builds its percentile grid from the stored mae_points column --
+// but resolveSetupsByPrice()'s bar walk STOPS the moment a trade's ORIGINAL stop or target is
+// hit, so mae_points is right-censored by whatever stop was actually live when that trade
+// fired: a trade that stopped out at 26pt has mae_points=~26pt regardless of whether a wider
+// 40pt candidate would have seen adverse excursion continue to 60pt or reverse back to
+// profit -- the data to tell the difference was never recorded. Feeding this censored column
+// into the candidate grid creates a feedback loop: the stop that was live when trades fired
+// determines how far the candidate grid can even see, which anchors the NEXT calibration
+// round near wherever the stop already sits rather than discovering a genuinely different one.
+//
+// Fixed by reusing precomputeCrossovers()'s own bar walk (same WALK_WINDOW_BARS window
+// sweepOptimalStopAndTargetChronological()'s EV computation already uses, so candidate
+// generation and candidate evaluation are drawn from the SAME uncensored source) with EMPTY
+// candidate lists -- this makes it walk the full window purely to report each trade's true,
+// uncensored max adverse excursion (mae), independent of when/whether the original stop or
+// target actually fired. Percentiled the same way realMaeCandidates() already does (0.25/0.40/
+// 0.50/0.60/0.75, same floor guard) so this is a drop-in replacement with the identical output
+// shape -- only the SOURCE of the underlying mae values changed.
+//
+// trades must already carry barIdx/direction/entry (same precondition as
+// sweepOptimalStopAndTargetChronological's own chronoTrades, built by the caller).
+export function uncensoredMaeCandidates(trades, allBars, floor) {
+  const maes = [];
+  for (const t of trades) {
+    const cx = precomputeCrossovers(t, allBars, [], []);
+    if (cx) maes.push(cx.mae);
+  }
+  if (!maes.length) return [];
+  maes.sort((a, b) => a - b);
+  return [0.25, 0.40, 0.50, 0.60, 0.75]
+    .map(pct => ({ value: percentileOf(maes, pct), pct }))
+    .filter(c => c.value != null && c.value >= floor);
+}
+
 // Volatility-scaled-default ratios (2026-08-05, exported 2026-08-10). Extracted here after
 // being hand-copied THREE times in 6 days (this file's own main(), test_invariants.mjs check
 // [5], and backtest_ib_daytype_stop_target.mjs's origin_status fix) -- the exact "share
@@ -454,7 +502,18 @@ export function computeVolatilityDefaultRatios({ priorStoredByType, realNByType,
   const volScaleRatio = median(qualifyingRatios.map(r => r.stopToBarRange));
   const targetStopRatio = median(qualifyingRatios.map(r => r.targetToStop));
   const canComputeVolDefault = volScaleRatio != null && targetStopRatio != null && medianBarRange > 0;
-  return { volScaleRatio, targetStopRatio, canComputeVolDefault, qualifyingCount: qualifyingRatios.length };
+  // ceilingRatio (2026-08-10, "uncensored MAE candidate grid" roadmap item): p90 of the SAME
+  // qualifying-type stopToBarRange distribution used for volScaleRatio (its median) -- i.e.
+  // "the widest stop-to-market-volatility ratio among setup_types the system ALREADY trusts on
+  // real, calibrated data." DeepSeek design review (scratch/deepseek_response.md, 2026-08-10)
+  // rejected capping uncensoredMaeCandidates()'s grid against the OLD censored mae_points
+  // distribution -- that just re-introduces the self-referential censoring loop the uncensored
+  // walk was built to escape, through a different door. This is a genuinely external, already-
+  // validated reference instead: reuses the SAME qualifyingRatios array already being computed
+  // for volScaleRatio (p50) rather than inventing a new statistic, so "typical" and "ceiling"
+  // are two percentiles of one real distribution, not two independently-chosen numbers.
+  const ceilingRatio = percentileOf([...qualifyingRatios.map(r => r.stopToBarRange)].sort((a, b) => a - b), 0.9);
+  return { volScaleRatio, targetStopRatio, ceilingRatio, canComputeVolDefault, qualifyingCount: qualifyingRatios.length };
 }
 
 // Full stop+target decision tree for ONE setup_type, given its real (origin_status-filtered)
@@ -470,9 +529,10 @@ export function computeVolatilityDefaultRatios({ priorStoredByType, realNByType,
 // medianBarRange (run-wide volatility-default parameters, null if canComputeVolDefault is
 // false), canComputeVolDefault.
 // Returns { optStop, optTarget, optEV, targetMethod, usedVolDefault }.
-export function computeStopTargetForType({ realTradesStop, direction, allBars, firstIndexAfter, stopDpp, targetDpp, noiseFloorPt, volScaleRatio, targetStopRatio, medianBarRange, canComputeVolDefault }) {
+export function computeStopTargetForType({ realTradesStop, direction, allBars, firstIndexAfter, stopDpp, targetDpp, noiseFloorPt, volScaleRatio, targetStopRatio, ceilingRatio, medianBarRange, canComputeVolDefault }) {
   const realNStop = realTradesStop.length;
   let swept, optStop, optTarget, targetMethod, usedVolDefault = false;
+  let ceilingFullyRejected = null;
 
   if (realNStop < MIN_N && canComputeVolDefault) {
     swept = null;
@@ -481,6 +541,12 @@ export function computeStopTargetForType({ realTradesStop, direction, allBars, f
     targetMethod = 'volatility-scaled-default';
     usedVolDefault = true;
   } else if (realNStop >= MIN_N) {
+    // realCandidates (censored mae_points column) stays the fallback for the order-blind sweep
+    // below, which has no bar-walk infrastructure of its own and evaluates EV against the same
+    // censored mae_points/mfe_points columns -- feeding it an uncensored candidate grid would be
+    // internally inconsistent with how it scores each candidate. The chronological path's own EV
+    // computation (precomputeCrossovers) is ALREADY a fresh bar walk, so it gets a matching
+    // uncensored candidate grid too -- see uncensoredMaeCandidates()'s own comment.
     const realCandidates = realMaeCandidates(realTradesStop, noiseFloorPt);
     const realMaxT = Math.round(realP75Mfe(realTradesStop) || DEFAULT_TARGET);
     let chronoResult = null;
@@ -491,7 +557,37 @@ export function computeStopTargetForType({ realTradesStop, direction, allBars, f
         direction,
         barIdx: firstIndexAfter(new Date(t.fired_at).getTime()),
       }));
-      chronoResult = sweepOptimalStopAndTargetChronological(chronoTrades, allBars, realCandidates, realMaxT, stopDpp, targetDpp);
+      const uncensoredCandidates = uncensoredMaeCandidates(chronoTrades, allBars, noiseFloorPt);
+      const chronoCandidates = uncensoredCandidates.length ? uncensoredCandidates : realCandidates;
+      chronoResult = sweepOptimalStopAndTargetChronological(chronoTrades, allBars, chronoCandidates, realMaxT, stopDpp, targetDpp);
+
+      // Risk ceiling (2026-08-10, DeepSeek-reviewed -- see comment on ceilingRatio above).
+      // uncensoredMaeCandidates() measures honestly and is left unconstrained; this only
+      // constrains what the SWEEP is allowed to pick, and only when its unconstrained winner
+      // actually exceeds the ceiling -- most types never hit this, since most real MAE
+      // distributions aren't as wide as IB_BEARISH's turned out to be.
+      if (chronoResult && !chronoResult.insufficientBarData && ceilingRatio != null && medianBarRange > 0) {
+        const ceiling = ceilingRatio * medianBarRange;
+        if (chronoResult.stop > ceiling) {
+          const cappedCandidates = chronoCandidates.filter(c => c.value <= ceiling);
+          const uncappedStop = chronoResult.stop, uncappedTarget = chronoResult.target, uncappedEv = chronoResult.ev;
+          const cappedResult = cappedCandidates.length
+            ? sweepOptimalStopAndTargetChronological(chronoTrades, allBars, cappedCandidates, realMaxT, stopDpp, targetDpp)
+            : null;
+          if (cappedResult && !cappedResult.insufficientBarData) {
+            chronoResult = { ...cappedResult, cappedByRiskCeiling: true, uncappedStop, uncappedTarget, uncappedEv, riskCeiling: Math.round(ceiling) };
+          } else {
+            // No candidate (uncensored OR the original censored realCandidates, since
+            // chronoCandidates falls back to realCandidates when the uncensored grid is empty)
+            // clears the ceiling -- falls through to the order-blind sweep below, on the OLD
+            // censored candidates, same as if the chronological path had never run at all.
+            // Recorded so this isn't indistinguishable from an ordinary "chronological path
+            // unusable" case in the final notes.
+            ceilingFullyRejected = { uncappedStop, uncappedTarget, uncappedEv, riskCeiling: Math.round(ceiling) };
+            chronoResult = null;
+          }
+        }
+      }
     }
     if (chronoResult && !chronoResult.insufficientBarData) {
       swept = chronoResult;
@@ -518,7 +614,22 @@ export function computeStopTargetForType({ realTradesStop, direction, allBars, f
   }
 
   const optEV = usedVolDefault ? null : swept.ev;
-  return { optStop, optTarget, optEV, targetMethod, usedVolDefault };
+  return {
+    optStop, optTarget, optEV, targetMethod, usedVolDefault,
+    // Present only when the risk ceiling actually engaged (see ceilingRatio comment above) --
+    // absent (undefined) on every normal row, so JSON.stringify naturally omits it rather than
+    // writing a clutter of always-null fields onto rows that were never capped.
+    ...(swept?.cappedByRiskCeiling ? {
+      cappedByRiskCeiling: true, uncappedStop: swept.uncappedStop,
+      uncappedTarget: swept.uncappedTarget, uncappedEv: swept.uncappedEv, riskCeiling: swept.riskCeiling,
+    } : {}),
+    // Distinct from cappedByRiskCeiling above: the ceiling engaged but NOTHING cleared it, so
+    // the chronological path was abandoned entirely and targetMethod fell through to whatever
+    // the order-blind path produced -- without this, that fallback is indistinguishable from
+    // the chronological path simply not having enough bar data, which is a materially
+    // different (and much less interesting) reason.
+    ...(ceilingFullyRejected ? { ceilingFullyRejected } : {}),
+  };
 }
 
 // --dry-run (2026-08-04, DeepSeek-recommended before shipping the structural-conservative
@@ -778,9 +889,9 @@ async function main() {
 
   // See computeVolatilityDefaultRatios()'s own header comment above for the full reasoning
   // -- extracted 2026-08-10 after being hand-copied 3 times in 6 days.
-  const { volScaleRatio, targetStopRatio, canComputeVolDefault, qualifyingCount } =
+  const { volScaleRatio, targetStopRatio, ceilingRatio, canComputeVolDefault, qualifyingCount } =
     computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN: MIN_N });
-  console.log(`Volatility-scaled default: ${qualifyingCount} real-N-qualified types (n>=${MIN_N}) inform the ratio -- stop=${volScaleRatio?.toFixed(2)}x median bar range (${medianBarRange.toFixed(1)}pt), target=${targetStopRatio?.toFixed(2)}x stop.`);
+  console.log(`Volatility-scaled default: ${qualifyingCount} real-N-qualified types (n>=${MIN_N}) inform the ratio -- stop=${volScaleRatio?.toFixed(2)}x median bar range (${medianBarRange.toFixed(1)}pt), target=${targetStopRatio?.toFixed(2)}x stop. Risk ceiling (p90 of the same distribution): ${ceilingRatio?.toFixed(2)}x = ${ceilingRatio != null ? Math.round(ceilingRatio * medianBarRange) : 'n/a'}pt.`);
 
   let upserted = 0, correctedCount = 0, volDefaultCount = 0;
   for (const r of rows) {
@@ -827,7 +938,7 @@ async function main() {
     // an expected value, instead of a second hand-copied version.
     const decision0 = computeStopTargetForType({
       realTradesStop, direction, allBars, firstIndexAfter, stopDpp, targetDpp,
-      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, medianBarRange, canComputeVolDefault,
+      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, ceilingRatio, medianBarRange, canComputeVolDefault,
     });
     let optStop, optTarget, targetMethod, usedVolDefault, swept;
     if (decision0.targetMethod === 'insufficient_data_no_fallback') {
@@ -846,6 +957,16 @@ async function main() {
       swept = { ev: decision0.optEV }; // shape-compatible with the optEV line below
       if (usedVolDefault) volDefaultCount++;
     }
+    const riskCappedInfo = decision0.cappedByRiskCeiling ? {
+      capped_by_risk_ceiling: true, uncapped_stop: decision0.uncappedStop,
+      uncapped_target: decision0.uncappedTarget, uncapped_ev: decision0.uncappedEv != null ? +decision0.uncappedEv.toFixed(2) : null,
+      risk_ceiling_pt: decision0.riskCeiling,
+    } : decision0.ceilingFullyRejected ? {
+      ceiling_fully_rejected: true, uncapped_stop: decision0.ceilingFullyRejected.uncappedStop,
+      uncapped_target: decision0.ceilingFullyRejected.uncappedTarget,
+      uncapped_ev: decision0.ceilingFullyRejected.uncappedEv != null ? +decision0.ceilingFullyRejected.uncappedEv.toFixed(2) : null,
+      risk_ceiling_pt: decision0.ceilingFullyRejected.riskCeiling,
+    } : null;
     // FIXED 2026-07-17: ev_per_trade used to be parseFloat(r.ev) -- ROUND(AVG(actual_pnl)),
     // a raw historical average using whatever stop/target each trade ACTUALLY fired with --
     // completely disconnected from optStop/optTarget above (the EV-sweep's real chosen pair).
@@ -890,7 +1011,7 @@ async function main() {
         optTarget = corrected.bestTarget;
         optEV = corrected.fullEv;
         targetMethod = 'corrected-resim';
-        correctedNotes = JSON.stringify({ method: 'corrected-resim', oldTarget: preCorrectionTarget, ...corrected });
+        correctedNotes = JSON.stringify({ method: 'corrected-resim', oldTarget: preCorrectionTarget, ...corrected, ...(riskCappedInfo ? { risk_capping: riskCappedInfo } : {}) });
         correctedCount++;
       } else {
         // Structural-conservative fallback: DESIGNED, DRY-RUN TESTED, REVERTED before going
@@ -925,10 +1046,11 @@ async function main() {
           method: targetMethod, correctionAttempted: true,
           exclusionReason: corrected.exclusionReason, exclusionDetail: corrected.exclusionDetail,
           structuralFallbackNotApplied: { stop: wouldBeStop, target: wouldBeTarget, ev: wouldBeEv, evDelta: +(wouldBeEv - optEV).toFixed(2) },
+          ...(riskCappedInfo ? { risk_capping: riskCappedInfo } : {}),
         });
       }
     } else {
-      correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: false, exclusionReason: !direction ? 'no_inferred_direction' : 'insufficient_trade_count', exclusionDetail: `expandedTrades=${expandedTrades.length}` });
+      correctedNotes = JSON.stringify({ method: targetMethod, correctionAttempted: false, exclusionReason: !direction ? 'no_inferred_direction' : 'insufficient_trade_count', exclusionDetail: `expandedTrades=${expandedTrades.length}`, ...(riskCappedInfo ? { risk_capping: riskCappedInfo } : {}) });
     }
 
     // Circuit breaker (see applyCircuitBreaker() above) -- the LAST gate applied to

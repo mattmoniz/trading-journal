@@ -145,7 +145,7 @@ async function run() {
     GROUP BY setup_type
   `);
   const realNByType = Object.fromEntries(realNCountRes.rows.map(r => [r.setup_type, +r.n]));
-  const { volScaleRatio, targetStopRatio } = computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN: MIN_N });
+  const { volScaleRatio, targetStopRatio, ceilingRatio } = computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN: MIN_N });
 
   let upserted = 0, skipped = 0, todayRow;
   for (const [signalName, trades] of Object.entries(byCell)) {
@@ -155,7 +155,7 @@ async function run() {
 
     const decision = computeStopTargetForType({
       realTradesStop: trades, direction, allBars, firstIndexAfter, stopDpp, targetDpp,
-      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, medianBarRange,
+      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, ceilingRatio, medianBarRange,
       canComputeVolDefault: false, // day-type buckets fall back to the blended row when thin, not a synthetic default -- see header comment
     });
 
@@ -169,6 +169,11 @@ async function run() {
     const notes = JSON.stringify({
       method: `day-type-conditioned ${decision.targetMethod}`, setup_type: setupType,
       real_n: trades.length,
+      ...(decision.cappedByRiskCeiling ? { risk_capping: {
+        capped_by_risk_ceiling: true, uncapped_stop: decision.uncappedStop,
+        uncapped_target: decision.uncappedTarget, uncapped_ev: decision.uncappedEv != null ? +decision.uncappedEv.toFixed(2) : null,
+        risk_ceiling_pt: decision.riskCeiling,
+      } } : {}),
     });
 
     if (!todayRow) {
