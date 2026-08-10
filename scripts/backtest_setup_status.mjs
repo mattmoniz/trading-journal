@@ -3,8 +3,23 @@
  * UNIFIED suppression system — the ONLY suppression source. acd.js hardcoded
  * suppressedFades set was removed 2026-07-09; all suppression flows through here.
  *
- * SUPPRESS: N≥20, EV<-$5/trade (no WR gate — catches high-WR structural losers)
- * PROMOTE:  currently suppressed AND recent 90-day N≥15, WR≥52%, EV>$0 → restore to ACTIVE
+ * SUPPRESS: real_n≥20, real EV<-$5/trade (no WR gate — catches high-WR structural losers)
+ * PROMOTE:  currently suppressed AND recent 90-day real_n≥15, real WR≥52%, real EV>$0 → restore to ACTIVE
+ *
+ * SUPPRESS/PROMOTE both gate on REAL (origin_status IN ('ACTIVE','SHADOW')) EV/WR/N as of
+ * 2026-08-10 — not the all-time/blended figures. Fixed the same day CAM_S2_FADE_SHORT was
+ * found firing live ACTIVE on all-time blended EV=+$1.37 (76% synthetic BACKFILL/UNKNOWN)
+ * while its real recent-90d EV was -$8.02 (N=22, 100% of its real history) — the SUPPRESS
+ * check had never used real_n/real_ev at all despite this file computing real_n since
+ * 2026-07-20 for exactly this class of contamination. Root-cause fix per direct user
+ * instruction ("fix the cron, don't build an override") rather than a manual one-time flip
+ * or a precedence/override mechanism layered on top — this makes CAM_S2 (and likely other
+ * types never individually audited) self-demote on the very next run, and self-correct again
+ * automatically once real EV genuinely recovers, same as everything else in this file.
+ * PROMOTE's real_n gate (previously a separate, looser PROMOTE_MIN_REAL_N=5 floor stacked on
+ * top of a blended-N/WR/EV check) is now just real_n/real_wr/real_ev directly at the same
+ * PROMOTE_MIN_N=15 bar as everything else in this decision — a real recovery needs 15 real
+ * trades, not 5 real trades padded out to 15 with synthetic ones.
  *
  * Shadow setups still resolve (TARGET_HIT/STOP_HIT) so data keeps accumulating.
  * When a suppressed setup recovers statistically it automatically comes back live.
@@ -14,7 +29,10 @@
  * insert as status='SHADOW' with suppression_reason='PERFORMANCE_BELOW_THRESHOLD'.
  *
  * Run:  node scripts/backtest_setup_status.mjs
- * Cron: Sunday 9:20 PM ET (run_weekly_backtests.sh)
+ * Cron: Sunday 10:30 PM ET (run_weekly_backtests.sh), also run_daily_calibration.sh (Mon-Fri
+ *       8:20 PM ET — verified directly against the live crontab 2026-08-10, not assumed;
+ *       CLAUDE.md's own "4:20pm ET" reference for this cron is stale/wrong, separate from
+ *       today's fix)
  */
 
 import { query } from '../server/db.js';
@@ -28,14 +46,14 @@ const SUPPRESS_MIN_N   = 20;   // N≥20 satisfies the hard floor from CLAUDE.md
 const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR gate)
 
 const PROMOTE_WINDOW_DAYS = 90;
-const PROMOTE_MIN_N    = 15;   // 15 trades in last 90 days is enough to signal recovery
+// 2026-08-10: PROMOTE_MIN_N/WR/EV now apply to REAL (origin_status IN ('ACTIVE','SHADOW'))
+// stats directly, not blended -- 15 real trades in the last 90 days is what signals a
+// recovery, not 15 blended trades where as few as 5 could be real (the old
+// PROMOTE_MIN_REAL_N=5 floor, now redundant and removed: real_n>=15 already implies
+// real_n>=5). Same root-cause fix as the SUPPRESS gate below -- see the file header.
+const PROMOTE_MIN_N    = 15;
 const PROMOTE_MIN_WR   = 0.52;
-const PROMOTE_MIN_EV   = 0;    // any positive EV
-// Of those 15+, at least this many must be real (ACTIVE/SHADOW-origin, not BACKFILL) --
-// otherwise a "recovery" can be 100% synthetic, as FLOOR_S1_FADE_LONG's was 2026-07-20.
-// Reuses classifyTrend()'s own existing N<5 "too thin to trust" cutoff below, rather than
-// inventing a new number.
-const PROMOTE_MIN_REAL_N = 5;
+const PROMOTE_MIN_EV   = 0;    // any positive real EV
 
 // Setup types that are day-type conditional — their overall EV blends good and bad day types
 // and therefore can't be evaluated as a single suppress/promote decision. These are managed
@@ -83,6 +101,7 @@ async function run() {
       COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
+      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_ev,
       SUM(actual_pnl)::float AS total_pnl
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
@@ -103,7 +122,9 @@ async function run() {
       COUNT(*) AS n,
       COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
-      AVG(actual_pnl)::float AS ev
+      AVG(actual_pnl)::float AS ev,
+      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_wr,
+      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_ev
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
@@ -241,17 +262,24 @@ async function run() {
     }
 
     let recommendation = 'ACTIVE';
+    // 2026-08-10 root-cause fix (see file header): SUPPRESS/PROMOTE both gate on REAL
+    // (origin_status-filtered) EV/WR/N now, never blended. realEv/rec90Real* are null only
+    // when their filtered row count is 0 (AVG(...) FILTER returns NULL on zero matches).
+    const realEv = r.real_ev != null ? +r.real_ev : null;
+    const rec90RealN  = rec90 && rec90.real_n  != null ? +rec90.real_n  : 0;
+    const rec90RealWr = rec90 && rec90.real_wr != null ? +rec90.real_wr : null;
+    const rec90RealEv = rec90 && rec90.real_ev != null ? +rec90.real_ev : null;
 
-    if (wasSuppressed && rec90 && +rec90.n >= PROMOTE_MIN_N && +rec90.wr >= PROMOTE_MIN_WR && +rec90.ev > PROMOTE_MIN_EV && +rec90.real_n >= PROMOTE_MIN_REAL_N) {
+    if (wasSuppressed && rec90RealN >= PROMOTE_MIN_N && rec90RealWr != null && rec90RealWr >= PROMOTE_MIN_WR && rec90RealEv != null && rec90RealEv > PROMOTE_MIN_EV) {
       // Recovery detected — promote back to live
       recommendation = 'PROMOTE';
       promoted++;
-      console.log(`  PROMOTE  ${type.padEnd(38)} all: N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)}  recent90: N=${rec90.n} (real=${rec90.real_n}) WR=${(+rec90.wr*100).toFixed(1)}% EV=$${(+rec90.ev).toFixed(0)}`);
-    } else if (n >= SUPPRESS_MIN_N && ev < SUPPRESS_MAX_EV) {
+      console.log(`  PROMOTE  ${type.padEnd(38)} all: N=${n} (real=${realN}) EV=$${ev.toFixed(0)} (real=$${realEv != null ? realEv.toFixed(0) : 'n/a'})  recent90 real: N=${rec90RealN} WR=${(rec90RealWr*100).toFixed(1)}% EV=$${rec90RealEv.toFixed(0)}`);
+    } else if (realN >= SUPPRESS_MIN_N && realEv != null && realEv < SUPPRESS_MAX_EV) {
       recommendation = 'SUPPRESS';
       suppressed++;
       const tag = wasSuppressed ? '(already suppressed)' : '← NEW';
-      console.log(`  SUPPRESS ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} total=$${r.total_pnl.toFixed(0)} ${tag}`);
+      console.log(`  SUPPRESS ${type.padEnd(38)} real N=${realN} real EV=$${realEv.toFixed(0)} (blended N=${n} EV=$${ev.toFixed(0)}) ${tag}`);
     } else if (n < SUPPRESS_MIN_N) {
       // CLAUDE.md hard rule: N<20 → SHADOW until enough data to evaluate.
       // acd.js reads THIN_N the same as SUPPRESS — inserts new setups as SHADOW.
@@ -272,7 +300,7 @@ async function run() {
       unchanged++;
     }
 
-    results.push({ type, n, realN, wr, ev, totalPnl: +r.total_pnl, recommendation, rec90 });
+    results.push({ type, n, realN, wr, ev, realEv, totalPnl: +r.total_pnl, recommendation, rec90 });
   }
 
   console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged`);
@@ -292,8 +320,17 @@ async function run() {
       all_time_real_n: r.realN ?? null,
       all_time_wr: +(r.wr * 100).toFixed(1),
       all_time_ev: +r.ev.toFixed(2),
+      // real_ev (origin_status-filtered) is what SUPPRESS actually gates on as of 2026-08-10
+      // -- surfaced here so the decision is auditable from the row alone, not just inferred.
+      all_time_real_ev: r.realEv != null ? +r.realEv.toFixed(2) : null,
       total_pnl:   +r.totalPnl.toFixed(2),
-      recent_90d:  r.rec90 ? { n: +r.rec90.n, real_n: r.rec90.real_n != null ? +r.rec90.real_n : null, wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2) } : null,
+      recent_90d:  r.rec90 ? {
+        n: +r.rec90.n, real_n: r.rec90.real_n != null ? +r.rec90.real_n : null,
+        wr: +(+r.rec90.wr * 100).toFixed(1), ev: +(+r.rec90.ev).toFixed(2),
+        // real_wr/real_ev (origin_status-filtered) are what PROMOTE actually gates on.
+        real_wr: r.rec90.real_wr != null ? +(+r.rec90.real_wr * 100).toFixed(1) : null,
+        real_ev: r.rec90.real_ev != null ? +(+r.rec90.real_ev).toFixed(2) : null,
+      } : null,
       rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
       ...(r.dayTypeBreakdown ? { day_type_breakdown: r.dayTypeBreakdown.map(b => ({ day_type: b.dayType, n: b.n, ev: +b.ev.toFixed(2) })) } : {}),
     });
