@@ -142,7 +142,7 @@ import fs, { existsSync } from 'fs';
 import path from 'path';
 import { config } from 'dotenv';
 import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES } from '../server/config/setupTypes.js';
-import { sweepOptimalStopAndTarget, DEFAULT_DPP, computeStopTargetForType } from './update_optimal_stops.mjs';
+import { sweepOptimalStopAndTarget, DEFAULT_DPP, computeStopTargetForType, computeVolatilityDefaultRatios } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget, makeBarIndex } from '../server/services/targetCalibrationService.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { listClaims } from './record_claim.mjs';
@@ -501,6 +501,27 @@ async function main() {
     const realTradesByType = {};
     for (const t of realTradesRes5.rows) (realTradesByType[t.setup_type] ||= []).push(t);
 
+    // Real, day-type-joined population -- mirrors backtest_ib_daytype_stop_target.mjs's own
+    // tradesRes query exactly (2026-08-10 fix, resolves day_type_alpha_stop_needs_origin_status_filter).
+    // Merged into the SAME realTradesByType map under cell_key ('IB_BEARISH_TURBULENT' etc.) so the
+    // main loop below can verify day-type sub-key rows via computeStopTargetForType() too, instead
+    // of unconditionally skipping them (the pre-fix state, when that script used blended data and
+    // there was no shared methodology to re-derive against).
+    const realDtTradesRes = await client.query(`
+      SELECT a.setup_type || '_' || d.day_type as cell_key,
+        a.mae_points::float, a.mfe_points::float, a.actual_pnl::float,
+        a.fired_at, a.entry_zone_low::float, a.entry_zone_high::float
+      FROM active_setups a
+      JOIN acd_daily_log d ON d.trade_date = a.trade_date
+      WHERE a.mae_points IS NOT NULL AND a.mfe_points IS NOT NULL AND a.actual_pnl IS NOT NULL
+        AND a.mae_points <= 300 AND a.mfe_points <= 300
+        AND a.status = 'RESOLVED' AND a.replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+        AND a.origin_status IN ('ACTIVE', 'SHADOW')
+        AND d.day_type IS NOT NULL
+      ORDER BY a.fired_at ASC
+    `);
+    for (const t of realDtTradesRes.rows) (realTradesByType[t.cell_key] ||= []).push(t);
+
     const medianBarRangeRes5 = await client.query(`
       SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (high - low)) as median_range
       FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '30 days'
@@ -526,16 +547,16 @@ async function main() {
     // minutes apart can legitimately produce different (both correct) values. Confirmed
     // live during the 2026-08-09 re-baseline: re-deriving this ratio right after a real run
     // shifted it 2.61x -> 3.02x purely from the prior stored values changing, zero code bug.
-    const qualifyingRatios5 = [];
+    // Extracted into computeVolatilityDefaultRatios() 2026-08-10 (this was a hand-copy of
+    // update_optimal_stops.mjs's own logic -- the 3rd copy in 6 days, caught before a 4th).
+    const priorStoredByType5 = {};
+    const realNByType5 = {};
     for (const row of latestOptRows.rows) {
-      const n = (realTradesByType[row.signal_name] || []).length;
-      const s = parseFloat(row.optimal_stop), t = parseFloat(row.optimal_target);
-      if (n >= 20 && s > 0 && t != null && !isNaN(t)) qualifyingRatios5.push({ stopToBarRange: s / medianBarRange5, targetToStop: t / s });
+      priorStoredByType5[row.signal_name] = { stop: parseFloat(row.optimal_stop), target: parseFloat(row.optimal_target) };
+      realNByType5[row.signal_name] = (realTradesByType[row.signal_name] || []).length;
     }
-    const median5 = (arr) => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
-    const volScaleRatio5 = median5(qualifyingRatios5.map(r => r.stopToBarRange));
-    const targetStopRatio5 = median5(qualifyingRatios5.map(r => r.targetToStop));
-    const canComputeVolDefault5 = volScaleRatio5 != null && targetStopRatio5 != null && medianBarRange5 > 0;
+    const { volScaleRatio: volScaleRatio5, targetStopRatio: targetStopRatio5, canComputeVolDefault: canComputeVolDefault5 } =
+      computeVolatilityDefaultRatios({ priorStoredByType: priorStoredByType5, realNByType: realNByType5, medianBarRange: medianBarRange5 });
 
     let evChecked = 0, evMismatches = 0;
     for (const row of latestOptRows.rows) {
@@ -600,7 +621,20 @@ async function main() {
       // update_optimal_stops.mjs has ever touched their stored row (both show run_date
       // 2026-07-19, notes=null, untouched even by today's re-baseline) -- a stale, orphaned
       // row this check can't meaningfully re-verify against either methodology.
-      if (_dtSuffix || !tradesByType[row.signal_name] || tradesByType[row.signal_name].length < 20) continue;
+      //
+      // Day-type sub-keys are a DIFFERENT case as of 2026-08-10: backtest_ib_daytype_stop_target.mjs
+      // now shares the exact same computeStopTargetForType() methodology (canComputeVolDefault
+      // forced false), so a day-type row with real touches CAN be meaningfully re-verified --
+      // gate it on realTradesByType (the real, origin_status+day_type-joined population) instead
+      // of the blended tradesByType/MIN_N gate the non-day-type branch below still needs. A
+      // day-type row with zero real touches (still possible -- e.g. IB_BULLISH_TURBULENT, real
+      // N=1) has nothing to re-derive against and is correctly left as a stale/orphaned row from
+      // before this fix, same treatment as the MONTHLY_VWAP case above.
+      if (_dtSuffix) {
+        if (!realTradesByType[row.signal_name] || realTradesByType[row.signal_name].length === 0) continue;
+      } else if (!tradesByType[row.signal_name] || tradesByType[row.signal_name].length < 20) {
+        continue;
+      }
 
       const direction = inferDirection(row.signal_name);
       const realTradesStop = realTradesByType[row.signal_name] || [];
@@ -624,7 +658,14 @@ async function main() {
       const decision5 = computeStopTargetForType({
         realTradesStop, direction, allBars, firstIndexAfter: firstIndexAfter5, stopDpp, targetDpp,
         noiseFloorPt: NOISE_FLOOR_PT5, volScaleRatio: volScaleRatio5, targetStopRatio: targetStopRatio5,
-        medianBarRange: medianBarRange5, canComputeVolDefault: canComputeVolDefault5,
+        medianBarRange: medianBarRange5,
+        // Day-type sub-keys always force canComputeVolDefault=false here, matching
+        // backtest_ib_daytype_stop_target.mjs's own call exactly (it deliberately never gives a
+        // thin day-type bucket a synthetic default -- see that script's header comment) --
+        // using the main population's canComputeVolDefault5 instead would wrongly vol-default
+        // a thin-but-nonzero-real-N day-type row (e.g. IB_BEARISH_BALANCE real N=11) that the
+        // real script actually skipped, producing a false mismatch against its stale stored row.
+        canComputeVolDefault: _dtSuffix ? false : canComputeVolDefault5,
       });
       if (decision5.targetMethod === 'insufficient_data_no_fallback') {
         // Only reachable on a genuinely first-ever run (no type anywhere clears the real-N

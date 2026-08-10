@@ -11,10 +11,35 @@
 // day_type) instead of blended, and persist a row for any bucket that clears the
 // same MIN_N=20 floor sweepOptimalStopAndTarget() already enforces.
 //
-// Reuses the REAL, already-validated sweepOptimalStopAndTarget()/computeEvAtStopTarget()
-// from update_optimal_stops.mjs (CLAUDE.md's "export the real function, never
-// reimplement" rule) — this script only differs in how the trade population is
-// partitioned (by day_type in addition to setup_type), not in the sweep math itself.
+// FIXED 2026-08-10 (OPEN_DECISION day_type_alpha_stop_needs_origin_status_filter):
+// this script had never been origin_status-filtered -- confirmed real-data composition
+// before touching anything (grouped by (setup_type, day_type, origin_status)):
+// IB_BULLISH_TURBULENT was 5% real (1 of 20 rows), IB_BULLISH_TREND 24%, IB_BEARISH_BALANCE
+// 17%, IB_BULLISH_BALANCE 49% -- only IB_BEARISH_TREND (85%) and IB_BEARISH_TURBULENT (56%)
+// were already real-data-dominated. Every "non-real" row here was UNKNOWN (pre-2026-07-09,
+// unrecoverable), not BACKFILL -- IB_BULLISH/IB_BEARISH have been live since early in this
+// system's life, predating the BACKFILL-era synthetic seeding, so this is a different
+// contamination SOURCE than update_optimal_stops.mjs's main population had, but the same
+// class of problem: a stop/target computed partly from data that doesn't reflect a real,
+// live-observed touch.
+//
+// Now reuses computeStopTargetForType()/computeVolatilityDefaultRatios() from
+// update_optimal_stops.mjs (exported 2026-08-09/10 specifically so this script and
+// test_invariants.mjs don't hand-copy the decision tree a 3rd/4th time) -- called with
+// canComputeVolDefault forced to false, which makes the shared function naturally reduce to
+// "sweep on real data if realNStop>=MIN_N, otherwise return the insufficient-data sentinel"
+// -- exactly this script's own pre-existing "skip thin buckets, fall back to the blended
+// row" convention, with zero new logic needed for that branch. Deliberately NOT giving
+// day-type buckets their own volatility-scaled-default: a thin day-type bucket already has a
+// good fallback (the blended, non-day-type OPTIMAL_STOP row, which gets its own vol-default
+// from the main script if IT is real-N-thin) -- layering a second, day-type-local synthetic
+// default on top would add complexity without a clear benefit over that existing fallback.
+//
+// volScaleRatio/targetStopRatio (used only if the rare insufficient_data_no_fallback edge
+// case's caller wanted them -- it doesn't here, canComputeVolDefault is always false) are
+// still computed and passed through for interface compatibility with computeStopTargetForType,
+// pooled from the MAIN (whole-system) OPTIMAL_STOP population, not a day-type-local one --
+// more robust than deriving a ratio from just 2 setup_types' own thin buckets.
 //
 // Writes signal_type='OPTIMAL_STOP' rows keyed `{setup_type}_{day_type}` (e.g.
 // IB_BEARISH_TURBULENT), matching backtest_day_type_alpha.js's existing
@@ -29,7 +54,9 @@
 
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
-import { sweepOptimalStopAndTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
+import { DEFAULT_DPP, computeStopTargetForType, computeVolatilityDefaultRatios } from './update_optimal_stops.mjs';
+import { inferDirection } from '../server/config/setupTypes.js';
+import { makeBarIndex } from '../server/services/targetCalibrationService.js';
 
 const MIN_N = 20;
 const SETUP_TYPES = ['IB_BEARISH', 'IB_BULLISH'];
@@ -62,19 +89,20 @@ async function run() {
     };
   }
 
-  // Real resolved trades joined to day_type, same population convention as
-  // update_optimal_stops.mjs's own rawByType query (status='RESOLVED' AND
-  // replay_resolution IN ('TARGET_HIT','STOP_HIT')), plus the DAY_TYPE_ALPHA
-  // convention of requiring a real (non-null) day_type.
+  // Real (origin_status-filtered), day-type-joined trades -- the actual fix. Matches
+  // update_optimal_stops.mjs's own rawResReal WHERE clause exactly, plus the day-type join.
   const tradesRes = await query(`
-    SELECT a.setup_type, d.day_type, a.mae_points::float, a.mfe_points::float, a.actual_pnl::float
+    SELECT a.setup_type, d.day_type, a.mae_points::float, a.mfe_points::float, a.actual_pnl::float,
+      a.fired_at, a.entry_zone_low::float, a.entry_zone_high::float
     FROM active_setups a
     JOIN acd_daily_log d ON d.trade_date = a.trade_date
     WHERE a.setup_type = ANY($1)
       AND a.mae_points IS NOT NULL AND a.mfe_points IS NOT NULL AND a.actual_pnl IS NOT NULL
       AND a.mae_points <= 300 AND a.mfe_points <= 300
       AND a.status = 'RESOLVED' AND a.replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
+      AND a.origin_status IN ('ACTIVE', 'SHADOW')
       AND d.day_type IS NOT NULL
+    ORDER BY a.fired_at ASC
   `, [SETUP_TYPES]);
 
   const byCell = {};
@@ -82,60 +110,64 @@ async function run() {
     const key = `${t.setup_type}_${t.day_type}`;
     (byCell[key] ??= []).push(t);
   }
+  console.log(`Found ${Object.keys(byCell).length} (setup_type, day_type) cells with real (origin_status-filtered) data.`);
 
-  console.log(`Found ${Object.keys(byCell).length} (setup_type, day_type) cells with any data.`);
+  // Bars for the chronological sweep + noise-floor guard -- same as update_optimal_stops.mjs.
+  console.log('Loading NQ bars for the chronological sweep...');
+  const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+  const firstIndexAfter = makeBarIndex(allBars);
 
-  // Percentiles via SQL PERCENTILE_CONT, grouped by (setup_type, day_type) — matches
-  // update_optimal_stops.mjs's own statsRes query exactly (linear interpolation, NOT
-  // the discrete nearest-rank method a manual sort+Math.floor(p*N) index would give).
-  // Caught on DeepSeek review 2026-08-03: the two methods are not equivalent and can
-  // select a different candidate at sparse distribution boundaries, changing which
-  // stop survives the thin-tail gate.
-  const pctRes = await query(`
-    SELECT a.setup_type || '_' || d.day_type as signal_name,
-      ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p25_mae,
-      ROUND(PERCENTILE_CONT(0.40) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p40_mae,
-      ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p50_mae,
-      ROUND(PERCENTILE_CONT(0.60) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p60_mae,
-      ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.mae_points)::numeric, 1) AS p75_mae,
-      ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY a.mfe_points)::numeric, 1) AS p75_mfe
-    FROM active_setups a
-    JOIN acd_daily_log d ON d.trade_date = a.trade_date
-    WHERE a.setup_type = ANY($1)
-      AND a.mae_points IS NOT NULL AND a.mfe_points IS NOT NULL AND a.actual_pnl IS NOT NULL
-      AND a.mae_points <= 300 AND a.mfe_points <= 300
-      AND a.status = 'RESOLVED' AND a.replay_resolution IN ('TARGET_HIT', 'STOP_HIT')
-      AND d.day_type IS NOT NULL
-    GROUP BY a.setup_type, d.day_type
-  `, [SETUP_TYPES]);
-  const pctByCell = Object.fromEntries(pctRes.rows.map(r => [r.signal_name, r]));
+  const medianBarRangeRes = await query(`
+    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (high - low)) as median_range
+    FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '30 days'
+  `);
+  const medianBarRange = +medianBarRangeRes.rows[0].median_range;
+  const NOISE_FLOOR_PT = 1.5 * medianBarRange;
 
-  let upserted = 0, todayRow;
+  // volScaleRatio/targetStopRatio computed for interface compatibility only -- see the
+  // header comment on why day-type buckets never actually use the volatility-default path
+  // (canComputeVolDefault is forced false below). Pooled from the MAIN, whole-system
+  // OPTIMAL_STOP population (not a day-type-local one).
+  const priorRes = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target
+    FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP'
+    ORDER BY signal_name, run_date DESC
+  `);
+  const priorStoredByType = Object.fromEntries(priorRes.rows.map(r => [r.signal_name, { stop: parseFloat(r.optimal_stop), target: parseFloat(r.optimal_target) }]));
+  const realNCountRes = await query(`
+    SELECT setup_type, COUNT(*) as n FROM active_setups
+    WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
+      AND mae_points <= 300 AND mfe_points <= 300
+      AND resolution IN ('TARGET_HIT', 'STOP_HIT', 'TIME_EXPIRED')
+      AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
+      AND origin_status IN ('ACTIVE', 'SHADOW')
+    GROUP BY setup_type
+  `);
+  const realNByType = Object.fromEntries(realNCountRes.rows.map(r => [r.setup_type, +r.n]));
+  const { volScaleRatio, targetStopRatio } = computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN: MIN_N });
+
+  let upserted = 0, skipped = 0, todayRow;
   for (const [signalName, trades] of Object.entries(byCell)) {
-    if (trades.length < MIN_N) {
-      console.log(`  SKIP ${signalName}: N=${trades.length} < MIN_N=${MIN_N} — falls back to blended OPTIMAL_STOP row live`);
-      continue;
-    }
     const setupType = signalName.replace(/_(BALANCE|TREND|TURBULENT)$/, '');
     const { stopDpp, targetDpp } = dppByType[setupType] || { stopDpp: DEFAULT_DPP, targetDpp: DEFAULT_DPP };
+    const direction = inferDirection(setupType);
 
-    const pcts = pctByCell[signalName];
-    const maeCandidates = [
-      { value: pcts.p25_mae, pct: 0.25 }, { value: pcts.p40_mae, pct: 0.40 },
-      { value: pcts.p50_mae, pct: 0.50 }, { value: pcts.p60_mae, pct: 0.60 },
-      { value: pcts.p75_mae, pct: 0.75 },
-    ].map(c => ({ ...c, value: parseFloat(c.value) })).filter(c => !isNaN(c.value) && c.value > 0);
-    const p75mfe = Math.round(parseFloat(pcts.p75_mfe) || 35);
+    const decision = computeStopTargetForType({
+      realTradesStop: trades, direction, allBars, firstIndexAfter, stopDpp, targetDpp,
+      noiseFloorPt: NOISE_FLOOR_PT, volScaleRatio, targetStopRatio, medianBarRange,
+      canComputeVolDefault: false, // day-type buckets fall back to the blended row when thin, not a synthetic default -- see header comment
+    });
 
-    const swept = sweepOptimalStopAndTarget(trades, maeCandidates, p75mfe, stopDpp, targetDpp);
-    if (!swept) {
-      console.log(`  SKIP ${signalName}: N=${trades.length} but no candidate cleared the thin-tail gate`);
+    if (decision.targetMethod === 'insufficient_data_no_fallback') {
+      console.log(`  SKIP ${signalName}: real N=${trades.length} < MIN_N=${MIN_N} — falls back to blended OPTIMAL_STOP row live`);
+      skipped++;
       continue;
     }
 
     const wr = trades.filter(t => t.actual_pnl > 0).length / trades.length;
     const notes = JSON.stringify({
-      method: 'day-type-conditioned EV-sweep', setup_type: setupType,
+      method: `day-type-conditioned ${decision.targetMethod}`, setup_type: setupType,
       real_n: trades.length,
     });
 
@@ -149,12 +181,12 @@ async function run() {
         SET sample_size = EXCLUDED.sample_size, win_rate = EXCLUDED.win_rate,
             ev_per_trade = EXCLUDED.ev_per_trade, optimal_stop = EXCLUDED.optimal_stop,
             optimal_target = EXCLUDED.optimal_target, notes = EXCLUDED.notes
-    `, [todayRow, signalName, trades.length, +(wr * 100).toFixed(1), +swept.ev.toFixed(2), swept.stop, swept.target, notes]);
-    console.log(`  WROTE ${signalName}: N=${trades.length} stop=${swept.stop} target=${swept.target} ev=$${swept.ev.toFixed(2)} (blended EV was different — see OPTIMAL_STOP row for ${setupType})`);
+    `, [todayRow, signalName, trades.length, +(wr * 100).toFixed(1), decision.optEV != null ? +decision.optEV.toFixed(2) : null, decision.optStop, decision.optTarget, notes]);
+    console.log(`  WROTE ${signalName}: real N=${trades.length} stop=${decision.optStop} target=${decision.optTarget} ev=$${decision.optEV != null ? decision.optEV.toFixed(2) : 'n/a'} method=${decision.targetMethod}`);
     upserted++;
   }
 
-  console.log(`\nDone. ${upserted} day-type-conditioned OPTIMAL_STOP row(s) upserted.`);
+  console.log(`\nDone. ${upserted} day-type-conditioned OPTIMAL_STOP row(s) upserted, ${skipped} skipped (real N below floor, falls back to blended row).`);
   process.exit(0);
 }
 

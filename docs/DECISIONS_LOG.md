@@ -501,3 +501,30 @@ uncertainty (6 of 7 flagged live-calibration mismatches turned out to be timing 
 disconnected pipeline) but didn't resolve the two big open questions (does RTH calibration beat a
 flat baseline on genuinely held-out data; is $200 DLL actually better than $400/$600). Trade
 manually, conservatively, until `rth_calibration_genuine_holdout_test` comes back.
+
+## 2026-08-10: IB day-type OPTIMAL_STOP origin_status fix (backtest_ib_daytype_stop_target.mjs)
+
+Third instance of the origin_status-contamination class fixed this week (after `update_optimal_stops.mjs`'s main stop-side and the 2026-08-09 re-baseline) — this one specific to `IB_BULLISH`/`IB_BEARISH`'s per-day-type `{setup_type}_{day_type}` sub-key rows (`IB_BEARISH_TURBULENT` etc.), user-flagged as "probably first" priority since IB_BULLISH is most of this system's live surface.
+
+**Composition audit before touching anything**: real-N (`origin_status IN ('ACTIVE','SHADOW')`) share ranged 5%–85% across the 6 (setup_type, day_type) cells — none of the non-real rows were `BACKFILL` (only `UNKNOWN`, since IB has been live since before the `BACKFILL`-era synthetic seeding), a different contamination *source* than the main population had, same *class* of problem.
+
+**Fix**: both trade-fetching queries got `origin_status IN ('ACTIVE','SHADOW')`; the manual `sweepOptimalStopAndTarget()` call was replaced with the shared `computeStopTargetForType()` (already exported from `update_optimal_stops.mjs` for exactly this kind of reuse), called with `canComputeVolDefault: false` — day-type buckets deliberately never get a synthetic volatility-scaled default, they fall back to the blended (whole-system) `OPTIMAL_STOP` row when thin, matching the script's own pre-existing skip convention. `computeVolatilityDefaultRatios()` was extracted from `update_optimal_stops.mjs` as a new export — this was its 3rd hand-copy (main script, `test_invariants.mjs` check [5], about to become a 3rd copy here) before being centralized, caught before a 4th.
+
+**Result of the real run**: 3 of 6 cells cleared `MIN_N=20` real touches —
+- `IB_BEARISH_TREND`: real_n=84, stop=45/target=50, EV=+$18.91 (chronological-sweep-real)
+- `IB_BEARISH_TURBULENT`: real_n=37, stop=24/target=30, EV=+$3.04
+- `IB_BULLISH_BALANCE`: real_n=49, stop=40/target=10, EV=-$3.79
+
+3 skipped for real_n below floor (`IB_BEARISH_BALANCE` real_n=11, `IB_BULLISH_TREND` real_n=10, `IB_BULLISH_TURBULENT` real_n=1) — these now fall back live to the **blended** IB_BULLISH/IB_BEARISH row from the 2026-08-09 re-baseline instead of their old stale day-type-specific values:
+- `IB_BULLISH` blended: stop=50/target=35, EV=+$8.62 (was serving `IB_BULLISH_TREND`'s old stop=30/target=50 before this fix — a real, live-risk-relevant change: **tomorrow's IB_BULLISH TREND-day fire uses a wider stop and tighter target than it did yesterday**, because the thin day-type cell it was reading from turned out to be 76% unverifiable data)
+- `IB_BEARISH` blended: stop=51/target=50, EV=+$15.40
+
+**Hand-reviewed both large movers before trusting them** (per the session's established discipline): `IB_BULLISH_BALANCE`'s target dropping 50→10 and `IB_BEARISH_TURBULENT`'s dropping 60→30 both checked out against the real MAE/MFE distributions — in both cases real MAE p50 sits almost identical to real MFE p50 (heavy whipsaw: price often gives back a favorable move before a wide target is reached), so the chronological (order-aware) sweep correctly picks a tighter EV-optimal target than a naive percentile match would. EV moved in the same direction (less negative / more positive) in both cases, no sign flips — consistent with a real methodology improvement, not a bug.
+
+**test_invariants.mjs check [5] extended** to verify day-type sub-keys with real data against this same shared function, instead of unconditionally skipping all of them (the necessary prior state, since before today there was no shared methodology to re-derive against). Added a real, `origin_status`+`day_type`-joined population query; gated the day-type branch on "has any real touches" rather than the blended `MIN_N` gate the non-day-type branch still uses; forced `canComputeVolDefault: false` for day-type rows in the check too (otherwise the two thin-but-nonzero cells — `IB_BEARISH_BALANCE` real_n=11, `IB_BULLISH_TREND` real_n=10 — would get a spurious vol-default mismatch against their correctly-stale, unwritten-today stored rows).
+
+**Verified**: same 5 pre-existing `FAIL`s before/after (all unrelated `BREAKEVEN_TRAIL_TEST` gaps, `docs/OPEN_THREADS.md`'s known 2026-08-04 finding), check [5] now shows "all 5 OPTIMAL_STOP rows match" (up from 0 immediately post-re-baseline), lint/build clean on all 3 touched files. Resolved `OPEN_DECISION day_type_alpha_stop_needs_origin_status_filter`.
+
+**Not done, deliberately out of scope**: `ib_bullish_daytype_alpha_stale_realn_floor_fix` (HIGH, still open) is a *different* pipeline — `backtest_day_type_alpha.js`'s `DAY_TYPE_ALPHA` signal_type, not this script's `OPTIMAL_STOP` day-type sub-keys — don't conflate the two when triaging the open queue.
+
+**Next per the user's own explicit sequencing** ([[project-risk-management-priority-20260729]]): the uncensored MAE candidate grid from bar history — "the one that breaks the self-referential loop... the last structural defect in the measurement layer."

@@ -421,6 +421,42 @@ export function realP75Mfe(trades) {
   return percentileOf(mfes, 0.75);
 }
 
+// Volatility-scaled-default ratios (2026-08-05, exported 2026-08-10). Extracted here after
+// being hand-copied THREE times in 6 days (this file's own main(), test_invariants.mjs check
+// [5], and backtest_ib_daytype_stop_target.mjs's origin_status fix) -- the exact "share
+// modules" violation CLAUDE.md's own history repeatedly documents and fixes elsewhere;
+// catching it on attempt #3 instead of letting a 4th copy happen. Derived FRESH each call
+// from whichever setup_types currently clear the real-N floor and have a prior stored
+// calibration -- not a hardcoded multiplier. Deliberately circular in a SAFE way (using
+// well-calibrated types' own real ratio to scale a default for poorly-calibrated ones), not
+// the self-referential CENSORING loop documented in
+// optimal_stop_candidate_grid_self_censoring_feedback_loop -- that defect is a single type's
+// OWN thin/censored MAE feeding its OWN candidate grid; this instead pools ACROSS every type
+// that already has enough real data to trust, so no single thin type can feed back into its
+// own default.
+//
+// priorStoredByType: { [signalName]: { stop, target, ... } } -- latest stored OPTIMAL_STOP
+// per signal_name (any population; callers with a day-type-scoped population should still
+// pass the MAIN, whole-system priorStoredByType here, not a day-type-local one -- pooling
+// across the full system gives a more robust ratio than deriving one from 2 setup_types'
+// own thin day-type buckets).
+// realNByType: { [signalName]: number } -- real (origin_status-filtered) trade count per
+// signal_name, same population shape as priorStoredByType's keys.
+export function computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN = MIN_N }) {
+  const median = (arr) => { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; };
+  const qualifyingRatios = [];
+  for (const [type, stored] of Object.entries(priorStoredByType)) {
+    const n = realNByType[type] || 0;
+    if (n >= minN && stored.stop != null && stored.stop > 0 && stored.target != null) {
+      qualifyingRatios.push({ stopToBarRange: stored.stop / medianBarRange, targetToStop: stored.target / stored.stop });
+    }
+  }
+  const volScaleRatio = median(qualifyingRatios.map(r => r.stopToBarRange));
+  const targetStopRatio = median(qualifyingRatios.map(r => r.targetToStop));
+  const canComputeVolDefault = volScaleRatio != null && targetStopRatio != null && medianBarRange > 0;
+  return { volScaleRatio, targetStopRatio, canComputeVolDefault, qualifyingCount: qualifyingRatios.length };
+}
+
 // Full stop+target decision tree for ONE setup_type, given its real (origin_status-filtered)
 // trades and the run-wide volatility-default parameters. Extracted 2026-08-09 (same session
 // as the re-baseline that needed it) so test_invariants.mjs check [5] can call this EXACT
@@ -740,26 +776,11 @@ async function main() {
   // against the final chosen stop after the fact.
   const NOISE_FLOOR_PT = 1.5 * medianBarRange;
 
-  // Ratios derived FRESH each run from whichever setup_types currently clear the real-N
-  // floor and have a prior stored calibration -- not a hardcoded multiplier. This is
-  // deliberately circular in a SAFE way (using well-calibrated types' own real ratio to
-  // scale a default for poorly-calibrated ones), not the self-referential CENSORING loop
-  // documented in optimal_stop_candidate_grid_self_censoring_feedback_loop -- that defect is
-  // a single type's OWN thin/censored MAE feeding its OWN candidate grid; this instead pools
-  // ACROSS every type that already has enough real data to trust, so no single thin type can
-  // feed back into its own default.
-  const qualifyingRatios = [];
-  for (const [type, stored] of Object.entries(priorStoredByType)) {
-    const n = realNByType[type] || 0;
-    if (n >= MIN_N && stored.stop != null && stored.stop > 0 && stored.target != null) {
-      qualifyingRatios.push({ stopToBarRange: stored.stop / medianBarRange, targetToStop: stored.target / stored.stop });
-    }
-  }
-  function median(arr) { const s = [...arr].sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null; }
-  const volScaleRatio = median(qualifyingRatios.map(r => r.stopToBarRange));
-  const targetStopRatio = median(qualifyingRatios.map(r => r.targetToStop));
-  console.log(`Volatility-scaled default: ${qualifyingRatios.length} real-N-qualified types (n>=${MIN_N}) inform the ratio -- stop=${volScaleRatio?.toFixed(2)}x median bar range (${medianBarRange.toFixed(1)}pt), target=${targetStopRatio?.toFixed(2)}x stop.`);
-  const canComputeVolDefault = volScaleRatio != null && targetStopRatio != null && medianBarRange > 0;
+  // See computeVolatilityDefaultRatios()'s own header comment above for the full reasoning
+  // -- extracted 2026-08-10 after being hand-copied 3 times in 6 days.
+  const { volScaleRatio, targetStopRatio, canComputeVolDefault, qualifyingCount } =
+    computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange, minN: MIN_N });
+  console.log(`Volatility-scaled default: ${qualifyingCount} real-N-qualified types (n>=${MIN_N}) inform the ratio -- stop=${volScaleRatio?.toFixed(2)}x median bar range (${medianBarRange.toFixed(1)}pt), target=${targetStopRatio?.toFixed(2)}x stop.`);
 
   let upserted = 0, correctedCount = 0, volDefaultCount = 0;
   for (const r of rows) {
