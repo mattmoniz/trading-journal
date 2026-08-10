@@ -194,7 +194,7 @@ async function run() {
   }
 
   // Build result rows
-  const today = new Date().toISOString().slice(0, 10);
+  const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   const rows = [];
 
   for (const dt of [...DAY_TYPES, 'ALL']) {

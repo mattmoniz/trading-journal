@@ -88,7 +88,7 @@ const downPct = downN >= MIN_N ? Math.round(1000 * downFilled / downN) / 10 : nu
 console.log(`Gap UP:   N=${upN}   fill=${upPct}%`);
 console.log(`Gap DOWN: N=${downN}  fill=${downPct}%`);
 
-const today = new Date().toISOString().slice(0, 10);
+const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
 
 await query(`DELETE FROM performance_audit WHERE signal_type='SESSION_BIAS' AND signal_name IN ('SB_GAP_UP_FILL','SB_GAP_DOWN_FILL')`);
 

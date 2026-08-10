@@ -38,6 +38,7 @@
 import { query } from '../server/db.js';
 import pool from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { CONDITIONAL_VARIANTS } from '../server/config/setupTypes.js';
 
 const SIGNAL_TYPE = 'SETUP_STATUS';
 
@@ -216,8 +217,23 @@ async function run() {
   const results = [];
   let suppressed = 0, promoted = 0, unchanged = 0;
 
+  let skippedConditional = 0;
   for (const r of allTimeQ.rows) {
     const type   = r.setup_type;
+
+    // conditional_variant_setup_status_daily_overwrite_race (OPEN_DECISION): this generic
+    // blind GROUP-BY-setup_type scan can't replicate a real entry-condition filter a
+    // dedicated CONDITIONAL_VARIANTS script uses (e.g. WPP_FADE_SHORT_GAP_UP's
+    // open_below_wpp) — writing a SETUP_STATUS row here for such a type would silently
+    // overwrite the dedicated script's correct, differently-populated row with a wrong one
+    // computed from the unfiltered population. Skip entirely; see setupTypes.js's
+    // skipGenericSetupStatus comment for the full incident and why _TRAIL variants are NOT
+    // skipped here (they have no competing SETUP_STATUS writer).
+    if (CONDITIONAL_VARIANTS[type]?.skipGenericSetupStatus) {
+      skippedConditional++;
+      continue;
+    }
+
     const n      = +r.n;
     const realN  = +r.real_n;
     const wr     = +r.wr;
@@ -303,7 +319,7 @@ async function run() {
     results.push({ type, n, realN, wr, ev, realEv, totalPnl: +r.total_pnl, recommendation, rec90 });
   }
 
-  console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged`);
+  console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged, ${skippedConditional} skipped (owned by a dedicated CONDITIONAL_VARIANTS script)`);
 
   // Write to performance_audit — always write every evaluated type so the session-start
   // coverage check can verify all active setup_types have been assessed this week.

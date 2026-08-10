@@ -84,7 +84,7 @@ const shortPct = shortN >= MIN_N ? Math.round(1000 * shortExtend / shortN) / 10 
 console.log(`Morning high pulled back (LONG re-entry): N=${longN}  re-extend=${longPct}%`);
 console.log(`Morning low bounced (SHORT re-entry):      N=${shortN}  re-extend=${shortPct}%`);
 
-const today = new Date().toISOString().slice(0, 10);
+const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
 
 await query(`DELETE FROM performance_audit WHERE signal_type='SESSION_BIAS' AND signal_name IN ('SB_V_PATTERN_LONG','SB_V_PATTERN_SHORT')`);
 

@@ -128,7 +128,7 @@ async function run() {
   console.log(`  ${derived.length} rows above MIN_FIRES=${MIN_FIRES}`);
 
   // 5. Write to performance_audit
-  const runDate = new Date().toISOString().slice(0, 10);
+  const runDate = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   await query(`DELETE FROM performance_audit WHERE signal_type='SETUP_ANTICIPATION' AND run_date=$1 AND window_days=0`, [runDate]);
 
   let rowsWritten = 0;

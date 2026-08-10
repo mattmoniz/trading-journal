@@ -300,7 +300,7 @@ for (const r of afmGroups) {
 // ── Write curated SESSION_BIAS rows to performance_audit ─────────────────────
 // Each row: signal_name, recommendation (LONG/SHORT/CONTINUE), win_rate, sample_size, notes JSON
 
-const today = new Date().toISOString().slice(0, 10);
+const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
 
 // Helper: compute stats for a filtered subset using the enriched data + the stat() function
 function subsetStat(filterFn) {

@@ -109,7 +109,7 @@ async function run() {
     }
   }
 
-  const today  = new Date().toISOString().slice(0, 10);
+  const today  = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   const counts = { SIZE_UP_STRONG: 0, SIZE_UP: 0, SIZE_DOWN: 0, SUPPRESS: 0, NEUTRAL: 0 };
   let written = 0, tooLong = 0;
 

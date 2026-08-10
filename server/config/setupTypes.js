@@ -153,6 +153,21 @@ export const CONDITIONAL_VARIANTS = {
     backtestScript: 'scripts/backtest_wpp_short_gap.mjs',
     addedDate: '2026-07-09',
     monitorAtN: 50,
+    // conditional_variant_setup_status_daily_overwrite_race (OPEN_DECISION, found 2026-08-03):
+    // backtest_wpp_short_gap.mjs's own population is filtered by `open_below_wpp` — a real
+    // ENTRY condition the generic backtest_setup_status.mjs (a blind `GROUP BY setup_type`
+    // scan) can't replicate. That script is weekly-only, but the generic script runs daily
+    // and writes the SAME signal_type='SETUP_STATUS' row for this exact signal_name off its
+    // own (wrong, unfiltered) population — confirmed live 2026-08-10: correctly ACTIVE/N=30
+    // from Sunday's dedicated run, silently overwritten to THIN_N/N=1 by Monday morning's
+    // generic run, every single weekday. This flag tells backtest_setup_status.mjs to skip
+    // writing SETUP_STATUS for this signal_name entirely, leaving it fully to the dedicated
+    // script — a several-days-stale CORRECT row (still within the 8-day freshness window the
+    // session-start coverage check uses) beats a fresh WRONG one every time. Do NOT set this
+    // on the _TRAIL variants below — their dedicated script (backtest_breakeven_trail.mjs)
+    // writes to signal_type='BREAKEVEN_TRAIL_TEST', not SETUP_STATUS, so there's no competing
+    // writer and the generic script's own SETUP_STATUS evaluation for them is correct/needed.
+    skipGenericSetupStatus: true,
   },
   // Not entry-conditional like the variant above — every FLOOR_R1_FADE_SHORT touch is
   // unconditionally diverted here, because the thing that differs is the EXIT mechanism

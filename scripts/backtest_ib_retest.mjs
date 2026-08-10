@@ -91,7 +91,7 @@ const lowPct  = lowN  >= MIN_N ? Math.round(1000 * lowRetrace  / lowN)  / 10 : n
 console.log(`IB HIGH re-test: N=${highN}  retrace=${highPct}%`);
 console.log(`IB LOW  re-test: N=${lowN}   retrace=${lowPct}%`);
 
-const today = new Date().toISOString().slice(0, 10);
+const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
 
 await query(`DELETE FROM performance_audit WHERE signal_type='SESSION_BIAS' AND signal_name IN ('SB_IB_HIGH_RETEST','SB_IB_LOW_RETEST')`);
 

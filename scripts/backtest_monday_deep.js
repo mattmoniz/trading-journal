@@ -1412,7 +1412,7 @@ async function run() {
   // Persist level-by-level Monday stats to performance_audit
   // signal_type='MON_BACKTEST' so the Monday overrides in acd.js have a queryable source
   console.log('Writing Monday results to performance_audit...');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = (await query(`SELECT CURRENT_DATE::text as today`)).rows[0].today;
   for (const [level, stats] of levelMonday.entries()) {
     if (stats.monN < 5) continue;
     await query(`

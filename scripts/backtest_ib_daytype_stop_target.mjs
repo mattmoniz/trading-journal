@@ -160,7 +160,23 @@ async function run() {
     });
 
     if (decision.targetMethod === 'insufficient_data_no_fallback') {
-      console.log(`  SKIP ${signalName}: real N=${trades.length} < MIN_N=${MIN_N} — falls back to blended OPTIMAL_STOP row live`);
+      // Found 2026-08-10 (auditing ib_bullish_trend_stop_thin_real_n_third_unfiltered_pipeline
+      // after day_type_alpha_stop_needs_origin_status_filter was fixed): a plain `continue`
+      // here left any PRE-FIX row for this exact signal_name sitting in the table forever --
+      // acd.js's ibOpt lookup does `DISTINCT ON (signal_name) ORDER BY run_date DESC` (never
+      // scoped to "written by this script's current methodology"), so a stale row from before
+      // this script was origin_status-filtered was silently still being read as if current.
+      // Confirmed live: IB_BULLISH_TREND had a 2026-08-09 (pre-fix) row of stop=30/target=50
+      // built from unfiltered N=42 (76% UNKNOWN-origin) -- the "falls back to blended" claim
+      // below was false for it, and IB_BULLISH's only currently-live-firing day-type path was
+      // sizing real risk off a superseded, contaminated number. Deleting every row for this
+      // exact signal_name (not just the latest) is what actually makes it ABSENT, which is
+      // the only way acd.js's `||` fallback to the blended row genuinely engages -- matches
+      // this codebase's own "explicitly delete rows a stricter re-run no longer produces,
+      // don't assume ON CONFLICT keeps the table consistent" convention.
+      const delRes = await query(`DELETE FROM performance_audit WHERE signal_type='OPTIMAL_STOP' AND signal_name=$1`, [signalName]);
+      if (delRes.rowCount > 0) console.log(`  SKIP ${signalName}: real N=${trades.length} < MIN_N=${MIN_N} — deleted ${delRes.rowCount} stale pre-fix row(s), now genuinely falls back to blended OPTIMAL_STOP row live`);
+      else console.log(`  SKIP ${signalName}: real N=${trades.length} < MIN_N=${MIN_N} — falls back to blended OPTIMAL_STOP row live`);
       skipped++;
       continue;
     }
