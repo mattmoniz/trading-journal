@@ -7220,8 +7220,21 @@ export default function createACDRouter(io) {
       // Priority selection: candidates array is ordered by priority.
       // Take the first valid candidate, but check for directional conflicts
       // against already-active setups and apply post-loss size reduction.
+      //
+      // selected_over (2026-08-10, roadmap item "instrument the one-alert-per-poll selection
+      // mechanism"): this is the one place in the codebase where multiple independently-
+      // qualifying candidates compete for a SINGLE alert slot and the loser(s) get zero trace
+      // -- unlike shadowCandidates below (every qualifier persists as SHADOW) or
+      // detectGlobexSetup()'s own candidates loop (every qualifier gets its own row regardless
+      // of ACTIVE/SHADOW status), a candidate here that also passed its own risk check but sat
+      // behind a higher-priority one in this fixed array order simply vanishes -- no row, no
+      // log line, no way to ever ask "how often does IB_BULLISH lose to a level-fade touch
+      // purely because of array order, not because it was actually worse that moment." Track
+      // every OTHER candidate that also cleared riskOk this poll (not just the winner) so it
+      // can be persisted alongside the winning row and made queryable.
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       let active = null;
+      const qualifyingThisPoll = [];
       for (const cand of candidates) {
         if (!cand) continue;
         const isLongCand = cand.direction === 'LONG';
@@ -7230,8 +7243,12 @@ export default function createACDRouter(io) {
           console.error(`[setup-detection] REJECTED ${cand.type} — non-positive risk: stop ${cand.stop} vs entry ${cand.entry} (${cand.direction})`);
           continue;
         }
-        active = cand;
-        break;
+        qualifyingThisPoll.push(cand);
+        if (!active) active = cand;
+      }
+      if (active) {
+        const selectedOver = qualifyingThisPoll.filter(c => c !== active).map(c => c.type);
+        active.selectedOver = selectedOver.length ? selectedOver : null;
       }
 
       if (active) {
@@ -7962,10 +7979,10 @@ export default function createACDRouter(io) {
             nl30_at_detection, structural_state_at_detection,
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
-            exhaustion_signal_at_detection, hivol_lopace_at_detection,
+            exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
             ${REGIME_STAMP_COLS.join(', ')}
-          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,
-            ${REGIME_STAMP_COLS.map((_, i) => `$${25 + i}`).join(', ')})
+          ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
+            ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -7981,6 +7998,7 @@ export default function createACDRouter(io) {
           active.confluenceLevels && active.confluenceLevels.length ? active.confluenceLevels : null,
           active.exhaustionSignalAtDetection ?? null,
           active.hivolLopaceAtDetection ?? null,
+          active.selectedOver ?? null,
           ...regimeStampValues(regimeStamp),
         ]);
         let row = ins.rows[0];

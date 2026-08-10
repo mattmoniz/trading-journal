@@ -370,7 +370,8 @@ CREATE TABLE public.active_setups (
     va_width_pctile_60d numeric,
     va_overlap_streak integer,
     ib_range_pctile_60d numeric,
-    fired_status character varying(10)
+    fired_status character varying(10),
+    selected_over text[]
 );
 
 
@@ -2624,6 +2625,117 @@ CREATE TABLE public.optimal_stop_circuit_breaker_backup_20260804 (
 --
 
 CREATE TABLE public.optimal_stop_noise_floor_revert_backup_20260805 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
+
+
+--
+-- Name: optimal_stop_noise_floor_revert_backup_20260809; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.optimal_stop_noise_floor_revert_backup_20260809 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
+
+
+--
+-- Name: optimal_stop_rebaseline_after_backup_20260809; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.optimal_stop_rebaseline_after_backup_20260809 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
+
+
+--
+-- Name: optimal_stop_rebaseline_backup_20260809; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.optimal_stop_rebaseline_backup_20260809 (
     id integer,
     run_date date,
     window_days integer,
@@ -4938,6 +5050,43 @@ CREATE SEQUENCE public.setup_outcome_backtest_id_seq
 --
 
 ALTER SEQUENCE public.setup_outcome_backtest_id_seq OWNED BY public.setup_outcome_backtest.id;
+
+
+--
+-- Name: setup_status_manual_override_backup_20260809; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.setup_status_manual_override_backup_20260809 (
+    id integer,
+    run_date date,
+    window_days integer,
+    signal_type character varying(30),
+    signal_name character varying(60),
+    sample_size integer,
+    win_rate numeric,
+    ev_per_trade numeric,
+    total_pnl numeric,
+    avg_mfe numeric,
+    p50_mfe numeric,
+    p75_mfe numeric,
+    avg_mae numeric,
+    p50_mae numeric,
+    p75_mae numeric,
+    p90_mae numeric,
+    avg_duration_min numeric,
+    current_stop numeric,
+    current_target numeric,
+    optimal_stop numeric,
+    optimal_target numeric,
+    optimal_ev numeric,
+    stop_blowthrough_pct numeric,
+    t1_overshoot_avg numeric,
+    mfe_range_pct numeric,
+    mae_range_pct numeric,
+    recommendation character varying(20),
+    notes text,
+    created_at timestamp without time zone
+);
 
 
 --
