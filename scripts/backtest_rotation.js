@@ -3,6 +3,18 @@ import { query } from '../server/db.js';
 import * as ss from 'simple-statistics';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
+// KNOWN LIMITATION (flagged 2026-08-10, roadmap Phase 0 order-blind sweep): the EV
+// simulation below (createTouch()'s mae/mfe, joint EV check at line ~175/248) is order-blind
+// -- checks mae > stop / mfe >= target against pre-aggregated scalars with no notion of
+// which happened first, the same defect class fixed elsewhere (see
+// scripts/backtest_rth_calibration_genuine_holdout.mjs / precomputeCrossovers() in
+// update_optimal_stops.mjs). NOT rewritten here: this script is a one-off, unscheduled
+// research artifact (not cron'd, doesn't write to performance_audit) whose conclusion was
+// already negative ("no tradeable Floor<->Camarilla rotation edge currently exists",
+// docs/OPEN_THREADS_ARCHIVE.md) -- the confound biases EV toward flattering wider stops, so
+// a corrected re-run could only make an already-negative finding harder to overturn, not
+// easier. Fix this properly (reuse precomputeCrossovers()) before ever re-running it for a
+// live decision.
 const PNL_PER_POINT = 2;
 const COMMISSION = 1;
 const WINDOW_DAYS = 1000; // all-time — level_prices currently starts 2023-11-16 (~416 trading days), this comfortably covers it and future data

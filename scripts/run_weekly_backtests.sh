@@ -117,4 +117,32 @@ echo "=== Weekly backtest run: $(date) ==="
 # is infrastructure for the months-long accumulation, see docs/OPEN_THREADS.md.
 /usr/bin/node scripts/scan_regime_combinations.mjs
 
+# --- Roadmap Phase 0 (2026-08-10): PROVISIONAL RESEARCH_CLAIM findings wired to weekly
+# cron per the roadmap's own Part 6.5 loop design ("if the finding is still open... wire its
+# source script into a recurring cron too, or it never actually recomputes itself"). Found
+# by cross-referencing scratch/research_claim_unscheduled.txt against every RESEARCH_CLAIM
+# whose latest status is PROVISIONAL (not CONFIRMED/settled, not STALE-already-tracked) --
+# 82 such claims existed, of which only these 10 both (a) point at a real script under
+# scripts/ (not a scratch/ one-off, a UI file, or a "direct query"/"synthesis" non-script
+# source) and (b) already call recordClaim() themselves, so adding them here is a pure
+# cron-wiring change with no script edits. The other ~18 candidates found by this sweep do
+# NOT call recordClaim() at all (their claim was recorded by a separate/manual step) --
+# cron-wiring those without first fixing that would just re-print console output weekly
+# with no lasting effect, so they're deliberately NOT added here; see OPEN_DECISION
+# roadmap_phase0_18_scripts_need_recordclaim_wiring.
+/usr/bin/node scripts/backtest_1yr_globex_inclusive_prop_challenge_20260720.mjs
+/usr/bin/node scripts/analyze_compression_tail_mfe.mjs
+/usr/bin/node scripts/backtest_globex_move_levels.mjs
+/usr/bin/node scripts/pilot_ib_bearish_2of3_target_1of3_trail.mjs
+/usr/bin/node scripts/analyze_intraday_ib_range_daytype.mjs
+/usr/bin/node scripts/analyze_intraday_ib_range_remainder.mjs
+# The single most decisive open test in the codebase (roadmap Phase 0's named checkpoint) --
+# does RTH OPTIMAL_STOP calibration beat a flat baseline on genuinely chronological,
+# held-out data. Corrected 2026-08-10 (order-blind confound + a DISTINCT ON (signal_name)
+# staleness bug both fixed same day) -- see RESEARCH_CLAIM rth_calibration_genuine_holdout_test.
+/usr/bin/node scripts/backtest_rth_calibration_genuine_holdout.mjs
+/usr/bin/node scripts/backtest_structural_breakout_phase0.mjs
+/usr/bin/node scripts/backtest_trend_gate_suppression.mjs
+/usr/bin/node scripts/backtest_volatility_regime_roster_wide.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

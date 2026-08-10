@@ -169,7 +169,10 @@ export const DEFAULT_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
 
 // Target sweep range (pts) — all setup types, not just IB. Always capped at p75_mfe
 // per-type below, so it can't select a target beyond what the type's own MFE data supports.
-const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150];
+// Exported 2026-08-10 so backtest_rth_calibration_genuine_holdout.mjs's corrected
+// chronological-evaluation rewrite can reuse the same grid instead of a hand-copied literal
+// (CLAUDE.md "share modules" convention).
+export const TARGET_SWEEP = [10, 15, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100, 120, 150];
 
 // Run EV sweep for targets — finds T1 that maximizes expected value given a fixed stop.
 // Simulates: if MAE > stop → -stop*stopDpp, elif MFE >= T → +T*targetDpp, else → actual_pnl
