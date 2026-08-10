@@ -67,8 +67,15 @@ async function main() {
       AND a.mae_points <= 300 AND a.mfe_points <= 300
       AND a.entry_zone_low IS NOT NULL
       AND d.day_type IS NOT NULL
+      AND a.origin_status IN ('ACTIVE', 'SHADOW')
     ORDER BY a.fired_at ASC
   `, [SETUP_TYPES]);
+  // preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10: the
+  // "real IB trades" language above and in the log line below was aspirational, not actual
+  // -- this query had no origin_status filter until now, despite IB_BULLISH/IB_BEARISH being
+  // this system's only currently fully-live-firing-eligible RTH family. Added the same
+  // filter every other IB day-type calibration path already uses (see
+  // backtest_ib_daytype_stop_target.mjs).
 
   const byCell = {};
   for (const t of tradesRes.rows) {

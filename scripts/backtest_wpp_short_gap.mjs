@@ -28,14 +28,29 @@ const pool = new pg.Pool({
   password: process.env.DB_PASSWORD || 'trader123',
 });
 
-// From performance_audit OPTIMAL_STOP for WPP_FADE_SHORT
-const STOP_DIST  = 46;   // p75_mae
-const TARGET_DIST = 39;  // p50_mfe
 const PNL_PER_PT  = 2;   // 1 MNQ = $2/pt
 
 async function main() {
   const client = await pool.connect();
   try {
+    // preflight_backtest_assertions.mjs check [2], roadmap Phase 0 sweep, 2026-08-10: this
+    // used to be a hardcoded STOP_DIST=46/TARGET_DIST=39, hand-copied from a one-time read of
+    // WPP_FADE_SHORT's OPTIMAL_STOP row on 2026-07-09 and never updated since -- CLAUDE.md's
+    // "never hand-type a WR%/N/$ literal" hard rule, the 8th confirmed instance. Confirmed
+    // live: WPP_FADE_SHORT's real current calibration (2026-08-09) is stop=32/target=37, a
+    // real ~30% drift from the frozen 46/39 this script had been feeding into every
+    // WPP_FADE_SHORT_GAP_UP OPTIMAL_STOP row it writes -- a setup that fires live. Now reads
+    // WPP_FADE_SHORT's live calibration at run time instead.
+    const baseOptRes = await client.query(`
+      SELECT optimal_stop, optimal_target FROM performance_audit
+      WHERE signal_type='OPTIMAL_STOP' AND signal_name='WPP_FADE_SHORT'
+      ORDER BY run_date DESC LIMIT 1
+    `);
+    if (!baseOptRes.rows.length) throw new Error('No OPTIMAL_STOP row found for WPP_FADE_SHORT -- cannot derive a stop/target for the gap-up variant');
+    const STOP_DIST = parseFloat(baseOptRes.rows[0].optimal_stop);
+    const TARGET_DIST = parseFloat(baseOptRes.rows[0].optimal_target);
+    console.log(`Using WPP_FADE_SHORT's live calibration: stop=${STOP_DIST}pt target=${TARGET_DIST}pt`);
+
     // 1. Get all sessions where WPP exists and RTH bars are available
     const sessions = await client.query(`
       SELECT

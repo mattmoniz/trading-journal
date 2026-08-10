@@ -82,8 +82,13 @@ async function main() {
       AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL AND t1_level IS NOT NULL
       AND mae_points IS NOT NULL AND mae_points <= 300
       AND mfe_points IS NOT NULL AND mfe_points <= 300
+      AND origin_status IN ('ACTIVE', 'SHADOW')
     ORDER BY trade_date, fired_at
   `);
+  // preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10: was
+  // unfiltered by origin_status. EXHAUSTION_SIGNAL_CALIB is informational-only (never gates
+  // sizing/suppression), so the risk here was a misleading displayed cutoff, not a live
+  // capital decision -- fixed to the same standard anyway.
   const setups = setupsRes.rows.filter(s => {
     const underlying = s.setup_type.replace('_FADE_LONG', '').replace('_FADE_SHORT', '');
     return validLevels.has(underlying);

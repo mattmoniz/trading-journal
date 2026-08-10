@@ -114,8 +114,11 @@ async function run() {
       AND s.resolution IN ('TARGET_HIT','STOP_HIT')
       AND s.fired_at IS NOT NULL
       AND s.actual_pnl IS NOT NULL
+      AND s.origin_status IN ('ACTIVE', 'SHADOW')
     ORDER BY s.trade_date, s.fired_at
   `);
+  // preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10: was
+  // unfiltered by origin_status -- PULSE_SCORE_AUDIT feeds the live Pulse Score display.
 
   const setups = setupsQ.rows;
   console.log(`[backtest_pulse_score] ${setups.length} setups loaded`);

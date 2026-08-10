@@ -45,8 +45,17 @@ async function main() {
     FROM active_setups
     WHERE status IN ('RESOLVED', 'EXPIRED') AND mae_points IS NOT NULL AND mfe_points IS NOT NULL
       AND mae_points <= 300 AND mfe_points <= 300 AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL
+      AND origin_status IN ('ACTIVE', 'SHADOW')
     ORDER BY fired_at ASC
   `);
+  // preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10: this
+  // population was previously unfiltered by origin_status (84.5% BACKFILL system-wide,
+  // confirmed via direct query) -- both the trail-candidate pullback distribution AND the
+  // EV baseline it's scored against came from mostly-synthetic data. Now real-only, matching
+  // every other calibration pipeline in this codebase. Practical impact today: none of the
+  // 6 live-wired _TRAIL variants currently read a fresh row from this script anyway (see
+  // breakeven_trail_4_more_variants_lost_calibration_row resolution, 2026-08-10) -- this is
+  // a correctness fix for future runs, not a change to anything currently live-consumed.
   const allTrades = tradesRes.rows;
 
   const byType = {};

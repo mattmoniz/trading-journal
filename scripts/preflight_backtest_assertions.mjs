@@ -54,11 +54,20 @@ function checkBaselineResimulated(src) {
 }
 
 // Assertion 3: explicit ORDER BY wherever chronological order matters (fired_at/ts referenced).
+// 2026-08-10 (roadmap Phase 0 full-corpus sweep, first time this check ran against cron'd
+// scripts): the original regex only matched ORDER BY on the literal column name (fired_at/ts)
+// -- 5 real false positives found (backtest_gap_fill.mjs, backtest_ib_retest.mjs,
+// backtest_permission_slips.mjs, backtest_v_pattern.mjs, mine_session_bias.mjs), each already
+// correctly ordering via a derived alias (ORDER BY td / d.td / d.trade_date, itself computed
+// FROM ts/fired_at in an earlier CTE). A static check that reflexively fires on a legitimate,
+// already-correct pattern is worse than no check -- it trains the reader to skim past WARNs
+// instead of investigating them. Broadened to also accept ORDER BY on a small set of common
+// date-derived aliases this codebase actually uses, not just the raw column name.
 function checkOrderBy(src) {
   const referencesTimeCol = /\b(fired_at|\bts\b)\b/.test(src);
   if (!referencesTimeCol) return null;
-  if (/ORDER\s+BY[^;]*\b(fired_at|ts)\b/i.test(src)) return null;
-  return 'references fired_at/ts but no SQL query in the file has an ORDER BY on that column -- if any logic depends on chronological sequence, an unordered result set can silently break it';
+  if (/ORDER\s+BY[^;]*\b(fired_at|ts|td|trade_date|run_date)\b/i.test(src)) return null;
+  return 'references fired_at/ts but no SQL query in the file has an ORDER BY on that column or a common date-derived alias (td/trade_date/run_date) -- if any logic depends on chronological sequence, an unordered result set can silently break it';
 }
 
 // Assertion 4: no same-day or future data in any derived field -- proxy check for the

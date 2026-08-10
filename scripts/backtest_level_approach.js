@@ -65,6 +65,11 @@ async function run() {
     WHERE a.status <> 'SHADOW'
       AND a.resolution IN ('TARGET_HIT', 'STOP_HIT')
       AND d.day_type IS NOT NULL
+      -- preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10:
+      -- a.status<>'SHADOW' only excludes still-open shadow positions, a different column
+      -- from origin_status (immutable at insert) -- resolved BACKFILL rows passed this
+      -- filter unfiltered. Added origin_status alongside, not instead of, the existing check.
+      AND a.origin_status IN ('ACTIVE', 'SHADOW')
     GROUP BY a.setup_type, d.day_type,
              EXTRACT(dow FROM (a.fired_at AT TIME ZONE 'America/New_York'))::int
   `);
