@@ -15,6 +15,13 @@ echo "=== Weekly backtest run: $(date) ==="
 # needs daily). See scripts/backtest_bet_class_status.mjs's own header. ---
 /usr/bin/node scripts/backtest_bet_class_status.mjs
 
+# --- VALUE_FADE bet_class Phase 2 Stage 1 resweep (roadmap Phase 2) — self-recalibrating,
+# not a one-off: as real N grows past the current ~5-week/4-fold history, the walk-forward
+# gets less thin and rigor.clean can turn true. See scripts/backtest_value_fade_bet_class_
+# phase2.mjs's own Stage 0 header and RESEARCH_CLAIM value_fade_bet_class_phase2_stage1_
+# backtest (30-day recheck) for the current SHIP_FLAT-but-not-rigor-clean finding. ---
+/usr/bin/node scripts/backtest_value_fade_bet_class_phase2.mjs
+
 # --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
 # classification (informational-only mid-trade flag) and the antigravity/edges-context
 # card badge. See server/services/touchQuality.js and docs/OPEN_THREADS.md. ---
