@@ -2,6 +2,123 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## 🔴 2026-08-11: ATR-compression breakout thread RETRACTED — a fill-realism bug (missed by Claude's own audit AND a DeepSeek design critique) turned a reported +$65.84/trade "CONFIRMED" edge into a decisively negative one, caught by an Opus consultation that actually re-derived the numbers instead of critiquing the plan
+
+User-sourced strategy (NQ, ATR(20)<ATR(30) compression filter, buy-stop breakout, no target,
+Friday-close exit) tested across 15/30/60-min bars, a parameter-sensitivity plateau check,
+and confluence with 2 live informational badges — full methodology and the original
+(wrong) numbers are superseded, not repeated here; see the `RESEARCH_CLAIM` rows below for
+the corrected account. **The short version: `runBacktest()` skipped checking whether the
+entry bar itself would have stopped the trade out, reasoning intrabar order "can't be
+resolved without tick data" — wrong, since the bars are aggregated from 1-min data already
+on hand. 89% of entry bars had a low already below the stop.** Resolving fills at 1-min
+resolution, plus fixing a second real bug (entry offset anchored to the signal bar's own
+open, not the entry bar's own open as the source rule specifies), dropped 60-min from
++$65.84/trade to a decisively negative -$14 to -$30/trade band (t=-0.67 to -2.30) — and all
+three timeframes are now negative. The parameter-sensitivity "plateau" (recorded CONFIRMED)
+and the badge-confluence null (also recorded CONFIRMED) were both built on the same
+contaminated 121-trade population and are retracted/downgraded accordingly — see
+`atr_breakout_plateau` and `atr_breakout_confluence` `RESEARCH_CLAIM` notes.
+
+**Process lesson, not just a data lesson**: this was audited twice before Opus caught it —
+once by Claude directly (read the script, checked the same-bar-stop logic, judged the "no
+tick data" rationale reasonable) and once via a DeepSeek design critique (which reviewed the
+*plan* for the follow-up threads, not the *original script's* fill assumption, so it never
+had reason to question a premise already baked into the baseline it was told to build on).
+**Opus's actual value here was refusing to accept the brief's framing and re-deriving the
+numbers from the real scripts instead of critiquing the plan as written** — it read the two
+pilot scripts and the results files, then wrote and ran two throwaway audit scripts
+(`scratch/opus6_fillcheck*.mjs`, deleted after their logic was ported into the real script)
+to measure the bias directly rather than reason about it abstractly. Claude independently
+re-ran both of Opus's audit scripts before trusting any of this and reproduced every number
+exactly. **General lesson for future Opus/DeepSeek consultations on a research thread with
+an already-established "baseline": ask explicitly whether the baseline's own methodology
+should be re-examined, not just the proposed next steps built on top of it** — a critique
+scoped to "is this follow-up plan sound" will not catch a bug in the thing the plan assumes
+as given.
+
+Fixed live in `scripts/pilot_atr_compression_breakout_mtf.mjs` (now reports a
+pessimistic/optimistic band, never a single point estimate, plus ambiguous/unambiguous
+same-minute-tie counts as a standing diagnostic) — still cron'd per this file's own
+"never a dead end just because the first run was negative" rule. **Not yet done**: the two
+follow-up scripts (`pilot_atr_breakout_badge_confluence.mjs`,
+`pilot_atr_breakout_parameter_sensitivity.mjs`) still contain their own local copy of the
+old broken fill logic and need the same fix ported before their own weekly cron re-runs mean
+anything — flagged, not silently left broken. Full technical account: `RESEARCH_CLAIM`
+`atr_compression_breakout_60m`/`_30m`/`_15m`/`atr_breakout_plateau`/`atr_breakout_confluence`;
+full Opus writeup: `docs/OPUS_AUDIT_PROMPT_6.md` / `scratch/opus_audit_6_results.md`.
+
+**Follow-up same day, second Opus consultation: the thread is now CLOSED, for a stronger
+reason than "we tried enough things."** After the fix above, the user pushed on two more
+angles directly: (1) a wider stop (per consultation 6's own §4 suggestion) — swept
+{0.5,0.75,1.0,1.5,2.0}x ATR20 on 60-min, every single cell negative, best cell fails
+chronological stability; (2) requiring the compression condition to persist K=1/2/3/5
+consecutive bars, not just one — barely changed anything at any bar width (ATR20/ATR30 are
+both smoothed, so once crossed the condition tends to stay crossed; the "maybe it's just
+noise around the threshold" theory turned out not to be the actual problem). The user then
+asked for a structural pivot: stop *anticipating* the breakout, *react* to it once already
+confirmed (a bar CLOSE beyond the trigger, not an intrabar touch) with a stop sized off real
+structure, not an ATR fraction. Built and tested — reported **-$219.72/trade (t=-4.58)**,
+worse than everything else tried.
+
+**That number was itself a bug, caught by a third Opus consultation** (`docs/OPUS_AUDIT_PROMPT_7.md`
+/ `scratch/opus_audit_7_results.md`) — Claude's own bug this time, not inherited. The
+position-management loop's index never advanced to the real entry bar after a multi-bar-ahead
+confirmation, so on the very next loop iteration the exit-check ran against a bar still
+*inside* the signal-to-confirmation window — chronologically before the real entry — and
+since the stop was defined as that window's own minimum low, the check was mathematically
+guaranteed to fire (falsely) on whichever bar set that minimum. **42.7% (60-min) / 36.3%
+(15-min) of "trades" were exiting before they were entered**, and those impossible trades
+were more than 100% of the reported loss. Verified independently (re-ran Opus's own audit
+script, reproduced every number exactly) before fixing the actual script (one line: jump the
+loop index to the real entry bar after opening a position) and correcting the `RESEARCH_CLAIM`
+row. **Corrected**: 60-min compression N=112, EV=+$25.43 (t=0.40, not significant); 15-min
+EV=-$15.19 (t=-0.51). Not a sign-flip win — just no longer a fake catastrophic loss.
+
+**The actual thread-closing evidence is separate and much stronger**: a stop-free,
+no-trade-machinery forward-return study at the signal level (N=806 at 60-min, N=2,603 at
+15-min — 5-7x the statistical power of any trade-level test in this whole thread) found the
+conditional forward return after a confirmed breakout close is *below* the unconditional
+baseline at every horizon out to 10 bars, with a real, significant *adverse* move in the very
+first bar after entry (60-min: -12.49pt conditional vs +1.84pt unconditional, t=-3.35) — genuine
+short-horizon mean-reversion immediately after the trigger, the opposite of the strategy's
+premise, occurring exactly in the window where any stop would fire. That's a mechanism-level
+negative (there is nothing in the conditional distribution to protect with a better exit),
+not a parameter-level one (this configuration lost, try another) — a qualitatively stronger
+reason to stop than anything found earlier in the thread. Recorded as its own claim,
+`RESEARCH_CLAIM atr_breakout_short_horizon_mean_reversion` (PROVISIONAL).
+
+**Two durable, general lessons worth carrying forward, not just retracting the one number**:
+1. **`computeRigor`'s chronological-stability check cannot distinguish a real, consistent
+   market effect from a consistent code defect** — a deterministic bug that fires on a fixed
+   fraction of trades every run is "stable across thirds" by construction. This happened
+   twice in three consultations, in both directions (consultation 6: a bug inflated a false
+   positive; consultation 7: a bug inflated a false negative). A cheap standing defense for
+   any hand-rolled bar-walk backtest: assert `exitBarIdx >= entryBarIdx` (or the timestamp
+   equivalent) on every emitted trade — the confirmed-expansion script recorded both fields
+   the whole time and never once compared them.
+2. **A stop-free, no-trade-machinery conditional-vs-unconditional forward-return check is the
+   cheapest, most powerful test in this entire thread** — ~40 lines, well under a minute to
+   run, and it answered "is there anything here at all" more decisively than any of the four
+   full backtest engines that preceded it. Had it been run first, this thread would have
+   ended on day one. This is the concrete, implementable form of this file's own "market-
+   behavior hypothesis → bar history first" rule — that rule says which table to query; this
+   says what to *compute* before building any entry/stop/exit machinery: conditional forward
+   return vs. the unconditional baseline (never vs. zero — in a sample with +12,360pt of NQ
+   drift and no bear market, "conditional mean is positive" is nearly uninformative on its
+   own, and the one seemingly-positive cell in this thread's own forward-return table was
+   84% beta once checked against the baseline instead of zero). **Not yet added to
+   CLAUDE.md's own "new setup type checklist"** (would belong directly above item 5,
+   "simulate the real stop/target") — deferred given CLAUDE.md is already flagged oversized
+   this session and a restructuring is pending; revisit when that happens.
+
+**What's genuinely dead**: the ATR(20)<ATR(30) compression filter under every mechanic tried
+(anticipatory breakout, wider stop, persistence-confirmed, reactive/confirmed-expansion) —
+never once added value over a no-filter control. **What's still open but unrelated to this
+specific thread**: whether a *different* breakout definition entirely might work — this
+result is narrow (one specific 2xATR20-displacement trigger), not a claim that breakouts
+don't work on NQ.
+
 ## ✅ 2026-08-11: `setup_status_realev_mtm_exclusion_needs_dedicated_pass` RESOLVED — the core suppression pipeline's MTM gap fixed, small verified blast radius, plus a Gemini research dispatch on live day-type signals
 
 Two more items from the same day's roster-rebuild follow-through, both requested via "can we use Gemini to help with the lift" then "do what you think is prudent."

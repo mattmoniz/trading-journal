@@ -183,4 +183,39 @@ echo "=== Weekly backtest run: $(date) ==="
 # "cron the scripts with genuinely open findings" rule, same as this file's other entries.
 /usr/bin/node scripts/backtest_mfe_runner_target_widening_uncensored.mjs
 
+# ATR-compression breakout pilot (2026-08-11, user-sourced strategy) -- three bar widths
+# (15/30/60-min). CORRECTED same session (Opus consultation 6, docs/OPUS_AUDIT_PROMPT_6.md)
+# after the original "skip the same-bar stop check, can't resolve intrabar ordering without
+# tick data" rationale was found to be wrong -- the bars are aggregated from 1-min data
+# already on hand, and resolving fills at that resolution (plus fixing a real entry-anchor
+# spec deviation) flipped 60-min from a reported +$65.84/trade to a corrected, decisively
+# negative -$14 to -$30/trade band. All three timeframes are now negative findings
+# (RESEARCH_CLAIM atr_compression_breakout_60m/_30m/_15m, all CONFIRMED as negative) --
+# kept scheduled anyway, per this file's own standing "never a dead end just because the
+# first run was negative" rule, so this self-recalibrates if real forward data ever
+# changes the picture.
+/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 15
+/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 30
+/usr/bin/node scripts/pilot_atr_compression_breakout_mtf.mjs 60
+# Follow-up threads (2026-08-11) -- BOTH RETRACTED/DOWNGRADED same session, still cron'd
+# because the underlying 60-min baseline they depend on might get revisited later, but as
+# of now both were computed on the pre-correction (broken-fill-engine) 121-trade population
+# and have NOT been re-run on the corrected engine (see atr_breakout_plateau/
+# atr_breakout_confluence RESEARCH_CLAIM notes for the full retraction account) -- these two
+# scripts still contain their OWN local copy of the old same-bar-stop-skipping logic and
+# need the same fix ported before their weekly re-runs mean anything. Not yet done --
+# flag if picked back up.
+/usr/bin/node scripts/pilot_atr_breakout_badge_confluence.mjs
+/usr/bin/node scripts/pilot_atr_breakout_parameter_sensitivity.mjs
+
+# Post-ATR-thread forward-return checks (2026-08-11) -- both self-recalibrate as real
+# forward NQ history accumulates. Bollinger squeeze: clean negative (edge negative at all 5
+# horizons tested, RESEARCH_CLAIM bollinger_squeeze_forward_return). STACK_VOL_BREAK_LIVE
+# horizon profile: genuinely mixed/inconclusive, not a clean kill -- no cell reaches
+# significance at the signal level, but real trade-level backtests with actual stop/target
+# machinery already show modest provisional positive EV that this test doesn't contradict
+# (RESEARCH_CLAIM STACK_VOL_BREAK_HORIZON). See docs/OPEN_THREADS.md.
+/usr/bin/node scripts/pilot_bollinger_squeeze_forward_return.mjs
+/usr/bin/node scripts/pilot_stackvol_horizon_profile.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
