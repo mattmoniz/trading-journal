@@ -120,6 +120,28 @@ function checkRunDateDerivation(src) {
   return 'new Date().toISOString() found -- naive JS-UTC date arithmetic, not CURRENT_DATE, can silently drift a trading-day boundary (CLAUDE.md\'s parseDateTime hard rule). Confirmed live 2026-08-05 in scripts/backtest_day_type_alpha.js: a 21:54 EDT run wrote run_date one full calendar day ahead of the real ET trading day.';
 }
 
+// Assertion 8 (added 2026-08-11, roadmap Phase 8 I6 -- the literal text of the roadmap's
+// own spec for this item: "MTM/RECOVERY rows excluded or flagged in any pooled P&L").
+// Motivating incident, same day: the roster-rebuild project summary's own CONTINUATION_LEGACY
+// decomposition (scripts/lib/betClassPhase2Resweep.mjs's SUM/AVG(actual_pnl) pattern, hand-
+// copied into a one-off analysis script) pooled real trade outcomes with uncapped
+// MARK_TO_MARKET/RECOVERY_MTM rows -- flipped the sign on the single largest contributor to
+// a headline EV figure (C_PAIRED_LONG: reported +$240.19/trade blended, actually -$79.80 on
+// PRICE_CLEAN-only resolutions) before a second independent review caught it. This check
+// would have caught it on the first pass, at write time, not after the number was already
+// reported. Heuristic: any script that aggregates active_setups.actual_pnl (SUM/AVG in SQL,
+// or a JS .reduce()/mean() over fetched pnl values) must show a resolution_method exclusion
+// somewhere in the file -- doesn't have to be adjacent to the aggregation itself (a shared
+// WHERE-clause constant, a filter() call, etc. all count), just present.
+function checkMtmExclusion(src) {
+  const aggregatesPnl = /\b(SUM|AVG)\s*\(\s*a?\.?actual_pnl\b/i.test(src) ||
+    /\bactual_pnl\b[^;]{0,80}\.(reduce|map)\s*\(/.test(src);
+  if (!aggregatesPnl) return null;
+  const excludesMtm = /MARK_TO_MARKET/.test(src) && /RECOVERY_MTM/.test(src);
+  if (excludesMtm) return null;
+  return 'aggregates actual_pnl (SUM/AVG or a JS reduce over fetched rows) but never mentions MARK_TO_MARKET or RECOVERY_MTM anywhere in the file -- these resolution_methods are uncapped by any stop (CLAUDE.md failure mode #9, N=101 spanning -$1,799 to +$1,958 historically) and can silently flip the sign of a pooled EV figure, exactly as happened to the CONTINUATION_LEGACY headline number 2026-08-11 (RESEARCH_CLAIM continuation_legacy_pooled_ev_decomposed_by_type)';
+}
+
 const CHECKS = [
   { id: 1, name: 'origin_status filter present', fn: checkOriginStatusFilter },
   { id: 2, name: 'baseline resimulated, not read raw', fn: checkBaselineResimulated },
@@ -128,6 +150,7 @@ const CHECKS = [
   { id: 5, name: '$/pt matches MNQ', fn: checkDollarsPerPoint },
   { id: 6, name: 'shared order-aware resolver, not inline mae/mfe check', fn: checkSharedResolver },
   { id: 7, name: 'run_date from CURRENT_DATE, not new Date().toISOString()', fn: checkRunDateDerivation },
+  { id: 8, name: 'MTM/RECOVERY_MTM excluded from any pooled actual_pnl', fn: checkMtmExclusion },
 ];
 
 const targets = await listTargets();
@@ -153,7 +176,7 @@ if (targetArg) {
   const rel = path.relative(process.cwd(), targets[0]);
   const flags = perFileFlags[rel];
   console.log(`\nPreflight check: ${rel}`);
-  if (!flags) { console.log('  ok -- no flags on any of the 6 checks (static analysis, not a proof of correctness)'); }
+  if (!flags) { console.log(`  ok -- no flags on any of the ${CHECKS.length} checks (static analysis, not a proof of correctness)`); }
   else {
     for (const f of flags) console.log(`  [${f.id}] WARN ${f.name}: ${f.msg}`);
   }

@@ -38,13 +38,60 @@
 import { query } from '../server/db.js';
 import pool from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
-import { CONDITIONAL_VARIANTS } from '../server/config/setupTypes.js';
+import { CONDITIONAL_VARIANTS, getBetClass } from '../server/config/setupTypes.js';
 
 const SIGNAL_TYPE = 'SETUP_STATUS';
 
 // Thresholds — EV-only gate catches high-WR structural losers that a WR threshold misses
 const SUPPRESS_MIN_N   = 20;   // N≥20 satisfies the hard floor from CLAUDE.md
 const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR gate)
+
+// bet_class-level SUPPRESS override — roadmap Phase 8 I6/user-authorized 2026-08-11 action,
+// following the file's own established philosophy (see header: "fix the cron, don't build
+// an override... self-correct again automatically"). This is NOT a bolt-on override applied
+// after the fact — it's one more condition feeding the same recommendation decision below,
+// re-evaluated fresh every run exactly like SUPPRESS/PROMOTE/THIN_N already are.
+//
+// Why this exists: VALUE_FADE (the roadmap's Setup A consolidation, ~166 setup_types) tests
+// real, MTM-clean EV negative at N=1,238+ (RESEARCH_CLAIM value_fade_stage3_reconciliation) --
+// decisive by this codebase's own N>=20 standard, just measured at the bet_class level
+// instead of per-type. A day-type decomposition found the aggregate is dragged down by
+// firing on TREND/TURBULENT days (BALANCE alone is real-EV-positive, N=605, EV=+$7.18 --
+// RESEARCH_CLAIM value_fade_daytype_conditioned_ev_balance_positive) -- but that finding
+// CANNOT be acted on with a live per-fire gate: the only ground-truth day-type source
+// (acd_daily_log.day_type) is null all day until the 20:20 ET nightly cron, and the only
+// live-estimate alternative was already tested as a fade-suppression gate input and found
+// NET HARMFUL (2026-08-03, OPEN_DECISION dtclass_null_all_day_neuters_multiple_live_gates,
+// RESOLVED: N=440, net delta -$3,238.60, 70.6% FPR specifically on fade-touch moments).
+// Given no reliable live day-type signal exists, this operates as a bet_class-wide batch
+// decision instead -- fully retrospective (no live time-of-day dependency), enforced
+// through the SAME already-live, already-day-type-blind _suppressedSetups mechanism every
+// other SUPPRESS decision already uses. The real cost (documented, not hidden): this
+// necessarily also suppresses on BALANCE days, where VALUE_FADE is genuinely positive --
+// the honest trade-off given no way to distinguish BALANCE from TREND/TURBULENT live.
+//
+// Design reviewed with DeepSeek before writing (scratch/deepseek_response.md, 2026-08-11):
+// - Threshold is bet_class-generic (a Set, not a single hardcoded name) so a future
+//   bet_class showing the same pattern gets the same protection without a new code path --
+//   but only VALUE_FADE is enabled today, since it's the only bet_class with real evidence
+//   of this shape (CONTINUATION_LEGACY/GLOBEX_LEVEL are real-EV-positive as of this run).
+// - N floor is 200, not the per-type SUPPRESS_MIN_N=20 -- this override can suppress many
+//   individual types at once (currently ~15-19 live VALUE_FADE types), so it needs a much
+//   higher bar than a single type's own thin-data floor.
+// - Threshold is EV<0 (strictly negative), not the individual per-type SUPPRESS_MAX_EV=-5 --
+//   VALUE_FADE's clean pooled EV (~-$1 to -$3/trade) never actually clears -5, but a
+//   1,000+-trade pooled sample smooths out the per-type noise that -5 exists to filter, so a
+//   less extreme bar is appropriate at this N.
+// - Escape hatch: a VALUE_FADE type whose OWN real EV is already non-negative (>=0) is NOT
+//   suppressed by this override, regardless of the bet_class aggregate -- a type that's
+//   already independently proving itself shouldn't be punished for its siblings' losses.
+//   This only affects types that were headed for the implicit 'ACTIVE'/unchanged branch
+//   below (realN>=20, realEv>=-5, i.e. individually "not clearly bad") -- a type already
+//   being SUPPRESSed or THIN_N on its own doesn't need this override, it's already
+//   SHADOW-only either way.
+const BET_CLASS_SUPPRESS_ENABLED = new Set(['VALUE_FADE']);
+const BET_CLASS_SUPPRESS_MIN_N   = 200;
+const BET_CLASS_SUPPRESS_MAX_EV  = 0;
 
 const PROMOTE_WINDOW_DAYS = 90;
 // 2026-08-10: PROMOTE_MIN_N/WR/EV now apply to REAL (origin_status IN ('ACTIVE','SHADOW'))
@@ -95,6 +142,17 @@ async function run() {
   // to match the existing convention in analyze_execution_efficiency.mjs -- WR answers
   // "did this resolve decisively in our favor," EV/N carry the P&L question. Gemini
   // design-critiqued before this change (scratch/gemini_review_time_expired_setup_status_fix.md).
+  // NOTE (found 2026-08-11 via preflight_backtest_assertions.mjs check [8], while building
+  // the VALUE_FADE bet_class override below): this query's real_ev/real_n -- which drive
+  // EVERY individual setup_type's SUPPRESS/PROMOTE decision in this file, not just
+  // VALUE_FADE's -- also don't exclude MARK_TO_MARKET/RECOVERY_MTM rows. Deliberately NOT
+  // fixed in this same pass: doing so would shift real_ev/real_n for potentially all ~180
+  // live/evaluated setup_types system-wide (a much larger blast radius than the scoped
+  // VALUE_FADE bet_class-level action below), and per this file's own "one change at a
+  // time" convention deserves its own dedicated before/after verification pass across the
+  // whole roster, not a bundled side-fix. Flagged as OPEN_DECISION
+  // setup_status_realev_mtm_exclusion_needs_dedicated_pass. The NEW bet_class-pooled query
+  // below (betClassPooledQ) IS MTM-clean, scoped to just the VALUE_FADE check it feeds.
   const allTimeQ = await query(`
     SELECT
       setup_type,
@@ -134,6 +192,33 @@ async function run() {
   `);
   const recent = {};
   for (const r of recentQ.rows) recent[r.setup_type] = r;
+
+  // bet_class-level pooled real, MTM-clean EV/N for the SUPPRESS_ENABLED bet_classes (see
+  // BET_CLASS_SUPPRESS_ENABLED above). Computed inline, not read from BET_CLASS_STATUS --
+  // DeepSeek design critique (scratch/deepseek_response.md): backtest_bet_class_status.mjs
+  // runs AFTER this script in run_weekly_backtests.sh, so reading its table here would see
+  // last week's number on every weekly run, and this script also runs DAILY (Mon-Fri, via
+  // run_daily_calibration.sh) while backtest_bet_class_status.mjs is weekly-only -- reading
+  // its table on a daily run would read up-to-6-day-stale data. An inline query keeps this
+  // check fresh on every run this script itself runs, matching the "self-correct every run"
+  // convention already established for SUPPRESS/PROMOTE above.
+  const betClassPooledQ = BET_CLASS_SUPPRESS_ENABLED.size > 0 ? await query(`
+    SELECT bet_class, COUNT(*) AS n, AVG(actual_pnl)::float AS ev
+    FROM active_setups
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+      AND actual_pnl IS NOT NULL
+      AND origin_status IN ('ACTIVE','SHADOW')
+      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
+      AND bet_class = ANY($1)
+    GROUP BY bet_class
+  `, [[...BET_CLASS_SUPPRESS_ENABLED]]) : { rows: [] };
+  const betClassPooled = {};
+  for (const r of betClassPooledQ.rows) betClassPooled[r.bet_class] = { n: +r.n, ev: +r.ev };
+  for (const bc of BET_CLASS_SUPPRESS_ENABLED) {
+    const pooled = betClassPooled[bc];
+    const triggered = pooled && pooled.n >= BET_CLASS_SUPPRESS_MIN_N && pooled.ev < BET_CLASS_SUPPRESS_MAX_EV;
+    console.log(`  [bet_class override] ${bc}: pooled real clean N=${pooled?.n ?? 0} EV=$${pooled?.ev != null ? pooled.ev.toFixed(2) : 'n/a'} -- ${triggered ? 'TRIGGERED (suppressing constituent types without their own proven positive EV)' : 'not triggered'}`);
+  }
 
   // Current SETUP_STATUS rows — what's already suppressed
   const currentStatusQ = await query(`
@@ -278,6 +363,7 @@ async function run() {
     }
 
     let recommendation = 'ACTIVE';
+    let betClassOverride = null;
     // 2026-08-10 root-cause fix (see file header): SUPPRESS/PROMOTE both gate on REAL
     // (origin_status-filtered) EV/WR/N now, never blended. realEv/rec90Real* are null only
     // when their filtered row count is 0 (AVG(...) FILTER returns NULL on zero matches).
@@ -313,10 +399,29 @@ async function run() {
       recommendation = 'THIN_N';
       console.log(`  THIN_N   ${type.padEnd(38)} N=${n} (real=${realN}) EV=$${ev.toFixed(0)} — blended N clears the floor, real N doesn't`);
     } else {
-      unchanged++;
+      // bet_class-level override (see BET_CLASS_SUPPRESS_ENABLED above) — only reached for
+      // a type that just cleared every individual bar (real N≥20, real EV≥-$5): "not
+      // clearly bad on its own," which is exactly the population this override exists to
+      // catch, since a type sitting between -$5 and $0 real EV looks individually fine
+      // while its whole bet_class pools decisively negative. Escape hatch: a type whose OWN
+      // real EV is already non-negative (≥0) is left alone regardless of the bet_class
+      // aggregate — it's independently proving itself, not being carried by noise.
+      const betClass = getBetClass(type);
+      const pooled = BET_CLASS_SUPPRESS_ENABLED.has(betClass) ? betClassPooled[betClass] : null;
+      const betClassTriggered = pooled && pooled.n >= BET_CLASS_SUPPRESS_MIN_N && pooled.ev < BET_CLASS_SUPPRESS_MAX_EV;
+      const ownEvProvenPositive = realEv != null && realEv >= 0;
+      if (betClassTriggered && !ownEvProvenPositive) {
+        recommendation = 'SUPPRESS';
+        suppressed++;
+        betClassOverride = { bet_class: betClass, pooled_real_clean_n: pooled.n, pooled_real_clean_ev: +pooled.ev.toFixed(2) };
+        const tag = wasSuppressed ? '(already suppressed)' : '← NEW';
+        console.log(`  SUPPRESS ${type.padEnd(38)} bet_class override: ${betClass} pooled real clean N=${pooled.n} EV=$${pooled.ev.toFixed(2)} (own real N=${realN} EV=$${realEv != null ? realEv.toFixed(2) : 'n/a'}, not independently positive) ${tag}`);
+      } else {
+        unchanged++;
+      }
     }
 
-    results.push({ type, n, realN, wr, ev, realEv, totalPnl: +r.total_pnl, recommendation, rec90 });
+    results.push({ type, n, realN, wr, ev, realEv, totalPnl: +r.total_pnl, recommendation, rec90, betClassOverride });
   }
 
   console.log(`\n  ${suppressed} suppressed, ${promoted} promoted, ${unchanged} active/unchanged, ${skippedConditional} skipped (owned by a dedicated CONDITIONAL_VARIANTS script)`);
@@ -349,6 +454,12 @@ async function run() {
       } : null,
       rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
       ...(r.dayTypeBreakdown ? { day_type_breakdown: r.dayTypeBreakdown.map(b => ({ day_type: b.dayType, n: b.n, ev: +b.ev.toFixed(2) })) } : {}),
+      // bet_class_override (roadmap Phase 8 I6, 2026-08-11) -- present only when this
+      // type's own real N/EV cleared the individual bar but the whole bet_class's pooled
+      // real-clean EV was negative at N>=200 (see BET_CLASS_SUPPRESS_ENABLED). Distinguishes
+      // "suppressed on its own record" from "suppressed because its family loses" for anyone
+      // reading this row later.
+      ...(r.betClassOverride ? { bet_class_override: r.betClassOverride } : {}),
     });
     await query(`
       INSERT INTO performance_audit

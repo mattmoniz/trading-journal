@@ -104,6 +104,11 @@ async function run() {
   // trade_date for an overnight fire (impossible `ts::date=tradeDate AND ts<=asOf`), not a
   // timezone bug. Bounding the query properly removes them by construction instead of by
   // accident.
+  // MARK_TO_MARKET/RECOVERY_MTM excluded 2026-08-11 (preflight_backtest_assertions.mjs
+  // check [8], roadmap Phase 8 I6) -- uncapped-by-any-stop rows, CLAUDE.md failure mode #9.
+  // Checked directly before fixing: only 43 of 748 candidates (-$641.50 combined) are
+  // MTM-origin here, small relative to this script's own -$3,238.60 finding -- doesn't
+  // change the net-harmful conclusion, but the query should exclude them regardless.
   const { rows: candidates } = await query(`
     SELECT id, trade_date::text as trade_date, setup_type,
            fired_at::text as fired_at, actual_pnl::float as actual_pnl
@@ -112,6 +117,7 @@ async function run() {
       AND origin_status IN ('ACTIVE','SHADOW')
       AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
+      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
       AND (EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) BETWEEN 630 AND 960
     ORDER BY fired_at
   `);

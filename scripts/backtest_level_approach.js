@@ -70,6 +70,10 @@ async function run() {
       -- from origin_status (immutable at insert) -- resolved BACKFILL rows passed this
       -- filter unfiltered. Added origin_status alongside, not instead of, the existing check.
       AND a.origin_status IN ('ACTIVE', 'SHADOW')
+      -- check [8], roadmap Phase 8 I6, 2026-08-11: MARK_TO_MARKET/RECOVERY_MTM are uncapped
+      -- by any stop (CLAUDE.md failure mode #9) and can distort avg_pnl/total_pnl here, the
+      -- same defect that flipped CONTINUATION_LEGACY's headline EV the same day.
+      AND (a.resolution_method IS NULL OR a.resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
     GROUP BY a.setup_type, d.day_type,
              EXTRACT(dow FROM (a.fired_at AT TIME ZONE 'America/New_York'))::int
   `);
