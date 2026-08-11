@@ -22,7 +22,10 @@
  * setup's actual_pnl calculation.
  */
 export const INSTRUMENTS = {
-  MNQ: { symbol: 'MNQ', label: 'MNQ ($2/pt)', dollarsPerPoint: 2, commissionPerRoundTrip: 1 },
+  // commissionPerRoundTrip corrected 2026-08-11 (user-confirmed, direct correction): $1 per
+  // transaction per contract (entry + exit = $2 round-trip for 1 MNQ), not $1 total -- the
+  // prior value was wrong despite an earlier note claiming broker-statement verification.
+  MNQ: { symbol: 'MNQ', label: 'MNQ ($2/pt)', dollarsPerPoint: 2, commissionPerRoundTrip: 2 },
   // NQ's commissionPerRoundTrip is user-recalled ("I think the commission might be $2
   // for nq", 2026-07-16), not independently verified against a broker statement/receipt
   // the way MNQ's $1 is -- treat as provisional, correct if a real statement contradicts

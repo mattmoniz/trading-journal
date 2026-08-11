@@ -15,7 +15,9 @@
 // calculator lets a user model NQ hypothetically) — never use NQ's numbers for a live
 // setup's actual P&L.
 export const INSTRUMENTS = {
-  MNQ: { symbol: 'MNQ', label: 'MNQ ($2/pt)', dollarsPerPoint: 2, commissionPerRoundTrip: 1 },
+  // commissionPerRoundTrip corrected 2026-08-11 (user-confirmed direct correction, mirrors
+  // server/config/instruments.js): $1/side, $2 round-trip for 1 MNQ -- the prior 1 was wrong.
+  MNQ: { symbol: 'MNQ', label: 'MNQ ($2/pt)', dollarsPerPoint: 2, commissionPerRoundTrip: 2 },
   // NQ's commissionPerRoundTrip is user-recalled, not verified against a statement --
   // see server/config/instruments.js for the full note. Real NQ contracts DO appear in
   // trades history (verified 2026-07-16, ~9.2x MNQ's per-contract P&L for the same

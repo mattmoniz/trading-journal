@@ -16,7 +16,7 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 const PT     = 2;   // $2/pt NQ micro
-const COMM   = 1;   // $1 round-trip commission
+const COMM   = 2;   // $2 round-trip commission ($1/side x2, corrected 2026-08-11 — matches server/config/instruments.js MNQ.commissionPerRoundTrip)
 const DRY_RUN = process.argv.includes('--dry-run');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
