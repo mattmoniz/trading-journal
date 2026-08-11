@@ -373,9 +373,17 @@ export function computeEvAtStopTargetChronological(crossovers, stop, target, sto
 // Precomputes crossovers ONCE per trade (not once per candidate pair), per DeepSeek's design
 // review -- for a 300-trade setup_type with ~75 (stop,target) pairs, this is 300 bar walks
 // instead of 22,500.
-export function sweepOptimalStopAndTargetChronological(trades, allBars, maeCandidates, maxT, stopDpp, targetDpp, commission = LIVE_INSTRUMENT.commissionPerRoundTrip) {
+// targetGrid defaults to this file's own live-calibration TARGET_SWEEP (capped at 150pt,
+// the live convention) -- every existing caller is unaffected. Added as an explicit param
+// 2026-08-10 (roadmap Phase 3, mfe_runner_target_widening_mining re-run) so a caller testing
+// whether a WIDER cap (up to p95_mfe, which can exceed 150pt) captures more edge can pass a
+// grid that actually reaches past 150pt -- passing maxT alone can't do this, since the old
+// hardcoded module-level TARGET_SWEEP silently capped every candidate list at 150 regardless
+// of maxT, which would have made any "widen past 150" test structurally unable to find
+// anything by construction. Never duplicate this function's body just to test a wider grid.
+export function sweepOptimalStopAndTargetChronological(trades, allBars, maeCandidates, maxT, stopDpp, targetDpp, commission = LIVE_INSTRUMENT.commissionPerRoundTrip, targetGrid = TARGET_SWEEP) {
   if (trades.length < MIN_N) return null;
-  const targetCandidates = TARGET_SWEEP.filter(T => T <= maxT);
+  const targetCandidates = targetGrid.filter(T => T <= maxT);
   if (!targetCandidates.length) return null;
   const stopCandidates = maeCandidates.map(c => Math.round(c.value));
 

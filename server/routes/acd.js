@@ -30,6 +30,7 @@ import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../servi
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
+import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -684,56 +685,30 @@ export async function resolveSetupsByPrice(io) {
       }
 
       if (trailWidth != null) {
-        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function) —
-        // string-slice, never Date-parse, to avoid the naive-timestamp landmine.
-        const isSessionEnd = bar.ts.slice(11, 13) >= '16';
-        if (armedAt == null) {
-          const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
-          const stopHit = long ? bar.low <= stop : bar.high >= stop;
-          if (t1Hit && stopHit) {
-            resolution = 'STOP_HIT'; method = 'SAME_BAR_STOP_FIRST';
-            resolvedAt = bar.ts; priceAtRes = stop;
-          } else if (t1Hit) {
-            // Arm: snap stop to breakeven, anchor the trail to this bar's favorable extreme.
-            armedAt = bar.ts;
-            peakPrice = long ? bar.high : bar.low;
-            trailStopPrice = entry;
-            const sameBarBreach = long ? bar.low <= trailStopPrice : bar.high >= trailStopPrice;
-            if (sameBarBreach) {
-              // Matches scripts/backtest_breakeven_trail.mjs lines ~216-225 exactly — a
-              // sharp same-bar reversal right after arming scratches immediately rather
-              // than riding to the next bar. Must reproduce this or live diverges from
-              // the backtest's own reported scratch rate. Method string kept <=20 chars —
-              // resolution_method is VARCHAR(20); found 2026-07-20 that this exact literal
-              // (21 chars) and BREAKEVEN_TIME_EXPIRED below (22 chars) would have thrown a
-              // "value too long" error and crashed resolveSetupsByPrice() for EVERY setup
-              // (one shared loop) the first time either code path actually fired — caught
-              // before it ever did, while building an unrelated data-recovery script that
-              // hit the identical column-length issue with its own method string.
-              resolution = 'TRAIL_EXIT'; method = 'SAME_BAR_ARM_STOP';
-              resolvedAt = bar.ts; priceAtRes = trailStopPrice;
-            }
-          } else if (stopHit) {
-            resolution = 'STOP_HIT'; method = 'PRICE_CLEAN';
-            resolvedAt = bar.ts; priceAtRes = stop;
-          }
-        } else {
-          if (long && bar.high > peakPrice) peakPrice = bar.high;
-          if (!long && bar.low < peakPrice) peakPrice = bar.low;
-          const rawTrail = long ? peakPrice - trailWidth : peakPrice + trailWidth;
-          const candidateStop = long ? Math.max(entry, rawTrail) : Math.min(entry, rawTrail);
-          // Ratchet only — never loosens once armed.
-          if (long && candidateStop > trailStopPrice) trailStopPrice = candidateStop;
-          if (!long && candidateStop < trailStopPrice) trailStopPrice = candidateStop;
-          const trailHit = long ? bar.low <= trailStopPrice : bar.high >= trailStopPrice;
-          if (trailHit) {
-            resolution = 'TRAIL_EXIT'; method = 'BREAKEVEN_TRAIL_HIT';
-            resolvedAt = bar.ts; priceAtRes = trailStopPrice;
-          }
-        }
-        if (!resolution && isSessionEnd) {
-          resolution = 'TIME_EXPIRED'; method = 'TRAIL_TIME_EXPIRED';
-          resolvedAt = bar.ts; priceAtRes = bar.close;
+        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function).
+        // Delegates to the shared step function (server/services/breakevenTrailWalker.js,
+        // extracted 2026-08-10, roadmap Phase 3 I4) instead of an inline reimplementation
+        // — the exact same function is exercised by
+        // scripts/test_breakeven_trail_walker_synthetic.mjs's synthetic price paths, so
+        // "the trail mechanism works" is now a provable, re-runnable claim about this
+        // live code path itself, not just about scripts/backtest_breakeven_trail.mjs's
+        // separate simulation. Byte-behavior-identical to the prior inline version
+        // (matches backtest_breakeven_trail.mjs's own simulation exactly, including the
+        // same-bar-arm-and-breach scratch case — resolution_method strings kept <=20
+        // chars, see the shared module's own header for the VARCHAR(20) history).
+        const step = stepBreakevenTrail(
+          { armedAt, peakPrice, trailStopPrice },
+          bar,
+          { entry, stop, t1, trailWidth, long }
+        );
+        armedAt = step.state.armedAt;
+        peakPrice = step.state.peakPrice;
+        trailStopPrice = step.state.trailStopPrice;
+        if (step.resolution) {
+          resolution = step.resolution.resolution;
+          method = step.resolution.method;
+          resolvedAt = bar.ts;
+          priceAtRes = step.resolution.priceAtRes;
         }
         if (resolution) break;
         continue;

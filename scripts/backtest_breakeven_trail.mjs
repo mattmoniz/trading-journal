@@ -58,8 +58,46 @@ async function main() {
   // a correctness fix for future runs, not a change to anything currently live-consumed.
   const allTrades = tradesRes.rows;
 
+  // Roadmap Phase 3 (I4), 2026-08-10: self-starving-population fix. resolveSetupType()
+  // in acd.js (~line 6423) UNCONDITIONALLY diverts every new touch of these 6 base types
+  // to their own _TRAIL setup_type the moment this mechanism is wired -- so the base
+  // type's own row in active_setups can never accumulate a NEW real trade again after
+  // its addedDate. This script grouped purely by raw setup_type, meaning it was reading
+  // a population frozen on whatever existed before the diversion, while the real,
+  // growing touch history was sitting under the _TRAIL name where this script never
+  // looked. Confirmed live: e.g. PD_POC_FADE_LONG (base) has real_n=19 (frozen, all
+  // pre-2026-07-21) vs PD_POC_FADE_LONG_TRAIL (real, still accumulating) real_n=11 --
+  // pooled, that's 30, already past MIN_N=20; unpooled, neither half alone is enough.
+  // This was NOT caught by the 2026-08-04/2026-08-10 breakeven_trail_4_more_variants_
+  // lost_calibration_row investigation, which measured only the base type's own real_n
+  // and concluded (correctly, as far as it checked) "thin data, wait for growth" without
+  // noticing growth was already happening under a name this query never read. Fix: pool
+  // trades from a _TRAIL variant into its baseType's bucket for calibration purposes --
+  // same entry/stop/target mechanism, only the resolution label differs, and the base
+  // type's OWN live calibration (SETUP_STATUS/OPTIMAL_STOP) is untouched by this (still
+  // computed elsewhere from the base type's own unpooled rows, unaffected). Generic via
+  // the CONDITIONAL_VARIANTS registry, not a hardcoded 6-name list, so a future 7th
+  // trail variant is covered automatically.
+  // Known remaining edge case, not yet reachable: once a variant's own trail actually
+  // starts engaging (a future TRAIL_EXIT/BREAKEVEN_TRAIL_HIT resolution rather than
+  // today's universal PRICE_CLEAN fallback), the pullback-distribution filter below
+  // (resolution==='TARGET_HIT') will undercount those trades, since a trail-exited trade
+  // that DID reach original target resolves as TRAIL_EXIT, not TARGET_HIT. Not an issue
+  // today (trailWidth has never been non-null for any of these 6, confirmed via
+  // resolution_method census) -- revisit once the first variant clears MIN_N and starts
+  // actually trailing.
+  const trailPoolMap = {};
+  for (const [variantType, cfg] of Object.entries(CONDITIONAL_VARIANTS)) {
+    if (cfg.backtestScript === 'scripts/backtest_breakeven_trail.mjs' && cfg.baseType) {
+      trailPoolMap[variantType] = cfg.baseType;
+    }
+  }
+
   const byType = {};
-  for (const t of allTrades) (byType[t.setup_type] ||= []).push(t);
+  for (const t of allTrades) {
+    const canonicalType = trailPoolMap[t.setup_type] || t.setup_type;
+    (byType[canonicalType] ||= []).push(t);
+  }
 
   console.log('Loading NQ price bars...');
   const barsRes = await query(`SELECT ts, high::float as high, low::float as low, close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);

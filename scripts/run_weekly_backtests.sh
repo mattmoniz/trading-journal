@@ -159,5 +159,12 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/backtest_structural_breakout_phase0.mjs
 /usr/bin/node scripts/backtest_trend_gate_suppression.mjs
 /usr/bin/node scripts/backtest_volatility_regime_roster_wide.mjs
+# Roadmap Phase 3 (I4) re-run of mfe_runner_target_widening_mining on the uncensored,
+# chronological, real-only surface -- unlike the 2026-07-17 original, finds a minority of
+# setup_types (VWAP-magnet/IB family) with large but NOT rigor-clean deltas. Cron'd (not
+# left one-off) so RESEARCH_CLAIM mfe_runner_target_widening_uncensored_20260810 self-
+# recalibrates as real N grows for these actively-firing live types -- per the standing
+# "cron the scripts with genuinely open findings" rule, same as this file's other entries.
+/usr/bin/node scripts/backtest_mfe_runner_target_widening_uncensored.mjs
 
 echo "=== Weekly backtest run complete: $(date) ==="
