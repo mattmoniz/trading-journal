@@ -142,25 +142,28 @@ async function run() {
   // to match the existing convention in analyze_execution_efficiency.mjs -- WR answers
   // "did this resolve decisively in our favor," EV/N carry the P&L question. Gemini
   // design-critiqued before this change (scratch/gemini_review_time_expired_setup_status_fix.md).
-  // NOTE (found 2026-08-11 via preflight_backtest_assertions.mjs check [8], while building
-  // the VALUE_FADE bet_class override below): this query's real_ev/real_n -- which drive
-  // EVERY individual setup_type's SUPPRESS/PROMOTE decision in this file, not just
-  // VALUE_FADE's -- also don't exclude MARK_TO_MARKET/RECOVERY_MTM rows. Deliberately NOT
-  // fixed in this same pass: doing so would shift real_ev/real_n for potentially all ~180
-  // live/evaluated setup_types system-wide (a much larger blast radius than the scoped
-  // VALUE_FADE bet_class-level action below), and per this file's own "one change at a
-  // time" convention deserves its own dedicated before/after verification pass across the
-  // whole roster, not a bundled side-fix. Flagged as OPEN_DECISION
-  // setup_status_realev_mtm_exclusion_needs_dedicated_pass. The NEW bet_class-pooled query
-  // below (betClassPooledQ) IS MTM-clean, scoped to just the VALUE_FADE check it feeds.
+  // MTM/RECOVERY_MTM exclusion added to real_n/real_ev/real_wr 2026-08-11 (found via
+  // preflight_backtest_assertions.mjs check [8] while building the VALUE_FADE bet_class
+  // override; OPEN_DECISION setup_status_realev_mtm_exclusion_needs_dedicated_pass, now
+  // resolved). Blast radius was verified BEFORE applying, not assumed: a full before/after
+  // reconstruction (Gemini dispatch, cross-checked directly by Claude against the live DB --
+  // both independently landed on the same 2 flips) found only GLOBEX_VWAP_FADE_LONG
+  // (SUPPRESS -> ACTIVE, real EV -$7.22 -> -$1.67 clean) and IB_HIGH_FADE_LONG (ACTIVE ->
+  // THIN_N, real N 20 -> 18 clean, below the floor) change status system-wide -- both
+  // reviewed and judged acceptable (GLOBEX_VWAP_FADE_LONG's clean EV is still barely above
+  // the existing -$5 SUPPRESS_MAX_EV bar, the same bar every other setup_type in this system
+  // is already held to; IB_HIGH_FADE_LONG's flip is the conservative direction). Only real_n/
+  // real_ev/real_wr (already origin_status-scoped) changed here -- the blended n/ev/wr columns
+  // deliberately still include everything (BACKFILL, MTM, all of it), matching their own
+  // documented purpose as the unfiltered population view.
   const allTimeQ = await query(`
     SELECT
       setup_type,
       COUNT(*) AS n,
-      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
+      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
-      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_ev,
+      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_ev,
       SUM(actual_pnl)::float AS total_pnl
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
@@ -169,21 +172,22 @@ async function run() {
     ORDER BY setup_type
   `);
 
-  // Recent 90-day stats (to detect recovery). real_n counts only ACTIVE/SHADOW-origin
-  // trades within the same window -- added 2026-07-20 after FLOOR_S1_FADE_LONG promoted
-  // to live purely on 15 BACKFILL-origin (synthetic) trades averaging +$8.33, overriding
-  // 115 real-backtest trades that were rigor-confirmed negative in all 3 chronological
-  // thirds (-$12.63/-$12.63/-$3.92, never once positive, -$1,113 total). The PROMOTE gate
-  // never checked provenance, so a recovery could be entirely fabricated. See CLAUDE.md.
+  // Recent 90-day stats (to detect recovery). real_n counts only ACTIVE/SHADOW-origin,
+  // MTM/RECOVERY_MTM-excluded trades within the same window -- added 2026-07-20 after
+  // FLOOR_S1_FADE_LONG promoted to live purely on 15 BACKFILL-origin (synthetic) trades
+  // averaging +$8.33, overriding 115 real-backtest trades that were rigor-confirmed negative
+  // in all 3 chronological thirds (-$12.63/-$12.63/-$3.92, never once positive, -$1,113
+  // total). The PROMOTE gate never checked provenance, so a recovery could be entirely
+  // fabricated. MTM exclusion added 2026-08-11, same pass/reasoning as allTimeQ above.
   const recentQ = await query(`
     SELECT
       setup_type,
       COUNT(*) AS n,
-      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
+      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
-      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_wr,
-      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_ev
+      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_wr,
+      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_ev
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
