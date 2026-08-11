@@ -199,10 +199,41 @@ const FAILED_SWEEP_REVERSAL_TYPES = new Set(['FAILED_SWEEP_REVERSAL_LONG', 'FAIL
 // forced into inferStrategyFamily()'s two-way split, matching the FAILED_SWEEP_REVERSAL
 // precedent immediately above -- each new roadmap Setup gets its own bet_class as it's built.
 const OPENING_DRIVE_15MIN_TYPES = new Set(['OPENING_DRIVE_15MIN_LONG', 'OPENING_DRIVE_15MIN_SHORT']);
-export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'OPENING_DRIVE_15MIN', 'UNCLASSIFIED'];
+// GLOBEX_LEVEL (roadmap Phase 7, Setup F "Globex Level Test" consolidation, 2026-08-11):
+// the overnight/Globex level-fade family (detectGlobexSetup(), server/routes/acd.js) --
+// "overnight levels hold or reject during the low-liquidity session," structurally
+// different from Setup A's RTH fades per the roadmap's own Part 3 framing (different
+// liquidity, different participants, different session shape), so its own bet_class
+// rather than folded into VALUE_FADE, matching the FAILED_SWEEP_REVERSAL/
+// OPENING_DRIVE_15MIN precedent above.
+//
+// ONLY covers setup_type names that are UNAMBIGUOUSLY Globex-only by construction (the 4
+// GLOBEX_-prefixed VWAP types, the 8 _OVERNIGHT-suffixed wider-window types -- see
+// WIDER_WINDOW_OVERNIGHT_LEVELS in acd.js). Deliberately does NOT include
+// PD_VAH_FADE_SHORT/PD_VAL_FADE_LONG/PD_POC_FADE_SHORT/PD_POC_FADE_LONG -- detectGlobexSetup()
+// also fires these 4 under the SAME setup_type strings as their RTH siblings (a real,
+// independently-found ambiguity: found live 2026-08-11 that getBetClass() was silently
+// classifying every Globex fire of these 4 as VALUE_FADE, 300/304 historical rows across
+// them). detectGlobexSetup()'s own INSERT now hardcodes bet_class='GLOBEX_LEVEL' directly
+// for ALL its own inserts (it has ground truth -- every row it writes IS a Globex fire --
+// so it doesn't need this function's name-based inference at all), which is why this Set
+// doesn't need to solve the ambiguous-name case either: adding those 4 names here would
+// make getBetClass() WRONG for their much-larger RTH-fired population instead. See
+// OPEN_DECISION globex_ambiguous_names_need_session_backfill for the
+// still-open question of correcting those 4 types' EXISTING historical rows.
+const GLOBEX_LEVEL_TYPES = new Set([
+  'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT',
+  'GLOBEX_VWAP_FADE_LONG', 'GLOBEX_VWAP_FADE_SHORT',
+  '3M_VAL_FADE_SHORT_OVERNIGHT', '3M_POC_FADE_SHORT_OVERNIGHT',
+  'WS1_FADE_SHORT_OVERNIGHT', 'PM_POC_FADE_SHORT_OVERNIGHT',
+  'MPP_FADE_SHORT_OVERNIGHT', 'MONTHLY_OPEN_FADE_LONG_OVERNIGHT',
+  '10D_IB_MID_FADE_SHORT_OVERNIGHT', 'WR1_FADE_SHORT_OVERNIGHT',
+]);
+export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'OPENING_DRIVE_15MIN', 'GLOBEX_LEVEL', 'UNCLASSIFIED'];
 export const getBetClass = (setupType) => {
   if (FAILED_SWEEP_REVERSAL_TYPES.has(setupType)) return 'FAILED_SWEEP_REVERSAL';
   if (OPENING_DRIVE_15MIN_TYPES.has(setupType)) return 'OPENING_DRIVE_15MIN';
+  if (GLOBEX_LEVEL_TYPES.has(setupType)) return 'GLOBEX_LEVEL';
   const family = inferStrategyFamily(setupType);
   if (family === 'MEAN_REVERSION') return 'VALUE_FADE';
   if (family === 'CONTINUATION') return 'CONTINUATION_LEGACY';

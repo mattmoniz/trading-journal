@@ -1306,7 +1306,21 @@ async function detectGlobexSetup(sessionDate, io) {
           sizeMultiplier,
           ...regimeStampValues(regimeStamp),
           ...fireTagValues(fireTags),
-          getBetClass(c.type)]);
+          // 'GLOBEX_LEVEL' hardcoded directly (roadmap Phase 7, Setup F consolidation,
+          // 2026-08-11) rather than getBetClass(c.type) -- this function only ever inserts
+          // rows it KNOWS are Globex fires, but 4 of its own setup_type names
+          // (PD_VAH_FADE_SHORT/PD_VAL_FADE_LONG/PD_POC_FADE_SHORT/PD_POC_FADE_LONG) are
+          // IDENTICAL strings to their RTH siblings -- getBetClass() has no way to tell
+          // them apart by name alone and was silently classifying every Globex fire of
+          // these 4 types as 'VALUE_FADE' (confirmed live: 300/304 historical rows across
+          // these 4 types). Since this insert site already has ground truth (it's Globex,
+          // unconditionally), skip the name-based inference entirely rather than trying to
+          // teach getBetClass() session-awareness it doesn't have data to support for the
+          // other ~180 setup_types that call it. See OPEN_DECISION
+          // globex_ambiguous_names_need_session_backfill for the
+          // still-open historical-data side of this (existing rows' bet_class not yet
+          // corrected retroactively -- this fix only affects future fires).
+          'GLOBEX_LEVEL']);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
