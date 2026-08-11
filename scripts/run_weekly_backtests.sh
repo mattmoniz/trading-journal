@@ -24,6 +24,22 @@ echo "=== Weekly backtest run: $(date) ==="
 # recheck. ---
 /usr/bin/node scripts/backtest_value_fade_bet_class_phase2.mjs
 /usr/bin/node scripts/backtest_continuation_legacy_bet_class_phase2.mjs
+# GLOBEX_LEVEL (roadmap Phase 7, Setup F consolidation) resweep, same
+# betClassPhase2Resweep.mjs methodology as the two lines above -- found missing from this
+# cron file during Phase 8 cleanup (2026-08-11), a real gap: the script existed and had
+# already been run once manually, but was never wired in, so it would never self-recalibrate
+# per this file's own standing "cron scripts with genuinely open findings" rule. Currently
+# SHIP_FLAT, thin, not rigor-clean (RESEARCH_CLAIM globex_level_bet_class_phase7_stage1_backtest).
+/usr/bin/node scripts/backtest_globex_level_bet_class_phase7.mjs
+
+# Correlation monitor (roadmap Phase 8, I5, 2026-08-11) -- pairwise Pearson r on
+# overlapping-real-trading-days-only daily P&L, both bet_class-level and (restricted to
+# currently-live) setup_type-level. Alert-only (scratch/gemini_alerts.txt) on any pair
+# overlap_N>=20 with |r|>0.6, the roadmap's own Stage 4 ceiling. Weekly per Part 6.5's
+# cadence table (Part 4's own "Daily job" line disagrees with Part 6.5 within the same
+# document -- resolved weekly, see this script's own header for the full reasoning,
+# confirmed by DeepSeek design critique before being built).
+/usr/bin/node scripts/monitor_bet_correlation.mjs
 
 # --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
 # classification (informational-only mid-trade flag) and the antigravity/edges-context

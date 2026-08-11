@@ -550,6 +550,82 @@ function RigorStabilityPanel() {
   );
 }
 
+// Roster-rebuild roadmap status (Phase 8, 2026-08-11) — the first and only UI surface for
+// the whole multi-week rebuild (scratch/MASTER_OPUS_ROSTER_REBUILD_ROADMAP.md). Before this
+// panel, bet_class, the roster cap, and the correlation monitor existed only as
+// performance_audit rows — nothing rendered them anywhere. Read-only/descriptive, same
+// convention as RigorStabilityPanel above.
+function RosterRebuildPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/acd/roster-rebuild-status`).then(r => r.json()).then(d => { if (!d.error) setData(d); }).catch(() => {});
+  }, []);
+
+  if (!data) return <div style={{ fontSize: 12, color: '#94a3b8' }}>Loading…</div>;
+
+  const STAGE_LABELS = {
+    LEGACY_LIVE: { label: 'Legacy live (pre-existing)', color: '#4ade80' },
+    STAGE_4_ACTIVE: { label: 'Stage 4 — live at 1 contract', color: '#4ade80' },
+    SHADOW: { label: 'Shadow (no real capital)', color: '#94a3b8' },
+    UNSTAGED: { label: 'No stage recorded', color: '#64748b' },
+  };
+
+  return (
+    <div style={S.section}>
+      <div style={S.sectionTitle}>Roster Rebuild — bet_class Status</div>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: data.rosterCap.liveCount > data.rosterCap.cap ? '#f87171' : '#f1f5f9' }}>
+          {data.rosterCap.liveCount}<span style={{ fontSize: 14, color: '#64748b' }}>/{data.rosterCap.cap}</span>
+        </div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>live bet_classes against the roadmap's hard roster cap</div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+        {data.betClasses.map(bc => {
+          const stageMeta = STAGE_LABELS[bc.stage] || STAGE_LABELS.UNSTAGED;
+          return (
+            <div key={bc.betClass} style={{ ...S.card, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#e2e8f0' }}>{bc.betClass}</span>
+                <span style={S.badge(stageMeta.color, stageMeta.color + '18')}>{stageMeta.label}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                blended N={bc.n} (real N={bc.realN ?? 'n/a'})
+                {bc.wr != null && <> · WR {bc.wr}%</>}
+                {bc.ev != null && <> · EV <span style={{ color: +bc.ev >= 0 ? '#4ade80' : '#f87171', fontWeight: 700 }}>${bc.ev}</span></>}
+                {bc.rigorClean != null && <> · rigor {bc.rigorClean ? 'clean' : 'unstable'}</>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ ...S.card, padding: '10px 14px', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 6 }}>Correlation monitor</div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: data.correlation.flaggedPairs.length > 0 ? 6 : 0 }}>
+          {data.correlation.betClassPairsChecked} bet_class pair(s) + {data.correlation.setupTypePairsChecked} live-setup_type pair(s) checked, last run {data.correlation.lastRunDate || 'never'}.
+        </div>
+        {data.correlation.flaggedPairs.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {data.correlation.flaggedPairs.map((p, i) => (
+              <div key={i} style={{ fontSize: 11, color: '#f87171' }}>
+                {p.a} vs {p.b}: r={p.r.toFixed(2)} (overlap_N={p.overlapN}) — exceeds the roadmap's 0.6 diversification ceiling
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: '#4ade80' }}>No pair currently exceeds r=0.6 with enough overlapping real trading days to trust — either genuinely diversifying, or (more likely at this stage) too little shared real history yet to tell.</div>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        A "bet" here is a bet_class, not an individual setup_type — the whole point of the rebuild was consolidating ~180 fragmented fade/continuation types into a handful of genuinely distinct bets so N can actually accumulate. {data.schedule}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -571,11 +647,9 @@ function FactorRow({ name, effect, stat, color }) {
 }
 
 export default function AlphaEngineOverview() {
-  const [liveStats, setLiveStats] = useState(null);
   const [setupStatus, setSetupStatus] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_URL}/acd/engine-summary`).then(r => r.json()).then(setLiveStats).catch(() => {});
     fetch(`${API_URL}/acd/setup-status`).then(r => r.json()).then(setSetupStatus).catch(() => {});
   }, []);
 
@@ -752,6 +826,9 @@ export default function AlphaEngineOverview() {
 
       {/* Backtest Stability (rigor/trend) */}
       <RigorStabilityPanel />
+
+      {/* Roster Rebuild (bet_class, roster cap, correlation monitor) */}
+      <RosterRebuildPanel />
 
       {/* Size Multiplier Stack */}
       <div style={S.section}>

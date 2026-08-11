@@ -27,7 +27,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
@@ -9508,6 +9508,78 @@ export default function createACDRouter(io) {
         degrading,
         lastRunDate,
         schedule: 'Re-evaluated weekly (Sun 10:30 PM ET, scripts/run_weekly_backtests.sh) via backtest_setup_status.mjs — every live setup_type, every run.',
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Roster-rebuild roadmap status (Phase 8, 2026-08-11) — the read-back half of the whole
+  // multi-week rebuild (scratch/MASTER_OPUS_ROSTER_REBUILD_ROADMAP.md). Before this
+  // endpoint, none of bet_class, the roster cap, or the correlation monitor had any UI
+  // surface at all — the entire rebuild was backend/DB-only, which is exactly the kind of
+  // gap CLAUDE.md's own "no dead ends" hard rule (item 3, "actually wired to a consumer")
+  // exists to catch. Deliberately read-only/descriptive — mirrors rigor-stability-coverage
+  // above, does not gate or size anything live.
+  router.get('/acd/roster-rebuild-status', async (req, res) => {
+    try {
+      const [betClassQ, corrBetClassQ, corrSetupTypeQ] = await Promise.all([
+        query(`
+          SELECT DISTINCT ON (signal_name) signal_name AS bet_class, sample_size, win_rate, ev_per_trade, notes, run_date::text
+          FROM performance_audit WHERE signal_type='BET_CLASS_STATUS'
+          ORDER BY signal_name, run_date DESC
+        `).catch(() => ({ rows: [] })),
+        query(`
+          SELECT DISTINCT ON (signal_name) signal_name, sample_size AS overlap_n, ev_per_trade AS r, notes, run_date::text
+          FROM performance_audit WHERE signal_type='CORRELATION_MONITOR_BET_CLASS'
+          ORDER BY signal_name, run_date DESC
+        `).catch(() => ({ rows: [] })),
+        query(`
+          SELECT DISTINCT ON (signal_name) signal_name, sample_size AS overlap_n, ev_per_trade AS r, notes, run_date::text
+          FROM performance_audit WHERE signal_type='CORRELATION_MONITOR_SETUP_TYPE'
+          ORDER BY signal_name, run_date DESC
+        `).catch(() => ({ rows: [] })),
+      ]);
+
+      const liveClasses = assertRosterCapNotExceeded();
+      const betClasses = betClassQ.rows.map(r => {
+        let notes = null;
+        try { notes = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes; } catch (_) {}
+        return {
+          betClass: r.bet_class,
+          stage: BET_CLASS_STAGE[r.bet_class] || 'UNSTAGED',
+          n: r.sample_size,
+          realN: notes?.all_time?.real_n ?? null,
+          wr: r.win_rate,
+          ev: r.ev_per_trade,
+          rigorClean: notes?.rigor?.clean ?? null,
+          runDate: r.run_date,
+        };
+      });
+
+      // Trustworthy (non-too-thin) correlation pairs above/near the roadmap's own 0.6 ceiling,
+      // pooled across both matrices — this is the "did anything actually flag" summary a
+      // dashboard panel needs; full per-pair detail stays in performance_audit for anyone
+      // who wants to query it directly.
+      const allCorrRows = [...corrBetClassQ.rows, ...corrSetupTypeQ.rows];
+      const flaggedPairs = allCorrRows
+        .map(r => {
+          let notes = null;
+          try { notes = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes; } catch (_) {}
+          return { a: notes?.a, b: notes?.b, r: r.r != null ? +r.r : null, overlapN: r.overlap_n, tooThin: notes?.tooThin };
+        })
+        .filter(p => !p.tooThin && p.r != null && Math.abs(p.r) > 0.6);
+
+      const lastCorrRunDate = allCorrRows.reduce((max, r) => (!max || r.run_date > max ? r.run_date : max), null);
+
+      res.json({
+        rosterCap: { cap: ROSTER_CAP, liveCount: liveClasses.length, liveClasses },
+        betClasses,
+        correlation: {
+          betClassPairsChecked: corrBetClassQ.rows.length,
+          setupTypePairsChecked: corrSetupTypeQ.rows.length,
+          flaggedPairs,
+          lastRunDate: lastCorrRunDate,
+        },
+        schedule: 'bet_class status + correlation monitor both re-evaluated weekly (run_weekly_backtests.sh) via backtest_bet_class_status.mjs / monitor_bet_correlation.mjs.',
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

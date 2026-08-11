@@ -167,7 +167,7 @@ import pg from 'pg';
 import fs, { existsSync } from 'fs';
 import path from 'path';
 import { config } from 'dotenv';
-import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES, getBetClass, BET_CLASSES } from '../server/config/setupTypes.js';
+import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES, getBetClass, BET_CLASSES, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP, computeStopTargetForType, computeVolatilityDefaultRatios } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget, makeBarIndex } from '../server/services/targetCalibrationService.js';
 import { getVolBucketAtFire } from '../server/routes/acd.js';
@@ -1371,6 +1371,58 @@ async function main() {
           warn(`latest BET_CLASS_STATUS run_date is ${latestRunDate} (${daysSince} days ago) -- expected weekly (run_weekly_backtests.sh), check the cron actually ran.`);
         } else {
           ok(`BET_CLASS_STATUS fresh as of ${latestRunDate} (${daysSince}d ago) -- ${statusRes.rows.map(r => `${r.signal_name}=N${r.sample_size}`).join(', ')}`);
+        }
+      }
+    }
+
+    console.log('\n[18] Roster cap enforcement (roadmap Phase 8, I7)');
+    {
+      // (a) BET_CLASS_STAGE must have an entry for every non-UNCLASSIFIED bet_class, and no
+      // entry for a bet_class that doesn't exist -- the two-registry sync risk DeepSeek's
+      // design critique flagged explicitly (scratch/deepseek_response.md, 2026-08-11).
+      const nonUnclassified = BET_CLASSES.filter(c => c !== 'UNCLASSIFIED');
+      const missingStage = nonUnclassified.filter(c => !(c in BET_CLASS_STAGE));
+      const orphanStage = Object.keys(BET_CLASS_STAGE).filter(c => !BET_CLASSES.includes(c));
+      if (missingStage.length > 0) {
+        warn(`BET_CLASS_STAGE is missing an entry for: ${missingStage.join(', ')} -- every real bet_class needs a stage (LEGACY_LIVE / SHADOW / STAGE_4_ACTIVE) or roster-cap counting silently excludes it.`);
+      }
+      if (orphanStage.length > 0) {
+        warn(`BET_CLASS_STAGE has stale entr(y/ies) for bet_class(es) no longer in BET_CLASSES: ${orphanStage.join(', ')} -- remove from server/config/setupTypes.js.`);
+      }
+      if (missingStage.length === 0 && orphanStage.length === 0) {
+        ok(`BET_CLASS_STAGE covers all ${nonUnclassified.length} non-UNCLASSIFIED bet_classes, no orphans`);
+      }
+
+      // (b) The cap itself -- re-derive via the real exported assertion, not a hand-copy.
+      // This is the recurring enforcement layer; the module-load call in setupTypes.js is
+      // the startup guard, this is what catches it on every routine self-check in between
+      // process restarts.
+      try {
+        const liveClasses = assertRosterCapNotExceeded();
+        ok(`roster cap OK: ${liveClasses.length}/${ROSTER_CAP} live bet_classes (${liveClasses.join(', ')})`);
+      } catch (e) {
+        fail(`roster cap exceeded: ${e.message}`);
+      }
+    }
+
+    console.log('\n[19] Correlation monitor freshness (roadmap Phase 8, I5)');
+    {
+      const corrRes = await client.query(`
+        SELECT signal_type, run_date::text, COUNT(*)::int as n_pairs
+        FROM performance_audit
+        WHERE signal_type IN ('CORRELATION_MONITOR_BET_CLASS', 'CORRELATION_MONITOR_SETUP_TYPE')
+        GROUP BY signal_type, run_date
+        ORDER BY run_date DESC
+      `).catch(() => ({ rows: [] }));
+      if (corrRes.rows.length === 0) {
+        warn('no CORRELATION_MONITOR_* rows in performance_audit yet -- run node scripts/monitor_bet_correlation.mjs (now wired into run_weekly_backtests.sh)');
+      } else {
+        const latestRunDate = corrRes.rows[0].run_date;
+        const daysSince = Math.floor((Date.now() - new Date(latestRunDate).getTime()) / 86400000);
+        if (daysSince > 9) {
+          warn(`latest CORRELATION_MONITOR run_date is ${latestRunDate} (${daysSince} days ago) -- expected weekly (run_weekly_backtests.sh), check the cron actually ran.`);
+        } else {
+          ok(`CORRELATION_MONITOR fresh as of ${latestRunDate} (${daysSince}d ago) -- ${corrRes.rows.filter(r => r.run_date === latestRunDate).map(r => `${r.signal_type}=${r.n_pairs} pair(s)`).join(', ')}`);
         }
       }
     }

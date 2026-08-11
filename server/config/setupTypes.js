@@ -240,6 +240,115 @@ export const getBetClass = (setupType) => {
   return 'UNCLASSIFIED';
 };
 
+/**
+ * Roster cap enforcement -- roadmap Phase 8, I7 (2026-08-11).
+ * scratch/MASTER_OPUS_ROSTER_REBUILD_ROADMAP.md Part 4 I7 / Part 2 P2 / Part 9.
+ *
+ * "The roster is capped at 8 live types... Removing the cap requires an explicit registry
+ * decision." "Code-level: attempting to set a ninth type to ACTIVE fails with a message
+ * naming the eight current live types."
+ *
+ * WHAT "live" MEANS HERE, and why this isn't a simple runtime intercept -- design-critiqued
+ * by DeepSeek before being written (scratch/deepseek_response.md, 2026-08-11): there is no
+ * existing code path today that "promotes a bet_class to real capital." Every live-capital
+ * decision in this codebase, before and after the rebuild, has been a human editing
+ * SETUP_STATUS directly, per individual setup_type, via the pre-existing (untouched by this
+ * rebuild) nightly ACTIVE/SUPPRESS pipeline -- there is no single choke point where "someone
+ * just tried to activate a 9th type" can be intercepted yet, because "activate" isn't a
+ * single function call anywhere in this system.
+ *
+ * So this enforces the cap at the level that DOES exist today -- the bet_class registry
+ * itself -- via two real, currently-running mechanisms:
+ *   1. assertRosterCapNotExceeded(), called at THIS MODULE'S LOAD TIME (a startup guard,
+ *      not a live-editing watcher -- DeepSeek correctly flagged that Node's ESM cache means
+ *      editing this file on a running process does NOT re-trigger this check; it fires on
+ *      the next process start, which for the systemd-managed server means "the service
+ *      fails to start" if BET_CLASS_STAGE is ever edited to add a 9th LEGACY_LIVE/
+ *      STAGE_4_ACTIVE entry -- a real, load-bearing guard, just not a filesystem watcher).
+ *   2. scripts/test_invariants.mjs check [18] re-validates the same cap + BET_CLASS_STAGE/
+ *      BET_CLASSES sync on every routine self-check run, so a bad registry edit is caught
+ *      long before it ever reaches a deploy/restart.
+ * promoteBetClassStage() is exported as the SINGLE INTENDED FUTURE CHOKE POINT for whenever
+ * this system's first genuine Stage 4 promotion happens (none has, as of this build -- every
+ * currently-LEGACY_LIVE bet_class predates this rebuild, and FAILED_SWEEP_REVERSAL/
+ * OPENING_DRIVE_15MIN are both still SHADOW). It is unused today -- that is expected, not a
+ * bug -- but per DeepSeek's review, a real Stage 4 promotion will need to coordinate more
+ * than this one cap check (updating whichever setup_types make up that bet_class in
+ * SETUP_STATUS, logging the decision, writing a RESEARCH_CLAIM) -- this function is the
+ * placeholder for that future coordination point, not the whole of it. Do not wire a future
+ * promotion script directly to a database write that bypasses this function.
+ *
+ * LEGACY COUNTS TOWARD THE CAP: VALUE_FADE, CONTINUATION_LEGACY, GLOBEX_LEVEL are pre-
+ * existing, already-live-at-real-capital bet_classes (the individual setup_types beneath
+ * them have fired live money since before this rebuild started) -- they occupy 3 of the 8
+ * slots. This matches the roadmap's own Part 9 target state ("6-8 live types" twelve months
+ * out, explicitly including Setups A and F, which ARE these legacy consolidations) and was
+ * confirmed against that reading by DeepSeek's review before this was written.
+ *
+ * WORTH RECORDING (not a code concern, a roadmap-tracking one): with Setups C and E killed
+ * by Phase 5's failed TREND/TURBULENT discriminator, the maximum realistic near-term live
+ * bet_class count from the roadmap's original 6 setups is 4 (A, B, D, F) plus the pre-
+ * existing CONTINUATION_LEGACY bucket = 5, or 6 if a future new bet_class emerges -- below
+ * Part 9's own "6-8" target range. The cap of 8 is NOT the binding constraint on this
+ * system reaching that range; Phase 5's negative result is. Do not read "roster cap not yet
+ * hit" as "the roadmap is on track for 6-8" -- those are two different questions.
+ */
+export const ROSTER_CAP = 8;
+
+// 'LEGACY_LIVE' = pre-existing, already trading real capital via the untouched SETUP_STATUS
+// pipeline (predates this rebuild). 'SHADOW' = roadmap-built, no real capital yet. A future
+// genuine Stage 4 promotion should read 'STAGE_4_ACTIVE' -- no bet_class has reached that
+// state as of this build. UNCLASSIFIED is deliberately absent -- it can never be "live" as
+// its own bet (it is the catch-all for setup_types nobody has classified yet).
+export const BET_CLASS_STAGE = {
+  VALUE_FADE: 'LEGACY_LIVE',
+  CONTINUATION_LEGACY: 'LEGACY_LIVE',
+  GLOBEX_LEVEL: 'LEGACY_LIVE',
+  FAILED_SWEEP_REVERSAL: 'SHADOW',
+  OPENING_DRIVE_15MIN: 'SHADOW',
+};
+
+const LIVE_STAGES = new Set(['LEGACY_LIVE', 'STAGE_4_ACTIVE']);
+
+// Real function, not decoration -- called at the bottom of this file (module load time).
+// Throws (not just logs) so an invalid registry can never be silently imported by any
+// consumer; a thrown error at import time takes the whole process down at startup rather
+// than letting a bad cap slip into a running server.
+export function assertRosterCapNotExceeded(stageMap = BET_CLASS_STAGE) {
+  const liveClasses = Object.entries(stageMap)
+    .filter(([, stage]) => LIVE_STAGES.has(stage))
+    .map(([betClass]) => betClass);
+  if (liveClasses.length > ROSTER_CAP) {
+    throw new Error(
+      `Roster cap exceeded: ${liveClasses.length} live bet_classes (cap=${ROSTER_CAP}) -- ` +
+      `current live set: ${liveClasses.join(', ')}. Adding a live bet_class beyond the cap ` +
+      `requires an explicit registry decision (roadmap Part 2 P2), not a routine edit.`
+    );
+  }
+  return liveClasses;
+}
+
+/**
+ * The single intended future choke point for promoting a bet_class to real capital
+ * (roadmap Stage 4). UNUSED as of this build -- no bet_class has reached Stage 4 yet. See
+ * the header comment above for what a real promotion will additionally need to coordinate
+ * (SETUP_STATUS updates for the constituent setup_types, a performance_audit/RESEARCH_CLAIM
+ * record of the decision) beyond the cap check this function performs today.
+ */
+export function promoteBetClassStage(betClass, newStage) {
+  if (!BET_CLASSES.includes(betClass)) {
+    throw new Error(`promoteBetClassStage: '${betClass}' is not a known bet_class (see BET_CLASSES)`);
+  }
+  const nextStageMap = { ...BET_CLASS_STAGE, [betClass]: newStage };
+  assertRosterCapNotExceeded(nextStageMap); // throws before mutating anything if this would exceed the cap
+  BET_CLASS_STAGE[betClass] = newStage;
+  return BET_CLASS_STAGE;
+}
+
+// Startup guard (see header comment) -- runs once, at module load, in every process that
+// imports this file (server/index.js, every backtest/calibration script, test_invariants.mjs).
+assertRosterCapNotExceeded();
+
 export const CONDITIONAL_VARIANTS = {
   WPP_FADE_SHORT_GAP_UP: {
     baseType: 'WPP_FADE_SHORT',
