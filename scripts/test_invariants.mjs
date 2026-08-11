@@ -135,15 +135,42 @@
  *    (a routine check's own output is not itself an investigation) says must never sit
  *    silently in a log nobody reads. See OPEN_DECISION
  *    optimal_stop_100pct_unguarded_fallback_needs_new_formula for the still-open root cause.
+ *
+ * 15. Fire-time regime tagging (roadmap Phase 1, I1) no-lookahead guard (added 2026-08-10)
+ *    Three checks on active_setups.day_type_at_fire/vol_bucket_at_fire, populated at insert
+ *    by server/routes/acd.js's computeFireTags(): (a) getVolBucketAtFire()'s source has a
+ *    strict upper time bound (ts::date < $1) on its price_bars_primary query -- static, so
+ *    it can't be fooled by a code path that hasn't fired yet; (b) a structural guarantee
+ *    that no RTH-session row ever has a non-UNKNOWN day_type_at_fire, since
+ *    acd_daily_log.day_type for that SAME trade_date is only ever written by
+ *    derive_day_types.js at 20:20 ET, always after RTH close -- a violation is proof of a
+ *    real lookahead leak; (c) determinism -- getVolBucketAtFire(tradeDate) excludes the
+ *    whole trade_date from its own rolling window, so a fresh re-derivation via the REAL
+ *    exported function must exactly reproduce what was stored at insert time.
+ *
+ * 16. Non-fire logging (roadmap Phase 1, I2) gated_candidates table health (added 2026-08-10)
+ *    Confirms the table exists (FAILs if it's been dropped/reverted) and WARNs if any
+ *    gate_name shows up that isn't in this check's own known list -- a new gate wired in
+ *    without updating this list, or a typo that silently fragments what should be one
+ *    gate_name into two. Prints the last-7-days per-gate row count every run so the
+ *    aggregate volume is visible without a manual query.
+ *
+ * 17. bet_class coverage (roadmap Phase 1, I3) (added 2026-08-10)
+ *    (a) Every real setup_type resolves to a real bet_class via getBetClass() (none
+ *    UNCLASSIFIED); (b) the STORED active_setups.bet_class column matches a fresh
+ *    re-derivation (WARN on drift -- expected if setupTypes.js's classification changed
+ *    since a row was tagged, otherwise a wiring bug); (c) BET_CLASS_STATUS rows exist in
+ *    performance_audit and are fresh (weekly cron via backtest_bet_class_status.mjs).
  */
 
 import pg from 'pg';
 import fs, { existsSync } from 'fs';
 import path from 'path';
 import { config } from 'dotenv';
-import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES } from '../server/config/setupTypes.js';
+import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES, getBetClass, BET_CLASSES } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP, computeStopTargetForType, computeVolatilityDefaultRatios } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget, makeBarIndex } from '../server/services/targetCalibrationService.js';
+import { getVolBucketAtFire } from '../server/routes/acd.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { listClaims } from './record_claim.mjs';
 
@@ -1199,6 +1226,151 @@ async function main() {
           warn(`docs/OPEN_THREADS.md is ${kb.toFixed(0)}KB (cap ${OPEN_THREADS_MAX_KB}KB) -- run node scripts/archive_open_threads.mjs --apply (now wired into run_daily_calibration.sh as of 2026-08-05, so this should self-correct within a day; a WARN here means it's still catching up or the cron didn't run).`);
         } else {
           ok(`docs/OPEN_THREADS.md within size cap (${kb.toFixed(0)}/${OPEN_THREADS_MAX_KB}KB)`);
+        }
+      }
+    }
+
+    console.log('\n[15] Fire-time regime tagging (roadmap Phase 1, I1) -- no-lookahead guard');
+    {
+      // (a) Source-level check that getVolBucketAtFire's population query has a strict
+      // upper time bound -- the exact guard I1's own spec item calls for ("fails if any
+      // regime field's source query lacks an upper time bound"). Static, not a live
+      // query, so it can't be fooled by a code path that happens not to have fired yet.
+      const acdSrc = fs.readFileSync(path.resolve('server/routes/acd.js'), 'utf8');
+      const volBucketFnMatch = acdSrc.match(/export async function getVolBucketAtFire[\s\S]*?\n}\n/);
+      if (!volBucketFnMatch) {
+        fail('getVolBucketAtFire() not found in server/routes/acd.js -- I1 regime tagging may have been removed or renamed without updating this check');
+      } else if (!/ts::date\s*<\s*\$1/.test(volBucketFnMatch[0])) {
+        fail('getVolBucketAtFire() no longer has a strict upper time bound (ts::date < $1) on its price_bars_primary query -- this is the exact no-lookahead guard I1 was built to enforce; a query missing this could let a fire-time tag see data from AFTER the trade_date it is tagging');
+      } else {
+        ok('getVolBucketAtFire() query has a strict upper time bound (ts::date < $1)');
+      }
+
+      // (b) Structural guarantee, not a data check: acd_daily_log.day_type is only ever
+      // written by derive_day_types.js at 20:20 ET (run_daily_calibration.sh) -- RTH
+      // fires (9:30-16:00 ET) always happen before that, every day, so ANY RTH-session
+      // active_setups row with a non-UNKNOWN day_type_at_fire is proof of a lookahead
+      // leak (e.g. a future edit that swaps in a live estimate without updating this
+      // guard, or a timezone bug in how trade_date/session get set at insert time).
+      const rthLeak = await client.query(`
+        SELECT id, trade_date, fired_at::text, day_type_at_fire
+        FROM active_setups
+        WHERE session = 'RTH' AND day_type_at_fire IS NOT NULL AND day_type_at_fire != 'UNKNOWN'
+        ORDER BY fired_at DESC LIMIT 5
+      `).catch(() => ({ rows: [] }));
+      if (rthLeak.rows.length > 0) {
+        fail(`${rthLeak.rows.length}+ RTH-session active_setups row(s) have a non-UNKNOWN day_type_at_fire (e.g. id=${rthLeak.rows[0].id}, trade_date=${rthLeak.rows[0].trade_date}, day_type_at_fire=${rthLeak.rows[0].day_type_at_fire}) -- acd_daily_log.day_type for that SAME trade_date cannot legitimately be known before derive_day_types.js's 20:20 ET run, which is always after RTH close. This is a real lookahead leak, not a stale-value quirk.`);
+      } else {
+        ok('no RTH-session row has a non-UNKNOWN day_type_at_fire (structurally impossible without lookahead)');
+      }
+
+      // (c) Determinism re-derivation: getVolBucketAtFire(tradeDate) excludes the WHOLE
+      // trade_date from its own rolling window, so its output for any past date is fixed
+      // forever -- re-deriving it today via the REAL exported function (not a hand-copy)
+      // must reproduce exactly what was stored at insert time. A mismatch means either a
+      // non-deterministic bug or a historical price_bars_primary correction that silently
+      // changed a past tag -- either way worth surfacing, not silently trusting the stored
+      // value forever.
+      const sample = await client.query(`
+        SELECT DISTINCT trade_date::text, vol_bucket_at_fire
+        FROM active_setups
+        WHERE vol_bucket_at_fire IS NOT NULL
+        ORDER BY trade_date DESC LIMIT 20
+      `).catch(() => ({ rows: [] }));
+      if (sample.rows.length === 0) {
+        ok('no vol_bucket_at_fire rows yet to re-derive (expected immediately after this field was added -- will self-populate as new setups fire)');
+      } else {
+        let mismatches = 0;
+        for (const r of sample.rows) {
+          const fresh = await getVolBucketAtFire(r.trade_date);
+          if (fresh !== r.vol_bucket_at_fire) mismatches++;
+        }
+        if (mismatches > 0) {
+          fail(`${mismatches}/${sample.rows.length} sampled vol_bucket_at_fire values don't match a fresh re-derivation via the real getVolBucketAtFire() -- either a non-deterministic bug or price_bars_primary was corrected after these rows were tagged.`);
+        } else {
+          ok(`all ${sample.rows.length} sampled vol_bucket_at_fire values reproduce exactly via a fresh re-derivation (deterministic, no lookahead)`);
+        }
+      }
+    }
+
+    console.log('\n[16] Non-fire logging (roadmap Phase 1, I2) -- gated_candidates table health');
+    {
+      const KNOWN_GATE_NAMES = new Set([
+        'GLOBEX_ALREADY_FIRED_TODAY', 'OTD_HARDCODED_KILL', 'IB_DAYTYPE_REAL_N_FLOOR',
+        'RISK_CHECK_MAIN', 'RISK_CHECK_SHADOW', 'DIRECTIONAL_CONFLICT_STAND_ASIDE',
+        'C_STANDALONE_DEATH_SEQUENCE', 'C_STANDALONE_POC_COUNTER',
+      ]);
+      const tableCheck = await client.query(`
+        SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='gated_candidates') as exists
+      `).catch(() => ({ rows: [{ exists: false }] }));
+      if (!tableCheck.rows[0].exists) {
+        fail('gated_candidates table does not exist -- I2 (non-fire logging) has been reverted or never migrated on this DB');
+      } else {
+        const rows = await client.query(`
+          SELECT gate_name, COUNT(*)::int as n, MAX(evaluated_at)::text as latest
+          FROM gated_candidates
+          WHERE evaluated_at > NOW() - INTERVAL '7 days'
+          GROUP BY gate_name ORDER BY n DESC
+        `).catch(() => ({ rows: [] }));
+        const unknownGates = rows.rows.filter(r => !KNOWN_GATE_NAMES.has(r.gate_name));
+        if (unknownGates.length > 0) {
+          warn(`gated_candidates has gate_name value(s) not in this check's known list: ${unknownGates.map(r => r.gate_name).join(', ')} -- either a new gate was wired (update KNOWN_GATE_NAMES here) or a typo produced a stray gate_name that will never aggregate cleanly with its siblings.`);
+        }
+        if (rows.rows.length === 0) {
+          ok('gated_candidates table exists, no rows in the last 7 days yet (expected immediately after this table was added)');
+        } else {
+          ok(`gated_candidates: ${rows.rows.length} distinct gate(s) logged in the last 7 days -- ${rows.rows.map(r => `${r.gate_name}=${r.n}`).join(', ')}`);
+        }
+      }
+    }
+
+    console.log('\n[17] bet_class coverage (roadmap Phase 1, I3)');
+    {
+      // (a) Every distinct setup_type in active_setups must resolve to a bet_class other
+      // than UNCLASSIFIED via getBetClass() -- the real function, not a hand-copy. Catches
+      // a new setup_type added without updating CONTINUATION_TYPES/MEAN_REVERSION_OVERRIDE_
+      // TYPES (the '_FADE' substring default rule already covers the large majority, so
+      // this should only ever flag a genuinely new, non-fade-named setup_type).
+      const typesRes = await client.query(`SELECT DISTINCT setup_type FROM active_setups`);
+      const unclassified = typesRes.rows.map(r => r.setup_type).filter(t => getBetClass(t) === 'UNCLASSIFIED');
+      if (unclassified.length > 0) {
+        warn(`${unclassified.length} real setup_type(s) resolve to UNCLASSIFIED via getBetClass(): ${unclassified.join(', ')} -- add to CONTINUATION_TYPES or MEAN_REVERSION_OVERRIDE_TYPES in server/config/setupTypes.js (see inferStrategyFamily()'s own docs for the classification method) rather than leaving them pooled with neither real bucket.`);
+      } else {
+        ok(`all ${typesRes.rows.length} real setup_types resolve to a real bet_class (none UNCLASSIFIED)`);
+      }
+
+      // (b) The STORED bet_class column shouldn't silently drift from what getBetClass()
+      // would compute today -- a mismatch means either a setup_type was reclassified in
+      // setupTypes.js after some rows were already tagged (expected to happen occasionally,
+      // WARN not FAIL) or the INSERT-site wiring has a bug feeding the wrong value.
+      const storedRes = await client.query(`
+        SELECT setup_type, bet_class, COUNT(*)::int as n
+        FROM active_setups WHERE bet_class IS NOT NULL
+        GROUP BY setup_type, bet_class
+      `);
+      const drifted = storedRes.rows.filter(r => getBetClass(r.setup_type) !== r.bet_class);
+      if (drifted.length > 0) {
+        warn(`${drifted.length} (setup_type, stored bet_class) combination(s) don't match a fresh getBetClass() re-derivation (e.g. ${drifted[0].setup_type}: stored=${drifted[0].bet_class}, fresh=${getBetClass(drifted[0].setup_type)}, ${drifted[0].n} row(s)) -- expected if setupTypes.js's classification changed since those rows were tagged; re-run the backfill (see the 2026-08-10 bet_class backfill in docs/OPEN_THREADS.md) if this is unexpected drift, not a deliberate reclassification.`);
+      } else {
+        ok(`all ${storedRes.rows.length} (setup_type, bet_class) combinations match a fresh getBetClass() re-derivation`);
+      }
+
+      // (c) BET_CLASS_STATUS rows exist and are fresh (weekly cron) -- confirms the
+      // aggregation layer is actually running, not just built once and forgotten.
+      const statusRes = await client.query(`
+        SELECT signal_name, run_date::text, sample_size FROM performance_audit
+        WHERE signal_type = 'BET_CLASS_STATUS'
+        ORDER BY run_date DESC LIMIT ${BET_CLASSES.length}
+      `).catch(() => ({ rows: [] }));
+      if (statusRes.rows.length === 0) {
+        warn('no BET_CLASS_STATUS rows in performance_audit yet -- run node scripts/backtest_bet_class_status.mjs (now wired into run_weekly_backtests.sh)');
+      } else {
+        const latestRunDate = statusRes.rows[0].run_date;
+        const daysSince = Math.floor((Date.now() - new Date(latestRunDate).getTime()) / 86400000);
+        if (daysSince > 9) {
+          warn(`latest BET_CLASS_STATUS run_date is ${latestRunDate} (${daysSince} days ago) -- expected weekly (run_weekly_backtests.sh), check the cron actually ran.`);
+        } else {
+          ok(`BET_CLASS_STATUS fresh as of ${latestRunDate} (${daysSince}d ago) -- ${statusRes.rows.map(r => `${r.signal_name}=N${r.sample_size}`).join(', ')}`);
         }
       }
     }

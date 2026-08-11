@@ -371,7 +371,12 @@ CREATE TABLE public.active_setups (
     va_overlap_streak integer,
     ib_range_pctile_60d numeric,
     fired_status character varying(10),
-    selected_over text[]
+    selected_over text[],
+    day_type_at_fire character varying(20),
+    vol_bucket_at_fire character varying(12),
+    session character varying(8),
+    minutes_from_open integer,
+    bet_class character varying(24)
 );
 
 
@@ -2237,6 +2242,43 @@ CREATE SEQUENCE public.engine_reads_id_seq
 --
 
 ALTER SEQUENCE public.engine_reads_id_seq OWNED BY public.engine_reads.id;
+
+
+--
+-- Name: gated_candidates; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.gated_candidates (
+    id bigint NOT NULL,
+    evaluated_at timestamp without time zone DEFAULT now() NOT NULL,
+    trade_date date NOT NULL,
+    setup_type character varying(60) NOT NULL,
+    gate_name character varying(60) NOT NULL,
+    gate_reason text,
+    would_have_entry numeric,
+    would_have_stop numeric,
+    would_have_target numeric,
+    bet_class character varying(24)
+);
+
+
+--
+-- Name: gated_candidates_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.gated_candidates_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: gated_candidates_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.gated_candidates_id_seq OWNED BY public.gated_candidates.id;
 
 
 --
@@ -6146,6 +6188,13 @@ ALTER TABLE ONLY public.engine_reads ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: gated_candidates id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gated_candidates ALTER COLUMN id SET DEFAULT nextval('public.gated_candidates_id_seq'::regclass);
+
+
+--
 -- Name: import_log id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -6715,6 +6764,14 @@ ALTER TABLE ONLY public.engine_reads
 
 ALTER TABLE ONLY public.engine_reads
     ADD CONSTRAINT engine_reads_trade_date_read_type_signal_value_key UNIQUE (trade_date, read_type, signal_value);
+
+
+--
+-- Name: gated_candidates gated_candidates_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.gated_candidates
+    ADD CONSTRAINT gated_candidates_pkey PRIMARY KEY (id);
 
 
 --
@@ -7850,6 +7907,20 @@ CREATE INDEX idx_dpl_structural_state ON public.daily_performance_log USING btre
 --
 
 CREATE INDEX idx_dpl_trade_date ON public.daily_performance_log USING btree (trade_date);
+
+
+--
+-- Name: idx_gated_candidates_trade_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gated_candidates_trade_date ON public.gated_candidates USING btree (trade_date);
+
+
+--
+-- Name: idx_gated_candidates_type_gate; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_gated_candidates_type_gate ON public.gated_candidates USING btree (setup_type, gate_name);
 
 
 --

@@ -123,6 +123,11 @@ const CONTINUATION_TYPES = new Set([
   'C_STANDALONE_UP', 'C_STANDALONE_DOWN',
   'A_UP_STRONG', 'A_DOWN_STRONG', 'A_UP_WEAK', 'A_DOWN_WEAK',
   'C_PAIRED_LONG', 'C_PAIRED_SHORT',
+  // VWAP_RECLAIM_SHORT: docs/VWAP_RECLAIM_HOLD_SPEC.md's own description is explicit --
+  // "a trend-continuation bet AWAY from VWAP, not a fade toward it." Found UNCLASSIFIED
+  // 2026-08-10 (the only one of 181 real setup_types this mapping missed) while building
+  // bet_class (roadmap I3) -- added here rather than left to fall through to UNCLASSIFIED.
+  'VWAP_RECLAIM_SHORT',
 ]);
 const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
   'FAILED_AUCTION_LONG', 'FAILED_AUCTION_SHORT',
@@ -143,6 +148,43 @@ export const inferStrategyFamily = (setupType) => {
   if (setupType.includes('_FADE') || MEAN_REVERSION_OVERRIDE_TYPES.has(setupType)) return 'MEAN_REVERSION';
   if (CONTINUATION_TYPES.has(setupType)) return 'CONTINUATION';
   return null;
+};
+
+/**
+ * bet_class — roster-rebuild roadmap Phase 1, I3 (2026-08-10): "converts 130 fragmented
+ * samples into one usable sample." Deliberately NOT a new classification built from
+ * scratch — it's a thin rename/remap of the already-validated inferStrategyFamily()
+ * above (built 2026-08-04, verified against each setup's real detection criteria, not
+ * guessed from the name) onto the roadmap's own vocabulary:
+ *   - MEAN_REVERSION -> 'VALUE_FADE' (the roadmap's own name for "Setup A — Value Fade
+ *     (consolidation of the existing roster)", scratch/MASTER_OPUS_ROSTER_REBUILD_
+ *     ROADMAP.md Part 3 — this IS the ~118-122-type fade roster the roadmap's Part 1.1
+ *     diagnosis ("the roster is one bet wearing 130 costumes") is about.
+ *   - CONTINUATION -> 'CONTINUATION_LEGACY', not 'CONTINUATION' bare and not folded into
+ *     a future Setup C — these are pre-existing, already-live continuation-shaped bets
+ *     (IB_BULLISH/BEARISH, OPEN_DRIVE, BRACKET_BREAKOUT, STACK_VOL_BREAK_LIVE,
+ *     C_STANDALONE, A_UP/DOWN_STRONG/WEAK, C_PAIRED, MOMENTUM_60m_60m_TREND) that
+ *     structurally are NOT part of the "130 costumes for one fade" problem (they're
+ *     already a different bet), but they're also not one of the roadmap's new B-F
+ *     setups (those don't exist yet) — a distinct, honest bucket, not a guess either way.
+ *   - null (unclassified by inferStrategyFamily) -> 'UNCLASSIFIED'. Per the same
+ *     "must be treated as needs-classifying, never defaulted" rule inferStrategyFamily's
+ *     own docs state — a setup_type landing here needs a real classification decision,
+ *     not a silent fold into VALUE_FADE or CONTINUATION_LEGACY.
+ * Phase 1's own scope (this commit): the column + this mapping + an aggregation layer
+ * (scripts/backtest_bet_class_status.mjs) that reports pooled real N/WR/EV per
+ * bet_class. Deliberately NOT wired into the live stop/target lookup yet — the roadmap's
+ * own Phase 2 checkpoint ("a defensible number for VALUE_FADE EV at an affordable stop,
+ * from real data, with N in the hundreds") is a real resweep at consolidated N, not a
+ * same-commit rewire of acd.js's live risk parameters. See OPEN_DECISION
+ * bet_class_phase2_consolidated_resweep_not_started.
+ */
+export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'UNCLASSIFIED'];
+export const getBetClass = (setupType) => {
+  const family = inferStrategyFamily(setupType);
+  if (family === 'MEAN_REVERSION') return 'VALUE_FADE';
+  if (family === 'CONTINUATION') return 'CONTINUATION_LEGACY';
+  return 'UNCLASSIFIED';
 };
 
 export const CONDITIONAL_VARIANTS = {

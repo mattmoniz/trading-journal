@@ -10,6 +10,11 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/backtest_pulse_score.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 
+# --- bet_class aggregation layer (roster-rebuild roadmap Phase 1, I3) — real N grows
+# slowly, weekly is the right cadence (unlike per-type SUPPRESS/PROMOTE above, which
+# needs daily). See scripts/backtest_bet_class_status.mjs's own header. ---
+/usr/bin/node scripts/backtest_bet_class_status.mjs
+
 # --- Touch-quality (order-flow) calibration — feeds acd.js's live resolveSetupsByPrice
 # classification (informational-only mid-trade flag) and the antigravity/edges-context
 # card badge. See server/services/touchQuality.js and docs/OPEN_THREADS.md. ---

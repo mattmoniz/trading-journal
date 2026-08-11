@@ -27,7 +27,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 
@@ -119,6 +119,129 @@ function computeRegimeStamp(price, vaMap) {
 }
 const REGIME_STAMP_COLS = REGIME_LOOKBACKS.flatMap(L => [`regime_pos_${L}d`, `regime_label_${L}d`]);
 function regimeStampValues(stamp) { return REGIME_STAMP_COLS.map(c => stamp[c] ?? null); }
+
+// ── Fire-time regime tagging (roster-rebuild roadmap Phase 1, I1, 2026-08-10) ──────
+// Tags every live INSERT with day_type_at_fire/vol_bucket_at_fire/session/
+// minutes_from_open — the regime that was true AT FIRE TIME, populated at insert,
+// never backfilled. Purely additive/informational, same posture as the value-area
+// regime stamp above — nothing reads these columns to gate/size anything yet. Point
+// of this: no census/analysis of the roster today can condition on regime at all; this
+// is what lets a future bet_class-level calibration (I3) or correlation monitor (I5)
+// group by "what was actually true when this fired" instead of pooling blind.
+//
+// day_type_at_fire is deliberately the SLOW, ground-truth acd_daily_log.day_type — NOT
+// the live dayTypeReassessmentService.js estimate. That engine was tested as a live
+// gate input and rejected (2026-08-03, OPEN_DECISION dtclass_null_all_day_neuters_
+// multiple_live_gates / RESEARCH_CLAIM trend_gate_suppression): it's specifically
+// UNRELIABLE at the exact moment a fade fires (70.6% FPR on that subpopulation, since a
+// fade-touch moment by construction looks like a trend in progress). Tagging a column
+// literally named "day_type_at_fire" with a known-unreliable live guess would silently
+// misdirect any future bet_class analysis that assumes it's ground truth. The honest
+// consequence: acd_daily_log.day_type isn't written until run_daily_calibration.sh's
+// 20:20 ET derive_day_types.js run, so for the RTH majority of the roster this will
+// read UNKNOWN nearly always — that itself is a real, useful finding (how much of the
+// roster can't be regime-conditioned on ground-truth day-type at all), not a bug to
+// paper over with a worse number. vol_bucket_at_fire/session/minutes_from_open are the
+// three fields expected to carry the real weight for regime conditioning until/unless a
+// future session deliberately re-opens the live-estimate question (tracked below).
+const RTH_OPEN_MIN = 570;    // 9:30 ET
+const GLOBEX_OPEN_MIN = 1080; // 18:00 ET
+
+export async function getDayTypeAtFire(tradeDate) {
+  const cached = getCached(tradeDate, 'dayTypeAtFire');
+  if (cached) return cached;
+  const r = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [tradeDate]).catch(() => ({ rows: [] }));
+  return setCached(tradeDate, 'dayTypeAtFire', r.rows[0]?.day_type || 'UNKNOWN');
+}
+
+// Trailing-30-trading-day median 1-min NQ bar range, strictly excluding tradeDate
+// itself (every input row satisfies ts::date < $1 — the preflight guard this field's
+// own spec item calls for). Excluding the WHOLE trade_date, not just bars before
+// fired_at's own time-of-day, means this is safe for both RTH and Globex fires on that
+// date with a single query, and is immune to any same-day reclassification. Bucketed
+// into quintiles against its own trailing 250-trading-day distribution of the SAME
+// rolling statistic — self-calibrating, no static threshold (matches the noise-floor/
+// circuit-breaker convention in update_optimal_stops.mjs, not reimplemented from it
+// since that one is a run-time script stat, not a per-tradeDate live lookup).
+export async function getVolBucketAtFire(tradeDate) {
+  // getCached/setCached can't distinguish "not cached" from "cached as a legitimate
+  // null" (both return null) — use a sentinel so the insufficient-history case (below)
+  // is actually cached instead of re-querying on every call.
+  const cached = getCached(tradeDate, 'volBucketAtFire', DAY_CACHE_TTL);
+  if (cached !== null) return cached === 'NONE' ? null : cached;
+  const rows = await query(`
+    WITH daily AS (
+      SELECT ts::date AS d, AVG(high - low) AS rng
+      FROM price_bars_primary
+      WHERE symbol = 'NQ' AND ts::date < $1
+      GROUP BY ts::date
+    ), rolled AS (
+      SELECT d,
+        AVG(rng) OVER (ORDER BY d ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS roll30,
+        COUNT(*) OVER (ORDER BY d ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) AS n_in_window
+      FROM daily
+    )
+    SELECT d, roll30::float FROM rolled WHERE n_in_window >= 30 ORDER BY d DESC LIMIT 251
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  if (rows.rows.length < 51) { setCached(tradeDate, 'volBucketAtFire', 'NONE'); return null; } // too little history to bucket meaningfully
+  const [today, ...hist] = rows.rows;
+  const histVals = hist.map(r => r.roll30).sort((a, b) => a - b);
+  const rank = histVals.filter(v => v <= today.roll30).length / histVals.length;
+  const bucket = rank >= 0.8 ? 'HIGH' : rank >= 0.6 ? 'ABOVE_AVG' : rank >= 0.4 ? 'AVG' : rank >= 0.2 ? 'BELOW_AVG' : 'LOW';
+  return setCached(tradeDate, 'volBucketAtFire', bucket);
+}
+
+// etMin: minutes-since-midnight ET at fire time. Session opens: RTH 9:30 ET (570),
+// Globex 18:00 ET (1080), wrapping past midnight through the 8:30 ET Globex detector
+// cutoff. Every call site derives etMin from "now" at insert time, never a stored/
+// stale value — satisfies the strict-upper-time-bound guard by construction (there is
+// no query here at all, just wall-clock arithmetic on the same instant fired_at=NOW()
+// uses).
+export function minutesFromSessionOpen(etMin, session) {
+  if (etMin == null) return null;
+  if (session === 'RTH') return etMin - RTH_OPEN_MIN;
+  if (etMin >= GLOBEX_OPEN_MIN) return etMin - GLOBEX_OPEN_MIN;
+  return etMin + (1440 - GLOBEX_OPEN_MIN);
+}
+
+export async function computeFireTags(tradeDate, session, etMin) {
+  const [dayType, volBucket] = await Promise.all([
+    getDayTypeAtFire(tradeDate),
+    getVolBucketAtFire(tradeDate),
+  ]);
+  return {
+    day_type_at_fire: dayType,
+    vol_bucket_at_fire: volBucket,
+    session,
+    minutes_from_open: minutesFromSessionOpen(etMin, session),
+  };
+}
+export const FIRE_TAG_COLS = ['day_type_at_fire', 'vol_bucket_at_fire', 'session', 'minutes_from_open'];
+export function fireTagValues(tags) { return FIRE_TAG_COLS.map(c => tags[c] ?? null); }
+
+// ── Non-fire logging (roster-rebuild roadmap Phase 1, I2, 2026-08-10) ──────────────
+// A `gated_candidates` row for every candidate this codebase's own gates drop, null, or
+// keep out of the ACTIVE path -- before this, the current census of what the system does
+// was blind to everything filtered before a row was written (e.g. a PROMOTE-status type
+// showing zero real attempts was invisible in every existing analysis, since a nulled
+// candidate simply never produced any row anywhere). Explicitly NOT a duplicate of the
+// existing SHADOW-row audit trail (the level-fade 6-way combo at ~line 6532, the
+// forceShadow combo on the winning candidate, the overnight-level promotion gate) --
+// those already persist their own row with their own reason and don't need this table;
+// this table exists specifically for the gates a 2026-08-10 audit found had NO trace at
+// all (a console.error, or nothing): the IB day-type real-N floor, the OPEN_TEST_DRIVE
+// hardcoded kill-switch, both riskOk checks, the directional-conflict "stand aside", the
+// C_STANDALONE death-sequence/POC-counter suppressions, and the Globex same-day dedup.
+// Fire-and-forget, never allowed to affect detection -- same posture as the rest of this
+// file's audit inserts.
+async function logGatedCandidate({ tradeDate, setupType, gateName, gateReason, entry, stop, target }) {
+  try {
+    await query(`
+      INSERT INTO gated_candidates (trade_date, setup_type, gate_name, gate_reason, would_have_entry, would_have_stop, would_have_target, bet_class)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `, [tradeDate, setupType, gateName, gateReason ?? null, entry ?? null, stop ?? null, target ?? null, getBetClass(setupType)]);
+  } catch (_) { /* informational only, never block detection */ }
+}
 
 // Touch-quality (order-flow) calibration + volume-baseline lookups — informational
 // only; see server/services/touchQuality.js and scripts/calibrate_touch_quality.mjs.
@@ -1109,7 +1232,10 @@ async function detectGlobexSetup(sessionDate, io) {
         `SELECT 1 FROM active_setups WHERE trade_date=$1 AND setup_type=$2 LIMIT 1`,
         [sessionDate, c.type]
       );
-      if (existing.rows.length) continue;
+      if (existing.rows.length) {
+        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'GLOBEX_ALREADY_FIRED_TODAY', gateReason: 'active_setups already has a row for this (trade_date, setup_type) today', entry: px });
+        continue;
+      }
 
       // Every candidate now carries widerStop/widerTarget from the real OPTIMAL_STOP source
       // (see the candidates array above) -- the old widerWindowNew-vs-globexParams() branch
@@ -1182,15 +1308,18 @@ async function detectGlobexSetup(sessionDate, io) {
       // OPEN_DECISION globex_confluence_pair_bonus_needs_sizing_mechanism) — informational
       // only, same as RTH, since this app has no broker execution capability.
       const regimeStamp = computeRegimeStamp(entry, await getValueAreaRegimeMap(sessionDate));
+      const fireTags = await computeFireTags(sessionDate, 'GLOBEX', etNow.getHours() * 60 + etNow.getMinutes());
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
-          ${REGIME_STAMP_COLS.join(', ')}
+          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
         ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
-          ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
+          ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
+          ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+          $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
@@ -1199,7 +1328,9 @@ async function detectGlobexSetup(sessionDate, io) {
           candidates.length,
           candidates.map(x => x.name),
           sizeMultiplier,
-          ...regimeStampValues(regimeStamp)]);
+          ...regimeStampValues(regimeStamp),
+          ...fireTagValues(fireTags),
+          getBetClass(c.type)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
@@ -3693,20 +3824,25 @@ export default function createACDRouter(io) {
               const svExpiresAt = `${todayET} 16:00:00`;
               getStackVolBreakLiveStatus(svSetupType).then(async (live) => {
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
+                const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const ins = await query(`
                   INSERT INTO active_setups (
                     trade_date, setup_type, fired_at, expires_at, status, origin_status,
                     entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                     extend_target_level, price_at_detection, confluence_score_at_detection,
-                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}
+                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
                   ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
-                    ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')})
+                    ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')},
+                    ${FIRE_TAG_COLS.map((_, i) => `$${13 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                    $${13 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                   ON CONFLICT DO NOTHING
                   RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
                 `, [todayET, svSetupType, svExpiresAt, live.status, svEntry, svStop, svT1,
                     `${stackVolSignal.calibratedTarget}pt (bank <=9 bars / extend 10-25 bars to 150pt)`,
                     svExtendTarget, levelDensity, stackVolSignal.levels, live.reason,
-                    ...regimeStampValues(svRegimeStamp)]);
+                    ...regimeStampValues(svRegimeStamp),
+                    ...fireTagValues(svFireTags),
+                    getBetClass(svSetupType)]);
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   if (live.status === 'ACTIVE' && io) {
@@ -4172,7 +4308,13 @@ export default function createACDRouter(io) {
       }
       // OPEN_TEST_DRIVE suppressed 2026-07-05: LONG=31.8% WR N=44 EV=-$100 (KILL), SHORT=26.7% WR N=45 EV=-$74 (KILL).
       // Code gates (nearPD2VA) described in description but not enforced — base rate is catastrophic.
-      // Shadow tracking continues; revisit if PD-2 VA gate shows N≥20 at ≥65% WR.
+      // The "shadow tracking continues" comment above was FALSE (2026-08-10 audit, roadmap I2) --
+      // this unconditionally nulled a fully-built candidate with zero trace anywhere. Now logged
+      // to gated_candidates (informational only, doesn't restore shadow firing) so a future PD-2
+      // VA gate revisit has real gated-population data to check, not just this comment's claim.
+      if (otdSetup) {
+        logGatedCandidate({ tradeDate: todayET, setupType: otdSetup.type, gateName: 'OTD_HARDCODED_KILL', gateReason: 'OPEN_TEST_DRIVE unconditionally suppressed 2026-07-05 (confirmed negative EV both directions)', entry: otdSetup.entry, stop: otdSetup.stop, target: otdSetup.target });
+      }
       otdSetup = null;
 
       // ── SETUP 0d: A UP STRONG (LONG) ─────────────────────────────────────────
@@ -4939,7 +5081,9 @@ export default function createACDRouter(io) {
             // must say why, in real time, not just in a scratch/*.log line that scrolls away --
             // console.error so it lands in scratch/server_errors.jsonl (the standing error
             // watcher already tails this) and is queryable/greppable after the fact.
-            console.error(`[ib-gate] ${ibSetup.type} NULLED by DAY_TYPE_ALPHA real-N floor: cell=${ibDtaRow.signal_name} run_date=${ibDtaRow.run_date} real_n=${realN} (floor=${REAL_N_FLOOR}) real_ev=${realEv ?? 'n/a'} reason=${unproven ? 'unproven (real_n<floor)' : 'realBad (real_ev<-5)'}`);
+            const ibGateReason = `DAY_TYPE_ALPHA real-N floor: cell=${ibDtaRow.signal_name} run_date=${ibDtaRow.run_date} real_n=${realN} (floor=${REAL_N_FLOOR}) real_ev=${realEv ?? 'n/a'} reason=${unproven ? 'unproven (real_n<floor)' : 'realBad (real_ev<-5)'}`;
+            console.error(`[ib-gate] ${ibSetup.type} NULLED by ${ibGateReason}`);
+            logGatedCandidate({ tradeDate: todayET, setupType: ibSetup.type, gateName: 'IB_DAYTYPE_REAL_N_FLOOR', gateReason: ibGateReason, entry: ibSetup.entry, stop: ibSetup.stop, target: ibSetup.target });
             ibSetup = null;
           }
         }
@@ -6332,20 +6476,25 @@ export default function createACDRouter(io) {
               if (cbSessionEnd <= cbEtNow) cbSessionEnd.setDate(cbSessionEnd.getDate() + 1);
               const cbExpiresAt = `${cbSessionEnd.getFullYear()}-${String(cbSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(cbSessionEnd.getDate()).padStart(2, '0')} ${String(cbSessionEnd.getHours()).padStart(2, '0')}:${String(cbSessionEnd.getMinutes()).padStart(2, '0')}:00`;
               const cbRegimeStamp = computeRegimeStamp(currentPrice, cbVaMap);
+              const cbFireTags = await computeFireTags(todayET, 'RTH', etMin);
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  ${REGIME_STAMP_COLS.join(', ')}
+                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7,
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')})
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${8 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${8 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, cbType, currentPrice, cbStopLevel, cbT1Level,
                 `T1: ${cbTargetPts}pt · Stop: ${cbStopPts}pt (cascade breaker audit)`,
                 cbExpiresAt,
                 ...regimeStampValues(cbRegimeStamp),
+                ...fireTagValues(cbFireTags),
+                getBetClass(cbType),
               ]).catch(() => {});
             }
           }
@@ -6770,15 +6919,18 @@ export default function createACDRouter(io) {
               // never got read here. Same source SetupHistoryView.jsx's "WR at Fire" column reads.
               const auditStats = liveStats._setupStats?.[type];
               const auditRegimeStamp = computeRegimeStamp(currentPrice, await getValueAreaRegimeMap(todayET).catch(() => ({})));
+              const auditFireTags = await computeFireTags(todayET, 'RTH', etMin);
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  historical_win_rate, historical_sessions, ${REGIME_STAMP_COLS.join(', ')}
+                  historical_win_rate, historical_sessions, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${14 + i}`).join(', ')})
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${14 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${14 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${14 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -6789,6 +6941,8 @@ export default function createACDRouter(io) {
                 auditExpiresAt,
                 auditStats?.wr ?? null, auditStats?.n ?? null,
                 ...regimeStampValues(auditRegimeStamp),
+                ...fireTagValues(auditFireTags),
+                getBetClass(type),
               ]).catch(() => {});
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -7101,8 +7255,10 @@ export default function createACDRouter(io) {
         if (!setup) return null;
         if (!priorFailedDir) return setup;
         // If prior setup failed and this is C_STANDALONE in the SAME direction → 9-14% WR death sequence
-        if (setup.type === 'C_STANDALONE_UP' && priorFailedDir === 'LONG') return null;
-        if (setup.type === 'C_STANDALONE_DOWN' && priorFailedDir === 'SHORT') return null;
+        if ((setup.type === 'C_STANDALONE_UP' && priorFailedDir === 'LONG') || (setup.type === 'C_STANDALONE_DOWN' && priorFailedDir === 'SHORT')) {
+          logGatedCandidate({ tradeDate: todayET, setupType: setup.type, gateName: 'C_STANDALONE_DEATH_SEQUENCE', gateReason: `prior setup failed same-direction (${priorFailedDir}), 9-14% WR death sequence`, entry: setup.entry, stop: setup.stop, target: setup.target });
+          return null;
+        }
         return setup;
       };
 
@@ -7121,7 +7277,10 @@ export default function createACDRouter(io) {
         if (!setup || !pocDir) return setup;
         // If POC is migrating HIGHER but setup is SHORT (or vice versa) → counter, suppress
         const isCounter = (setup.direction === 'LONG' && pocDir === 'LOWER') || (setup.direction === 'SHORT' && pocDir === 'HIGHER');
-        if (isCounter) return null;
+        if (isCounter) {
+          logGatedCandidate({ tradeDate: todayET, setupType: setup.type, gateName: 'C_STANDALONE_POC_COUNTER', gateReason: `counter to 2-day POC migration (${pocDir})`, entry: setup.entry, stop: setup.stop, target: setup.target });
+          return null;
+        }
         return setup;
       };
 
@@ -7241,6 +7400,7 @@ export default function createACDRouter(io) {
         const riskOk = cand.stop == null || (isLongCand ? cand.stop < cand.entry : cand.stop > cand.entry);
         if (!riskOk) {
           console.error(`[setup-detection] REJECTED ${cand.type} — non-positive risk: stop ${cand.stop} vs entry ${cand.entry} (${cand.direction})`);
+          logGatedCandidate({ tradeDate: todayET, setupType: cand.type, gateName: 'RISK_CHECK_MAIN', gateReason: `non-positive risk: stop ${cand.stop} vs entry ${cand.entry} (${cand.direction})`, entry: cand.entry, stop: cand.stop, target: cand.target });
           continue;
         }
         qualifyingThisPoll.push(cand);
@@ -7259,7 +7419,9 @@ export default function createACDRouter(io) {
         `, [todayET]).catch(() => ({ rows: [] }));
         const oppositeActive = activeToday.rows.find(s => inferDirection(s.setup_type) !== active.direction);
         if (oppositeActive) {
+          const conflictReason = `opposite-direction setup already active today: ${oppositeActive.setup_type} (${inferDirection(oppositeActive.setup_type)}) fired ${oppositeActive.fired_at}`;
           console.log(`[setup-detection] CONFLICT: ${active.type} (${active.direction}) vs active ${oppositeActive.setup_type} (${inferDirection(oppositeActive.setup_type)}). Standing aside.`);
+          logGatedCandidate({ tradeDate: todayET, setupType: active.type, gateName: 'DIRECTIONAL_CONFLICT_STAND_ASIDE', gateReason: conflictReason, entry: active.entry, stop: active.stop, target: active.target });
           active = null;
         }
 
@@ -7627,19 +7789,27 @@ export default function createACDRouter(io) {
               const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
               const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
               const btRegimeStamp = computeRegimeStamp(bt.entry, btVaMap);
+              // bt.etMin is the touch's OWN time-of-day (earlier than "now", since this is a
+              // same-poll backfill of an earlier-in-the-session touch) -- use it, not the
+              // outer etMin, so minutes_from_open reflects when the touch actually happened.
+              const btFireTags = await computeFireTags(todayET, 'RTH', bt.etMin);
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')})
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')})
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
                 bt.entry, bt.history.winRate, bt.history.occurrences, bt.history.avgPnl, bt.history.t1HitRate,
                 ...regimeStampValues(btRegimeStamp),
+                ...fireTagValues(btFireTags),
+                getBetClass(bt.type),
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -7970,6 +8140,7 @@ export default function createACDRouter(io) {
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
+        const fireTags = await computeFireTags(todayET, 'RTH', etMin);
         const ins = await query(`
           INSERT INTO active_setups (
             trade_date, setup_type, fired_at, expires_at, status, origin_status,
@@ -7980,9 +8151,11 @@ export default function createACDRouter(io) {
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
-            ${REGIME_STAMP_COLS.join(', ')}
+            ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
-            ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')})
+            ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
+            ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -8000,6 +8173,8 @@ export default function createACDRouter(io) {
           active.hivolLopaceAtDetection ?? null,
           active.selectedOver ?? null,
           ...regimeStampValues(regimeStamp),
+          ...fireTagValues(fireTags),
+          getBetClass(active.type),
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -8083,24 +8258,32 @@ export default function createACDRouter(io) {
       if (shadowCandidates.length > 0) {
         (async () => {
           const vaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
+          const shadowFireTags = await computeFireTags(todayET, 'RTH', etMin);
           for (const shadow of shadowCandidates) {
             if (!shadow || shadow.type === active?.type) continue;
             const isLongS = shadow.direction === 'LONG';
             const riskOk = shadow.stop == null || (isLongS ? shadow.stop < shadow.entry : shadow.stop > shadow.entry);
-            if (!riskOk) continue;
+            if (!riskOk) {
+              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'RISK_CHECK_SHADOW', gateReason: `non-positive risk: stop ${shadow.stop} vs entry ${shadow.entry} (${shadow.direction})`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
+              continue;
+            }
             let sT1 = shadow.target;
             if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')})
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')})
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')},
+                ${FIRE_TAG_COLS.map((_, i) => `$${10 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                $${10 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
               ...regimeStampValues(regimeStamp),
+              ...fireTagValues(shadowFireTags),
+              getBetClass(shadow.type),
             ]).catch(() => {});
           }
         })();

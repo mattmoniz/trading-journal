@@ -19,7 +19,8 @@
 // Stop/target are NEVER hardcoded here — read live from the OPTIMAL_STOP row in
 // performance_audit (per CLAUDE.md's New Setup Type checklist), cached for the trading day.
 import { query } from '../db.js';
-import { dropToTimeline } from '../routes/acd.js';
+import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
+import { getBetClass } from '../config/setupTypes.js';
 
 const SETUP_FAMILY = 'MOMENTUM_60m_60m_TREND';
 const LOOKBACK_MIN = 60;
@@ -160,15 +161,23 @@ export async function detectMomentum60Trend(io) {
       const rthClose = new Date(nowET); rthClose.setHours(16, 0, 0, 0);
       const expiryDate = expiryCandidate < rthClose ? expiryCandidate : rthClose;
       const expiresAt = `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')} ${String(expiryDate.getHours()).padStart(2, '0')}:${String(expiryDate.getMinutes()).padStart(2, '0')}:00`;
+      // Fire-time regime tags (roadmap Phase 1, I1) — this detector is RTH-only
+      // (EVAL_START_ET_MIN/EVAL_END_ET_MIN gate it to 10:30 ET-3:00 PM ET), so session
+      // is always 'RTH'. totalMins (line 98) is this poll's own ET minutes-since-
+      // midnight, same instant fired_at=NOW() uses.
+      const fireTags = await computeFireTags(tradeDateStr, 'RTH', totalMins);
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-          price_at_detection, suppression_reason
-        ) VALUES ($1,$2,NOW(),$9,$7,$7,$3,$3,$4,$5,$6,$3,$8)
+          price_at_detection, suppression_reason, ${FIRE_TAG_COLS.join(', ')}, bet_class
+        ) VALUES ($1,$2,NOW(),$9,$7,$7,$3,$3,$4,$5,$6,$3,$8,
+          ${FIRE_TAG_COLS.map((_, i) => `$${10 + i}`).join(', ')},
+          $${10 + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
-      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason, expiresAt]);
+      `, [tradeDateStr, setupType, entry, stop, target, `${_cache.optimalStop.target.toFixed(0)}pt target`, live.status, live.reason, expiresAt,
+          ...fireTagValues(fireTags), getBetClass(setupType)]);
 
       // Every other insert path in acd.js drops a copy into trade_timeline_events — matching
       // that here so this setup type shows up in the timeline the same as any other, once it's
