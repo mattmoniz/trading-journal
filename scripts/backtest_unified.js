@@ -34,6 +34,9 @@ function floorPivots(h, l, c) {
   const pp = (h + l + c) / 3;
   return { FLOOR_PIVOT: pp, FLOOR_R1: 2*pp - l, FLOOR_S1: 2*pp - h };
 }
+// Exported alongside `resolve`/`loadData`/`detectStopSweep` below (2026-08-11, roadmap
+// Phase 4, Setup B) so a new-setup Stage 1 script that reuses detectStopSweep's real fires
+// can also reuse this trivial-but-canonical pivot formula rather than re-typing it.
 
 // MAE/MFE stats helper
 function mfmaeStats(vals) {
@@ -45,6 +48,8 @@ function mfmaeStats(vals) {
 // ── Resolution ────────────────────────────────────────────────────────────────
 // Walk bars from entryIdx+1. Returns { result, pnl, mae, mfe, barsHeld }.
 // Conservative same-bar rule: if stop and target both hit in same bar → STOP_HIT.
+// Already exported via the named `export { resolve, ... }` block at the bottom of this
+// file (added 2026-07-28) -- reuse that, don't add a second export site.
 function resolve(bars, entryIdx, direction, entry, stop, target, maxBars = 240) {
   let mae = 0, mfe = 0;
   const isLong = direction === 'LONG';
@@ -1345,6 +1350,7 @@ export {
   resolve, aggregate, loadData, detectLevelFades, LEVEL_GATES,
   buildBracketLevels, buildOrMids, buildIbMids, buildMonthlyOpens,
   buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid,
+  floorPivots,
   PT, COMM,
   // Added 2026-07-28 so the "OTHER" (non-level-fade) setup family's real detection
   // functions can be reused by external test scripts instead of reimplemented --

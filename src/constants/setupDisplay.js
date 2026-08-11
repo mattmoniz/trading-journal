@@ -6,6 +6,8 @@
 export const SETUP_DISPLAY_LABELS = {
   IB_BULLISH:              'IB Bullish',
   IB_BEARISH:              'IB Bearish',
+  FAILED_SWEEP_REVERSAL_LONG:  'Failed Sweep ↑ (Setup B)',
+  FAILED_SWEEP_REVERSAL_SHORT: 'Failed Sweep ↓ (Setup B)',
   MOMENTUM_60m_60m_TREND_LONG:  '60m Momentum ↑ (Trend)',
   MOMENTUM_60m_60m_TREND_SHORT: '60m Momentum ↓ (Trend)',
   BRACKET_BREAKOUT_LONG:   'Bracket Break ↑',

@@ -527,6 +527,36 @@ export function computeVolatilityDefaultRatios({ priorStoredByType, realNByType,
   return { volScaleRatio, targetStopRatio, ceilingRatio, canComputeVolDefault, qualifyingCount: qualifyingRatios.length };
 }
 
+// Fetches computeVolatilityDefaultRatios()'s 3 inputs fresh from the DB. Extracted 2026-08-11
+// (roadmap Phase 4, Setup B Stage 1) as this exact 3-query block's THIRD hand-copy (this
+// file's own main(), scripts/lib/betClassPhase2Resweep.mjs, and now a brand-new bar-history-
+// only setup that has no active_setups population of its own yet to derive it from) -- the
+// same "share modules" pattern this codebase repeatedly documents catching late. The two
+// pre-existing inline copies were deliberately left as-is (working, already-verified code,
+// not worth the risk of touching for a pure refactor) -- only new callers should use this.
+export async function loadVolatilityDefaultInputs() {
+  const priorRes = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, optimal_stop, optimal_target
+    FROM performance_audit WHERE signal_type = 'OPTIMAL_STOP'
+    ORDER BY signal_name, run_date DESC
+  `);
+  const priorStoredByType = {};
+  for (const p of priorRes.rows) priorStoredByType[p.signal_name] = { stop: p.optimal_stop != null ? +p.optimal_stop : null, target: p.optimal_target != null ? +p.optimal_target : null };
+  const realNRes = await query(`
+    SELECT setup_type, COUNT(*) n FROM active_setups
+    WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+      AND mae_points IS NOT NULL AND mfe_points IS NOT NULL
+    GROUP BY setup_type
+  `);
+  const realNByType = Object.fromEntries(realNRes.rows.map(r => [r.setup_type, +r.n]));
+  const medianBarRangeRes = await query(`
+    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (high - low)) as median_range
+    FROM price_bars_primary WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '30 days'
+  `);
+  const medianBarRange = +medianBarRangeRes.rows[0].median_range;
+  return { priorStoredByType, realNByType, medianBarRange };
+}
+
 // Full stop+target decision tree for ONE setup_type, given its real (origin_status-filtered)
 // trades and the run-wide volatility-default parameters. Extracted 2026-08-09 (same session
 // as the re-baseline that needed it) so test_invariants.mjs check [5] can call this EXACT

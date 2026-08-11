@@ -7162,6 +7162,102 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── Setup B: Failed Sweep Reversal (roadmap Phase 4, Stage 2, 2026-08-11) ──────
+      // Distinct from STOP_SWEEP_LONG/SHORT above -- Setup B was validated against a
+      // DIFFERENT, wider level set with NO confluence-proximity requirement
+      // (PD_POC/PD_VAH/PD_VAL/OR_HIGH/OR_LOW/FLOOR_PIVOT/FLOOR_R1/FLOOR_S1), via the real
+      // detectStopSweep() bar-history detector (backtest_unified.js, reused not
+      // reimplemented) in scripts/backtest_setup_b_failed_sweep_reversal_stage1.mjs.
+      // Stage 0: RESEARCH_CLAIM setup_b_failed_sweep_reversal_stage0. Stage 1 result:
+      // RESEARCH_CLAIM setup_b_failed_sweep_reversal_stage1 (PASSED -- N=803,
+      // rigor.clean=true, OOS_EV=$12.99 beats a flat volatility-scaled default's
+      // OOS_EV=$2.00; stop=68pt/target=250pt). Day-type breakdown found in Stage 1 is
+      // worth reading before trusting the aggregate: BALANCE was net-NEGATIVE (-$23.3/
+      // trade, N=469, the majority bucket) while TREND (+$74.76) and TURBULENT (+$43.48)
+      // carried the positive aggregate -- the opposite of the Stage 0 pre-registered
+      // expectation ("works in both BALANCE and TURBULENT"). Not day-type-gated here
+      // (Stage 2 is SHADOW-only, zero capital risk either way; day-type conditioning is a
+      // natural post-Stage-2 refinement once real fires accumulate, matching how
+      // IB_BULLISH/IB_BEARISH later became DAY_TYPE_MANAGED).
+      //
+      // IMPORTANT CAVEAT, stated plainly rather than silently: this live block is a
+      // ROLLING-WINDOW ADAPTATION of the swept-then-reclaimed condition (matching this
+      // file's own live-polling convention, same adaptation the STOP_SWEEP block above
+      // already makes), NOT a byte-identical port of detectStopSweep()'s whole-session
+      // bar-pattern scan -- that function is shaped for a one-time historical replay, not
+      // a live "check only what's new since last poll" loop. Reconciliation (Stage 3) is
+      // exactly the roadmap's built-in mechanism for catching and correcting any material
+      // gap between this live adaptation and the Stage 1 backtest -- do not skip Stage 3
+      // once real SHADOW fires accumulate.
+      // Wrapped in its own try/catch (2026-08-11): this route's own outer catch (see the
+      // handler's final `catch(e)` clause) turns any uncaught exception here into a 500 for
+      // the ENTIRE /api/acd/setup-detection response -- degrading every other live setup,
+      // not just this brand-new SHADOW-only one. A local failure here should cost Setup B's
+      // own fire for this poll, nothing more.
+      let failedSweepReversalSetup = null;
+      try {
+      if (currentPrice && allRthBarsRow.rows.length >= 30) {
+        const fsrRecentBars = allRthBarsRow.rows.slice(-10);
+        const fsrLevels = [
+          pdPOC != null && { name: 'PD_POC', price: pdPOC },
+          pdVAH != null && { name: 'PD_VAH', price: pdVAH },
+          pdVAL != null && { name: 'PD_VAL', price: pdVAL },
+          floorP != null && { name: 'FLOOR_PIVOT', price: floorP },
+          floorR1 != null && { name: 'FLOOR_R1', price: floorR1 },
+          floorS1 != null && { name: 'FLOOR_S1', price: floorS1 },
+        ].filter(Boolean);
+        // Today's opening range -- fetched fresh (not already in scope in this block,
+        // unlike pdPOC/pdVAH/pdVAL/floorP/floorR1/floorS1 which the STOP_SWEEP block
+        // above already computed and left in scope).
+        const fsrOrRow = await query(
+          `SELECT or_high::float as or_high, or_low::float as or_low FROM acd_daily_log WHERE trade_date=$1`,
+          [todayET]
+        ).catch(() => ({ rows: [] }));
+        if (fsrOrRow.rows[0]?.or_high != null) fsrLevels.push({ name: 'OR_HIGH', price: fsrOrRow.rows[0].or_high });
+        if (fsrOrRow.rows[0]?.or_low != null) fsrLevels.push({ name: 'OR_LOW', price: fsrOrRow.rows[0].or_low });
+
+        const fsrOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
+        for (const lvl of fsrLevels) {
+          if (failedSweepReversalSetup) break;
+          const fsrBrokeBelow = fsrRecentBars.some(b => b.low < lvl.price - 3);
+          const fsrBrokeAbove = fsrRecentBars.some(b => b.high > lvl.price + 3);
+          if (fsrBrokeBelow && currentPrice > lvl.price) {
+            const type = 'FAILED_SWEEP_REVERSAL_LONG';
+            // Fallback literals only cover the narrow window before the OPTIMAL_STOP seed
+            // row (scripts/backtest_setup_b_failed_sweep_reversal_stage1.mjs's own result,
+            // stop=68/target=250) exists or if this lookup fails -- matches the same
+            // bootstrap-default-then-real-data-overrides pattern already used throughout
+            // this file's keepLevelsAll entries (mae_p75/mfe literals overridden by ls()).
+            const stopPts = fsrOpt?.[type]?.stop ?? 68;
+            const targetPts = fsrOpt?.[type]?.target ?? 250;
+            failedSweepReversalSetup = {
+              type, direction: 'LONG', entry: currentPrice,
+              stop: Math.round(currentPrice - stopPts),
+              target: Math.round(currentPrice + targetPts),
+              targetLabel: `${lvl.name} sweep reversal (Setup B)`,
+              description: `Price swept below ${lvl.name} (${Math.round(lvl.price)}), now reclaimed above. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=803, rigor-clean).`,
+              history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+            };
+          } else if (fsrBrokeAbove && currentPrice < lvl.price) {
+            const type = 'FAILED_SWEEP_REVERSAL_SHORT';
+            const stopPts = fsrOpt?.[type]?.stop ?? 68;
+            const targetPts = fsrOpt?.[type]?.target ?? 250;
+            failedSweepReversalSetup = {
+              type, direction: 'SHORT', entry: currentPrice,
+              stop: Math.round(currentPrice + stopPts),
+              target: Math.round(currentPrice - targetPts),
+              targetLabel: `${lvl.name} sweep reversal (Setup B)`,
+              description: `Price swept above ${lvl.name} (${Math.round(lvl.price)}), now reclaimed below. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=803, rigor-clean).`,
+              history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+            };
+          }
+        }
+      }
+      } catch (fsrErr) {
+        console.error('[setup-detection] FAILED_SWEEP_REVERSAL block error (isolated, not fatal):', fsrErr.message);
+        failedSweepReversalSetup = null;
+      }
+
       // ── Priority selection (spec order) ──────────────────────────────────────
       // Integrity guard: a setup must not fire with the stop on the wrong side of
       // entry (non-positive risk — e.g. VALUE_AREA_RESPONSIVE's ±8pt buffer can land
@@ -7332,6 +7428,7 @@ export default function createACDRouter(io) {
       // and build WR data. Promoted to ACTIVE when positive EV over 30+ forward trades.
       const shadowCandidates = [
         stopSweepSetup,
+        failedSweepReversalSetup,
         vwapMagnetSetup,
         globexVwapMagnetRTH,
         globexVwapFadeRTH,

@@ -179,8 +179,16 @@ export const inferStrategyFamily = (setupType) => {
  * same-commit rewire of acd.js's live risk parameters. See OPEN_DECISION
  * bet_class_phase2_consolidated_resweep_not_started.
  */
-export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'UNCLASSIFIED'];
+// FAILED_SWEEP_REVERSAL_LONG/_SHORT (roadmap Phase 4, Setup B, 2026-08-11): a genuinely
+// distinct bet from both buckets above -- entry is AFTER a level breaks (not a touch, so
+// not MEAN_REVERSION in inferStrategyFamily()'s sense), but the trade itself fades BACK
+// toward the level once it fails to hold (not a trend-continuation bet either). Deliberately
+// its own bet_class rather than forced into the two-way inferStrategyFamily() split, per
+// the roadmap's own Part 3 framing of Setup B as structurally distinct from Setup A.
+const FAILED_SWEEP_REVERSAL_TYPES = new Set(['FAILED_SWEEP_REVERSAL_LONG', 'FAILED_SWEEP_REVERSAL_SHORT']);
+export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'UNCLASSIFIED'];
 export const getBetClass = (setupType) => {
+  if (FAILED_SWEEP_REVERSAL_TYPES.has(setupType)) return 'FAILED_SWEEP_REVERSAL';
   const family = inferStrategyFamily(setupType);
   if (family === 'MEAN_REVERSION') return 'VALUE_FADE';
   if (family === 'CONTINUATION') return 'CONTINUATION_LEGACY';
