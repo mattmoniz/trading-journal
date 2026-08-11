@@ -31,6 +31,7 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
+import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -4647,6 +4648,68 @@ export default function createACDRouter(io) {
         }
       }
 
+      // ── Setup D: Opening Drive, 15-minute-OR-consistent (roadmap Phase 6, 2026-08-11) ──
+      // Deliberately a NEW setup_type (OPENING_DRIVE_15MIN_LONG/SHORT), NOT a change to
+      // OPEN_DRIVE_LONG/SHORT above. Stage 1 (scripts/backtest_setup_d_opening_drive_
+      // stage1.mjs) tested the CURRENT live 5-min-OR definition against a 15-min-OR-
+      // consistent variant, each with a required blind-delay confound control (DeepSeek
+      // design critique, scratch/deepseek_setup_d_design.md — the same confound that
+      // invalidated engagement_confirmation_entry_timing: entering later against fixed
+      // exits is structurally favorable regardless of the entry condition tested). Result:
+      // the 5-min (live, above) definition FAILED its own confound check — its apparent
+      // edge was indistinguishable from "just enter later." The 15-min variant PASSED
+      // cleanly (beat blind delay, beat a flat default, rigor-clean, N=138). Full account:
+      // OPEN_DECISION open_drive_5min_or_vs_15min_classifier_mismatch (resolved).
+      //
+      // Uses the extracted classifyACDOpeningCall() (server/services/
+      // openingCallClassifier.js) — the SAME formula OPEN_DRIVE above uses inline, not a
+      // reimplementation — fed a 15-minute OR (9:30-9:45) and a 45-minute confirm window
+      // (9:30-10:15, same 1:3 anchor:confirm ratio the live 5-min/15-min pairing already
+      // uses, just scaled up), replicating Stage 1's exact VARIANT_15MIN definition.
+      let openingDrive15Min = null;
+      try {
+        if (currentPrice && etMin >= 615) { // confirm window (9:30-10:15) must have closed
+          const odOrBars = allRthBarsRow.rows.filter(b => b.et_min < 585); // 9:30-9:45
+          const odConfirmBars = allRthBarsRow.rows.filter(b => b.et_min < 615); // 9:30-10:15
+          if (odOrBars.length >= 5 && odConfirmBars.length >= 15) {
+            const odOrH = Math.max(...odOrBars.map(b => b.high));
+            const odOrL = Math.min(...odOrBars.map(b => b.low));
+            const odCall = classifyACDOpeningCall(odConfirmBars, odOrH, odOrL);
+            if (odCall?.type === 'OPEN_DRIVE') {
+              const isLong = odCall.driveDirection === 'UP';
+              // Exact asymmetric pullback band replicated from OPEN_DRIVE above — a
+              // symmetric band would test a different (unvalidated) entry rule.
+              const nearBoundary = isLong
+                ? (currentPrice >= odOrH - 15 && currentPrice <= odOrH + 5)
+                : (currentPrice <= odOrL + 15 && currentPrice >= odOrL - 5);
+              if (nearBoundary) {
+                const type = isLong ? 'OPENING_DRIVE_15MIN_LONG' : 'OPENING_DRIVE_15MIN_SHORT';
+                const opt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[type];
+                // Fallbacks only cover the narrow window before the OPTIMAL_STOP seed row
+                // (Stage 1's own result, stop=85/target=150) exists or if this lookup fails
+                // — same bootstrap-then-real-data-overrides pattern used throughout this file.
+                const stopPts = opt?.stop ?? 85;
+                const targetPts = opt?.target ?? 150;
+                openingDrive15Min = {
+                  type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
+                  stop: Math.round(isLong ? currentPrice - stopPts : currentPrice + stopPts),
+                  target: Math.round(isLong ? currentPrice + targetPts : currentPrice - targetPts),
+                  targetLabel: `15-min OR drive reversal-of-pullback (Setup D)`,
+                  description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, price pulled back to the OR boundary. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=138, rigor-clean, beat its own blind-delay control).`,
+                  history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+                };
+              }
+            }
+          }
+        }
+      } catch (odErr) {
+        // Isolated (2026-08-11, same convention as failedSweepReversalSetup above): a bug
+        // here should cost this one SHADOW-only setup's fire for this poll, not 500 the
+        // entire /api/acd/setup-detection response via the route's own outer catch.
+        console.error('[setup-detection] OPENING_DRIVE_15MIN block error (isolated, not fatal):', odErr.message);
+        openingDrive15Min = null;
+      }
+
       // ── SETUP 5a: C PAIRED (LONG) ────────────────────────────────────────────
       let cPairedLong = null;
       if (aUpFired && cUpConf && !timelineEvents.some(e => e === 'C_PAIRED_LONG')) {
@@ -7442,6 +7505,7 @@ export default function createACDRouter(io) {
         aDownWeak,
         // ibSetup moved to candidates 2026-07-01 — BALANCE suppressed, TREND/TURBULENT promoted
         openDrive,
+        openingDrive15Min,
         valueAreaResp,
         // C_STANDALONE: suppressed in HIGH-VOL-CHOP (0% WR), death sequences (9-14% WR), and POC counter direction (41.5% WR)
         morningRegime !== 'HIGH-VOL-CHOP' ? suppressIfPOCCounter(suppressIfDeathSequence(cStandalone)) : null,

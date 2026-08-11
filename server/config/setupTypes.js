@@ -186,9 +186,23 @@ export const inferStrategyFamily = (setupType) => {
 // its own bet_class rather than forced into the two-way inferStrategyFamily() split, per
 // the roadmap's own Part 3 framing of Setup B as structurally distinct from Setup A.
 const FAILED_SWEEP_REVERSAL_TYPES = new Set(['FAILED_SWEEP_REVERSAL_LONG', 'FAILED_SWEEP_REVERSAL_SHORT']);
-export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'UNCLASSIFIED'];
+// OPENING_DRIVE_15MIN_LONG/_SHORT (roadmap Phase 6, Setup D, 2026-08-11): deliberately a NEW
+// setup_type, not a reuse of the pre-existing OPEN_DRIVE_LONG/SHORT (bet_class
+// CONTINUATION_LEGACY, untouched, still 5min-OR-defined). Stage 1
+// (scripts/backtest_setup_d_opening_drive_stage1.mjs) tested the CURRENT live 5-min-OR
+// definition against a 15-min-OR-consistent variant with a required blind-delay confound
+// control (per DeepSeek design critique): the 5-min (live) definition FAILED its own
+// confound check (Arm A did not beat blind delay -- its apparent edge was indistinguishable
+// from "just enter later"), while the 15-min variant passed cleanly (beats blind delay,
+// beats a flat default, rigor-clean, N=138). Own bet_class rather than folded into
+// CONTINUATION_LEGACY (reserved for the pre-existing, unvalidated OPEN_DRIVE_LONG/SHORT) or
+// forced into inferStrategyFamily()'s two-way split, matching the FAILED_SWEEP_REVERSAL
+// precedent immediately above -- each new roadmap Setup gets its own bet_class as it's built.
+const OPENING_DRIVE_15MIN_TYPES = new Set(['OPENING_DRIVE_15MIN_LONG', 'OPENING_DRIVE_15MIN_SHORT']);
+export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'OPENING_DRIVE_15MIN', 'UNCLASSIFIED'];
 export const getBetClass = (setupType) => {
   if (FAILED_SWEEP_REVERSAL_TYPES.has(setupType)) return 'FAILED_SWEEP_REVERSAL';
+  if (OPENING_DRIVE_15MIN_TYPES.has(setupType)) return 'OPENING_DRIVE_15MIN';
   const family = inferStrategyFamily(setupType);
   if (family === 'MEAN_REVERSION') return 'VALUE_FADE';
   if (family === 'CONTINUATION') return 'CONTINUATION_LEGACY';
