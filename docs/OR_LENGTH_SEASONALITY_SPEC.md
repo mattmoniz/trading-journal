@@ -175,3 +175,33 @@ just before being wired live):
    this design is underweighting?
 4. Anything in the wiring plan (§6) that's actually more complex than it looks
    from inside this codebase's existing conventions.
+
+## 8. Deferred idea (explicitly OUT OF SCOPE for this Phase 0): a rolling/adaptive window boundary
+
+While scoping §2-3, the user raised a broader question worth recording here so it
+isn't lost, but is deliberately NOT part of what this spec's Phase 0 tests: instead
+of sweeping a small set of FIXED window choices (5/10/15/30min), should the window
+boundary itself be a ROLLING/ADAPTIVE quantity derived from the data — not a fixed
+wall-clock or bar-count value — and should that idea generalize beyond the OR
+family to a rolling-style backtest approach across ALL setups, not just this one?
+Tracked as `OPEN_DECISION rolling_window_backtest_generalization_idea`.
+
+**This needs its own design pass, not a bolt-on to this one**, for a specific,
+precedent-backed reason: a rolling/adaptive boundary is a fresh classifier by
+construction, and this codebase already has a direct, painful example of exactly
+this shape of idea failing — `docs/REGIME_DETECTION_SPEC.md`'s three regime
+classifiers (directional-trend/price-stretch/persistence z-scores) passed every
+downstream EV-split rigor check and then failed once independently validated (a
+same-day placebo test and an independent PELT-changepoint ground truth on raw
+price data both overturned the result). Before any downstream EV split built on
+a rolling/adaptive boundary is trusted, it needs the same treatment: a
+parameter-robustness check (does it survive a slightly different lookback?), a
+placebo/permutation test, and ideally an independent ground truth — not just a
+check before it goes live, a check before its EV numbers are believed at all.
+
+**Next steps, not started**: (1) get a more concrete description of the idea —
+which setups, and what would the rolling boundary actually be derived from
+(volatility? a structural pivot? something else?); (2) scope it as its own
+Phase 0 design doc, critiqued blind by Gemini/DeepSeek before any code, per the
+standing 3-phase workflow — not a section bolted onto this OR-length spec; (3)
+do not skip the classifier-validation step this section exists to flag.
