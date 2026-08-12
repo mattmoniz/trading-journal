@@ -518,10 +518,14 @@ function EdgeSectionsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, fontSize: 12 }}>
-      {/* Cascade Breaker Banner */}
+      {/* Cascade signal — DISABLED as an acting gate 2026-08-05 (blocked outperforming
+          trades on 5 of 6 test days, see OPEN_DECISION cascade_breaker_validate_or_remove).
+          cascadeBreaker.active/stopCount are still computed and shown, but purely
+          informational now — same convention as bigMoveSignal/sigmaContinuation below.
+          Do NOT restore language implying this blocks entries; it doesn't. */}
       {cascadeBreaker?.active && (
         <div style={{ padding: '10px 14px', background: 'rgba(239,68,68,0.15)', border: '2px solid #ef4444', borderRadius: 8, color: '#ef4444', fontWeight: 700, fontSize: 13 }}>
-          ⛔ FADE REGIME OFF — {cascadeBreaker.stopCount} different levels stopped out in {cascadeBreaker.windowMins} min · tape is trending · no new fade entries
+          ⚠ RAPID STOP CASCADE — {cascadeBreaker.stopCount} different levels stopped out in {cascadeBreaker.windowMins} min · tape is trending · informational only, does not block new fade entries
         </div>
       )}
       {/* Big-move-day signal — informational only, does not gate any setup. See RESEARCH_CLAIM
