@@ -71,6 +71,12 @@ let acdJob = { status: 'idle', progress: null, result: null, error: null };
 // 2026-07-15, consolidated onto this existing helper instead.
 const _levelCache = {};
 const LEVEL_CACHE_TTL = 60000;
+// Dedup for the dtaRow real-N-floor gate's console.error (see ~line 6800) — a
+// persistently-thin SIZE_UP cell would otherwise log an identical line every 15s poll
+// for the whole week between recalibrations, drowning scratch/server_errors.jsonl.
+// Keyed by trade date so it naturally resets daily without extra cleanup logic; bounded
+// size (setup_types × day_types × reasons, low hundreds at most).
+const _dtaGateLogged = new Set();
 const DAY_CACHE_TTL = 12 * 60 * 60 * 1000; // half a trading day+ — safe since the cache key already includes the date
 function cacheKey(tradeDate, key) { return `${tradeDate}:${key}`; }
 function getCached(tradeDate, key, ttl = LEVEL_CACHE_TTL) {
@@ -6311,6 +6317,11 @@ export default function createACDRouter(io) {
                 recommendation: r.recommendation,
                 sizeDelta:      parsedNotes.size_delta ?? 0.10,
                 zScore:         parsedNotes.z_score    ?? null,
+                // real_n/real_ev (ACTIVE/SHADOW-origin only, excludes BACKFILL synthetic
+                // data) — added 2026-08-12 so the dtaRow real-N floor below (~line 6791)
+                // can gate SIZE_UP/SIZE_UP_STRONG on real evidence, not blended.
+                realN:          parsedNotes.real_n     ?? null,
+                realEv:         parsedNotes.real_ev    ?? null,
               };
             }
             // Setup-level suppression set — keyed by setup_type (directional)
@@ -6788,7 +6799,33 @@ export default function createACDRouter(io) {
             // Day-type edge lookup — reads from liveStats._dta (populated weekly by backtest_day_type_alpha.js).
             // Only SIZE_UP/SIZE_DOWN/SUPPRESS rows are non-NEUTRAL (N≥20, z≥1.5 required).
             const dtaKey = dtClass ? `${type}-${dtClass}` : null;
-            const dtaRow = dtaKey ? (liveStats._dta?.[dtaKey] ?? null) : null;
+            const dtaRowRaw = dtaKey ? (liveStats._dta?.[dtaKey] ?? null) : null;
+            // Real-N floor — added 2026-08-12, mirrors the IB_BULLISH/IB_BEARISH precedent
+            // (~line 5133) that already fixed this exact gap for that one setup family:
+            // dtaRowRaw.recommendation is derived from a BLENDED sample that can be majority
+            // BACKFILL synthetic data, not real live-fired trades. Gated ONLY on the SIZE_UP
+            // side (direction-aware, per DeepSeek design critique 2026-08-12) — a thin-real
+            // SUPPRESS/SIZE_DOWN is still the conservative call and must not be dropped just
+            // because real_n is low; the failure mode this guards against (a false-good
+            // blended call inflating sizeMultiplier) is an upside-only hazard. A SUPPRESS/
+            // SIZE_DOWN built on thin real data costs only foregone profit if wrong, which
+            // self-corrects weekly as real N grows — dropping it would cost a sizing floor
+            // and remove a live warning instead.
+            const REAL_N_FLOOR = 5;
+            const dtaRealN  = dtaRowRaw?.realN ?? 0;
+            const dtaRealEv = dtaRowRaw?.realEv;
+            const dtaIsSizeUp = dtaRowRaw?.recommendation?.startsWith('SIZE_UP') ?? false;
+            const dtaUnproven = dtaIsSizeUp && dtaRealN < REAL_N_FLOOR;
+            const dtaRealBad  = dtaIsSizeUp && dtaRealN >= REAL_N_FLOOR && dtaRealEv != null && dtaRealEv < -5;
+            if (dtaRowRaw && (dtaUnproven || dtaRealBad)) {
+              const dtaGateReason = dtaUnproven ? 'unproven' : 'realBad';
+              const dtaGateLogKey = `${todayET}:${type}-${dtClass}:${dtaGateReason}`;
+              if (!_dtaGateLogged.has(dtaGateLogKey)) {
+                _dtaGateLogged.add(dtaGateLogKey);
+                console.error(`[dta-gate] ${type}-${dtClass} recommendation=${dtaRowRaw.recommendation} dropped to NEUTRAL: real_n=${dtaRealN} (floor=${REAL_N_FLOOR}) real_ev=${dtaRealEv ?? 'n/a'} reason=${dtaGateReason}`);
+              }
+            }
+            const dtaRow = (dtaUnproven || dtaRealBad) ? null : dtaRowRaw;
 
             // Specific confluence pair bonus: live lookup against backtest_confluence.js's real
             // PAIR:X+Y data (server/services/rigorDiagnostics.js-checked, distinct-day-gated —
