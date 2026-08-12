@@ -502,6 +502,12 @@ function detectLevelFades(bars, levels, isMonday) {
       const dir = fromAbove ? 'LONG' : 'SHORT';
       fires.push({ type: `${name}_${dir}`, direction: dir,
         entryIdx: i, entry: b.close,
+        // stopPts/targetPts (2026-08-12, added for scripts/backtest_defended_level_retest.mjs):
+        // the point-distance form of the same stop/target already computed below -- needed by
+        // any caller that re-derives a NEW stop/target from a LATER bar's close (a delayed-entry
+        // arm) rather than reusing entry/stop/target as-is. Purely additive; every existing
+        // caller of this function is unaffected.
+        stopPts: stopPt, targetPts: tgtPt,
         stop:   dir === 'LONG' ? b.close - stopPt : b.close + stopPt,
         target: dir === 'LONG' ? b.close + tgtPt  : b.close - tgtPt });
       fired.add(name);

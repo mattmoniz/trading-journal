@@ -192,9 +192,49 @@ are clustered. Deliberately out of scope for the first test — validating one
 new signal and its live-selection application in the same pass would make a
 negative result ambiguous. Revisit once Step 1 has a real, controlled result.
 
-## Status
+## Status — RESOLVED NEGATIVE (2026-08-12)
 
-Scoped and design-critiqued by DeepSeek (2 rounds of user refinement +
-1 formal critique round, all findings incorporated above — see git history for
-the pre-critique version). Ready to dispatch to Gemini for the actual mining,
-starting with the cheap census gate.
+Full 8-way sweep (window 4/6/8/10 × variant 1/2) run against real history
+(N=3657 RTH level-fade touches, 2023-11 to 2026-08) via
+`scripts/backtest_defended_level_retest.mjs`. `computeReplication()` run for
+real (not a placeholder call — the first Gemini pass got this wrong, see
+below).
+
+**Result: `DEFENDED_CONFIRMED` is negative EV in all 8 combinations** (range
+-$0.23 to -$8.97/trade) and never beats blind immediate entry (`NEVER_WAITED`,
+-$1.92/trade) in any of them. `heldOutFavorableFrac=0/7` on the replication
+check. Against the timing-matched control (`WAITED_SIGNATURE_TIMING`,
+isolating the pattern from the entry-delay confound) the result is genuinely
+mixed — 4 of 8 combos better, 4 worse — no robust precision gain once delay is
+controlled for. The dominant effect across the whole exercise: **waiting AT
+ALL underperforms blind entry**, matching `engagement_confirmation_entry_timing`
+(2026-07-23)'s prior finding on a related idea almost exactly. An early
+single-point run (W=6/V=2 only) showed `FAILED_ATTEMPTS_NO_WEAKENING` at a
+modestly positive +$1.64/trade and was flagged as a possible secondary
+finding — this does **not** replicate across the full sweep (ranges -$9.35 to
++$2.70, sign-flips freely) — confirmed noise, exactly the largest-of-K-effects
+trap this spec's own confound checklist exists to catch.
+
+Full writeup: `RESEARCH_CLAIM defended_level_retest_confirmation_entry_negative`.
+Resolves `OPEN_DECISION wait_for_held_ground_confirmation_before_fade_entry`.
+
+**Process note, since two real mining-run bugs were caught by direct code
+audit, not by trusting the prose summary:** (1) Gemini's first pass falsely
+claimed the touch-detection logic wasn't cleanly importable (it already was,
+in `scripts/backtest_unified.js`) and halted. (2) Gemini's second pass had a
+hardcoded-Monday-stop/target bug and never actually computed the
+required coverage-cost metric despite claiming to. (3) After the corrected
+Step-1 run looked done, a follow-up audit found `computeReplication()` was
+called with a broken/incomplete args object (missing `selectedIds`, and
+against the wrong population shape) — it was never actually testing the
+required window/variant sweep for selection bias, just returning degenerate
+zeros. Built and ran the real 8-way sweep directly instead of a third Gemini
+round, reusing the already-verified-correct simulation engine. Along the way,
+consolidating the mining script into `scripts/backtest_defended_level_retest.mjs`
+(imports the real `detectLevelFades`/`resolve`/`aggregate` from
+`backtest_unified.js` rather than duplicating them) surfaced one more bug: the
+import initially dropped Gemini's legitimate `stopPts`/`targetPts` fields,
+silently zeroing out 4 of 5 populations' P&L. Fixed by adding those fields to
+the canonical exported function itself (purely additive, verified
+non-breaking for `backtest_unified.js`'s own use), then re-verified the sweep
+reproduces byte-identical numbers to the pre-refactor run.
