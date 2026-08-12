@@ -125,7 +125,7 @@ function getLevels(date, priorDate, vaByDate, acdByDate, barsByDate) {
     levels.push({ name: 'FLOOR_S1', value: s1, availableAt: 570 });
   }
 
-  // 5. OR_HIGH, OR_LOW — computed from first 5 bars (9:30-9:35)
+  // 5. OR5_HIGH, OR5_LOW — computed from first 5 bars (9:30-9:35)
   const bars = barsByDate[date];
   if (bars && bars.length >= 5) {
     const orBars = bars.filter(b => b.et_min >= 570 && b.et_min < 575);
@@ -133,8 +133,8 @@ function getLevels(date, priorDate, vaByDate, acdByDate, barsByDate) {
       const orHigh = Math.max(...orBars.map(b => b.high));
       const orLow = Math.min(...orBars.map(b => b.low));
       // OR levels only valid AFTER OR closes (et_min >= 575)
-      levels.push({ name: 'OR_HIGH', value: orHigh, availableAt: 575 });
-      levels.push({ name: 'OR_LOW', value: orLow, availableAt: 575 });
+      levels.push({ name: 'OR5_HIGH', value: orHigh, availableAt: 575 });
+      levels.push({ name: 'OR5_LOW', value: orLow, availableAt: 575 });
     }
   }
 

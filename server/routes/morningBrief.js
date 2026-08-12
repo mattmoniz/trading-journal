@@ -558,7 +558,7 @@ router.get('/scalp-recap/:date', async (req, res) => {
 
       const levels = [
         { name: 'PD_POC', price: pd?.poc }, { name: 'PD_VAH', price: pd?.vah }, { name: 'PD_VAL', price: pd?.val },
-        { name: 'OR_HIGH', price: orH }, { name: 'OR_LOW', price: orL },
+        { name: 'OR5_HIGH', price: orH }, { name: 'OR5_LOW', price: orL },
         { name: 'IB_HIGH', price: ibH }, { name: 'IB_LOW', price: ibL },
         { name: 'FLOOR_PIVOT', price: floorP }, { name: 'FLOOR_R1', price: floorR1 }, { name: 'FLOOR_S1', price: floorS1 },
         { name: '10D_IB_MID', price: ib10Mid }, { name: '5D_OR_MID', price: or5Mid },

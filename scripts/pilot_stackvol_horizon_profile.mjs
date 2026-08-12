@@ -74,7 +74,7 @@ function classifyStackVolBar(bar, i, dayBars, svBaseline, paceBaseline, map, ret
 
   const svLevels = { ...map };
   if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
-  if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
+  if (bar.tod < 575) { delete svLevels.OR5_HIGH; delete svLevels.OR5_LOW; }
   
   svLevels.VWAP = computeVWAP(svBars, svBars.length - 1);
 

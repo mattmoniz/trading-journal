@@ -35,7 +35,7 @@ import { computeRunningVwapSeries } from '../server/services/developingValueServ
 import { getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../server/services/queries.js';
 
 const TRAILING_DAYS = 200; // rolling window -- recalibrated fresh each run, not "all history forever"
-const GLOBEX_EXCLUDED_LEVELS = new Set(['OR_HIGH', 'OR_LOW', 'OR_MID', 'IB_HIGH', 'IB_LOW', 'IB_MID', 'RTH_VWAP', 'ONH', 'ONL']);
+const GLOBEX_EXCLUDED_LEVELS = new Set(['OR5_HIGH', 'OR5_LOW', 'OR5_MID', 'IB_HIGH', 'IB_LOW', 'IB_MID', 'RTH_VWAP', 'ONH', 'ONL']);
 
 async function getGlobexBars(sessionDate) {
   const r = await query(`

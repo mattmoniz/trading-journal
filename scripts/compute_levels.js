@@ -5,7 +5,7 @@
 // Levels computed per session:
 //   PRIOR_DAY     : PD_VAH, PD_VAL, PD_POC, PD_HIGH, PD_LOW, PD_CLOSE, PD_IB_HIGH, PD_IB_LOW, PD_IB_MID
 //   OVERNIGHT     : ONH, ONL  (Globex 18:00 prior ET → 09:29 current ET)
-//   CURRENT       : OR_HIGH, OR_LOW, OR_MID, IB_HIGH, IB_LOW, IB_MID, 5D_OR_MID
+//   CURRENT       : OR5_HIGH, OR5_LOW, OR5_MID, IB_HIGH, IB_LOW, IB_MID, 5D_OR_MID
 //   PRIOR_DAY     : ... PD_SESSION_MID (added 2026-07-04)
 //   OPENS         : DAILY_OPEN, WEEKLY_OPEN, MONTHLY_OPEN
 //   VWAP          : RTH_VWAP, WEEKLY_VWAP, MONTHLY_VWAP  (24hr VWAP computed live in acd.js, not stored here)
@@ -215,9 +215,9 @@ async function computeLevelsForDate(date) {
   `, [date]);
   const or_ = orR.rows[0];
   if (or_?.orh && or_?.orl) {
-    add('OR_HIGH', or_.orh,                    'CURRENT');
-    add('OR_LOW',  or_.orl,                    'CURRENT');
-    add('OR_MID',  (or_.orh + or_.orl) / 2,   'CURRENT');
+    add('OR5_HIGH', or_.orh,                    'CURRENT');
+    add('OR5_LOW',  or_.orl,                    'CURRENT');
+    add('OR5_MID',  (or_.orh + or_.orl) / 2,   'CURRENT');
   }
 
   // 5-session composite OR: MAX(or_high) / MIN(or_low) across prior 5 sessions
@@ -230,6 +230,29 @@ async function computeLevelsForDate(date) {
   `, [date]);
   const or5 = or5R.rows[0];
   if (or5?.hi && or5?.lo) add('5D_OR_MID', (or5.hi + or5.lo) / 2, 'CURRENT');
+
+  // ── 4b. OR10/OR15/OR30 high/low/mid (current day) ────────────────────────
+  // Added 2026-08-12 alongside the OR5 rename, per docs/OR_LENGTH_SEASONALITY_SPEC.md
+  // Phase 1 (bar-history backtest dispatched same session, results pending). Unlike
+  // OR5 (read from acd_daily_log, itself populated by a separate ACD-parameter-driven
+  // process), these compute directly from price_bars_primary -- acd_daily_log only
+  // ever stores ONE configured OR length, not multiple simultaneously. Same window
+  // convention as the IB block below (bars 570..570+N-1, available at 570+N).
+  for (const mins of [10, 15, 30]) {
+    const endMin = 570 + mins - 1;
+    const orNR = await q(`
+      SELECT MAX(high)::float AS h, MIN(low)::float AS l
+      FROM price_bars_primary
+      WHERE symbol = 'NQ' AND ts::date = $1
+        AND EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts) BETWEEN 570 AND $2
+    `, [date, endMin]);
+    const orN = orNR.rows[0];
+    if (orN?.h && orN?.l) {
+      add(`OR${mins}_HIGH`, orN.h,                  'CURRENT');
+      add(`OR${mins}_LOW`,  orN.l,                  'CURRENT');
+      add(`OR${mins}_MID`,  (orN.h + orN.l) / 2,   'CURRENT');
+    }
+  }
 
   // ── 5. IB high/low/mid (9:30–10:30 current day) ──────────────────────────
   // Window fixed 2026-07-14: was BETWEEN 570 AND 599 (30min, 9:30-10:00) -- see the matching

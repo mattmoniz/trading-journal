@@ -96,8 +96,8 @@ function detectFailedBreakouts(bars, orHigh, orLow, ibHigh, ibLow) {
   const patterns = [];
   const levels = [];
   if (orHigh && orLow) {
-    levels.push({ name: 'OR_HIGH', price: orHigh, dir: 'UP' });
-    levels.push({ name: 'OR_LOW', price: orLow, dir: 'DOWN' });
+    levels.push({ name: 'OR5_HIGH', price: orHigh, dir: 'UP' });
+    levels.push({ name: 'OR5_LOW', price: orLow, dir: 'DOWN' });
   }
   if (ibHigh && ibLow) {
     levels.push({ name: 'IB_HIGH', price: ibHigh, dir: 'UP' });
@@ -779,7 +779,7 @@ export async function mineLevelFades({ windowDays = 90, windowType = 'ROLLING_90
   // touches), not hardcoded — a flat 20/25pt pair was previously used, but NQ's average price
   // roughly doubled between 2022 and 2026 (verified 2026-07-13), so a fixed point value would
   // silently drift out of calibration with current volatility. Recomputed fresh every scan run.
-  const levelNames = ['PD_POC','PD_VAH','PD_VAL','OR_HIGH','OR_LOW','IB_HIGH','IB_LOW','FLOOR_PIVOT','FLOOR_R1','FLOOR_S1','PW_HIGH','PW_LOW','PW_VAH','PW_VAL','1M_VAH','1M_VAL','3M_VAH','3M_VAL'];
+  const levelNames = ['PD_POC','PD_VAH','PD_VAL','OR5_HIGH','OR5_LOW','IB_HIGH','IB_LOW','FLOOR_PIVOT','FLOOR_R1','FLOOR_S1','PW_HIGH','PW_LOW','PW_VAH','PW_VAL','1M_VAH','1M_VAL','3M_VAH','3M_VAL'];
   const allTouches = [];
 
   for (const dayRow of days.rows) {
@@ -847,7 +847,7 @@ export async function mineLevelFades({ windowDays = 90, windowType = 'ROLLING_90
     const getLevel = (name) => {
       switch (name) {
         case 'PD_VAH': return pd?.vah; case 'PD_VAL': return pd?.val; case 'PD_POC': return pd?.poc;
-        case 'OR_HIGH': return orH; case 'OR_LOW': return orL;
+        case 'OR5_HIGH': return orH; case 'OR5_LOW': return orL;
         case 'IB_HIGH': return ibH; case 'IB_LOW': return ibL;
         case 'FLOOR_PIVOT': return floorP; case 'FLOOR_R1': return floorR1; case 'FLOOR_S1': return floorS1;
         case 'PW_HIGH': return pwHigh; case 'PW_LOW': return pwLow;

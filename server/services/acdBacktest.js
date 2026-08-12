@@ -86,7 +86,7 @@ function minutesBetween(t1, t2) {
 
 // ── Core ACD functions ────────────────────────────────────────────────────────
 
-function getOpeningRange(bars, orMinutes) {
+export function getOpeningRange(bars, orMinutes) {
   const orEnd = addMinutes('09:30', orMinutes);
   const orBars = bars.filter(b => b.time >= '09:30' && b.time < orEnd);
   if (orBars.length === 0) return null;

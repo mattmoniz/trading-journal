@@ -31,8 +31,8 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 
 const TARGET_SETUPS = [
-  'OR_LOW_FADE_LONG',
-  'OR_HIGH_FADE_SHORT',
+  'OR5_LOW_FADE_LONG',
+  'OR5_HIGH_FADE_SHORT',
   'IB_HIGH_FADE_SHORT',
   'IB_LOW_FADE_LONG',
   'RTH_VWAP_FADE_LONG',

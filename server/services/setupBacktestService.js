@@ -20,8 +20,8 @@ function isLong(setupType) {
 function nearestLevel(entryPrice, acdRow) {
   if (!acdRow) return 'UNKNOWN';
   const levels = [
-    { label: 'OR_HIGH', price: acdRow.or_high },
-    { label: 'OR_LOW',  price: acdRow.or_low  },
+    { label: 'OR5_HIGH', price: acdRow.or_high },
+    { label: 'OR5_LOW',  price: acdRow.or_low  },
     { label: 'A_UP',    price: acdRow.a_up_level   },
     { label: 'A_DOWN',  price: acdRow.a_down_level  },
   ].filter(l => l.price != null);

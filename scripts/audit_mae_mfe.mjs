@@ -461,7 +461,7 @@ async function main() {
   console.log('SECTION 4: EDGE-LEVEL SIGNAL ANALYSIS');
   console.log('='.repeat(120));
 
-  const edgeSignals = ['PD_POC_FADE', 'FLOOR_S1_FADE', 'OR_HIGH_FADE', 'IB_HIGH_FADE', 'VWAP_MAGNET'];
+  const edgeSignals = ['PD_POC_FADE', 'FLOOR_S1_FADE', 'OR5_HIGH_FADE', 'IB_HIGH_FADE', 'VWAP_MAGNET'];
   for (const sig of edgeSignals) {
     const edgeRecs = results.filter(r => r.setup_type.includes(sig));
     const resolved = edgeRecs.filter(r => r.replay_resolution !== 'EXPIRED');

@@ -3650,7 +3650,7 @@ export default function createACDRouter(io) {
         })();
         const svLevels = { ...svLevelsRaw };
         if (bar.tod < 630) { delete svLevels.IB_HIGH; delete svLevels.IB_LOW; delete svLevels.IB_MID; }
-        if (bar.tod < 575) { delete svLevels.OR_HIGH; delete svLevels.OR_LOW; }
+        if (bar.tod < 575) { delete svLevels.OR5_HIGH; delete svLevels.OR5_LOW; }
         if (!isGlobexNow) svLevels.VWAP = computeVWAP(svBars, i);
 
         const levelsArr = Object.entries(svLevels).filter(([, p]) => p != null && isFinite(p)).map(([name, price]) => ({ name, price })).sort((a, b) => a.price - b.price);
@@ -3931,12 +3931,24 @@ export default function createACDRouter(io) {
           GROUP BY ts::date
           ORDER BY trade_date DESC
         `, [todayET]),
-        // IB bars (9:30–10:00) with bid/ask volume — spec: 30-min OR period
+        // IB bars (9:30–10:30, the real 60-min Initial Balance, matching ibHighToday/
+        // ibLowToday's own BETWEEN 570 AND 629 elsewhere in this file) with bid/ask
+        // volume, fed to computeIbBullBear() for the IB_BULLISH/IB_BEARISH read.
+        // FIXED 2026-08-12: this previously queried BETWEEN 570 AND 599 (only the
+        // first 30 min) with a comment mislabeling it "30-min OR period" — conflating
+        // IB with the separate, genuinely-30-min Opening Range concept (acd_daily_log.
+        // or_high/or_low). A direct test (scratch/backtest_ib_window_30v60.mjs,
+        // RESEARCH_CLAIM ib_bullbear_30min_vs_60min_window_test) found the 30-min vs
+        // 60-min window disagrees on bullish/bearish/neither 51% of the time (12% is an
+        // outright opposite call), and the correct 60-min window produces more signals
+        // at a better raw EV. See docs/OPEN_THREADS.md for the recalibration follow-up
+        // this fix requires (existing SETUP_STATUS/OPTIMAL_STOP rows for IB_BULLISH/
+        // IB_BEARISH were calibrated under the old, buggy 30-min classification).
         query(`
           SELECT high::float, low::float, close::float, open::float,
                  COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int
           FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
           ORDER BY ts
         `, [todayET]),
         // Current price + volume + bar timestamp
@@ -5923,7 +5935,7 @@ export default function createACDRouter(io) {
           // existing `isCached ? Promise.resolve(...) : query(...)` convention.
           const cachedLP = getCached(todayET, 'lpAll');
           const cached2DPOC = getCached(todayET, '2dPOC');
-          const [or5Q, pdIbQ, pdOrQ, ib10Q, ibTodayQ, lpQ, poc2Q] = await Promise.all([
+          const [or5Q, pdIbQ, pdOrQ, ib10Q, ibTodayQ, or10Q, or15Q, or30Q, lpQ, poc2Q] = await Promise.all([
             query(`SELECT MAX(orh) as hi, MIN(orl) as lo FROM (SELECT or_high::float as orh, or_low::float as orl FROM acd_daily_log WHERE trade_date < $1 AND or_high IS NOT NULL ORDER BY trade_date DESC LIMIT 5) t`, [todayET]).catch(() => ({ rows: [] })),
             // Bounded lower end (2026-07-15, matches the same fix applied elsewhere this
             // session) — an unbounded ts::date < $1 lookback in the inner MAX(ts::date)
@@ -5964,9 +5976,32 @@ export default function createACDRouter(io) {
               WHERE symbol='NQ' AND ts::date = $1
                 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
             `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            // Today's OR10/OR15/OR30 high/low, each self-gated to its own formation window
+            // (bars 570..570+N-1, available at 570+N) — added 2026-08-12 alongside the OR5
+            // rename, per docs/OR_LENGTH_SEASONALITY_SPEC.md. Mirrors ibTodayQ's pattern
+            // exactly (real-time bar query, not level_prices, since these same-day-forming
+            // windows may not have a level_prices row yet mid-session).
+            etMinNow >= 580 ? query(`
+              SELECT MAX(high)::float as orh, MIN(low)::float as orl
+              FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date = $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 579
+            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            etMinNow >= 585 ? query(`
+              SELECT MAX(high)::float as orh, MIN(low)::float as orl
+              FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date = $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 584
+            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+            etMinNow >= 600 ? query(`
+              SELECT MAX(high)::float as orh, MIN(low)::float as orl
+              FROM price_bars_primary
+              WHERE symbol='NQ' AND ts::date = $1
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 599
+            `, [todayET]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
             // All static levels from level_prices — single batch query, cached daily.
             // Replaces individual PW_HIGH/PW_LOW, PM_VAH, etc. queries.
-            // OR_HIGH/OR_LOW/IB_HIGH/IB_LOW/IB_MID/OR_MID stay as real-time bar values
+            // OR5_HIGH/OR5_LOW/IB_HIGH/IB_LOW/IB_MID/OR5_MID stay as real-time bar values
             // because compute_levels.js may not have run yet during the live session.
             cachedLP ? Promise.resolve(null) : query(
               `SELECT level_name, price::float FROM level_prices WHERE trade_date=$1`,
@@ -6004,6 +6039,20 @@ export default function createACDRouter(io) {
           if (etMinNow >= 630 && ibTodayQ.rows[0]?.ibh) {
             ibHighToday = ibTodayQ.rows[0].ibh;
             ibLowToday  = ibTodayQ.rows[0].ibl;
+          }
+
+          // Today's OR10/OR15/OR30 high/low/mid — each self-gated to its own window close.
+          let or10High = null, or10Low = null, or10Mid = null;
+          if (etMinNow >= 580 && or10Q.rows[0]?.orh != null) {
+            or10High = or10Q.rows[0].orh; or10Low = or10Q.rows[0].orl; or10Mid = (or10High + or10Low) / 2;
+          }
+          let or15High = null, or15Low = null, or15Mid = null;
+          if (etMinNow >= 585 && or15Q.rows[0]?.orh != null) {
+            or15High = or15Q.rows[0].orh; or15Low = or15Q.rows[0].orl; or15Mid = (or15High + or15Low) / 2;
+          }
+          let or30High = null, or30Low = null, or30Mid = null;
+          if (etMinNow >= 600 && or30Q.rows[0]?.orh != null) {
+            or30High = or30Q.rows[0].orh; or30Low = or30Q.rows[0].orl; or30Mid = (or30High + or30Low) / 2;
           }
 
           // Today's IB mid (usable after IB closes at 10:30) and OR mid (usable once the
@@ -6087,7 +6136,7 @@ export default function createACDRouter(io) {
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
               // Directional optimal stops derived from active_setups MAE backfill.
-              // Keyed by full setup_type (e.g. 'OR_HIGH_FADE_SHORT'). Updated weekly.
+              // Keyed by full setup_type (e.g. 'OR5_HIGH_FADE_SHORT'). Updated weekly.
               // FIXED 2026-08-03 (OPEN_DECISION live_opt_stop_reads_percentiles_not_ev_sweep):
               // this query read the raw p75_mae/p50_mfe percentile columns -- the ORIGINAL
               // calibration method from this query's creation (2026-07-05, commit a04b2fd) --
@@ -6340,8 +6389,18 @@ export default function createACDRouter(io) {
             // FLOOR_S1 restored 2026-07-04: backfill (corrected direction) shows LONG 80% WR N=55 EV=+$98, SHORT 66.7% N=21 EV=+$18. Prior removal was based on inverted-direction backtest data.
             { name: 'FLOOR_S1_FADE',   level: lp.FLOOR_S1   ?? null, ...(ls('FLOOR_S1')    || {}), ...monOverride('FLOOR_S1') },
             // Today's OR/IB (real-time bar values — not from level_prices which may lag)
-            { name: 'OR_HIGH_FADE',   level: orH,         ...(ls('OR_HIGH')    || {}), ...monOverride('OR_HIGH') },
-            { name: 'OR_LOW_FADE',    level: orL,         ...(ls('OR_LOW')     || {}) },
+            { name: 'OR5_HIGH_FADE',   level: orH,         ...(ls('OR5_HIGH')    || {}), ...monOverride('OR5_HIGH') },
+            { name: 'OR5_LOW_FADE',    level: orL,         ...(ls('OR5_LOW')     || {}) },
+            // OR10/15/30 HIGH/LOW — added 2026-08-12, SHADOW-only until real N accumulates
+            // (see the "New setup type checklist" — THIN_N placeholder rows seeded the same
+            // session precisely so these never fire unsuppressed on a first real touch).
+            // Phase 1 bar-history backtest: docs/OR_LENGTH_SEASONALITY_SPEC.md.
+            { name: 'OR10_HIGH_FADE',  level: or10High,    ...(ls('OR10_HIGH')   || {}) },
+            { name: 'OR10_LOW_FADE',   level: or10Low,     ...(ls('OR10_LOW')    || {}) },
+            { name: 'OR15_HIGH_FADE',  level: or15High,    ...(ls('OR15_HIGH')   || {}) },
+            { name: 'OR15_LOW_FADE',   level: or15Low,     ...(ls('OR15_LOW')    || {}) },
+            { name: 'OR30_HIGH_FADE',  level: or30High,    ...(ls('OR30_HIGH')   || {}) },
+            { name: 'OR30_LOW_FADE',   level: or30Low,     ...(ls('OR30_LOW')    || {}) },
             { name: 'IB_HIGH_FADE',   level: ibHighToday, ...(ls('IB_HIGH')    || {}) },
             { name: 'IB_LOW_FADE',    level: ibLowToday,  ...(ls('IB_LOW')     || {}) },
             // Computed meta-levels
@@ -6437,16 +6496,19 @@ export default function createACDRouter(io) {
             // 5min OR itself (~9:35) and is NOT IB-dependent — gating it to 630 was a
             // copy-paste of the IB_MID_SCALP_FADE line below (both added same commit,
             // bf65b47, 2026-07-02) rather than a deliberate finding that the OR mid fade
-            // only works post-IB. Fixed 2026-07-16 per live user report. NOTE: the existing
-            // SETUP_STATUS calibration for OR_MID_AFTER_IB_FADE (N=121/97, EV=-$5.90/-$5.12,
-            // SUPPRESS) was computed entirely from >=10:30 touches (230/235 active_setups rows
-            // are BACKFILL-sourced, fired_at >= 10:30) — it says nothing about touches in the
-            // newly-eligible 9:35-10:29 window. Don't treat this setup as validated for that
-            // window until a dedicated recalibration backtest re-runs against the wider
-            // first-touch-anywhere population, same lesson as the CAM_R4/CAM_S3 window-mismatch
-            // fix (docs/OPEN_THREADS.md).
-            { name: 'IB_MID_SCALP_FADE',    level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
-            { name: 'OR_MID_AFTER_IB_FADE', level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR_MID_AFTER_IB') || {}) },
+            // only works post-IB. Gate fixed 2026-07-16 per live user report; the setup_type
+            // itself was renamed OR_MID_AFTER_IB -> OR5_MID 2026-08-12 (folded into the new
+            // OR{N}_HIGH/LOW/MID naming family, see docs/OR_LENGTH_SEASONALITY_SPEC.md) since
+            // "AFTER_IB" had been a stale, misleading name for ungated logic for nearly a
+            // month. Full active_setups/performance_audit/level_prices history renamed in
+            // place (backup: *_or_rename_backup_20260812, see docs/DB_BACKUP_CATALOG.md).
+            { name: 'IB_MID_SCALP_FADE', level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
+            { name: 'OR5_MID_FADE',      level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR5_MID') || {}) },
+            // OR10/15/30 MID — added 2026-08-12, same SHADOW-only convention as the HIGH/LOW
+            // entries above. Unlike the old OR_MID_AFTER_IB name, none of these wait for IB.
+            { name: 'OR10_MID_FADE', level: or10Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR10_MID') || {}) },
+            { name: 'OR15_MID_FADE', level: or15Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR15_MID') || {}) },
+            { name: 'OR30_MID_FADE', level: or30Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR30_MID') || {}) },
             // Ordinary close-range VWAP touch (within the standard 15pt window every other
             // level here uses), distinct from VWAP_MAGNET's far-away sigma-distance trigger
             // just above. Added 2026-07-28 per direct user pushback ("what about fades off
@@ -7242,7 +7304,7 @@ export default function createACDRouter(io) {
       // ── Setup B: Failed Sweep Reversal (roadmap Phase 4, Stage 2, 2026-08-11) ──────
       // Distinct from STOP_SWEEP_LONG/SHORT above -- Setup B was validated against a
       // DIFFERENT, wider level set with NO confluence-proximity requirement
-      // (PD_POC/PD_VAH/PD_VAL/OR_HIGH/OR_LOW/FLOOR_PIVOT/FLOOR_R1/FLOOR_S1), via the real
+      // (PD_POC/PD_VAH/PD_VAL/OR5_HIGH/OR5_LOW/FLOOR_PIVOT/FLOOR_R1/FLOOR_S1), via the real
       // detectStopSweep() bar-history detector (backtest_unified.js, reused not
       // reimplemented) in scripts/backtest_setup_b_failed_sweep_reversal_stage1.mjs.
       // Stage 0: RESEARCH_CLAIM setup_b_failed_sweep_reversal_stage0. Stage 1 result:
@@ -7290,8 +7352,8 @@ export default function createACDRouter(io) {
           `SELECT or_high::float as or_high, or_low::float as or_low FROM acd_daily_log WHERE trade_date=$1`,
           [todayET]
         ).catch(() => ({ rows: [] }));
-        if (fsrOrRow.rows[0]?.or_high != null) fsrLevels.push({ name: 'OR_HIGH', price: fsrOrRow.rows[0].or_high });
-        if (fsrOrRow.rows[0]?.or_low != null) fsrLevels.push({ name: 'OR_LOW', price: fsrOrRow.rows[0].or_low });
+        if (fsrOrRow.rows[0]?.or_high != null) fsrLevels.push({ name: 'OR5_HIGH', price: fsrOrRow.rows[0].or_high });
+        if (fsrOrRow.rows[0]?.or_low != null) fsrLevels.push({ name: 'OR5_LOW', price: fsrOrRow.rows[0].or_low });
 
         const fsrOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt;
         for (const lvl of fsrLevels) {
@@ -7488,7 +7550,7 @@ export default function createACDRouter(io) {
       // ACTIVE candidates — ONLY the 9 KEEP level fades from system backtest.
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
-        levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
+        levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR5_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
         // IB_BULLISH is now fully SUPPRESSed (2026-07-14, backtest_setup_status.mjs) — every
         // day-type bucket is below breakeven, see docs/OPEN_THREADS.md for the incident. Checked
         // via _suppressedSetups the same way level-fade setup_types are, alongside the existing
@@ -8115,7 +8177,7 @@ export default function createACDRouter(io) {
         VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
         PD_POC_FADE_LONG: 30, PD_POC_FADE_SHORT: 30,
         FLOOR_S1_FADE_LONG: 30, FLOOR_S1_FADE_SHORT: 30,
-        OR_HIGH_FADE_LONG: 30, OR_HIGH_FADE_SHORT: 30,
+        OR5_HIGH_FADE_LONG: 30, OR5_HIGH_FADE_SHORT: 30,
         IB_HIGH_FADE_LONG: 30, IB_HIGH_FADE_SHORT: 30,
         RSI_DIV_BULLISH: 45, RSI_DIV_BEARISH: 30,
         ABSORPTION_LONG: 100, // runner — needs 20 bars (100 min) for full edge
@@ -10015,7 +10077,7 @@ export default function createACDRouter(io) {
             const allLevels = {
               PD_POC: dv.poc, PD_VAL: dv.val, PD_VAH: dv.vah,
               FLOOR_PIVOT: fp, FLOOR_R1: fr1, FLOOR_S1: fs1,
-              OR_HIGH: orH10, IB_HIGH: ibH10, IB_LOW: ibL10,
+              OR5_HIGH: orH10, IB_HIGH: ibH10, IB_LOW: ibL10,
               PD_IB_MID: pdIbMid10, PD_OR_MID: pdOrMid10, PD_SESSION_MID: pdSessMid10,
               PD_OR_HIGH: dv.or_h, PD_OR_LOW: dv.or_l,
               PD_IB_HIGH: dv.ib_h, PD_IB_LOW: dv.ib_l,
@@ -10085,7 +10147,7 @@ export default function createACDRouter(io) {
         'PD_VAH':       { price: pdVAH,    bestCtx: 'High frequency level', freq: '~1.2/day' },
         'PD_IB_MID':    { price: pdIbMid,  bestCtx: 'PD midpoint fade', freq: '~0.5/day' },
         'FLOOR_PIVOT':  { price: floorP,   bestCtx: 'Structural reference', freq: '~0.8/day' },
-        'OR_HIGH':      { price: orH,      bestCtx: 'AM session strong', freq: '~0.7/day' },
+        'OR5_HIGH':     { price: orH,      bestCtx: 'AM session strong', freq: '~0.7/day' },
         'FLOOR_R1':     { price: floorR1,  bestCtx: 'Thursday 1PM specialist', freq: '~0.5/day' },
         'PD_OR_MID':    { price: pdOrMid,  bestCtx: 'Good midpoint fade', freq: '~0.5/day' },
         // FLOOR_S1 removed from keepLevels 2026-07-03 (12+ backtest runs all negative EV)
@@ -10101,7 +10163,7 @@ export default function createACDRouter(io) {
         'PD_SESSION_MID': { price: pdSessMid, bestCtx: 'PD session midpoint', freq: '~0.5/day' },
         '10D_IB_MID':   { price: null,     bestCtx: '10-day IB composite', freq: '~0.3/day' },
         'IB_MID_SCALP': { price: ibMid,    bestCtx: 'Tight-target scalp fade', freq: '~1.5/day' },
-        'OR_MID_AFTER_IB': { price: orMid, bestCtx: 'Post-IB OR midpoint', freq: '~1/day' },
+        'OR5_MID':      { price: orMid,    bestCtx: '5-min OR midpoint (tradeable as soon as OR completes)', freq: '~1/day' },
         'TRT_LONG':     { price: null,     bestCtx: 'Trend resumption', freq: '~0.3/day' },
         'IB_BEARISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.4/day' },
         'IB_BULLISH_DIRECTION': { price: null, bestCtx: 'Directional context (IB break)', freq: '~0.5/day' },
@@ -10117,8 +10179,8 @@ export default function createACDRouter(io) {
         'IB_BEARISH':           { price: null,  bestCtx: 'IB breakdown direction context (all-day-type blended)', freq: '~0.4/day' },
         'IB_MID_SCALP_LONG':   { price: ibMid, bestCtx: 'Scalp fade LONG from IB midpoint', freq: '~1.5/day' },
         'IB_MID_SCALP_SHORT':  { price: ibMid, bestCtx: 'Scalp fade SHORT from IB midpoint', freq: '~1.5/day' },
-        'OR_MID_AFTER_IB_LONG':  { price: orMid, bestCtx: 'Scalp fade LONG post-IB OR midpoint', freq: '~1/day' },
-        'OR_MID_AFTER_IB_SHORT': { price: orMid, bestCtx: 'Scalp fade SHORT post-IB OR midpoint', freq: '~1/day' },
+        'OR5_MID_LONG':  { price: orMid, bestCtx: 'Scalp fade LONG from 5-min OR midpoint', freq: '~1/day' },
+        'OR5_MID_SHORT': { price: orMid, bestCtx: 'Scalp fade SHORT from 5-min OR midpoint', freq: '~1/day' },
       };
 
       // Builds the level's context description from its OWN live performance_audit
@@ -10283,7 +10345,7 @@ export default function createACDRouter(io) {
         // Determine type
         let type;
         if (row.signal_type === 'SCALP' ||
-            (row.signal_type === 'UNIFIED_BACKTEST' && (row.signal_name.includes('_SCALP_') || row.signal_name.startsWith('OR_MID_AFTER_IB')))) {
+            (row.signal_type === 'UNIFIED_BACKTEST' && (row.signal_name.includes('_SCALP_') || row.signal_name.startsWith('OR5_MID')))) {
           type = 'SCALP';
         } else if (row.signal_type === 'CONTEXT' ||
             (row.signal_type === 'UNIFIED_BACKTEST' && (row.signal_name === 'IB_BULLISH' || row.signal_name === 'IB_BEARISH'))) {

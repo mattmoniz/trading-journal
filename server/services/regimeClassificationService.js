@@ -165,7 +165,7 @@ export function conditionedMultiplier(setupType, date, regimes, postRotationFlag
     if (r) {
       if (setupType === 'FLOOR_R1_FADE_SHORT' && r.A === 'BULLISH_TREND') mult *= 0.5;
       if (setupType === 'IB_MID_SCALP_FADE_LONG' && r.B === 'STRETCHED_LOW') mult *= 0.5;
-      if (setupType === 'OR_HIGH_FADE_SHORT' && r.C === 'established') mult *= 1.3;
+      if (setupType === 'OR5_HIGH_FADE_SHORT' && r.C === 'established') mult *= 1.3;
     }
   }
 
@@ -173,7 +173,7 @@ export function conditionedMultiplier(setupType, date, regimes, postRotationFlag
     const isPostRotation = postRotationFlag.get(date) === true;
     if (isPostRotation) {
       if (setupType === 'IB_BULLISH') mult *= 0.5;
-      if (setupType === 'OR_HIGH_FADE_SHORT') mult *= 1.3;
+      if (setupType === 'OR5_HIGH_FADE_SHORT') mult *= 1.3;
     }
   }
 

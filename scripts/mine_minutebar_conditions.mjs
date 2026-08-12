@@ -231,7 +231,7 @@ async function mineFamily(familyName, tradeDirFn, evtsRaw) {
       if (wr >= MIN_WR && r.pnl > 0) {
         const rigor = rigorDiagnostics(r.trades);
         // Format matches the established level-fade convention exactly: {dimension}:{name}×{value}
-        // (e.g. level_x_dow:OR_LOW×Thu) — NOT {family}:{dimension}:{value}. morningBrief.js's
+        // (e.g. level_x_dow:OR5_LOW×Thu) — NOT {family}:{dimension}:{value}. morningBrief.js's
         // scalp-playbook endpoint finds today-relevant patterns via substring checks like
         // pattern_key.includes('×' + dowName), which only work with this exact shape. Found
         // 2026-07-14: an earlier format (family:dimension:value) meant these discoveries would

@@ -142,19 +142,33 @@ export const LEVEL_FADE_DEFINITIONS = {
   ONH: { rule: 'OVERNIGHT_RANGE', displayName: 'Overnight High', levelDesc: "prior Globex session's high (18:00 ET prior day → 09:29 ET today)" },
   ONL: { rule: 'OVERNIGHT_RANGE', displayName: 'Overnight Low', levelDesc: "prior Globex session's low (18:00 ET prior day → 09:29 ET today)" },
   // Same-day-forming
-  OR_HIGH: { rule: 'SAME_DAY_FORMING', displayName: 'Opening Range High', levelDesc: "today's 5-minute opening range high (9:30-9:35 AM ET)", formationGate: 575 },
-  OR_LOW:  { rule: 'SAME_DAY_FORMING', displayName: 'Opening Range Low', levelDesc: "today's 5-minute opening range low (9:30-9:35 AM ET)", formationGate: 575 },
+  OR5_HIGH: { rule: 'SAME_DAY_FORMING', displayName: '5-Min Opening Range High', levelDesc: "today's 5-minute opening range high (9:30-9:35 AM ET)", formationGate: 575 },
+  OR5_LOW:  { rule: 'SAME_DAY_FORMING', displayName: '5-Min Opening Range Low', levelDesc: "today's 5-minute opening range low (9:30-9:35 AM ET)", formationGate: 575 },
   IB_HIGH: { rule: 'SAME_DAY_FORMING', displayName: 'Initial Balance High', levelDesc: "today's Initial Balance high (9:30-10:30 AM ET)", formationGate: 630 },
   IB_LOW:  { rule: 'SAME_DAY_FORMING', displayName: 'Initial Balance Low', levelDesc: "today's Initial Balance low (9:30-10:30 AM ET)", formationGate: 630 },
   IB_MID_SCALP:    { rule: 'SAME_DAY_FORMING', displayName: 'IB Mid Scalp', levelDesc: "midpoint of today's Initial Balance, tight scalp stop/target", formationGate: 630 },
-  // Name is a historical artifact — this used to be gated to fire only after IB closed
-  // (etMinNow >= 630), a copy-paste of the IB_MID_SCALP_FADE line above it (both added
-  // same commit, bf65b47, 2026-07-02). Fixed live 2026-07-16 (server/routes/acd.js ~line
-  // 5960): the OR mid forms with the 5-min OR itself (~9:35 ET) and was never actually
-  // IB-dependent, so the gate was removed there — but this definition/formationGate/group
-  // entry was never updated to match, so the Setup Reference page kept showing the old,
-  // wrong gate/description/family for 2 weeks. Fixed here 2026-07-31.
-  OR_MID_AFTER_IB: { rule: 'SAME_DAY_FORMING', displayName: 'Opening Range Mid (5-Min)', levelDesc: "midpoint of today's 5-minute opening range (9:30-9:35 AM ET) — tradeable as soon as the OR completes, not gated to IB close despite the legacy setup_type name", formationGate: 575 },
+  // Renamed OR_MID_AFTER_IB -> OR5_MID 2026-08-12, folded into the new OR{N}_HIGH/LOW/MID
+  // naming family (docs/OR_LENGTH_SEASONALITY_SPEC.md). The old name had been a stale,
+  // misleading artifact since 2026-07-16, when the setup's actual IB-wait gate was removed
+  // from server/routes/acd.js but the name itself was never updated to match (the
+  // 2026-07-31 fix above corrected the formationGate/description but explicitly left the
+  // key itself as a documented "legacy setup_type name" — this rename is the completion of
+  // that fix, not a new decision). Full active_setups/performance_audit/level_prices
+  // history renamed in place (backup: *_or_rename_backup_20260812).
+  OR5_MID: { rule: 'SAME_DAY_FORMING', displayName: '5-Min Opening Range Mid', levelDesc: "midpoint of today's 5-minute opening range (9:30-9:35 AM ET) — tradeable as soon as the OR completes", formationGate: 575 },
+  // OR10/15/30 — added 2026-08-12 alongside the OR5 rename, Phase 1 bar-history backtest
+  // in progress/complete per docs/OR_LENGTH_SEASONALITY_SPEC.md. THIN_N-seeded (see
+  // scripts/seed_or_length_thin_n_placeholders.mjs) so none of these can ever fire
+  // unsuppressed ACTIVE before real N accumulates — SHADOW-only until then.
+  OR10_HIGH: { rule: 'SAME_DAY_FORMING', displayName: '10-Min Opening Range High', levelDesc: "today's 10-minute opening range high (9:30-9:40 AM ET)", formationGate: 580 },
+  OR10_LOW:  { rule: 'SAME_DAY_FORMING', displayName: '10-Min Opening Range Low', levelDesc: "today's 10-minute opening range low (9:30-9:40 AM ET)", formationGate: 580 },
+  OR10_MID:  { rule: 'SAME_DAY_FORMING', displayName: '10-Min Opening Range Mid', levelDesc: "midpoint of today's 10-minute opening range (9:30-9:40 AM ET)", formationGate: 580 },
+  OR15_HIGH: { rule: 'SAME_DAY_FORMING', displayName: '15-Min Opening Range High', levelDesc: "today's 15-minute opening range high (9:30-9:45 AM ET)", formationGate: 585 },
+  OR15_LOW:  { rule: 'SAME_DAY_FORMING', displayName: '15-Min Opening Range Low', levelDesc: "today's 15-minute opening range low (9:30-9:45 AM ET)", formationGate: 585 },
+  OR15_MID:  { rule: 'SAME_DAY_FORMING', displayName: '15-Min Opening Range Mid', levelDesc: "midpoint of today's 15-minute opening range (9:30-9:45 AM ET)", formationGate: 585 },
+  OR30_HIGH: { rule: 'SAME_DAY_FORMING', displayName: '30-Min Opening Range High', levelDesc: "today's 30-minute opening range high (9:30-10:00 AM ET)", formationGate: 600 },
+  OR30_LOW:  { rule: 'SAME_DAY_FORMING', displayName: '30-Min Opening Range Low', levelDesc: "today's 30-minute opening range low (9:30-10:00 AM ET)", formationGate: 600 },
+  OR30_MID:  { rule: 'SAME_DAY_FORMING', displayName: '30-Min Opening Range Mid', levelDesc: "midpoint of today's 30-minute opening range (9:30-10:00 AM ET)", formationGate: 600 },
   // Prior-year value area — added 2026-07-19 (see CLAUDE.md). Deliberately the safe
   // prior-COMPLETE-year convention (like PW/PM), not a rolling window.
   PY_VAH: { rule: 'PRIOR_PERIOD', displayName: 'Prior Year VAH', levelDesc: "prior complete calendar year's value area high" },
@@ -245,7 +259,10 @@ const LEVEL_GROUP_MAP = {
   WPP: 'Weekly Pivots', WR1: 'Weekly Pivots', WR2: 'Weekly Pivots', WS1: 'Weekly Pivots', WS2: 'Weekly Pivots',
   MPP: 'Monthly Pivots', MR1: 'Monthly Pivots', MR2: 'Monthly Pivots', MS1: 'Monthly Pivots', MS2: 'Monthly Pivots',
   ONH: 'Overnight', ONL: 'Overnight',
-  OR_HIGH: 'Opening Range', OR_LOW: 'Opening Range', OR_MID_AFTER_IB: 'Opening Range',
+  OR5_HIGH: 'Opening Range', OR5_LOW: 'Opening Range', OR5_MID: 'Opening Range',
+  OR10_HIGH: 'Opening Range', OR10_LOW: 'Opening Range', OR10_MID: 'Opening Range',
+  OR15_HIGH: 'Opening Range', OR15_LOW: 'Opening Range', OR15_MID: 'Opening Range',
+  OR30_HIGH: 'Opening Range', OR30_LOW: 'Opening Range', OR30_MID: 'Opening Range',
   IB_HIGH: 'Initial Balance', IB_LOW: 'Initial Balance', IB_MID_SCALP: 'Initial Balance',
   '5D_OR_MID': 'Opening Range (5-Day)', '10D_IB_MID': 'Initial Balance (10-Day)',
   PY_VAH: 'Prior Year', PY_VAL: 'Prior Year', PY_POC: 'Prior Year',

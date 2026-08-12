@@ -310,7 +310,7 @@ export async function loadAndTagTrades(config) {
         { name: 'PD1_VAL', price: pd1VA.val, dir: 'LONG' },
         { name: 'PD1_POC', price: pd1VA.poc, dir: 'LONG' },
       ];
-      if (orMid) levels.push({ name: 'OR_MID', price: orMid, dir: 'LONG' });
+      if (orMid) levels.push({ name: 'OR5_MID', price: orMid, dir: 'LONG' });
 
       const postOR = bars.filter(b => b.et_min >= 600 && b.et_min <= 900);
       const stopD = config.levels?.stopOverride || 20;

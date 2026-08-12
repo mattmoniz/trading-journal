@@ -461,12 +461,17 @@ function pdIbMid(prevBars) {
 // quarter, floor/camarilla pivots, ONH/ONL, all rolling composites — verified directly
 // against their own computation functions in this file: buildIbMids/buildRollingVAs/
 // buildTwoDayPOC/etc. all window strictly BEFORE the current date, never including it).
-// Only same-day-forming levels get a later gate: OR_HIGH/OR_LOW need the opening range's
-// own bars to complete (575 = bars 570-574), IB-dependent levels need IB to close (630).
+// Only same-day-forming levels get a later gate: OR5_HIGH/OR5_LOW/OR5_MID need the opening
+// range's own bars to complete (575 = bars 570-574), IB-dependent levels need IB to close (630).
 const RTH_START = 570, RTH_END = 960; // 9:30 AM - 4:00 PM ET, matches live acd.js's all-session detection
+// FIXED 2026-08-12: OR5_MID (renamed from OR_MID_AFTER_IB) was still gated at 630 here,
+// the exact stale copy-paste bug already found and fixed live in acd.js on 2026-07-16 (the
+// OR mid forms with the 5-min OR itself, ~9:35 ET, and was never actually IB-dependent) --
+// this backtest script's population never got that correction, so its formation-gate
+// filtering has been silently more restrictive than live detection for nearly a month.
 const LEVEL_GATES = {
-  OR_HIGH: 575, OR_LOW: 575,
-  IB_HIGH: 630, IB_LOW: 630, IB_MID_SCALP: 630, OR_MID_AFTER_IB: 630,
+  OR5_HIGH: 575, OR5_LOW: 575, OR5_MID: 575,
+  IB_HIGH: 630, IB_LOW: 630, IB_MID_SCALP: 630,
 };
 
 // Direction convention fixed 2026-07-27 (backtest_unified_uses_wrong_direction_formula_for_rth):
@@ -1022,8 +1027,8 @@ async function main() {
       FLOOR_S2:    lp.FLOOR_S2    ?? null,
       FLOOR_S3:    lp.FLOOR_S3    ?? null,
       // Today's OR/IB (from live bar data — lp values may be stale during session)
-      OR_HIGH:     orH,
-      OR_LOW:      orL,
+      OR5_HIGH:    orH,
+      OR5_LOW:     orL,
       IB_HIGH:     lp.IB_HIGH     ?? ibH,
       IB_LOW:      lp.IB_LOW      ?? ibL,
       // Overnight
@@ -1083,7 +1088,7 @@ async function main() {
       PD2_VAL:     dvlByDate.get(dates[di-2])?.val ?? null,
       // Custom stop/target overrides
       IB_MID_SCALP:    (ibH && ibL) ? { price: (ibH + ibL) / 2, stop: 50, target: 15 } : null,
-      OR_MID_AFTER_IB: (orH && orL) ? { price: (orH + orL) / 2, stop: 35, target: 20 } : null,
+      OR5_MID: (orH && orL) ? { price: (orH + orL) / 2, stop: 35, target: 20 } : null,
     };
 
     const nl30    = parseInt(acd.nl30) || 0;
@@ -1231,8 +1236,8 @@ async function main() {
     'FLOOR_S2':      ['FLOOR_S2_LONG',      'FLOOR_S2_SHORT'],
     'FLOOR_S3':      ['FLOOR_S3_LONG',      'FLOOR_S3_SHORT'],
     // Today's OR/IB
-    'OR_HIGH':       ['OR_HIGH_LONG',       'OR_HIGH_SHORT'],
-    'OR_LOW':        ['OR_LOW_LONG',        'OR_LOW_SHORT'],
+    'OR5_HIGH':      ['OR5_HIGH_LONG',      'OR5_HIGH_SHORT'],
+    'OR5_LOW':       ['OR5_LOW_LONG',       'OR5_LOW_SHORT'],
     'IB_HIGH':       ['IB_HIGH_LONG',       'IB_HIGH_SHORT'],
     'IB_LOW':        ['IB_LOW_LONG',        'IB_LOW_SHORT'],
     // Overnight
@@ -1271,7 +1276,7 @@ async function main() {
     '2D_POC':        ['2D_POC_LONG',        '2D_POC_SHORT'],
     // Custom-stop scalps
     'IB_MID_SCALP':    ['IB_MID_SCALP_LONG',   'IB_MID_SCALP_SHORT'],
-    'OR_MID_AFTER_IB': ['OR_MID_AFTER_IB_LONG', 'OR_MID_AFTER_IB_SHORT'],
+    'OR5_MID':       ['OR5_MID_LONG',       'OR5_MID_SHORT'],
     // Camarilla pivots (R3/S3 = reversal zones, R4/S4 = breakout levels)
     'CAM_R1':    ['CAM_R1_LONG',    'CAM_R1_SHORT'],
     'CAM_R2':    ['CAM_R2_LONG',    'CAM_R2_SHORT'],

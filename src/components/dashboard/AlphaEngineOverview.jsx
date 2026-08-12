@@ -676,7 +676,7 @@ export default function AlphaEngineOverview() {
     { name: 'Elite zone (TURB + IB dir)', effect: '+0.15', stat: '78–82% WR on confirmed TURBULENT', color: '#f97316' },
     { name: 'Level recency ≤2 days', effect: '+0.15', stat: '$22 EV proven defender', color: '#22c55e' },
     { name: 'Level fresh (21d+ untested)', effect: '−0.10', stat: '60.5% WR, -$5 EV unproven', color: '#f59e0b' },
-    { name: 'Verified confluence pair', effect: '+0.15', stat: 'OR_MID+DAILY_OPEN 84%, OR_LOW+IB_LOW 80%', color: '#a78bfa' },
+    { name: 'Verified confluence pair', effect: '+0.15', stat: 'OR5_MID+DAILY_OPEN 84%, OR5_LOW+IB_LOW 80%', color: '#a78bfa' },
     { name: 'INSIDE_VALUE open', effect: '−0.15', stat: '68.3% vs 72.7% outside z=−2.43', color: '#f59e0b' },
     { name: 'Day-type significance', effect: '±data-driven', stat: 'From DAY_TYPE_ALPHA rows (weekly recompute)', color: '#06b6d4' },
     { name: 'Stacking 7+ same-dir/day', effect: '0.10× (suppress)', stat: '62.4% WR -$15.7 EV N=1,922 — trend day, fades dead', color: '#ef4444' },
@@ -760,7 +760,7 @@ export default function AlphaEngineOverview() {
     {
       name: 'Setup Anticipation',
       color: '#0ea5e9',
-      desc: 'scripts/backtest_level_approach.js — weekly Sunday 8:30 PM. Computes P(setup fires | day_type, DOW) × avg_pnl from 906+ rows. Top-3 coverage = 77% (3 in 4 trading days, ≥1 top-3 setup fires). Shown in SessionForecastPanel. Key: BALANCE→OR_HIGH_FADE_SHORT 29% fire rate / 84% WR.',
+      desc: 'scripts/backtest_level_approach.js — weekly Sunday 8:30 PM. Computes P(setup fires | day_type, DOW) × avg_pnl from 906+ rows. Top-3 coverage = 77% (3 in 4 trading days, ≥1 top-3 setup fires). Shown in SessionForecastPanel. Key: BALANCE→OR5_HIGH_FADE_SHORT 29% fire rate / 84% WR.',
     },
     {
       name: 'Auto-Suppression Engine',
@@ -777,7 +777,7 @@ export default function AlphaEngineOverview() {
 
   const pending = [
     { icon: '🔇', text: 'S2 suppression indicator — no UI tells you when a setup was killed by the double-counter filter.' },
-    { icon: '📅', text: 'Shadow validation due ~2026-08-05 — IB_MID_SCALP_FADE_SHORT and OR_MID_AFTER_IB_FADE_SHORT (both flip positive with tight stops).' },
+    { icon: '📅', text: 'Shadow validation due ~2026-08-05 — IB_MID_SCALP_FADE_SHORT and OR5_MID_FADE_SHORT (both flip positive with tight stops).' },
     { icon: '🔗', text: 'Confluence pairs near price endpoint — 108 TRADE-rated pairs in JSON, no live UI surfacing which pairs overlap current price.' },
   ];
 

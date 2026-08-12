@@ -241,9 +241,9 @@ function computeLevels(dayIdx, allDays, dvlByDate, acdByDate, barsByDate, overni
   // Today's OR (available after 10:00)
   const todayAcd = acdByDate.get(day);
   if (todayAcd) {
-    levels.OR_HIGH = todayAcd.or_high;
-    levels.OR_LOW = todayAcd.or_low;
-    levels.OR_MID = (todayAcd.or_high + todayAcd.or_low) / 2;
+    levels.OR5_HIGH = todayAcd.or_high;
+    levels.OR5_LOW = todayAcd.or_low;
+    levels.OR5_MID = (todayAcd.or_high + todayAcd.or_low) / 2;
   }
 
   return levels;
@@ -285,7 +285,7 @@ function simulateDay(bars, levels, todayAcd) {
 
       // Timing gates for intraday levels
       if ((levelName === 'IB_MID' || levelName === 'IB_HIGH' || levelName === 'IB_LOW') && !pastIB) continue;
-      if ((levelName === 'OR_MID' || levelName === 'OR_HIGH' || levelName === 'OR_LOW') && !pastOR) continue;
+      if ((levelName === 'OR5_MID' || levelName === 'OR5_HIGH' || levelName === 'OR5_LOW') && !pastOR) continue;
 
       if (touchedLevels.has(levelName)) continue;
 
@@ -881,9 +881,9 @@ async function run() {
       }
 
       if (todayAcd) {
-        levels.OR_HIGH = todayAcd.or_high;
-        levels.OR_LOW = todayAcd.or_low;
-        levels.OR_MID = (todayAcd.or_high + todayAcd.or_low) / 2;
+        levels.OR5_HIGH = todayAcd.or_high;
+        levels.OR5_LOW = todayAcd.or_low;
+        levels.OR5_MID = (todayAcd.or_high + todayAcd.or_low) / 2;
       }
 
       // Simulate from startTod onwards, but track touches before startTod
@@ -918,7 +918,7 @@ async function run() {
         for (const [levelName, levelPrice] of Object.entries(levels)) {
           if (levelPrice == null || !isFinite(levelPrice)) continue;
           if ((levelName === 'IB_MID' || levelName === 'IB_HIGH' || levelName === 'IB_LOW') && !pastIB) continue;
-          if ((levelName === 'OR_MID' || levelName === 'OR_HIGH' || levelName === 'OR_LOW') && !pastOR) continue;
+          if ((levelName === 'OR5_MID' || levelName === 'OR5_HIGH' || levelName === 'OR5_LOW') && !pastOR) continue;
           if (touchedBefore.has(levelName)) continue;
           if (touchedAfter.has(levelName)) continue;
 
@@ -1183,7 +1183,7 @@ async function run() {
         if (b.tod >= 570 && b.tod <= 629) { ibH = Math.max(ibH, b.high); ibL = Math.min(ibL, b.low); }
       }
       if (ibH > -Infinity) { lvls.IB_HIGH = ibH; lvls.IB_LOW = ibL; lvls.IB_MID = (ibH + ibL) / 2; }
-      if (todayAcd) { lvls.OR_HIGH = todayAcd.or_high; lvls.OR_LOW = todayAcd.or_low; lvls.OR_MID = (todayAcd.or_high + todayAcd.or_low) / 2; }
+      if (todayAcd) { lvls.OR5_HIGH = todayAcd.or_high; lvls.OR5_LOW = todayAcd.or_low; lvls.OR5_MID = (todayAcd.or_high + todayAcd.or_low) / 2; }
 
       const touched = new Set();
       for (let i = 0; i < bars.length; i++) {
@@ -1194,7 +1194,7 @@ async function run() {
         for (const [ln, lp] of Object.entries(lvls)) {
           if (lp == null || !isFinite(lp)) continue;
           if ((ln === 'IB_MID' || ln === 'IB_HIGH' || ln === 'IB_LOW') && !pastIB) continue;
-          if ((ln === 'OR_MID' || ln === 'OR_HIGH' || ln === 'OR_LOW') && !pastOR) continue;
+          if ((ln === 'OR5_MID' || ln === 'OR5_HIGH' || ln === 'OR5_LOW') && !pastOR) continue;
           if (touched.has(ln)) continue;
 
           const tH = bar.high >= lp - PROXIMITY && bar.high <= lp + PROXIMITY;
@@ -1287,7 +1287,7 @@ async function run() {
       if (b.tod >= 570 && b.tod <= 629) { ibH = Math.max(ibH, b.high); ibL = Math.min(ibL, b.low); }
     }
     if (ibH > -Infinity) { lvls.IB_HIGH = ibH; lvls.IB_LOW = ibL; lvls.IB_MID = (ibH + ibL) / 2; }
-    if (todayAcd) { lvls.OR_HIGH = todayAcd.or_high; lvls.OR_LOW = todayAcd.or_low; lvls.OR_MID = (todayAcd.or_high + todayAcd.or_low) / 2; }
+    if (todayAcd) { lvls.OR5_HIGH = todayAcd.or_high; lvls.OR5_LOW = todayAcd.or_low; lvls.OR5_MID = (todayAcd.or_high + todayAcd.or_low) / 2; }
 
     // Track touches before startTod
     const touchedBefore = new Set();
@@ -1316,7 +1316,7 @@ async function run() {
         // ONLY trade good levels
         if (!goodLevelSet.has(ln)) continue;
         if ((ln === 'IB_MID' || ln === 'IB_HIGH' || ln === 'IB_LOW') && !pastIB) continue;
-        if ((ln === 'OR_MID' || ln === 'OR_HIGH' || ln === 'OR_LOW') && !pastOR) continue;
+        if ((ln === 'OR5_MID' || ln === 'OR5_HIGH' || ln === 'OR5_LOW') && !pastOR) continue;
         if (touchedBefore.has(ln)) continue;
         if (touched.has(ln)) continue;
 
