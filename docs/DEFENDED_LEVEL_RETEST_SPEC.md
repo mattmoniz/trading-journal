@@ -1,4 +1,4 @@
-# Defended-Level Retest Spec (2026-08-12, scoping — not yet built)
+# Defended-Level Retest Spec (2026-08-12, scoped and design-critiqued — ready to mine)
 
 ## Origin
 
@@ -13,112 +13,174 @@ retest after a break is a `SHORT` fade — same underlying rule, not two rules).
 **The current gap:** the system fires the instant a retest *touches* the level,
 regardless of whether that retest shows any sign of holding. The 09:45 loser was
 a retest that touched and got run over. The 10:59 winner was a retest that
-*stalled* — specifically, a sequence of failed bounce attempts, each one sold
-back down, before the final rollover:
+*stalled* — a sequence of failed bounce attempts before the final rollover:
 
 ```
 10:50-51  first drop            delta -180, -79
-10:52-53  bounce attempt        delta +118, +43   (tries to counter)
-10:54     hits a wall           NEW LOW (29856 < 29863), delta -127  (counter fails)
-10:55     drops further         new low 29848.50, third leg down
-10:56-57  another bounce        delta +126, +118
-10:58     stalls                tiny range, delta flips to -31  (bounce loses conviction)
+10:52-53  bounce attempt 1      delta +118, +43   (tries to counter)
+10:54     hits a wall           closes back down, delta -127  (attempt 1 fails)
+10:55     drops further         new low 29848.50
+10:56-57  bounce attempt 2      delta +126, +118
+10:58     hits a wall again     tiny range, delta -31  (attempt 2 fails)
 10:59     rolls over            entry
 ```
 
-**The actual signature is not "N quiet bars."** It's a sequence of failed
-reclaim/bounce attempts against the level, where each subsequent push shows less
-conviction than the last, until the bounces themselves stop and price reverses.
-User explicitly declined to pin a fixed bar count ("not a hard number... really
-about getting a solid feel for that moment a possible pivot") — the window
-should be swept, not guessed.
+## Known traps this design must avoid (both real, both found by re-checking the
+## design against the exact numbers above, not assumed)
 
-## Known trap this design must avoid
+1. **`intrabar_cvd_divergence_no_edge_confounded`** (2026-07-21) — a
+   similarly-shaped idea (price making a new adverse extreme while delta already
+   favorable) found the "divergence" condition added almost nothing once
+   properly controlled, because "made a new extreme" and "divergence present"
+   are structurally correlated by construction. A naive "N failed attempts"
+   predicate has the same shape: "price kept trying and couldn't" is *definitionally*
+   close to "the level held" — the outcome being predicted, not a separate signal.
+   Multiplying the attempt count from 1 to N does not escape this; it just
+   restates it more times. **Fix**: define "failure" as absorption (an attempt
+   makes a new HIGH, i.e. moves *against* the eventual fade direction, and then
+   loses it) rather than "makes a new low" (which is a momentum restatement of
+   the outcome). Absorption is anti-correlated with the down-prediction, not
+   entailed by it.
+2. **Summed attempt delta does not show "weakening" on the real example** —
+   checked directly: attempt 1 (10:52-53) delta = +118+43 = +161; attempt 2
+   (10:56-57) = +126+118 = **+244, stronger, not weaker**. Only the specific
+   bar where each attempt fails shows a clean decline: -127 (attempt 1's
+   failure) vs -31 (attempt 2's failure). Two genuinely different, non-tautological
+   candidate metrics survive this reconciliation (both below) — testing both in
+   parallel rather than picking one on a guess.
+3. **Entry-timing structural advantage** (the overshoot-entry incident) — if the
+   confirmed-signal arm enters at a variable bar (whenever the pattern completes)
+   while its control enters at a fixed bar, early-completing signatures get a
+   systematically cheaper entry against the same stop/target, independent of
+   whether the pattern means anything. Needs a timing-matched control arm, not
+   just a same-selection one.
 
-`intrabar_cvd_divergence_no_edge_confounded` (2026-07-21, this codebase) tested a
-similar-shaped idea — price making a new adverse extreme while delta is already
-favorable — and found the "divergence" condition added almost nothing once
-properly controlled: `CVD_DIVERGENCE` (N=2294, EV=-$32.20) vs
-`EXTREME_NO_FAV_VOL` (N=2418, EV=-$23.93) — only -$8.27/trade of real marginal
-contribution, because "price already made a new extreme" and "divergence
-present" are structurally correlated by construction, not independent signals.
+## Definition — attempt detection (fixed, not swept)
 
-This spec's version must isolate "the pushes are getting weaker" from "price
-is still moving toward extremes" as two *separate* measured quantities, not
-conflate them the way the 2026-07-21 first-pass version did.
+At a level retest (touch on the direction-correct side — every touch, not
+first-touch-only; the retest concept structurally excludes most events if
+deduped to first-touch, per the live dedup convention used for
+`active_setups`, which does NOT apply here):
 
-## Definition (first cut, to be refined in DeepSeek design critique)
+1. Classify each bar UP or DOWN by close-vs-prior-close (SHORT fade: UP =
+   reclaim/adverse, DOWN = rejection/favorable; mirror for LONG).
+2. An **attempt** = a maximal run of >=1 consecutive UP bars.
+3. An attempt **fails** at the first DOWN bar afterward that closes back below
+   the level (or the attempt's own midpoint) — confirmed at that bar's close,
+   not before. (Absorption reading — see trap #1 above.)
+4. The **completion bar** — the anchor for everything downstream (entry,
+   forward-return measurement) — is the bar where **both** conditions are true:
+   (a) >=2 attempts have each had their failure confirmed within the lookback
+   window, AND (b) the chosen weakening metric (below) shows the most recent
+   attempt weaker than the prior one.
 
-At a level retest (touch on the direction-correct side, per existing logic):
+## Definition — weakening metric (TWO candidates, tested in parallel, not chosen by guess)
 
-1. Look back over a swept window (candidates: 4/6/8/10 bars — user's own guess
-   was "6-7", treat as a hypothesis to check, not the answer) ending at the
-   current bar.
-2. Within that window, identify each local counter-move ("bounce attempt" for a
-   short setup, "dip attempt" for a long one) — a run of bars moving away from
-   the adverse extreme before reversing again toward it.
-3. For each attempt, measure: (a) whether it made a new adverse extreme
-   afterward (failed to hold), (b) the delta/volume magnitude of that attempt
-   vs. the previous one (weakening or not).
-4. The "defended" signal = multiple failed attempts (>=2, swept) with
-   monotonically weakening counter-push delta, culminating in the most recent
-   attempt failing to even reach the prior attempt's magnitude.
-5. Symmetric for the opposite direction (long setups: failed sell-off attempts
-   into support, weakening downside delta each time).
+- **Variant 1 (bounce-progress weakening, price only):** `m_i` = price extent of
+  attempt `i` (high − low over the attempt's UP-bar run). Weakening = `m_last <
+  m_(last-1)`. Tests whether the bounces themselves are making less structural
+  progress each time — no order-flow data needed.
+- **Variant 2 (rejection-force weakening, order flow):** `m_i` = |delta on the
+  bar where attempt `i` fails|. Weakening = `|m_last| < |m_(last-1)|`. Tests
+  whether each rejection needs less active selling to turn the bounce back —
+  the level increasingly defending itself with less force each time. This is
+  the metric that actually holds cleanly on the real example (127 -> 31).
 
-Bid/ask size (not just net delta) as a secondary check on the same attempts —
-does resting size at the level visibly build as each attempt fails, distinct
-from just the delta sign.
+Run both as separate candidate definitions against the same attempt-detection
+logic — not a combinatorial cross-product, two parallel single-metric tests.
+Bid/ask resting size (distinct from net delta) is explicitly DROPPED from this
+first pass — it has no measurement/threshold defined yet and would be a third
+unaccounted free parameter; revisit as a follow-up only if Variant 2 shows real
+signal.
+
+## Window (the one deliberately swept parameter)
+
+Lookback window candidates: 4/6/8/10 bars (user's own estimate was "6-7",
+treated as a hypothesis to check, not the answer — "not a hard number... really
+about getting a solid feel for that moment a possible pivot"). This is the only
+swept surface; attempt-detection and the weakening-metric choice are both fixed
+a priori (above), so `computeReplication()` only needs to key on (window,
+variant) pairs, not a larger free-parameter space.
 
 ## No-lookahead
 
-The signal at each candidate bar may only use bars strictly at-or-before that
-bar. The window/attempt-detection logic walks forward through history exactly
-as the live poller would see it, never referencing a future bar to decide
-whether the current bar "was" a failed attempt.
+Every classification (UP/DOWN, attempt, failure, completion) walks forward
+using only bars at-or-before the bar in question. The completion bar is the
+earliest point the signal is legitimately known — never referenced before it
+completes.
+
+## Cheap gate before any real mining (run this first, always)
+
+One `COUNT(*)` census: across the full history, how many touches actually reach
+a completed defended-signature (>=2 failed attempts + weakening, either
+variant) within the swept window range? If this is a low-single-digit percent
+of touches, every downstream arm is N-starved from the start and the whole
+design needs rethinking before spending real compute. Report this number before
+anything else.
 
 ## Step 0 — cheapest screen first (per CLAUDE.md's standing pretest rule)
 
 No stops, no targets, no trade machinery. At every real level-retest touch in
-`price_bars_primary` (using the actual live touch-detection logic, not a
-reimplementation — the existing candidate-detection function, not a
-new copy), measure raw forward price movement at several horizons (1/3/5/10/20
-bars), conditional on the defended-signature being present vs. absent vs. the
-unconditional mean over the same horizon. Both RTH and Globex, not RTH-only.
+`price_bars_primary` (using the actual live touch-detection logic — the
+existing candidate-detection function, not a reimplementation; every
+direction-correct touch, not first-touch-only), measure raw forward price
+movement at several horizons (1/3/5/10/20 bars from the **completion bar**, NOT
+the touch bar — anchoring at the touch bar would put the signal's own
+formation window inside the measured horizons, i.e. lookahead). Compare
+conditional (signature present) vs. unconditional mean, session-matched: RTH
+touches compared against an RTH-only baseline, Globex touches against a
+Globex-only baseline — never a mixed baseline, since forward drift and
+liquidity differ by session. Apply day-clustering/overlap rigor
+(`computeRigor` with the touch date as `dateField`) at this bar-level stage,
+not deferred to Step 1 — overlapping forward-return windows and same-day
+repeat touches of the same level are correlated, and Step 0's N is inflated
+without this.
 
 ## Step 1 — full simulation, if Step 0 shows something
 
-Three arms (reusing the `pilot_cvd_divergence.mjs` 3-way template, the
-established pattern for this exact class of selection-bias problem):
+Five populations, four marginal-comparison pairs (not the original three-arm
+design — that version left the entry-timing confound and the delta-isolation
+question both uncontrolled):
 
-- `NEVER_WAITED` — blind immediate entry on touch, today's baseline, resimulated
-  fresh (not read from a stored column).
-- `DEFENDED_CONFIRMED` — waited up to the window's end; entered only if the
-  failed-attempt/weakening-delta signature completed.
-- `WAITED_NO_SIGNATURE` — same touches, waited the same window, entered at
-  window's end regardless of whether the signature appeared. This is
-  simultaneously the blind-delay control (isolates whether the pattern itself
-  matters vs. just entering late) and the same-selection control (isolates the
-  pattern's real marginal contribution from which touches happened to survive
-  to be eligible at all) — the two confounds this codebase has already been
-  burned by once each (`engagement_confirmation_entry_timing`'s blind-delay
-  trap, the overshoot-entry algebraic-advantage trap), controlled in one arm.
+| Population | What it is |
+|---|---|
+| `NEVER_WAITED` | Immediate entry at first touch — today's baseline, resimulated fresh via `replayBars`/`directionFromType` (`maeMfeReplay.js`) against the real MNQ $2/pt + $2 round-trip commission (`server/config/instruments.js`) — not read from a stored column |
+| `WAITED_NO_SIGNATURE` | Same touches, waited the full window, entered at window's end regardless of signature |
+| `WAITED_SIGNATURE_TIMING` | Same touches, entered at `min(signature_completion_bar, window_end)` **regardless of whether the signature was actually real** — timing-matched to `DEFENDED_CONFIRMED`'s variable entry bar |
+| `FAILED_ATTEMPTS_NO_WEAKENING` | >=2 failed attempts present, but the weakening metric (Variant 1 or 2) does NOT hold |
+| `DEFENDED_CONFIRMED` | >=2 failed attempts AND weakening (Variant 1 or 2) |
+
+Comparison pairs:
+
+| Pair | Isolates |
+|---|---|
+| `NEVER_WAITED` vs `WAITED_NO_SIGNATURE` | pure delay effect |
+| `WAITED_NO_SIGNATURE` vs `WAITED_SIGNATURE_TIMING` | entry-timing structural advantage |
+| `WAITED_SIGNATURE_TIMING` vs `DEFENDED_CONFIRMED` | the whole signature, timing-matched |
+| `FAILED_ATTEMPTS_NO_WEAKENING` vs `DEFENDED_CONFIRMED` | the weakening metric specifically |
+
+Run this full 5-population design separately for Variant 1 and Variant 2.
 
 ## Required reporting shape (per direct user instruction — not aggregate EV alone)
 
-1. **Coverage cost**: of all `NEVER_WAITED`-eligible touches, what fraction does
-   `DEFENDED_CONFIRMED` filter out entirely (signature never completes within
-   the window)? Of *that filtered-out population specifically*, what would its
-   win rate/EV have been under blind immediate entry? This is the real price of
-   the filter — a number, not an afterthought.
-2. **Precision gain**: `DEFENDED_CONFIRMED`'s WR/EV vs. `WAITED_NO_SIGNATURE`'s
-   WR/EV (same selection, only the signature differs) — the honest measure of
-   whether the pattern adds anything, isolated from delay/selection.
+1. **Coverage cost**: fraction of `NEVER_WAITED`-eligible touches that
+   `DEFENDED_CONFIRMED` filters out entirely, and that filtered-out
+   population's own EV under blind immediate entry — reported **relative to
+   `NEVER_WAITED`'s own EV sign** (filtering out a trade only "costs" something
+   if the blind baseline is itself positive-EV) — with its own N printed
+   next to it, since it's the thinnest sub-population in the whole report and
+   its WR alone is not trustworthy below the standing N>=20 floor. Also report
+   the all-in blended EV (weighted mix of confirmed + filtered-blind) vs.
+   `NEVER_WAITED` as a cross-check — components AND the aggregate, not
+   components instead of it.
+2. **Precision gain**: `DEFENDED_CONFIRMED` vs `WAITED_SIGNATURE_TIMING` (the
+   timing-matched comparison, not `WAITED_NO_SIGNATURE` — using the fixed-window
+   control here would still carry the entry-timing confound into this number).
 3. Distribution, not just mean, per this codebase's standing asymmetric-payoff
-   convention — tail shape matters as much as the average.
-4. If multiple window lengths are swept (item 1 of the definition), the
-   selected window needs `computeReplication()` before being trusted — this is
-   a K-way sweep by construction.
+   convention.
+4. `computeReplication()` on the selected (window, variant) pair before trusting
+   any headline number — this is a real K-way sweep even with the attempt-logic
+   fixed a priori.
 
 ## Second-phase application (not part of this test — flag only)
 
@@ -128,10 +190,11 @@ natural input to the level-cluster candidate-selection fix shipped 2026-08-12
 showing real defense over one just ranked by historical EV when multiple levels
 are clustered. Deliberately out of scope for the first test — validating one
 new signal and its live-selection application in the same pass would make a
-negative result ambiguous (is the signal wrong, or the selection-integration
-wrong). Revisit once Step 1 has a real, controlled result on its own.
+negative result ambiguous. Revisit once Step 1 has a real, controlled result.
 
 ## Status
 
-Scoped, not built. Next: send this spec (not code) to DeepSeek for a design
-critique before any mining begins, per this session's established workflow.
+Scoped and design-critiqued by DeepSeek (2 rounds of user refinement +
+1 formal critique round, all findings incorporated above — see git history for
+the pre-critique version). Ready to dispatch to Gemini for the actual mining,
+starting with the cheap census gate.
