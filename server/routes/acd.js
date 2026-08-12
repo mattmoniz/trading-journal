@@ -6695,6 +6695,22 @@ export default function createACDRouter(io) {
             `, [todayET, type]).catch(() => ({ rows: [] }));
             const sameTypeRecentlyFired = sameTypeRecentRes.rows.length > 0;
 
+            // TEMPORARY DIAGNOSTIC (2026-08-12) — investigating a real, confirmed pattern:
+            // during cascadeBreaker.active windows today, the real candidate path (this
+            // block) produced ZERO rows of any kind across 8+ different setup_types over a
+            // 42-minute stretch (09:50-10:32) -- not one ACTIVE fire, not one SUPPRESSED_FADE/
+            // DOW_SUPPRESSED/SAME_TYPE_REFIRE_COOLDOWN/CLUSTER_ALREADY_FIRED row, only the
+            // vestigial cascade-audit rows (disabled as an acting gate 2026-08-05, see the
+            // comment ~6576). Static tracing ruled out an obvious single cause (nearLevels is
+            // shared, not recomputed; NOW()-based fired_at timestamps in the audit branch vs
+            // this block's own inserts should not collide on the unique index since each
+            // query() call is its own autocommit statement). Logging every poll's actual
+            // suppression-check state here to catch the real mechanism on the next live
+            // cascade occurrence, rather than continuing to guess. Remove once root-caused.
+            if (cascadeBreaker.active) {
+              console.error(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${isS2DoubleCounter(dir)} trendCounter=${isTrendCounterFade(dir)} nearLevelsN=${nearLevels.length}`);
+            }
+
             if (!clusterAlreadyFired && !sameTypeRecentlyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
@@ -7641,6 +7657,12 @@ export default function createACDRouter(io) {
       // every OTHER candidate that also cleared riskOk this poll (not just the winner) so it
       // can be persisted alongside the winning row and made queryable.
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      // TEMPORARY DIAGNOSTIC (2026-08-12) — see the matching comment ~6698. Confirms whether
+      // levelScalpSetup successfully survived the suppression check above but got dropped here
+      // or later (forceShadow ~8399), vs never having been built at all.
+      if (cascadeBreaker.active) {
+        console.error(`[cascade-diag] candidates-stage levelScalpSetup=${levelScalpSetup ? levelScalpSetup.type : 'null'} candidatesNonNull=${candidates.filter(Boolean).map(c => c.type).join(',') || 'none'}`);
+      }
       let active = null;
       const qualifyingThisPoll = [];
       for (const cand of candidates) {
@@ -8384,6 +8406,10 @@ export default function createACDRouter(io) {
           || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
           || inNewEntryDeadZone
           || inRefireCooldown;
+        // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
+        if (cascadeBreaker.active) {
+          console.error(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown}`);
+        }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
