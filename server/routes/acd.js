@@ -62,6 +62,20 @@ async function getTrailingORWidths(date, days = 90) {
 // In-memory backtest job state
 let acdJob = { status: 'idle', progress: null, result: null, error: null };
 
+// TEMPORARY DIAGNOSTIC (2026-08-12) — persists the cascade-breaker investigation's
+// [cascade-diag] lines to a scratch file, since plain console.error only reaches
+// nodemon's own stdout (not reliably tail-able from outside the running process, and
+// not captured by server/index.js's recordError()/server_errors.jsonl, which only
+// fires at explicit SERVER_ERROR/CLIENT_ERROR call sites). Remove alongside the
+// diagnostic call sites once the real mechanism is found — see OPEN_DECISION
+// cascade_breaker_reenable_redesign_scope.
+function cascadeDiagLog(line) {
+  console.error(line);
+  try {
+    fs.appendFileSync(path.join(__dirname, '../../scratch/cascade_diag.log'), `${new Date().toISOString()} ${line}\n`);
+  } catch (_) {}
+}
+
 // ── Setup-detection level cache (structural data that changes at most daily) ──
 // Keyed by trade date + cache key. Default TTL = 60 seconds for intraday stability;
 // callers with a naturally-daily-scoped value (already keyed by date, so a stale-day
@@ -6708,7 +6722,7 @@ export default function createACDRouter(io) {
             // suppression-check state here to catch the real mechanism on the next live
             // cascade occurrence, rather than continuing to guess. Remove once root-caused.
             if (cascadeBreaker.active) {
-              console.error(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${isS2DoubleCounter(dir)} trendCounter=${isTrendCounterFade(dir)} nearLevelsN=${nearLevels.length}`);
+              cascadeDiagLog(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${isS2DoubleCounter(dir)} trendCounter=${isTrendCounterFade(dir)} nearLevelsN=${nearLevels.length}`);
             }
 
             if (!clusterAlreadyFired && !sameTypeRecentlyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
@@ -7661,7 +7675,7 @@ export default function createACDRouter(io) {
       // levelScalpSetup successfully survived the suppression check above but got dropped here
       // or later (forceShadow ~8399), vs never having been built at all.
       if (cascadeBreaker.active) {
-        console.error(`[cascade-diag] candidates-stage levelScalpSetup=${levelScalpSetup ? levelScalpSetup.type : 'null'} candidatesNonNull=${candidates.filter(Boolean).map(c => c.type).join(',') || 'none'}`);
+        cascadeDiagLog(`[cascade-diag] candidates-stage levelScalpSetup=${levelScalpSetup ? levelScalpSetup.type : 'null'} candidatesNonNull=${candidates.filter(Boolean).map(c => c.type).join(',') || 'none'}`);
       }
       let active = null;
       const qualifyingThisPoll = [];
@@ -8408,7 +8422,7 @@ export default function createACDRouter(io) {
           || inRefireCooldown;
         // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
         if (cascadeBreaker.active) {
-          console.error(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown}`);
+          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown}`);
         }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
