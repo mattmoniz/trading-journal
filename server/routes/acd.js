@@ -6640,12 +6640,14 @@ export default function createACDRouter(io) {
           // Was `if (!cascadeBreaker.active && nearLevels.length > 0)` -- the cascadeBreaker
           // condition no longer gates this. See the disable note above the audit-log block.
           if (nearLevels.length > 0) {
-            const primary = nearLevels.reduce((best, lv) =>
-              (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
-            const lv = primary;
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
-            const type = resolveSetupType(`${lv.name}_${dir}`, lv);
+            // Kept purely to name the "would-have-picked" audit candidate when the
+            // fallback below finds nothing eligible -- preserves exact tie-break parity
+            // with the old single-pick behavior (strict `>`, earlier array element wins
+            // ties) rather than depending on sort stability for the same purpose.
+            const pooledPrimary = nearLevels.reduce((best, lv) =>
+              (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
             // Cluster dedup (2026-07-29): nearLevels.reduce() above only picks one primary
             // PER POLL -- but the server polls every 15-60s, and as price ticks within a
             // clustered zone, CONSECUTIVE polls can each pick a DIFFERENT "best EV" level
@@ -6701,31 +6703,95 @@ export default function createACDRouter(io) {
             // which does NOT cover ordinary level fades). This restores the old same-type
             // protection (unconditional 15-minute block on THIS exact type, resolved or not)
             // while keeping the new behavior for every OTHER type in the same cluster.
-            const sameTypeRecentRes = await query(`
-              SELECT 1 FROM active_setups
-              WHERE trade_date = $1 AND setup_type = $2
+            // Batched same-type-recently-fired check across the whole cluster (2026-08-12,
+            // level-fade cluster-fallback fix — see the fallback loop below). Used to be a
+            // single query for the one reduce()-picked type; the fallback needs to check this
+            // per candidate as it tries each one in turn, so this is now one ANY($2) query +
+            // Set membership instead of N sequential round-trips. Deliberately NOT merged with
+            // clusterAnchorRes above -- that query has different predicates (restricted to
+            // still-open ACTIVE/SHADOW non-CASCADE_BREAKER rows, for cluster-dedup attribution)
+            // from this one (any row at all in the last 15min, resolved or not, for the same-type
+            // refire guard) -- collapsing them would silently change the cooldown semantics.
+            const recentTypeRows = await query(`
+              SELECT DISTINCT setup_type FROM active_setups
+              WHERE trade_date = $1 AND setup_type = ANY($2)
                 AND fired_at >= NOW() - INTERVAL '15 minutes'
-              LIMIT 1
-            `, [todayET, type]).catch(() => ({ rows: [] }));
-            const sameTypeRecentlyFired = sameTypeRecentRes.rows.length > 0;
+            `, [todayET, clusterTypes]).catch(() => ({ rows: [] }));
+            const recentlyFiredTypes = new Set(recentTypeRows.rows.map(r => r.setup_type));
 
-            // TEMPORARY DIAGNOSTIC (2026-08-12) — investigating a real, confirmed pattern:
-            // during cascadeBreaker.active windows today, the real candidate path (this
-            // block) produced ZERO rows of any kind across 8+ different setup_types over a
-            // 42-minute stretch (09:50-10:32) -- not one ACTIVE fire, not one SUPPRESSED_FADE/
-            // DOW_SUPPRESSED/SAME_TYPE_REFIRE_COOLDOWN/CLUSTER_ALREADY_FIRED row, only the
-            // vestigial cascade-audit rows (disabled as an acting gate 2026-08-05, see the
-            // comment ~6576). Static tracing ruled out an obvious single cause (nearLevels is
-            // shared, not recomputed; NOW()-based fired_at timestamps in the audit branch vs
-            // this block's own inserts should not collide on the unique index since each
-            // query() call is its own autocommit statement). Logging every poll's actual
-            // suppression-check state here to catch the real mechanism on the next live
-            // cascade occurrence, rather than continuing to guess. Remove once root-caused.
-            if (cascadeBreaker.active) {
-              cascadeDiagLog(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${isS2DoubleCounter(dir)} trendCounter=${isTrendCounterFade(dir)} nearLevelsN=${nearLevels.length}`);
+            // dir-global gates -- pure functions of `dir`/`dtClass`/`ibSetup`, identical for
+            // every candidate in this cluster, so computed once rather than per candidate.
+            const s2Double = isS2DoubleCounter(dir);
+            const trendCounterFadeFlag = isTrendCounterFade(dir);
+
+            // Level-fade cluster fallback (2026-08-12) -- replaces the old single reduce()
+            // pick, which chose ONE candidate by pooled EV and gave up entirely for the whole
+            // poll if it was excluded, even when several OTHER eligible, real, positive-EV
+            // candidates sat in the same cluster. Root-caused live the same day: confirmed
+            // RTH_VWAP_FADE_LONG (a real, cleared +$6.66/trade setup) never fired once in a
+            // 42-minute window because WEEKLY_OPEN_FADE (THIN_N, cluster-blocked) kept winning
+            // the pooled-EV pick every single poll. Sorts by DIRECTIONAL EV (the EV of the bet
+            // actually being fired, not the pooled long+short number a level carries) and tries
+            // each candidate in EV order until one clears every existing gate. Also filters to
+            // the approach-consistent side of price -- a level on the far side from the approach
+            // direction would fire a semantically-backwards fade, a latent pre-existing gap this
+            // fallback would otherwise make MORE likely to fire, not less. DeepSeek design
+            // critique 2026-08-12 (scratch/deepseek_response.md) -- see
+            // OPEN_DECISION cascade_diag_awaiting_live_data for the full writeup.
+            let lv = null, type = null, sameTypeRecentlyFired = false;
+            // Explicit flag rather than re-deriving "cleared" from the individual suppression
+            // booleans below (2026-08-12 correctness fix, caught before shipping): the side
+            // filter (sideOk) excludes a candidate from ever being tried without setting any of
+            // clusterAlreadyFired/sameTypeRecentlyFired/suppressedSetup/etc -- if the fallback's
+            // pooledPrimary happens to be wrong-side but otherwise unsuppressed, re-deriving from
+            // those flags alone would wrongly read as "cleared" and fire it anyway, silently
+            // defeating the side filter this fix exists to add.
+            let winnerFound = false;
+            if (!clusterAlreadyFired) {
+              const dirKey = isLong ? 'long' : 'short';
+              const directionalEv = (cand) => {
+                const base = cand.name.replace(/_FADE$/, '');
+                return liveStats[base]?.[dirKey]?.ev ?? cand.ev ?? -999;
+              };
+              const sideOk = (cand) => isLong ? cand.level < currentPrice : cand.level > currentPrice;
+              const sortedCandidates = nearLevels.filter(sideOk).sort((a, b) => directionalEv(b) - directionalEv(a));
+              for (const cand of sortedCandidates) {
+                const candType = resolveSetupType(`${cand.name}_${dir}`, cand);
+                const candRecentlyFired = recentlyFiredTypes.has(candType);
+                const candSuppressed = !!liveStats._suppressedSetups?.has(candType);
+                const candDowSuppressed = !!liveStats._dowSuppressToday?.has(candType);
+                if (!candRecentlyFired && !candSuppressed && !candDowSuppressed && !s2Double && !trendCounterFadeFlag) {
+                  lv = cand; type = candType; sameTypeRecentlyFired = false; winnerFound = true;
+                  break;
+                }
+                // Skipped candidate — logged so the fallback doesn't recreate the exact
+                // "orphaned candidate with zero trace" problem this fix exists to solve.
+                const skipReason = candRecentlyFired ? 'SAME_TYPE_REFIRE_COOLDOWN'
+                  : candSuppressed ? 'SUPPRESSED_FADE'
+                  : candDowSuppressed ? 'DOW_SUPPRESSED'
+                  : s2Double ? 'S2_DOUBLE_COUNTER'
+                  : trendCounterFadeFlag ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
+                logGatedCandidate({ tradeDate: todayET, setupType: candType, gateName: 'LEVEL_FADE_CLUSTER_FALLBACK_SKIP', gateReason: skipReason, entry: currentPrice });
+              }
+            }
+            // No candidate cleared (or clusterAlreadyFired blocked the whole cluster) -- fall
+            // back to the pooled-EV pick for the audit trail, exactly matching pre-fix behavior.
+            if (!lv) {
+              lv = pooledPrimary;
+              type = resolveSetupType(`${lv.name}_${dir}`, lv);
+              sameTypeRecentlyFired = recentlyFiredTypes.has(type);
             }
 
-            if (!clusterAlreadyFired && !sameTypeRecentlyFired && !liveStats._suppressedSetups?.has(type) && !liveStats._dowSuppressToday?.has(type) && !isS2DoubleCounter(dir) && !isTrendCounterFade(dir)) {
+            // TEMPORARY DIAGNOSTIC (2026-08-12) — kept through the fallback fix's first live
+            // cascade window per DeepSeek's review, since it's the only real-time visibility
+            // into the rescue path outside cascadeBreaker.active windows. Now logs the WINNER
+            // (or would-have-picked candidate), not the single pre-fallback pick. Remove once
+            // the fallback's selection quality is confirmed over a few real occurrences.
+            if (cascadeBreaker.active) {
+              cascadeDiagLog(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${s2Double} trendCounter=${trendCounterFadeFlag} nearLevelsN=${nearLevels.length}`);
+            }
+
+            if (winnerFound) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
             const optStop  = liveStats._opt?.[type];
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
@@ -8597,7 +8663,7 @@ export default function createACDRouter(io) {
         sigmaContinuation,
         stackVolSignal,
       });
-    } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
+    } catch(e) { console.error('setup-detection error:', e); cascadeDiagLog(`[setup-detection-error] ${e.stack}`); res.status(500).json({ error: e.message }); }
   };
 
   // Short-lived (20s) full-response cache, on top of the in-flight coalescing lock
