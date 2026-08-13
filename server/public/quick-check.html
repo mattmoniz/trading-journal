@@ -144,16 +144,20 @@
   .range-btn.active { background: rgba(99,102,241,0.18); border-color: rgba(99,102,241,0.5); color: #a5b4fc; }
   .range-label { font-size: 11px; color: var(--dim); margin-bottom: 14px; }
 
-  /* Live/All performance sub-sections -- two independent equity curves shown side by
-     side (stacked on mobile) instead of one curve behind a toggle, per direct 2026-08-13
-     user request ("i want to see the individual equity chart one for live and one for
-     all"). "Live" = origin_status='ACTIVE' only (real alerts). "All" = every row for the
-     period regardless of origin_status, i.e. live + SHADOW (background-tracked, never
-     alerted) + BACKFILL/UNKNOWN (synthetic) -- deliberately the full, unfiltered picture,
-     not an intermediate "real" tier, so the two charts bound the range (narrowest vs.
-     widest population) rather than sitting close together. */
-  .perf-subhead { font-size: 12.5px; font-weight: 700; color: var(--text); margin-bottom: 8px; display: flex; align-items: baseline; gap: 6px; }
+  /* Performance section: ONE equity curve/stats row/table, switched via a Live/All toggle
+     -- not two always-visible charts (tried 2026-08-13, reverted same day per direct user
+     request: "I want the equity chart with live to show when i toggle live and i want the
+     equity chart for all when i toggle all"). "Live" = origin_status='ACTIVE' only (real
+     alerts). "All" = every row for the period regardless of origin_status, i.e. live +
+     SHADOW (background-tracked, never alerted) + BACKFILL/UNKNOWN (synthetic). Both
+     populations are still fetched in parallel per range change (loadRange()) so switching
+     the toggle is an instant client-side re-render, no extra network round trip. */
+  .perf-head-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .perf-subhead { font-size: 12.5px; font-weight: 700; color: var(--text); display: flex; align-items: baseline; gap: 6px; }
   .perf-subcount { font-size: 11px; font-weight: 500; color: var(--dim); }
+  .perf-toggle { display: flex; gap: 1px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); flex-shrink: 0; }
+  .perf-toggle button { padding: 3px 9px; font-size: 10px; font-weight: 600; cursor: pointer; border: none; background: rgba(15,23,42,0.8); color: var(--dim); }
+  .perf-toggle button.active { background: rgba(51,65,85,0.6); color: var(--text); }
   .range-stats-row { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; margin-bottom: 10px; padding: 8px 10px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
 </style>
 </head>
@@ -189,15 +193,13 @@
     </div>
     <div id="range-label" class="range-label"></div>
 
-    <div class="perf-subhead">Live <span id="live-subcount" class="perf-subcount"></span></div>
-    <div id="range-stats-live" class="range-stats-row"></div>
-    <canvas id="range-equity-live" class="equity"></canvas>
-    <div id="range-agg-live" style="margin-top:14px;"><div class="loading">Loading…</div></div>
-
-    <div class="perf-subhead" style="margin-top:24px;">All <span id="all-subcount" class="perf-subcount"></span></div>
-    <div id="range-stats-all" class="range-stats-row"></div>
-    <canvas id="range-equity-all" class="equity"></canvas>
-    <div id="range-agg-all" style="margin-top:14px;"><div class="loading">Loading…</div></div>
+    <div class="perf-head-row">
+      <div class="perf-subhead">Performance <span id="perf-subcount" class="perf-subcount"></span></div>
+      <div id="perf-toggle" class="perf-toggle"></div>
+    </div>
+    <div id="range-stats" class="range-stats-row"></div>
+    <canvas id="range-equity" class="equity"></canvas>
+    <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
   </div>
 </div>
 
@@ -349,11 +351,20 @@ function renderSetupCard(setupData) {
 
 // ---- Session timeline ----
 // COMMISSION/PNL_PER_POINT match server/routes/acd.js's live resolution constants exactly
-// (CLAUDE.md hard rule: this journal trades MNQ, $2/pt, $1 round-trip commission -- never
-// copy a different $/pt or commission constant). actual_pnl is already NET of commission
+// (CLAUDE.md hard rule: this journal trades MNQ, $2/pt, $2 round-trip commission / $1 per
+// side -- never copy a different $/pt or commission constant; ground truth is
+// server/config/instruments.js's LIVE_INSTRUMENT.commissionPerRoundTrip, imported by
+// acd.js's own resolution paths as `COMMISSION`). actual_pnl is already NET of commission
 // (every resolution path subtracts COMMISSION before storing it) -- "commission spent" and
 // "gross P&L" below are both DERIVED from that stored net figure, not separately fetched.
-const COMMISSION_PER_TRADE = 1;
+// FIXED 2026-08-13: this was still 1, left over from before the 2026-08-11 commission
+// correction (server/config/instruments.js's own comment: "$1 per transaction per contract
+// -- entry + exit = $2 round-trip -- the prior value was wrong despite an earlier note
+// claiming broker-statement verification"). This file never got updated when that fix
+// shipped -- every "commission spent"/"gross P&L" figure on this page was silently
+// undercounting commission by $1/trade since 2026-08-11, caught via direct user report
+// ("commission in live is still $1... should be $2 round trip").
+const COMMISSION_PER_TRADE = 2;
 
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
@@ -479,15 +490,17 @@ function openTradeModal(id) {
   html += mRow('Resolution', s.resolution, color);
   html += mRow('Method', s.resolution_method);
   html += mRow('P&L (net)', pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : null, pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : null);
-  // Claimed vs. possible (2026-08-09, user request): pnl is net of the $1 round-trip
+  // Claimed vs. possible (2026-08-09, user request): pnl is net of the $2 round-trip
   // commission (server/routes/acd.js's live resolution constants) -- back out the points
   // actually captured (signedPts = (pnl + COMMISSION) / PNL_PER_POINT, valid for both a win
   // and a loss since commission is always subtracted regardless of direction) and compare
   // against mfe_points, the best favorable excursion that was actually available during the
   // trade's life. Only shown when both are known -- MAE/MFE aren't captured on every
   // resolution path (e.g. some pre-2026-07 rows, or a resolution with no price data at all).
+  // FIXED 2026-08-13: was `(pnl + 1) / 2`, stale from before the 2026-08-11 commission
+  // correction -- see COMMISSION_PER_TRADE's own comment above for the full incident.
   if (pnl != null && s.mfe_points != null && Number(s.mfe_points) > 0) {
-    const capturedPts = (pnl + 1) / 2; // MNQ: $2/pt, $1 commission -- see CLAUDE.md hard rule
+    const capturedPts = (pnl + COMMISSION_PER_TRADE) / 2; // MNQ: $2/pt round-trip commission
     const pct = Math.max(0, Math.min(999, (capturedPts / Number(s.mfe_points)) * 100));
     html += mRow('Captured vs. available', capturedPts.toFixed(1) + 'pt of ' + Number(s.mfe_points).toFixed(1) + 'pt MFE (' + pct.toFixed(0) + '%)',
       pct >= 70 ? 'var(--green)' : pct >= 35 ? 'var(--amber)' : 'var(--red)');
@@ -726,16 +739,22 @@ function renderEquityCurve(canvasId, rows, range) {
   ctx.fillText((finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0), w - padR - 2, padT + 12);
 }
 
-// ---- Performance: filterable range (today/week/month/year/all), shown as two
-// independent sub-sections -- "Live" (origin_status='ACTIVE' only, real alerts) and "All"
-// (every row for the period, live + SHADOW + backfill/unknown). CHANGED 2026-08-13: was a
-// single curve behind a live/all toggle -- a direct user report ("commission in live is
-// still $1" while asking to see both at once) plus the earlier finding that a lone SHADOW
-// trade could make "Today" look very different depending on toggle state made two
-// always-visible curves clearer than one curve that silently changes meaning.
+// ---- Performance: filterable range (today/week/month/year/all), one chart switched by
+// a Live/All toggle. "Live" = origin_status='ACTIVE' only (real alerts, matches Session
+// Timeline's own default). "All" = every row for the period regardless of origin_status,
+// i.e. live + SHADOW (background-tracked, never alerted) + BACKFILL/UNKNOWN (synthetic).
+// Both populations are fetched in parallel on every range change and cached client-side,
+// so toggling Live/All is an instant re-render with no extra fetch. CHANGED 2026-08-13
+// twice in the same day: first from a single curve behind a checkbox toggle to two
+// always-visible stacked curves (misread "show me live and all individually" as "show both
+// at once"), then reverted to this toggle per direct correction: "I want the equity chart
+// with live to show when i toggle live and i want the equity chart for all when i toggle
+// all" -- i.e. switch which one is shown, don't show both.
 let currentRange = 'today';
+let performanceFilter = localStorage.getItem('performanceFilter') || 'live'; // 'live' | 'all'
 let currentRangeRowsLive = [];
 let currentRangeRowsAll = [];
+let currentLiveData = null, currentAllData = null;
 // Guards against out-of-order responses: 'all'/'year' can scan 10,000+ rows and take far
 // longer than 'today'/'week', so a slow request kicked off by an earlier tab click can
 // resolve AFTER a faster request from a later click and silently overwrite the display --
@@ -753,6 +772,43 @@ function subcountLabel(data) {
   return { liveN, shadowN, backfillN, parts };
 }
 
+function renderPerfToggle() {
+  $('perf-toggle').innerHTML = [['live', 'Live'], ['all', 'All']].map(([val, label]) =>
+    '<button data-pf="' + val + '" class="' + (performanceFilter === val ? 'active' : '') + '">' + label + '</button>'
+  ).join('');
+  $('perf-toggle').querySelectorAll('button').forEach(b => b.addEventListener('click', () => setPerformanceFilter(b.dataset.pf)));
+}
+
+function setPerformanceFilter(f) {
+  performanceFilter = f;
+  localStorage.setItem('performanceFilter', f);
+  renderPerformance();
+}
+
+// Re-renders from already-fetched cached data -- no network call, so the Live/All toggle
+// switches instantly.
+function renderPerformance() {
+  renderPerfToggle();
+  const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
+  const data = performanceFilter === 'live' ? currentLiveData : currentAllData;
+  if (!data) return; // nothing fetched yet
+
+  if (performanceFilter === 'live') {
+    const info = subcountLabel(data);
+    $('perf-subcount').textContent = '(' + info.liveN.toLocaleString() + ' real trade' + (info.liveN === 1 ? '' : 's') + ')';
+  } else {
+    const info = subcountLabel(data);
+    const total = info.liveN + info.shadowN + info.backfillN;
+    $('perf-subcount').textContent = info.parts.length
+      ? '(' + total.toLocaleString() + ' total — ' + info.liveN.toLocaleString() + ' live + ' + info.parts.join(' + ') + ')'
+      : '(' + total.toLocaleString() + ' total, all live)';
+  }
+
+  renderRangeStats('range-stats', rows);
+  renderAggTable('range-agg', rows);
+  renderEquityCurve('range-equity', rows, currentRange);
+}
+
 async function loadRange(range) {
   currentRange = range;
   const myRequestId = ++rangeRequestSeq;
@@ -764,28 +820,13 @@ async function loadRange(range) {
     ]);
     if (myRequestId !== rangeRequestSeq) return; // a newer tab click/poll superseded this response -- discard
 
-    const liveRows = Array.isArray(liveData?.setups) ? liveData.setups : [];
-    const allRows = Array.isArray(allData?.setups) ? allData.setups : [];
-    currentRangeRowsLive = liveRows;
-    currentRangeRowsAll = allRows;
+    currentRangeRowsLive = Array.isArray(liveData?.setups) ? liveData.setups : [];
+    currentRangeRowsAll = Array.isArray(allData?.setups) ? allData.setups : [];
+    currentLiveData = liveData;
+    currentAllData = allData;
     $('range-label').textContent = liveData.rangeLabel || allData.rangeLabel || '';
 
-    const liveInfo = subcountLabel(liveData);
-    $('live-subcount').textContent = '(' + liveInfo.liveN.toLocaleString() + ' real trade' + (liveInfo.liveN === 1 ? '' : 's') + ')';
-
-    const allInfo = subcountLabel(allData);
-    const allTotal = allInfo.liveN + allInfo.shadowN + allInfo.backfillN;
-    $('all-subcount').textContent = allInfo.parts.length
-      ? '(' + allTotal.toLocaleString() + ' total — ' + allInfo.liveN.toLocaleString() + ' live + ' + allInfo.parts.join(' + ') + ')'
-      : '(' + allTotal.toLocaleString() + ' total, all live)';
-
-    renderRangeStats('range-stats-live', liveRows);
-    renderAggTable('range-agg-live', liveRows);
-    renderEquityCurve('range-equity-live', liveRows, range);
-
-    renderRangeStats('range-stats-all', allRows);
-    renderAggTable('range-agg-all', allRows);
-    renderEquityCurve('range-equity-all', allRows, range);
+    renderPerformance();
   } catch (e) { /* keep last good render */ }
 }
 
@@ -815,8 +856,8 @@ setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 window.addEventListener('resize', () => {
-  renderEquityCurve('range-equity-live', currentRangeRowsLive, currentRange);
-  renderEquityCurve('range-equity-all', currentRangeRowsAll, currentRange);
+  const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
+  renderEquityCurve('range-equity', rows, currentRange);
 });
 </script>
 </body>
