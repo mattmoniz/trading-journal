@@ -142,15 +142,19 @@
   }
   .range-btn:hover { background: rgba(255,255,255,0.07); color: var(--text); }
   .range-btn.active { background: rgba(99,102,241,0.18); border-color: rgba(99,102,241,0.5); color: #a5b4fc; }
-  .range-label { font-size: 11px; color: var(--dim); margin-bottom: 10px; }
-  .origin-banner {
-    display: none; align-items: center; justify-content: space-between; gap: 10px;
-    font-size: 11.5px; padding: 7px 10px; border-radius: 6px; margin-bottom: 10px;
-    background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.3); color: var(--amber-soft);
-  }
-  .origin-banner.show { display: flex; }
-  .origin-banner label { display: flex; align-items: center; gap: 5px; color: var(--muted); cursor: pointer; flex-shrink: 0; white-space: nowrap; }
-  .origin-banner input { cursor: pointer; }
+  .range-label { font-size: 11px; color: var(--dim); margin-bottom: 14px; }
+
+  /* Live/All performance sub-sections -- two independent equity curves shown side by
+     side (stacked on mobile) instead of one curve behind a toggle, per direct 2026-08-13
+     user request ("i want to see the individual equity chart one for live and one for
+     all"). "Live" = origin_status='ACTIVE' only (real alerts). "All" = every row for the
+     period regardless of origin_status, i.e. live + SHADOW (background-tracked, never
+     alerted) + BACKFILL/UNKNOWN (synthetic) -- deliberately the full, unfiltered picture,
+     not an intermediate "real" tier, so the two charts bound the range (narrowest vs.
+     widest population) rather than sitting close together. */
+  .perf-subhead { font-size: 12.5px; font-weight: 700; color: var(--text); margin-bottom: 8px; display: flex; align-items: baseline; gap: 6px; }
+  .perf-subcount { font-size: 11px; font-weight: 500; color: var(--dim); }
+  .range-stats-row { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; margin-bottom: 10px; padding: 8px 10px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
 </style>
 </head>
 <body>
@@ -184,10 +188,16 @@
       <button class="range-btn" data-range="all">All</button>
     </div>
     <div id="range-label" class="range-label"></div>
-    <div id="origin-banner" class="origin-banner"></div>
-    <div id="range-stats" style="display:flex;gap:10px;flex-wrap:wrap;font-size:12px;margin-bottom:10px;padding:8px 10px;background:rgba(255,255,255,0.03);border-radius:6px;border:1px solid var(--border);"></div>
-    <canvas id="range-equity" class="equity"></canvas>
-    <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
+
+    <div class="perf-subhead">Live <span id="live-subcount" class="perf-subcount"></span></div>
+    <div id="range-stats-live" class="range-stats-row"></div>
+    <canvas id="range-equity-live" class="equity"></canvas>
+    <div id="range-agg-live" style="margin-top:14px;"><div class="loading">Loading…</div></div>
+
+    <div class="perf-subhead" style="margin-top:24px;">All <span id="all-subcount" class="perf-subcount"></span></div>
+    <div id="range-stats-all" class="range-stats-row"></div>
+    <canvas id="range-equity-all" class="equity"></canvas>
+    <div id="range-agg-all" style="margin-top:14px;"><div class="loading">Loading…</div></div>
   </div>
 </div>
 
@@ -716,20 +726,16 @@ function renderEquityCurve(canvasId, rows, range) {
   ctx.fillText((finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0), w - padR - 2, padT + 12);
 }
 
-// ---- Performance: filterable range (today/week/month/year/all) ----
-// Defaults to LIVE data only (origin_status='ACTIVE') -- matches Session Timeline's own
-// default filter exactly. CHANGED 2026-08-13 from a 'real' (ACTIVE+SHADOW) default after a
-// direct user report: a SHADOW-origin trade (background-tracked, never shown as a live
-// alert) was silently dragging "Today"'s Performance card to -$4 while Session Timeline
-// (already live-only) correctly showed the one real alert at +$72 -- same underlying data,
-// two sections disagreeing with no visible explanation. The toggle below now opts INTO
-// SHADOW+backfill/unknown together (single switch, matching how the user wants to "peek" at
-// the wider picture) rather than backfill alone -- the banner always shows the full
-// live/shadow/backfill breakdown so the composition is never silently ambiguous, in either
-// toggle state.
+// ---- Performance: filterable range (today/week/month/year/all), shown as two
+// independent sub-sections -- "Live" (origin_status='ACTIVE' only, real alerts) and "All"
+// (every row for the period, live + SHADOW + backfill/unknown). CHANGED 2026-08-13: was a
+// single curve behind a live/all toggle -- a direct user report ("commission in live is
+// still $1" while asking to see both at once) plus the earlier finding that a lone SHADOW
+// trade could make "Today" look very different depending on toggle state made two
+// always-visible curves clearer than one curve that silently changes meaning.
 let currentRange = 'today';
-let currentRangeRows = [];
-let includeNonLive = false;
+let currentRangeRowsLive = [];
+let currentRangeRowsAll = [];
 // Guards against out-of-order responses: 'all'/'year' can scan 10,000+ rows and take far
 // longer than 'today'/'week', so a slow request kicked off by an earlier tab click can
 // resolve AFTER a faster request from a later click and silently overwrite the display --
@@ -739,40 +745,47 @@ let includeNonLive = false;
 // a response is only rendered if no newer loadRange() call has started since.
 let rangeRequestSeq = 0;
 
+function subcountLabel(data) {
+  const liveN = data.liveCount || 0, shadowN = data.shadowCount || 0, backfillN = data.backfillCount || 0;
+  const parts = [];
+  if (shadowN > 0) parts.push(shadowN.toLocaleString() + ' background');
+  if (backfillN > 0) parts.push(backfillN.toLocaleString() + ' backfill/unknown');
+  return { liveN, shadowN, backfillN, parts };
+}
+
 async function loadRange(range) {
   currentRange = range;
   const myRequestId = ++rangeRequestSeq;
   document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
   try {
-    const origin = includeNonLive ? 'all' : 'live';
-    const data = await fetch('/api/setups/range-summary?range=' + range + '&origin=' + origin).then(r => r.json());
+    const [liveData, allData] = await Promise.all([
+      fetch('/api/setups/range-summary?range=' + range + '&origin=live').then(r => r.json()),
+      fetch('/api/setups/range-summary?range=' + range + '&origin=all').then(r => r.json()),
+    ]);
     if (myRequestId !== rangeRequestSeq) return; // a newer tab click/poll superseded this response -- discard
-    const rows = Array.isArray(data?.setups) ? data.setups : [];
-    currentRangeRows = rows;
-    $('range-label').textContent = data.rangeLabel || '';
 
-    const banner = $('origin-banner');
-    const liveN = data.liveCount || 0, shadowN = data.shadowCount || 0, backfillN = data.backfillCount || 0;
-    const nonLive = shadowN + backfillN;
-    if (nonLive > 0) {
-      banner.classList.add('show');
-      const parts = [];
-      if (shadowN > 0) parts.push(shadowN.toLocaleString() + ' background (never alerted)');
-      if (backfillN > 0) parts.push(backfillN.toLocaleString() + ' backfill/unknown (synthetic)');
-      banner.innerHTML =
-        '<span>' + (includeNonLive
-          ? '⚠ Includes ' + parts.join(' + ') + ' — not real live performance'
-          : '✓ ' + liveN.toLocaleString() + ' live trade' + (liveN === 1 ? '' : 's') + ' shown — ' + parts.join(' + ') + ' excluded') +
-        '</span>' +
-        '<label><input type="checkbox" id="nonlive-toggle" ' + (includeNonLive ? 'checked' : '') + '> include</label>';
-      $('nonlive-toggle').addEventListener('change', (e) => { includeNonLive = e.target.checked; loadRange(currentRange); });
-    } else {
-      banner.classList.remove('show');
-    }
+    const liveRows = Array.isArray(liveData?.setups) ? liveData.setups : [];
+    const allRows = Array.isArray(allData?.setups) ? allData.setups : [];
+    currentRangeRowsLive = liveRows;
+    currentRangeRowsAll = allRows;
+    $('range-label').textContent = liveData.rangeLabel || allData.rangeLabel || '';
 
-    renderRangeStats('range-stats', rows);
-    renderAggTable('range-agg', rows);
-    renderEquityCurve('range-equity', rows, range);
+    const liveInfo = subcountLabel(liveData);
+    $('live-subcount').textContent = '(' + liveInfo.liveN.toLocaleString() + ' real trade' + (liveInfo.liveN === 1 ? '' : 's') + ')';
+
+    const allInfo = subcountLabel(allData);
+    const allTotal = allInfo.liveN + allInfo.shadowN + allInfo.backfillN;
+    $('all-subcount').textContent = allInfo.parts.length
+      ? '(' + allTotal.toLocaleString() + ' total — ' + allInfo.liveN.toLocaleString() + ' live + ' + allInfo.parts.join(' + ') + ')'
+      : '(' + allTotal.toLocaleString() + ' total, all live)';
+
+    renderRangeStats('range-stats-live', liveRows);
+    renderAggTable('range-agg-live', liveRows);
+    renderEquityCurve('range-equity-live', liveRows, range);
+
+    renderRangeStats('range-stats-all', allRows);
+    renderAggTable('range-agg-all', allRows);
+    renderEquityCurve('range-equity-all', allRows, range);
   } catch (e) { /* keep last good render */ }
 }
 
@@ -801,7 +814,10 @@ loadRange('today');
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
-window.addEventListener('resize', () => renderEquityCurve('range-equity', currentRangeRows, currentRange));
+window.addEventListener('resize', () => {
+  renderEquityCurve('range-equity-live', currentRangeRowsLive, currentRange);
+  renderEquityCurve('range-equity-all', currentRangeRowsAll, currentRange);
+});
 </script>
 </body>
 </html>
