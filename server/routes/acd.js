@@ -8862,7 +8862,7 @@ export default function createACDRouter(io) {
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
-  // GET /api/setups/range-summary?range=today|week|month|year|all&origin=real|all —
+  // GET /api/setups/range-summary?range=today|week|month|year|all&origin=live|real|all —
   // powers the quick-check page's single filterable equity curve + by-setup table
   // (superseded the earlier separate /setups/week-summary, which only did one fixed
   // range). Deliberately NOT `SELECT s.*` like /setups/today -- for month/year/all this
@@ -8875,21 +8875,27 @@ export default function createACDRouter(io) {
   // RESOLVED/EXPIRED lifecycle, an easy pair to conflate since both use "ACTIVE"/
   // "SHADOW" as literal values for two unrelated concepts.
   //
-  // origin=real (default) restricts to origin_status IN ('ACTIVE','SHADOW') -- genuinely
-  // live-fired data, per this codebase's standing rule that ~80-97% of active_setups for
-  // any wide date range is BACKFILL (synthetic historical seeding) or UNKNOWN (pre-2026-
-  // 07-09, unrecoverable), and presenting a blended figure as "performance" without this
-  // filter is exactly the mistake that rule exists to prevent. Found 2026-07-29, same
-  // session this endpoint was built: the "All time" range's blended equity curve was
-  // being dragged to a large apparent loss almost entirely by UNKNOWN-origin legacy rows
-  // (-$10,892) while the real ACTIVE+SHADOW total was actually positive (+$4,858) --
-  // confirmed directly, not assumed. realCount/nonRealCount are always returned
-  // regardless of which origin filter is active, so the frontend can show the
-  // composition even when already filtered to real-only.
+  // origin=live (default, 2026-08-13) restricts to origin_status='ACTIVE' only -- a real
+  // trade the user was actually shown as a live alert, matching Session Timeline's own
+  // default filter exactly. Was 'real' (ACTIVE+SHADOW) by default until a direct user
+  // report: a SHADOW-origin trade (background-tracked, never shown as a live alert) was
+  // silently dragging "Today"'s Performance card to -$4 while Session Timeline (its
+  // 'live'-only default) correctly showed the one real alert at +$72 -- same underlying
+  // data, two sections disagreeing with no visible explanation why. origin=real
+  // (ACTIVE+SHADOW) and origin=all (+BACKFILL/UNKNOWN) remain available -- 'real' kept for
+  // any future direct caller, 'all' still needed since ~80-97% of active_setups for any
+  // wide date range is BACKFILL (synthetic historical seeding) or UNKNOWN (pre-2026-07-09,
+  // unrecoverable) and presenting that blended in without an explicit opt-in is exactly the
+  // mistake this codebase's standing rule exists to prevent (found 2026-07-29: "All time"'s
+  // blended equity curve was dragged to a large apparent loss almost entirely by
+  // UNKNOWN-origin legacy rows, -$10,892, while the real total was actually +$4,858).
+  // liveCount/shadowCount/backfillCount are always returned regardless of which origin
+  // filter is active, so the frontend can show the full composition breakdown even when
+  // already filtered down to live-only.
   router.get('/setups/range-summary', async (req, res) => {
     try {
       const range = ['today', 'week', 'month', 'year', 'all'].includes(req.query.range) ? req.query.range : 'today';
-      const origin = req.query.origin === 'all' ? 'all' : 'real';
+      const origin = ['live', 'real', 'all'].includes(req.query.origin) ? req.query.origin : 'live';
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const todayET = nowET.toLocaleDateString('en-CA');
 
@@ -8951,12 +8957,18 @@ export default function createACDRouter(io) {
       `, params);
 
       const allRows = setupsRes.rows;
-      const isReal = (r) => r.origin_status === 'ACTIVE' || r.origin_status === 'SHADOW';
-      const realCount = allRows.filter(isReal).length;
-      const nonRealCount = allRows.length - realCount;
-      const setups = origin === 'real' ? allRows.filter(isReal) : allRows;
+      const isLive = (r) => r.origin_status === 'ACTIVE';
+      const isShadow = (r) => r.origin_status === 'SHADOW';
+      const liveCount = allRows.filter(isLive).length;
+      const shadowCount = allRows.filter(isShadow).length;
+      const backfillCount = allRows.length - liveCount - shadowCount;
+      const setups = origin === 'live' ? allRows.filter(isLive)
+        : origin === 'real' ? allRows.filter(r => isLive(r) || isShadow(r))
+        : allRows;
 
-      res.json({ setups, range, rangeLabel, origin, realCount, nonRealCount });
+      res.json({ setups, range, rangeLabel, origin, liveCount, shadowCount, backfillCount,
+        // kept for compatibility with anything still reading the pre-2026-08-13 field names
+        realCount: liveCount + shadowCount, nonRealCount: backfillCount });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 

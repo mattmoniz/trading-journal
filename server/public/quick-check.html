@@ -717,15 +717,19 @@ function renderEquityCurve(canvasId, rows, range) {
 }
 
 // ---- Performance: filterable range (today/week/month/year/all) ----
-// Defaults to REAL data only (origin_status ACTIVE/SHADOW) -- for wide ranges most of
-// active_setups is BACKFILL (synthetic historical seeding) or UNKNOWN (pre-2026-07-09,
-// unrecoverable), and blending it into "performance" silently is exactly the mistake
-// this app's own standing rule exists to prevent. The banner below always shows the
-// real-vs-excluded composition so this can never be silently forgotten, even when
-// already filtered to real-only.
+// Defaults to LIVE data only (origin_status='ACTIVE') -- matches Session Timeline's own
+// default filter exactly. CHANGED 2026-08-13 from a 'real' (ACTIVE+SHADOW) default after a
+// direct user report: a SHADOW-origin trade (background-tracked, never shown as a live
+// alert) was silently dragging "Today"'s Performance card to -$4 while Session Timeline
+// (already live-only) correctly showed the one real alert at +$72 -- same underlying data,
+// two sections disagreeing with no visible explanation. The toggle below now opts INTO
+// SHADOW+backfill/unknown together (single switch, matching how the user wants to "peek" at
+// the wider picture) rather than backfill alone -- the banner always shows the full
+// live/shadow/backfill breakdown so the composition is never silently ambiguous, in either
+// toggle state.
 let currentRange = 'today';
 let currentRangeRows = [];
-let includeBackfill = false;
+let includeNonLive = false;
 // Guards against out-of-order responses: 'all'/'year' can scan 10,000+ rows and take far
 // longer than 'today'/'week', so a slow request kicked off by an earlier tab click can
 // resolve AFTER a faster request from a later click and silently overwrite the display --
@@ -740,7 +744,7 @@ async function loadRange(range) {
   const myRequestId = ++rangeRequestSeq;
   document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
   try {
-    const origin = includeBackfill ? 'all' : 'real';
+    const origin = includeNonLive ? 'all' : 'live';
     const data = await fetch('/api/setups/range-summary?range=' + range + '&origin=' + origin).then(r => r.json());
     if (myRequestId !== rangeRequestSeq) return; // a newer tab click/poll superseded this response -- discard
     const rows = Array.isArray(data?.setups) ? data.setups : [];
@@ -748,16 +752,20 @@ async function loadRange(range) {
     $('range-label').textContent = data.rangeLabel || '';
 
     const banner = $('origin-banner');
-    const nonReal = data.nonRealCount || 0;
-    if (nonReal > 0) {
+    const liveN = data.liveCount || 0, shadowN = data.shadowCount || 0, backfillN = data.backfillCount || 0;
+    const nonLive = shadowN + backfillN;
+    if (nonLive > 0) {
       banner.classList.add('show');
+      const parts = [];
+      if (shadowN > 0) parts.push(shadowN.toLocaleString() + ' background (never alerted)');
+      if (backfillN > 0) parts.push(backfillN.toLocaleString() + ' backfill/unknown (synthetic)');
       banner.innerHTML =
-        '<span>' + (includeBackfill
-          ? '⚠ Includes ' + nonReal.toLocaleString() + ' backfill/unknown row' + (nonReal === 1 ? '' : 's') + ' — not real performance'
-          : '✓ ' + (data.realCount || 0).toLocaleString() + ' real trades shown — ' + nonReal.toLocaleString() + ' backfill/unknown excluded') +
+        '<span>' + (includeNonLive
+          ? '⚠ Includes ' + parts.join(' + ') + ' — not real live performance'
+          : '✓ ' + liveN.toLocaleString() + ' live trade' + (liveN === 1 ? '' : 's') + ' shown — ' + parts.join(' + ') + ' excluded') +
         '</span>' +
-        '<label><input type="checkbox" id="backfill-toggle" ' + (includeBackfill ? 'checked' : '') + '> include</label>';
-      $('backfill-toggle').addEventListener('change', (e) => { includeBackfill = e.target.checked; loadRange(currentRange); });
+        '<label><input type="checkbox" id="nonlive-toggle" ' + (includeNonLive ? 'checked' : '') + '> include</label>';
+      $('nonlive-toggle').addEventListener('change', (e) => { includeNonLive = e.target.checked; loadRange(currentRange); });
     } else {
       banner.classList.remove('show');
     }
