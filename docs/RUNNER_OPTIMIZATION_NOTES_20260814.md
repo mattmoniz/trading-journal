@@ -15,6 +15,88 @@ on a **structural swing-anchor trailing-stop system** — letting winning trades
 than a fixed target by trailing the stop behind recent market structure (higher-lows in an
 uptrend) instead of exiting at a fixed T1.
 
+## 0. A REAL backtest already ran — 734 trades, 2025-08-01 to 2026-08-14 — but it has two
+   confirmed problems and its headline number is not trustworthy as-is
+
+**Added 2026-08-16, after the user pointed out this thread had more to it than the
+prototype code below.** Separate from (and predating) the Gemini/DeepSeek optimizer
+prototypes in sections 1-3, there's an already-executed backtest:
+
+- **`docs/backtest_mnq_20260814.py`** (permanent copy of `scratch/backtest_mnq.py`) — reads
+  raw Sierra Chart tick data directly from `/mnt/c/SierraChart/Data/NQ[HMUZ]\d.CME.scid`
+  (NQ contract files, not MNQ — a deliberate and reasonable choice given this codebase's own
+  established convention that NQ/MNQ share identical price action and only differ by dollar
+  multiplier, confirmed elsewhere in CLAUDE.md: "their per-contract P&L runs ~9.2x MNQ's...
+  matching the real $20-vs-$2 ratio almost exactly"). Applies `CONTRACT_MULTIPLIER = 2`
+  (MNQ's correct $/pt) to that NQ price action. Runs its own, completely from-scratch entry
+  signal (volume/delta-based reversal: `b_vol > 1500` + large opposing delta, or high
+  avg-trade-size + delta, near a known level from `levels_1yr.json`) and a "2-bar structural
+  trailing stop" (exit when the current bar's close breaks the low/high of 2 bars back) —
+  **this is NOT this app's real setup-detection logic**, it's an independent, ad-hoc signal
+  built just for this test.
+- **`docs/dump_levels_20260814.mjs`** (permanent copy) generates `levels_1yr.json` by
+  reading every row from the real `level_prices` table for `trade_date >= '2025-08-01'`.
+- **`docs/mnq_trades_log_trailing_20260814.csv`** (permanent copy, 734 rows) is the output:
+  `Date,Entry_Time,Exit_Time,Direction,Level_Name,Level_Price,Entry_Price,Exit_Price,Result,PnL`.
+  Raw aggregate: **N=734, sum=$500.50, avg=+$0.68/trade**, 722 `STRUCTURAL_TRAILING_EXIT` /
+  12 `STOP_LOSS`.
+- **`docs/summarize_csv_20260814.py`** (permanent copy) computes losing-day streaks and a
+  weekly breakdown from the same CSV — no new numbers, same underlying data.
+
+### Two confirmed problems, both independently verified by reading the actual code
+
+1. **Lookahead bias on same-day-forming levels.** `dump_levels.mjs` dumps every level for
+   every date as one flat per-date list, with zero regard for *when during the day* each
+   level actually became knowable. `backtest_mnq.py` only guards the first 5 minutes
+   (`if est_dt.hour == 9 and 30 <= est_dt.minute < 35: pass # Filter first 5 mins`) — but
+   `levels_1yr.json`'s level set includes `OR10_HIGH/LOW/MID`, `OR15_HIGH/LOW/MID`,
+   `OR30_HIGH/LOW/MID`, and `IB_HIGH/LOW/MID`, none of which get an equivalent guard. A
+   trade at 9:40 AM testing proximity to `OR30_HIGH` is matching against the *actual,
+   completed* 30-minute range — a level that wouldn't be knowable in real time until 10:00
+   AM. This is exactly the risk CLAUDE.md's own hard rule names directly: "Same-day-forming
+   levels (Opening Range, Initial Balance) need their own formation gate or a re-test
+   introduces lookahead." Confirmed present here, not just theoretical — `dump_levels.mjs`
+   has no time-of-day awareness at all, only `trade_date`.
+2. **No commission subtracted, anywhere.** Neither `backtest_mnq.py` nor `summarize_csv.py`
+   subtracts MNQ's $2 round-trip commission from any trade — every `profit = pts_gained *
+   CONTRACT_MULTIPLIER * CONTRACTS` line is gross. At N=734 and $2/trade, that's -$1,468 not
+   accounted for. **Net of commission, the real result is roughly -$1.32/trade — negative,
+   not the breakeven-ish +$0.68 the raw CSV shows.**
+
+### Also worth knowing, lower severity
+
+- Every threshold in the entry signal and exit logic is a hardcoded static constant
+  (`STOP_LOSS_PTS=60`, `PROXIMITY_THRESHOLD=15`, `MAX_TRADES_PER_DAY=3`, `b_vol>1500`,
+  `b_delta<-200`/`>200`, `avg_size>1.2`, `b_delta<-150`/`>150`) — none derived from a rolling
+  distribution, directly against this codebase's "no static thresholds, ever" rule. This
+  matters more here than usual since these thresholds ARE the entry signal, not just a
+  secondary filter.
+- The entry signal's volume/delta inputs come from NQ's own order flow (the full-size
+  contract's tick data), not MNQ's. Price parity between NQ and MNQ is well-established in
+  this codebase, but order-flow/liquidity *character* between a full-size and micro contract
+  isn't necessarily identical — worth a sanity check, not necessarily a real problem.
+- No `origin_status`/synthetic-data concept, no N≥20 gating on the signal itself, no
+  day-of-week or confluence handling — this is a from-scratch signal with none of this
+  codebase's other established statistical guardrails, by design (it's a standalone
+  exploration, not wired to anything live).
+- The prop-account balance simulation at the bottom of `backtest_mnq.py` (DLL=-$400/day,
+  trailing drawdown=$2,000, target=$53,000 from $50,000) hardcodes real external prop-firm
+  rules — that's fine, those are genuinely fixed external constraints, not a trading
+  threshold this codebase's no-static-thresholds rule is about.
+
+### What this means for the runner-optimization thread overall
+
+This backtest tests a genuinely different, simpler trailing mechanism (2-bar break, not the
+zigzag/ATR versions in sections 1 below) against a from-scratch signal, not this app's real
+setups — so even a clean, correctly-fixed version of this specific backtest wouldn't
+directly validate "should we add a runner to our real live setups," only "does this
+particular exit style help this particular toy signal." Still useful as a first read on
+whether structural trailing exits have *any* legs at all before spending more effort — but
+not close to sufficient to act on, and the two bugs above mean even that first read isn't
+trustworthy yet. **Before this number means anything: fix the lookahead gate (add real
+formation-time gating for OR10/15/30/IB, matching how `detectLevelFades()` already handles
+this correctly elsewhere in this codebase) and subtract commission, then re-run.**
+
 ## 1. Gemini's build: `docs/structural_runner_optimization_20260814.py`
 
 (Permanent copy — the original `scratch/structural_runner_optimization.py` is fragile, see
@@ -51,6 +133,24 @@ Second flagged caveat (Gemini's own): recompiling `TradePathStructural` inside t
 optimizer's objective-function loop (once per DE evaluation, ~30 iterations × 10 population
 × however many trades) will be slow at scale — may need vectorizing the pivot computation
 or capping population/generations for an initial pass.
+
+**An earlier, simpler version also exists**: `docs/runner_optimization_atr_20260814.py`
+(permanent copy of `scratch/runner_optimization.py`, timestamped ~5 min before the
+structural version) — the ATR-band mechanism DeepSeek's own explanation describes ("recent
+highs minus your optimized ATR cushion") before Gemini's structural/zigzag version replaced
+it. Same differential-evolution optimizer shape, same utility function, but the trailing
+anchor is `rolling_high(lookback) - atr_mult * ATR` instead of a swing-structure pivot. One
+nice detail worth keeping regardless of which mechanism wins: it bounds the activation
+threshold search space by the *empirical 70th percentile MFE of the actual trade population
+passed in* (`p70_mfe = np.percentile(mfe_dist, 70.0)`) rather than a flat hardcoded cap —
+a data-derived bound, matching this codebase's own no-static-thresholds preference. Same
+`fetch_trade_bars_from_db`-style schema mismatch would apply if this version were used
+instead of/alongside the structural one — it also needs real trade-bar data to run.
+A synthetic-data smoke test of the structural version (`docs/test_structural_20260814.py`,
+permanent copy) confirms the optimizer code itself runs end-to-end without crashing (20
+synthetic "runner" trades + 80 "chop" trades, `optimize_structural_system()` completes), but
+this used randomly generated price paths, not real data — it validates the code executes,
+not that the results mean anything.
 
 ## 2. DeepSeek's plain-English mechanism explanation
 
@@ -131,6 +231,14 @@ is a "someday, probably not" list, not a near-term backlog. Full text:
 
 ## What actually needs to happen next (in order)
 
+0. **Fix the already-run backtest first** (`backtest_mnq.py`) — it's further along than the
+   prototypes below and cheaper to fix: (a) add real formation-time gating for OR10/OR15/
+   OR30/IB before matching proximity to those levels (block a level from being tested until
+   its formation window has actually elapsed for that entry's timestamp — mirror how
+   `detectLevelFades()` already does this correctly), (b) subtract MNQ's $2 round-trip
+   commission from every trade's PnL, (c) re-run and see if the result is still worth
+   pursuing once both are fixed. If it goes solidly negative once corrected, that's a real,
+   useful negative result — don't be reluctant to report it as one.
 1. **Fix the schema mismatch** in `structural_runner_optimization.py` — rewrite
    `fetch_trade_bars_from_db()` against the real schema (`custom_fields->'sierra_data'`
    JSONB for trade metadata, `price_bars_primary`'s real `ts` column, real `symbol='NQ'`
