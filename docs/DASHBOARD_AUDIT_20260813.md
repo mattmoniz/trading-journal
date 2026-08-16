@@ -60,7 +60,7 @@ part of the app the user consults.
 | D5 | `keyLevels.js` | **Hardcoded static thresholds**: `PROX = 2.5`, `LOOKAHEAD = 15`, `MFE_BARS = 60`, and a `diff > 20 ? 'UP' : diff < -20 ? 'DOWN'` cutoff — violates the "no static thresholds, ever" hard rule. | Not independently re-verified by Claude this pass. |
 | D6 | `tearsheet.js` | **No N≥20 floor** on `% Profitable Weeks`/`% Profitable Months` before presenting a confident-sounding percentage. | Not independently re-verified by Claude this pass. |
 
-### DeepSeek findings (code-level, 15 total — full table in `scratch/deepseek_response.md` history; highlights below)
+### DeepSeek findings (code-level, 15 total — full table below; already the complete permanent record, not dependent on any scratch file)
 
 Explicitly cleared by DeepSeek (and consistent with Gemini's read): no hand-typed WR%/N/$
 literal in a live stat card on this page; `active_setups`/`origin_status` conflation does
