@@ -75,17 +75,28 @@ async function getOptimalStop() {
   return rows[0] || null;
 }
 
-// Live status must be computed dynamically, not hardcoded — matches the level-fade engine's
-// own `getCached(...)._suppressedSetups` pattern. Without this, the setup would sit in SHADOW
-// forever even after clearing N>=20 live trades with good EV, since nothing else in the
-// pipeline flips a hardcoded status. Checked against REAL resolved active_setups trades for
-// this family (both LONG/SHORT variants combined), not the backtest N already used to
-// calibrate stop/target.
+// PARTIALLY MIGRATED, then REVERTED same session (2026-08-16, promotion-pipeline structural fix,
+// Layer 3) -- first attempt pointed this at getCanonicalLiveStatus(SETUP_FAMILY), reading the
+// real SETUP_STATUS row for this family. DeepSeek's QA of that build caught a real regression:
+// this family's ONLY SETUP_STATUS row is written by scripts/backtest_momentum60_daytype.mjs from
+// a bar-history BACKTEST simulation (summary.n/summary.ev over a simulated trendTrades array),
+// never from real active_setups trades -- backtest_setup_status.mjs (the REAL-FORWARD writer)
+// only writes a row for a setup_type that already has active_setups rows, and this family has
+// had ZERO ever. So pointing at SETUP_STATUS would have fired this detector origin_status=ACTIVE
+// on its first-ever real touch, with no real forward validation at all -- the exact opposite of
+// what Layer 3 was supposed to fix. Reverted to the original hand-rolled query, with the one
+// real, narrow fix Layer 3 was actually about: TIME_EXPIRED added to the resolution filter (a
+// bug fixed in backtest_setup_status.mjs itself on 2026-08-03, never propagated here) so a trade
+// that times out rather than hitting a clean stop/target still counts toward real N/EV. Do NOT
+// re-attempt the getCanonicalLiveStatus migration for this family until
+// backtest_setup_status.mjs is actually writing a real-forward row for it (which requires real
+// active_setups rows to exist first) -- see docs/OPEN_THREADS.md's 2026-08-16 entry for the full
+// writeup.
 async function getLiveStatus() {
   const { rows } = await query(`
     SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
     FROM active_setups
-    WHERE setup_type LIKE $1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+    WHERE setup_type LIKE $1 AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
   `, [`${SETUP_FAMILY}_%`]);
   const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
   if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };

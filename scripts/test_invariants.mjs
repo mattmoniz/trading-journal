@@ -1427,6 +1427,51 @@ async function main() {
       }
     }
 
+    // ── 20. Reachability: every ACTIVE/PROMOTE-rated setup_type must have fired ACTIVE at least
+    //    once, given a fair chance to do so. Empirical proxy for "is there a live insert path
+    //    that actually checks SETUP_STATUS for this type" -- avoids maintaining a hand-written
+    //    map from setup_type to insert path, which would itself be exactly the kind of
+    //    hand-maintained list this check exists to make unnecessary. See
+    //    docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md for the full design rationale.
+    console.log('\n[20] Reachability: ACTIVE/PROMOTE-rated setup_types can actually fire ACTIVE');
+    {
+      const { rows: firstPromoted } = await client.query(`
+        SELECT signal_name, MIN(run_date) as first_active_date
+        FROM performance_audit
+        WHERE signal_type='SETUP_STATUS' AND recommendation IN ('ACTIVE','PROMOTE')
+        GROUP BY signal_name
+        HAVING MIN(run_date) <= CURRENT_DATE - 30
+      `);
+      const { rows: latestStatus } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, recommendation
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const currentlyActive = new Map(latestStatus.map(r => [r.signal_name, r.recommendation]));
+      const { rows: everFired } = await client.query(`
+        SELECT DISTINCT setup_type FROM active_setups WHERE origin_status = 'ACTIVE'
+      `);
+      const everFiredSet = new Set(everFired.map(r => r.setup_type));
+      // A SETUP_STATUS signal_name can be a POOLED family name (e.g. 'MOMENTUM_60m_60m_TREND',
+      // no _LONG/_SHORT suffix) while the real fired setup_type carries a directional suffix
+      // (found via DeepSeek QA of the promotion-pipeline structural fix, 2026-08-16) -- an exact
+      // string match would report a permanent false positive for any such family even once it's
+      // genuinely firing. Generic, no hand-maintained family list: also treat a signal_name as
+      // "fired" if any real fired setup_type starts with `${signal_name}_`.
+      const hasFiredPooled = (signalName) => everFiredSet.has(signalName)
+        || [...everFiredSet].some(t => t.startsWith(`${signalName}_`));
+      const stuck = firstPromoted
+        .filter(r => ['ACTIVE', 'PROMOTE'].includes(currentlyActive.get(r.signal_name)))
+        .filter(r => !hasFiredPooled(r.signal_name));
+      if (stuck.length === 0) {
+        ok('every setup_type rated ACTIVE/PROMOTE for 30+ days has fired origin_status=ACTIVE at least once');
+      } else {
+        for (const r of stuck) {
+          warn(`${r.signal_name}: rated ${currentlyActive.get(r.signal_name)} since ${r.first_active_date} (30+ days ago) but has ZERO real origin_status='ACTIVE' rows ever -- likely reachable only through a hardcoded-SHADOW insert path (see shadowCandidates in acd.js) or a poller gate that never checks SETUP_STATUS at all. Verify which insert path this setup_type actually goes through before assuming it's a bug -- a genuinely rare-touch level can also produce this pattern.`);
+        }
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

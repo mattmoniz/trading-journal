@@ -32,6 +32,7 @@ import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
+import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus } from '../services/setupEligibility.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -141,6 +142,15 @@ function computeRegimeStamp(price, vaMap) {
 }
 const REGIME_STAMP_COLS = REGIME_LOOKBACKS.flatMap(L => [`regime_pos_${L}d`, `regime_label_${L}d`]);
 function regimeStampValues(stamp) { return REGIME_STAMP_COLS.map(c => stamp[c] ?? null); }
+
+// Excluded from the shadowCandidates live-eligibility flip (2026-08-16 promotion-pipeline
+// structural fix, Layer 1/F3) even though SETUP_STATUS rates STOP_SWEEP_LONG ACTIVE
+// (real_n~31, EV~+$0.40) -- OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep was
+// resolved to PAUSED 2026-08-05 (docs/DECISIONS_LOG.md), both LONG and SHORT, pending a target
+// re-calibration fix. Without this exclusion the flip would immediately un-pause something
+// deliberately paused. Remove this exclusion once that decision's target fix ships, don't just
+// delete it silently.
+const STOP_SWEEP_PAUSED = new Set(['STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT']);
 
 // ── Fire-time regime tagging (roster-rebuild roadmap Phase 1, I1, 2026-08-10) ──────
 // Tags every live INSERT with day_type_at_fire/vol_bucket_at_fire/session/
@@ -996,21 +1006,17 @@ const WIDER_WINDOW_OVERNIGHT_LEVELS = [
 ];
 
 // Dynamic SHADOW->ACTIVE promotion for the 4 wider-window overnight types above —
-// mirrors minuteBarSignalDetector.js's getLiveStatus() exactly (N>=20 real resolved
-// trades + EV>=-$5 to graduate), since these start at N=0 and have never fired live
-// before. Without this they'd sit in SHADOW forever — nothing else in the pipeline
-// would ever flip them, same footgun the New Setup Type checklist (CLAUDE.md) warns
-// about for any standalone-poller-style detector.
+// FIXED 2026-08-16 (promotion-pipeline structural fix, Layer 3): used to hand-roll its own
+// N>=20/EV<-$5 check directly against active_setups (excluding TIME_EXPIRED-resolved trades,
+// a bug already fixed in backtest_setup_status.mjs on 2026-08-03, never propagated here) — now
+// reads the real SETUP_STATUS row via the shared getCanonicalLiveStatus(), keyed by exact
+// setup_type (unchanged convention). Without this they'd sit in SHADOW forever — nothing else
+// in the pipeline would ever flip them, same footgun the New Setup Type checklist (CLAUDE.md)
+// warns about for any standalone-poller-style detector. Deliberately does NOT add day-of-week
+// suppression (unlike the main level-fade candidates path) — see
+// docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md Layer 3.
 async function getOvernightLevelLiveStatus(type) {
-  const { rows } = await query(`
-    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
-    FROM active_setups
-    WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
-  `, [type]);
-  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
-  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
-  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
-  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+  return getCanonicalLiveStatus(type);
 }
 
 // Same dynamic SHADOW->ACTIVE promotion pattern for STACK_VOL_BREAK_LIVE_LONG/SHORT
@@ -1021,17 +1027,11 @@ async function getOvernightLevelLiveStatus(type) {
 // it would sit in SHADOW forever even once real forward data clears the bar. Checked
 // per exact setup_type (LONG/SHORT calibrations differ -- 70pt vs 40pt target, direction-
 // specific per stackvol_target_direction_specific_calibration_2026_07_27), not a LIKE
-// pattern combining both.
+// pattern combining both. FIXED 2026-08-16 (Layer 3): now reads the real SETUP_STATUS row
+// via getCanonicalLiveStatus() instead of a hand-rolled N/EV reimplementation that
+// undercounted TIME_EXPIRED trades — see docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md.
 async function getStackVolBreakLiveStatus(setupType) {
-  const { rows } = await query(`
-    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
-    FROM active_setups
-    WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
-  `, [setupType]);
-  const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
-  if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
-  if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
-  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+  return getCanonicalLiveStatus(setupType);
 }
 
 async function detectGlobexSetup(sessionDate, io) {
@@ -6138,7 +6138,7 @@ export default function createACDRouter(io) {
           if (!liveStats) {
             // DOW as integer (0=Sun, 1=Mon...5=Fri, 6=Sat) for SETUP_STATUS_DOW lookup
             const todayDowInt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
-            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, dowStatusQ, confluencePairQ, exhaustionCalibQ] = await Promise.all([
+            const [statsQ, monQ, optStopQ, dtaQ, setupStatusQ, confluencePairQ, exhaustionCalibQ] = await Promise.all([
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name,
                   sample_size, win_rate::float, ev_per_trade::float,
@@ -6211,15 +6211,6 @@ export default function createACDRouter(io) {
                 WHERE signal_type = 'SETUP_STATUS'
                 ORDER BY signal_name, run_date DESC
               `).catch(() => ({ rows: [] })),
-              // DOW-specific suppression: setups negative on one DOW but positive all-time.
-              // signal_name = '{SETUP_TYPE}_DOW_{N}'. Only loads today's DOW rows.
-              query(`
-                SELECT DISTINCT ON (signal_name) signal_name, recommendation
-                FROM performance_audit
-                WHERE signal_type = 'SETUP_STATUS_DOW'
-                  AND signal_name LIKE $1
-                ORDER BY signal_name, run_date DESC
-              `, [`%_DOW_${todayDowInt}`]).catch(() => ({ rows: [] })),
               // Real level-pair confluence bonus data, computed weekly (full ~1.7yr level_prices
               // history, not a rolling window) by backtest_confluence.js from a genuine bar
               // simulation (not active_setups BACKFILL data). recommendation='VALIDATED_PAIR' is
@@ -6342,13 +6333,21 @@ export default function createACDRouter(io) {
             // SUPPRESS: N≥20, EV<-$5 — auto-suppress structural losers
             // THIN_N: N<20 — CLAUDE.md rule: insufficient data, must shadow until N≥20
             // Both cause new setups to insert as SHADOW rather than ACTIVE
-            liveStats._suppressedSetups = new Set();
+            // DOW-specific suppression for today — setups negative on this DOW but fine all-time
+            // signal_name format: '{SETUP_TYPE}_DOW_{DOW_INT}' — strip the suffix to get setup_type
+            // Both computed via the canonical setupEligibility.js source (2026-08-16, promotion-
+            // pipeline structural fix) so shadowCandidates' INSERT and every other consumer of
+            // "is this setup_type live-eligible" reads the exact same logic, not a hand-rolled
+            // copy — see docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md.
+            const { suppressedSetups, dowSuppressToday, knownTypes } = await computeSuppressionSets(todayDowInt);
+            liveStats._suppressedSetups = suppressedSetups;
+            liveStats._dowSuppressToday = dowSuppressToday;
+            liveStats._knownSetupTypes = knownTypes;
             // Real, live per-setup_type WR/EV/N — the single source every "EDGE: ... WR (N=...)"
             // description string in this file must read from instead of hand-typing a literal.
             // See the setupStatusQ comment above for the incident this fixed.
             liveStats._setupStats = {};
             for (const r of setupStatusQ.rows) {
-              if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') liveStats._suppressedSetups.add(r.signal_name);
               liveStats._setupStats[r.signal_name] = { wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size, recommendation: r.recommendation };
             }
             // Formats a live edge stat honestly: real N≥20 numbers, or an explicit "not enough
@@ -6359,15 +6358,6 @@ export default function createACDRouter(io) {
               if (r.n < 20) return `insufficient sample (N=${r.n}) — not yet decisive`;
               return `${(r.wr * 100).toFixed(1)}% WR (N=${r.n}, EV=$${r.ev?.toFixed(2)})`;
             };
-            // DOW-specific suppression for today — setups negative on this DOW but fine all-time
-            // signal_name format: '{SETUP_TYPE}_DOW_{DOW_INT}' — strip the suffix to get setup_type
-            liveStats._dowSuppressToday = new Set();
-            for (const r of dowStatusQ.rows) {
-              if (r.recommendation === 'SUPPRESS') {
-                const setupType = r.signal_name.replace(/_DOW_\d+$/, '');
-                liveStats._dowSuppressToday.add(setupType);
-              }
-            }
             // Live confluence pair-bonus lookup — replaces the old hardcoded _PAIR_BONUS_MAP
             // (5 hand-picked, never-validated pairs) with real data from
             // backtest_confluence.js. Widened 2026-07-22 to the full ~1.7yr level_prices
@@ -8632,18 +8622,40 @@ export default function createACDRouter(io) {
             }
             let sT1 = shadow.target;
             if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
+            // FIXED 2026-08-16 (promotion-pipeline structural fix, Layer 1/F3): shadowCandidates
+            // used to hardcode 'SHADOW','SHADOW' with no promotion path (the "promoted after 30+
+            // forward trades" comment was never implemented) -- see
+            // docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md. A type the SETUP_STATUS pipeline has
+            // promoted to ACTIVE (not suppressed, not DOW-suppressed today, and has a real
+            // SETUP_STATUS row at all -- isLiveEligible defaults to ineligible for an unknown
+            // type, per the fail-open hole DeepSeek's QA caught same session) now fires live via
+            // the same canonical isLiveEligible() gate the main candidates path uses -- one
+            // definition of "live-eligible", not a second hand-rolled copy. STOP_SWEEP_LONG/SHORT
+            // stay SHADOW-only regardless (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep,
+            // resolved to PAUSED 2026-08-05 pending target re-calibration; remove this exclusion
+            // once unpaused). `?.` matches every other liveStats._suppressedSetups consumer in
+            // this file -- defensive only, getCached always has a value here in practice (setCached
+            // at ~6384 runs before this IIFE is ever constructed in the same request).
+            const shadowIsLive = !STOP_SWEEP_PAUSED.has(shadow.type)
+              && isLiveEligible(shadow.type, {
+                   suppressedSetups: liveStats?._suppressedSetups ?? new Set(),
+                   dowSuppressToday: liveStats?._dowSuppressToday ?? new Set(),
+                   knownTypes: liveStats?._knownSetupTypes ?? new Set(),
+                 });
+            const st = shadowIsLive ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                 status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'SHADOW','SHADOW', ${REGIME_STAMP_COLS.map((_, i) => `$${10 + i}`).join(', ')},
-                ${FIRE_TAG_COLS.map((_, i) => `$${10 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                $${10 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
+                ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
+              st,
               ...regimeStampValues(regimeStamp),
               ...fireTagValues(shadowFireTags),
               getBetClass(shadow.type),
