@@ -64,6 +64,17 @@ silently corrupted trade times for over a month before being caught).
    [docs/DB_BACKUP_CATALOG.md](DB_BACKUP_CATALOG.md) in the same commit** — what it's a
    snapshot of, why, source script. 13 backup tables existed with no index anywhere
    before this was built; don't let a 14th join them unindexed.
+2a. **Before any `DELETE`, grep `server/schema.sql` for every `REFERENCES <table>` up
+   front** (`grep -n "REFERENCES public.<table>" server/schema.sql`) — don't discover
+   foreign keys one Postgres error at a time. A `RESTRICT`/default FK blocks the delete
+   and you'll find out; an `ON DELETE CASCADE` FK deletes silently with no error and no
+   count check, and if you never backed up that other table, the deletion is
+   unrecoverable and possibly unnoticed. Back up (or at minimum COUNT) every referencing
+   table before running the delete, not just the one whose error message you happened to
+   hit first. See `active_setups_cascade_breaker_repair_backup_20260816`'s catalog entry
+   (2026-08-16) — a real instance where this step was skipped; caught and confirmed
+   harmless only after the fact via an independent QA pass, not by the migration script
+   itself.
 3. **If dispatching the reconstruction logic to Gemini** (appropriate for genuinely
    mining/reconstruction-shaped work, per CLAUDE.md's Gemini-for-mining convention):
    Gemini gets read-only access and writes a script; Claude independently re-verifies
