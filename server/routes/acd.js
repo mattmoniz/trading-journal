@@ -6598,43 +6598,40 @@ export default function createACDRouter(io) {
           // (suppression_reason='CASCADE_BREAKER') still runs whenever the trigger condition
           // is met, so the data keeps accumulating for a future re-decision -- only the
           // downstream gating (the `!cascadeBreaker.active` check further below) was removed.
+          //
+          // FIXED 2026-08-16 (live-firing audit, F1+F2 -- scratch/deepseek_response.md,
+          // independently verified against the live DB before applying: 1,072 CASCADE_BREAKER
+          // rows existed, 1,012 resolved via real price-walk with genuine P&L (avg +$81.54
+          // wins / -$95.88 losses)). The old version inserted a full, OPEN SHADOW row per near
+          // level (entry/stop/target/expiry all populated) which (1) got picked up by
+          // resolveSetupsByPrice() and counted toward SETUP_STATUS's real_n/real_ev --
+          // contaminating the SUPPRESS/THIN_N/ACTIVE decision for every affected setup_type
+          // with phantom trades -- and (2) was eligible to be reused by the `existingSetup`
+          // check further below (status IN ('ACTIVE','SHADOW'), no suppression_reason
+          // exclusion), silently hijacking a genuinely new live-quality touch into this
+          // audit row instead of firing its own ACTIVE row. Now a terminal, level-less audit
+          // marker: status='EXPIRED' (not IN ('ACTIVE','SHADOW'), so existingSetup can't match
+          // it and resolveSetupsByPrice() never touches it), resolution/resolved_at set at
+          // insert time (never enters the resolution pipeline, never counts toward real_n,
+          // which requires resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')), no
+          // entry/stop/target/expires_at (nothing to walk against). Deduped one row per
+          // (trade_date, setup_type) per cascade window rather than once per ~15s poll.
           if (cascadeBreaker.active && nearLevels.length > 0) {
             const cbIsLong = approachDir === 'FROM_ABOVE';
             const cbDir = cbIsLong ? 'LONG' : 'SHORT';
-            const cbVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
             for (const lv of nearLevels) {
               const cbType = resolveSetupType(`${lv.name}_${cbDir}`, lv);
-              const cbOptStop = liveStats._opt?.[cbType];
-              const cbStopPts = cbOptStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
-              const cbTargetPts = cbOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
-              const cbStopLevel = cbIsLong ? currentPrice - cbStopPts : currentPrice + cbStopPts;
-              const cbT1Level = cbIsLong ? currentPrice + cbTargetPts : currentPrice - cbTargetPts;
-              const cbEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-              const cbSessionEnd = new Date(cbEtNow);
-              cbSessionEnd.setHours(16, 0, 0, 0);
-              if (cbSessionEnd <= cbEtNow) cbSessionEnd.setDate(cbSessionEnd.getDate() + 1);
-              const cbExpiresAt = `${cbSessionEnd.getFullYear()}-${String(cbSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(cbSessionEnd.getDate()).padStart(2, '0')} ${String(cbSessionEnd.getHours()).padStart(2, '0')}:${String(cbSessionEnd.getMinutes()).padStart(2, '0')}:00`;
-              const cbRegimeStamp = computeRegimeStamp(currentPrice, cbVaMap);
-              const cbFireTags = await computeFireTags(todayET, 'RTH', etMin);
               await query(`
                 INSERT INTO active_setups (
-                  trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
-                  suppression_reason, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+                  trade_date, setup_type, fired_at, price_at_detection,
+                  status, origin_status, suppression_reason, resolution, resolved_at
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CASCADE_BREAKER',$3,$3,$4,$5,$6,$7,
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${8 + i}`).join(', ')},
-                  ${FIRE_TAG_COLS.map((_, i) => `$${8 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${8 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
-                ON CONFLICT DO NOTHING
-              `, [
-                todayET, cbType, currentPrice, cbStopLevel, cbT1Level,
-                `T1: ${cbTargetPts}pt · Stop: ${cbStopPts}pt (cascade breaker audit)`,
-                cbExpiresAt,
-                ...regimeStampValues(cbRegimeStamp),
-                ...fireTagValues(cbFireTags),
-                getBetClass(cbType),
-              ]).catch(() => {});
+                SELECT $1, $2, NOW(), $3, 'EXPIRED', 'SHADOW', 'CASCADE_BREAKER', 'NO_EXPIRY_SET', NOW()
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM active_setups
+                  WHERE trade_date = $1 AND setup_type = $2 AND suppression_reason = 'CASCADE_BREAKER'
+                )
+              `, [todayET, cbType, currentPrice]).catch(() => {});
             }
           }
           // Was `if (!cascadeBreaker.active && nearLevels.length > 0)` -- the cascadeBreaker
@@ -8390,9 +8387,20 @@ export default function createACDRouter(io) {
       // a later bar's genuinely different fired_at to insert normally. All ON CONFLICT
       // clauses against this table are now bare `ON CONFLICT DO NOTHING` (catches either
       // index) rather than targeting one specific constraint.
+      // FIXED 2026-08-16 (live-firing audit, F2 -- scratch/deepseek_response.md): this query
+      // used to match ANY status IN ('ACTIVE','SHADOW') row for the type with no
+      // suppression_reason check, which meant an audit-only row (CASCADE_BREAKER,
+      // SUPPRESSED_FADE, CLUSTER_ALREADY_FIRED, etc. -- none of these represent a real fire
+      // decision, they're logging-only) could be silently reused as if it were the live fire,
+      // hijacking a genuinely new touch into someone else's audit row instead of getting its
+      // own. Now only matches a real fire: suppression_reason NULL (normal ACTIVE) or one of
+      // the three `forceShadow` reasons a real touch can still carry (POST_RTH_DEAD_ZONE /
+      // REFIRE_COOLDOWN / PERFORMANCE_BELOW_THRESHOLD, set at the real-fire insert below).
       const existingSetup = await query(`
         SELECT id, fired_at::text as fired_at, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         FROM active_setups WHERE trade_date=$1 AND setup_type=$2 AND status IN ('ACTIVE','SHADOW')
+          AND (suppression_reason IS NULL
+               OR suppression_reason IN ('POST_RTH_DEAD_ZONE','REFIRE_COOLDOWN','PERFORMANCE_BELOW_THRESHOLD'))
         ORDER BY fired_at DESC LIMIT 1
       `, [todayET, active.type]);
 
