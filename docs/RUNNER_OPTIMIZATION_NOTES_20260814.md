@@ -1,4 +1,4 @@
-# Runner / Trailing-Stop Optimization — Notes (2026-08-14, saved not built)
+# Runner / Trailing-Stop Optimization — Notes (2026-08-14, saved not built; section 0 corrected 2026-08-16)
 
 **Status: SAVED FOR REVIEW, NOT ACTED ON.** Per explicit user instruction ("lets review
 before doing a backtest... Save it dont just do it. Need to clear context before we
@@ -96,6 +96,48 @@ not close to sufficient to act on, and the two bugs above mean even that first r
 trustworthy yet. **Before this number means anything: fix the lookahead gate (add real
 formation-time gating for OR10/15/30/IB, matching how `detectLevelFades()` already handles
 this correctly elsewhere in this codebase) and subtract commission, then re-run.**
+
+### CORRECTED RE-RUN (2026-08-16) — both bugs fixed, result is a real, stable negative
+
+Fixed in `scripts/backtest_mnq_structural_trailing.py` (permanent, not scratch): (a) added
+a per-level `LEVEL_FORMATION_ET_MIN` gate for `OR10/15/30_HIGH/LOW/MID` and `IB_HIGH/LOW/MID`
+(575/580/585/600/630 ET-minute-of-day respectively), matching `scripts/backtest_unified.js`'s
+existing `FORMATION_GATE_ET_MIN` convention exactly rather than inventing a new one; (b)
+along the way, found and fixed a real *third* bug while building the fix for (a) — the
+original script's `est_dt = dt - timedelta(hours=4)` assumed a flat UTC-4 offset, but Sierra
+Chart's own docs (`sierrachart.com/index.php?page=doc/SCDateTime.html`, confirmed via
+WebSearch, not guessed — per this codebase's standing "don't guess on Sierra Chart specifics"
+rule) state `.scid` timestamps are always UTC. UTC-4 is only correct during EDT; this
+backtest's date range (2025-08-01 to 2026-08-14) spans EST months too, during which the old
+filter silently didn't fire at all. Replaced with real `zoneinfo`-based ET conversion
+(DST-correct automatically). (c) Subtracted MNQ's real $2 round-trip commission
+(`server/config/instruments.js` `LIVE_INSTRUMENT.commissionPerRoundTrip`, confirmed against
+the live constant, not copied blind) on every closed trade.
+
+**Result: N=734 (same count, different trade sequence — see below), avg=-$1.54/trade,
+WR=31.5%, sum=-$1,128.00.** Negative in both chronological halves (1st -$0.91/trade, 2nd
+-$2.17/trade) across 249 distinct trading days (not day-clustered) — a stable, decisive
+negative, not noise. Recorded via `recordClaim()` (read back and confirmed):
+`RESEARCH_CLAIM mnq_structural_trailing_2bar_toy_signal_negative`, status `CONFIRMED`.
+
+This is materially *worse* than the doc's own original back-of-envelope estimate of
+"~-$1.32/trade if you just subtract commission" — confirming some of the original +$0.68
+gross headline came specifically from the lookahead bug, not just from ignoring commission.
+Trade count stayed exactly 734 by coincidence, not because the formation gate had no effect:
+diffing the two trade logs shows every single trade differs (entries near a not-yet-formed
+level were removed — e.g. an `OR5_MID` entry at 9:26 AM ET, before market open, in the
+original — and other valid entries that were previously blocked by `in_trade`/
+`MAX_TRADES_PER_DAY` filled the same daily slots instead, a normal consequence of fixing a
+lookahead bug in a sequential state-machine sim).
+
+**Per the standing "report a solid negative honestly" convention: this is a real negative.**
+The 2-bar structural trailing exit, tested against this specific from-scratch volume/delta
+signal, loses money once measured correctly. As before, this doesn't invalidate the
+zigzag/ATR optimizer prototypes in section 1 below (different exit mechanism, different
+signal source, still schema-blocked) — but it does mean this particular already-run
+backtest is now a closed, honest negative rather than an open, unverified "maybe +$0.68"
+lead. Output: `scratch/mnq_trades_log_trailing_fixed.csv` (734 rows, same schema as the
+original CSV).
 
 ## 1. Gemini's build: `docs/structural_runner_optimization_20260814.py`
 
@@ -231,14 +273,11 @@ is a "someday, probably not" list, not a near-term backlog. Full text:
 
 ## What actually needs to happen next (in order)
 
-0. **Fix the already-run backtest first** (`backtest_mnq.py`) — it's further along than the
-   prototypes below and cheaper to fix: (a) add real formation-time gating for OR10/OR15/
-   OR30/IB before matching proximity to those levels (block a level from being tested until
-   its formation window has actually elapsed for that entry's timestamp — mirror how
-   `detectLevelFades()` already does this correctly), (b) subtract MNQ's $2 round-trip
-   commission from every trade's PnL, (c) re-run and see if the result is still worth
-   pursuing once both are fixed. If it goes solidly negative once corrected, that's a real,
-   useful negative result — don't be reluctant to report it as one.
+0. ~~**Fix the already-run backtest first** (`backtest_mnq.py`)~~ — **Done 2026-08-16.** See
+   "CORRECTED RE-RUN" above: fixed, re-run, result is a real, stable negative
+   (-$1.54/trade, N=734). This specific backtest (2-bar exit + from-scratch toy signal) is
+   now a closed thread, not an open lead — don't re-run it again without a reason to
+   believe something changed.
 1. **Fix the schema mismatch** in `structural_runner_optimization.py` — rewrite
    `fetch_trade_bars_from_db()` against the real schema (`custom_fields->'sierra_data'`
    JSONB for trade metadata, `price_bars_primary`'s real `ts` column, real `symbol='NQ'`
