@@ -5,15 +5,26 @@ import { query } from '../db.js';
 // docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md. Mirrors the exact SQL already used to
 // build server/routes/acd.js's liveStats._suppressedSetups/_dowSuppressToday (extracted from
 // there, not reinvented) -- SUPPRESS/THIN_N both cause SHADOW-only, ACTIVE/PROMOTE allow ACTIVE.
-// `.catch(() => ({ rows: [] }))` on both queries matches the original inline call sites'
+// `.catch(() => ({ rows: [] }))` on the DOW query matches the original inline call site's
 // fail-open-on-DB-error posture for the REST of the request (a transient DB blip here must not
 // 500 the whole setup-detection response) -- but note this pairs with isLiveEligible()'s own
 // fail-CLOSED default below: an empty knownTypes Set from a caught error means every setup_type
 // reads as "unknown" and therefore ineligible, not eligible. Availability is preserved; the
 // suppression decision itself still fails safe.
-export async function computeSuppressionSets(todayDowInt) {
+//
+// `setupStatusRows` (optional): pass the caller's own already-fetched SETUP_STATUS rows
+// (signal_name, recommendation -- extra columns are fine, ignored) to skip this function's own
+// SETUP_STATUS query entirely. FIXED 2026-08-16 (DeepSeek 2nd-pass QA): acd.js's caller also
+// needs the fuller SETUP_STATUS row shape (sample_size/win_rate/ev_per_trade) for its own
+// _setupStats map and was fetching that separately -- this function used to always re-query
+// SETUP_STATUS on top of that, meaning _setupStats and _suppressedSetups/knownTypes could in
+// principle come from two different query instants (a race window of milliseconds, since both
+// read the same latest-row-per-signal_name shape) instead of provably the same rows, undermining
+// this whole fix's "one source of truth" premise. Pass the rows through instead when the caller
+// already has them.
+export async function computeSuppressionSets(todayDowInt, setupStatusRows = null) {
   const [setupStatusQ, dowStatusQ] = await Promise.all([
-    query(`
+    setupStatusRows ? Promise.resolve({ rows: setupStatusRows }) : query(`
       SELECT DISTINCT ON (signal_name) signal_name, recommendation
       FROM performance_audit WHERE signal_type = 'SETUP_STATUS'
       ORDER BY signal_name, run_date DESC

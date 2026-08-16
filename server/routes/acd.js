@@ -6339,7 +6339,7 @@ export default function createACDRouter(io) {
             // pipeline structural fix) so shadowCandidates' INSERT and every other consumer of
             // "is this setup_type live-eligible" reads the exact same logic, not a hand-rolled
             // copy — see docs/PROMOTION_PIPELINE_STRUCTURAL_FIX_SPEC.md.
-            const { suppressedSetups, dowSuppressToday, knownTypes } = await computeSuppressionSets(todayDowInt);
+            const { suppressedSetups, dowSuppressToday, knownTypes } = await computeSuppressionSets(todayDowInt, setupStatusQ.rows);
             liveStats._suppressedSetups = suppressedSetups;
             liveStats._dowSuppressToday = dowSuppressToday;
             liveStats._knownSetupTypes = knownTypes;
@@ -8629,8 +8629,15 @@ export default function createACDRouter(io) {
             // promoted to ACTIVE (not suppressed, not DOW-suppressed today, and has a real
             // SETUP_STATUS row at all -- isLiveEligible defaults to ineligible for an unknown
             // type, per the fail-open hole DeepSeek's QA caught same session) now fires live via
-            // the same canonical isLiveEligible() gate the main candidates path uses -- one
-            // definition of "live-eligible", not a second hand-rolled copy. STOP_SWEEP_LONG/SHORT
+            // the same suppression sets (liveStats._suppressedSetups/_dowSuppressToday) the main
+            // candidates path reads directly -- but via isLiveEligible(), which ALSO requires a
+            // known SETUP_STATUS row (fail-closed on an unknown type). CORRECTED 2026-08-16
+            // (DeepSeek 2nd-pass QA): this comment previously claimed the main candidates path
+            // (the `forceShadow` check ~line 8483) also calls isLiveEligible() -- false, it still
+            // reads `_suppressedSetups?.has(active.type)` directly and is fail-OPEN on an unknown
+            // type (pre-existing, not a regression from this fix, low practical exposure since
+            // that path's own roster is curated). The two gates share the same underlying data,
+            // not (yet) the same function. STOP_SWEEP_LONG/SHORT
             // stay SHADOW-only regardless (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep,
             // resolved to PAUSED 2026-08-05 pending target re-calibration; remove this exclusion
             // once unpaused). `?.` matches every other liveStats._suppressedSetups consumer in

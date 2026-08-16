@@ -1463,11 +1463,22 @@ async function main() {
       const stuck = firstPromoted
         .filter(r => ['ACTIVE', 'PROMOTE'].includes(currentlyActive.get(r.signal_name)))
         .filter(r => !hasFiredPooled(r.signal_name));
+      // STOP_SWEEP_LONG/SHORT are DELIBERATELY excluded from the shadowCandidates live-eligibility
+      // flip (acd.js's STOP_SWEEP_PAUSED Set) despite being rated ACTIVE -- OPEN_DECISION
+      // stop_sweep_long_calibrated_target_pause_or_keep, resolved to PAUSED 2026-08-05 pending a
+      // target re-calibration. They will WARN here forever until that decision resolves -- that's
+      // expected, not a bug to re-investigate (found via DeepSeek 2nd-pass QA of the
+      // promotion-pipeline structural fix, 2026-08-16: the first version of this check gave no
+      // hint that these two are a known, deliberate exception).
+      const KNOWN_PAUSED_TYPES = new Set(['STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT']);
       if (stuck.length === 0) {
         ok('every setup_type rated ACTIVE/PROMOTE for 30+ days has fired origin_status=ACTIVE at least once');
       } else {
         for (const r of stuck) {
-          warn(`${r.signal_name}: rated ${currentlyActive.get(r.signal_name)} since ${r.first_active_date} (30+ days ago) but has ZERO real origin_status='ACTIVE' rows ever -- likely reachable only through a hardcoded-SHADOW insert path (see shadowCandidates in acd.js) or a poller gate that never checks SETUP_STATUS at all. Verify which insert path this setup_type actually goes through before assuming it's a bug -- a genuinely rare-touch level can also produce this pattern.`);
+          const pausedNote = KNOWN_PAUSED_TYPES.has(r.signal_name)
+            ? ` -- KNOWN, EXPECTED: deliberately paused via acd.js's STOP_SWEEP_PAUSED Set (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep, PAUSED since 2026-08-05), not a bug.`
+            : '';
+          warn(`${r.signal_name}: rated ${currentlyActive.get(r.signal_name)} since ${r.first_active_date} (30+ days ago) but has ZERO real origin_status='ACTIVE' rows ever -- likely reachable only through a hardcoded-SHADOW insert path (see shadowCandidates in acd.js) or a poller gate that never checks SETUP_STATUS at all. Verify which insert path this setup_type actually goes through before assuming it's a bug -- a genuinely rare-touch level can also produce this pattern.${pausedNote}`);
         }
       }
     }
