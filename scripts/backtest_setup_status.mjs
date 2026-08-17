@@ -287,7 +287,7 @@ async function run() {
   function rigorDiagnostics(type) {
     const trades = tradesByType.get(type) || [];
     const rigor = computeRigor(trades, { dateField: 'trade_date', pnlFn: t => t.pnl });
-    return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, stable: rigor.stable, thirds: rigor.thirds };
+    return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, stable: rigor.stable, thirds: rigor.thirds, boundaryStraddle: rigor.boundaryStraddle };
   }
 
   // Automated version of the classification Gemini did by hand 2026-07-14 for the 26 unstable
@@ -464,7 +464,7 @@ async function run() {
         real_wr: r.rec90.real_wr != null ? +(+r.rec90.real_wr * 100).toFixed(1) : null,
         real_ev: r.rec90.real_ev != null ? +(+r.rec90.real_ev).toFixed(2) : null,
       } : null,
-      rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, trend },
+      rigor: { distinct_dates: rigor.distinctDates, top5_day_pct: rigor.top5DayPct, three_way_stable: rigor.stable, thirds: rigor.thirds, boundary_straddle: rigor.boundaryStraddle, trend },
       ...(r.dayTypeBreakdown ? { day_type_breakdown: r.dayTypeBreakdown.map(b => ({ day_type: b.dayType, n: b.n, ev: +b.ev.toFixed(2) })) } : {}),
       // bet_class_override (roadmap Phase 8 I6, 2026-08-11) -- present only when this
       // type's own real N/EV cleared the individual bar but the whole bet_class's pooled
@@ -648,12 +648,12 @@ async function run() {
       dow, dow_name: DOW_NAMES[dow], setup_type: type,
       n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2),
       real_n: realN, real_wr: realWr != null ? +(realWr*100).toFixed(1) : null, real_ev: realEv != null ? +realEv.toFixed(2) : null,
-      rigor: { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, clean: rigor.clean },
+      rigor: { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, boundaryStraddle: rigor.boundaryStraddle, clean: rigor.clean },
       // stable===null (real_n<15, too thin for the 3-way chronological check) is "not
       // computable," distinct from stable===false ("computed, failed") — surfaced explicitly so
       // a THIN_N/ACTIVE row doesn't read later as "failed rigor" when rigor was never evaluable.
       ...(rigor.stable === null ? { rigor_insufficient: true } : {}),
-      blended_rigor: { distinctDates: blendedRigor.distinctDates, top5DayPct: blendedRigor.top5DayPct, clustered: blendedRigor.clustered, stable: blendedRigor.stable, clean: blendedRigor.clean },
+      blended_rigor: { distinctDates: blendedRigor.distinctDates, top5DayPct: blendedRigor.top5DayPct, clustered: blendedRigor.clustered, stable: blendedRigor.stable, boundaryStraddle: blendedRigor.boundaryStraddle, clean: blendedRigor.clean },
       // failed_rigor: numbers alone would suppress (real_n/real_ev qualify) but rigor blocked it
       // — only meaningful when recommendation stayed ACTIVE despite evWouldSuppress being true.
       ...(recommendation === 'ACTIVE' && evWouldSuppress ? { failed_rigor: true } : {}),

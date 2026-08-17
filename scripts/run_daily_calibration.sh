@@ -33,6 +33,15 @@ echo "=== Daily calibration: $(date) ==="
 # alongside the IB stop/target calibration right above it.
 /usr/bin/node scripts/backtest_day_type_alpha.js
 
+# Wider-target-on-fast-resolving-trades mechanism, daily self-throttling recheck (2026-08-17,
+# user request, docs/RUNNER_FOLLOWUPS_SPEC_20260817.md Item 0) -- --daily-check runs the full
+# closed-loop audit every weekday while real armed N is thin, then self-throttles to a no-op
+# (skips only the write/flag, the cheap computation still runs and logs) once N has already
+# cleared the MIN_N=20 floor as of the last check, deferring back to the weekly-only cadence
+# (run_weekly_backtests.sh, unflagged, always runs in full) -- no manual cron edit needed
+# later when N clears the floor.
+/usr/bin/node scripts/audit_wider_target_live.mjs --daily-check
+
 # Standing invariant check (2026-07-17) -- previously only ever run manually ("run after
 # any change touching acd.js..."), which meant its checks (including [6]'s
 # UNCALIBRATED_SHADOW_TYPES staleness re-verification) only caught a real drift whenever

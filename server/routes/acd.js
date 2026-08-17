@@ -27,7 +27,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
@@ -352,11 +352,15 @@ const csvUpload = multer({
 
 // ── Helpers for setup lifecycle ───────────────────────────────────────────────
 
-function inferDirection(setupType) {
-  if (/LONG|UP|BULLISH/.test(setupType)) return 'LONG';
-  if (/SHORT|DOWN|BEARISH/.test(setupType)) return 'SHORT';
-  return null;
-}
+// 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug, DeepSeek design-critique
+// adjustment A): this used to be a LOCAL, un-suffix-stripped copy of direction inference,
+// buggy for _GAP_UP/_GAP_DOWN variants in exactly the same way isLongSetup() below was
+// (WPP_FADE_SHORT_GAP_UP matched bare "UP" -> LONG, wrong). Now imports the canonical
+// server/config/setupTypes.js version (strips the _GAP_(UP|DOWN) suffix first, matches all
+// 112 known types per its own docstring, validated by test_invariants.mjs check [3]).
+// Deleting the local shadow here, not just adding the import, is load-bearing -- an import
+// alongside a same-named local declaration is a collision either way (parse error or silent
+// shadowing), and either would have silently defeated this whole fix.
 
 // Drops an active_setups row into trade_timeline_events (idempotent via ON CONFLICT).
 // event_time = fired_at (never current timestamp — per spec).
@@ -388,8 +392,44 @@ export async function dropToTimeline(setup) {
   ]);
 }
 
-function isLongSetup(setupType) {
-  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
+// 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug, fixed) -- replaces
+// isLongSetup(), which was a bare substring match (setupType.includes('_UP') etc, no
+// _GAP_UP/_GAP_DOWN handling) used at 4 call sites across resolveSetupsByPrice(),
+// expireStaleSetups(), and structurallyInvalidateSetups() to compute real P&L direction.
+// Confirmed real and reachable: isLongSetup('WPP_FADE_SHORT_GAP_UP') returned true (a real
+// SHORT trade, sign-corrupted). Also silently misclassified every ZONE_EDGE_FADE row as
+// SHORT unconditionally (no LONG/BULLISH/_UP substring at all) -- a second, related bug this
+// fix also closes, since ZONE_EDGE_FADE has no name-encoded direction for inferDirection()
+// to find either.
+//
+// Hybrid design (DeepSeek design-critique + code-review, 2026-08-17): canonical
+// inferDirection(setupType) is the primary signal (correct for all 112 known-named types,
+// strips the _GAP_* suffix). row.t1_level > row.stop_level is a general, setup-type-agnostic
+// fallback/cross-check -- LONG trades have stop below entry and target above, SHORT the
+// reverse, and this sign is stable for a row's entire lifecycle (verified: none of this
+// codebase's ~38 `UPDATE active_setups` statements ever write stop_level or t1_level after
+// insert; breakeven-trail/wider-target/extendTarget all use separate columns
+// (breakeven_armed_at/runner_*, wider_target_mult, extend_target_level) and never touch
+// stop_level/t1_level). This lets ZONE_EDGE_FADE resolve correctly via price where the name
+// carries no direction, not just "exclude, don't guess."
+//
+// A name/price DISAGREEMENT means the row's levels are inverted relative to its name -- the
+// exact anomaly class this fix exists to catch -- so it returns null (exclude), matching the
+// audit_wider_target_live.mjs mechanism's own established "exclude, don't guess" posture for
+// this same bug class. Null/undefined stop_level or t1_level also returns null (JS would
+// otherwise coerce null in a `>` comparison to a silently-guessed direction).
+function resolveDirection(row) {
+  if (row.stop_level == null || row.t1_level == null) return null;
+  const named = inferDirection(row.setup_type);
+  // Coerced with Number() -- node-postgres returns NUMERIC columns (stop_level/t1_level's
+  // real type) as JS strings by default (db.js only overrides the timestamp/date OIDs, not
+  // numeric). An uncoerced `>` here compares lexicographically, which happens to agree with
+  // numeric order for this codebase's current 5-digit uniform-precision index levels but is
+  // not correct in general (DeepSeek code-review, 2026-08-17) -- also matches the backfill
+  // script's own `+row.t1_level > +row.stop_level` coercion, which this was inconsistent with.
+  const priceDerived = Number(row.t1_level) > Number(row.stop_level) ? 'LONG' : 'SHORT';
+  if (named !== null && named !== priceDerived) return null; // disagreement -- exclude
+  return named ?? priceDerived;
 }
 
 // Fade-against-a-big-move-day exit check — DISABLED 2026-07-27, kept in place (not deleted)
@@ -503,10 +543,23 @@ export async function resolveSetupsByPrice(io) {
   // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
   const needsBars = active.rows.filter(row => {
     if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE')) return false;
-    const long = isLongSetup(row.setup_type);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const { stop_level: stop, t1_level: t1 } = row;
     if (entry == null || stop == null || t1 == null) return false;
+    const direction = resolveDirection(row);
+    // A null direction here can only mean a name/price disagreement (missing entry/stop/t1
+    // already returned false above, so resolveDirection's own null-guard never triggers this
+    // far down) -- NOT dropped here, since this filter only decides whether to fetch bars /
+    // widens the shared bar-fetch window, it doesn't gate the row's fate. The main loop
+    // below (which iterates active.rows directly, not needsBars) is what actually decides a
+    // null-direction row's outcome (continue + logged reason) regardless of this filter's
+    // return value -- returning true just means bars get fetched for a row that may end up
+    // skipped anyway, which is harmless. (DeepSeek code-review, 2026-08-17: corrected from an
+    // earlier, inaccurate comment that claimed returning false here would silently exclude
+    // the row from the main loop -- it wouldn't, since the main loop doesn't consult this
+    // filter's result at all.)
+    if (direction === null) return true;
+    const long = direction === 'LONG';
     if (long && t1 <= entry) return false;
     if (!long && t1 >= entry) return false;
     return true;
@@ -545,7 +598,6 @@ export async function resolveSetupsByPrice(io) {
 
   let count = 0;
   for (const row of active.rows) {
-    const long = isLongSetup(row.setup_type);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const statusMatch = row.status; // 'ACTIVE' or 'SHADOW'
 
@@ -579,6 +631,20 @@ export async function resolveSetupsByPrice(io) {
       }
       continue;
     }
+
+    // Direction resolution (all remaining branches below need it; ABSORPTION_LONG above
+    // doesn't and always `continue`s before reaching here). A null result means the row's
+    // name and its own stop/t1 levels disagree, or a price level is missing -- exclude
+    // rather than silently guess (see resolveDirection()'s own header comment). This is a
+    // real anomaly, not expected noise, so it's logged loudly, not just skipped quietly --
+    // a systematic inversion (a future setup type inserted with flipped levels) must stay
+    // visible, not become a permanent silent gap (CLAUDE.md no-dead-ends rule).
+    const direction = resolveDirection(row);
+    if (direction === null) {
+      console.warn(`[resolveSetupsByPrice] DIRECTION_UNRESOLVABLE id=${row.id} ${row.setup_type} stop=${row.stop_level} t1=${row.t1_level} -- name/price direction disagreement or missing price levels. Skipping this poll, will retry next poll.`);
+      continue;
+    }
+    const long = direction === 'LONG';
 
     // Custom resolution for COIL_SURGE: "did price move toward VWAP?"
     if (row.setup_type.startsWith('COIL_SURGE')) {
@@ -1449,8 +1515,12 @@ export async function expireStaleSetups(io) {
   // single most recent known close (same live-price lookup ABSORPTION_LONG/COIL_SURGE
   // already use above) rather than a blunt no-pnl status flip. Only genuinely un-scoreable
   // rows (no entry price recorded, or no price data has EVER arrived) stay null.
+  // stop_level/t1_level added 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug)
+  // -- resolveDirection() below needs both for its price-derived direction fallback; this
+  // SELECT previously omitted them entirely, so the fallback silently never ran here.
   const candidates = await query(`
-    SELECT id, setup_type, trade_date::text as trade_date, entry_zone_low, entry_zone_high
+    SELECT id, setup_type, trade_date::text as trade_date, entry_zone_low, entry_zone_high,
+           stop_level, t1_level
     FROM active_setups
     WHERE status IN ('ACTIVE', 'SHADOW') AND expires_at IS NOT NULL AND expires_at < NOW()
   `);
@@ -1461,10 +1531,16 @@ export async function expireStaleSetups(io) {
   }
   const expiredRows = [];
   for (const row of candidates.rows) {
-    const long = isLongSetup(row.setup_type);
+    // Null direction (name/price disagreement, or missing price levels) leaves pnl null --
+    // resolution_method below already falls to 'NO_PRICE_DATA' for a null pnl, the existing
+    // convention for un-scoreable rows here. No separate logging needed at this call site:
+    // the main resolveSetupsByPrice() loop already logs every disagreement loudly when it
+    // first encounters the row; this backstop just inherits the same null outcome.
+    const direction = resolveDirection(row);
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     let pnl = null;
-    if (lastKnownClose != null && entry != null) {
+    if (direction != null && lastKnownClose != null && entry != null) {
+      const long = direction === 'LONG';
       pnl = Math.round(((long ? (lastKnownClose - entry) : (entry - lastKnownClose))
         * LIVE_INSTRUMENT.dollarsPerPoint - LIVE_INSTRUMENT.commissionPerRoundTrip) * 100) / 100;
     }
@@ -1513,8 +1589,11 @@ export async function structurallyInvalidateSetups(io) {
   // inflated minutesActive by the ET/UTC offset (4hrs in EDT) and made POST_ENTRY/PRE_ENTRY
   // classification always resolve to POST_ENTRY. Same root cause as the resolveSetupsByPrice
   // fix above. Found 2026-06-30.
+  // t1_level added 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug) --
+  // resolveDirection() below needs it alongside stop_level for its price-derived fallback;
+  // this SELECT previously had stop_level but not t1_level, so the fallback couldn't run.
   const activeWithTime = await query(`
-    SELECT id, setup_type, trade_date, stop_level, entry_zone_low, entry_zone_high,
+    SELECT id, setup_type, trade_date, stop_level, t1_level, entry_zone_low, entry_zone_high,
       EXTRACT(epoch FROM ((NOW() AT TIME ZONE 'America/New_York') - fired_at)) / 60 as minutes_active
     FROM active_setups
     WHERE trade_date=$1 AND status='ACTIVE'
@@ -1550,8 +1629,12 @@ export async function structurallyInvalidateSetups(io) {
     // decision 2026-07-20 (OPEN_DECISION invalidated_session_closed_setups_never_get_actual_pnl).
     let pnl = null;
     const entry = row.entry_zone_high ?? row.entry_zone_low;
-    if (invalidationTiming === 'POST_ENTRY' && entry != null) {
-      const long = isLongSetup(row.setup_type);
+    // Null direction (name/price disagreement, or missing price levels) leaves pnl null --
+    // resolution_method below already falls to null for a null pnl, the existing convention
+    // here (matches expireStaleSetups' NO_PRICE_DATA-equivalent posture).
+    const direction = resolveDirection(row);
+    if (invalidationTiming === 'POST_ENTRY' && entry != null && direction != null) {
+      const long = direction === 'LONG';
       pnl = Math.round(((long ? (currentPrice - entry) : (entry - currentPrice))
         * LIVE_INSTRUMENT.dollarsPerPoint - LIVE_INSTRUMENT.commissionPerRoundTrip) * 100) / 100;
     }
@@ -10007,6 +10090,11 @@ export default function createACDRouter(io) {
         liveMechanism = {
           verdict: lm.recommendation,
           nArmed: lm.sample_size,
+          // Hardcoded to match scripts/audit_wider_target_live.mjs's own exported MIN_N=20 --
+          // not imported directly since server/ routes don't import from scripts/ (scripts
+          // are standalone, not imported by the running app, per CLAUDE.md convention). If
+          // MIN_N ever changes there, update this literal in the same commit.
+          nArmedFloor: 20,
           meanDelta: lm.ev_per_trade != null ? +lm.ev_per_trade : null,
           // win_rate is stored 0-1 (standing convention) -- *100 for this API's own display
           // field, matching how /performance-audit/unified's confluence query does the same
@@ -10021,6 +10109,14 @@ export default function createACDRouter(io) {
           medianDelta: lmNotes?.median_delta ?? null,
           rigor: lmNotes?.rigor ?? null,
           deltaSinceLastCheck: lmNotes?.delta_since_last_check ?? null,
+          // 2026-08-17 (docs/RUNNER_FOLLOWUPS_SPEC_20260817.md Item 2a) — already computed and
+          // stored by audit_wider_target_live.mjs, just never read into this endpoint before.
+          // Same null-at-nArmed=0 shape as the fields above (all computed under `if (armedN)`
+          // in the audit script).
+          daySignMajority: lmNotes?.day_sign_majority ?? null,
+          survivesLargestDayExclusion: lmNotes?.survives_largest_day_exclusion ?? null,
+          topSetupType: lmNotes?.top_setup_type ?? null,
+          topSetupTypeShare: lmNotes?.top_setup_type_share ?? null,
         };
       }
 

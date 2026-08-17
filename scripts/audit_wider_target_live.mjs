@@ -33,7 +33,12 @@ import { flagDecision } from './flag_decision.mjs';
 const SIGNAL_TYPE = 'WIDER_TARGET_LIVE_STATUS';
 const SIGNAL_NAME = 'wider_target_1p5x';
 const RECHECK_OF = 'velocity_fast_wider_target_positive_provisional';
-const MIN_N = 20;
+// Exported for reference/future import -- server/ routes don't currently import from
+// scripts/ (scripts are standalone, not imported by the running app, per CLAUDE.md
+// convention), so GET /acd/runner-wider-target-status currently mirrors this as a literal
+// (nArmedFloor: 20 in acd.js) rather than importing it. If that convention ever relaxes, or
+// this value changes, update both together.
+export const MIN_N = 20;
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
@@ -112,6 +117,25 @@ async function main() {
   }
 
   const armedN = validRows.length;
+
+  const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
+
+  // Prior run (most recent before today) -- for delta_since_last_check, transition detection,
+  // AND (2026-08-17) the --daily-check throttle below. Moved up from its original position
+  // right before the `notes` object so the throttle can use nAtLastCheck; reused later for
+  // deltaSinceLastCheck, no duplicate query.
+  const priorRes = await query(`
+    SELECT run_date::text, recommendation, notes FROM performance_audit
+    WHERE signal_type=$1 AND signal_name=$2 AND run_date < $3
+    ORDER BY run_date DESC LIMIT 1
+  `, [SIGNAL_TYPE, SIGNAL_NAME, today]);
+  const prior = priorRes.rows[0] || null;
+  let priorNotes = null;
+  try { priorNotes = prior?.notes ? (typeof prior.notes === 'string' ? JSON.parse(prior.notes) : prior.notes) : null; } catch (_) {}
+  const nAtLastCheck = priorNotes?.n_armed ?? 0;
+
+  const dailyCheckMode = process.argv.includes('--daily-check');
+
   console.log(`Armed (resolution_method IN WIDER_*): ${armedRes.rows.length} raw, ${armedN} valid, ${excludedRows.length} excluded.`);
   if (excludedRows.length) {
     console.log('Excluded rows (reason):', excludedRows.map(r => `id=${r.id} ${r.setup_type} (${r.reason})`).join('; '));
@@ -176,18 +200,8 @@ async function main() {
   else if (rigor.clean) verdict = 'REPRODUCED';
   else verdict = 'UNSTABLE';
 
-  const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
-
-  // Prior run (most recent before today) -- for delta_since_last_check and transition detection.
-  const priorRes = await query(`
-    SELECT run_date::text, recommendation, notes FROM performance_audit
-    WHERE signal_type=$1 AND signal_name=$2 AND run_date < $3
-    ORDER BY run_date DESC LIMIT 1
-  `, [SIGNAL_TYPE, SIGNAL_NAME, today]);
-  const prior = priorRes.rows[0] || null;
-  let priorNotes = null;
-  try { priorNotes = prior?.notes ? (typeof prior.notes === 'string' ? JSON.parse(prior.notes) : prior.notes) : null; } catch (_) {}
-  const nAtLastCheck = priorNotes?.n_armed ?? 0;
+  // today/priorRes/prior/priorNotes/nAtLastCheck are all computed earlier now (moved up for
+  // the --daily-check throttle) -- reused here, no duplicate query.
   const deltaSinceLastCheck = armedN - nAtLastCheck;
 
   const notes = {
@@ -212,6 +226,30 @@ async function main() {
     win_rate_semantics: 'the win_rate COLUMN (0-1 scale) is the fraction of armed rows where delta > fixed-T1 counterfactual, not a classic win rate -- multiply by 100 for display, per this codebase\'s standing win_rate convention',
   };
 
+  console.log(`\nVerdict: ${verdict} (N=${armedN}, meanDelta=${meanDelta}, rigor.clean=${rigor?.clean})`);
+
+  // Daily self-throttle (user request 2026-08-17, docs/RUNNER_FOLLOWUPS_SPEC_20260817.md
+  // Item 0): scripts/run_daily_calibration.sh invokes this with --daily-check Mon-Fri so the
+  // mechanism gets checked daily while real armed N is thin, self-throttling back to the
+  // existing weekly-only cadence (scripts/run_weekly_backtests.sh, unflagged, always runs in
+  // full) once N clears the floor -- no manual cron edit needed later. Gates on
+  // nAtLastCheck (the PRIOR stored row's N), not the just-computed armedN, so the daily run
+  // that FIRST discovers armedN>=MIN_N still writes (the verdict-transition flagDecision
+  // fires promptly, not delayed to Sunday) -- only subsequent daily runs after that point
+  // throttle. The `armedN >= nAtLastCheck` guard (DeepSeek design-critique, 2026-08-17)
+  // catches the one real edge case: if a same-day repair/exclusion change pushed fresh N
+  // back below the floor, do NOT suppress the write that would record the THIN_N reversion.
+  // Placed HERE (right before the write), not earlier -- DeepSeek's code-review caught that
+  // an earlier placement would have skipped the full computation/verdict/rigor entirely on a
+  // throttled day, contradicting this very comment's promise that only the WRITE is skipped.
+  // Only the performance_audit INSERT + flagDecision calls below are skipped -- everything
+  // above (armedN, meanDelta, verdict, rigor, and the verdict line just logged) already ran
+  // and printed, every day, regardless of throttle state.
+  if (dailyCheckMode && nAtLastCheck >= MIN_N && armedN >= nAtLastCheck) {
+    console.log(`Throttled (--daily-check): N=${nAtLastCheck} at last check, N=${armedN} now -- already cleared the floor, deferring to weekly cadence (scripts/run_weekly_backtests.sh). Not persisting/flagging today.`);
+    return;
+  }
+
   await query(`
     INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
     VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -220,7 +258,6 @@ async function main() {
           total_pnl=EXCLUDED.total_pnl, recommendation=EXCLUDED.recommendation, notes=EXCLUDED.notes
   `, [today, SIGNAL_TYPE, SIGNAL_NAME, armedN, winRateVsFixed, meanDelta, deltas.reduce((a, b) => a + b, 0), verdict, JSON.stringify(notes)]);
 
-  console.log(`\nVerdict: ${verdict} (N=${armedN}, meanDelta=${meanDelta}, rigor.clean=${rigor?.clean})`);
   console.log(`Persisted to performance_audit (${SIGNAL_TYPE}/${SIGNAL_NAME}).`);
 
   // Flag a human decision only on a genuine verdict TRANSITION -- comparing against the

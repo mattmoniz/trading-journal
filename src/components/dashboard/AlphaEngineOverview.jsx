@@ -704,6 +704,19 @@ function RunnerWiderTargetPanel() {
               )}>{data.liveMechanism.verdict}</span>
               <span style={{ fontSize: 11, color: '#94a3b8' }}>last checked {data.liveMechanism.lastCheckedDate}</span>
             </div>
+            {/* Armed-N-toward-floor progress (2026-08-17) -- deliberately OUTSIDE the
+                nArmed===0 gate below, since "0/20" is itself meaningful. A DIFFERENT bar/
+                population from the "full-live promotion" one further down this component
+                (nActiveCurrent/nActiveFloor, real ACTIVE-origin trades toward the separate
+                full-live standard) -- this one tracks nArmed (any real SHADOW-origin armed
+                trade) toward the audit script's own MIN_N=20, the number that actually
+                drives the verdict above. Fixed denominator, no divide-by-zero risk. */}
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: '#64748b', marginBottom: 3 }}>Armed toward closed-loop check floor (N≥{data.liveMechanism.nArmedFloor}, gates the verdict above)</div>
+              <div style={{ background: '#0f172a', borderRadius: 4, height: 6, overflow: 'hidden' }}>
+                <div style={{ width: `${Math.min(100, Math.round(100 * data.liveMechanism.nArmed / data.liveMechanism.nArmedFloor))}%`, height: '100%', background: '#3b82f6' }} />
+              </div>
+            </div>
             {data.liveMechanism.nArmed === 0 ? (
               <div style={{ fontSize: 11, color: '#94a3b8' }}>Zero real trades have armed the mechanism yet ({data.liveMechanism.nFlagged ?? 0} flagged eligible so far) — too thin to say anything. This is expected right after build; watch this space fill in.</div>
             ) : (
@@ -718,6 +731,19 @@ function RunnerWiderTargetPanel() {
                 </div>
                 {data.liveMechanism.deltaSinceLastCheck != null && data.liveMechanism.deltaSinceLastCheck !== 0 && (
                   <div style={{ fontSize: 11, color: '#64748b' }}>+{data.liveMechanism.deltaSinceLastCheck} armed since last check</div>
+                )}
+                {/* Guard status (2026-08-17) -- day-sign majority + largest-day-exclusion
+                    survival + dominant-family share, already computed by
+                    audit_wider_target_live.mjs and stored, just not surfaced here before.
+                    Reported only, same as the audit script's own posture -- doesn't gate
+                    anything, gives a human a fast read on whether the mean delta above is
+                    broad-based or riding on one day/setup_type. */}
+                {(data.liveMechanism.daySignMajority != null || data.liveMechanism.topSetupType != null) && (
+                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>
+                    {data.liveMechanism.daySignMajority != null && <>{data.liveMechanism.daySignMajority}% of days positive</>}
+                    {data.liveMechanism.survivesLargestDayExclusion != null && <> · survives largest-day exclusion: {data.liveMechanism.survivesLargestDayExclusion ? 'yes' : 'no'}</>}
+                    {data.liveMechanism.topSetupType != null && <> · dominant setup_type: {data.liveMechanism.topSetupType} ({data.liveMechanism.topSetupTypeShare}% of N)</>}
+                  </div>
                 )}
               </>
             )}

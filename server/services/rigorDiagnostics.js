@@ -27,7 +27,7 @@
 // are evaluated (e.g. for regime-conditioned chronological stability).
 export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } = {}) {
   const events = filterFn ? rawEvents.filter(filterFn) : rawEvents;
-  if (!events.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null, clustered: false, clean: null };
+  if (!events.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null, boundaryStraddle: null, clustered: false, clean: null };
 
   const perDay = new Map();
   for (const e of events) {
@@ -39,7 +39,7 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
   const clustered = top5DayPct > 50;
 
   const third = Math.floor(events.length / 3);
-  let stable = null, thirds = null;
+  let stable = null, thirds = null, boundaryStraddle = null;
   if (third >= 5) {
     const g1 = events.slice(0, third), g2 = events.slice(third, 2 * third), g3 = events.slice(2 * third);
     const evOf = g => g.reduce((s, e) => s + pnlFn(e), 0) / g.length;
@@ -47,6 +47,30 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
     const overallSign = Math.sign(events.reduce((s, e) => s + pnlFn(e), 0));
     stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
     thirds = { ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
+
+    // 2026-08-17 (OPEN_DECISION computerigor_stable_clustered_independence_gap): the
+    // clustered check (top5DayPct, by DAY) and stable check (sign consistency, by EVENT
+    // POSITION) operate at different granularities and aren't independent -- a single
+    // dominant dateField entity holding ~33-50% of events is chronologically contiguous
+    // enough to straddle a third-boundary, propping up two adjacent thirds' sign at once
+    // while staying under the 50% clustering bar (clustered=false). Informational only --
+    // does NOT feed `clean` in this pass (see below). Finds the dominant (by count)
+    // dateField entity and checks whether its event indices span more than one third.
+    // One-entity check: can miss a co-dominant pair where neither is individually dominant
+    // but each straddles a different boundary -- acceptable for an informational flag,
+    // revisit if this is ever wired into `clean`.
+    const idxByDate = new Map();
+    events.forEach((e, i) => {
+      const d = e[dateField];
+      if (!idxByDate.has(d)) idxByDate.set(d, []);
+      idxByDate.get(d).push(i);
+    });
+    let dominantIdxs = null, dominantCount = 0;
+    for (const idxs of idxByDate.values()) {
+      if (idxs.length > dominantCount) { dominantIdxs = idxs; dominantCount = idxs.length; }
+    }
+    const bucketsTouched = new Set(dominantIdxs.map(i => (i < third ? 0 : i < 2 * third ? 1 : 2)));
+    boundaryStraddle = bucketsTouched.size > 1;
   }
 
   return {
@@ -55,7 +79,12 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
     clustered,
     stable,
     thirds,
+    boundaryStraddle,
     clean: stable === true && !clustered, // the single "trust this" bit — both checks must pass
+    // deliberately NOT: clean = stable === true && !clustered && !boundaryStraddle. Not yet
+    // wired -- see the OPEN_DECISION above. Tightening `clean` here would ripple into every
+    // current consumer (including the SETUP_STATUS_DOW gate fixed 2026-08-17) and needs its
+    // own dedicated audit before gating anything.
   };
 }
 
@@ -66,6 +95,7 @@ export function rigorContext(rigor) {
     top5_day_pct: rigor.top5DayPct,
     three_way_stable: rigor.stable,
     thirds: rigor.thirds,
+    boundary_straddle: rigor.boundaryStraddle,
     clean: rigor.clean,
   };
 }
