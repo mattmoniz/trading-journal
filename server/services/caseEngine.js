@@ -15,6 +15,7 @@ import { getNL, getPriorWeekRange, getGLine, getConvictionData, computeDynamicCo
 import { getStructuralLevels } from './phaseChangeDetector.js';
 import { runReassessment, describeLiveReassessment } from './dayTypeReassessmentService.js';
 import { computeProfile } from './developingValueService.js';
+import { resolveDirection } from '../config/setupTypes.js';
 
 const RTH_START = 570; // 09:30 in minutes from midnight
 const REASSESSMENT_CHECKPOINTS = [660, 690, 720, 750, 780, 840, 900, 945]; // 11:00 .. 15:45 ET
@@ -365,7 +366,15 @@ function applyStacking(levels) {
 // Only requires a fresh (barsAgo=0) 3-bar streak at any bar — conservative baseline.
 function checkSessionActivation(bars, setup, nl30, levels, dayTypeClass) {
   if (!setup) return false;
-  const isLong  = /LONG|UP|BULLISH/.test(setup.setup_type);
+  // resolveDirection() (server/config/setupTypes.js), not a bare /LONG|UP|BULLISH/ regex --
+  // 2026-08-17, OPEN_DECISION islongsetup_bug_survives_in_3_other_files. Null (name/price
+  // disagreement or an unresolvable name-directionless type) short-circuits to false here,
+  // not just a skipped scoring bonus -- isLong drives the delta-direction comparison in the
+  // loop below (line ~387), so an unknown direction can't be scanned against at all
+  // (DeepSeek design-critique, 2026-08-17).
+  const direction = resolveDirection(setup);
+  if (direction == null) return false;
+  const isLong  = direction === 'LONG';
   const stop    = Number(setup.stop_level    || 0);
   const t1      = Number(setup.t1_level      || 0);
   const entryPx = Number(setup.entry_zone_high || setup.entry_zone_low || 0);
@@ -1404,8 +1413,30 @@ export async function computeCase(tradeDate, asOf) {
 
   // 13. Trigger & impact score + state machine
   let trigger = { active: false, state: 'WATCHING', resolvedReason: null, setup: null };
-  if (latestSetup) {
-    const isLong  = /LONG|UP|BULLISH/.test(latestSetup.setup_type);
+  // resolveDirection() (server/config/setupTypes.js), not a bare /LONG|UP|BULLISH/ regex --
+  // 2026-08-17, OPEN_DECISION islongsetup_bug_survives_in_3_other_files. Computed once, up
+  // front, and used to gate this entire block (which runs from here down to the `trigger =`
+  // assignment ~120 lines below, INCLUDING the `if (latestSetup) trigger = {...}` statement
+  // near the end -- that statement is NESTED inside this same block, not a sibling; it reads
+  // `isLong`/`impact`/`impactStack`/`triggerState`/`resolvedReason`, all declared here).
+  // Unlike checkSessionActivation() above (a single boolean return where "unknown direction"
+  // cleanly means "false"), this block runs a real t1Hit/stopHit/premiseBroken STATE MACHINE
+  // partway down that decides trigger.state (ACTIVE/RESOLVED/WATCHING) -- guessing a
+  // direction there could report a wrong resolution (e.g. "stopped out" when the true,
+  // unknown-direction trade actually hit target), not just a wrong score. So a null direction
+  // excludes the ENTIRE block (trigger stays at its WATCHING/inactive default, or gets set by
+  // the separate ACD-signal-only fallback further below, outside this block, gated on
+  // `trigger.state === 'WATCHING'`) rather than trying to selectively guess/skip individual
+  // lines within a state machine (DeepSeek design-critique flagged the scoring lines
+  // specifically; this wider all-or-nothing gate was found while implementing, once the
+  // state-machine reads further down were checked too -- DeepSeek's code-review then verified
+  // the block really is single, correctly-nested, and confirmed no scope hazard exists either
+  // way; the `&& triggerDirectionKnown` on the nested statement is accordingly redundant with
+  // the outer gate, kept as a defensive/self-documenting repeat, not because it's load-bearing).
+  const triggerDirection = latestSetup ? resolveDirection(latestSetup) : null;
+  const triggerDirectionKnown = triggerDirection != null;
+  if (latestSetup && triggerDirectionKnown) {
+    const isLong  = triggerDirection === 'LONG';
     let impact    = 0;
     const impactStack = [];
 
@@ -1513,7 +1544,7 @@ export async function computeCase(tradeDate, asOf) {
       };
     }
 
-    if (latestSetup) trigger = {
+    if (latestSetup && triggerDirectionKnown) trigger = {
       active: triggerState === 'ACTIVE' || triggerState === 'ACTIVE_MANAGING',
       state:  triggerState,
       resolvedReason,

@@ -181,26 +181,55 @@ class. Make the adversarial stress-test battery (exclude dominant family → exc
 exclude cluster → verify P&L → check for bugs) the DEFAULT gate before recording any positive
 runner finding, not something requested only after the fact. Zero code risk.
 
-### 2c. The bounded-live T1-floor mechanism itself — SCOPE ONLY, not built this session
+### 2c. The real-capital wider-target mechanism — SCOPE ONLY, not built this session (re-scoped 2026-08-17)
 
-**Explicitly deferred, not silently dropped.** This is the actual mechanism that would let
-the wider-target finding touch real capital (a capped ~25%-of-eligible-positions rollout,
-T1 banked as a guaranteed floor reusing the breakeven-trail machinery's T1-floor pattern,
-conditioned on `bars_to_resolution≤4` at T1 touch). Reasons for deferring out of this batch:
-- Touches the live resolution engine for real ACTIVE-origin positions — a fundamentally
-  higher blast radius than every other item here.
-- Triggers this codebase's full new-setup-type checklist (dedicated backtest script,
-  `SETUP_STATUS`/`OPTIMAL_STOP` rows, `CONDITIONAL_VARIANTS` entry, insert-time forced-SHADOW
-  gate, dashboard visibility, `test_invariants.mjs` pass).
-- CLAUDE.md's 3-phase rule requires a SEPARATE design-critique-before-code pass specifically
-  for this piece — folding it into this batch's shared critique would shortcut that.
-- **Real dependency on Item 1**: this mechanism would extend the exact same
-  `resolveSetupsByPrice()` direction logic Item 1 is fixing. Building it before Item 1 lands
-  and is verified would mean building on top of a known-buggy foundation. Sequence strictly
-  after Item 1, not concurrently.
+**Explicitly deferred, not silently dropped — and re-scoped this session, not just re-confirmed.**
+The literal "T1-floor structure, capped allocation" wording this item originally carried is
+STALE and should not be re-derived from: DeepSeek proved earlier in this same investigation
+that the literal T1-floor shape (bank T1 as a guaranteed floor, never lose fresh capital) is
+mathematically tautological — its PnL is ≥ the T1-baseline on every trade by construction, so
+a backtest of it proves nothing (confirmed empirically, 0/292 negative deltas,
+`scratch/velocity_wider_target_t1floor_vs_origstop.mjs`). The mechanism that actually carries
+real, validated signal is the ALTERNATIVE shape from that same round — widen the target, leave
+the ORIGINAL stop untouched (real flip-to-loss risk, 43/292 negative in the backtest) — and
+**that mechanism is already built and live, SHADOW-only**: `server/services/widerTargetWalker.js`'s
+`stepWiderTarget()`, wired into `resolveSetupsByPrice()` (`acd.js`) via
+`active_setups.wider_target_mult`, accumulating real data since 2026-08-17.
 
-Recorded here so a future session picks this up as an explicit, scoped-but-not-built
-follow-on, not something that has to be rediscovered.
+So what genuinely remains under this item is NOT a design or build task — it's **data
+readiness**. Checked directly against the live monitoring signal (`performance_audit`,
+`signal_type='WIDER_TARGET_LIVE_STATUS'`, written by `scripts/audit_wider_target_live.mjs`):
+`n_armed=1` real armed trade as of 2026-08-17 (one day after shipping), against the
+mechanism's own designed promotion bar of `N≥20 armed + mean delta>0 + rigor.clean=true`.
+Building live-capital-eligible machinery (the full new-setup-type checklist: dedicated
+backtest script, `SETUP_STATUS`/`OPTIMAL_STOP` rows, `CONDITIONAL_VARIANTS` entry, an
+insert-time ACTIVE-eligibility gate, dashboard visibility, `test_invariants.mjs` coverage)
+ahead of the data that would justify it is premature engineering, and a hardcoded capped
+allocation percentage (the "~25%" figure this item originally carried) is itself a static
+threshold with zero derivation — the same no-static-thresholds anti-pattern CLAUDE.md's
+own hard rule exists to catch, just smuggled in as a sizing rule instead of an entry trigger.
+
+**One real limitation worth flagging for the next session, not a reason to act now**: the
+promotion gate as literally stated may be structurally hard to clear for this mechanism
+class specifically. Runner findings cluster on trend days by construction, and
+`computeRigor()`'s clustering/stability checks aren't fully independent for a dominant
+single-day/single-family entity (tracked separately, `OPEN_DECISION
+computerigor_stable_clustered_independence_gap`) — so even once `n_armed` clears 20, `clean`
+may still read false on a real, legitimate effect. The eventual promotion decision will
+likely need a runner-specific rigor variant, not the literal `clean=true` bar borrowed from
+entry-signal calibration.
+
+**When real N does clear the bar**, the actual new work is small: `stepWiderTarget()` itself
+gets reused unchanged (it's already the right exit shape); the only genuinely new pieces are
+(a) an insert-time gate deciding which `ACTIVE`-origin rows are eligible to carry
+`wider_target_mult` (today it's structurally SHADOW-only — `ACTIVE` rows can't carry the flag
+at all), and (b) sizing/allocation, which itself should be derived from the accumulated real
+distribution (e.g. a capped fraction based on realized variance) rather than a flat guessed
+percentage.
+
+Recorded here so a future session picks this up as an explicit, data-gated follow-on with the
+CORRECT mechanism shape already identified, not something that has to be rediscovered or
+re-tautologized.
 
 ---
 

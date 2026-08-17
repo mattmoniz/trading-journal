@@ -7,7 +7,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
-import { directionFromType, computeBar6Checkpoint } from '../services/maeMfeReplay.js';
+import { computeBar6Checkpoint } from '../services/maeMfeReplay.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
@@ -27,7 +27,7 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
@@ -392,45 +392,12 @@ export async function dropToTimeline(setup) {
   ]);
 }
 
-// 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug, fixed) -- replaces
-// isLongSetup(), which was a bare substring match (setupType.includes('_UP') etc, no
-// _GAP_UP/_GAP_DOWN handling) used at 4 call sites across resolveSetupsByPrice(),
-// expireStaleSetups(), and structurallyInvalidateSetups() to compute real P&L direction.
-// Confirmed real and reachable: isLongSetup('WPP_FADE_SHORT_GAP_UP') returned true (a real
-// SHORT trade, sign-corrupted). Also silently misclassified every ZONE_EDGE_FADE row as
-// SHORT unconditionally (no LONG/BULLISH/_UP substring at all) -- a second, related bug this
-// fix also closes, since ZONE_EDGE_FADE has no name-encoded direction for inferDirection()
-// to find either.
-//
-// Hybrid design (DeepSeek design-critique + code-review, 2026-08-17): canonical
-// inferDirection(setupType) is the primary signal (correct for all 112 known-named types,
-// strips the _GAP_* suffix). row.t1_level > row.stop_level is a general, setup-type-agnostic
-// fallback/cross-check -- LONG trades have stop below entry and target above, SHORT the
-// reverse, and this sign is stable for a row's entire lifecycle (verified: none of this
-// codebase's ~38 `UPDATE active_setups` statements ever write stop_level or t1_level after
-// insert; breakeven-trail/wider-target/extendTarget all use separate columns
-// (breakeven_armed_at/runner_*, wider_target_mult, extend_target_level) and never touch
-// stop_level/t1_level). This lets ZONE_EDGE_FADE resolve correctly via price where the name
-// carries no direction, not just "exclude, don't guess."
-//
-// A name/price DISAGREEMENT means the row's levels are inverted relative to its name -- the
-// exact anomaly class this fix exists to catch -- so it returns null (exclude), matching the
-// audit_wider_target_live.mjs mechanism's own established "exclude, don't guess" posture for
-// this same bug class. Null/undefined stop_level or t1_level also returns null (JS would
-// otherwise coerce null in a `>` comparison to a silently-guessed direction).
-function resolveDirection(row) {
-  if (row.stop_level == null || row.t1_level == null) return null;
-  const named = inferDirection(row.setup_type);
-  // Coerced with Number() -- node-postgres returns NUMERIC columns (stop_level/t1_level's
-  // real type) as JS strings by default (db.js only overrides the timestamp/date OIDs, not
-  // numeric). An uncoerced `>` here compares lexicographically, which happens to agree with
-  // numeric order for this codebase's current 5-digit uniform-precision index levels but is
-  // not correct in general (DeepSeek code-review, 2026-08-17) -- also matches the backfill
-  // script's own `+row.t1_level > +row.stop_level` coercion, which this was inconsistent with.
-  const priceDerived = Number(row.t1_level) > Number(row.stop_level) ? 'LONG' : 'SHORT';
-  if (named !== null && named !== priceDerived) return null; // disagreement -- exclude
-  return named ?? priceDerived;
-}
+// resolveDirection() moved to server/config/setupTypes.js 2026-08-17 (OPEN_DECISION
+// islongsetup_bug_survives_in_3_other_files) so setupBacktestService.js/maeMfeReplay.js/
+// caseEngine.js can share the exact same function instead of each hand-rolling their own
+// copy -- the same "silent contract" drift that made this local copy necessary in the
+// first place (see OPEN_DECISION islongsetup_gap_variant_direction_bug). Imported above
+// alongside inferDirection().
 
 // Fade-against-a-big-move-day exit check — DISABLED 2026-07-27, kept in place (not deleted)
 // so the wiring/history is visible rather than silently vanishing. The 2026-07-26 validation
@@ -1575,12 +1542,13 @@ export async function structurallyInvalidateSetups(io) {
   const orLow  = acdRow.rows[0]?.or_low;
   if (!currentPrice || !orHigh || !orLow) return 0;
 
-  // Bearish setups invalidated when price closes above OR High
-  const bearishPattern = '%SHORT%,IB_BEARISH,C_STANDALONE_DOWN,FAILED_AUCTION_SHORT,VALUE_AREA_RESPONSIVE_SHORT'.split(',');
-  const bullishPattern = '%LONG%,IB_BULLISH,C_STANDALONE_UP,FAILED_AUCTION_LONG,VALUE_AREA_RESPONSIVE_LONG'.split(',');
-
-  const isBearish = (t) => t.includes('SHORT') || t.includes('BEARISH') || t === 'C_STANDALONE_DOWN' || t.includes('A_DOWN');
-  const isBullish = (t) => t.includes('LONG')  || t.includes('BULLISH') || t === 'C_STANDALONE_UP' || t.includes('A_UP');
+  // isBearish/isBullish + the dead bearishPattern/bullishPattern arrays removed 2026-08-17
+  // (OPEN_DECISION isbearish_isbullish_heuristic_zone_edge_fade_gap) -- a third hand-rolled
+  // direction heuristic, replaced below with the same resolveDirection(row) this function
+  // already computes for the pnl calc (previously two separate calls per row; now hoisted
+  // to one, reused for both the invalidation gate and the pnl calc, per DeepSeek's
+  // code-review). Closes a real coverage gap: ZONE_EDGE_FADE matched neither isBearish nor
+  // isBullish, so it was NEVER structurally invalidated by this function.
 
   // Need fired_at and stop_level to compute how long the setup was active when invalidated.
   // minutes_active computed SQL-side (naive ET fired_at vs. naive-ET-converted NOW()) —
@@ -1603,16 +1571,32 @@ export async function structurallyInvalidateSetups(io) {
   for (const row of activeWithTime.rows) {
     const isBracket = row.setup_type.includes('BRACKET_BREAKOUT');
     let shouldInvalidate = false;
+    // Hoisted: one resolveDirection(row) call per row, reused below for both the
+    // non-bracket invalidation gate and the pnl calc further down (2026-08-17,
+    // OPEN_DECISION isbearish_isbullish_heuristic_zone_edge_fade_gap, DeepSeek
+    // code-review) -- previously two separate calls per row; avoids any future
+    // divergence between "the direction the gate used" and "the direction the pnl
+    // used." Computed for every row, including bracket ones, since the pnl calc below
+    // has always used it regardless of isBracket (only the shouldInvalidate GATE has a
+    // separate bracket-specific path, unchanged, see below). Null (name/price
+    // disagreement, or missing price levels) leaves the non-bracket shouldInvalidate
+    // false -- the same "exclude, don't guess" convention this function already uses
+    // for the pnl side (an ambiguous row isn't abandoned forever; it still resolves via
+    // its own stop/t1 in resolveSetupsByPrice() or via expireStaleSetups()).
+    const direction = resolveDirection(row);
 
     if (isBracket) {
+      // BRACKET_BREAKOUT only ships as _LONG/_SHORT with no _GAP_* suffix (setupTypes.js),
+      // so this name-only check is reliable and unaffected by the _GAP_* bug class --
+      // deliberately left as-is, not part of this fix (DeepSeek design-critique, 2026-08-17).
       const isLong = row.setup_type.includes('LONG');
       shouldInvalidate = isLong
         ? (row.stop_level != null && currentPrice <= row.stop_level)
         : (row.stop_level != null && currentPrice >= row.stop_level);
     } else {
       shouldInvalidate =
-        (isBearish(row.setup_type) && currentPrice > orHigh) ||
-        (isBullish(row.setup_type) && currentPrice < orLow);
+        (direction === 'SHORT' && currentPrice > orHigh) ||
+        (direction === 'LONG'  && currentPrice < orLow);
     }
 
     if (!shouldInvalidate) continue;
@@ -1632,7 +1616,6 @@ export async function structurallyInvalidateSetups(io) {
     // Null direction (name/price disagreement, or missing price levels) leaves pnl null --
     // resolution_method below already falls to null for a null pnl, the existing convention
     // here (matches expireStaleSetups' NO_PRICE_DATA-equivalent posture).
-    const direction = resolveDirection(row);
     if (invalidationTiming === 'POST_ENTRY' && entry != null && direction != null) {
       const long = direction === 'LONG';
       pnl = Math.round(((long ? (currentPrice - entry) : (entry - currentPrice))

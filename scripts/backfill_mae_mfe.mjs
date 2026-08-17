@@ -5,7 +5,8 @@
 // =============================================================================
 
 import { query } from '../server/db.js';
-import { replayBars, directionFromType } from '../server/services/maeMfeReplay.js';
+import { replayBars } from '../server/services/maeMfeReplay.js';
+import { resolveDirection } from '../server/config/setupTypes.js';
 
 const BATCH_REPORT_EVERY = 100;
 
@@ -68,13 +69,19 @@ async function main() {
     const entry     = (setup.entry_low + setup.entry_high) / 2;
     const stop      = setup.stop;
     const t1        = setup.t1;
-    const direction = directionFromType(setup.setup_type);
+    // resolveDirection() (server/config/setupTypes.js), not directionFromType() -- this
+    // script writes real mae_points/mfe_points to the DB (2026-08-17, OPEN_DECISION
+    // islongsetup_bug_survives_in_3_other_files, DeepSeek-flagged: this was the one real
+    // gap in the original fix plan, a DB writer that would have kept guessing SHORT for
+    // ZONE_EDGE_FADE). Row already carries setup_type/stop/t1 -- reshaped to the
+    // {setup_type, stop_level, t1_level} field names resolveDirection() expects.
+    const direction = resolveDirection({ setup_type: setup.setup_type, stop_level: stop, t1_level: t1 });
     const firedAt   = setup.fired_at; // text, e.g. "2026-07-08 09:30:00" -- sortable as-is
 
     const allBars   = barsByDate[setup.trade_date] ?? [];
     const bars      = allBars.filter(b => b.ts >= firedAt);
 
-    const result    = replayBars(bars, entry, stop, t1, direction);
+    const result    = direction == null ? null : replayBars(bars, entry, stop, t1, direction);
 
     if (!result) {
       skipped++;

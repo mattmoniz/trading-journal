@@ -1,8 +1,25 @@
 // Bar-by-bar MAE/MFE replay engine.
 // Used by the backfill script and live resolution path so both stay in sync.
 
+import { resolveDirection } from '../config/setupTypes.js';
+
+// Minimal, signature-preserving fix (2026-08-17, OPEN_DECISION
+// islongsetup_bug_survives_in_3_other_files): strips a trailing _GAP_(UP|DOWN) suffix
+// before matching, same one-line pattern as the canonical inferDirection()
+// (server/config/setupTypes.js) -- a setup like WPP_FADE_SHORT_GAP_UP is a real SHORT
+// trade, _GAP_UP describes the entry condition, not the trade direction. Kept as a
+// name-only, setupType-string-in function (not upgraded to the row-aware
+// resolveDirection()) because it's imported by name-string-only in ~65 other files
+// (44 backtest_*/pilot_* exploratory scripts, DeepSeek-verified count), and changing
+// the signature would break all of them for no benefit to those read-only scripts.
+// ZONE_EDGE_FADE still defaults to SHORT here (no direction keyword in the name at
+// all) -- a known, documented limitation, not a silent guess: the two DB-writing real
+// call sites in this codebase (computeMaeMfe() below, scripts/backfill_mae_mfe.mjs)
+// are upgraded to the row-aware resolveDirection() instead, which correctly resolves
+// ZONE_EDGE_FADE via its price levels rather than guessing.
 function directionFromType(setupType) {
-  const u = setupType.toUpperCase();
+  const base = setupType.replace(/_GAP_(UP|DOWN)$/, '');
+  const u = base.toUpperCase();
   if (u.includes('LONG') || u.includes('BULLISH') || u.includes('_UP')) return 'LONG';
   return 'SHORT';
 }
@@ -69,7 +86,6 @@ function replayBars(bars, entry, stop, t1, direction) {
  */
 async function computeMaeMfe(queryFn, setupRow) {
   const {
-    setup_type,
     entry_zone_low, entry_zone_high,
     stop_level, t1_level,
     fired_at, trade_date,
@@ -79,7 +95,18 @@ async function computeMaeMfe(queryFn, setupRow) {
   const entry = (parseFloat(entry_zone_low) + hi) / 2;
   const stop  = parseFloat(stop_level);
   const t1    = parseFloat(t1_level);
-  const direction = directionFromType(setup_type);
+  // resolveDirection() (server/config/setupTypes.js), not directionFromType() -- this is a
+  // real DB-writing/live-adjacent path (2026-08-17, OPEN_DECISION
+  // islongsetup_bug_survives_in_3_other_files), so it gets the row-aware version with the
+  // price-derived fallback for name-directionless types (ZONE_EDGE_FADE) instead of a guess.
+  const direction = resolveDirection(setupRow);
+  if (direction == null) return null; // name/price disagreement or missing levels -- exclude, don't guess
+  // Pre-existing gap, not introduced by this fix (DeepSeek code-review, 2026-08-17): if both
+  // entry_zone_low/entry_zone_high are null, `entry` above is NaN, and replayBars()'s own
+  // `entryRisk <= 0` guard doesn't catch it (`NaN <= 0` is false, so it doesn't short-circuit)
+  // -- would silently produce mfe=mae=0/EXPIRED instead of excluding. Consistent with the
+  // "exclude, don't guess" posture just established above for direction.
+  if (!Number.isFinite(entry) || !Number.isFinite(stop) || !Number.isFinite(t1)) return null;
 
   // price_bars_primary.ts / active_setups.fired_at are both `timestamp without time zone`
   // storing naive ET wall-clock (server/db.js's custom OID-1114 parser reads them correctly

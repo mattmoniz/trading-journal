@@ -12,10 +12,7 @@
  * archived 2026-07-09 (scripts/archive/) -- corrected here 2026-07-16, was stale for a week.
  */
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
-
-function isLong(setupType) {
-  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
-}
+import { resolveDirection } from '../config/setupTypes.js';
 
 function nearestLevel(entryPrice, acdRow) {
   if (!acdRow) return 'UNKNOWN';
@@ -71,7 +68,13 @@ export async function runSetupBacktest(db, { verbose = false, setupIds = null } 
 
       if (entry == null || stop == null || t1 == null) { skipped++; continue; }
 
-      const long = isLong(setup.setup_type);
+      // resolveDirection() (server/config/setupTypes.js), not a local isLong() substring
+      // match -- 2026-08-17, OPEN_DECISION islongsetup_bug_survives_in_3_other_files.
+      // Null (name/price disagreement, or a name-directionless type like ZONE_EDGE_FADE
+      // whose price levels also don't resolve it) -- exclude, don't guess.
+      const direction = resolveDirection(setup);
+      if (direction == null) { skipped++; continue; }
+      const long = direction === 'LONG';
 
       // Skip setups where T1 is on the wrong side of entry (data issue)
       if ( long && t1 <= entry) { skipped++; continue; }
