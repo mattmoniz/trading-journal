@@ -114,8 +114,8 @@ async function run() {
 
   // Bars for the chronological sweep + noise-floor guard -- same as update_optimal_stops.mjs.
   console.log('Loading NQ bars for the chronological sweep...');
-  const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
-  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+  const barsRes = await query(`SELECT ts, high::float as high, low::float as low, close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low, close: b.close }));
   const firstIndexAfter = makeBarIndex(allBars);
 
   const medianBarRangeRes = await query(`

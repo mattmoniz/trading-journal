@@ -859,8 +859,13 @@ async function main() {
   for (const t of rawResExpanded.rows) (rawByTypeExpanded[t.setup_type] ||= []).push(t);
 
   console.log('Loading NQ bars for corrected-target resimulation...');
-  const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
-  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+  // close is required by computeCorrectedTarget()'s mark-to-market branch for trades that
+  // don't resolve within the 390-bar walk window (lastBar.close) -- omitted here until
+  // 2026-08-16, making that branch's pnl always NaN and poisoning the aggregate EV sum for
+  // any candidate with >=1 unresolved trade (target_correction_oos_nan_bug_3_setup_types:
+  // reproduced directly against real IB_BULLISH data, confirmed fixed by adding this column).
+  const barsRes = await query(`SELECT ts, high::float as high, low::float as low, close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low, close: b.close }));
   console.log(`${allBars.length} bars loaded.`);
   const firstIndexAfter = makeBarIndex(allBars);
 

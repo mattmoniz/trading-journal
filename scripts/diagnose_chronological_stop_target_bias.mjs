@@ -98,8 +98,8 @@ async function main() {
   const rawByTypeExpanded = {};
   for (const t of rawResExpanded.rows) (rawByTypeExpanded[t.setup_type] ||= []).push(t);
 
-  const barsRes = await query(`SELECT ts, high::float as high, low::float as low FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
-  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low }));
+  const barsRes = await query(`SELECT ts, high::float as high, low::float as low, close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
+  const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low, close: b.close }));
   const firstIndexAfter = makeBarIndex(allBars);
 
   const resultsUnguarded = [];

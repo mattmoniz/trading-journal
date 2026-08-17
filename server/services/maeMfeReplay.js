@@ -81,16 +81,31 @@ async function computeMaeMfe(queryFn, setupRow) {
   const t1    = parseFloat(t1_level);
   const direction = directionFromType(setup_type);
 
-  // Fetch bars from fired_at to end of RTH session (4PM ET = minute 960)
+  // price_bars_primary.ts / active_setups.fired_at are both `timestamp without time zone`
+  // storing naive ET wall-clock (server/db.js's custom OID-1114 parser reads them correctly
+  // by appending 'Z'). But binding `fired_at` (a JS Date) directly as a query PARAMETER hits
+  // the opposite bug: node-pg serializes the Date via its real UTC instant, and Postgres
+  // casts that instant back to a naive timestamp using the session's America/New_York
+  // timezone -- silently shifting the value by the UTC/ET offset (reproduced directly:
+  // 2023-11-17 10:30:00 round-tripped as a Date param became 2023-11-17 05:30:00, a 5hr
+  // shift). Confirmed this was a real, live-relevant bug: this function's own bar window
+  // ended up starting hours before the real fired_at, silently pulling in unrelated
+  // overnight price action -- the same failure shape as the documented VWAP_MAGNET_LONG
+  // BACKFILL fired_at bug (targetCalibrationService.js's outlier-guard comment), except
+  // self-inflicted by this function rather than bad source data. Fix: re-serialize fired_at
+  // to its naive ET string before binding, so Postgres never re-derives a UTC instant from
+  // it. Found + fixed 2026-08-16 before scripts/audit_worst_trades_maemfe.mjs (this
+  // function's only real caller) had ever been run.
+  const firedAtNaive = fired_at instanceof Date ? fired_at.toISOString().slice(0, 19).replace('T', ' ') : fired_at;
   const barsResult = await queryFn(`
     SELECT ts, open::float, high::float, low::float, close::float
     FROM price_bars_primary
     WHERE symbol = 'NQ'
       AND ts::date = $1
-      AND ts >= $2
+      AND ts >= $2::timestamp
       AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
     ORDER BY ts
-  `, [trade_date, fired_at]);
+  `, [trade_date, firedAtNaive]);
 
   return replayBars(barsResult.rows, entry, stop, t1, direction);
 }
