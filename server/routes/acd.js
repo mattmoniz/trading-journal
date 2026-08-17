@@ -31,6 +31,7 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
+import { stepWiderTarget } from '../services/widerTargetWalker.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus } from '../services/setupEligibility.js';
 
@@ -477,7 +478,8 @@ export async function resolveSetupsByPrice(io) {
   const active = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, expires_at::text as expires_at,
            entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
-           runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level
+           runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level,
+           wider_target_mult::float as wider_target_mult
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
   // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the
@@ -624,6 +626,14 @@ export async function resolveSetupsByPrice(io) {
     // fixed-stop/fixed-target logic. Mutually exclusive with trailWidth -- no setup_type
     // sets both columns.
     const extendTarget = row.extend_target_level;
+    // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17,
+    // OPEN_DECISION runner_wider_target_mechanism_build_spec): a non-null wider_target_mult
+    // marks this row as using the dynamic wider-target exit below instead of the plain
+    // fixed-stop/fixed-target logic. SHADOW-origin only (set at insert time, see the INSERT
+    // site) -- ACTIVE rows never carry this flag, so real capital is structurally
+    // unreachable by this mechanism. Mutually exclusive with trailWidth/extendTarget -- no
+    // setup_type row sets more than one of the three.
+    const widerTargetMult = row.wider_target_mult;
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
@@ -647,6 +657,12 @@ export async function resolveSetupsByPrice(io) {
     // continuation); false the whole way through for a fast (<=9 bar) bank or a slow
     // (>25 bar, unvalidated-to-extend) arrival, both of which just take t1 normally.
     let extending = false;
+    // Wider-target state -- same re-derive-from-scratch-every-poll convention as the trail
+    // and bank-vs-extend state above. `widening` flips true once T1 is reached within
+    // MAX_BARS_TO_T1_FOR_WIDER bars of fired_at (matches the bars_to_resolution<=4 backtest
+    // population exactly, see server/services/widerTargetWalker.js's own header); false the
+    // whole way through for a slower arrival, which just takes t1 normally.
+    let widerTargetState = { widening: false };
 
     for (const bar of bars.rows) {
       barCount++;
@@ -735,6 +751,35 @@ export async function resolveSetupsByPrice(io) {
         armedAt = step.state.armedAt;
         peakPrice = step.state.peakPrice;
         trailStopPrice = step.state.trailStopPrice;
+        if (step.resolution) {
+          resolution = step.resolution.resolution;
+          method = step.resolution.method;
+          resolvedAt = bar.ts;
+          priceAtRes = step.resolution.priceAtRes;
+        }
+        if (resolution) break;
+        continue;
+      }
+
+      if (widerTargetMult != null) {
+        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function).
+        // Delegates to the shared step function (server/services/widerTargetWalker.js),
+        // same "exercised by its own synthetic test, not a separate simulation" convention
+        // as the trailWidth branch above. widerTarget is computed from THIS row's own
+        // t1_level distance (not a shared per-setup_type constant) — matches
+        // scratch/velocity_fast_wider_target_bounded_live_gate.mjs's backtested convention
+        // exactly. 4-bar eligibility window matches bars_to_resolution<=4 (the population
+        // RESEARCH_CLAIM velocity_fast_wider_target_positive_provisional was tested and
+        // cross-family-validated against) — same class of backtest-derived bar-count
+        // literal as the extendTarget branch's own 9/25 cutoffs above, not a fresh guess.
+        const t1Distance = Math.abs(t1 - entry);
+        const widerTarget = long ? entry + t1Distance * widerTargetMult : entry - t1Distance * widerTargetMult;
+        const step = stepWiderTarget(
+          widerTargetState,
+          bar,
+          { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: 4 }
+        );
+        widerTargetState = step.state;
         if (step.resolution) {
           resolution = step.resolution.resolution;
           method = step.resolution.method;
@@ -8160,11 +8205,11 @@ export default function createACDRouter(io) {
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class)
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
@@ -8173,6 +8218,13 @@ export default function createACDRouter(io) {
                 ...regimeStampValues(btRegimeStamp),
                 ...fireTagValues(btFireTags),
                 getBetClass(bt.type),
+                // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
+                // always-SHADOW here (no status gate needed), but resolveSetupType() can
+                // divert a backfilled touch to a _TRAIL CONDITIONAL_VARIANTS entry -- those
+                // are trail-mechanism rows (a pre-existing gap: this site doesn't currently
+                // set runner_trail_width for them either, separate from this task), so skip
+                // wider-target tagging for them rather than double-flag a row.
+                CONDITIONAL_VARIANTS[bt.type]?.trailSignalName != null ? null : 1.5,
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -8529,11 +8581,11 @@ export default function createACDRouter(io) {
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
-            ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+            ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -8553,6 +8605,13 @@ export default function createACDRouter(io) {
           ...regimeStampValues(regimeStamp),
           ...fireTagValues(fireTags),
           getBetClass(active.type),
+          // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
+          // reuses forceShadow, the SAME boolean already bound to status/origin_status
+          // above ($18) -- no separate string comparison. !isTrailMechanism is required,
+          // not cosmetic: forceShadow is ALSO forced true for trail variants, which
+          // already carry runner_trail_width from this same INSERT -- excluding them here
+          // preserves the "no row sets more than one exit-mechanism flag" invariant.
+          forceShadow && !isTrailMechanism ? 1.5 : null,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -8679,10 +8738,10 @@ export default function createACDRouter(io) {
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class)
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
                 ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
@@ -8691,6 +8750,13 @@ export default function createACDRouter(io) {
               ...regimeStampValues(regimeStamp),
               ...fireTagValues(shadowFireTags),
               getBetClass(shadow.type),
+              // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
+              // st === 'SHADOW' is the dynamic status gate (this site can produce ACTIVE
+              // since the 2026-08-16 promotion fix). ABSORPTION_LONG/COIL_SURGE mirror the
+              // resolver's own needsBars exclusion (acd.js ~505) -- they have their own
+              // custom resolution and never reach the wider-target branch, so tagging them
+              // would be dead value.
+              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')) ? 1.5 : null,
             ]).catch(() => {});
           }
         })();
@@ -9901,8 +9967,11 @@ export default function createACDRouter(io) {
         // notes (rigor_status is currently free-text prose, not safely machine-checkable) —
         // update this once the mechanism build persists that structured field.
         fullLivePromotion: { nActiveFloor: 20, nActiveCurrent: +live.n_active, cleared: false, note: 'Bounded-live gates above are a lower, separate bar for capped/SHADOW exposure only — full live still needs computeRigor clean=true at N>=20 real, which this has not cleared (day-clustering check still trips for this class).' },
-        mechanismBuilt: false,
-        tile: `${notes?.status || 'PROVISIONAL'} finding — not live. No real trade exit is currently affected by this.`,
+        // Wired 2026-08-17 (server/services/widerTargetWalker.js + resolveSetupsByPrice()'s
+        // wider_target_mult branch, SHADOW-origin rows only) — genuinely live now, but only
+        // in SHADOW: ACTIVE rows never carry the flag, so no real trade exit is affected.
+        mechanismBuilt: true,
+        tile: `${notes?.status || 'PROVISIONAL'} finding — SHADOW-only mechanism live, no real trade exit is affected. Accumulating real forward data toward the full-live floor below.`,
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
