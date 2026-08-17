@@ -21,7 +21,7 @@ const RECHECK_INTERVAL_DAYS = 30;
 export async function recordClaim({
   slug, claimText, sourceFile, sourceDate = null, sampleSize = null,
   winRate = null, evPerTrade = null, rigorStatus = 'not_checked', status = 'PROVISIONAL',
-  unblockCondition = null,
+  unblockCondition = null, extra = null,
 }) {
   if (!slug || !claimText || !sourceFile) {
     throw new Error('recordClaim requires slug, claimText, sourceFile');
@@ -55,10 +55,16 @@ export async function recordClaim({
   }
   const { rows } = await query(`SELECT CURRENT_DATE::text as today, (CURRENT_DATE + INTERVAL '${RECHECK_INTERVAL_DAYS} days')::date::text as next_recheck`);
   const { today, next_recheck } = rows[0];
+  // extra (2026-08-17): optional caller-defined structured fields merged into notes, for a
+  // claim whose consumer (e.g. a dashboard tile) needs data-driven detail beyond the fixed
+  // shape above -- e.g. { bounded_live_gates: [{label, result}, ...] } -- so a UI reads
+  // structured JSON instead of a hand-typed N/$ literal that goes stale on the next
+  // recordClaim() call. Kept generic/opt-in rather than growing the fixed parameter list per
+  // consumer.
   const notes = JSON.stringify({
     claim_text: claimText, source_file: sourceFile, source_date: sourceDate,
     rigor_status: rigorStatus, status, last_verified_date: today, next_recheck_due: next_recheck,
-    unblock_condition: unblockCondition,
+    unblock_condition: unblockCondition, ...(extra || {}),
   });
   await query(`
     INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, notes)

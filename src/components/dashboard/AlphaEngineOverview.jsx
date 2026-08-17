@@ -626,6 +626,75 @@ function RosterRebuildPanel() {
   );
 }
 
+// Runner-trail / wider-target finding (2026-08-17) — visibility-only tile for the "let
+// winners run" thread's PROVISIONAL, SHADOW/bounded-live finding (docs/OPEN_THREADS.md's
+// 2026-08-17 entries). Explicitly NOT live — no real trade exit is currently affected by
+// this. Exists so the finding is visible while it accumulates real forward data instead of
+// sitting invisible in performance_audit. Same read-only/descriptive convention as
+// RigorStabilityPanel/RosterRebuildPanel above.
+function RunnerWiderTargetPanel() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_URL}/acd/runner-wider-target-status`).then(r => r.json()).then(d => { if (!d.error && d.found) setData(d); }).catch(() => {});
+  }, []);
+
+  if (!data) return null; // no claim recorded yet, or still loading -- don't show an empty section
+
+  const progressPct = Math.min(100, Math.round(100 * data.fullLivePromotion.nActiveCurrent / data.fullLivePromotion.nActiveFloor));
+
+  return (
+    <div style={S.section}>
+      <div style={S.sectionTitle}>Runner Extension — Wider Target on Fast-Resolving Trades</div>
+      <div style={{ ...S.card, padding: '10px 14px', marginBottom: 10, borderColor: '#fbbf2440' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#fbbf24' }}>{data.status} — not live</span>
+          <span style={{ fontSize: 11, color: '#64748b' }}>backtested {data.headline.backtestDate}</span>
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8' }}>{data.tile}</div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, fontFamily: 'monospace', color: data.headline.evPerTrade >= 0 ? '#4ade80' : '#f87171' }}>
+          {data.headline.evPerTrade != null ? `${data.headline.evPerTrade >= 0 ? '+' : ''}$${data.headline.evPerTrade.toFixed(2)}` : 'n/a'}
+        </div>
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>mean delta/trade vs. fixed-T1 exit, cross-family backtest (N={data.headline.sampleSizeAtBacktest})</div>
+      </div>
+
+      <div style={{ ...S.card, padding: '10px 14px', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>Bounded-live gate (backtest-time snapshot)</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {data.gates.map(g => (
+            <div key={g.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+              <span style={{ color: '#cbd5e1' }}>{g.label}</span>
+              <span style={{ color: '#4ade80', fontWeight: 700 }}>{g.result}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ ...S.card, padding: '10px 14px', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>Live population (grows as real fast-resolving trades happen)</div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 8 }}>
+          {data.liveNow.nReal} real (ACTIVE+SHADOW) fast-resolving trades now on record, across {data.liveNow.distinctDays} distinct days — {data.liveNow.nActive} of those are live-visible (ACTIVE).
+        </div>
+        <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>Toward full-live promotion floor (N≥20 real ACTIVE, same bar as every entry signal):</div>
+        <div style={{ background: '#0f172a', borderRadius: 4, height: 8, overflow: 'hidden', marginBottom: 4 }}>
+          {/* Green only once fullLivePromotion.cleared is actually true -- N-floor-met alone
+              (progressPct>=100) is not "cleared" (still needs a clean rigor pass), so a full
+              green bar here would misleadingly read as "done." */}
+          <div style={{ width: `${progressPct}%`, height: '100%', background: data.fullLivePromotion.cleared ? '#4ade80' : '#3b82f6' }} />
+        </div>
+        <div style={{ fontSize: 11, color: '#64748b' }}>{data.fullLivePromotion.nActiveCurrent} / {data.fullLivePromotion.nActiveFloor} — {data.fullLivePromotion.note}</div>
+      </div>
+
+      <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
+        Fast-resolving = original T1 target hit in ≤4 bars. Widening the exit target 1.5x on these shows a real, cross-family-validated positive in backtest (survives excluding the largest setup_type family and the single largest trading day), but clears a lower "bounded-live" bar than the full-live standard — this tile tracks progress, it does not gate anything. Mechanism build status: {data.mechanismBuilt ? 'built' : 'not yet built'}.
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, accent }) {
   return (
     <div style={{ ...S.card, borderColor: accent ? accent + '40' : '#1e293b' }}>
@@ -829,6 +898,9 @@ export default function AlphaEngineOverview() {
 
       {/* Roster Rebuild (bet_class, roster cap, correlation monitor) */}
       <RosterRebuildPanel />
+
+      {/* Runner Extension — wider-target finding on fast-resolving trades */}
+      <RunnerWiderTargetPanel />
 
       {/* Size Multiplier Stack */}
       <div style={S.section}>

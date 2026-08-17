@@ -9853,6 +9853,60 @@ export default function createACDRouter(io) {
     } catch (err) { res.status(500).json({ error: err.message }); }
   });
 
+  // Runner-trail / wider-target finding status (2026-08-17) — the read-back half of the
+  // "let winners run" thread (docs/OPEN_THREADS.md's 2026-08-17 entries). PROVISIONAL,
+  // SHADOW/bounded-live only, NOT wired into any live exit yet — this endpoint exists so
+  // the finding is visible while it accumulates real forward data instead of sitting
+  // invisible in performance_audit (the "feels like a black box" gap flagged this session).
+  // Deliberately read-only/descriptive, same convention as rigor-stability-coverage and
+  // roster-rebuild-status above — does not gate or size anything live.
+  router.get('/acd/runner-wider-target-status', async (req, res) => {
+    try {
+      const [claimQ, liveCountQ] = await Promise.all([
+        query(`
+          SELECT sample_size, ev_per_trade, run_date::text, notes
+          FROM performance_audit
+          WHERE signal_type='RESEARCH_CLAIM' AND signal_name='velocity_fast_wider_target_positive_provisional'
+          ORDER BY run_date DESC LIMIT 1
+        `),
+        query(`
+          SELECT
+            COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) as n_real,
+            COUNT(*) FILTER (WHERE origin_status = 'ACTIVE') as n_active,
+            COUNT(DISTINCT trade_date) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) as distinct_days
+          FROM active_setups
+          WHERE resolution = 'TARGET_HIT' AND bars_to_resolution <= 4
+        `),
+      ]);
+
+      if (!claimQ.rows.length) return res.json({ found: false });
+      const claim = claimQ.rows[0];
+      let notes = null;
+      try { notes = typeof claim.notes === 'string' ? JSON.parse(claim.notes) : claim.notes; } catch (_) {}
+      const live = liveCountQ.rows[0];
+
+      res.json({
+        found: true,
+        headline: { evPerTrade: claim.ev_per_trade != null ? +claim.ev_per_trade : null, sampleSizeAtBacktest: claim.sample_size, backtestDate: claim.run_date },
+        status: notes?.status || 'PROVISIONAL',
+        rigorStatus: notes?.rigor_status || null,
+        // Data-driven, not hand-typed (DeepSeek review, 2026-08-17) — read from the claim's
+        // own notes (scripts/record_claim.mjs's `extra` field) so this can't silently go
+        // stale the next time the claim is re-run with different numbers.
+        gates: notes?.bounded_live_gates || [],
+        liveNow: { nReal: +live.n_real, nActive: +live.n_active, distinctDays: +live.distinct_days },
+        // Full-live promotion bar is the same standard as every entry signal — N>=20 real
+        // ACTIVE-only AND a clean computeRigor() pass, not this panel's own bounded-live gates.
+        // `cleared` is hardcoded false pending a structured rigor.clean bit in the claim's
+        // notes (rigor_status is currently free-text prose, not safely machine-checkable) —
+        // update this once the mechanism build persists that structured field.
+        fullLivePromotion: { nActiveFloor: 20, nActiveCurrent: +live.n_active, cleared: false, note: 'Bounded-live gates above are a lower, separate bar for capped/SHADOW exposure only — full live still needs computeRigor clean=true at N>=20 real, which this has not cleared (day-clustering check still trips for this class).' },
+        mechanismBuilt: false,
+        tile: `${notes?.status || 'PROVISIONAL'} finding — not live. No real trade exit is currently affected by this.`,
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════
   // Unified Setup/Edge Table — single source of truth for all tradeable signals
   // ═══════════════════════════════════════════════════════════════════════
