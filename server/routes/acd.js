@@ -7154,17 +7154,41 @@ export default function createACDRouter(io) {
               const auditStats = liveStats._setupStats?.[type];
               const auditRegimeStamp = computeRegimeStamp(currentPrice, await getValueAreaRegimeMap(todayET).catch(() => ({})));
               const auditFireTags = await computeFireTags(todayET, 'RTH', etMin);
+              // breakeven_trail_never_engaged_5of6_rows_missing (found 2026-08-16): every
+              // one of the 6 _TRAIL setup_types is THIN_N in SETUP_STATUS by construction
+              // (resolveSetupType() unconditionally diverts their touches here, and
+              // liveStats._suppressedSetups includes THIN_N, not just SUPPRESS) — so every
+              // real touch of a _TRAIL type lands in THIS audit-only insert branch, never
+              // the main candidate INSERT ~8440 that actually looks up runner_trail_width.
+              // Confirmed live: all 14 real fires across all 6 variants had
+              // runner_trail_width IS NULL, silently downgrading the mechanism to an
+              // ordinary fixed-target trade under a _TRAIL label. Mirror the main path's
+              // lookup here so this branch stops being a second, forgotten dead end.
+              const auditTrailVariant = CONDITIONAL_VARIANTS[type];
+              let auditRunnerTrailWidth = null;
+              if (auditTrailVariant?.trailSignalName) {
+                const auditTrailRow = await query(
+                  `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
+                   WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
+                   ORDER BY signal_name, run_date DESC`,
+                  [auditTrailVariant.trailSignalName]
+                ).catch(() => ({ rows: [] }));
+                const auditNotes = auditTrailRow.rows[0]?.notes;
+                const auditParsed = typeof auditNotes === 'string' ? JSON.parse(auditNotes) : auditNotes;
+                auditRunnerTrailWidth = auditParsed?.trail ?? null;
+              }
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  historical_win_rate, historical_sessions, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+                  historical_win_rate, historical_sessions, runner_trail_width,
+                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${14 + i}`).join(', ')},
-                  ${FIRE_TAG_COLS.map((_, i) => `$${14 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${14 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -7174,6 +7198,7 @@ export default function createACDRouter(io) {
                 `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
                 auditExpiresAt,
                 auditStats?.wr ?? null, auditStats?.n ?? null,
+                auditRunnerTrailWidth,
                 ...regimeStampValues(auditRegimeStamp),
                 ...fireTagValues(auditFireTags),
                 getBetClass(type),
