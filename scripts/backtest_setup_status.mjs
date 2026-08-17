@@ -46,6 +46,15 @@ const SIGNAL_TYPE = 'SETUP_STATUS';
 const SUPPRESS_MIN_N   = 20;   // N≥20 satisfies the hard floor from CLAUDE.md
 const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR gate)
 
+// The "real trade" predicate — excludes synthetic BACKFILL/UNKNOWN origin_status rows and
+// MTM/RECOVERY_MTM resolutions (never a real bar-by-bar resolution). ONE shared constant, used
+// by both the main gate's queries below AND the DOW sub-pass — this exact duplication (the DOW
+// pass had its own un-synced copy of this filter) is what let the DOW gate miss the main gate's
+// 2026-08-10 real-data-scoping fix for weeks (OPEN_DECISION
+// setup_status_dow_gate_93pct_synthetic_never_rescoped, fixed 2026-08-17). Any future query
+// needing "is this a real, resolvable trade" must reuse this string, not hand-roll a copy.
+const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))`;
+
 // bet_class-level SUPPRESS override — roadmap Phase 8 I6/user-authorized 2026-08-11 action,
 // following the file's own established philosophy (see header: "fix the cron, don't build
 // an override... self-correct again automatically"). This is NOT a bolt-on override applied
@@ -160,10 +169,10 @@ async function run() {
     SELECT
       setup_type,
       COUNT(*) AS n,
-      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))) AS real_n,
+      COUNT(*) FILTER (WHERE ${REAL_TRADE_FILTER}) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
-      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_ev,
+      AVG(actual_pnl) FILTER (WHERE ${REAL_TRADE_FILTER})::float AS real_ev,
       SUM(actual_pnl)::float AS total_pnl
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
@@ -183,11 +192,11 @@ async function run() {
     SELECT
       setup_type,
       COUNT(*) AS n,
-      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))) AS real_n,
+      COUNT(*) FILTER (WHERE ${REAL_TRADE_FILTER}) AS real_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
-      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_wr,
-      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')))::float AS real_ev
+      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE ${REAL_TRADE_FILTER})::float AS real_wr,
+      AVG(actual_pnl) FILTER (WHERE ${REAL_TRADE_FILTER})::float AS real_ev
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
@@ -211,8 +220,7 @@ async function run() {
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
-      AND origin_status IN ('ACTIVE','SHADOW')
-      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
+      AND ${REAL_TRADE_FILTER}
       AND bet_class = ANY($1)
     GROUP BY bet_class
   `, [[...BET_CLASS_SUPPRESS_ENABLED]]) : { rows: [] };
@@ -539,6 +547,14 @@ async function run() {
 
   const globalSuppress = new Set(results.filter(r => r.recommendation === 'SUPPRESS').map(r => r.type));
 
+  // 2026-08-17 fix (OPEN_DECISION setup_status_dow_gate_93pct_synthetic_never_rescoped): this
+  // sub-pass never got the main gate's 2026-08-10 origin_status-scoping fix. Confirmed live: of
+  // the 267 (setup_type, dow) cells clearing blended N>=20, only 8 also clear real_n>=20 (135
+  // have real_n=0) -- the same "deciding a live SUPPRESS gate on ~93% synthetic BACKFILL data"
+  // bug the main gate already had fixed, just never migrated here. Now mirrors the main gate's
+  // real_n/real_ev three-way branch (THIN_N below the real-N floor, never SUPPRESS on blended
+  // alone) -- see CLAUDE.md's origin_status hard rule and the main gate's realN/realEv logic
+  // above (~line 366) for the identical pattern this reuses.
   const dowQ = await query(`
     SELECT
       EXTRACT(DOW FROM trade_date)::int AS dow,
@@ -546,7 +562,10 @@ async function run() {
       COUNT(*) AS n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
-      SUM(actual_pnl)::float AS total_pnl
+      SUM(actual_pnl)::float AS total_pnl,
+      COUNT(*) FILTER (WHERE ${REAL_TRADE_FILTER}) AS real_n,
+      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE ${REAL_TRADE_FILTER})::float AS real_wr,
+      AVG(actual_pnl) FILTER (WHERE ${REAL_TRADE_FILTER})::float AS real_ev
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
@@ -556,27 +575,40 @@ async function run() {
   `);
 
   // Per-(setup_type, dow) trade list for the rigor check — one query, not one per
-  // candidate (this file already has ~180 candidates to check).
+  // candidate (this file already has ~180 candidates to check). Rigor is now computed on the
+  // REAL-only population (realTradesByTypeDow), since that's what actually gates SUPPRESS below
+  // -- computing rigor on the blended population while gating on real N/EV would check the
+  // day-clustering of a population that isn't the one deciding the outcome. tradesByTypeDow
+  // (blended) is kept only for the notes JSON's informational blended-rigor readout.
   const dowTradesQ = await query(`
     SELECT setup_type, EXTRACT(DOW FROM trade_date)::int AS dow,
-           trade_date::text AS trade_date, actual_pnl::float AS pnl
+           trade_date::text AS trade_date, actual_pnl::float AS pnl,
+           (${REAL_TRADE_FILTER}) AS is_real
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
     ORDER BY setup_type, dow, trade_date ASC
   `);
   const tradesByTypeDow = new Map();
+  const realTradesByTypeDow = new Map();
   for (const r of dowTradesQ.rows) {
     const key = `${r.setup_type}_${r.dow}`;
     if (!tradesByTypeDow.has(key)) tradesByTypeDow.set(key, []);
     tradesByTypeDow.get(key).push(r);
+    if (r.is_real) {
+      if (!realTradesByTypeDow.has(key)) realTradesByTypeDow.set(key, []);
+      realTradesByTypeDow.get(key).push(r);
+    }
   }
 
-  let dowSuppressed = 0, dowWritten = 0;
+  let dowSuppressed = 0, dowWritten = 0, dowThinN = 0;
   const newDowSuppress = new Set();
   for (const r of dowQ.rows) {
     const dow = +r.dow;
     const type = r.setup_type;
     const n = +r.n, ev = +r.ev, wr = +r.wr;
+    const realN = +r.real_n;
+    const realEv = r.real_ev != null ? +r.real_ev : null;
+    const realWr = r.real_wr != null ? +r.real_wr : null;
 
     // Skip globally suppressed (already handled) and Sun/Sat.
     // DAY_TYPE_CONDITIONAL (IB_BULLISH/IB_BEARISH) are NOT skipped here — they are excluded from
@@ -584,18 +616,47 @@ async function run() {
     // acd.js checks _dowSuppressToday for IB types when building the candidates array.
     if (globalSuppress.has(type) || dow === 0 || dow === 6) continue;
 
-    const meetsNAndEv = ev < SUPPRESS_MAX_EV;
-    if (!meetsNAndEv) continue;
-
-    const trades = tradesByTypeDow.get(`${type}_${dow}`) || [];
-    const rigor = computeRigor(trades, { dateField: 'trade_date', pnlFn: t => t.pnl });
-    const shouldSuppress = rigor.clean === true;
-
     const signalName = `${type}_DOW_${dow}`;
+    const realTrades = realTradesByTypeDow.get(`${type}_${dow}`) || [];
+    const blendedTrades = tradesByTypeDow.get(`${type}_${dow}`) || [];
+    // Rigor gates the decision on the REAL population only (see comment above); blended rigor
+    // is informational-only, carried in notes for continuity with the pre-fix rows.
+    const rigor = computeRigor(realTrades, { dateField: 'trade_date', pnlFn: t => t.pnl });
+    const blendedRigor = computeRigor(blendedTrades, { dateField: 'trade_date', pnlFn: t => t.pnl });
+
+    // realN>=20 AND realEv qualifies (<-$5) but rigor isn't clean — "would have suppressed on
+    // the numbers alone, held back by rigor." Distinct from realN>=20 with realEv not even
+    // negative enough to consider (genuinely fine, not merely rigor-blocked).
+    const evWouldSuppress = realN >= SUPPRESS_MIN_N && realEv != null && realEv < SUPPRESS_MAX_EV;
+
+    let recommendation, shouldSuppress = false;
+    if (realN < SUPPRESS_MIN_N) {
+      // Same THIN_N treatment as the main gate's realN<SUPPRESS_MIN_N branch: blended N cleared
+      // the floor, real N doesn't — honest "not enough real data yet," not a suppression.
+      // Expected to be the outcome for most cells today (real data is thin at this weekday
+      // granularity) — this is the correct, intended effect of the fix, not a malfunction.
+      recommendation = 'THIN_N';
+      dowThinN++;
+    } else if (evWouldSuppress && rigor.clean === true) {
+      recommendation = 'SUPPRESS';
+      shouldSuppress = true;
+    } else {
+      recommendation = 'ACTIVE';
+    }
+
     const notes = JSON.stringify({
-      dow, dow_name: DOW_NAMES[dow], setup_type: type, n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2),
+      dow, dow_name: DOW_NAMES[dow], setup_type: type,
+      n, wr: +(wr*100).toFixed(1), ev: +ev.toFixed(2),
+      real_n: realN, real_wr: realWr != null ? +(realWr*100).toFixed(1) : null, real_ev: realEv != null ? +realEv.toFixed(2) : null,
       rigor: { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, clean: rigor.clean },
-      ...(shouldSuppress ? {} : { failed_rigor: true }),
+      // stable===null (real_n<15, too thin for the 3-way chronological check) is "not
+      // computable," distinct from stable===false ("computed, failed") — surfaced explicitly so
+      // a THIN_N/ACTIVE row doesn't read later as "failed rigor" when rigor was never evaluable.
+      ...(rigor.stable === null ? { rigor_insufficient: true } : {}),
+      blended_rigor: { distinctDates: blendedRigor.distinctDates, top5DayPct: blendedRigor.top5DayPct, clustered: blendedRigor.clustered, stable: blendedRigor.stable, clean: blendedRigor.clean },
+      // failed_rigor: numbers alone would suppress (real_n/real_ev qualify) but rigor blocked it
+      // — only meaningful when recommendation stayed ACTIVE despite evWouldSuppress being true.
+      ...(recommendation === 'ACTIVE' && evWouldSuppress ? { failed_rigor: true } : {}),
     });
 
     await query(`
@@ -609,14 +670,16 @@ async function run() {
         total_pnl      = EXCLUDED.total_pnl,
         recommendation = EXCLUDED.recommendation,
         notes          = EXCLUDED.notes
-    `, [today, DOW_SIGNAL_TYPE, signalName, n, wr, ev, +r.total_pnl, shouldSuppress ? 'SUPPRESS' : 'ACTIVE', notes]);
+    `, [today, DOW_SIGNAL_TYPE, signalName, n, wr, ev, +r.total_pnl, recommendation, notes]);
 
     if (shouldSuppress) {
-      console.log(`  DOW_SUPPRESS ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} rigor=clean`);
+      console.log(`  DOW_SUPPRESS ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} real N=${realN} real EV=$${realEv.toFixed(0)} (blended N=${n} EV=$${ev.toFixed(0)}) rigor=clean`);
       newDowSuppress.add(signalName);
       dowSuppressed++;
+    } else if (recommendation === 'THIN_N') {
+      console.log(`  DOW_THIN_N   ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} (real=${realN}) EV=$${ev.toFixed(0)} — blended N clears the floor, real N doesn't`);
     } else {
-      console.log(`  DOW_RIGOR_FAIL ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} N=${n} WR=${(wr*100).toFixed(1)}% EV=$${ev.toFixed(0)} rigor=${rigor.clustered ? 'clustered' : 'unstable'} (top5day%=${rigor.top5DayPct})`);
+      console.log(`  DOW_RIGOR_FAIL ${DOW_NAMES[dow].padEnd(4)} ${type.padEnd(38)} real N=${realN} real EV=$${realEv != null ? realEv.toFixed(0) : 'n/a'} (blended N=${n} EV=$${ev.toFixed(0)}) rigor=${rigor.clustered ? 'clustered' : rigor.stable === null ? 'insufficient' : 'unstable'} (top5day%=${rigor.top5DayPct})`);
     }
     dowWritten++;
   }
@@ -647,7 +710,7 @@ async function run() {
     }
   }
 
-  console.log(`\n[backtest_setup_status] ${dowSuppressed} DOW-specific suppressions | ${dowWritten} rows written → SETUP_STATUS_DOW`);
+  console.log(`\n[backtest_setup_status] ${dowSuppressed} DOW-specific suppressions (real-N gated) | ${dowThinN} THIN_N (real N below floor) | ${dowWritten} rows written → SETUP_STATUS_DOW`);
   await pool.end();
 }
 
