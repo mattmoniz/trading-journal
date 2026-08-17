@@ -9184,7 +9184,41 @@ export default function createACDRouter(io) {
         }
       } catch (_) { /* informational only, never block the response */ }
 
-      const summaryLines = [bigMoveLine, sigmaLine].filter(Boolean).concat(lines);
+      // Wider-target-on-fast-resolving-trades mechanism (2026-08-17) -- two lines, same
+      // try/catch-and-null-on-failure convention as bigMoveLine/sigmaLine above:
+      //   1. widerTargetHeadlineLine: always shown once the finding exists (this is
+      //      "the tile" for the user's HA view -- the finding's existence/backtest
+      //      number, not the live tally), cumulative not session-scoped like the rest of
+      //      this feed, so it doesn't disappear across the 6PM rollover.
+      //   2. widerTargetLiveLine: the live tally ("how does it behave") -- omitted
+      //      entirely at nArmed=0 (current state, no noise), matching DeepSeek's own
+      //      design call for this line.
+      let widerTargetHeadlineLine = null;
+      let widerTargetLiveLine = null;
+      try {
+        const claimQ = await query(`
+          SELECT sample_size, ev_per_trade, notes FROM performance_audit
+          WHERE signal_type='RESEARCH_CLAIM' AND signal_name='velocity_fast_wider_target_positive_provisional'
+          ORDER BY run_date DESC LIMIT 1
+        `);
+        if (claimQ.rows[0] && claimQ.rows[0].ev_per_trade != null) {
+          const ev = +claimQ.rows[0].ev_per_trade;
+          widerTargetHeadlineLine = `Wider-target research: backtest shows ${ev >= 0 ? '+' : ''}$${ev.toFixed(2)}/trade (N=${claimQ.rows[0].sample_size}) — SHADOW-only, not live.`;
+        }
+        const liveMechQ = await query(`
+          SELECT sample_size, ev_per_trade, recommendation FROM performance_audit
+          WHERE signal_type='WIDER_TARGET_LIVE_STATUS' AND signal_name='wider_target_1p5x'
+          ORDER BY run_date DESC LIMIT 1
+        `);
+        const lm = liveMechQ.rows[0];
+        if (lm && lm.sample_size > 0) {
+          const meanDelta = lm.ev_per_trade != null ? +lm.ev_per_trade : null;
+          const deltaStr = meanDelta != null && Number.isFinite(meanDelta) ? `${meanDelta >= 0 ? '+' : '-'}$${Math.abs(meanDelta).toFixed(2)}` : 'n/a';
+          widerTargetLiveLine = `Wider-target (SHADOW): ${lm.sample_size} armed, mean Δ${deltaStr} — ${lm.recommendation || 'THIN_N'}`;
+        }
+      } catch (_) { /* informational only, never block the response */ }
+
+      const summaryLines = [bigMoveLine, sigmaLine, widerTargetHeadlineLine, widerTargetLiveLine].filter(Boolean).concat(lines);
       res.json({ count: lines.length, summary_text: summaryLines.join('\n') || 'No resolved setups yet.' });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
@@ -9928,7 +9962,7 @@ export default function createACDRouter(io) {
   // roster-rebuild-status above — does not gate or size anything live.
   router.get('/acd/runner-wider-target-status', async (req, res) => {
     try {
-      const [claimQ, liveCountQ] = await Promise.all([
+      const [claimQ, liveCountQ, liveMechQ] = await Promise.all([
         query(`
           SELECT sample_size, ev_per_trade, run_date::text, notes
           FROM performance_audit
@@ -9943,6 +9977,16 @@ export default function createACDRouter(io) {
           FROM active_setups
           WHERE resolution = 'TARGET_HIT' AND bars_to_resolution <= 4
         `),
+        // Closed-loop monitoring of the LIVE mechanism's own real fired outcomes (2026-08-17,
+        // scripts/audit_wider_target_live.mjs) -- a different question from the two queries
+        // above, which describe the frozen one-time backtest and the general eligible
+        // population. This is "what has the mechanism itself actually done."
+        query(`
+          SELECT sample_size, win_rate, ev_per_trade, recommendation, run_date::text, notes
+          FROM performance_audit
+          WHERE signal_type='WIDER_TARGET_LIVE_STATUS' AND signal_name='wider_target_1p5x'
+          ORDER BY run_date DESC LIMIT 1
+        `),
       ]);
 
       if (!claimQ.rows.length) return res.json({ found: false });
@@ -9950,6 +9994,35 @@ export default function createACDRouter(io) {
       let notes = null;
       try { notes = typeof claim.notes === 'string' ? JSON.parse(claim.notes) : claim.notes; } catch (_) {}
       const live = liveCountQ.rows[0];
+
+      // liveMechanism fields are split across COLUMNS (meanDelta/winRateVsFixed/verdict/
+      // lastCheckedDate) and NOTES (everything else) -- deliberately not all read from
+      // notes, per the writer script's own schema (ev_per_trade/win_rate/recommendation
+      // are real columns, not duplicated into notes).
+      let liveMechanism = null;
+      if (liveMechQ.rows.length) {
+        const lm = liveMechQ.rows[0];
+        let lmNotes = null;
+        try { lmNotes = typeof lm.notes === 'string' ? JSON.parse(lm.notes) : lm.notes; } catch (_) {}
+        liveMechanism = {
+          verdict: lm.recommendation,
+          nArmed: lm.sample_size,
+          meanDelta: lm.ev_per_trade != null ? +lm.ev_per_trade : null,
+          // win_rate is stored 0-1 (standing convention) -- *100 for this API's own display
+          // field, matching how /performance-audit/unified's confluence query does the same
+          // conversion for its consumers.
+          winRateVsFixed: lm.win_rate != null ? +(lm.win_rate * 100).toFixed(1) : null,
+          lastCheckedDate: lm.run_date,
+          nFlagged: lmNotes?.n_flagged ?? null,
+          nExcluded: lmNotes?.n_excluded ?? null,
+          nWiderTargetHit: lmNotes?.n_wider_target_hit ?? null,
+          nWiderStopHit: lmNotes?.n_wider_stop_hit ?? null,
+          nWiderTimeExpired: lmNotes?.n_wider_time_expired ?? null,
+          medianDelta: lmNotes?.median_delta ?? null,
+          rigor: lmNotes?.rigor ?? null,
+          deltaSinceLastCheck: lmNotes?.delta_since_last_check ?? null,
+        };
+      }
 
       res.json({
         found: true,
@@ -9972,6 +10045,10 @@ export default function createACDRouter(io) {
         // in SHADOW: ACTIVE rows never carry the flag, so no real trade exit is affected.
         mechanismBuilt: true,
         tile: `${notes?.status || 'PROVISIONAL'} finding — SHADOW-only mechanism live, no real trade exit is affected. Accumulating real forward data toward the full-live floor below.`,
+        // Closed-loop monitoring result (2026-08-17) -- what the live mechanism has
+        // actually done, distinct from the frozen backtest headline and the eligible-
+        // population count above. null until the weekly recheck script has run at least once.
+        liveMechanism,
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

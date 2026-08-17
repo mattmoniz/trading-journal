@@ -1,0 +1,249 @@
+// Closed-loop monitoring for the wider-target-on-fast-resolving-trades mechanism
+// (docs/OPEN_THREADS.md 2026-08-17, server/services/widerTargetWalker.js). Design +
+// scope both DeepSeek-reviewed twice before this was written (design pass, then a
+// scope pass that caught a real pre-existing direction bug -- see below).
+//
+// Reads the REAL, live-fired outcomes of the mechanism (not the frozen one-time backtest,
+// RESEARCH_CLAIM velocity_fast_wider_target_positive_provisional, which stays untouched as
+// the historical reference) and asks: is the SHADOW mechanism reproducing its backtested
+// positive delta, or has it drifted? Writes one performance_audit row per run
+// (signal_type='WIDER_TARGET_LIVE_STATUS') and flags an OPEN_DECISION only on a verdict
+// TRANSITION (never auto-promotes -- the mechanism is SHADOW-only by construction, ACTIVE
+// rows structurally cannot carry the flag, so a REPRODUCED verdict only ever surfaces a
+// human decision to consider building the ACTIVE-row wiring).
+//
+// Counterfactual baseline is deterministic, no bar-replay needed: stepWiderTarget() only
+// arms when T1 is hit cleanly with no same-bar stop conflict, so the fixed-T1 exit the
+// plain branch would have produced is exactly |t1_level - entry| * $/pt - commission,
+// computable from the row alone.
+//
+// Real pre-existing bug worked around here (OPEN_DECISION islongsetup_gap_variant_direction_bug):
+// resolveSetupsByPrice()'s isLongSetup() helper misclassifies _GAP_UP/_GAP_DOWN conditional
+// variants (e.g. WPP_FADE_SHORT_GAP_UP reads as LONG via a bare '_UP' substring match) --
+// any armed row where the correct inferDirection() disagrees with isLongSetup() has a
+// sign-corrupted stored actual_pnl and is excluded from the mean/verdict, not silently folded in.
+//
+// Run: node scripts/audit_wider_target_live.mjs
+import { query } from '../server/db.js';
+import { inferDirection } from '../server/config/setupTypes.js';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { flagDecision } from './flag_decision.mjs';
+
+const SIGNAL_TYPE = 'WIDER_TARGET_LIVE_STATUS';
+const SIGNAL_NAME = 'wider_target_1p5x';
+const RECHECK_OF = 'velocity_fast_wider_target_positive_provisional';
+const MIN_N = 20;
+const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+
+// isLongSetup() is intentionally NOT imported -- it's the local (buggy for _GAP_* variants)
+// helper inside acd.js, not exported. Reproduced verbatim here ONLY to detect disagreement
+// with inferDirection(), never to compute anything trusted.
+function isLongSetupBuggy(setupType) {
+  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
+}
+
+function median(values) {
+  if (!values.length) return null;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function mean(values) {
+  return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+}
+
+async function main() {
+  const armedRes = await query(`
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at,
+      entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
+      stop_level::float as stop_level, t1_level::float as t1_level,
+      wider_target_mult::float as wider_target_mult,
+      price_at_resolution::float as price_at_resolution, actual_pnl::float as actual_pnl,
+      resolution_method
+    FROM active_setups
+    WHERE resolution_method IN ('WIDER_TARGET_HIT','WIDER_STOP_HIT','WIDER_TIME_EXPIRED')
+      AND origin_status = 'SHADOW'
+    ORDER BY fired_at ASC
+  `);
+
+  const flaggedTotalRes = await query(`
+    SELECT COUNT(*)::int as n FROM active_setups
+    WHERE wider_target_mult IS NOT NULL AND origin_status = 'SHADOW'
+      AND status IN ('RESOLVED', 'EXPIRED')
+  `);
+  const flaggedTotal = flaggedTotalRes.rows[0].n;
+
+  // Direction cross-check + P&L reconstruction. Excludes (not silently corrects) any row
+  // where the correct direction disagrees with the mechanism's own (sign-corrupted
+  // actual_pnl -- see header). Also reconstructs actual_pnl from price_at_resolution
+  // independently of the stored value, per DeepSeek's "strictly stronger check" review --
+  // a mismatch here means something OTHER than the known direction bug corrupted the row,
+  // and must not be silently trusted either.
+  const excludedRows = [];
+  const validRows = [];
+  for (const r of armedRes.rows) {
+    const correctDirection = inferDirection(r.setup_type);
+    const buggyIsLong = isLongSetupBuggy(r.setup_type);
+    const buggyDirection = buggyIsLong ? 'LONG' : 'SHORT';
+    if (correctDirection === null) {
+      excludedRows.push({ ...r, reason: 'inferDirection_null' });
+      continue;
+    }
+    if (correctDirection !== buggyDirection) {
+      excludedRows.push({ ...r, reason: 'direction_mismatch_islongsetup_bug', correctDirection, buggyDirection });
+      continue;
+    }
+    const long = correctDirection === 'LONG';
+    const entry = r.entry_zone_high ?? r.entry_zone_low;
+    const fixedT1Pnl = Math.round(((long ? r.t1_level - entry : entry - r.t1_level) * PNL_PER_POINT - COMMISSION) * 100) / 100;
+    // Independent reconstruction from price_at_resolution, cross-checked against the
+    // stored actual_pnl -- a stronger check than re-deriving delta from the same inputs.
+    const reconstructedPnl = r.price_at_resolution != null
+      ? Math.round(((long ? r.price_at_resolution - entry : entry - r.price_at_resolution) * PNL_PER_POINT - COMMISSION) * 100) / 100
+      : null;
+    if (reconstructedPnl != null && Math.abs(reconstructedPnl - r.actual_pnl) > 0.02) {
+      excludedRows.push({ ...r, reason: 'actual_pnl_mismatch_price_reconstruction', reconstructedPnl });
+      continue;
+    }
+    const delta = Math.round((r.actual_pnl - fixedT1Pnl) * 100) / 100;
+    validRows.push({ ...r, direction: correctDirection, entry, fixedT1Pnl, delta });
+  }
+
+  const armedN = validRows.length;
+  console.log(`Armed (resolution_method IN WIDER_*): ${armedRes.rows.length} raw, ${armedN} valid, ${excludedRows.length} excluded.`);
+  if (excludedRows.length) {
+    console.log('Excluded rows (reason):', excludedRows.map(r => `id=${r.id} ${r.setup_type} (${r.reason})`).join('; '));
+  }
+  console.log(`Flagged total (wider_target_mult set, terminal): ${flaggedTotal}. Never-armed: ${flaggedTotal - armedRes.rows.length}.`);
+
+  if (armedN === 0) {
+    console.log('Zero valid armed rows -- writing THIN_N with N=0.');
+  } else {
+    // Mandatory first-run self-check: print the full reconstruction for the first valid
+    // armed row so this is verified fresh every run, not trusted from a one-time manual check.
+    const first = validRows[0];
+    console.log(`Self-check (row id=${first.id}, ${first.setup_type}): entry=${first.entry} t1=${first.t1_level} storedPnl=${first.actual_pnl} fixedT1Pnl=${first.fixedT1Pnl} delta=${first.delta}`);
+    const recheckDelta = Math.round((first.actual_pnl - first.fixedT1Pnl) * 100) / 100;
+    if (recheckDelta !== first.delta) {
+      console.error(`SELF-CHECK FAILED: recomputed delta ${recheckDelta} != stored ${first.delta}. Aborting without writing.`);
+      process.exit(1);
+    }
+  }
+
+  const deltas = validRows.map(r => r.delta);
+  const meanDelta = mean(deltas);
+  const medianDelta = median(deltas);
+  // 0-1 scale, matching this codebase's standing performance_audit.win_rate convention
+  // (CLAUDE.md/ANTIGRAVITY_CONSTRAINTS.md: "0-1 scale... do not store on 0-100 scale") --
+  // caught in DeepSeek's code review: storing a raw percent here would be self-consistent
+  // with this script's own two consumers today, but would silently double-multiply once
+  // the generic Unified Signal Table (/api/performance-audit/unified) reads this
+  // signal_type's win_rate and applies its own *100 for display.
+  const winRateVsFixed = armedN ? +(deltas.filter(d => d > 0).length / armedN).toFixed(3) : null;
+
+  const events = validRows.map(r => ({ trade_date: r.trade_date, delta: r.delta }));
+  const rigor = armedN ? computeRigor(events, { dateField: 'trade_date', pnlFn: e => e.delta }) : null;
+
+  // Day-sign majority + largest-day-exclusion -- reported only, never gating (per design:
+  // selection bias isn't the live risk here, the population isn't a cherry-picked subset).
+  let daySignMajority = null, largestDayShare = null, survivesLargestDayExclusion = null;
+  if (armedN) {
+    const byDay = {};
+    for (const r of validRows) (byDay[r.trade_date] ||= []).push(r.delta);
+    const dayEntries = Object.entries(byDay).map(([d, ds]) => ({ date: d, n: ds.length, mean: mean(ds) }));
+    daySignMajority = +(100 * dayEntries.filter(d => d.mean > 0).length / dayEntries.length).toFixed(1);
+    const sortedByN = [...dayEntries].sort((a, b) => b.n - a.n);
+    largestDayShare = +(100 * sortedByN[0].n / armedN).toFixed(1);
+    const withoutLargest = validRows.filter(r => r.trade_date !== sortedByN[0].date).map(r => r.delta);
+    survivesLargestDayExclusion = withoutLargest.length ? mean(withoutLargest) > 0 : null;
+  }
+
+  const bySetupType = {};
+  for (const r of validRows) (bySetupType[r.setup_type] = (bySetupType[r.setup_type] || 0) + 1);
+  const topEntry = Object.entries(bySetupType).sort((a, b) => b[1] - a[1])[0];
+  const topSetupType = topEntry ? topEntry[0] : null;
+  const topSetupTypeShare = topEntry ? +(100 * topEntry[1] / armedN).toFixed(1) : null;
+
+  const nWiderTargetHit = validRows.filter(r => r.resolution_method === 'WIDER_TARGET_HIT').length;
+  const nWiderStopHit = validRows.filter(r => r.resolution_method === 'WIDER_STOP_HIT').length;
+  const nWiderTimeExpired = validRows.filter(r => r.resolution_method === 'WIDER_TIME_EXPIRED').length;
+
+  let verdict;
+  if (armedN < MIN_N) verdict = 'THIN_N';
+  else if (meanDelta <= 0) verdict = 'CONTRADICTED';
+  else if (rigor.clean) verdict = 'REPRODUCED';
+  else verdict = 'UNSTABLE';
+
+  const today = (await query(`SELECT CURRENT_DATE::text as d`)).rows[0].d;
+
+  // Prior run (most recent before today) -- for delta_since_last_check and transition detection.
+  const priorRes = await query(`
+    SELECT run_date::text, recommendation, notes FROM performance_audit
+    WHERE signal_type=$1 AND signal_name=$2 AND run_date < $3
+    ORDER BY run_date DESC LIMIT 1
+  `, [SIGNAL_TYPE, SIGNAL_NAME, today]);
+  const prior = priorRes.rows[0] || null;
+  let priorNotes = null;
+  try { priorNotes = prior?.notes ? (typeof prior.notes === 'string' ? JSON.parse(prior.notes) : prior.notes) : null; } catch (_) {}
+  const nAtLastCheck = priorNotes?.n_armed ?? 0;
+  const deltaSinceLastCheck = armedN - nAtLastCheck;
+
+  const notes = {
+    recheck_of: RECHECK_OF,
+    n_flagged: flaggedTotal,
+    n_armed: armedN,
+    n_armed_raw: armedRes.rows.length,
+    n_excluded: excludedRows.length,
+    n_wider_target_hit: nWiderTargetHit,
+    n_wider_stop_hit: nWiderStopHit,
+    n_wider_time_expired: nWiderTimeExpired,
+    n_flagged_never_armed: flaggedTotal - armedRes.rows.length,
+    median_delta: medianDelta,
+    day_sign_majority: daySignMajority,
+    largest_day_share: largestDayShare,
+    top_setup_type: topSetupType,
+    top_setup_type_share: topSetupTypeShare,
+    rigor: rigor ? { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, thirds: rigor.thirds, clean: rigor.clean } : null,
+    survives_largest_day_exclusion: survivesLargestDayExclusion,
+    n_at_last_check: nAtLastCheck,
+    delta_since_last_check: deltaSinceLastCheck,
+    win_rate_semantics: 'the win_rate COLUMN (0-1 scale) is the fraction of armed rows where delta > fixed-T1 counterfactual, not a classic win rate -- multiply by 100 for display, per this codebase\'s standing win_rate convention',
+  };
+
+  await query(`
+    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
+    VALUES ($1, 0, $2, $3, $4, $5, $6, $7, $8, $9)
+    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
+      SET sample_size=EXCLUDED.sample_size, win_rate=EXCLUDED.win_rate, ev_per_trade=EXCLUDED.ev_per_trade,
+          total_pnl=EXCLUDED.total_pnl, recommendation=EXCLUDED.recommendation, notes=EXCLUDED.notes
+  `, [today, SIGNAL_TYPE, SIGNAL_NAME, armedN, winRateVsFixed, meanDelta, deltas.reduce((a, b) => a + b, 0), verdict, JSON.stringify(notes)]);
+
+  console.log(`\nVerdict: ${verdict} (N=${armedN}, meanDelta=${meanDelta}, rigor.clean=${rigor?.clean})`);
+  console.log(`Persisted to performance_audit (${SIGNAL_TYPE}/${SIGNAL_NAME}).`);
+
+  // Flag a human decision only on a genuine verdict TRANSITION -- comparing against the
+  // prior run's own stored recommendation is sufficient (and correct even across a
+  // resolved-then-reopened OPEN_DECISION, per DeepSeek's review); no listDecisions() call.
+  const priorVerdict = prior?.recommendation ?? null;
+  if (verdict === 'REPRODUCED' && priorVerdict !== 'REPRODUCED') {
+    await flagDecision({
+      slug: 'wider_target_live_recheck_cleared_promotion_consideration',
+      priority: 'MEDIUM',
+      sourceFile: 'scripts/audit_wider_target_live.mjs',
+      decisionText: `The SHADOW-only wider-target mechanism's REAL, live-fired outcomes now reproduce its backtested positive delta: N=${armedN} armed trades, mean delta=$${meanDelta?.toFixed(2)}/trade vs. the fixed-T1 counterfactual, computeRigor clean (stable=${rigor.stable}, not day-clustered, top5DayPct=${rigor.top5DayPct}%). This is the live confirmation the original backtest (RESEARCH_CLAIM ${RECHECK_OF}) needed before any promotion could be considered. Consider building the ACTIVE-row wiring (a real-capital code change, NOT done automatically by this script or any other) -- this decision only surfaces the option, it does not act on it.`,
+    });
+    console.log('Flagged wider_target_live_recheck_cleared_promotion_consideration (transition into REPRODUCED).');
+  } else if (verdict === 'CONTRADICTED' && priorVerdict !== 'CONTRADICTED') {
+    await flagDecision({
+      slug: 'wider_target_live_recheck_contradicted',
+      priority: 'MEDIUM',
+      sourceFile: 'scripts/audit_wider_target_live.mjs',
+      decisionText: `The SHADOW-only wider-target mechanism's REAL, live-fired outcomes now CONTRADICT its backtested positive delta: N=${armedN} armed trades, mean delta=$${meanDelta?.toFixed(2)}/trade vs. the fixed-T1 counterfactual (<=0, wrong direction). MEDIUM priority not HIGH -- this is zero-capital SHADOW tracking, nothing real is at risk, so urgency is low. Consider removing the wider_target_mult flag from the 3 insert sites (server/routes/acd.js) if this persists across further rechecks.`,
+    });
+    console.log('Flagged wider_target_live_recheck_contradicted (transition into CONTRADICTED).');
+  }
+}
+
+main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

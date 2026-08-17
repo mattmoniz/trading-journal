@@ -71,6 +71,10 @@ echo "=== Weekly backtest run: $(date) ==="
 # --- Audit pipelines ---
 /usr/bin/node scripts/level_fade_audit.mjs
 /usr/bin/node scripts/audit_mae_mfe.mjs
+# Wider-target-on-fast-resolving-trades mechanism (docs/OPEN_THREADS.md 2026-08-17) --
+# closed-loop recheck of the SHADOW mechanism's real live outcomes vs. the frozen
+# one-time backtest (RESEARCH_CLAIM velocity_fast_wider_target_positive_provisional).
+/usr/bin/node scripts/audit_wider_target_live.mjs
 # 2D_POC/PD2_VAH/PD2_VAL confirmed-negative-EV recheck (RESEARCH_CLAIM 2d_poc_fade_no_edge)
 # — also writes real SETUP_STATUS rows so the live unified suppression pipeline stays
 # correctly gated even though these types have ~0 real active_setups history for

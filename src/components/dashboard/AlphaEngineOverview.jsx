@@ -688,6 +688,43 @@ function RunnerWiderTargetPanel() {
         <div style={{ fontSize: 11, color: '#64748b' }}>{data.fullLivePromotion.nActiveCurrent} / {data.fullLivePromotion.nActiveFloor} — {data.fullLivePromotion.note}</div>
       </div>
 
+      {/* Live mechanism results (2026-08-17) -- what the mechanism has ACTUALLY done on
+          real fired trades, distinct from the frozen backtest headline and the eligible-
+          population count above. Rechecked weekly (scripts/audit_wider_target_live.mjs). */}
+      <div style={{ ...S.card, padding: '10px 14px', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: '#e2e8f0', marginBottom: 8 }}>Live mechanism results (real fired outcomes, rechecked weekly)</div>
+        {!data.liveMechanism ? (
+          <div style={{ fontSize: 11, color: '#64748b' }}>Not yet checked — the weekly recheck script hasn't run since this was built.</div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={S.badge(
+                data.liveMechanism.verdict === 'REPRODUCED' ? '#4ade80' : data.liveMechanism.verdict === 'CONTRADICTED' ? '#f87171' : '#fbbf24',
+                (data.liveMechanism.verdict === 'REPRODUCED' ? '#4ade80' : data.liveMechanism.verdict === 'CONTRADICTED' ? '#f87171' : '#fbbf24') + '18'
+              )}>{data.liveMechanism.verdict}</span>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>last checked {data.liveMechanism.lastCheckedDate}</span>
+            </div>
+            {data.liveMechanism.nArmed === 0 ? (
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Zero real trades have armed the mechanism yet ({data.liveMechanism.nFlagged ?? 0} flagged eligible so far) — too thin to say anything. This is expected right after build; watch this space fill in.</div>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+                  {data.liveMechanism.nArmed} armed (of {data.liveMechanism.nFlagged} flagged{data.liveMechanism.nExcluded ? `, ${data.liveMechanism.nExcluded} excluded — see below` : ''}) — {data.liveMechanism.nWiderTargetHit} widened-won, {data.liveMechanism.nWiderStopHit} widened-lost, {data.liveMechanism.nWiderTimeExpired} timed out.
+                </div>
+                <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 4 }}>
+                  mean delta vs. fixed-T1: <strong style={{ color: data.liveMechanism.meanDelta >= 0 ? '#4ade80' : '#f87171' }}>{data.liveMechanism.meanDelta != null ? `${data.liveMechanism.meanDelta >= 0 ? '+' : ''}$${data.liveMechanism.meanDelta.toFixed(2)}` : 'n/a'}</strong>
+                  {data.liveMechanism.medianDelta != null && <> (median ${data.liveMechanism.medianDelta.toFixed(2)})</>}
+                  {data.liveMechanism.winRateVsFixed != null && <> · {data.liveMechanism.winRateVsFixed}% beat the fixed target</>}
+                </div>
+                {data.liveMechanism.deltaSinceLastCheck != null && data.liveMechanism.deltaSinceLastCheck !== 0 && (
+                  <div style={{ fontSize: 11, color: '#64748b' }}>+{data.liveMechanism.deltaSinceLastCheck} armed since last check</div>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
+
       <div style={{ fontSize: 11, color: '#64748b', lineHeight: 1.5 }}>
         Fast-resolving = original T1 target hit in ≤4 bars. Widening the exit target 1.5x on these shows a real, cross-family-validated positive in backtest (survives excluding the largest setup_type family and the single largest trading day), but clears a lower "bounded-live" bar than the full-live standard — this tile tracks progress, it does not gate anything. Mechanism build status: {data.mechanismBuilt ? 'built' : 'not yet built'}.
       </div>
