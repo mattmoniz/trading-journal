@@ -16,17 +16,22 @@ Classification: PostLossCooldown = DECISION-RELEVANT. LiveReadPanel = DECISION-R
 
 ---
 
-## 2. GLOBAL MODALS (5 modal/banner interrupts)
+## 2. GLOBAL MODALS (4 modal/banner interrupts)
 
 | Modal | Trigger Condition | Action Required |
 |---|---|---|
 | DLLBlockingBanner | Daily loss limit hit on any account | Blocks — must stop |
 | ProfitGivebackBanner | Profit-lock threshold breached (gave back X% of peak) | Warning — consider stopping |
-| OnePMReminderModal | Clock hits 1 PM ET | Reminds to check 1 PM P&L vs rule |
 | UpAndDoneNudge | P&L hits "up and done" threshold | Nudge to stop trading |
 | SetupEventModal | Trade entry detected | Prompt to tag setup |
 
-Classification: All 5 = DECISION-RELEVANT (active intervention logic).
+Classification: All 4 = DECISION-RELEVANT (active intervention logic).
+
+**OnePMReminderModal removed 2026-08-18** — a fixed 1:00 PM ET cron-fired modal citing a
+hand-typed "100% of your losing days were traded past 1 PM" stat that was never derived from
+a real query, violating the standing no-hand-typed-stat rule. Removed along with its backend
+cron job, socket event, and `1PM_REMINDER` event_type — see ARCHITECTURE.md's risk-guardrails
+row and CLAUDE.md's "never hand-type a WR%/N/$ literal" hard rule.
 
 ---
 

@@ -122,48 +122,6 @@ function ProfitGivebackBanner({ status, onDismiss }) {
   );
 }
 
-// ==================== 1PM STOP REMINDER (full-screen, requires acknowledgment) ====================
-function OnePMReminderModal({ pnlAtReminder, onAck }) {
-  const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
-  const isGreen = (pnlAtReminder || 0) >= 0;
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 99998, background: 'rgba(10,10,15,0.95)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}>
-      <div style={{ maxWidth: 520, width: '90vw', background: '#0f1520', border: '2px solid #3b82f6', borderRadius: 16, padding: '40px 44px', boxShadow: '0 0 60px rgba(59,130,246,0.15)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
-          <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(59,130,246,0.12)', border: '2px solid #3b82f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>⏰</div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.12em', color: '#3b82f6', textTransform: 'uppercase', marginBottom: 2 }}>1:00 PM ET</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#bfdbfe', letterSpacing: '-0.01em' }}>Your Window Is Over</div>
-          </div>
-        </div>
-        <div style={{ fontSize: 15, color: '#94a3b8', lineHeight: 1.8, marginBottom: 24 }}>
-          Your data: <strong style={{ color: '#f8fafc' }}>100% of your losing days were traded past 1 PM.</strong> That is not a coincidence — it is the pattern. The edge disappears after noon.
-        </div>
-        {pnlAtReminder != null && (
-          <div style={{ background: '#111827', borderRadius: 8, padding: '14px 18px', marginBottom: 24, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 13, color: '#94a3b8' }}>P&L right now:</span>
-            <span style={{ fontSize: 20, fontWeight: 800, color: isGreen ? '#22c55e' : '#ef4444', fontFamily: 'monospace' }}>{fmt$(pnlAtReminder)}</span>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={() => onAck('STOP')}
-            style={{ flex: 2, padding: '14px 0', borderRadius: 8, border: 'none', background: '#1d4ed8', color: '#fff', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
-          >
-            I'm done — closing out
-          </button>
-          <button
-            onClick={() => onAck('CONTINUE')}
-            style={{ flex: 1, padding: '14px 0', borderRadius: 8, border: '1px solid rgba(100,116,139,0.4)', background: 'transparent', color: '#94a3b8', fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
-          >
-            Continue (logged)
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ==================== UP-AND-DONE NUDGE (non-blocking, dismissible) ====================
 function UpAndDoneNudge({ status, onStop, onDismiss }) {
   const fmt$ = (n) => `${n >= 0 ? '+' : ''}$${fmtP(Math.abs(n))}`;
@@ -391,8 +349,6 @@ function App() {
   const [dllBannerDismissed, setDllBannerDismissed] = useState(false);
   const [profitLockBannerDismissed, setProfitLockBannerDismissed] = useState(false);
   const [profitLockStatus, setProfitLockStatus] = useState(null);
-  const [show1PMModal, setShow1PMModal] = useState(false);
-  const [onePMChoice, setOnePMChoice] = useState(null);
   const [upAndDoneDismissed, setUpAndDoneDismissed] = useState(false);
   const upAndDoneShownRef = React.useRef(false);
   const syncTimeoutRef = React.useRef(null);
@@ -493,11 +449,6 @@ function App() {
       }
     });
 
-    socket.on('1pm-reminder', (data) => {
-      setProfitLockStatus(prev => prev ? { ...prev, _1pmPnl: data.pnlAtReminder } : prev);
-      setShow1PMModal(true);
-    });
-
     return () => socket.disconnect();
   }, []);
 
@@ -562,15 +513,9 @@ function App() {
   const showUpAndDone = profitLockStatus?.armed && !profitLockStatus?.fired && !upAndDoneDismissed
     && upAndDoneShownRef.current && profitLockStatus?.date === _todayDateET && _etHour < 16;
 
-  const handle1PMAck = async (choice) => {
-    setOnePMChoice(choice);
-    setShow1PMModal(false);
-    try { await fetch(`${API_URL}/profit-lock/1pm-ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice }) }); } catch (_) {}
-  };
-
   const handleUpAndDoneStop = async () => {
     setUpAndDoneDismissed(true);
-    try { await fetch(`${API_URL}/profit-lock/1pm-ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ choice: 'STOP_UPANDDONE' }) }); } catch (_) {}
+    try { await fetch(`${API_URL}/profit-lock/upanddone-ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }); } catch (_) {}
   };
 
   return (
@@ -578,7 +523,6 @@ function App() {
     <div className="app-container">
       {isDLLBannerActive && <DLLBlockingBanner hits={dllStatus.hitsAccounts} allAccounts={dllStatus.accounts} onDismiss={() => setDllBannerDismissed(true)} />}
       {isProfitLockFired && !isDLLBannerActive && <ProfitGivebackBanner status={profitLockStatus} onDismiss={() => setProfitLockBannerDismissed(true)} />}
-      {show1PMModal && onePMChoice === null && <OnePMReminderModal pnlAtReminder={profitLockStatus?._1pmPnl ?? profitLockStatus?.currentPnl} onAck={handle1PMAck} />}
       {showUpAndDone && <UpAndDoneNudge status={profitLockStatus} onStop={handleUpAndDoneStop} onDismiss={() => setUpAndDoneDismissed(true)} />}
       <Sidebar
         currentView={currentView}

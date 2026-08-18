@@ -639,24 +639,6 @@ httpServer.listen(PORT, () => {
     } catch (e) { console.error('[auto-import 4PM] Error:', e.message); }
   }, { timezone: 'America/New_York' });
 
-  // 1PM Stop reminder — Mon–Fri
-  cron.schedule('0 13 * * 1-5', async () => {
-    try {
-      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const today = nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      const pnlNow = (await query(`SELECT COALESCE(SUM(pnl),0)::float as pnl FROM trades WHERE log_date=$1`, [today])).rows[0]?.pnl || 0;
-      // Upsert 1PM event log (reminder is always sent, user_choice set when acknowledged)
-      await query(
-        `INSERT INTO profit_lock_events (event_date, event_type, current_pnl)
-         VALUES ($1, '1PM_REMINDER', $2)
-         ON CONFLICT DO NOTHING`,
-        [today, pnlNow]
-      ).catch(() => {});
-      if (io) io.emit('1pm-reminder', { pnlAtReminder: pnlNow, time: new Date().toISOString() });
-      console.log(`[1PM-stop] Reminder fired — P&L at 1PM: $${pnlNow >= 0 ? '+' : ''}${pnlNow.toFixed(0)}`);
-    } catch (e) { console.error('[1PM-stop] Error:', e.message); }
-  }, { timezone: 'America/New_York' });
-
   // Pattern Memory — 4:05 PM ET Mon–Fri
   cron.schedule('5 16 * * 1-5', async () => {
     try { await logProcess('PATTERN_MEMORY', runNightlyUpdate); }

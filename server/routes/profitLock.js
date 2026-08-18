@@ -177,29 +177,20 @@ router.put('/profit-lock/config', async (req, res) => {
   }
 });
 
-// Log 1PM acknowledgment — called from frontend when user clicks through the modal
-router.post('/profit-lock/1pm-ack', async (req, res) => {
+// Log an Up-and-Done nudge "stop" click — called from frontend when the user clicks
+// "Lock it in" on UpAndDoneNudge. (Renamed from the old /profit-lock/1pm-ack endpoint,
+// which was removed 2026-08-18 along with the full 1PM reminder mechanism — see
+// docs/OPEN_THREADS.md. That endpoint used to log a hardcoded 1PM_REMINDER event_type
+// even for this unrelated up-and-done click; this route logs its own event_type instead.)
+router.post('/profit-lock/upanddone-ack', async (req, res) => {
   try {
     const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-    const { choice } = req.body; // 'STOP' or 'CONTINUE'
-    // Upsert — only one record per day
-    const existing = await query(
-      `SELECT id FROM profit_lock_events WHERE event_date=$1 AND event_type='1PM_REMINDER' LIMIT 1`,
-      [today]
+    const pnlNow = await getDailyPnl(today);
+    await query(
+      `INSERT INTO profit_lock_events (event_date, event_type, current_pnl, user_choice)
+       VALUES ($1, 'UP_AND_DONE_STOP', $2, 'STOP')`,
+      [today, pnlNow]
     );
-    if (existing.rows.length) {
-      await query(
-        `UPDATE profit_lock_events SET user_choice=$2 WHERE id=$1`,
-        [existing.rows[0].id, choice]
-      );
-    } else {
-      const pnlNow = await getDailyPnl(today);
-      await query(
-        `INSERT INTO profit_lock_events (event_date, event_type, current_pnl, user_choice)
-         VALUES ($1, '1PM_REMINDER', $2, $3)`,
-        [today, pnlNow, choice]
-      );
-    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
