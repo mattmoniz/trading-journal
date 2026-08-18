@@ -45,15 +45,28 @@ export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long
     } else if (stopHit) {
       resolution = { resolution: 'STOP_HIT', method: 'PRICE_CLEAN', priceAtRes: stop };
     } else if (t1Hit) {
-      if (barCount <= maxBarsToT1) {
+      // !isSessionEnd guard added 2026-08-18 (B2, DeepSeek-QA'd fix — docs/OPEN_THREADS.md
+      // 2026-08-18): without it, a T1 hit that qualifies as "fast" (barCount<=maxBarsToT1)
+      // AND lands on/after the 16:00 RTH-close bar would both arm (newState.widening=true)
+      // AND fall through to the isSessionEnd check just below, which — seeing `resolution`
+      // still null — would ALSO set a TIME_EXPIRED/MARK_TO_MARKET resolution in the same
+      // return, violating this function's own documented {state, resolution} contract (never
+      // both a real state transition and a resolution at once). DeepSeek independently
+      // confirmed TARGET_HIT/PRICE_CLEAN (not a mark-to-market) is the correct outcome here:
+      // T1 genuinely printed and mark-to-market could misprice it below T1; the plain
+      // (non-flagged) branch already resolves a 16:00 T1-hit as TARGET_HIT/PRICE_CLEAN with
+      // no special case, and declining to arm must not change that; this IS behaviorally a
+      // plain TARGET_HIT either way (too slow, or fast-but-no-session-time-left-to-benefit).
+      if (barCount <= maxBarsToT1 && !isSessionEnd) {
         // Fast arrival, eligible — arm the wider-target continuation. Stop stays exactly
         // where it already was (never moves) — the whole point of building the
         // original-stop shape, not the T1-floor shape.
         newState = { widening: true };
       } else {
-        // T1 reached, but not fast enough to qualify — bank normally, same outcome as if
-        // this mechanism didn't apply at all. Reuses the plain branch's own method string
-        // (not a new one) since this IS behaviorally a plain TARGET_HIT.
+        // T1 reached, but either not fast enough to qualify or no session time left to
+        // benefit from arming — bank normally, same outcome as if this mechanism didn't
+        // apply at all. Reuses the plain branch's own method string (not a new one) since
+        // this IS behaviorally a plain TARGET_HIT.
         resolution = { resolution: 'TARGET_HIT', method: 'PRICE_CLEAN', priceAtRes: t1 };
       }
     }

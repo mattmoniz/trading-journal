@@ -745,18 +745,36 @@ export async function resolveSetupsByPrice(io) {
               // (median -$135/trade on the fastest quartile).
               resolution = 'TARGET_HIT'; method = 'BANKED_FAST_ARRIVAL';
               resolvedAt = bar.ts; priceAtRes = t1;
-            } else if (barsToTarget <= 25) {
+            } else if (barsToTarget <= 25 && !isSessionEnd) {
               // Grinding arrival = real trend, rigor-clean +$34.75/trade median to extend.
               // Original stop_level is NEVER moved once extending -- the validated
               // FLAT_WIDE_150 design keeps the same stop throughout, it does not ratchet
               // to breakeven (unlike the trailWidth mechanism above, which is a different
               // exit design entirely).
+              //
+              // !isSessionEnd guard added 2026-08-18 (same bug class as widerTargetWalker.js's
+              // B2 fix, docs/OPEN_THREADS.md 2026-08-18): without it, a t1Hit that qualifies
+              // for extending AND lands on/after the 16:00 RTH-close bar would set
+              // extending=true here and then ALSO get overwritten below by the
+              // `if (!resolution && isSessionEnd)` MARK_TO_MARKET branch -- not a
+              // contradictory return like the walker (this is a single mutable `resolution`
+              // var, not a `{state, resolution}` pair), but the same underlying "arming with
+              // zero session time left to benefit" mistake. Falls through to the BANKED_SLOW_
+              // ARRIVAL branch below instead -- there's no time left to extend into, so bank
+              // normally, same as the >25-bar case.
               extending = true;
             } else {
-              // >25 bars: only thinly positive on backtest, not independently rigor-clean
-              // (see RESEARCH_CLAIM path_quality_bars_to_target_predicts_continuation) --
-              // the OPEN_DECISION this mechanism implements only validated the 10-25 bar
-              // window as worth extending, so this defaults to banking like a fast arrival.
+              // Two distinct paths land here, both banking the same way (DeepSeek code
+              // review, 2026-08-18): (1) >25 bars -- only thinly positive on backtest, not
+              // independently rigor-clean (see RESEARCH_CLAIM
+              // path_quality_bars_to_target_predicts_continuation) -- the OPEN_DECISION this
+              // mechanism implements only validated the 10-25 bar window as worth extending;
+              // (2) a 10-25 bar arrival that lands on/after session end (!isSessionEnd guard
+              // above) -- there's no session time left to benefit from extending, so it banks
+              // here too rather than arming with nothing left to gain. BANKED_SLOW_ARRIVAL is
+              // reused for both (no downstream consumer buckets by this string; the outcome
+              // and actual_pnl are identical to any other bank-at-t1) rather than adding a
+              // distinct method string with nothing to justify it.
               resolution = 'TARGET_HIT'; method = 'BANKED_SLOW_ARRIVAL';
               resolvedAt = bar.ts; priceAtRes = t1;
             }
@@ -7322,18 +7340,31 @@ export default function createACDRouter(io) {
                 const auditParsed = typeof auditNotes === 'string' ? JSON.parse(auditNotes) : auditNotes;
                 auditRunnerTrailWidth = auditParsed?.trail ?? null;
               }
+              // wider_target_mult was entirely missing from this INSERT's column list (found
+              // 2026-08-18, docs/OPEN_THREADS.md 2026-08-18 "Separately found, not yet fixed")
+              // -- this is the majority source of SHADOW rows (most setup_types are suppressed
+              // by default), so every real touch of a non-trail, non-custom-resolution type
+              // landing here was silently excluded from the mechanism entirely, the same bug
+              // class already found and fixed for runner_trail_width on this identical branch.
+              // User confirmed no principled reason to exclude these trades. Same exclusion
+              // predicate as the other always-SHADOW wired site (~8870): trail-mechanism
+              // variants already carry runner_trail_width (set just above) and must not also
+              // carry this flag; ABSORPTION_LONG/COIL_SURGE have their own custom resolution
+              // and never reach the wider-target branch in resolveSetupsByPrice().
+              const auditWiderTargetMult = (!auditTrailVariant?.trailSignalName
+                && type !== 'ABSORPTION_LONG' && !type.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null;
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
-                  historical_win_rate, historical_sessions, runner_trail_width,
+                  historical_win_rate, historical_sessions, runner_trail_width, wider_target_mult,
                   ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
                 )
-                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
-                  ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -7344,6 +7375,7 @@ export default function createACDRouter(io) {
                 auditExpiresAt,
                 auditStats?.wr ?? null, auditStats?.n ?? null,
                 auditRunnerTrailWidth,
+                auditWiderTargetMult,
                 ...regimeStampValues(auditRegimeStamp),
                 ...fireTagValues(auditFireTags),
                 getBetClass(type),
@@ -8856,7 +8888,16 @@ export default function createACDRouter(io) {
               // resolver's own needsBars exclusion (acd.js ~505) -- they have their own
               // custom resolution and never reach the wider-target branch, so tagging them
               // would be dead value.
-              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null,
+              //
+              // CONDITIONAL_VARIANTS[...]?.trailSignalName exclusion added 2026-08-18 (C1,
+              // docs/OPEN_THREADS.md 2026-08-18): this site was the one wired insert path
+              // missing this check -- the other 2 real wired sites (~8338, ~8725) already
+              // exclude trail-mechanism variants (they carry runner_trail_width instead, and
+              // no row may set more than one of the three exit-mechanism flags). Harmless
+              // today (no _TRAIL variant currently flows through shadowCandidates's roster),
+              // defensive against one being added here later without noticing this gap.
+              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
+                && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
             ]).catch(() => {});
           }
         })();

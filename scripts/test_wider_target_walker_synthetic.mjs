@@ -144,5 +144,22 @@ function runPath(bars, baseParams) {
   assert(finalState.widening, 'T8: barCount===maxBarsToT1 is eligible (inclusive boundary, matches bars_to_resolution<=4)');
 }
 
+// ── Test 9: T1 hit fast (within maxBarsToT1) but on/after the 16:00 session-end bar — the
+// exact contradiction B2 fixed (docs/OPEN_THREADS.md 2026-08-18, DeepSeek-QA'd): before the
+// fix this would BOTH arm (newState.widening=true) AND resolve TIME_EXPIRED/MARK_TO_MARKET
+// in the same return, violating stepWiderTarget()'s own {state, resolution} contract. Correct
+// behavior (DeepSeek-confirmed): do not arm — there's no remaining session time to benefit
+// from arming anyway — and bank as a plain TARGET_HIT, not a mark-to-market (T1 genuinely
+// printed; mark-to-market could misprice it below T1).
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4 };
+  const bars = [
+    bar('16:00', 20065, 20050, 20060), // barCount=1 (<=maxBarsToT1), but hour>='16' -- session end
+  ];
+  const { resolution, finalState } = runPath(bars, params);
+  assertEqual(resolution, { resolution: 'TARGET_HIT', method: 'PRICE_CLEAN', priceAtRes: 20060 }, 'T9: fast T1 hit exactly at session-end banks as a plain TARGET_HIT, not a mark-to-market');
+  assert(!finalState.widening, 'T9: does not arm when there is no session time left to benefit from arming');
+}
+
 console.log(`\n${pass} passed, ${fail} failed.`);
 if (fail > 0) process.exit(1);

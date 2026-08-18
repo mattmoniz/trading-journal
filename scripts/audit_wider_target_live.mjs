@@ -17,15 +17,23 @@
 // plain branch would have produced is exactly |t1_level - entry| * $/pt - commission,
 // computable from the row alone.
 //
-// Real pre-existing bug worked around here (OPEN_DECISION islongsetup_gap_variant_direction_bug):
-// resolveSetupsByPrice()'s isLongSetup() helper misclassifies _GAP_UP/_GAP_DOWN conditional
-// variants (e.g. WPP_FADE_SHORT_GAP_UP reads as LONG via a bare '_UP' substring match) --
-// any armed row where the correct inferDirection() disagrees with isLongSetup() has a
-// sign-corrupted stored actual_pnl and is excluded from the mean/verdict, not silently folded in.
+// Direction resolution (fixed 2026-08-18, B1 of the DeepSeek-QA'd wider-target bug hunt --
+// docs/OPEN_THREADS.md 2026-08-18): this script used to reproduce the LOCAL, buggy
+// isLongSetup() heuristic from acd.js (misclassifies _GAP_UP/_GAP_DOWN conditional variants,
+// e.g. WPP_FADE_SHORT_GAP_UP read as LONG via a bare '_UP' substring match) purely to detect
+// disagreement with inferDirection() and exclude the mismatch. That local reproduction is gone
+// -- resolveSetupsByPrice() itself was already fixed elsewhere to use the shared, canonical
+// resolveDirection() (server/config/setupTypes.js), so comparing against the OLD buggy
+// heuristic here was itself stale and wrongly excluding correctly-resolved rows (DeepSeek's
+// QA catch: inferDirection() alone is also name-only and returns null for ZONE_EDGE_FADE,
+// which the live path resolves via resolveDirection()'s price-derived fallback -- using
+// resolveDirection() here closes that gap too, not just the original _GAP_* one). The
+// independent price_at_resolution reconstruction check below is a strictly stronger check
+// on its own and already catches genuine corruption regardless of direction source.
 //
 // Run: node scripts/audit_wider_target_live.mjs
 import { query } from '../server/db.js';
-import { inferDirection } from '../server/config/setupTypes.js';
+import { resolveDirection } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { flagDecision } from './flag_decision.mjs';
@@ -41,13 +49,6 @@ const RECHECK_OF = 'velocity_fast_wider_target_positive_provisional';
 export const MIN_N = 20;
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
-
-// isLongSetup() is intentionally NOT imported -- it's the local (buggy for _GAP_* variants)
-// helper inside acd.js, not exported. Reproduced verbatim here ONLY to detect disagreement
-// with inferDirection(), never to compute anything trusted.
-function isLongSetupBuggy(setupType) {
-  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
-}
 
 function median(values) {
   if (!values.length) return null;
@@ -80,27 +81,21 @@ async function main() {
   `);
   const flaggedTotal = flaggedTotalRes.rows[0].n;
 
-  // Direction cross-check + P&L reconstruction. Excludes (not silently corrects) any row
-  // where the correct direction disagrees with the mechanism's own (sign-corrupted
-  // actual_pnl -- see header). Also reconstructs actual_pnl from price_at_resolution
+  // Direction resolution + P&L reconstruction. Excludes (not silently corrects) any row
+  // where resolveDirection() can't resolve a direction (reason 'direction_unresolved' --
+  // see header for what that means). Also reconstructs actual_pnl from price_at_resolution
   // independently of the stored value, per DeepSeek's "strictly stronger check" review --
-  // a mismatch here means something OTHER than the known direction bug corrupted the row,
-  // and must not be silently trusted either.
+  // a mismatch here means something OTHER than a direction issue corrupted the row, and
+  // must not be silently trusted either.
   const excludedRows = [];
   const validRows = [];
   for (const r of armedRes.rows) {
-    const correctDirection = inferDirection(r.setup_type);
-    const buggyIsLong = isLongSetupBuggy(r.setup_type);
-    const buggyDirection = buggyIsLong ? 'LONG' : 'SHORT';
-    if (correctDirection === null) {
-      excludedRows.push({ ...r, reason: 'inferDirection_null' });
+    const direction = resolveDirection(r);
+    if (direction === null) {
+      excludedRows.push({ ...r, reason: 'direction_unresolved' });
       continue;
     }
-    if (correctDirection !== buggyDirection) {
-      excludedRows.push({ ...r, reason: 'direction_mismatch_islongsetup_bug', correctDirection, buggyDirection });
-      continue;
-    }
-    const long = correctDirection === 'LONG';
+    const long = direction === 'LONG';
     const entry = r.entry_zone_high ?? r.entry_zone_low;
     const fixedT1Pnl = Math.round(((long ? r.t1_level - entry : entry - r.t1_level) * PNL_PER_POINT - COMMISSION) * 100) / 100;
     // Independent reconstruction from price_at_resolution, cross-checked against the
@@ -113,7 +108,7 @@ async function main() {
       continue;
     }
     const delta = Math.round((r.actual_pnl - fixedT1Pnl) * 100) / 100;
-    validRows.push({ ...r, direction: correctDirection, entry, fixedT1Pnl, delta });
+    validRows.push({ ...r, direction, entry, fixedT1Pnl, delta });
   }
 
   const armedN = validRows.length;
@@ -210,6 +205,12 @@ async function main() {
     n_armed: armedN,
     n_armed_raw: armedRes.rows.length,
     n_excluded: excludedRows.length,
+    // Breakdown by reason (DeepSeek QA suggestion, 2026-08-18): self-documents whether an
+    // armedN jump after the B1 fix came from previously-wrongly-excluded-now-included rows,
+    // or from a genuinely corrupted row moving from the old (removed) direction-mismatch
+    // bucket into actual_pnl_mismatch_price_reconstruction instead -- those are different
+    // findings and should not be conflated when reading this row later.
+    n_excluded_by_reason: excludedRows.reduce((acc, r) => { acc[r.reason] = (acc[r.reason] || 0) + 1; return acc; }, {}),
     n_wider_target_hit: nWiderTargetHit,
     n_wider_stop_hit: nWiderStopHit,
     n_wider_time_expired: nWiderTimeExpired,
@@ -277,7 +278,7 @@ async function main() {
       slug: 'wider_target_live_recheck_contradicted',
       priority: 'MEDIUM',
       sourceFile: 'scripts/audit_wider_target_live.mjs',
-      decisionText: `The SHADOW-only wider-target mechanism's REAL, live-fired outcomes now CONTRADICT its backtested positive delta: N=${armedN} armed trades, mean delta=$${meanDelta?.toFixed(2)}/trade vs. the fixed-T1 counterfactual (<=0, wrong direction). MEDIUM priority not HIGH -- this is zero-capital SHADOW tracking, nothing real is at risk, so urgency is low. Consider removing the wider_target_mult flag from the 3 insert sites (server/routes/acd.js) if this persists across further rechecks.`,
+      decisionText: `The SHADOW-only wider-target mechanism's REAL, live-fired outcomes now CONTRADICT its backtested positive delta: N=${armedN} armed trades, mean delta=$${meanDelta?.toFixed(2)}/trade vs. the fixed-T1 counterfactual (<=0, wrong direction). MEDIUM priority not HIGH -- this is zero-capital SHADOW tracking, nothing real is at risk, so urgency is low. Consider removing the wider_target_mult flag from the 4 insert sites (server/routes/acd.js) if this persists across further rechecks.`,
     });
     console.log('Flagged wider_target_live_recheck_contradicted (transition into CONTRADICTED).');
   }
