@@ -17,6 +17,14 @@
 // "eligible within maxBarsToT1" here is bit-identical to the backtested
 // `bars_to_resolution<=4` population, no separate 0-based translation needed.
 //
+// Named constants (extracted 2026-08-17, DeepSeek code-review of the per-trade
+// counterfactual endpoint build) -- previously three independent `1.5` literals at the
+// live INSERT sites (acd.js ~8293/8680/8825) and a `maxBarsToT1: 4` literal at the live
+// resolveSetupsByPrice() call site (acd.js ~813), with no single named source. All 4
+// sites plus the new counterfactual endpoint now import these instead.
+export const WIDER_TARGET_MULT = 1.5;
+export const MAX_BARS_TO_T1_FOR_WIDER = 4;
+
 // state: { widening: boolean }
 // bar: { ts: string (ET wall-clock text, HH in bar.ts.slice(11,13)), high, low, close }
 // params: { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1 }

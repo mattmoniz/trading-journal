@@ -83,6 +83,15 @@
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
   #timeline-stats span b { font-family: monospace; }
+
+  /* Research & Monitoring -- SHADOW-only mechanism findings, same content/placement logic
+     as the two lines already prepended to Home Assistant's Session Timeline feed
+     (GET /api/setups/today-summary's widerTargetHeadlineLine/widerTargetLiveLine). Sits
+     directly above the trade rows here too, for the same reason: informational, not a
+     trade you can act on, but relevant context for the session you're looking at. */
+  #research-note { display: none; font-size: 12px; margin-bottom: 10px; padding: 8px 12px; background: rgba(99,102,241,0.06); border-radius: 6px; border: 1px solid rgba(99,102,241,0.25); color: var(--muted); line-height: 1.6; }
+  #research-note.visible { display: block; }
+  #research-note b { color: var(--text); }
   .row {
     display: flex; align-items: center; gap: 8px; padding: 8px 0;
     border-bottom: 1px solid rgba(51,65,85,0.3); font-size: 13px;
@@ -119,6 +128,16 @@
   .m-row .m-v { font-weight: 600; }
   .m-section { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 4px; }
   .m-section:first-of-type { margin-top: 4px; }
+
+  /* Wider-target counterfactual (2026-08-17) -- deliberately visually SEPARATE from the
+     real Outcome/P&L rows above (not another m-row under "Outcome"), sign-neutral indigo
+     regardless of whether the hypothetical is positive or negative, per DeepSeek's design
+     critique: structural separation is what stops a real, correctly-computed number from
+     being misread as "money I actually left on the table." */
+  #wt-counterfactual { margin-top: 14px; padding: 10px 12px; background: rgba(165,180,252,0.06); border: 1px solid rgba(165,180,252,0.25); border-radius: 8px; font-size: 12px; }
+  #wt-counterfactual .wt-label { color: #a5b4fc; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 5px; }
+  #wt-counterfactual .wt-value { color: var(--text); font-size: 13px; margin-bottom: 4px; }
+  #wt-counterfactual .wt-note { color: var(--dim); font-size: 11px; line-height: 1.5; }
 
   .loading { text-align: center; color: var(--dim); padding: 30px 0; font-size: 13px; }
 
@@ -179,6 +198,7 @@
   <div id="timeline-head">
     <h2 id="timeline-title">Session Timeline</h2>
   </div>
+  <div id="research-note"></div>
   <div id="timeline-stats"></div>
   <div id="timeline-list"><div class="loading">Loading…</div></div>
 
@@ -376,6 +396,43 @@ async function loadTimeline() {
     allTimelineRows = Array.isArray(data?.setups) ? data.setups : [];
     renderTimeline();
   } catch (e) { /* keep last good render */ }
+  loadResearchNote();
+}
+
+// Research & Monitoring note -- same source (/api/setups/today-summary) and content as the
+// two lines already shown in Home Assistant's Session Timeline feed, added here 2026-08-17
+// per direct user request after finding this page (unlike HA) had nowhere to see them.
+// Polled on the same cadence as the timeline itself since it's the same conceptual section.
+async function loadResearchNote() {
+  try {
+    const data = await fetch('/api/setups/today-summary').then(r => r.json());
+    renderResearchNote(data);
+  } catch (e) { /* keep last good render */ }
+}
+
+// Built via textContent/DOM nodes, not innerHTML (DeepSeek code-review, 2026-08-17) --
+// today's lines are server-constructed from numeric ev/sample_size and fixed text (no
+// injection risk currently), but building from raw strings via innerHTML is a latent
+// stored-XSS shape if either line ever interpolates free text (e.g. a setup-type name).
+function renderResearchNote(data) {
+  const el = $('research-note');
+  const lines = [data?.widerTargetHeadlineLine, data?.widerTargetLiveLine].filter(Boolean);
+  el.textContent = '';
+  if (!lines.length) { el.classList.remove('visible'); return; }
+  for (const l of lines) {
+    const div = document.createElement('div');
+    const m = l.match(/^(Wider-target[^:]*:)(.*)$/);
+    if (m) {
+      const b = document.createElement('b');
+      b.textContent = m[1];
+      div.appendChild(b);
+      div.appendChild(document.createTextNode(m[2]));
+    } else {
+      div.textContent = l;
+    }
+    el.appendChild(div);
+  }
+  el.classList.add('visible');
 }
 
 function setTimelineFilter(f) {
@@ -546,9 +603,68 @@ function openTradeModal(id) {
       '</div>';
   }
 
+  // Wider-target counterfactual placeholder -- only fetched for TARGET_HIT trades (a
+  // STOP_HIT never touched T1 first, so the wider branch is structurally unreachable and
+  // there's nothing to ask -- skip the network round trip entirely rather than fetch and
+  // get 'not_target_hit' back). Lazy: only loaded when this modal actually opens.
+  if (isWin) html += '<div id="wt-counterfactual"></div>';
+
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
+  if (isWin) loadWiderTargetCounterfactual(s.id, s.origin_status);
 }
+
+// "How much extra could this specific trade have gotten" (2026-08-17, direct user request
+// after seeing the aggregate Research & Monitoring box) -- GET /api/setups/:id/
+// wider-target-counterfactual re-walks this ONE trade's real bars through the shared
+// stepWiderTarget() and returns a hypothetical outcome, or an ineligibility reason.
+// DeepSeek design critique (scratch/deepseek_response.md, 2026-08-17): render as a
+// visually separate, sign-neutral section -- never map positive/negative to green/red,
+// since that reproduces the exact "did I win/lose" reading this section must avoid.
+//
+// Normal ineligibility reasons (mechanism structurally doesn't apply -- explain, don't
+// alarm) vs. abnormal ones (a real data-integrity anomaly -- surface, don't silently hide,
+// per DeepSeek code-review: silently removing reconstruction_mismatch/error made a genuine
+// anomaly indistinguishable from an ordinary ineligible trade).
+const WT_NORMAL_REASONS = {
+  too_slow: (r) => 'Wider-target mechanism: not eligible — resolved in ' + (r.barsToResolution ?? '?') + ' bars (requires ≤' + r.maxBars + ').',
+  already_armed: () => 'This trade already ran under the wider-target mechanism live (1.5×) — the actual P&L above reflects it, so there is no separate hypothetical.',
+  different_mechanism_applied: () => 'A different exit mechanism (target extension) applied to this trade — not directly comparable to the wider-target question.',
+};
+const WT_ABNORMAL_NOTE = 'Wider-target check: could not verify this trade’s reconstruction — skipped rather than risk a wrong number.';
+
+async function loadWiderTargetCounterfactual(id, originStatus) {
+  // Captured once, checked via isConnected after the await -- NOT re-queried by id
+  // afterward. Fixes a real race DeepSeek's code-review caught: openTradeModal() replaces
+  // $('modal').innerHTML wholesale, so a re-query by id would find trade B's freshly
+  // created element (same id) if the user opened trade A then B before A's fetch resolved,
+  // silently rendering A's response into B's box. el.isConnected correctly detects BOTH
+  // "modal closed" and "modal replaced," which a same-id re-query cannot distinguish.
+  const el = $('wt-counterfactual');
+  if (!el) return;
+  try {
+    const r = await fetch('/api/setups/' + id + '/wider-target-counterfactual').then(r => r.json());
+    if (!el.isConnected) return; // modal closed or replaced while this fetch was in flight
+    if (!r.eligible) {
+      const normalMsg = WT_NORMAL_REASONS[r.reason]?.(r);
+      el.innerHTML = '<div class="wt-note">' + (normalMsg || WT_ABNORMAL_NOTE) + '</div>';
+      return;
+    }
+    const hyp = r.hypotheticalPnl, act = r.actualPnl;
+    const hypStr = (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2);
+    const actStr = act != null ? (act >= 0 ? '+' : '') + '$' + act.toFixed(2) : 'n/a';
+    const originNote = originStatus === 'ACTIVE'
+      ? 'Structurally could not have happened with real capital — the mechanism only ever applies to SHADOW-tagged trades today.'
+      : 'This trade was not tagged for the mechanism (untagged SHADOW), so this did not actually happen.';
+    el.innerHTML =
+      '<div class="wt-label">If wider-target were live (hypothetical)</div>' +
+      '<div class="wt-value">≈ ' + hypStr + ' vs. actual ' + actStr + '</div>' +
+      '<div class="wt-note">' + originNote + ' Backtest-validated at the aggregate level (see Session Timeline header), not yet promoted to real trades.</div>';
+  } catch (e) {
+    if (el.isConnected) el.innerHTML = '<div class="wt-note">' + WT_ABNORMAL_NOTE + '</div>';
+  }
+}
+
 function closeTradeModal() { $('modal-backdrop').classList.remove('open'); }
 $('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeTradeModal(); });
 

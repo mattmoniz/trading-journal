@@ -31,7 +31,7 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
-import { stepWiderTarget } from '../services/widerTargetWalker.js';
+import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus } from '../services/setupEligibility.js';
 
@@ -482,9 +482,27 @@ export async function resolveSetupsByPrice(io) {
   // from scratch each poll, deterministically, and only needs to be WRITTEN (for the
   // frontend card to display "armed, trailing" — see docs/SCALEOUT_RUNNER_SPEC.md §7),
   // never read back in as input.
+  // entry_zone_low/entry_zone_high/stop_level/t1_level cast to ::float (2026-08-17,
+  // DeepSeek code-review of the wider-target counterfactual endpoint): node-postgres
+  // returns NUMERIC columns as JS strings, and this loop's `entry`/`stop`/`t1` locals
+  // (derived from these 4 columns below) were left uncast. The widerTarget branch's
+  // `entry + t1Distance * widerTargetMult` (long side) silently STRING-CONCATENATED
+  // instead of adding on any LONG SHADOW row that armed the mechanism -- confirmed real
+  // and live, the exact bug found and fixed in the read-only counterfactual endpoint
+  // earlier the same session, except this is the actual WRITE path. Checked directly
+  // against every LONG-direction wider_target_mult-tagged row's real price bars before
+  // this fix: none had actually touched T1 within the 4-bar arming window yet, so this
+  // was a live, armed bug with zero realized corruption -- forward-looking fix, no
+  // backfill needed. Also fixes the fragile (currently-coincidentally-correct) string
+  // comparisons at BOTH `t1 <= entry`/`t1 >= entry` sites below -- the needsBars filter
+  // a few lines down AND the main loop's own copy further down -- which only agreed with
+  // numeric order because this codebase's index levels are all uniform 5-digit numbers
+  // (DeepSeek confirmation-pass, 2026-08-17: flagged the original comment as under-scoped,
+  // naming only the first site).
   const active = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at, expires_at::text as expires_at,
-           entry_zone_low, entry_zone_high, stop_level, t1_level, status, touch_quality,
+           entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
+           stop_level::float as stop_level, t1_level::float as t1_level, status, touch_quality,
            runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level,
            wider_target_mult::float as wider_target_mult
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
@@ -810,7 +828,7 @@ export async function resolveSetupsByPrice(io) {
         const step = stepWiderTarget(
           widerTargetState,
           bar,
-          { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: 4 }
+          { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER }
         );
         widerTargetState = step.state;
         if (step.resolution) {
@@ -8290,7 +8308,7 @@ export default function createACDRouter(io) {
                 // are trail-mechanism rows (a pre-existing gap: this site doesn't currently
                 // set runner_trail_width for them either, separate from this task), so skip
                 // wider-target tagging for them rather than double-flag a row.
-                CONDITIONAL_VARIANTS[bt.type]?.trailSignalName != null ? null : 1.5,
+                CONDITIONAL_VARIANTS[bt.type]?.trailSignalName != null ? null : WIDER_TARGET_MULT,
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -8677,7 +8695,7 @@ export default function createACDRouter(io) {
           // not cosmetic: forceShadow is ALSO forced true for trail variants, which
           // already carry runner_trail_width from this same INSERT -- excluding them here
           // preserves the "no row sets more than one exit-mechanism flag" invariant.
-          forceShadow && !isTrailMechanism ? 1.5 : null,
+          forceShadow && !isTrailMechanism ? WIDER_TARGET_MULT : null,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -8822,7 +8840,7 @@ export default function createACDRouter(io) {
               // resolver's own needsBars exclusion (acd.js ~505) -- they have their own
               // custom resolution and never reach the wider-target branch, so tagging them
               // would be dead value.
-              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')) ? 1.5 : null,
+              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null,
             ]).catch(() => {});
           }
         })();
@@ -9285,8 +9303,186 @@ export default function createACDRouter(io) {
       } catch (_) { /* informational only, never block the response */ }
 
       const summaryLines = [bigMoveLine, sigmaLine, widerTargetHeadlineLine, widerTargetLiveLine].filter(Boolean).concat(lines);
-      res.json({ count: lines.length, summary_text: summaryLines.join('\n') || 'No resolved setups yet.' });
+      // widerTargetHeadlineLine/widerTargetLiveLine also returned as their own structured
+      // fields (2026-08-17), not just baked into summary_text -- HA's REST sensor only reads
+      // summary_text (unaffected, additive change), but quick-check.html needs real fields to
+      // render its own "Research & Monitoring" section without regex-parsing a sentence meant
+      // for a different consumer.
+      res.json({
+        count: lines.length,
+        summary_text: summaryLines.join('\n') || 'No resolved setups yet.',
+        widerTargetHeadlineLine,
+        widerTargetLiveLine,
+      });
     } catch(e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // GET /api/setups/:id/wider-target-counterfactual — 2026-08-17, per direct user request
+  // ("how much extra could this specific trade have gotten") after seeing the aggregate
+  // Research & Monitoring box on the quick-check page. Answers a DIFFERENT question than
+  // scripts/audit_wider_target_live.mjs's own counterfactual: that script computes "what
+  // would the OLD fixed exit have given up" for a trade that DID arm the mechanism
+  // (deterministic, no bar-replay needed, per that script's own comment). This endpoint
+  // answers the reverse: for a trade that did NOT arm (wider_target_mult IS NULL --
+  // structurally every ACTIVE-origin row, plus any non-flagged SHADOW row), "what would the
+  // NEW wider-target exit have produced?" That requires a real bar replay, since the trade
+  // already resolved at the original T1 and nothing tells us what price did afterward.
+  //
+  // Design per DeepSeek's phase-0 critique (2026-08-17, scratch/deepseek_response.md):
+  // - Eligibility: resolution='TARGET_HIT' AND bars_to_resolution<=MAX_BARS_TO_T1_FOR_WIDER
+  //   AND wider_target_mult IS NULL. The first two conditions match the live mechanism's own
+  //   arming gate exactly (bars_to_resolution is bit-identical to the live loop's barCount,
+  //   per widerTargetWalker.js's own header comment); the third excludes rows that already
+  //   went through the real mechanism, where there is no "if it were live" question to ask.
+  //   STOP_HIT trades never touched T1 first, so the wider branch is structurally
+  //   unreachable for them -- no hypothetical applies, not just "not computed."
+  // - Re-walks from fired_at (not from resolved_at forward) through the exact shared
+  //   stepWiderTarget() -- deliberately redundant (re-derives the already-known original
+  //   outcome) because that redundancy is a free consistency check: if the re-derived
+  //   bars-to-original-T1 doesn't match the stored bars_to_resolution, something about this
+  //   row's entry/stop/t1/direction doesn't reconcile with a fresh walk, and the endpoint
+  //   refuses to emit a number rather than risk a silently wrong counterfactual (this is the
+  //   exact same "exclude, don't guess" posture the resolveDirection() null case uses).
+  // - Computed on-demand (this route), never precomputed/stored on the row -- avoids adding
+  //   a speculative column next to authoritative ones (this codebase's own status vs.
+  //   origin_status pair is the standing cautionary example of two similar-looking columns
+  //   meaning different things). Single-trade cost is trivial; GET /setups/today (the bulk
+  //   listing that feeds the timeline every 15s) is untouched.
+  router.get('/setups/:id/wider-target-counterfactual', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const q = await query(`
+        SELECT id, setup_type, resolution, bars_to_resolution, wider_target_mult::float as wider_target_mult,
+               extend_target_level::float as extend_target_level,
+               entry_zone_low, entry_zone_high, stop_level, t1_level,
+               trade_date::text as trade_date, fired_at::text as fired_at, actual_pnl
+        FROM active_setups WHERE id = $1
+      `, [id]);
+      const row = q.rows[0];
+      if (!row) return res.status(404).json({ eligible: false, reason: 'not_found' });
+
+      if (row.resolution !== 'TARGET_HIT') {
+        return res.json({ eligible: false, reason: 'not_target_hit' });
+      }
+      if (row.wider_target_mult != null) {
+        return res.json({ eligible: false, reason: 'already_armed' }); // mechanism DID apply live, no hypothetical needed
+      }
+      // extend_target_level IS NULL (DeepSeek code-review, 2026-08-17): the STACK_VOL_BREAK
+      // extendTarget branch can also resolve TARGET_HIT (method BANKED_FAST_ARRIVAL) within
+      // bars_to_resolution<=4 -- without this exclusion, such a row would pass every other
+      // gate, arm widening on the same bar (so the consistency check below can't catch it
+      // either), and compare against a trade that actually used a DIFFERENT exit mechanism.
+      // Trail-mechanism rows self-exclude via the resolution gate above (they can't resolve
+      // TARGET_HIT under that mechanism's own semantics), so only this one extra check is needed.
+      if (row.extend_target_level != null) {
+        return res.json({ eligible: false, reason: 'different_mechanism_applied' });
+      }
+      if (row.bars_to_resolution == null || Number(row.bars_to_resolution) > MAX_BARS_TO_T1_FOR_WIDER) {
+        return res.json({ eligible: false, reason: 'too_slow', barsToResolution: row.bars_to_resolution, maxBars: MAX_BARS_TO_T1_FOR_WIDER });
+      }
+
+      // Same entry/direction resolution as the live resolveSetupsByPrice() loop -- entry
+      // prefers entry_zone_high, falls back to entry_zone_low (matches acd.js's live
+      // convention exactly, NOT computeMaeMfe()'s separate average-of-both convention,
+      // per DeepSeek's flag #3: using the wrong entry definition would make the "vs. actual"
+      // delta off by the zone width on any row where the two differ).
+      // Number()-coerced: node-postgres returns NUMERIC columns as JS strings. Found live,
+      // the hard way, testing this exact endpoint: `entry + t1Distance * WIDER_TARGET_MULT`
+      // below silently string-concatenated ("29872" + 63 -> "2987263") on every LONG trade
+      // when entry was left as a string, producing a wider target so large it could never
+      // resolve except TIME_EXPIRED -- confirmed via id 95409 (OR5_LOW_FADE_LONG) returning
+      // a bogus $667 hypothetical before this fix. SHORT trades (subtraction, JS always
+      // numeric-coerces `-`) were unaffected, which is why 3/4 initial spot-checks looked
+      // fine and only the one LONG trade exposed it.
+      const entryRaw = row.entry_zone_high ?? row.entry_zone_low;
+      const entry = entryRaw != null ? Number(entryRaw) : null;
+      const stop = row.stop_level != null ? Number(row.stop_level) : null;
+      const t1 = row.t1_level != null ? Number(row.t1_level) : null;
+      if (entry == null || stop == null || t1 == null) {
+        return res.json({ eligible: false, reason: 'missing_levels' });
+      }
+      const direction = resolveDirection(row);
+      if (direction == null) {
+        return res.json({ eligible: false, reason: 'direction_unresolvable' });
+      }
+      const long = direction === 'LONG';
+
+      // Same bar-fetch convention as computeMaeMfe() (maeMfeReplay.js): from fired_at
+      // through the RTH session close (<=960 ET-minutes), bounded by trade_date -- a single
+      // historical trade, not an unbounded price_bars_primary scan (CLAUDE.md's own
+      // "needs an explicit upper bound too" convention for this VIEW).
+      const barsQ = await query(`
+        SELECT ts::text as ts, high::float, low::float, close::float
+        FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date = $1 AND ts > $2::timestamp
+          AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
+        ORDER BY ts
+      `, [row.trade_date, row.fired_at]);
+      const bars = barsQ.rows;
+      if (!bars.length) return res.json({ eligible: false, reason: 'no_bar_data' });
+
+      const t1Distance = Math.abs(t1 - entry);
+      const widerTarget = long ? entry + t1Distance * WIDER_TARGET_MULT : entry - t1Distance * WIDER_TARGET_MULT;
+
+      let state = { widening: false };
+      let barCount = 0;
+      let resolution = null, priceAtRes = null, method = null, derivedBarsToT1 = null;
+
+      for (const bar of bars) {
+        barCount++;
+        const step = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER });
+        const wasWidening = state.widening;
+        state = step.state;
+        if (!wasWidening && state.widening && derivedBarsToT1 == null) derivedBarsToT1 = barCount;
+        if (step.resolution) {
+          resolution = step.resolution.resolution;
+          method = step.resolution.method;
+          priceAtRes = step.resolution.priceAtRes;
+          break;
+        }
+      }
+
+      if (!resolution) return res.json({ eligible: false, reason: 'no_resolution_in_window' });
+
+      // Consistency check (the "free" byproduct of re-walking from fired_at instead of
+      // resolved_at) -- DeepSeek code-review, 2026-08-17: this is WEAKER than "entry/stop/
+      // t1/direction reconcile," and the comment used to overstate it. The !widening->
+      // widening transition depends ONLY on `long`, `t1`, `maxBarsToT1`, and the bar data --
+      // `entry` never participates in the arming decision at all, so a wrong entry (e.g. the
+      // zone-width convention mismatch flagged above) produces a wrong widerTarget/
+      // hypotheticalPnl while derivedBarsToT1 still matches and this check passes silently.
+      // What it DOES catch, genuinely: a direction flip (changes which side triggers t1Hit),
+      // stop-hit-before-T1 (derivedBarsToT1 stays null), and a t1 error large enough to shift
+      // the crossing to a different bar. Treat this as "the bar-count and direction reconcile,"
+      // not "the whole reconstruction is verified" -- entry is fundamentally unverifiable by
+      // re-walking with the SAME entry; a real check would need an independent invariant
+      // (e.g. entry within the firing bar's own high/low range), not built here.
+      if (derivedBarsToT1 !== Number(row.bars_to_resolution)) {
+        return res.json({
+          eligible: false, reason: 'reconstruction_mismatch',
+          derivedBarsToT1, storedBarsToResolution: row.bars_to_resolution,
+        });
+      }
+
+      const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+      const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+      const hypotheticalPnl = Math.round(((long ? (priceAtRes - entry) : (entry - priceAtRes))
+        * PNL_PER_POINT - COMMISSION) * 100) / 100;
+      const actualPnl = row.actual_pnl != null ? Number(row.actual_pnl) : null;
+      const delta = actualPnl != null ? Math.round((hypotheticalPnl - actualPnl) * 100) / 100 : null;
+
+      res.json({
+        eligible: true,
+        resolution, // TARGET_HIT | STOP_HIT | TIME_EXPIRED (the outcome of the WIDER branch)
+        method,     // WIDER_TARGET_HIT | WIDER_STOP_HIT | WIDER_TIME_EXPIRED
+        hypotheticalPnl,
+        actualPnl,
+        delta,
+        widerTargetMultUsed: WIDER_TARGET_MULT,
+      });
+    } catch (e) {
+      res.status(500).json({ eligible: false, reason: 'error', error: e.message });
+    }
   });
 
   // ── POST /api/setups/:id/outcome ───────────────────────────────────────────
