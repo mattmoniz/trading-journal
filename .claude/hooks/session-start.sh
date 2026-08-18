@@ -17,6 +17,17 @@ SERVER_STATUS=$(systemctl --user is-active trading-journal-server.service 2>/dev
 # just never got the port back.
 SERVER_PORT_PID=$(ss -ltnp 2>/dev/null | grep ':3002 ' | grep -oP 'pid=\K[0-9]+' | head -1)
 SERVER_MAIN_PID=$(systemctl --user show trading-journal-server.service -p MainPID --value 2>/dev/null)
+# Duplicate-supervisor detector (added 2026-08-18, see docs/DECISIONS_LOG.md's 2026-08-18
+# entry): the PID-identity check above catches ONE orphaned process silently serving in
+# place of systemd, but not multiple simultaneous nodemon supervisors piled up from
+# separate sessions each fighting over port 3002 (5 found live the day this was added,
+# from a mix of a stale restart.sh session and bare `npm run server` calls -- neither had
+# any single-instance protection at the time). start.sh/restart.sh/`npm run server` now
+# all share one takeover path (scripts/lib/server-lifecycle.sh) that should prevent this
+# going forward, but this stays as a loud backstop in case something still bypasses it.
+export DUPLICATE_SERVER_COUNT DUPLICATE_SERVER_PIDS
+DUPLICATE_SERVER_PIDS=$(pgrep -f "node_modules/.bin/nodemon server/index.js" 2>/dev/null | tr '\n' ' ')
+DUPLICATE_SERVER_COUNT=$(echo "$DUPLICATE_SERVER_PIDS" | wc -w)
 ALERT_COUNT=0
 LAST_ALERT=""
 if [ -f "$REPO/scratch/gemini_alerts.txt" ]; then
@@ -361,6 +372,8 @@ const mainPid = process.env.SERVER_MAIN_PID || '';
 // process is serving" signal; an unbound port with mainPid=0 is just "server is down",
 // already covered by the s !== 'active' check below.
 const pidMismatch = portPid && mainPid && mainPid !== '0' && portPid !== mainPid;
+const dupServerCount = parseInt(process.env.DUPLICATE_SERVER_COUNT || '0', 10);
+const dupServerPids = (process.env.DUPLICATE_SERVER_PIDS || '').trim();
 const recentServerDownRaw = process.env.RECENT_SERVER_DOWN_ALERTS || '';
 const recentServerDownLines = recentServerDownRaw.split('\n').filter(Boolean);
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -563,6 +576,10 @@ const lines = [
   // successful start much earlier).
   (s !== 'active' || pidMismatch)
     ? `🔴 TRADING JOURNAL SERVER NOT HEALTHY -- ${s !== 'active' ? `systemd reports "${s}", not "active"` : `port 3002 is held by PID ${portPid}, not systemd's managed PID ${mainPid} -- an orphaned process (likely ./start.sh left running) is serving in its place`}.\n  ACTION: check \`systemctl --user status trading-journal-server.service\` and \`journalctl --user -u trading-journal-server.service -n 50\` before assuming a simple restart fixes it -- if something else is still holding port 3002, a restart will just crash-loop again. Kill the stray process (or run ./stop.sh, which also kills the managed service -- restart it after) first.`
+    : '',
+  '',
+  dupServerCount > 1
+    ? `🔴 DUPLICATE SERVER SUPERVISORS -- ${dupServerCount} separate nodemon processes running server/index.js at once (PIDs: ${dupServerPids}). Only one can hold port 3002 -- the rest crash-loop against it and each other forever, which is exactly what tripped trading-journal-server.service into a permanent 'failed' state on 2026-08-18.\n  ACTION: check \`ss -tlnp | grep 3002\` to find which PID actually holds the port, then \`kill -9\` every other one in the list above. start.sh/restart.sh/\`npm run server\` all share one takeover path now (scripts/lib/server-lifecycle.sh) that's supposed to prevent this -- if you're seeing this, something bypassed all three (e.g. \`nodemon server/index.js\` run directly instead of through \`npm run server\`).`
     : '',
   '',
   recentServerDownLines.length > 0
