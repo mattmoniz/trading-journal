@@ -48,6 +48,7 @@ echo "=== Weekly backtest run: $(date) ==="
 
 # --- Conditional-variant backtests (maintain population stats for setup type overrides) ---
 /usr/bin/node scripts/backtest_wpp_short_gap.mjs
+/usr/bin/node scripts/backtest_or5_low_gap_down.mjs
 /usr/bin/node scripts/backtest_momentum60_daytype.mjs
 /usr/bin/node scripts/backtest_ib_daytype_stop_target.mjs
 # Breakeven-then-trail trail-width calibration for FLOOR_R1_FADE_SHORT_TRAIL (and any of

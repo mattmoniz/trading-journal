@@ -6677,6 +6677,22 @@ export default function createACDRouter(io) {
               const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
               if (sessionOpenBar && parseFloat(sessionOpenBar.open) < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
             }
+            // OR5_LOW_FADE_LONG_GAP_DOWN (docs/OPEN_THREADS.md 2026-08-18): mining found the
+            // 5-min opening-range low fade performs materially better when the session gapped
+            // DOWN into it (real backtest N=147 aligned EV=$7.77 vs N=194 against EV=-$2.08,
+            // rigor CLEAN, replication PASS on scripts/mine_or_conditional_fade.mjs's bar-history
+            // population). "Gap down" = today's 9:30 open below the PRIOR session's RTH close —
+            // same definition the mining script used (its prevRthClose, from price_bars_primary's
+            // last RTH bar of the prior date). lp.PD_CLOSE is that same prior-session RTH close
+            // (developing_value_log.session_close via compute_levels.js) — reusing it here keeps
+            // the live gap classification consistent with the validated backtest population
+            // rather than deriving a second, possibly-diverging value.
+            if (rawType === 'OR5_LOW_FADE_LONG') {
+              const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
+              if (sessionOpenBar && lp.PD_CLOSE != null && parseFloat(sessionOpenBar.open) < lp.PD_CLOSE) {
+                return 'OR5_LOW_FADE_LONG_GAP_DOWN';
+              }
+            }
             // Unconditional diversion (docs/SCALEOUT_RUNNER_SPEC.md §4/§10) — every
             // touch of these 6 base types gets the breakeven-then-trail exit mechanism
             // instead of the fixed single target. Keeps each base type's own live

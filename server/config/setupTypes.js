@@ -408,6 +408,28 @@ export const CONDITIONAL_VARIANTS = {
     // writer and the generic script's own SETUP_STATUS evaluation for them is correct/needed.
     skipGenericSetupStatus: true,
   },
+  OR5_LOW_FADE_LONG_GAP_DOWN: {
+    baseType: 'OR5_LOW_FADE_LONG',
+    direction: 'LONG',
+    condition: 'session 9:30 open is BELOW the prior session\'s RTH close (gap brought price down into the OR5 low, a support fade)',
+    backtestScript: 'scripts/backtest_or5_low_gap_down.mjs',
+    addedDate: '2026-08-18',
+    monitorAtN: 50,
+    // Same overwrite-race reasoning as WPP_FADE_SHORT_GAP_UP above: the generic weekly
+    // scan can't replicate the gap-down entry filter, so it would silently overwrite
+    // this variant's correct row with a wrong unfiltered one.
+    skipGenericSetupStatus: true,
+    // DELIBERATE DEVIATION from the WPP precedent: backtest_or5_low_gap_down.mjs hardcodes
+    // recommendation='THIN_N' regardless of its own backtest N/EV (N=147, EV=$7.77 as of
+    // 2026-08-18) rather than letting the threshold compute ACTIVE. WPP_FADE_SHORT_GAP_UP's
+    // script DOES let the threshold compute ACTIVE, and that variant is currently live
+    // ACTIVE with ZERO real origin_status='ACTIVE' trades ever -- flagged as an open
+    // INVARIANT_WARN, not a pattern to replicate. This variant stays SHADOW-only until real
+    // forward trades (origin_status IN ('ACTIVE','SHADOW')) reach N>=20 with acceptable EV,
+    // and promotion to ACTIVE must be a deliberate manual step, not automatic. See
+    // backtest_or5_low_gap_down.mjs's file header and docs/OPEN_THREADS.md 2026-08-18.
+    forcedShadowPendingRealValidation: true,
+  },
   // Not entry-conditional like the variant above — every FLOOR_R1_FADE_SHORT touch is
   // unconditionally diverted here, because the thing that differs is the EXIT mechanism
   // (breakeven-then-trail instead of a fixed single target), not the entry. Kept in this

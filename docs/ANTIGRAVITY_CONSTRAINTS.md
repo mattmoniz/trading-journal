@@ -158,6 +158,8 @@ systemctl --user start trading-journal-watcher.service
 ```
 Never use `nohup node scratch/gemini_error_watcher.mjs &` — that bypasses systemd and creates duplicates.
 
+**Do not start/stop/restart/modify any systemd service (server or watcher) unless the task explicitly instructs it.** If you observe an inactive or degraded service while doing unrelated work, report it in your output — do not fix it yourself. This codebase has a documented history of service-restart races causing real outages (see CLAUDE.md's orphaned-`start.sh`-supervisor incident); an unprompted restart during an unrelated task is a real, if low-probability, footgun, not a helpful cleanup.
+
 ### Browser/Extension Warnings & Vite Proxy Notes
 *   **Ignore `contentscript.js` errors:** Any stack traces on `contentscript.js` containing `ObjectMultiplex`, `app-init-liveness`, `background-liveness`, or `MaxListenersExceededWarning` are injected by browser extensions (e.g. MetaMask) and are **not** application bugs. Do not try to debug or fix them in the source code.
 *   **Vite Proxy Wedging:** If the backend port 3002 is temporarily restarted/offline, the Vite dev server's proxy (port 3000) can become wedged and continuously return 500 errors to the browser even after the backend is online. Solve this by killing the port 3000 process tree (`lsof -t -i :3000 | xargs kill -9`) and restarting Vite via `npm run client`.
