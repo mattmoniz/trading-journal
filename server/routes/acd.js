@@ -7982,6 +7982,16 @@ export default function createACDRouter(io) {
         trt?.type === 'TRT_LONG' ? trt : null,
         trt?.type === 'TRT_SHORT' ? trt : null,
         trtMah,
+        // Fixed 2026-08-19 (trt_v2_c_reversal_zero_fires_ever): trtLongV2/trtShortV2/
+        // cReversalLong/cReversalShort were fully computed above (~line 4418/4993) but
+        // never added to this array -- confirmed via grep, zero references anywhere
+        // else in this file. Not "rare touches" as the flagging note speculated; the
+        // detectors were structurally dead code, unreachable by construction. Safe to
+        // wire in: none of these 4 have a SETUP_STATUS row yet, so isLiveEligible()'s
+        // existing fail-closed-on-unknown-type behavior (knownTypes.has() check)
+        // already guarantees SHADOW-only until a real row exists and clears N>=20 --
+        // the standard new-setup-type pattern, no new gating logic needed.
+        trtLongV2, trtShortV2, cReversalLong, cReversalShort,
         aDownWeak,
         // ibSetup moved to candidates 2026-07-01 — BALANCE suppressed, TREND/TURBULENT promoted
         openDrive,

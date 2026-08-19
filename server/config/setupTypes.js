@@ -526,5 +526,5 @@ export const CONDITIONAL_VARIANTS = {
  * remove the flagged entry from this Set; do not just silence the check.
  */
 export const UNCALIBRATED_SHADOW_TYPES = new Set([
-  'GAP_FILL_LONG', 'TRT_LONG_V2', 'TRT_SHORT_V2', 'A_UP_WEAK', 'A_DOWN_STRONG',
+  'GAP_FILL_LONG', 'A_UP_WEAK', 'A_DOWN_STRONG',
 ]);
