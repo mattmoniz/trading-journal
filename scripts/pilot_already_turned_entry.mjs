@@ -87,7 +87,7 @@ async function main() {
 
   for (const setupType of setupTypes) {
     const tradesRes = await query(`
-      SELECT id, trade_date, fired_at, resolution, actual_pnl,
+      SELECT id, trade_date, fired_at, fired_at::text AS fired_at_raw, resolution, actual_pnl,
              entry_zone_low, entry_zone_high, stop_level, t1_level, setup_type
       FROM active_setups
       WHERE setup_type = $1 AND ${REAL_TRADE_FILTER} AND resolution IN ('STOP_HIT','TARGET_HIT')
@@ -106,14 +106,23 @@ async function main() {
       // Median (high-low) range of the RANGE_WINDOW_BARS bars strictly before fired_at
       // (floored to the minute -- floor-timestamps-to-the-minute convention, real trades
       // carry sub-minute fired_at precision, bars are always on-minute).
+      //
+      // Bug fixed 2026-08-19: fired_at and price_bars_primary.ts are BOTH naive
+      // (timestamp without time zone) columns holding the same ET wall-clock convention.
+      // node-pg parses a naive column into a JS Date by tagging the wall-clock digits as
+      // UTC; passing that Date back into a `::timestamptz` cast made Postgres reinterpret
+      // it through the session's America/New_York TimeZone, shifting every lookup by the
+      // ET/UTC offset (verified live: a 14:08 ET fired_at was searched for bars at 10:08).
+      // Fix: fetch fired_at::text (the raw naive string) and cast with plain `::timestamp`
+      // -- naive-to-naive, no timezone reinterpretation involved.
       const rangeRes = await query(`
         SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY (high - low)) AS median_range
         FROM (
           SELECT high::float AS high, low::float AS low FROM price_bars_primary
-          WHERE symbol = 'NQ' AND ts < date_trunc('minute', $1::timestamptz)
+          WHERE symbol = 'NQ' AND ts < date_trunc('minute', $1::timestamp)
           ORDER BY ts DESC LIMIT ${RANGE_WINDOW_BARS}
         ) recent
-      `, [t.fired_at]);
+      `, [t.fired_at_raw]);
       const medianRange = +rangeRes.rows[0]?.median_range;
       if (!Number.isFinite(medianRange) || medianRange <= 0) continue;
 
@@ -122,8 +131,8 @@ async function main() {
       const closesRes = await query(`
         SELECT ts, close::float AS close FROM price_bars_primary
         WHERE symbol = 'NQ'
-          AND ts IN (date_trunc('minute', $1::timestamptz), date_trunc('minute', $1::timestamptz) - ($2::text || ' minutes')::interval)
-      `, [t.fired_at, String(LOOKBACK_MIN)]);
+          AND ts IN (date_trunc('minute', $1::timestamp), date_trunc('minute', $1::timestamp) - ($2::text || ' minutes')::interval)
+      `, [t.fired_at_raw, String(LOOKBACK_MIN)]);
       if (closesRes.rows.length < 2) continue;
       const byTs = new Map(closesRes.rows.map(r => [new Date(r.ts).getTime(), r.close]));
       const fireMinuteMs = new Date(t.fired_at).setSeconds(0, 0);

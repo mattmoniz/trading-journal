@@ -1,24 +1,32 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
-## 🔶 2026-08-19: `scripts/pilot_already_turned_entry.mjs` (Build 2 per-type study) — written, NOT working yet, session paused here on user request
+## ✅ 2026-08-19: `scripts/pilot_already_turned_entry.mjs` (Build 2 per-type study) — bug fixed, real negative result recorded
 
-Untracked/uncommitted file on disk, do not assume it produces real numbers. First run returned
-zero classified trades in every arm for all 9 setup_types tested (`SIGNAL`/`DIRECTION_MATCHED_CTRL`/
-`NEVER_SELECTED` all n=0 pooled) — a real bug in the per-trade signal computation (median-bar-range +
-15-min-lookback close-to-close move classification), not yet root-caused. Suspect area: the
-naive-timestamp-vs-timestamptz comparison between `active_setups.fired_at` and `price_bars_primary.ts`
-in the `date_trunc('minute', $1::timestamptz)` queries — this exact bug class (naive ET-wall-clock
-columns silently mis-comparing against timestamptz-cast values) has bitten this session and others
-before (see the CLAUDE.md convention on naive timestamp parsing) and is the first thing to check
-before anything else. Queries execute without error and return plausible-looking row counts (rows:1,
-rows:2), so this is not a crash — the classification logic itself is silently producing zero hits,
-consistent with a timezone-offset mismatch making the minute-exact `ts IN (...)` lookups miss.
-Next step when resumed: print the actual `adv15` values for a handful of trades and sanity-check
-them by hand against raw bar data before re-running the full sweep. This is Build 2 from the
-DeepSeek-reviewed plan below — Build 1 (throttle) is intentionally sequenced after it and untouched.
+Root cause confirmed exactly as suspected: `t.fired_at` (a JS Date object — node-pg parses the naive
+`timestamp without time zone` `fired_at` column by tagging its ET wall-clock digits as UTC) was
+passed into a `$1::timestamptz` cast, and Postgres reinterpreted that value through the session's
+`America/New_York` TimeZone setting, shifting every bar lookup by the ET/UTC offset (verified live:
+a real 14:08 ET `fired_at` produced a bar lookup for 10:08, missing every match). Fix: fetch
+`fired_at::text` (`fired_at_raw`) and cast with plain `::timestamp` (naive-to-naive, no timezone
+reinterpretation) in both the median-range and closes queries — matches the CLAUDE.md convention on
+naive timestamp parsing exactly.
 
-## ✅ 2026-08-19: "four huge losses" cluster-loss research — 2 defect fixes shipped after DeepSeek Phase-0 design critique; the two real fixes (Build 1/Build 2) still to build
+Re-run confirms real classification: 601 real trades classified across all 10 tested setup_types
+(previously 0). Genuine result, recorded via `recordClaim()` (slug-based upsert correctly overwrote
+the earlier fabricated `sample_size=0, CONFIRMED` row — verified only one row now exists for this
+slug): **0 of 10 setup_types show `DIRECTION_SURVIVES`** (favourable move beats adverse move at equal
+distance, N≥20 both arms, rigor-clean) — `RESEARCH_CLAIM already_turned_entry_gate_per_type`,
+`CONFIRMED` negative. Most types landed `INSUFFICIENT_DATA` (control or signal arm <20) rather than a
+clean fail; `IB_BEARISH` was the closest near-miss (`DIRECTION_POSITIVE_NOT_RIGOR_CLEAN`, signal EV
++$22.80 vs control -$15.75, N=60/32, but `computeRigor().clean=false`); `GLOBEX_VWAP_MAGNET_SHORT`
+was the one clean-rigor verdict and it went the other way (`GEOMETRY_ONLY_NO_REAL_SIGNAL`, control EV
+$14.39 > signal EV $3.60). `OPEN_DECISION build2_already_turned_entry_gate_script_broken` resolved.
+
+**Per DeepSeek's decisive recommendation, Build 2 is now settled (negative) — Build 1 (cross-setup-type
+same-direction throttle) is next, still unstarted.** See its bar in the "four huge losses" entry below.
+
+## 🔶 2026-08-19: "four huge losses" cluster-loss research — 2 defect fixes shipped, Build 2 settled negative, Build 1 still to build
 
 Continuation of Opus Audit 8's investigation into the user's recurring "trades are great and then we get four huge losses that wipe out everything" concern. Day-type-conditioned IB stops (the first candidate fix) were tested via `scripts/backtest_ib_daytype_live_reassessment.mjs` and found NOT to help — real IB_BEARISH ~flat/-$1.32/trade once routed through the live `getLiveDayTypeRead()` reassessment engine rather than idealized hindsight; IB_BULLISH untestable (no calibration exists for its buckets). Two leads remained from the audit (Opus R3 "already-turned" entry-timing gate, Opus R4 cross-setup-type same-direction throttle) — DeepSeek ran a Phase-0 design critique on both before any code (`scratch/deepseek_cluster_loss_fixes_design_review.md`, full text preserved there).
 
@@ -26,10 +34,10 @@ Continuation of Opus Audit 8's investigation into the user's recurring "trades a
 1. Removed the backwards cross-setup-type directional conflict gate (~line 8042, was `oppositeActive`/`DIRECTIONAL_CONFLICT_STAND_ASIDE`) — it only stood a candidate aside when an OPPOSITE-direction setup was already ACTIVE, confirmed near-inert (51 fires, 2 distinct days) and backwards relative to the real problem (SAME-direction stacking). Deliberately removed, not reversed — reversing would have silently shipped Build 1's unvalidated conclusion. See `OPEN_DECISION directional_conflict_gate_polarity_pending_build1`.
 2. Re-added `IB_BULLISH: 30` to `REFIRE_COOLDOWN_MINUTES` (~line 8757) — its exclusion cited "globally SUPPRESSed today anyway," which went stale the moment IB_BULLISH moved under the temporary `CAPITAL_EXPOSURE_OVERRIDE` (`STOP_DAY_CLUSTERED`, added 2026-08-19). Without this, IB_BULLISH reverts to a zero-cooldown machine-gun path (13 real fires on 2026-08-06 alone) the instant that override clears. Same-family default (30min, matching IB_BEARISH), not independently validated for IB_BULLISH specifically.
 
-**Still to build, per DeepSeek's decisive recommendation — study Build 2 first, not Build 1:**
-- **Build 2 (Opus R3, already-turned entry gate)**: pooled result already failed `computeReplication()` (held-out -$12.63, the two IB types split in opposite directions — a mixture artifact, not a real edge). Next step: `scripts/pilot_already_turned_entry.mjs`, per-setup-type, reusing `pilot_cvd_divergence.mjs`'s loop/rigor/replay shape but **replacing** its 3-way template's middle arm — the "selection minus signal" arm doesn't exist for this signal because the confound (distance-from-level) IS the signal. DeepSeek's fix: `SIGNAL` (favorable move ≥1.5 bar-ranges) / `DIRECTION_MATCHED_CONTROL` (adverse move of the same magnitude) / `NEVER_SELECTED` (|move|<1.5) — holds distance constant, varies only sign. Also re-price stop/target from actual entry to kill the R:R algebra (same confound class as the overshoot-entry finding, `ARCHITECTURE.md:252`). Bar: per-type `computeRigor().clean`, N≥20, direction-beats-geometry, EV/trade + dollar-forgone framing stated explicitly (gated arm has fewer total dollars despite higher EV/trade — that's expected, not a red flag).
-- **Build 1 (Opus R4, cross-setup-type same-direction throttle)**: study SECOND, only after Build 2 either survives (recompute on the post-gate stream) or is rejected (study on current stream). Does not clear "Stage-1 finding" yet — must (a) explain the 4+ same-direction-fires-in-30min rebound as a day-regime confound test, not assert it, (b) show a genuine K-plateau (value-adjacent K/W neighbors same-sign — currently fails, K=1/60 inverts the K=2/30 result), (c) pass `computeRigor().clean` on the kept arm. Count ACTIVE-only fires (not ACTIVE+SHADOW) since a SHADOW fire is real capital deliberately not risked. No live wiring, including SHADOW-informational, until all three clear.
-- **Composition risk flagged for later**: if both eventually clear independently, naive AND-ing would retain only ~28% of an ACTIVE stream that's already collapsed to 3-4 fires/day (Audit 8 §6.3) — "roster-destroying, not risk refinement." Run a joint simulation with an explicit combined-retention floor before wiring both; default expectation is one (or neither) survives, not both.
+**Build status:**
+- **Build 2 (Opus R3, already-turned entry gate) — SETTLED NEGATIVE 2026-08-19.** Per-setup-type re-test (`scripts/pilot_already_turned_entry.mjs`) ran clean after a naive-timestamp bug fix (see the entry above this one) — 0 of 10 tested setup_types show `DIRECTION_SURVIVES`. `RESEARCH_CLAIM already_turned_entry_gate_per_type`, `CONFIRMED`. No live wiring, including SHADOW-informational.
+- **Build 1 (Opus R4, cross-setup-type same-direction throttle)**: next up, unstarted. Does not clear "Stage-1 finding" yet — must (a) explain the 4+ same-direction-fires-in-30min rebound as a day-regime confound test, not assert it, (b) show a genuine K-plateau (value-adjacent K/W neighbors same-sign — currently fails, K=1/60 inverts the K=2/30 result), (c) pass `computeRigor().clean` on the kept arm. Count ACTIVE-only fires (not ACTIVE+SHADOW) since a SHADOW fire is real capital deliberately not risked. No live wiring, including SHADOW-informational, until all three clear.
+- **Composition risk was flagged for later but is now moot for Build 2** since it settled negative — was: "if both eventually clear independently, naive AND-ing would retain only ~28% of an ACTIVE stream that's already collapsed to 3-4 fires/day (Audit 8 §6.3)." No longer applies since only Build 1 remains in play.
 
 ## ✅ 2026-08-19: `PD_POC_FADE_SHORT` "negative EV" concern (Opus Audit 8 incidental finding) — investigated, not a stat bug, surfaced a concrete case of the known RTH/Globex name-collision issue
 
