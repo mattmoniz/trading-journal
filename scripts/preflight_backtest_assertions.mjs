@@ -101,11 +101,11 @@ function checkDollarsPerPoint(src) {
 // concrete defect that motivated building this whole script): outcome determination must go
 // through a shared, genuinely order-aware resolver, never an inline mae/mfe threshold check.
 function checkSharedResolver(src) {
-  const hasInlineOrderBlindCheck = /\bmae(_points)?\s*>\s*\w*stop\w*/.test(src) && /\bmfe(_points)?\s*>=?\s*\w*target\w*/.test(src);
+  const hasInlineOrderBlindCheck = /\bmae(_points)?\s*>=?\s*\w*stop\w*/i.test(src) && /\bmfe(_points)?\s*>=?\s*\w*target\w*/i.test(src);
   if (!hasInlineOrderBlindCheck) return null;
   const usesSharedResolver = /\bresolve\s*\(/.test(src) || /computeEvAtStopTargetChronological/.test(src) || /sweepOptimalStopAndTargetChronological/.test(src);
   if (usesSharedResolver) return null; // has the pattern AND the real resolver -- likely a comment/docstring or a guarded fallback path
-  return 'has an inline `mae > stop` / `mfe >= target`-shaped comparison with no shared chronological resolver (resolve()/computeEvAtStopTargetChronological/sweepOptimalStopAndTargetChronological) imported -- this is the exact order-blindness confound found in scripts/backtest_rth_calibration_genuine_holdout.mjs and scripts/update_optimal_stops.mjs\'s old sweepOptimalStopAndTarget() 2026-08-05: two arms with different stop widths compared via mae_points/mfe_points alone systematically favors the wider one, since neither value carries which happened first';
+  return 'has an inline `mae > stop` / `mfe >= target`-shaped comparison with no shared chronological resolver (resolve()/computeEvAtStopTargetChronological/sweepOptimalStopAndTargetChronological) imported -- this is the exact order-blindness confound found in scripts/backtest_rth_calibration_genuine_holdout.mjs and scripts/update_optimal_stops.mjs\'s old sweepOptimalStopAndTarget() 2026-08-05: mae/mfe carry no notion of which was crossed first, so a genuinely order-aware resimulation may find either an inflated OR a deflated EV/win-rate vs. this script\'s inline check -- read the actual win/loss branch in THIS file (2026-08-19 DeepSeek QA: scripts/backtest_confluence.js and its siblings use the conservative `mae>=stop` -> loss form, which under- not over-states EV) before assuming which direction applies here';
 }
 
 // Assertion 7 (added 2026-08-05, split out of assertion 4 -- see its comment): run_date/
