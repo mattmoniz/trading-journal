@@ -31,6 +31,7 @@ async function main() {
     WHERE origin_status IN ('ACTIVE', 'SHADOW')
       AND status IN ('RESOLVED', 'EXPIRED')
       AND t1_level IS NOT NULL AND stop_level IS NOT NULL AND entry_zone_low IS NOT NULL
+    ORDER BY fired_at ASC
   `);
   const allTrades = tradesRes.rows;
   console.log(`Loaded ${allTrades.length} candidate real trades.`);
@@ -116,6 +117,19 @@ async function main() {
     };
     
     for (const mult of WIDER_MULTIPLIERS) {
+      if (mult === 1.0) {
+        // "Bank T1 immediately, don't hold for anything wider" -- deliberately NOT run
+        // through stepWiderTarget(). DeepSeek code review (2026-08-19, blocking finding):
+        // with widerTarget===t1, the walker's armed branch has no "bank now" case, so it
+        // instead simulates "arm, then wait for a T1 RE-TOUCH with the original stop still
+        // live" -- strictly worse than banking immediately (confirmed: 1.0x was the worst
+        // row in every group in the pre-fix run, so it could never win argmax and the
+        // candidate was structurally unable to express what it was added for). Matches the
+        // predecessor script's convention (wider_target_backtest_1yr.mjs): 1.0x = baseline,
+        // delta = 0.
+        tradeResult.multResults[mult] = { armed: true, resolution: null, baselinePnl: dummySim.baselinePnl, simPnl: dummySim.baselinePnl };
+        continue;
+      }
       tradeResult.multResults[mult] = runSim(trade, direction, mult);
     }
     eligibleTrades.push(tradeResult);
@@ -125,8 +139,17 @@ async function main() {
 
   function summarizeGroup(trades) {
     const summary = {};
+    // Sort chronologically before building events -- DeepSeek code review (2026-08-19,
+    // should-fix finding): computeRigor()'s 3-way "thirds" stability check slices by
+    // ARRAY POSITION, assuming chronological order. The query itself is now ORDER BY
+    // fired_at, but a bet_class-pooled group (thin setup_types merged via getBetClass())
+    // is built by concatenating each setup_type's own chronological sub-array one after
+    // another (trades.push(...typeTrades) per type) -- NOT globally chronological across
+    // types. Sorting here, not just at the query, is what actually fixes it for those
+    // groups.
+    const sortedTrades = [...trades].sort((a, b) => a.trade_date.localeCompare(b.trade_date));
     for (const mult of WIDER_MULTIPLIERS) {
-      const events = trades.map(t => ({
+      const events = sortedTrades.map(t => ({
         date: t.trade_date,
         delta: t.multResults[mult].simPnl - t.baselinePnl,
         simPnl: t.multResults[mult].simPnl,
