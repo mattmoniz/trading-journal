@@ -231,4 +231,13 @@ echo "=== Weekly backtest run: $(date) ==="
 # slow_deep_adverse_grind_early_exit. Does not wire anything live.
 /usr/bin/node scripts/backtest_slow_deep_early_exit.mjs
 
+# Same-direction fire-density throttle, "Build 1" (2026-08-19, Opus Audit 8 §2.4/R4 re-test).
+# CONFIRMED negative as of first run per DeepSeek's bar (A): the 4+ rebound IS explained by
+# day clustering and the K=2/W=30 K/W plateau DOES pass, but the kept arm fails
+# computeRigor().clean (chronological instability -- EV declines into a negative final third).
+# Still open, not a hard structural rejection -- scheduled so it self-recalibrates as real
+# ACTIVE N grows and the instability either resolves or hardens. RESEARCH_CLAIM
+# same_direction_throttle_stage1. Does not wire anything live.
+/usr/bin/node scripts/pilot_same_direction_throttle.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
