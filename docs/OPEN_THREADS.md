@@ -1,6 +1,13 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-08-19: Quick-decisions sweep, round 2 — 3 more resolved, 2 correctly left open (still genuinely thin)
+
+- **`dta_population_query_excludes_4_live_nonfade_types`**: fixed, one-line-per-site — `DAY_TYPE_ALPHA`'s population query excluded `GLOBEX_VWAP_MAGNET_LONG/SHORT`/`MOMENTUM_60m_60m_TREND`/`STOP_SWEEP_LONG` (names don't contain "FADE", not in the IB allowlist), same gap/fix pattern as the 2026-07-23 IB extension. Ran live: `GLOBEX_VWAP_MAGNET_SHORT`/`LONG` now get real day-type coverage (N=433/N=1001) that was silently dropped before.
+- **`value_fade_override_failed_auction_long_review`**: unblocked by the 2026-08-16 cascade-breaker repair. Checked with clean data — `FAILED_AUCTION_LONG`'s real EV is -$13.78 (N=27, degrading trend), nowhere near the override's "own EV≥0" escape hatch. Current `SUPPRESS` is correct, not a wrongful suppression.
+- **`gemini_modified_shared_scratch_fn_silent_regression`**: closed — a process lesson whose mitigation was already stated as applied in its own flag text, no pending decision was ever attached to it.
+- **Checked but correctly left open** (genuinely still blocked on real-world data, not stale): `selected_over_starvation_recheck_at_n20` (N=2, still far below the N≥20 recheck floor) and `remove_cascade_diag_after_confirmed` (the specific log pattern DeepSeek wanted to observe — `winnerFound=true` with a non-obvious candidate — still hasn't occurred, 0 matches in `scratch/cascade_diag.log`'s 2028 lines).
+
 ## ✅ 2026-08-19: Quick-decisions sweep — 7 resolved (1 real dead-code fix, 2 already-fixed closures, 3 live verifications, 1 trivial bug)
 
 Worked through a batch of quick/verify-type pending `OPEN_DECISION`s in one pass:
