@@ -714,4 +714,13 @@ async function run() {
   await pool.end();
 }
 
-run().catch(e => { console.error('[backtest_setup_status] ERROR:', e.message); process.exit(1); });
+// Guarded 2026-08-19 (found live: exporting REAL_TRADE_FILTER for
+// backtest_ib_window_reclassification_impact.mjs to import caused THIS ENTIRE SCRIPT to
+// execute as an import side effect -- a real, unintended live write of 247 rows to
+// SETUP_STATUS_DOW, plus a pool.end() that then killed every subsequent query in the
+// importing script. Same guard pattern already used by update_optimal_stops.mjs (which
+// documents the exact same reasoning) -- `node scripts/backtest_setup_status.mjs` still runs
+// normally; `import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs'` no longer does.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().catch(e => { console.error('[backtest_setup_status] ERROR:', e.message); process.exit(1); });
+}
