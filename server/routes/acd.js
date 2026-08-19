@@ -6725,8 +6725,17 @@ export default function createACDRouter(io) {
             // "AFTER_IB" had been a stale, misleading name for ungated logic for nearly a
             // month. Full active_setups/performance_audit/level_prices history renamed in
             // place (backup: *_or_rename_backup_20260812, see docs/DB_BACKUP_CATALOG.md).
-            { name: 'IB_MID_SCALP_FADE', level: etMinNow >= 630 ? ibMid : null,  mae_p75: 50, mfe: 15, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
-            { name: 'OR5_MID_FADE',      level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR5_MID') || {}) },
+            // mae_p75/mfe literals REMOVED 2026-08-19 (OPEN_DECISION
+            // hardcoded_stop90_target40_fallback_needs_fix, extended cleanup pass) — both types
+            // now have real OPTIMAL_STOP rows (currently volatility-scaled-default method, not
+            // yet a full EV-sweep) that already take precedence over these via optStop?.stop ??
+            // ..., making the literals dead code today — but a stale, wrong number (50/15,
+            // 35/20 — neither matches the current real 39-45pt/40-43pt and 31-35pt/35-49pt
+            // calibration) left in place is a landmine if optStop ever becomes unavailable
+            // again. Falls through to getVolatilityScaledDefault() same as every other cleaned
+            // literal in this list.
+            { name: 'IB_MID_SCALP_FADE', level: etMinNow >= 630 ? ibMid : null, mfe_p75: 30, ...(ls('IB_MID_SCALP') || {}) },
+            { name: 'OR5_MID_FADE',      level: orMid, mfe_p75: 40, ...(ls('OR5_MID') || {}) },
             // OR10/15/30 MID — added 2026-08-12, same SHADOW-only convention as the HIGH/LOW
             // entries above. Unlike the old OR_MID_AFTER_IB name, none of these wait for IB.
             // mae_p75/mfe literals REMOVED 2026-08-19 (OPEN_DECISION
