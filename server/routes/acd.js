@@ -30,6 +30,7 @@ import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../servi
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
+import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
@@ -103,6 +104,41 @@ function getCached(tradeDate, key, ttl = LEVEL_CACHE_TTL) {
 function setCached(tradeDate, key, val) {
   _levelCache[cacheKey(tradeDate, key)] = { val, ts: Date.now() };
   return val;
+}
+
+// Volatility-scaled default stop/target — replaces the bare hardcoded 90pt/40pt literal
+// fallback (OPEN_DECISION hardcoded_stop90_target40_fallback_needs_fix, DeepSeek blast-radius
+// investigation 2026-08-19). Previously, a candidate with neither a real OPTIMAL_STOP row nor
+// UNIFIED_BACKTEST mae_p75/mfe data fell straight through to a flat STOP=90/TARGET=40 (a 2.25:1
+// risk:reward needing 69% WR to break even, vs this codebase's calibrated norm of ~0.85-1.2:1,
+// and 9x the current 30-day NQ median bar range) -- confirmed live: OR10_LOW_FADE_LONG's
+// first-ever touch (id 99881) fired straight into this fallback and lost -$182 on a 90pt
+// stop-out. This reuses update_optimal_stops.mjs's own volatility-scaled-default formula
+// (loadVolatilityDefaultInputs()/computeVolatilityDefaultRatios(), the SAME functions that
+// script uses when a setup_type's real N is too thin to sweep a real optimum) rather than
+// inventing a second formula -- "share modules instead of reimplementing." Cached once per
+// trading day (DAY_CACHE_TTL) since the inputs (a system-wide ratio derived from all
+// real-N-qualified setup_types' calibrated stops, plus a 30-day trailing median bar range) are
+// not intraday-sensitive. Deliberately NOT touching computeStopTargetForType() itself (the
+// function test_invariants.mjs re-derives expected values from) -- mirrors its 2-line
+// vol-default branch (update_optimal_stops.mjs ~622-627) exactly, same precedent this codebase
+// already used when loadVolatilityDefaultInputs() was extracted ("the two pre-existing inline
+// copies were deliberately left as-is... only new callers should use this").
+async function getVolatilityScaledDefault(tradeDate) {
+  const cached = getCached(tradeDate, 'volDefault', DAY_CACHE_TTL);
+  if (cached) return cached;
+  try {
+    const { priorStoredByType, realNByType, medianBarRange } = await loadVolatilityDefaultInputs();
+    const { volScaleRatio, targetStopRatio, canComputeVolDefault } = computeVolatilityDefaultRatios({ priorStoredByType, realNByType, medianBarRange });
+    if (!canComputeVolDefault) return setCached(tradeDate, 'volDefault', null);
+    const noiseFloorPt = 1.5 * medianBarRange;
+    const stop = Math.max(Math.round(volScaleRatio * medianBarRange), Math.ceil(noiseFloorPt));
+    const target = Math.round(stop * targetStopRatio);
+    return setCached(tradeDate, 'volDefault', { stop, target });
+  } catch (e) {
+    console.error('[getVolatilityScaledDefault] failed, callers fall back to their own hardcoded default:', e.message);
+    return setCached(tradeDate, 'volDefault', null);
+  }
 }
 
 // ── Value-area regime stamping (measurement layer only, 2026-07-31) ────────────────
@@ -6079,8 +6115,12 @@ export default function createACDRouter(io) {
               } else if (Math.abs(dist24) <= 15) {
                 const isLong = currentPrice < vwap24Now; // matches detectGlobexSetup's pocDir-style convention
                 const type = isLong ? 'GLOBEX_VWAP_FADE_LONG' : 'GLOBEX_VWAP_FADE_SHORT';
-                const stopPts = _rthGlobexOpt?.[type]?.stop ?? 90;
-                const t1Pts = _rthGlobexOpt?.[type]?.target ?? 40;
+                // Volatility-scaled fallback (OPEN_DECISION hardcoded_stop90_target40_fallback_needs_fix)
+                // — was a bare ?? 90 / ?? 40 literal until 2026-08-19, same fix as the main
+                // level-fade fallback below.
+                const _rthVolDefault = await getVolatilityScaledDefault(todayET);
+                const stopPts = _rthGlobexOpt?.[type]?.stop ?? _rthVolDefault?.stop ?? 90;
+                const t1Pts = _rthGlobexOpt?.[type]?.target ?? _rthVolDefault?.target ?? 40;
                 globexVwapFadeRTH = {
                   type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
                   stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
@@ -6103,8 +6143,13 @@ export default function createACDRouter(io) {
           const approachDir = last5[0].close < currentPrice ? 'FROM_BELOW' : 'FROM_ABOVE';
           // Fallback stop/target — only used when no OPTIMAL_STOP row exists AND no mae_p75 from level data.
           // Per-setup-type values are loaded from performance_audit via liveStats._opt[type].
-          const STOP = 90;   // Fallback — only fires when _opt[type] is null AND lv.mae_p75 is null
-          const TARGET = 40; // Fallback — only fires when _opt[type] is null AND lv.mfe is null
+          // Volatility-scaled (getVolatilityScaledDefault, OPEN_DECISION
+          // hardcoded_stop90_target40_fallback_needs_fix) — was a bare STOP=90/TARGET=40 literal
+          // until 2026-08-19; falls back to that same historical literal only if the vol-default
+          // computation itself fails (e.g. genuinely zero real-N-qualified types anywhere yet).
+          const _volDefault = await getVolatilityScaledDefault(todayET);
+          const STOP = _volDefault?.stop ?? 90;
+          const TARGET = _volDefault?.target ?? 40;
 
           // Compute rolling composite levels
           // Batched 2026-07-15 — these 7 lookups only depend on todayET/etMinNow, none
@@ -6684,9 +6729,15 @@ export default function createACDRouter(io) {
             { name: 'OR5_MID_FADE',      level: orMid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR5_MID') || {}) },
             // OR10/15/30 MID — added 2026-08-12, same SHADOW-only convention as the HIGH/LOW
             // entries above. Unlike the old OR_MID_AFTER_IB name, none of these wait for IB.
-            { name: 'OR10_MID_FADE', level: or10Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR10_MID') || {}) },
-            { name: 'OR15_MID_FADE', level: or15Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR15_MID') || {}) },
-            { name: 'OR30_MID_FADE', level: or30Mid, mae_p75: 35, mfe: 20, mfe_p75: 40, ...(ls('OR30_MID') || {}) },
+            // mae_p75/mfe literals REMOVED 2026-08-19 (OPEN_DECISION
+            // hardcoded_stop90_target40_fallback_needs_fix) — these 3 types had no real
+            // OPTIMAL_STOP/UNIFIED_BACKTEST data, so the bare 35/20 literal was the ONLY value
+            // ever used, never actually a fallback. Now correctly falls through to
+            // getVolatilityScaledDefault() (STOP/TARGET below) like OR10/15/30_HIGH/LOW already
+            // did — still overridable by ls('OR{N}_MID') if real calibration data appears.
+            { name: 'OR10_MID_FADE', level: or10Mid, mfe_p75: 40, ...(ls('OR10_MID') || {}) },
+            { name: 'OR15_MID_FADE', level: or15Mid, mfe_p75: 40, ...(ls('OR15_MID') || {}) },
+            { name: 'OR30_MID_FADE', level: or30Mid, mfe_p75: 40, ...(ls('OR30_MID') || {}) },
             // Ordinary close-range VWAP touch (within the standard 15pt window every other
             // level here uses), distinct from VWAP_MAGNET's far-away sigma-distance trigger
             // just above. Added 2026-07-28 per direct user pushback ("what about fades off
