@@ -59,4 +59,16 @@ echo "=== Daily calibration: $(date) ==="
 # nothing is deleted, and it no-ops cleanly when there's nothing old enough to move.
 /usr/bin/node scripts/archive_open_threads.mjs --apply
 
+# Wider-target MULTIPLIER calibration (2026-08-19, OPEN_DECISION
+# wider_target_calib_needs_deepseek_review) -- distinct from audit_wider_target_live.mjs
+# above, which just monitors the already-live fixed 1.5x mechanism. This sweeps candidate
+# multipliers (1.0x/1.2x/1.5x/1.8x/2x/2.5x -- 1.0x deliberately included, see the script's
+# own header comment) against real armed trades to ask what the multiplier SHOULD be,
+# per-setup_type/bet_class. Daily, not weekly (user-confirmed 2026-08-19): if the market
+# shifts regime, waiting up to 6 days for the next weekly run to reflect new real data is
+# too slow -- the N>=20 floor, plateau/rigor checks are what prevent chasing noise, not run
+# frequency. PROVISIONAL/descriptive only until DeepSeek's code review lands -- writes a
+# RESEARCH_CLAIM, does not wire anything live.
+/usr/bin/node scripts/backtest_calibrated_wider_target.mjs
+
 echo "=== Daily calibration complete: $(date) ==="

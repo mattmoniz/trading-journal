@@ -3,11 +3,20 @@ import { resolveDirection, getBetClass } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from '../server/services/widerTargetWalker.js';
+import { recordClaim } from './record_claim.mjs';
 import fs from 'fs';
 
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
-const WIDER_MULTIPLIERS = [1.2, 1.5, 1.8, 2.0, 2.5];
+// 1.0x kept in the grid deliberately (2026-08-19 user-confirmed design decision, see
+// OPEN_DECISION wider_target_calib_needs_deepseek_review): the mechanism only ever arms
+// after a fast T1 hit (bars_to_resolution<=MAX_BARS_TO_T1_FOR_WIDER) -- once armed, there
+// is no existing way to express "for THIS type, bank T1 immediately anyway instead of
+// continuing to hold," since every other candidate implies holding for a wider level. A
+// type that arms but loses money once held for ANY wider target (confirmed independently
+// for VWAP_MAGNET_LONG, -$16.92 to -$24/trade) needs 1.0x to be selectable as the winning
+// candidate, not just excluded from the grid.
+const WIDER_MULTIPLIERS = [1.0, 1.2, 1.5, 1.8, 2.0, 2.5];
 
 async function main() {
   console.log('Loading real resolved trades...');
@@ -204,11 +213,60 @@ async function main() {
     md += '\n';
   }
 
+  // Leading candidate per group -- argmax(meanDelta) among multipliers with N>=20, purely
+  // descriptive (not a validated pick). 1.0x can win here, meaning "arms but loses money
+  // once held for any wider target -- bank T1 immediately instead" (the exact case this
+  // candidate was added to express, see the WIDER_MULTIPLIERS comment above).
+  function leadingCandidate(summary) {
+    let best = null;
+    for (const mult of WIDER_MULTIPLIERS) {
+      const s = summary[mult];
+      if (s.N < 20) continue;
+      if (!best || s.meanDelta > best.meanDelta) best = { mult, ...s };
+    }
+    return best;
+  }
+
+  const pooledLeading = leadingCandidate(pooledSummary);
+  const groupLeading = {};
+  for (const [groupName, data] of Object.entries(finalGroups)) {
+    const s = summarizeGroup(data.trades);
+    groupLeading[groupName] = { isBetClass: data.isBetClass, N: data.trades.length, leading: leadingCandidate(s) };
+  }
+
   md += '\n## Recommendation\n';
-  md += '*(To be filled by Antigravity after reviewing the results)*\n';
+  md += pooledLeading
+    ? `Pooled leading candidate (argmax mean EV delta among N>=20 multipliers, NOT yet DeepSeek-reviewed): ${pooledLeading.mult}x, meanDelta=$${pooledLeading.meanDelta.toFixed(2)}, rigor.clean=${pooledLeading.rigor.clean}.\n`
+    : 'Pooled: no multiplier clears N>=20.\n';
+  md += 'Per-group leading candidates below are descriptive only -- none of this is wired live. See OPEN_DECISION wider_target_calib_needs_deepseek_review for review status.\n';
 
   fs.writeFileSync('scratch/wider_target_multiplier_calibration_RESULTS.md', md);
   console.log('Results written to scratch/wider_target_multiplier_calibration_RESULTS.md');
+
+  // Persist per CLAUDE.md's no-dead-ends rule -- a computed calibration finding must be
+  // queryable, not just a scratch/*.md file. PROVISIONAL: methodology has not yet had its
+  // DeepSeek code review (OPEN_DECISION wider_target_calib_needs_deepseek_review), and no
+  // per-group number here is wired to anything live.
+  const { rows: todayRows } = await query(`SELECT CURRENT_DATE::text as today`);
+  await recordClaim({
+    slug: 'wider_target_multiplier_calibration',
+    claimText: `Wider-target-mechanism multiplier calibration (candidates ${WIDER_MULTIPLIERS.join('/')}x, real armed trades only). Pooled N=${eligibleTrades.length}, leading candidate ${pooledLeading ? `${pooledLeading.mult}x (meanDelta=$${pooledLeading.meanDelta.toFixed(2)}, rigor.clean=${pooledLeading.rigor.clean})` : 'none clear N>=20'}. Per-group breakdown in extra. NOT DeepSeek-reviewed yet, NOT wired live -- descriptive only.`,
+    sourceFile: 'scripts/backtest_calibrated_wider_target.mjs',
+    sourceDate: todayRows[0].today,
+    sampleSize: eligibleTrades.length,
+    evPerTrade: pooledLeading ? +pooledLeading.meanDelta.toFixed(2) : null,
+    rigorStatus: pooledLeading ? JSON.stringify(pooledLeading.rigor) : 'not_checked',
+    status: 'PROVISIONAL',
+    extra: {
+      candidates: WIDER_MULTIPLIERS,
+      pooled_leading: pooledLeading ? { mult: pooledLeading.mult, meanDelta: +pooledLeading.meanDelta.toFixed(2), rigorClean: pooledLeading.rigor.clean } : null,
+      by_group: Object.fromEntries(Object.entries(groupLeading).map(([k, v]) => [k, {
+        isBetClass: v.isBetClass, N: v.N,
+        leading: v.leading ? { mult: v.leading.mult, meanDelta: +v.leading.meanDelta.toFixed(2), rigorClean: v.leading.rigor.clean } : null,
+      }])),
+    },
+  });
+  console.log('Recorded RESEARCH_CLAIM wider_target_multiplier_calibration (PROVISIONAL, pending DeepSeek review).');
 }
 
 main().catch(console.error);
