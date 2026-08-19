@@ -8034,18 +8034,18 @@ export default function createACDRouter(io) {
       }
 
       if (active) {
-        // Directional conflict check: suppress if opposite-direction setup is already active today
-        const activeToday = await query(`
-          SELECT setup_type, fired_at::text as fired_at FROM active_setups
-          WHERE trade_date=$1 AND status='ACTIVE'
-        `, [todayET]).catch(() => ({ rows: [] }));
-        const oppositeActive = activeToday.rows.find(s => inferDirection(s.setup_type) !== active.direction);
-        if (oppositeActive) {
-          const conflictReason = `opposite-direction setup already active today: ${oppositeActive.setup_type} (${inferDirection(oppositeActive.setup_type)}) fired ${oppositeActive.fired_at}`;
-          console.log(`[setup-detection] CONFLICT: ${active.type} (${active.direction}) vs active ${oppositeActive.setup_type} (${inferDirection(oppositeActive.setup_type)}). Standing aside.`);
-          logGatedCandidate({ tradeDate: todayET, setupType: active.type, gateName: 'DIRECTIONAL_CONFLICT_STAND_ASIDE', gateReason: conflictReason, entry: active.entry, stop: active.stop, target: active.target });
-          active = null;
-        }
+        // Cross-setup-type directional conflict gate removed 2026-08-19 (DeepSeek Phase-0 design
+        // review, scratch/deepseek_cluster_loss_fixes_design_review.md, defect 1). It stood a NEW
+        // candidate aside only when an OPPOSITE-direction setup was already ACTIVE -- confirmed
+        // near-inert (51 fires / 2 distinct days) and backwards relative to the actual problem
+        // Opus Audit 8 identified (SAME-direction stacking, not opposite-direction conflict).
+        // Reversing its polarity here would silently ship Build 1's (Opus R4, cross-setup-type
+        // same-direction throttle) unvalidated conclusion under the guise of a defect fix -- that
+        // gate's own preliminary numbers are K-sensitive (helps at max-2/30min, inverts at
+        // max-1/60min, the same brittleness signature that killed the 2026-07-30 4H-EMA filter).
+        // Whether and how to gate on same-direction density is Build 1's question to answer via
+        // scripts/pilot_already_turned_entry.mjs-style per-setup-type study, not a one-line polarity
+        // flip. Recorded as OPEN_DECISION directional_conflict_gate_polarity_pending_build1_throttle_study.
 
         // Build full trade brief: WHY NOW + PACE + SIZE
         if (active) {
@@ -8750,12 +8750,19 @@ export default function createACDRouter(io) {
         // (scripts/backtest_vwap_magnet.mjs: 2025-11-20, 107 of 1158 VWAP_MAGNET_LONG
         // backfilled fires from repeated ~2-bar-apart stop-outs in one session), same
         // shape of problem as the validated IB_BEARISH fix (OPEN_DECISION
-        // vwap_magnet_repeated_whipsaw_on_trend_days). IB_BULLISH deliberately excluded —
-        // its own cooldown backtest cell failed computeReplication (see the RESEARCH_CLAIM
-        // above), and it's globally SUPPRESSed today anyway. `resolved_at` (not
+        // vwap_magnet_repeated_whipsaw_on_trend_days). IB_BULLISH re-added 2026-08-19 (DeepSeek
+        // Phase-0 design review, scratch/deepseek_cluster_loss_fixes_design_review.md, defect 2)
+        // — its prior exclusion cited "globally SUPPRESSed today anyway," which went stale the
+        // moment IB_BULLISH moved under CAPITAL_EXPOSURE_OVERRIDE (STOP_DAY_CLUSTERED,
+        // setupEligibility.js, addedDate 2026-08-19) — an explicitly temporary, revisit-gated
+        // brake, not a permanent suppression. Without this cooldown, IB_BULLISH reverts to a
+        // zero-cooldown machine-gun path (13 real fires on 2026-08-06 alone) the instant that
+        // override clears. Same 30min same-family default as IB_BEARISH — NOT independently
+        // validated for IB_BULLISH (its own cooldown cell failed computeReplication), a
+        // precautionary default same as the VWAP_MAGNET family below. `resolved_at` (not
         // resolution_bar_time) matches the cascadeBreaker precedent 130 lines above.
         const REFIRE_COOLDOWN_MINUTES = {
-          IB_BEARISH: 30,
+          IB_BEARISH: 30, IB_BULLISH: 30,
           VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
           GLOBEX_VWAP_MAGNET_LONG: 30, GLOBEX_VWAP_MAGNET_SHORT: 30,
         };
