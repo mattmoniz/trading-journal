@@ -1357,10 +1357,15 @@ async function detectGlobexSetup(sessionDate, io) {
       const stop   = isLong ? px - STOP  : px + STOP;
       const target = isLong ? px + T1    : px - T1;
 
-      // The 3 original PD candidates fire straight to ACTIVE unconditionally (existing,
-      // unchanged behavior). The 4 wider-window candidates are brand new (N=0 live history)
-      // — dynamically SHADOW-gated via getOvernightLevelLiveStatus(), same discipline as
-      // minuteBarSignalDetector.js, until N>=20 real resolutions clear the bar.
+      // STALE COMMENT CORRECTED 2026-08-19 (see resolved OPEN_DECISION
+      // globex_pd_types_bypass_suppression_pipeline): this used to say the 3 original PD
+      // candidates "fire straight to ACTIVE unconditionally" — that was true before
+      // 2026-08-09 (commit 8dcf5ed4), but all 3 now carry widerWindowNew: true same as
+      // every other candidate here (see the candidates array above), so they DO route
+      // through getOvernightLevelLiveStatus() below like everything else. The stale wording
+      // caused a real misdiagnosis in a later session (traced and retracted the same day) —
+      // don't reintroduce it. All candidates in this array are dynamically SHADOW-gated via
+      // getOvernightLevelLiveStatus() until their real SETUP_STATUS clears the bar.
       //
       // UN-PAUSED 2026-08-09: was shadowed 2026-08-05-through-08-09 via
       // PAUSED_UNTIL_ORIGIN_FILTER pending the stop-side origin_status re-baseline
