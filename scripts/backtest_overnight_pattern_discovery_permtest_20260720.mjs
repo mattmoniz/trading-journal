@@ -3,7 +3,7 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import fs from 'fs';
 
-function getLandmark(et_min) {
+export function getLandmark(et_min) {
   if (et_min >= 960) {
     if (et_min < 1080) return '1_Pre_Globex'; // 16:00 - 18:00
     return '2_Evening'; // 18:00 - 00:00
@@ -346,4 +346,15 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(console.error);
+// Import-safety guard (2026-08-19, found live: `import { getLandmark } from
+// './backtest_overnight_pattern_discovery_permtest_20260720.mjs'` in
+// backtest_phase0a_time_windowed_diagnostic.mjs triggered this entire script's real
+// execution -- a real DB query + a recordClaim write + process.exit(0) -- as an import
+// side effect, which killed the importing script's own process before it ran a single
+// line of its own logic. Exact same bug class already fixed once in this codebase
+// (backtest_setup_status.mjs/update_optimal_stops.mjs, same guard). `node
+// scripts/backtest_overnight_pattern_discovery_permtest_20260720.mjs` still runs
+// normally; importing `getLandmark` from it no longer does.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(console.error);
+}

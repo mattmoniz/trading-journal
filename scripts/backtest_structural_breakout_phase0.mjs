@@ -40,16 +40,16 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 
 const SIGNAL_TYPE = 'STRUCTURAL_BREAKOUT_PHASE0'; // 26 chars, fits VARCHAR(30)
-const INTRADAY_SCALES = [5, 10, 20, 30];
+export const INTRADAY_SCALES = [5, 10, 20, 30];
 const DAILY_SCALES = [2, 3, 5];
 const RTH_START = 570, RTH_END = 960; // 9:30am-4:00pm ET
 const MAINT_START = 1020, MAINT_END = 1080; // 5-6pm ET daily maintenance gap
-const LOOKFORWARD_INTRADAY = 200; // bars, ~3.3hr horizon for MAE/MFE calibration + replay
+export const LOOKFORWARD_INTRADAY = 200; // bars, ~3.3hr horizon for MAE/MFE calibration + replay
 const LOOKFORWARD_DAILY = 20; // daily bars, ~1 month horizon
-const MIN_N_FOR_GATE = 20;
+export const MIN_N_FOR_GATE = 20;
 
 // ── Data loading ─────────────────────────────────────────────────────────────
-async function loadBars(regime) {
+export async function loadBars(regime) {
   // FIXED (DeepSeek review, 2026-08-03): RTH_END-1 excluded minute 960 (4:00pm, the RTH
   // closing bar) from RTH AND from the Globex NOT-clause, so it fell through and got
   // misclassified as Globex. BETWEEN is inclusive on both ends -- use RTH_END directly.
@@ -69,7 +69,7 @@ async function loadBars(regime) {
 
 // One row per RTH trading day, built from RTH 1-min bars -- matches this codebase's
 // existing "daily/session" convention (PD_HIGH/PD_LOW etc. use RTH range, not full 24h).
-function buildDailyBars(rthBars) {
+export function buildDailyBars(rthBars) {
   const byDate = new Map();
   for (const b of rthBars) {
     if (!byDate.has(b.trade_date)) byDate.set(b.trade_date, []);
@@ -91,7 +91,7 @@ function buildDailyBars(rthBars) {
 }
 
 // ── Causal rolling ATR-like average range (used for nearTolerance/farThreshold) ────
-function rollingAvgRange(bars, window) {
+export function rollingAvgRange(bars, window) {
   const out = new Array(bars.length).fill(null);
   let sum = 0;
   const q = [];
@@ -109,7 +109,7 @@ function rollingAvgRange(bars, window) {
 // amplitudeFilter: true = apply the rolling swingMin[k] 25th-percentile floor (real
 // structural pivots, Arm 0/1); false = keep every raw fractal point unfiltered (Arm 2's
 // "any local high/low" population).
-function detectPivots(bars, k, amplitudeFilter) {
+export function detectPivots(bars, k, amplitudeFilter) {
   const pivots = [];
   const pastAmplitudesHigh = []; // rolling causal population for the percentile floor
   const pastAmplitudesLow = [];
@@ -182,7 +182,7 @@ function sampleBetaLike() {
   return Math.min(1, Math.max(0, x));
 }
 
-function generateRandomLevels(bars, k, realPivots) {
+export function generateRandomLevels(bars, k, realPivots) {
   const randomLevels = [];
   for (const p of realPivots) {
     const winStart = Math.max(0, p.idx - k * 3);
@@ -208,7 +208,7 @@ function generateRandomLevels(bars, k, realPivots) {
 // For Arm 1/2/3: entry = first bar re-entering nearTolerance from the correct side,
 // after having cleared farThreshold (the "clearly left and came back" logic), within
 // a bounded clearWindow bars of confirmation.
-function scanRetests(bars, pivots, avgRangeSeries, k, isDaily) {
+export function scanRetests(bars, pivots, avgRangeSeries, k, isDaily) {
   const nearMult = 0.5, farMult = 2.5; // stated defaults, not independently tuned (per spec's own allowance)
   const clearWindow = isDaily ? k : k * 3;
   const arm0 = [], armRetest = [];
@@ -304,7 +304,7 @@ function median(arr) {
 }
 
 // ── Simulate an arm: derive stop/target from ITS OWN candidates, then replay ────
-function simulateArm(bars, candidates, lookforward) {
+export function simulateArm(bars, candidates, lookforward) {
   if (!candidates.length) return { n: 0, trades: [] };
   const raw = candidates.map(c => rawExcursion(bars, c.entryIdx, c.direction, lookforward));
   const stopDist = median(raw.map(r => r.mae));
@@ -465,4 +465,15 @@ async function run() {
   await pool.end();
 }
 
-run().catch(e => { console.error('[phase0] ERROR:', e.message, e.stack); process.exit(1); });
+// Import-safety guard (2026-08-19, found live: exporting loadBars/detectPivots/etc for
+// backtest_phase0a_time_windowed_diagnostic.mjs to import triggered this ENTIRE script's
+// real execution -- a full duplicate Phase 0 backtest run plus a `pool.end()` that then
+// crashed the importing script's own persistence step -- as an import side effect. Same
+// bug class already fixed once in this codebase (backtest_setup_status.mjs/
+// update_optimal_stops.mjs, same guard) and found again the same session in
+// backtest_overnight_pattern_discovery_permtest_20260720.mjs. `node
+// scripts/backtest_structural_breakout_phase0.mjs` still runs normally; importing its
+// exported functions no longer does.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  run().catch(e => { console.error('[phase0] ERROR:', e.message, e.stack); process.exit(1); });
+}
