@@ -31,11 +31,34 @@ import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { computeCorrectedTarget, makeBarIndex, WALK_WINDOW_BARS } from '../server/services/targetCalibrationService.js';
+import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
 // Minimum N before we trust a computed optimal stop
 const MIN_N = 20;
 const DEFAULT_STOP = 65;
 const DEFAULT_TARGET = 35;
+
+// MIN_SWEEPABLE_N (2026-08-18, DeepSeek-found + independently verified against live data --
+// see docs/OPEN_THREADS.md's GLOBEX_VWAP_FADE_LONG entry): both sweepOptimalStopAndTarget()
+// and sweepOptimalStopAndTargetChronological() gate EACH candidate percentile individually
+// (`requiredN = ceil(MIN_N / (1 - pct))`, lines below), so the type's OWN N must clear that
+// per-candidate floor before that candidate is even eligible -- MIN_N=20 alone is not
+// sufficient to guarantee ANY candidate survives. realMaeCandidates()/uncensoredMaeCandidates()
+// always start at pct=0.25 (the loosest/cheapest candidate), so this is the true minimum N for
+// a type to get ANY swept value at all: below it, both sweep functions return null for every
+// candidate, and computeStopTargetForType() used to silently fall through to the p75mae-real-
+// fallback branch -- p75 of the CENSORED mae_points column, precisely the self-referential
+// censoring uncensoredMaeCandidates() (2026-08-10) was built to escape -- while still being
+// stored with a `method` that looks like it swept. Confirmed live: GLOBEX_VWAP_FADE_LONG at
+// N=25 (real, origin_status IN ACTIVE/SHADOW) was silently using this fallback for its entire
+// recent history, on a real population that's ALSO 64% concentrated in 5 trading days.
+// computeStopTargetForType() now routes any type below this floor to the SAME
+// volatility-scaled-default branch used for N<MIN_N, rather than the censored fallback --
+// an honest "not enough data to sweep yet" placeholder is strictly better than a fallback
+// that looks calibrated but isn't. Derived from the same MIN_N/loosest-percentile formula the
+// sweep functions themselves use, not a second hardcoded number that could drift out of sync.
+const LOOSEST_CANDIDATE_PCT = 0.25;
+export const MIN_SWEEPABLE_N = Math.ceil(MIN_N / (1 - LOOSEST_CANDIDATE_PCT));
 
 // Circuit breaker (2026-08-04, shipped same-night per direct user/Opus instruction after
 // GLOBEX_VWAP_FADE_LONG's live optimal_stop was found oscillating 83pt<->8pt across
@@ -108,7 +131,14 @@ function minDeltaNRequired(baselineN) {
 // stored row for the same setup_type. Returns { stop, target, ev, notes } -- notes always
 // includes a circuitBreaker object recording what happened, even when nothing tripped,
 // so the decision is inspectable without re-deriving it.
-function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, prior, bypass = false }) {
+// Methods that carry NO per-type validated information -- a placeholder, not a computed
+// optimum (see MIN_SWEEPABLE_N's comment above and DeepSeek's 2026-08-18 review,
+// docs/OPEN_THREADS.md). Used by the placeholder-prior check below.
+const PLACEHOLDER_METHODS = new Set(['volatility-scaled-default', 'p75mae-real-fallback']);
+function isPlaceholderMethod(method) {
+  return PLACEHOLDER_METHODS.has(method);
+}
+function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, prior, bypass = false }) {
   // One-time re-baseline escape hatch (2026-08-09, rawByType_origin_status_filter). Named
   // with the date deliberately so it can't be casually reused as a generic "skip the
   // breaker" flag later -- this run's whole point is that the population feeding every
@@ -129,6 +159,22 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
     // the natural pipeline output through and establish the first baseline.
     return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
       circuitBreaker: { tripped: false, reason: 'no_prior_baseline', lastRecalibratedN: currentN } };
+  }
+  // Placeholder-prior check (2026-08-18, DeepSeek-found + independently verified live:
+  // GLOBEX_VWAP_FADE_LONG's frozen stop=32 was never swept -- prior.method=
+  // 'volatility-scaled-default' -- yet the breaker was refusing every subsequent attempt to
+  // replace it with a REAL calibration, for over 2 days). A placeholder prior carries no
+  // per-type information, so defending it against a "too large" a change is defending nothing
+  // real -- the same logical situation as no_prior_baseline above, just with a non-null stored
+  // value. Only bypasses the gate when the ATTEMPTED value is itself genuinely swept (not
+  // another placeholder) -- swapping one unvalidated number for a differently-unvalidated one
+  // (e.g. the p75mae-real-fallback this same session's MIN_SWEEPABLE_N fix now avoids feeding
+  // here) would not be a real improvement, just a different placeholder wearing the breaker's
+  // approval.
+  if (isPlaceholderMethod(prior.method) && attemptedMethod && !isPlaceholderMethod(attemptedMethod)) {
+    console.error(`  [CIRCUIT BREAKER: PLACEHOLDER PRIOR] ${setupType}: prior stop=${prior.stop}/target=${prior.target} was never swept (method=${prior.method}) -- accepting first genuinely-swept value (method=${attemptedMethod}) stop=${attemptedStop} target=${attemptedTarget} unconditionally.`);
+    return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+      circuitBreaker: { tripped: false, reason: 'prior_was_placeholder_accepting_first_genuine_calibration', priorMethod: prior.method, attemptedMethod, priorStop: prior.stop, priorTarget: prior.target, lastRecalibratedN: currentN } };
   }
   const baselineN = prior.lastRecalibratedN != null ? prior.lastRecalibratedN : prior.sampleSize;
   const deltaN = baselineN != null ? currentN - baselineN : Infinity;
@@ -575,13 +621,13 @@ export function computeStopTargetForType({ realTradesStop, direction, allBars, f
   let swept, optStop, optTarget, targetMethod, usedVolDefault = false;
   let ceilingFullyRejected = null;
 
-  if (realNStop < MIN_N && canComputeVolDefault) {
+  if (realNStop < MIN_SWEEPABLE_N && canComputeVolDefault) {
     swept = null;
     optStop = Math.max(Math.round(volScaleRatio * medianBarRange), Math.ceil(noiseFloorPt));
     optTarget = Math.round(optStop * targetStopRatio);
     targetMethod = 'volatility-scaled-default';
     usedVolDefault = true;
-  } else if (realNStop >= MIN_N) {
+  } else if (realNStop >= MIN_SWEEPABLE_N) {
     // realCandidates (censored mae_points column) stays the fallback for the order-blind sweep
     // below, which has no bar-walk infrastructure of its own and evaluates EV against the same
     // censored mae_points/mfe_points columns -- feeding it an uncensored candidate grid would be
@@ -646,8 +692,8 @@ export function computeStopTargetForType({ realTradesStop, direction, allBars, f
       swept = { stop: optStop, target: optTarget, ev: computeEvAtStopTarget(realTradesStop, optStop, optTarget, stopDpp, targetDpp) };
     }
   } else {
-    // realNStop < MIN_N AND canComputeVolDefault false -- only reachable on a genuinely
-    // first-ever run (no setup_type anywhere clears the real-N floor yet). No sane fallback
+    // realNStop < MIN_SWEEPABLE_N AND canComputeVolDefault false -- only reachable on a
+    // genuinely first-ever run (no setup_type anywhere clears the real-N floor yet). No sane fallback
     // exists without ANY real-N-qualified type to derive a ratio from -- returns null
     // (caller must handle; update_optimal_stops.mjs's own pre-2026-08-09 blended fallback
     // for this one edge case stays inline there, not duplicated here).
@@ -761,6 +807,13 @@ async function main() {
         ev: p.ev_per_trade != null ? parseFloat(p.ev_per_trade) : null,
         sampleSize: p.sample_size != null ? parseInt(p.sample_size) : null,
         lastRecalibratedN: priorNotes?.circuitBreaker?.lastRecalibratedN ?? null,
+        // method (2026-08-18, DeepSeek-found circuit-breaker gap): whether the PRIOR value was
+        // ever a genuinely swept per-type optimum, or a placeholder (volatility-scaled-default
+        // / p75mae-real-fallback). Feeds applyCircuitBreaker()'s isPlaceholderPrior check below --
+        // without this the breaker can defend an admitted placeholder indefinitely, refusing a
+        // real swept value from ever replacing it (confirmed live: GLOBEX_VWAP_FADE_LONG's
+        // prior=32 was never swept, method='volatility-scaled-default').
+        method: priorNotes?.method ?? null,
       };
     }
   }
@@ -881,7 +934,7 @@ async function main() {
   // scoring trades below are computed from this SAME array, so there's no half-fixed seam.
   const rawResReal = await query(`
     SELECT setup_type, mae_points::float, mfe_points::float, actual_pnl::float,
-      fired_at, entry_zone_low::float, entry_zone_high::float
+      fired_at, entry_zone_low::float, entry_zone_high::float, trade_date::text as trade_date
     FROM active_setups
     WHERE mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
       AND mae_points <= 300 AND mfe_points <= 300
@@ -1116,14 +1169,31 @@ async function main() {
       // (now real-N-based) metric going forward, so this stays self-consistent run to run.
       const decision = applyCircuitBreaker({
         setupType: r.setup_type, currentN: realNStop,
-        attemptedStop, attemptedTarget, attemptedEv,
+        attemptedStop, attemptedTarget, attemptedEv, attemptedMethod: targetMethod,
         prior: priorStoredByType[r.setup_type],
         bypass: BYPASS_BREAKER,
       });
       optStop = decision.stop; optTarget = decision.target; optEV = decision.ev;
       let baseNotes = null;
       try { baseNotes = JSON.parse(correctedNotes); } catch (_) { baseNotes = { method: targetMethod }; }
-      correctedNotes = JSON.stringify({ ...baseNotes, circuitBreaker: decision.circuitBreaker });
+      // Day-clustering diagnostic (2026-08-18, DeepSeek-recommended -- see MIN_SWEEPABLE_N's
+      // comment above for the incident): surfaces whether the REAL trades behind a genuinely
+      // swept value are clustered in a handful of days, using this codebase's own centralized
+      // computeRigor() convention (top5DayPct>50 => clustered). Deliberately informational
+      // only, per computeRigor()'s own header ("should NEVER let this feed an ACTIVE/SUPPRESS
+      // or promote/demote decision automatically") -- does not gate the circuit breaker or
+      // change optStop/optTarget, just makes a real risk visible in the stored notes instead
+      // of requiring a manual day-count query to discover it (as this session did by hand for
+      // GLOBEX_VWAP_FADE_LONG: N=25, top5DayPct=64%). Only computed when the type actually has
+      // a genuinely swept value (not a placeholder) and enough real trades to be meaningful --
+      // cheap and skipped otherwise.
+      const rigorDiag = (!isPlaceholderMethod(targetMethod) && realTradesStop.length >= MIN_SWEEPABLE_N)
+        ? computeRigor(realTradesStop, { dateField: 'trade_date', pnlFn: t => Number(t.actual_pnl) || 0 })
+        : null;
+      correctedNotes = JSON.stringify({
+        ...baseNotes, circuitBreaker: decision.circuitBreaker,
+        ...(rigorDiag ? { rigor: { distinctDates: rigorDiag.distinctDates, top5DayPct: rigorDiag.top5DayPct, clustered: rigorDiag.clustered } } : {}),
+      });
     }
 
     if (DRY_RUN) {

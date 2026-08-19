@@ -33,7 +33,7 @@
 //
 // Run: node scripts/audit_wider_target_live.mjs
 import { query } from '../server/db.js';
-import { resolveDirection } from '../server/config/setupTypes.js';
+import { resolveDirection, getBetClass } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { flagDecision } from './flag_decision.mjs';
@@ -185,6 +185,25 @@ async function main() {
   const topSetupType = topEntry ? topEntry[0] : null;
   const topSetupTypeShare = topEntry ? +(100 * topEntry[1] / armedN).toFixed(1) : null;
 
+  // byBetClass/topBetClass (2026-08-18, docs/SLOW_DEEP_EARLY_EXIT_SPEC.md step 4): this
+  // mechanism has the identical "single pooled constant, not per-bet_class" gap as the
+  // slow-deep-early-exit finding, but a different urgency -- upside-only (worst case gives
+  // back a paper gain down to the original stop, not a locked-in real loss) and already
+  // closed-loop monitored here. User explicitly deprioritized a full per-bet_class
+  // recalibration of WIDER_TARGET_MULT until real extra-MFE benefit is confirmed first --
+  // this is just visibility, so a family-specific drift would surface here before any
+  // promotion decision, not a recalibration.
+  const byBetClassMap = {};
+  for (const r of validRows) {
+    const bc = getBetClass(r.setup_type);
+    (byBetClassMap[bc] ||= []).push(r.delta);
+  }
+  const byBetClass = Object.entries(byBetClassMap)
+    .map(([betClass, deltas]) => ({ betClass, n: deltas.length, meanDelta: +mean(deltas).toFixed(2), share: +(100 * deltas.length / armedN).toFixed(1) }))
+    .sort((a, b) => b.n - a.n);
+  const topBetClass = byBetClass[0]?.betClass ?? null;
+  const topBetClassShare = byBetClass[0]?.share ?? null;
+
   const nWiderTargetHit = validRows.filter(r => r.resolution_method === 'WIDER_TARGET_HIT').length;
   const nWiderStopHit = validRows.filter(r => r.resolution_method === 'WIDER_STOP_HIT').length;
   const nWiderTimeExpired = validRows.filter(r => r.resolution_method === 'WIDER_TIME_EXPIRED').length;
@@ -220,6 +239,9 @@ async function main() {
     largest_day_share: largestDayShare,
     top_setup_type: topSetupType,
     top_setup_type_share: topSetupTypeShare,
+    top_bet_class: topBetClass,
+    top_bet_class_share: topBetClassShare,
+    by_bet_class: byBetClass,
     rigor: rigor ? { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered, stable: rigor.stable, thirds: rigor.thirds, clean: rigor.clean } : null,
     survives_largest_day_exclusion: survivesLargestDayExclusion,
     n_at_last_check: nAtLastCheck,

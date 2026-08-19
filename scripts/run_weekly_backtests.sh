@@ -223,4 +223,12 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/pilot_bollinger_squeeze_forward_return.mjs
 /usr/bin/node scripts/pilot_stackvol_horizon_profile.mjs
 
+# "Slow+deep adverse-grind early exit" (2026-08-18) -- consolidated/scheduled version of
+# scripts/pilot_zero_mfe_early_stop.mjs's Part 4, per docs/SLOW_DEEP_EARLY_EXIT_SPEC.md's
+# numbered build plan. PROVISIONAL as of first run: bet_class split found CONTINUATION_LEGACY
+# opposite-sign from the pooled result and computeRigor not clean -- self-recalibrates weekly
+# as real N grows per this file's own standing rule, RESEARCH_CLAIM
+# slow_deep_adverse_grind_early_exit. Does not wire anything live.
+/usr/bin/node scripts/backtest_slow_deep_early_exit.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
