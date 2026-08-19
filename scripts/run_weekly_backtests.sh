@@ -240,4 +240,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # same_direction_throttle_stage1. Does not wire anything live.
 /usr/bin/node scripts/pilot_same_direction_throttle.mjs
 
+# CONFIRMED negative as of first run (2026-08-19): IB-break-direction-match (live-knowable
+# at 10:30 ET, computeIbBullBear()) as a replacement for MOMENTUM_60m_60m_TREND's dead
+# EOD-day_type admission gate. Correlates only weakly with actual TREND days (47.4% vs a
+# ~39% base rate) and stays net-negative EV even beating the unconditioned baseline
+# (-$2.55 vs -$7.27/trade, same stop/target) -- not rigor-clean. Resolves
+# OPEN_DECISION promotion_pipeline_structural_fix_2026_08_16. Scheduled so it
+# self-recalibrates as real bar history/day-type calibration accumulates, not a hard
+# structural rejection. RESEARCH_CLAIM momentum60_ib_break_admission_gate_test. Does not
+# wire anything live.
+/usr/bin/node scripts/pilot_momentum60_ib_break_gate.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
