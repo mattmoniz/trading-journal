@@ -325,6 +325,89 @@ export function classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accur
   };
 }
 
+// Live day-type read — the static classifyDayType() call plus (from 11:00 ET on) the
+// dayTypeReassessmentService.js reassessment engine, as a single reusable unit. Extracted
+// 2026-08-19 (OPEN_DECISION ib_daytype_calibration_structurally_unreachable) from what was
+// previously inline-only in computeCase() §7/§7a (~1049-1104 pre-extraction), so acd.js's IB
+// day-type-conditioned stop/target selection can call the SAME live logic computeCase() already
+// runs, instead of reading the dead acd_daily_log.day_type column (written once at 20:20 ET,
+// NULL all session). DeepSeek design-reviewed before this was written (design critique caught
+// two errors in the original plan: the reassessment engine's first checkpoint is 11:00 ET
+// (REASSESSMENT_CHECKPOINTS[0]=660), not 10:30 as first assumed, and this needed to live here
+// (caseEngine.js) rather than in dayTypeReassessmentService.js to avoid a circular import and to
+// reuse getOpeningThresholds/getDayTypeAccuracyStats/avgRange20Cache, none of which
+// dayTypeReassessmentService.js has access to).
+//
+// Returns { classification: <static read>, finalRead: <reassessed read, == classification if
+// no checkpoint has fired yet>, reassessed: bool (true only once an actual checkpoint changed
+// the read), events }. Callers that only want the improved read once the reassessment engine has
+// actually spoken (not the 52.8%-accurate static fallback) should gate on `reassessed === true`
+// — see acd.js's ibDayTypeKey call site for why that distinction matters there.
+export async function getLiveDayTypeRead({ tradeDate, asOfMinutes, bars, sessOpen, ibHigh, ibLow, nl30, orWidth, aUpFired = false, aDownFired = false, cUpConfirmed = false, cDownConfirmed = false }) {
+  const openingThresholds = await getOpeningThresholds(tradeDate);
+  const openingType = classifyOpeningType(bars, openingThresholds);
+  const accuracyStats = await getDayTypeAccuracyStats();
+  const dayType = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats, aUpFired, aDownFired, cUpConfirmed, cDownConfirmed });
+
+  let finalRead = dayType.classification;
+  let events = [];
+  let reassessed = false;
+
+  if (asOfMinutes >= RTH_START + 60 && ibHigh != null && ibLow != null) {
+    let avgRange20 = null;
+    if (avgRange20Cache.has(tradeDate)) {
+      avgRange20 = avgRange20Cache.get(tradeDate);
+    } else {
+      const avgRange20Q = await query(`
+        WITH sessions AS (
+          SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
+          FROM price_bars_primary
+          WHERE symbol = 'NQ'
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
+            AND ts::date < $1
+          GROUP BY ts::date
+          ORDER BY trade_date DESC
+          LIMIT 20
+        )
+        SELECT AVG(sess_high - sess_low)::float AS avg_range_20 FROM sessions
+      `, [tradeDate]);
+      avgRange20 = avgRange20Q.rows[0]?.avg_range_20 ?? null;
+      if (avgRange20) {
+        avgRange20Cache.set(tradeDate, avgRange20);
+        if (avgRange20Cache.size > 100) {
+          const firstKey = avgRange20Cache.keys().next().value;
+          avgRange20Cache.delete(firstKey);
+        }
+      }
+    }
+
+    if (avgRange20) {
+      // Prefer an already-present et_min (a caller may have computed it via a correct,
+      // timezone-safe SQL path, e.g. a backtest replaying historical bars) over recomputing via
+      // barMinutes(), which requires a raw `ts` field the caller may not have passed through --
+      // silently produces NaN et_min for every bar otherwise (found live 2026-08-19 debugging
+      // this exact function: a backtest passing pre-computed et_min bars saw reassessed=false
+      // on 100% of 233 real trades, including known TREND/TURBULENT days, because this line
+      // unconditionally overwrote their correct et_min with NaN).
+      const reassessBars = bars.map(b => ({ ...b, et_min: b.et_min ?? barMinutes(b) }));
+      const checkpoints = REASSESSMENT_CHECKPOINTS.filter(t => t <= asOfMinutes);
+      const reassessResult = runReassessment({
+        initialRead: dayType.classification,
+        bars: reassessBars,
+        sessOpen,
+        avgRange20,
+        ibHigh, ibLow,
+        checkpoints,
+      });
+      finalRead = reassessResult.finalRead;
+      events = reassessResult.events;
+      reassessed = events.length > 0;
+    }
+  }
+
+  return { dayType, openingType, classification: dayType.classification, finalRead, reassessed, events };
+}
+
 // Detect absorption: high volume + small body at a level
 function detectAbsorption(bars, levelPrice, proximityPts = 12) {
   if (bars.length < 3) return null;
@@ -1046,62 +1129,24 @@ export async function computeCase(tradeDate, asOf) {
   const supportPx      = levels.filter(l => l.role === 'SUPPORT').map(l => l.price);
   const failedAuctions = detectFailedAuctions(bars, resistancePx, supportPx);
 
-  // 7. Opening type & day type
-  const openingThresholds = await getOpeningThresholds(tradeDate);
-  const openingType   = classifyOpeningType(bars, openingThresholds);
-  const accuracyStats = await getDayTypeAccuracyStats();
-  const dayType       = classifyDayType({ openingType, nl30, orWidth, asOfMinutes, accuracyStats, aUpFired: !!acd?.a_up_fired, aDownFired: !!acd?.a_down_fired, cUpConfirmed: !!acd?.c_up_confirmed, cDownConfirmed: !!acd?.c_down_confirmed });
-
-  // 7a. Live day-type REASSESSMENT (additive, read-only — see dayTypeReassessmentService.js).
-  // Catches the static read's blind spot (TREND days called BALANCE at 10:05) using
-  // backtest-validated triggers: range expansion >= 30% avg_range_20, confirmed by a
-  // vol-jump when present. Runs at checkpoints from 11:00 ET on, no-lookahead.
-  let dayTypeReassessment = null;
-  if (asOfMinutes >= RTH_START + 60) {
-    let avgRange20 = null;
-    if (avgRange20Cache.has(tradeDate)) {
-      avgRange20 = avgRange20Cache.get(tradeDate);
-    } else {
-      const avgRange20Q = await query(`
-        WITH sessions AS (
-          SELECT ts::date AS trade_date, MAX(high)::float AS sess_high, MIN(low)::float AS sess_low
-          FROM price_bars_primary
-          WHERE symbol = 'NQ'
-            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN ${RTH_START} AND 959
-            AND ts::date < $1
-          GROUP BY ts::date
-          ORDER BY trade_date DESC
-          LIMIT 20
-        )
-        SELECT AVG(sess_high - sess_low)::float AS avg_range_20 FROM sessions
-      `, [tradeDate]);
-      avgRange20 = avgRange20Q.rows[0]?.avg_range_20 ?? null;
-      if (avgRange20) {
-        avgRange20Cache.set(tradeDate, avgRange20);
-        if (avgRange20Cache.size > 100) {
-          const firstKey = avgRange20Cache.keys().next().value;
-          avgRange20Cache.delete(firstKey);
-        }
-      }
-    }
-
-    if (avgRange20) {
-      const reassessBars = bars.map(b => ({ ...b, et_min: barMinutes(b) }));
-      const checkpoints = REASSESSMENT_CHECKPOINTS.filter(t => t <= asOfMinutes);
-      const reassessResult = runReassessment({
-        initialRead: dayType.classification,
-        bars: reassessBars,
-        sessOpen: Number(bars[0].open),
-        avgRange20,
-        ibHigh, ibLow,
-        checkpoints,
-      });
-      dayTypeReassessment = {
-        ...describeLiveReassessment(reassessResult, asOfMinutes),
+  // 7 + 7a. Opening type / day type / live REASSESSMENT — shared with acd.js's IB day-type-
+  // conditioned stop/target selection via getLiveDayTypeRead() (extracted 2026-08-19, see that
+  // function's own header). Catches the static read's blind spot (TREND days called BALANCE at
+  // 10:05) using backtest-validated triggers: range expansion >= 30% avg_range_20, confirmed by
+  // a vol-jump when present. Runs at checkpoints from 11:00 ET on, no-lookahead.
+  const liveDayTypeRead = await getLiveDayTypeRead({
+    tradeDate, asOfMinutes, bars, sessOpen: Number(bars[0].open), ibHigh, ibLow, nl30, orWidth,
+    aUpFired: !!acd?.a_up_fired, aDownFired: !!acd?.a_down_fired,
+    cUpConfirmed: !!acd?.c_up_confirmed, cDownConfirmed: !!acd?.c_down_confirmed,
+  });
+  const dayType = liveDayTypeRead.dayType;
+  const openingType = liveDayTypeRead.openingType;
+  const dayTypeReassessment = liveDayTypeRead.reassessed
+    ? {
+        ...describeLiveReassessment({ finalRead: liveDayTypeRead.finalRead, events: liveDayTypeRead.events }, asOfMinutes),
         limitation: '~68% accurate end-to-end and recovers ~71% of TREND days the static read misses, but ~20% of BALANCE→TREND reassessments are false positives. Treat a reassessment as a prompt to verify with price action, not a command to switch playbooks.',
-      };
-    }
-  }
+      }
+    : null;
 
   // 8. Volume & delta metrics
   const avgVol     = trailingAvgVol(bars, bars.length, 20) || 1;

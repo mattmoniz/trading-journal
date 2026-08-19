@@ -679,6 +679,22 @@ Also caught and fixed the SAME `TARGET_SWEEP`-ceiling bug found in Phase 3 (this
 
 ## 🔴 CURRENT TOP PRIORITY (set 2026-07-29): risk management, not more entry-signal research
 
+**STALE NUMBER CORRECTED 2026-08-19 (Opus Audit 8, `scratch/opus_audit_8_results.md`):** the
+"118 of 122 (97%) have a stop wider than target" figure cited below is no longer current — a
+fresh census of the latest `OPTIMAL_STOP` row per type found **14 of 138 (10.1%)**, median
+stop/target ratio **0.86** (was 1.67). The risk-ceiling machinery visible in `OPTIMAL_STOP`'s
+`notes.risk_capping` has evidently fixed the raw ratio problem since this was written. **This
+does NOT mean risk management is solved** — the realized payoff shape has not followed: ACTIVE
+population (n=344, real capital) shows avg win $85.30 vs avg loss $118.00 (1.38 loss/win ratio),
+driven by (a) a fatter loss tail on fade-family setups specifically (STOP_HIT MAE overshoots the
+stop by >50% at 13.2% of the time vs 3.6% for breakout-family, both N≥20) and (b) a much larger,
+newly-found structural bug: `IB_BULLISH`/`IB_BEARISH` — which together produce 67% of real-capital
+big losses — have their entire day-type-conditioned stop/target/suppression wired to
+`acd_daily_log.day_type`, a column that's NULL for the entire live session (written by cron at
+8:20 PM ET). Four real, correctly-swept day-type `OPTIMAL_STOP` rows have never once been read
+live. See `OPEN_DECISION ib_daytype_calibration_structurally_unreachable` (HIGH, flagged same
+session) — **this, not the stop/target ratio, is the re-aimed top priority.**
+
 **User directive, verbatim intent**: the system needs to find a way to manage risk effectively — throttling losing trades, achieving a better R:R, or some other mechanism — because right now it fires sequential counter-trend/low-R:R trades that produce small wins and large losses. This is the top priority over further signal-discovery work. Stated end goal: make the system **autonomous and profitable** — both halves matter, not just finding more signals. Recorded as `OPEN_DECISION` `prioritize_risk_management_over_signal_research` (HIGH) so it resurfaces every session start regardless of whether this file gets read carefully.
 
 **Third lead tested and closed out, same night (2026-07-30): the user's own 4H-50-EMA trend filter idea (only fade LONG above it, only fade SHORT below it) — discard, real negative on 3 independent checks.** Built with genuine no-lookahead (`scratch/run_ema_filter_test.js` — Claude verified this directly by reading the code, not just trusting Gemini's summary: the DB session timezone is America/New_York, so the hour-based 4H bucket boundaries are correctly ET-midnight-anchored, and a touch only ever sees the EMA as of the previous CLOSED 4H bucket). A 9-combination sensitivity sweep (period ∈ {20,50,100} × timeframe ∈ {1H,2H,4H}, RTH) showed no consistent neighborhood — e.g. 1H/50 gap=-$2.87 vs 4H/50 gap=+$10.10 — the same brittle, parameter-specific signature that already killed the Regime A/B/C classifiers. The Globex/overnight leg fully INVERTED the RTH result (ALIGNED EV=-$2.06 vs COUNTER EV=+$5.27) — a real trend-alignment relationship shouldn't flip sign between sessions. Chronological rigor on the RTH headline failed (thirds -$4.20/-$1.42/+$17.42) with the entire apparent edge concentrated in the most recent third of ~3.5 years of history — independently corroborated by the 80/20 train/test split showing the identical pattern (two different slices of the same data agreeing it's a recent-history artifact, not a bug). `RESEARCH_CLAIM ema_4h_trend_filter_brittle_overfit_discard` (CONFIRMED negative). Not wired. **This closes out all 3 risk-management leads tested this session** (drawdown-velocity, risk-adjusted stop/target re-optimization, EMA trend filter) — all 3 real, honestly negative/inconclusive results, none wireable. Remaining un-tried angles: lean into `STACK_VOL_BREAK_LIVE` (the one breakout-family setup, naturally better R:R by construction — matches the user's own stated trading style, see memory `user-trading-style-breakout-preference`), or the never-built SPC/Kelly position-sizing ideas.
