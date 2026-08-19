@@ -53,7 +53,14 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // 2026-08-10 real-data-scoping fix for weeks (OPEN_DECISION
 // setup_status_dow_gate_93pct_synthetic_never_rescoped, fixed 2026-08-17). Any future query
 // needing "is this a real, resolvable trade" must reuse this string, not hand-roll a copy.
-export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))`;
+// ib_window_stale_basis exclusion added 2026-08-19 (OPEN_DECISION
+// ib_bullbear_window_fix_recalibration_needed): flags real trades whose classification
+// changed under the 2026-08-12 IB-window correction (30-min -> 60-min) -- currently 31
+// IB_BEARISH rows, backfilled via scripts/backfill_ib_window_stale_exclusion_20260819.mjs.
+// NULL/false for every other row (this column is not written by any live INSERT path, only
+// that one-time backfill script), so this clause is a no-op for every setup_type except the
+// ones actually tagged.
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE`;
 
 // bet_class-level SUPPRESS override — roadmap Phase 8 I6/user-authorized 2026-08-11 action,
 // following the file's own established philosophy (see header: "fix the cron, don't build
