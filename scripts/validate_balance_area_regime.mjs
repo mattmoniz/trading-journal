@@ -67,7 +67,10 @@ async function run() {
   const results = [];
   for (const [type, buckets] of Object.entries(bySetup)) {
     if (buckets.Mid.length < 10 || buckets.Edge.length < 10) continue;
-    const ev = list => list.reduce((a, x) => a + x.actual_pnl * 2, 0) / list.length;
+    // Fixed 2026-08-19 (validate_balance_area_regime_2x_actual_pnl_bug): active_setups.
+    // actual_pnl is already a real dollar value -- the *2 double-counted it, inflating
+    // every EV figure this script prints/records by exactly 2x.
+    const ev = list => list.reduce((a, x) => a + x.actual_pnl, 0) / list.length;
     const midEv = ev(buckets.Mid), edgeEv = ev(buckets.Edge);
     const midRigor = computeRigor(buckets.Mid, { dateField: 'trade_date', pnlFn: x => x.actual_pnl });
     const edgeRigor = computeRigor(buckets.Edge, { dateField: 'trade_date', pnlFn: x => x.actual_pnl });

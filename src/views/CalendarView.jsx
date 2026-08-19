@@ -9,6 +9,7 @@ import {
 } from 'recharts';
 
 import { API_URL } from '../constants/api.js';
+import { inferDirection } from '../../server/config/setupTypes.js';
 
 function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
   const [dailyLogs, setDailyLogs] = useState([]);
@@ -349,8 +350,13 @@ function CalendarView({ accounts, selectedAccounts, setSelectedAccounts }) {
 
 // ==================== INTRADAY CHART SECTION ====================
 
+// Fixed 2026-08-19 (gap_direction_bug_survives_calendarview_and_repair_script): the old
+// bare-substring check (type.includes('_UP')) mis-orients any _GAP_UP/_GAP_DOWN
+// conditional-variant setup (e.g. WPP_FADE_SHORT_GAP_UP matched "_UP" -> LONG, wrong --
+// it's a SHORT). Reuses the canonical inferDirection() (server/config/setupTypes.js,
+// already strips the _GAP_(UP|DOWN) suffix before checking) instead of a 3rd local copy.
 function isLongSetupType(type) {
-  return type.includes('LONG') || type.includes('BULLISH') || type.includes('_UP');
+  return inferDirection(type) === 'LONG';
 }
 
 function IntradayChartSection({ dateStr }) {

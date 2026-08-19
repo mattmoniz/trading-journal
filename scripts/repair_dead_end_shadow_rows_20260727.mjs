@@ -16,13 +16,20 @@
 
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { inferDirection } from '../server/config/setupTypes.js';
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const PT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
+// Fixed 2026-08-19 (gap_direction_bug_survives_calendarview_and_repair_script): the old
+// bare-substring check mis-orients any _GAP_UP/_GAP_DOWN conditional-variant setup (e.g.
+// WPP_FADE_SHORT_GAP_UP matched "_UP" -> LONG, wrong -- it's a SHORT). This script is
+// re-runnable, so a future re-run against a _GAP_* row would have computed a wrong
+// direction and written a wrong repair. Reuses the canonical inferDirection() instead of a
+// 3rd local copy of this exact bug.
 function isLongSetup(setupType) {
-  return setupType.includes('LONG') || setupType.includes('BULLISH') || setupType.includes('_UP');
+  return inferDirection(setupType) === 'LONG';
 }
 
 async function main() {
