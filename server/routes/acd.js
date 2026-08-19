@@ -189,6 +189,56 @@ function regimeStampValues(stamp) { return REGIME_STAMP_COLS.map(c => stamp[c] ?
 // delete it silently.
 const STOP_SWEEP_PAUSED = new Set(['STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT']);
 
+// Re-fire cooldown (2026-08-03) — gates a NEW candidate to SHADOW/skip if the SAME
+// setup_type resolved within the last N minutes today. IB_BEARISH: 30min is
+// backtest-validated (RESEARCH_CLAIM ib_bearish_refire_cooldown_beats_volz_gate,
+// PROVISIONAL — rigor-clean, not yet independently replicated) — real finding:
+// "re-firing repeatedly in one day is itself the problem" (EV degrades by
+// within-day fire number), and a blind cooldown performs at least as well as a
+// bespoke volume gate, so the simple fix is the right shape. VWAP_MAGNET family:
+// precautionary, not independently backtested for its own EV — historical
+// backfill directly showed the same unbounded-rapid-refire pattern on trend days
+// (scripts/backtest_vwap_magnet.mjs: 2025-11-20, 107 of 1158 VWAP_MAGNET_LONG
+// backfilled fires from repeated ~2-bar-apart stop-outs in one session), same
+// shape of problem as the validated IB_BEARISH fix (OPEN_DECISION
+// vwap_magnet_repeated_whipsaw_on_trend_days). IB_BULLISH re-added 2026-08-19
+// (DeepSeek Phase-0 design review) — its prior exclusion cited "globally
+// SUPPRESSed today anyway," which went stale once IB_BULLISH moved under
+// CAPITAL_EXPOSURE_OVERRIDE (an explicitly temporary, revisit-gated brake, not a
+// permanent suppression). STOP_SWEEP_LONG/C_PAIRED_SHORT added 2026-08-19 (found
+// investigating a live "everything says expired" report): confirmed 62/71 real
+// fires each over the trailing 7 days, ~93% TIME_EXPIRED — the exact same
+// unbounded-rapid-refire shape as the already-validated types, precautionary
+// same-family default, not independently backtested for either.
+//
+// HOISTED to module scope 2026-08-19 (was previously declared inside the request
+// handler, only reachable by the single `active`/main-banner candidate's own
+// insert path) — found live: the shadowCandidates insert loop (~line 8940, where
+// IB_BEARISH/STOP_SWEEP_LONG/C_PAIRED_SHORT actually fire from in practice, not
+// the `active` slot) never checked this cooldown at all, so it was structurally
+// dead for anything that fires as a shadow candidate rather than winning the
+// single `active` pick — which is most of the time for these types. This is why
+// IB_BEARISH kept machine-gunning despite already being "covered" by this map.
+const REFIRE_COOLDOWN_MINUTES = {
+  IB_BEARISH: 30, IB_BULLISH: 30,
+  VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
+  GLOBEX_VWAP_MAGNET_LONG: 30, GLOBEX_VWAP_MAGNET_SHORT: 30,
+  STOP_SWEEP_LONG: 30, C_PAIRED_SHORT: 30,
+};
+
+async function isInRefireCooldown(tradeDate, setupType) {
+  const cooldownMin = REFIRE_COOLDOWN_MINUTES[setupType];
+  if (!cooldownMin) return false;
+  const cooldownQ = await query(`
+    SELECT 1 FROM active_setups
+    WHERE trade_date = $1 AND setup_type = $2
+      AND resolution IS NOT NULL
+      AND resolved_at > NOW() - ($3::int * INTERVAL '1 minute')
+    LIMIT 1
+  `, [tradeDate, setupType, cooldownMin]).catch(() => ({ rows: [] }));
+  return cooldownQ.rows.length > 0;
+}
+
 // ── Fire-time regime tagging (roster-rebuild roadmap Phase 1, I1, 2026-08-10) ──────
 // Tags every live INSERT with day_type_at_fire/vol_bucket_at_fire/session/
 // minutes_from_open — the regime that was true AT FIRE TIME, populated at insert,
@@ -8748,46 +8798,10 @@ export default function createACDRouter(io) {
           const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
           runnerTrailWidth = parsed?.trail ?? null;
         }
-        // Re-fire cooldown (2026-08-03) — gates a NEW candidate to SHADOW if the SAME
-        // setup_type resolved within the last N minutes today. IB_BEARISH: 30min is
-        // backtest-validated (RESEARCH_CLAIM ib_bearish_refire_cooldown_beats_volz_gate,
-        // PROVISIONAL — rigor-clean, not yet independently replicated) — real finding:
-        // "re-firing repeatedly in one day is itself the problem" (EV degrades by
-        // within-day fire number), and a blind cooldown performs at least as well as a
-        // bespoke volume gate, so the simple fix is the right shape. VWAP_MAGNET family:
-        // precautionary, not independently backtested for its own EV — historical
-        // backfill directly showed the same unbounded-rapid-refire pattern on trend days
-        // (scripts/backtest_vwap_magnet.mjs: 2025-11-20, 107 of 1158 VWAP_MAGNET_LONG
-        // backfilled fires from repeated ~2-bar-apart stop-outs in one session), same
-        // shape of problem as the validated IB_BEARISH fix (OPEN_DECISION
-        // vwap_magnet_repeated_whipsaw_on_trend_days). IB_BULLISH re-added 2026-08-19 (DeepSeek
-        // Phase-0 design review, scratch/deepseek_cluster_loss_fixes_design_review.md, defect 2)
-        // — its prior exclusion cited "globally SUPPRESSed today anyway," which went stale the
-        // moment IB_BULLISH moved under CAPITAL_EXPOSURE_OVERRIDE (STOP_DAY_CLUSTERED,
-        // setupEligibility.js, addedDate 2026-08-19) — an explicitly temporary, revisit-gated
-        // brake, not a permanent suppression. Without this cooldown, IB_BULLISH reverts to a
-        // zero-cooldown machine-gun path (13 real fires on 2026-08-06 alone) the instant that
-        // override clears. Same 30min same-family default as IB_BEARISH — NOT independently
-        // validated for IB_BULLISH (its own cooldown cell failed computeReplication), a
-        // precautionary default same as the VWAP_MAGNET family below. `resolved_at` (not
+        // Re-fire cooldown -- see REFIRE_COOLDOWN_MINUTES/isInRefireCooldown() at module
+        // scope (~line 192) for the full history/reasoning. `resolved_at` (not
         // resolution_bar_time) matches the cascadeBreaker precedent 130 lines above.
-        const REFIRE_COOLDOWN_MINUTES = {
-          IB_BEARISH: 30, IB_BULLISH: 30,
-          VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
-          GLOBEX_VWAP_MAGNET_LONG: 30, GLOBEX_VWAP_MAGNET_SHORT: 30,
-        };
-        let inRefireCooldown = false;
-        const _cooldownMin = REFIRE_COOLDOWN_MINUTES[active.type];
-        if (_cooldownMin) {
-          const cooldownQ = await query(`
-            SELECT 1 FROM active_setups
-            WHERE trade_date = $1 AND setup_type = $2
-              AND resolution IS NOT NULL
-              AND resolved_at > NOW() - ($3::int * INTERVAL '1 minute')
-            LIMIT 1
-          `, [todayET, active.type, _cooldownMin]).catch(() => ({ rows: [] }));
-          inRefireCooldown = cooldownQ.rows.length > 0;
-        }
+        let inRefireCooldown = await isInRefireCooldown(todayET, active.type);
         // Real-capital exposure override (2026-08-19, OPEN_DECISION
         // optimal_stop_circuit_breaker_retripped_20260812): a setup_type can clear the WR/EV
         // gate above (_suppressedSetups is SUPPRESS/THIN_N-driven only) while the stop/target
@@ -8947,6 +8961,19 @@ export default function createACDRouter(io) {
             const riskOk = shadow.stop == null || (isLongS ? shadow.stop < shadow.entry : shadow.stop > shadow.entry);
             if (!riskOk) {
               logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'RISK_CHECK_SHADOW', gateReason: `non-positive risk: stop ${shadow.stop} vs entry ${shadow.entry} (${shadow.direction})`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
+              continue;
+            }
+            // Found 2026-08-19 (live "everything says expired" report): this loop -- where
+            // IB_BEARISH/STOP_SWEEP_LONG/C_PAIRED_SHORT actually fire from in practice, not
+            // the `active` slot above -- never checked REFIRE_COOLDOWN_MINUTES at all, so
+            // that map was structurally dead for anything reaching active_setups via
+            // shadowCandidates rather than winning the single `active` pick. Confirmed live:
+            // IB_BEARISH/STOP_SWEEP_LONG/C_PAIRED_SHORT each fired 60+ times in the trailing
+            // 7 days, ~93% TIME_EXPIRED, often one fresh row per ~15s-1min poll cycle with no
+            // gap at all. See isInRefireCooldown()/REFIRE_COOLDOWN_MINUTES at module scope
+            // (~line 192) for the full history.
+            if (await isInRefireCooldown(todayET, shadow.type)) {
+              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'REFIRE_COOLDOWN_SHADOW', gateReason: `resolved within the last ${REFIRE_COOLDOWN_MINUTES[shadow.type]}min`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
               continue;
             }
             let sT1 = shadow.target;
