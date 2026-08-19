@@ -1,6 +1,23 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## 🔶 2026-08-19: `scripts/pilot_already_turned_entry.mjs` (Build 2 per-type study) — written, NOT working yet, session paused here on user request
+
+Untracked/uncommitted file on disk, do not assume it produces real numbers. First run returned
+zero classified trades in every arm for all 9 setup_types tested (`SIGNAL`/`DIRECTION_MATCHED_CTRL`/
+`NEVER_SELECTED` all n=0 pooled) — a real bug in the per-trade signal computation (median-bar-range +
+15-min-lookback close-to-close move classification), not yet root-caused. Suspect area: the
+naive-timestamp-vs-timestamptz comparison between `active_setups.fired_at` and `price_bars_primary.ts`
+in the `date_trunc('minute', $1::timestamptz)` queries — this exact bug class (naive ET-wall-clock
+columns silently mis-comparing against timestamptz-cast values) has bitten this session and others
+before (see the CLAUDE.md convention on naive timestamp parsing) and is the first thing to check
+before anything else. Queries execute without error and return plausible-looking row counts (rows:1,
+rows:2), so this is not a crash — the classification logic itself is silently producing zero hits,
+consistent with a timezone-offset mismatch making the minute-exact `ts IN (...)` lookups miss.
+Next step when resumed: print the actual `adv15` values for a handful of trades and sanity-check
+them by hand against raw bar data before re-running the full sweep. This is Build 2 from the
+DeepSeek-reviewed plan below — Build 1 (throttle) is intentionally sequenced after it and untouched.
+
 ## ✅ 2026-08-19: "four huge losses" cluster-loss research — 2 defect fixes shipped after DeepSeek Phase-0 design critique; the two real fixes (Build 1/Build 2) still to build
 
 Continuation of Opus Audit 8's investigation into the user's recurring "trades are great and then we get four huge losses that wipe out everything" concern. Day-type-conditioned IB stops (the first candidate fix) were tested via `scripts/backtest_ib_daytype_live_reassessment.mjs` and found NOT to help — real IB_BEARISH ~flat/-$1.32/trade once routed through the live `getLiveDayTypeRead()` reassessment engine rather than idealized hindsight; IB_BULLISH untestable (no calibration exists for its buckets). Two leads remained from the audit (Opus R3 "already-turned" entry-timing gate, Opus R4 cross-setup-type same-direction throttle) — DeepSeek ran a Phase-0 design critique on both before any code (`scratch/deepseek_cluster_loss_fixes_design_review.md`, full text preserved there).
