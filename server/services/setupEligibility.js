@@ -69,7 +69,7 @@ export async function getStopCalibrationConfidence(signalName) {
 // elsewhere in acd.js) -- add to it only after the same deliberate-review bar these 2 cleared,
 // not as a default response to any future thin-N/clustered finding.
 export const CAPITAL_EXPOSURE_OVERRIDE = new Map([
-  ['GLOBEX_VWAP_FADE_LONG', { reason: 'STOP_NEVER_SWEPT', addedDate: '2026-08-19', revisitWhen: 'real N clears MIN_SWEEPABLE_N (27) with a genuinely-swept, non-placeholder OPTIMAL_STOP method' }],
+  ['GLOBEX_VWAP_FADE_LONG', { reason: 'STOP_NEVER_SWEPT', addedDate: '2026-08-19', revisitWhen: 'getStopCalibrationConfidence() returns unvalidated:false -- real N clears MIN_SWEEPABLE_N (27) with a genuinely-swept, non-placeholder OPTIMAL_STOP method AND the fresh sweep is not itself day-clustered (rigor.clustered!==true) -- both conditions, not just the N/method one (flagged 2026-08-19, DeepSeek review of commit 47da9ed: the original wording named only the method condition, not the clustering check the diagnostic actually applies)' }],
   ['IB_BULLISH', { reason: 'STOP_DAY_CLUSTERED', addedDate: '2026-08-19', revisitWhen: 'computeRigor().clustered is false on a fresh sweep (i.e. real trading days spread out past the current 7-day, 97.1%-top5 concentration)' }],
 ]);
 
@@ -130,8 +130,21 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
 // from SETUP_STATUS entirely defaults to ineligible (SHADOW), matching getCanonicalLiveStatus's
 // own fail-closed "no row -> SHADOW" behavior below, so the two halves of this fix agree on the
 // "no data" case instead of disagreeing.
+// FIXED 2026-08-19 (DeepSeek code review of commit 47da9ed, same-day): this used to check
+// only the WR/EV-driven suppression sets, missing CAPITAL_EXPOSURE_OVERRIDE entirely --
+// shadowCandidates' promotion INSERT (acd.js ~8881, the RTH-hours 24hr-VWAP-fade touch of
+// GLOBEX_VWAP_FADE_LONG/SHORT, a THIRD insert path for these exact setup_type names beyond
+// the 2 the override commit actually covered) calls isLiveEligible() directly, so a type on
+// the override list could still reach origin_status='ACTIVE' through this path even though
+// getCanonicalLiveStatus() (the Globex-hours path) correctly blocked it. Confirmed live:
+// GLOBEX_VWAP_FADE_LONG has SETUP_STATUS recommendation=ACTIVE, so pre-this-fix
+// isLiveEligible() returned true here regardless of the override. Checking the override in
+// THIS canonical function (rather than patching the one known call site) means any future
+// caller gets it for free, per this function's own "every live insert path must call this
+// instead of reimplementing" contract.
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
-  return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType);
+  return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType)
+    && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
 }
 
 // Canonical resolved-trade eligibility check for standalone pollers -- currently used by acd.js's

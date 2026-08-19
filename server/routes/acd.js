@@ -6034,10 +6034,16 @@ export default function createACDRouter(io) {
         // already fire from both detectGlobexSetup() AND the RTH keepLevelsAll path under
         // one shared name. Reuses the exact same shared functions as the Globex-fired
         // version (computeRunningVwapSeries, getTrailing24hrVwapStd, getGlobex24hrBars) --
-        // no independent reimplementation. SHADOW-only (shadowCandidates), same minimal
-        // sizing convention (no sizeMultiplier stack) as every other Globex-fired VWAP
-        // candidate, since none of that RTH-only machinery has ever been validated for this
-        // family and it fires through a fundamentally different (moving-level) mechanism.
+        // no independent reimplementation. Lives in shadowCandidates (same minimal sizing
+        // convention -- no sizeMultiplier stack -- as every other Globex-fired VWAP candidate,
+        // since none of that RTH-only machinery has ever been validated for this family and it
+        // fires through a fundamentally different, moving-level mechanism), but NOT SHADOW-only
+        // since the 2026-08-16 promotion-pipeline fix -- shadowCandidates' own INSERT
+        // (~8881) can promote any type isLiveEligible() approves to real origin_status='ACTIVE'.
+        // "Lives in shadowCandidates" is about array placement/sizing convention, not a status
+        // guarantee -- stale wording here was flagged 2026-08-19 (DeepSeek review of commit
+        // 47da9ed) as plausibly why this path was missed when CAPITAL_EXPOSURE_OVERRIDE first
+        // shipped (isLiveEligible() didn't check it yet -- fixed the same day, setupEligibility.js).
         // (globexVwapMagnetRTH/globexVwapFadeRTH declared with `let` at the outer scope
         // above, same escape-the-block pattern vwapMagnetSetup already uses, so shadowCandidates far below can read them.)
         {
@@ -7878,10 +7884,16 @@ export default function createACDRouter(io) {
       // These fire banners, show as actionable setups, and count as trade entries.
       const candidates = [
         levelScalpSetup, // PD_POC / PD_VAL / PD_VAH / FLOOR_PIVOT / FLOOR_R1 / OR5_HIGH / PD_IB_MID / PD_OR_MID / 5D_OR_MID fades
-        // IB_BULLISH is now fully SUPPRESSed (2026-07-14, backtest_setup_status.mjs) — every
-        // day-type bucket is below breakeven, see docs/OPEN_THREADS.md for the incident. Checked
-        // via _suppressedSetups the same way level-fade setup_types are, alongside the existing
-        // DOW-specific check. IB_BEARISH remains DAY_TYPE_MANAGED (TURBULENT bucket is genuinely
+        // STALE 2026-07-14 note corrected 2026-08-19 (flagged by DeepSeek review of commit
+        // 47da9ed, which found this exact staleness was plausibly why a THIRD IB_BULLISH-
+        // adjacent live path got missed): IB_BULLISH is NOT currently SUPPRESSed by
+        // backtest_setup_status.mjs -- it silently un-suppressed to DAY_TYPE_MANAGED around
+        // 2026-07-15 and _suppressedSetups (SUPPRESS/THIN_N only) never catches it. Its real
+        // live gate is CAPITAL_EXPOSURE_OVERRIDE (setupEligibility.js, added 2026-08-19,
+        // STOP_DAY_CLUSTERED) checked in this same INSERT block's forceShadow ternary further
+        // below -- do NOT assume "IB_BULLISH is suppressed" from this comment or its absence
+        // from _suppressedSetups; check CAPITAL_EXPOSURE_OVERRIDE and the live SETUP_STATUS
+        // row directly. IB_BEARISH remains DAY_TYPE_MANAGED (TURBULENT bucket is genuinely
         // strong) — see the day-type nulling above this candidates array for its per-type gate.
         // DOW suppression via pipeline: Thu×IB_BEARISH EV=-$17 N=27 suppressed as of 2026-07-09.
         (ibSetup
