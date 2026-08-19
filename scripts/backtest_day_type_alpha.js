@@ -33,6 +33,12 @@
 // Wiring ibSetup's live gate to actually READ liveStats._dta instead of the hardcoded boolean
 // is a separate, deliberately-not-yet-built live-behavior change -- see OPEN_DECISION
 // ib_bullish_bearish_daytype_gate_hardcoded_not_dynamic.
+//
+// EXTENDED AGAIN 2026-08-19 (dta_population_query_excludes_4_live_nonfade_types): the same
+// FADE-name/IB-allowlist gap also excluded 4 more live setup_types whose names don't contain
+// "FADE" and aren't IB_BULLISH/IB_BEARISH: GLOBEX_VWAP_MAGNET_LONG, GLOBEX_VWAP_MAGNET_SHORT,
+// MOMENTUM_60m_60m_TREND, STOP_SWEEP_LONG. Same low-risk fix -- extends the IN-list, only
+// populates performance_audit, no live behavior change by itself.
 // =============================================================================
 
 import { query } from '../server/db.js';
@@ -58,14 +64,16 @@ async function run() {
     query(`
       SELECT setup_type, resolution, actual_pnl::float
       FROM active_setups
-      WHERE (setup_type LIKE '%FADE%' OR setup_type IN ('IB_BULLISH', 'IB_BEARISH'))
+      WHERE (setup_type LIKE '%FADE%' OR setup_type IN ('IB_BULLISH', 'IB_BEARISH',
+        'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'MOMENTUM_60m_60m_TREND', 'STOP_SWEEP_LONG'))
         AND status = 'RESOLVED'
     `),
     query(`
       SELECT a.setup_type, a.resolution, a.actual_pnl::float, a.origin_status, d.day_type
       FROM active_setups a
       JOIN acd_daily_log d ON a.trade_date = d.trade_date
-      WHERE (a.setup_type LIKE '%FADE%' OR a.setup_type IN ('IB_BULLISH', 'IB_BEARISH'))
+      WHERE (a.setup_type LIKE '%FADE%' OR a.setup_type IN ('IB_BULLISH', 'IB_BEARISH',
+        'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT', 'MOMENTUM_60m_60m_TREND', 'STOP_SWEEP_LONG'))
         AND a.status = 'RESOLVED'
         AND d.day_type IS NOT NULL
       ORDER BY a.setup_type, d.day_type
