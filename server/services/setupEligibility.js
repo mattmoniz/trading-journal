@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 
 // Stop/target calibration methods that carry NO per-type validated information -- a
 // placeholder default, not a real computed optimum. Shared with scripts/update_optimal_stops.mjs
@@ -6,6 +7,59 @@ import { query } from '../db.js';
 export const PLACEHOLDER_STOP_METHODS = new Set(['volatility-scaled-default', 'p75mae-real-fallback']);
 export function isPlaceholderStopMethod(method) {
   return PLACEHOLDER_STOP_METHODS.has(method);
+}
+
+// Found 2026-08-19 investigating promotion_pipeline_remaining_stuck_types: SETUP_STATUS is
+// NOT one uniform trust tier (getCanonicalLiveStatus()'s own header below already warns
+// about this generically -- this is where that warning gets teeth). These setup_types'
+// ONLY writer is a bar-history BACKTEST SIMULATION script, never backtest_setup_status.mjs
+// (the real-forward writer) -- confirmed live: WPP_FADE_SHORT_GAP_UP's latest SETUP_STATUS
+// row (source=backtest_wpp_short_gap.mjs) says ACTIVE/N=30, while its real active_setups
+// history is exactly 1 row, SHADOW-origin. A prior fix (conditional_variant_setup_status_
+// daily_overwrite_race, 2026-08-10) taught backtest_setup_status.mjs's generic scanner to
+// SKIP this signal_name entirely (skipGenericSetupStatus in CONDITIONAL_VARIANTS) -- so
+// unlike an ordinary type, this is not "stale until the next real-forward run," it will
+// NEVER organically get overwritten by real data; the dedicated bar-history script owns it
+// permanently. Trusting its ACTIVE recommendation at face value would fire it live on zero
+// real forward validation -- the exact regression minuteBarSignalDetector.js's own
+// getLiveStatus() header documents being caught and reverted for MOMENTUM_60m_60m_TREND.
+// MOMENTUM_60m_60m_TREND/_BALANCE_FADE are listed here too even though the TREND family
+// already has its own hand-rolled real-N check in minuteBarSignalDetector.js (this list
+// makes computeSuppressionSets()/getCanonicalLiveStatus() independently safe for them too,
+// belt-and-suspenders -- harmless overlap, not a conflicting second mechanism, since both
+// converge on the same real_n>=20 answer from the same active_setups data).
+export const BACKTEST_DERIVED_SETUP_STATUS_TYPES = new Set([
+  'WPP_FADE_SHORT_GAP_UP',   // scripts/backtest_wpp_short_gap.mjs
+  'MOMENTUM_60m_60m_TREND',        // scripts/backtest_momentum60_daytype.mjs
+  'MOMENTUM_60m_60m_BALANCE_FADE', // scripts/backtest_momentum60_daytype.mjs
+]);
+
+// Real (non-BACKFILL/UNKNOWN, non-mark-to-market) resolved N/EV for a setup_type, computed
+// directly from active_setups -- NEVER from a SETUP_STATUS row, since that's exactly what's
+// untrustworthy for BACKTEST_DERIVED_SETUP_STATUS_TYPES. Reuses REAL_TRADE_FILTER (the
+// canonical real-trade predicate, scripts/backtest_setup_status.mjs) and the same
+// resolution/actual_pnl gate minuteBarSignalDetector.js's own getLiveStatus() uses -- not
+// reimplemented, matching this codebase's export-the-real-function rule.
+async function getRealForwardStats(setupType) {
+  const { rows } = await query(`
+    SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
+    FROM active_setups
+    WHERE setup_type = $1 AND ${REAL_TRADE_FILTER}
+      AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
+  `, [setupType]);
+  return { n: +rows[0].n, ev: rows[0].ev != null ? +rows[0].ev : null };
+}
+
+// true = this type's SETUP_STATUS 'ACTIVE'/'PROMOTE' recommendation is trustworthy enough
+// to fire live on. For an ordinary type this is always true (its SETUP_STATUS row already
+// came from real-forward data by construction). For a BACKTEST_DERIVED_SETUP_STATUS_TYPES
+// member, only true once real forward N>=20 with EV not below the standard -$5 floor --
+// same bar backtest_setup_status.mjs applies everywhere else, just computed by hand because
+// the normal writer will never run for these signal_names.
+export async function hasRealForwardClearance(setupType) {
+  if (!BACKTEST_DERIVED_SETUP_STATUS_TYPES.has(setupType)) return true;
+  const { n, ev } = await getRealForwardStats(setupType);
+  return n >= 20 && !(ev != null && ev < -5);
 }
 
 // Diagnostic only -- NOT auto-wired into any live gate. Reports whether a setup_type's
@@ -114,6 +168,18 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
     knownTypes.add(r.signal_name);
     if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') suppressedSetups.add(r.signal_name);
   }
+  // Found 2026-08-19 (promotion_pipeline_remaining_stuck_types): an ACTIVE/PROMOTE
+  // recommendation from a BACKTEST_DERIVED_SETUP_STATUS_TYPES member is NOT the same
+  // guarantee it is for every other type -- its SETUP_STATUS row can never be organically
+  // replaced by real-forward data (the writer is a bar-history simulation script, not
+  // backtest_setup_status.mjs), so trusting it here would let the type fire ACTIVE with
+  // zero real validation, forever. Only check the small handful in the list -- one query
+  // per candidate, not a blanket per-poll cost.
+  for (const t of BACKTEST_DERIVED_SETUP_STATUS_TYPES) {
+    if (knownTypes.has(t) && !suppressedSetups.has(t) && !(await hasRealForwardClearance(t))) {
+      suppressedSetups.add(t);
+    }
+  }
   const dowSuppressToday = new Set();
   for (const r of dowStatusQ.rows) {
     if (r.recommendation === 'SUPPRESS') dowSuppressToday.add(r.signal_name.replace(/_DOW_\d+$/, ''));
@@ -178,6 +244,15 @@ export async function getCanonicalLiveStatus(signalName) {
       reason: row.recommendation === 'THIN_N' ? 'NEW_SIGNAL_UNDER_LIVE_EVALUATION' : 'PERFORMANCE_BELOW_THRESHOLD',
       liveN: row.sample_size, liveEv: row.ev,
     };
+  }
+  // WR/EV cleared -- still check whether this row itself is trustworthy (see
+  // BACKTEST_DERIVED_SETUP_STATUS_TYPES's header: some SETUP_STATUS rows can never be
+  // organically replaced by real-forward data). No current caller of this function is on
+  // that list, but the whole point of a canonical function is that a FUTURE caller gets
+  // this protection automatically without having to know to ask for it.
+  if (!(await hasRealForwardClearance(signalName))) {
+    const real = await getRealForwardStats(signalName);
+    return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: real.n, liveEv: real.ev };
   }
   // WR/EV cleared -- still check the deliberate, human-reviewed capital-exposure override list
   // above (NOT a generic calibration-confidence auto-check -- see CAPITAL_EXPOSURE_OVERRIDE's
