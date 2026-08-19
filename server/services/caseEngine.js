@@ -145,10 +145,15 @@ export function classifyOpeningType(bars, thresholds = null) {
 // IB_BULLISH/IB_BEARISH direction call — the exact formula acd.js's ibSetup block
 // (~line 4333-4341) uses inline. Extracted 2026-08-03 so scripts/backtest_trend_gate_
 // suppression.mjs can import the real logic instead of reimplementing it (this codebase's
-// "share modules when the same logic would otherwise be reimplemented" rule). NOTE: despite
-// the "IB" name, `ibBars` here is the 30-min Opening Range window (9:30-10:00 ET), not a
-// 60-min Initial Balance — matches acd.js's own comment at ~line 4321 ("ibBars itself is
-// still the 30-min window, spec — only the fire gate moved to 630").
+// "share modules when the same logic would otherwise be reimplemented" rule). This function
+// itself is window-agnostic (just computes stats over whatever bars it's handed) -- STALE
+// NOTE CORRECTED 2026-08-19: the caller's `ibBars` was widened 2026-08-12 from the 30-min
+// Opening Range window (9:30-10:00 ET) to the real 60-min Initial Balance (9:30-10:30 ET,
+// acd.js's ibBarsRow query, BETWEEN 570 AND 629) -- this docstring previously described the
+// pre-fix caller behavior as if still current. See OPEN_DECISION
+// ib_bullbear_window_fix_recalibration_needed for the recalibration status of IB_BULLISH/
+// IB_BEARISH/STOP_SWEEP_LONG/SHORT, whose live SETUP_STATUS/OPTIMAL_STOP basis predates
+// this window correction for most of their real history.
 export function computeIbBullBear(ibBars) {
   if (!ibBars || ibBars.length < 3) return null;
   const ibHigh = Math.max(...ibBars.map(b => b.high));

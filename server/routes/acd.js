@@ -4697,8 +4697,12 @@ export default function createACDRouter(io) {
       };
 
       // ── SETUP 3: IB CONFIRMATION ──────────────────────────────────────────────
-      // ibBars itself is still the 30-min window (9:30-10:00, spec) — only the fire
-      // gate moved to 10:30 (etMin>=630). Found 2026-07-14: gating fire at 10:00
+      // STALE COMMENT CORRECTED 2026-08-19 (part of ib_bullbear_window_fix_recalibration_needed
+      // spec work): this used to say "ibBars itself is still the 30-min window (9:30-10:00,
+      // spec)" — that was true before the 2026-08-12 fix (commit-documented at this file's
+      // ibBarsRow query, ~line 4106), which widened ibBars to the real 60-min window
+      // (BETWEEN 570 AND 629) to match ibHighToday/ibLowToday. The fire gate moved to 10:30
+      // (etMin>=630) for a SEPARATE reason (below) — don't conflate the two fixes. Found 2026-07-14: gating fire at 10:00
       // meant dtClass (line 3341) was always null at decision time (day_type isn't
       // classified until IB close at 10:30 — see CLAUDE.md's day-type classifier
       // timing fix), so the day-type suppression checks below (dtClass==='BALANCE'
@@ -4718,7 +4722,8 @@ export default function createACDRouter(io) {
           const priceSide = isBull ? currentPrice > ibMid : currentPrice < ibMid;
           if (priceSide) {
             // Conflicting signal: A Up tested and failed (for bullish IB) or A Down tested and failed (for bearish IB)
-            // Both aUpLevel/aDownLevel are from acd_daily_log; ibBars is the 9:30–10:00 window
+            // Both aUpLevel/aDownLevel are from acd_daily_log; ibBars is the 9:30–10:30 window
+            // (corrected 2026-08-12, was 9:30-10:00 before -- see the ibBarsRow query comment above)
             // WEAK WR = 33.3% (N=9 decided, 20 fired) — not yet suppressed because N<20 threshold.
             // Revisit when forward-test accumulates 20 decided WEAK trades. (replay_ib_setups.js 2026-07-01)
             const aUpTestedInIB   = aUpLevel   && ibBars.some(b => b.high >= aUpLevel);
