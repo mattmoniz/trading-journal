@@ -53,7 +53,7 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // 2026-08-10 real-data-scoping fix for weeks (OPEN_DECISION
 // setup_status_dow_gate_93pct_synthetic_never_rescoped, fixed 2026-08-17). Any future query
 // needing "is this a real, resolvable trade" must reuse this string, not hand-roll a copy.
-const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))`;
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))`;
 
 // bet_class-level SUPPRESS override — roadmap Phase 8 I6/user-authorized 2026-08-11 action,
 // following the file's own established philosophy (see header: "fix the cron, don't build
