@@ -598,7 +598,31 @@ process.on('uncaughtException', async (err) => { await logShutdown('UNCAUGHT_EXC
 process.on('unhandledRejection', async (reason) => { await logShutdown('UNHANDLED_REJECTION', { error: String(reason) }); });
 
 const PORT = process.env.PORT || 3001;
+
+// EADDRINUSE retry — a nodemon restart can race the old process's port release, throwing
+// EADDRINUSE, which was previously uncaught -> uncaughtException -> exit(1) -> nodemon
+// respawns right back into the same race, producing a crash loop (found 2026-08-16, see
+// OPEN_DECISION pattern_memory_dev_value_missing_catchup_and_listen_race). This retries a
+// handful of times to let the old socket close, then gives up and lets a REAL port conflict
+// crash + log normally via the existing uncaughtException -> logShutdown path.
+let serverListening = false;
+let listenRetryCount = 0;
+const LISTEN_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 8000];
+httpServer.on('error', (err) => {
+  if (serverListening) throw err; // post-bind error, not a listen race — crash normally
+  if (err.code === 'EADDRINUSE' && listenRetryCount < LISTEN_RETRY_DELAYS_MS.length) {
+    const delay = LISTEN_RETRY_DELAYS_MS[listenRetryCount];
+    listenRetryCount++;
+    console.warn(`[listen] Port ${PORT} in use (EADDRINUSE) — retry ${listenRetryCount}/${LISTEN_RETRY_DELAYS_MS.length} in ${delay}ms`);
+    setTimeout(() => httpServer.listen(PORT), delay);
+    return;
+  }
+  console.error(`[listen] Giving up binding port ${PORT} after ${listenRetryCount} retries:`, err.message);
+  throw err; // uncaught -> existing uncaughtException handler -> logShutdown -> exit(1)
+});
+
 httpServer.listen(PORT, () => {
+  serverListening = true;
   console.log(`Server running on port ${PORT}`);
 
   // ── Scheduled jobs (node-cron v3, fires within the matching minute) ──────────
@@ -640,9 +664,18 @@ httpServer.listen(PORT, () => {
   }, { timezone: 'America/New_York' });
 
   // Pattern Memory — 4:05 PM ET Mon–Fri
+  // NOTE: runNightlyUpdate self-logs via its own logProcess('PATTERN_MEMORY', ...) call — do NOT
+  // wrap it in another logProcess here. The prior version passed runNightlyUpdate as a bare
+  // function reference to logProcess, which invoked it with ZERO arguments, so tradeDate was
+  // always undefined -> NULL, which made populateDailyLog's trade lookup match 0 rows every
+  // time and silently no-op (SUCCESS, {skipped:true}) since 2026-06-01 (commit c242c243) — the
+  // real cron-triggered update never wrote real data. Fixed 2026-08-19, see OPEN_DECISION
+  // pattern_memory_dev_value_missing_catchup_and_listen_race.
   cron.schedule('5 16 * * 1-5', async () => {
-    try { await logProcess('PATTERN_MEMORY', runNightlyUpdate); }
-    catch (err) { console.error('[pattern_memory] Cron error:', err.message); }
+    try {
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      await runNightlyUpdate(todayET, io);
+    } catch (err) { console.error('[pattern_memory] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
   // Volatility regime history — 4:10 PM ET Mon-Fri. Decided 2026-07-17 (OPEN_DECISION
@@ -1098,6 +1131,40 @@ httpServer.listen(PORT, () => {
         }
       }
 
+      // Developing Value Tracker catch-up — due 4:05 PM Mon–Fri; catch up after 5 PM.
+      // computeAndPersistSession() has no "silently skipped but reported SUCCESS" ambiguity
+      // (unlike Pattern Memory below), so a plain process_log SUCCESS check is sufficient here,
+      // matching the convention the other catch-up branches already use.
+      if (day >= 1 && day <= 5 && hour >= 17) {
+        const { rows } = await query(
+          `SELECT 1 FROM process_log WHERE process_name = 'DEVELOPING_VALUE' AND status = 'SUCCESS' AND started_at::date = CURRENT_DATE LIMIT 1`
+        );
+        if (rows.length === 0) {
+          console.log('[catch-up] Developing Value Tracker overdue — running now');
+          await logProcess('DEVELOPING_VALUE', async () => {
+            const r = await computeAndPersistSession(today);
+            return { count: r ? 1 : 0 };
+          });
+        }
+      }
+
+      // Pattern Memory catch-up — due 4:05 PM Mon–Fri; catch up after 5 PM. Deliberately does
+      // NOT check process_log SUCCESS: a genuinely-skipped day (0 trades) also logs SUCCESS
+      // with {skipped:true}, so that alone can't distinguish "ran fine, nothing to log" from
+      // "never really ran." Guard on the real signal instead — trades exist for today but
+      // daily_performance_log has no row yet. runNightlyUpdate self-logs; do not wrap it here
+      // (see the cron.schedule('5 16 * * 1-5', ...) block's comment above for why).
+      if (day >= 1 && day <= 5 && hour >= 17) {
+        const [tradeRows, dplRows] = await Promise.all([
+          query(`SELECT 1 FROM trades WHERE log_date = $1 AND pnl IS NOT NULL LIMIT 1`, [today]),
+          query(`SELECT 1 FROM daily_performance_log WHERE trade_date = $1 LIMIT 1`, [today]),
+        ]);
+        if (tradeRows.rows.length > 0 && dplRows.rows.length === 0) {
+          console.log('[catch-up] Pattern Memory overdue (trades exist, no daily_performance_log row) — running now');
+          await runNightlyUpdate(today, io);
+        }
+      }
+
       // Daily coaching — due 4:30 PM Mon–Fri; catch up after 5 PM
       // Re-run only if coaching has never run OR it ran with 0 live-account trades but live fills now exist.
       // Uses LIKE '%-PRO%' to match live accounts — avoids infinite loop when sim-only fills exist.
@@ -1393,18 +1460,13 @@ httpServer.listen(PORT, () => {
     }
   }, 60000);
 
-  // Pattern memory nightly job — fires at 4:05 PM ET on trading days
-  setInterval(async () => {
-    try {
-      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const h = nowET.getHours(), m = nowET.getMinutes(), day = nowET.getDay();
-      if (day === 0 || day === 6) return; // skip weekends
-      if (h !== 16 || m < 5 || m > 10) return; // only fire between 4:05-4:10 PM ET
-      const tradeDate = nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      console.log(`[pattern] Nightly job triggered for ${tradeDate}`);
-      await runNightlyUpdate(tradeDate, io);
-    } catch(e) { console.error('[pattern] Nightly job error:', e.message); }
-  }, 60000); // check every minute
+  // Pattern memory nightly job: REMOVED 2026-08-19 (was a redundant second scheduler,
+  // present since 2026-05-22/de8860f, firing runNightlyUpdate every minute from 4:05-4:10 PM
+  // ET -- up to 6x/day). updateConditionMemory() has no per-trade_date idempotency guard, so
+  // this was silently inflating condition_memory's occurrences/wins/losses/total_pnl by up to
+  // 6x every trading day. The cron.schedule('5 16 * * 1-5', ...) block above (fixed the same
+  // session, see its comment) plus the catch-up branch in the */30 self-healing block now
+  // fully replace this. See OPEN_DECISION pattern_memory_dev_value_missing_catchup_and_listen_race.
 
   // Auto-backfill weekly ACD if empty
   setTimeout(async () => {

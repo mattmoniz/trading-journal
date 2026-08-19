@@ -393,6 +393,17 @@ export async function updateConditionMemory(tradeDate) {
   `, [d.structural_state, nl30Bucket, d.opening_call||'NO_SIGNAL',
       d.a_signal_quality||'NO_SIGNAL', confluenceBucket, d.counter_trend||false]);
 
+  // Idempotency guard — this row's occurrences/wins/losses/total_pnl are cumulative counters
+  // with no other way to detect a re-processed day. Without this, any duplicate call for a
+  // trade_date already folded into last_seen (a second cron fire, an overlapping catch-up
+  // check, a manual re-trigger) silently double-counts. Found 2026-08-19: a since-removed
+  // redundant setInterval was calling this 6x/day, inflating every condition combination's
+  // stats ~6-fold (see OPEN_DECISION pattern_memory_dev_value_missing_catchup_and_listen_race).
+  if (existingQ.rows[0] && existingQ.rows[0].last_seen >= tradeDate) {
+    console.log(`[pattern] ${tradeDate}: condition_memory already reflects this date (last_seen=${existingQ.rows[0].last_seen}) — skipping to avoid double-count`);
+    return;
+  }
+
   if (existingQ.rows[0]) {
     const row = existingQ.rows[0];
     const n = row.occurrences + 1;
