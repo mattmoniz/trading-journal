@@ -33,7 +33,7 @@ import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
-import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus } from '../services/setupEligibility.js';
+import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -8694,17 +8694,31 @@ export default function createACDRouter(io) {
           `, [todayET, active.type, _cooldownMin]).catch(() => ({ rows: [] }));
           inRefireCooldown = cooldownQ.rows.length > 0;
         }
+        // Real-capital exposure override (2026-08-19, OPEN_DECISION
+        // optimal_stop_circuit_breaker_retripped_20260812): a setup_type can clear the WR/EV
+        // gate above (_suppressedSetups is SUPPRESS/THIN_N-driven only) while the stop/target
+        // it would actually be sized against is one this codebase's own pipeline hasn't
+        // actually validated yet -- caught IB_BULLISH specifically (97.1% day-clustered, only
+        // 7 distinct real trading days behind its whole calibration) after 2 independent
+        // DeepSeek reviews recommended exposure management over trusting the number. This is a
+        // small, explicit, dated exception list (CAPITAL_EXPOSURE_OVERRIDE, setupEligibility.js)
+        // -- NOT a generic auto-detected rule (see that file's header for why a first, broader
+        // attempt at this was reverted before shipping: it would have forced ~95% of the live
+        // roster to SHADOW).
+        const exposureOverride = CAPITAL_EXPOSURE_OVERRIDE.get(active.type);
         const forceShadow = isTrailMechanism
           || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
           || inNewEntryDeadZone
-          || inRefireCooldown;
+          || inRefireCooldown
+          || !!exposureOverride;
         // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
         if (cascadeBreaker.active) {
-          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown}`);
+          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride}`);
         }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
+          : exposureOverride ? exposureOverride.reason
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const fireTags = await computeFireTags(todayET, 'RTH', etMin);

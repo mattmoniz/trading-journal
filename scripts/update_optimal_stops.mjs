@@ -32,6 +32,7 @@ import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { computeCorrectedTarget, makeBarIndex, WALK_WINDOW_BARS } from '../server/services/targetCalibrationService.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { isPlaceholderStopMethod } from '../server/services/setupEligibility.js';
 
 // Minimum N before we trust a computed optimal stop
 const MIN_N = 20;
@@ -131,13 +132,10 @@ function minDeltaNRequired(baselineN) {
 // stored row for the same setup_type. Returns { stop, target, ev, notes } -- notes always
 // includes a circuitBreaker object recording what happened, even when nothing tripped,
 // so the decision is inspectable without re-deriving it.
-// Methods that carry NO per-type validated information -- a placeholder, not a computed
-// optimum (see MIN_SWEEPABLE_N's comment above and DeepSeek's 2026-08-18 review,
-// docs/OPEN_THREADS.md). Used by the placeholder-prior check below.
-const PLACEHOLDER_METHODS = new Set(['volatility-scaled-default', 'p75mae-real-fallback']);
-function isPlaceholderMethod(method) {
-  return PLACEHOLDER_METHODS.has(method);
-}
+// isPlaceholderStopMethod (which methods carry NO per-type validated information -- a
+// placeholder, not a computed optimum) now lives in server/services/setupEligibility.js
+// (2026-08-19) so the live read path (getStopCalibrationConfidence) can never drift out of
+// sync with what this writer actually stamps -- imported above, not redefined here.
 function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, prior, bypass = false }) {
   // One-time re-baseline escape hatch (2026-08-09, rawByType_origin_status_filter). Named
   // with the date deliberately so it can't be casually reused as a generic "skip the
@@ -171,7 +169,7 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
   // (e.g. the p75mae-real-fallback this same session's MIN_SWEEPABLE_N fix now avoids feeding
   // here) would not be a real improvement, just a different placeholder wearing the breaker's
   // approval.
-  if (isPlaceholderMethod(prior.method) && attemptedMethod && !isPlaceholderMethod(attemptedMethod)) {
+  if (isPlaceholderStopMethod(prior.method) && attemptedMethod && !isPlaceholderStopMethod(attemptedMethod)) {
     console.error(`  [CIRCUIT BREAKER: PLACEHOLDER PRIOR] ${setupType}: prior stop=${prior.stop}/target=${prior.target} was never swept (method=${prior.method}) -- accepting first genuinely-swept value (method=${attemptedMethod}) stop=${attemptedStop} target=${attemptedTarget} unconditionally.`);
     return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
       circuitBreaker: { tripped: false, reason: 'prior_was_placeholder_accepting_first_genuine_calibration', priorMethod: prior.method, attemptedMethod, priorStop: prior.stop, priorTarget: prior.target, lastRecalibratedN: currentN } };
@@ -1187,7 +1185,7 @@ async function main() {
       // GLOBEX_VWAP_FADE_LONG: N=25, top5DayPct=64%). Only computed when the type actually has
       // a genuinely swept value (not a placeholder) and enough real trades to be meaningful --
       // cheap and skipped otherwise.
-      const rigorDiag = (!isPlaceholderMethod(targetMethod) && realTradesStop.length >= MIN_SWEEPABLE_N)
+      const rigorDiag = (!isPlaceholderStopMethod(targetMethod) && realTradesStop.length >= MIN_SWEEPABLE_N)
         ? computeRigor(realTradesStop, { dateField: 'trade_date', pnlFn: t => Number(t.actual_pnl) || 0 })
         : null;
       correctedNotes = JSON.stringify({
