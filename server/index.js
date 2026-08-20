@@ -168,13 +168,13 @@ async function autoComputeTodayACD() {
     const result = await computeACDFromBars(todayET, orMins, aMult, sustainMins);
     if (!result) return;
     await query(`
-      INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, daily_score, session_close)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, a_up_time, a_down_time, c_up_confirmed, c_down_confirmed, daily_score, session_close)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
       ON CONFLICT (trade_date) DO UPDATE SET
         or_high=$2, or_low=$3, a_multiplier=$4, a_up_level=$5, a_down_level=$6,
-        a_up_fired=$7, a_down_fired=$8, c_up_confirmed=$9, c_down_confirmed=$10,
-        daily_score=$11, session_close=$12
-    `, [todayET, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
+        a_up_fired=$7, a_down_fired=$8, a_up_time=$9, a_down_time=$10,
+        c_up_confirmed=$11, c_down_confirmed=$12, daily_score=$13, session_close=$14
+    `, [todayET, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.aUpTime, result.aDownTime, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
     console.log(`ACD auto-logged: ${todayET} — score ${result.score > 0 ? '+' : ''}${result.score} (${result.aUpFired ? 'A Up' : result.aDownFired ? 'A Down' : 'No signal'})`);
     // Save setup events for pattern tracking
     setTimeout(() => scanAndSaveSetupEvents(todayET), 2000);
@@ -200,10 +200,10 @@ async function autoBulkBackfillIfEmpty() {
         const result = await computeACDFromBars(d, bfOrMins, bfAMult, bfSustain);
         if (result) {
           await query(`
-            INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, daily_score, session_close)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+            INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, a_up_time, a_down_time, c_up_confirmed, c_down_confirmed, daily_score, session_close)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
             ON CONFLICT (trade_date) DO NOTHING
-          `, [d, result.orHigh, result.orLow, 0.33, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
+          `, [d, result.orHigh, result.orLow, 0.33, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.aUpTime, result.aDownTime, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
         }
       } catch(e) {}
       done++;

@@ -2124,6 +2124,12 @@ export default function createACDRouter(io) {
   });
 
   // POST /api/acd/daily
+  // Manual raw-boolean entry point (not bar-computed like computeACDFromBars) -- does not
+  // set a_up_time/a_down_time deliberately, since there's no real triggering bar here to
+  // derive a timestamp from; a fabricated NOW() would be worse than leaving it null. The
+  // 4 bar-computed INSERT sites (autoComputeTodayACD/autoBulkBackfillIfEmpty in index.js,
+  // /acd/autocompute + its batch sibling below) all persist computeACDFromBars()'s own
+  // aUpTime/aDownTime, which is the real triggering bar's timestamp.
   router.post('/acd/daily', async (req, res) => {
     try {
       const { trade_date, or_high, or_low, a_multiplier = 0.33, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, session_close, notes, profile_shape } = req.body;
@@ -2366,14 +2372,14 @@ export default function createACDRouter(io) {
       if (!result) return res.status(404).json({ error: `No NQ bars found for ${targetDate}` });
 
       const r = await query(`
-        INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, daily_score, session_close)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, a_up_time, a_down_time, c_up_confirmed, c_down_confirmed, daily_score, session_close)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
         ON CONFLICT (trade_date) DO UPDATE SET
           or_high=$2, or_low=$3, a_multiplier=$4, a_up_level=$5, a_down_level=$6,
-          a_up_fired=$7, a_down_fired=$8, c_up_confirmed=$9, c_down_confirmed=$10,
-          daily_score=$11, session_close=$12
+          a_up_fired=$7, a_down_fired=$8, a_up_time=$9, a_down_time=$10,
+          c_up_confirmed=$11, c_down_confirmed=$12, daily_score=$13, session_close=$14
         RETURNING *
-      `, [targetDate, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
+      `, [targetDate, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.aUpTime, result.aDownTime, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
 
       res.json({ ...result, saved: r.rows[0] });
     } catch(e) { console.error('autocompute error:', e); res.status(500).json({ error: e.message }); }
@@ -2548,13 +2554,13 @@ export default function createACDRouter(io) {
             const result = await computeACDFromBars(d, orMins, aMult, sustainM);
             if (result) {
               await query(`
-                INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, c_up_confirmed, c_down_confirmed, daily_score, session_close)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                INSERT INTO acd_daily_log (trade_date, or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired, a_up_time, a_down_time, c_up_confirmed, c_down_confirmed, daily_score, session_close)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                 ON CONFLICT (trade_date) DO UPDATE SET
                   or_high=$2, or_low=$3, a_multiplier=$4, a_up_level=$5, a_down_level=$6,
-                  a_up_fired=$7, a_down_fired=$8, c_up_confirmed=$9, c_down_confirmed=$10,
-                  daily_score=$11, session_close=$12
-              `, [d, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
+                  a_up_fired=$7, a_down_fired=$8, a_up_time=$9, a_down_time=$10,
+                  c_up_confirmed=$11, c_down_confirmed=$12, daily_score=$13, session_close=$14
+              `, [d, result.orHigh, result.orLow, aMult, result.aUpLevel, result.aDownLevel, result.aUpFired, result.aDownFired, result.aUpTime, result.aDownTime, result.cUpConfirmed, result.cDownConfirmed, result.score, result.sessionClose]);
             }
           } catch(e) { /* skip individual date errors */ }
           acdBulkJob.done = i + 1;
