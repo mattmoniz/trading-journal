@@ -1,11 +1,25 @@
 # VWAP_MAGNET BACKFILL `fired_at`/`resolved_at` Timezone Repair Spec
 
-**Status: 2026-08-20, ROOT-CAUSED via DeepSeek review + independent verification, spec
-corrected, not yet built.** Written to be self-contained across a context clear — read
-this doc plus `CLAUDE.md` and you should not need the prior conversation. Resolves
-`OPEN_DECISION vwap_magnet_backfill_entry_price_trade_date_mismatch` (HIGH). Read this
-before touching `active_setups` for the 4 setup_types below, or before touching
-`scripts/update_optimal_stops.mjs`'s STOP-side calibration for them.
+**Status: RESOLVED 2026-08-20, no live-risk action needed, timestamp repair remains
+optional/not built.** `OPEN_DECISION vwap_magnet_backfill_entry_price_trade_date_mismatch`
+closed the same day it was flagged, on its 3rd pass, after discovering the presumed
+live-risk mitigation (`origin_status` filtering on the STOP-side population) was already
+shipped 2026-08-09/10 — 10 days before this bug was even found. `rawByTypeReal`
+(`origin_status IN ('ACTIVE','SHADOW')`) already feeds `computeStopTargetForType()` for
+all 4 setup_types below; verified live via `notes.method` (`EV-sweep-real`/
+`p75mae-real-fallback`, not a synthetic-derived method). **Neither the STOP nor TARGET
+live calibration path reads BACKFILL-origin data for these types at all** — the
+`fired_at`/`resolved_at` defect this doc describes has zero current live consequence.
+This document is kept for whoever eventually wants to repair the historical BACKFILL
+timestamps for analysis purposes (the mechanism below is still correct), but do not treat
+it as urgent, and do not assume `CLAUDE.md`'s prior "CURRENT STATE" framing of this area
+was accurate — it was stale by 10 days and has been corrected in the same session this
+spec was resolved.
+
+---
+
+*Below is the mechanism writeup from the spec's corrected (2nd) version — still accurate
+for the timestamp bug itself, just no longer describing an urgent problem.*
 
 **This spec's first version (same date) mischaracterized the defect** — it framed this as
 "`entry_zone_low` doesn't match real market price" and proposed a 2-phase
