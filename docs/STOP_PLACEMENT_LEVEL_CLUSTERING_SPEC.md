@@ -1,43 +1,91 @@
 # Stop Placement vs. Nearby Structural Levels — Spec
 
-**Status: 2026-08-20, spec only, not yet built.** Written to be self-contained across a
-context clear — read this doc plus `CLAUDE.md` and you should not need the prior
-conversation. Resolves `OPEN_DECISION stop_placement_ignores_nearby_structural_levels`
-(MEDIUM, flagged 2026-08-12). Sent to DeepSeek for Phase-0 design critique before any
-code — see `scratch/deepseek_stop_placement_spec_review.md` once it lands.
+**Status: 2026-08-20, DeepSeek-reviewed, spec corrected, not yet built.** Written to be
+self-contained across a context clear — read this doc plus `CLAUDE.md` and you should not
+need the prior conversation. Resolves `OPEN_DECISION
+stop_placement_ignores_nearby_structural_levels` (MEDIUM, flagged 2026-08-12). Reviewed by
+DeepSeek (`scratch/deepseek_stop_placement_spec_review.md`) — verdict: proceed, with 3
+amendments, all applied below. Independently re-verified before trusting (not accepted on
+DeepSeek's word): the code citations, and a genuine structural bug DeepSeek found in a
+prior, unrelated pilot script (see "Related prior work" below).
 
 ## The hypothesis
 
 When multiple level-fade candidates cluster close together in price, the live selection
-picks whichever has the best historical EV as primary — confirmed in code,
-`server/routes/acd.js:6966-6967`:
+has two paths. **The real primary path** (`server/routes/acd.js:7058-7083`, added
+2026-08-12) filters candidates to the approach-consistent side, sorts by **directional**
+EV (`liveStats[base][dirKey].ev`, not pooled EV), and walks in order, skipping
+recently-fired/suppressed/DOW-suppressed/S2-double/trend-counter candidates, picking the
+first that clears. **The fallback path** (`acd.js:7096-7100`, only reached when no
+candidate clears) is the pooled-EV pick:
 ```js
 const pooledPrimary = nearLevels.reduce((best, lv) =>
   (lv.ev ?? -999) > (best.ev ?? -999) ? lv : best, nearLevels[0]);
 ```
-The resulting stop is then a **fixed point-distance for that setup_type**, read from
-`OPTIMAL_STOP` calibration with zero awareness of where any other nearby level sits —
-confirmed in code, `server/routes/acd.js:7113-7114`:
+The resulting stop is then a **fixed point-distance for that setup_type** (per-setup_type
+`OPTIMAL_STOP`, falling back to that level's own `mae_p75`, then a constant) — read with
+zero awareness of where any other nearby level sits, in either path — confirmed in code,
+`acd.js:7113-7114`:
 ```js
 const optStop = liveStats._opt?.[type];
 const stopPts = optStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
 ```
-Neither the selection (`pooledPrimary`) nor the stop distance (`stopPts`) consults
-`nearLevels`' other members' prices at all. If two levels are 5-10pt apart, the stop from
-fading the closer one could land right on top of the other level's liquidity pocket —
-more exposed to an ordinary sweep/noise move than if the model had picked a level with a
-genuinely clear runway to the same fixed stop distance.
+**The hypothesis survives the correction**: neither the primary (directional-EV) path nor
+the fallback (pooled-EV) path consults `nearLevels`' other members' prices when computing
+the stop. If two levels are 5-10pt apart, the stop from fading the closer one could land
+right on top of the other level's liquidity pocket — more exposed to an ordinary
+sweep/noise move than if the model had picked a level with a genuinely clear runway to the
+same fixed stop distance.
 
 **This is a real hypothesis worth testing carefully — not a bug.** The EV-based selection
-has its own real backing (per-level historical performance); this spec does not propose
-replacing it, only asking whether stop *placement* awareness of level clustering would
-improve outcomes on top of it, or whether it would need to override selection entirely.
+(either path) has its own real backing (per-level historical performance); this spec does
+not propose replacing it, only asking whether stop *placement* awareness of level
+clustering would improve outcomes on top of it, or whether it would need to override
+selection entirely.
 
 ## Distinct from a related, already-flagged idea
 
 `wait_for_held_ground_confirmation_before_fade_entry` is about entry **timing**/
 confirmation — this is about entry **selection** among clustered candidates and stop
 **placement** relative to known structure. Different questions; don't conflate.
+
+## Related prior work — found mid-session, does NOT settle this hypothesis
+
+`scratch/pilot_structural_stop_placement.mjs` (2026-07-27/29) tested a **related but
+different** question: for **stack-break CONTINUATION** trades (same signal family as the
+live `STACK_VOL_BREAK_LIVE`, not level-fade candidates), does anchoring the **stop
+distance** to nearby structure (`LEVEL_IMMEDIATE`/`LEVEL_NEXT`/etc.) beat a fixed 40pt
+stop, with **entry held fixed**? This spec's hypothesis holds **stop distance fixed**
+(the setup_type's `OPTIMAL_STOP`) and varies **which entry candidate gets selected** —
+an orthogonal knob. The mechanisms are different enough (reversal-vs-momentum,
+entry-selection-vs-stop-distance) that the prior work's result does not transfer in either
+direction — per this codebase's own hard rule, "a negative verdict … must cite a specific
+TESTED mechanism failure with a number — negative by analogy to a different pipeline's
+result is not a valid closure."
+
+**That prior work's own "replication failed" conclusion turned out to be wrong anyway** —
+DeepSeek's review found the `computeReplication()` call passed the 9-event held-out
+complement as `units` instead of the full 491-event population, which structurally
+guarantees `replicates: false` regardless of the data (the `selected` pool inside the
+function is always empty since none of the 9 held-out ids can appear in `selectedIds`),
+compounded by scoring those same 9 events with a null stop price (`nextLevelBeyond ===
+null` coerces to a stop price of 0 in JS, producing garbage ~-$40k-per-trade PnL).
+Independently re-verified against the actual code before trusting DeepSeek's claim — both
+defects confirmed exactly as described. The prior pilot's one methodologically clean cell
+(`LEVEL_NEXT @ 40pt` vs `FIXED_40 @ 40pt`, WR 48.3% vs 45.4%, EV $8.26 vs $6.82, N≈482) is
+therefore a real-but-unreplicated small edge, not a confirmed positive OR negative finding
+— recorded as `RESEARCH_CLAIM structural_stop_placement_level_next_vs_fixed40`
+(PROVISIONAL) alongside a corrective `RESEARCH_CLAIM
+pilot_structural_stop_placement_replication_check_broken` so the defect is durable,
+documented knowledge rather than a scratch-file footnote nobody rediscovers.
+
+**Practical takeaway for this spec's own build**: when this spec's Phase 1 eventually
+calls `computeReplication()`, pass the **full** population as `units` (never the
+complement), ensure `metricFn` is defined for every unit (return `null` — not a
+nonsense-scored value — for a unit that can't be scored under the variant being tested,
+per the function's own documented contract), and surface `distinctDates`/`top5DayPct`
+alongside `clean` rather than letting them be computed-and-discarded like the prior pilot
+did.
 
 ## Phase 0 — cheap correlational check first (no re-simulation)
 
@@ -66,13 +114,34 @@ building anything that resimulates alternative entries:
    stratified/controlled by setup_type — EV varies enormously by type, a naive pooled
    comparison would be dominated by composition, not the hypothesis). N≥20 floor per
    bucket per this codebase's standard.
-5. **Specifically check the STOP_HIT sub-population for a liquidity-sweep signature**: of
-   trades that hit their stop, does `STOP_NEAR_OTHER_LEVEL` show a higher rate of price
-   reversing back through the stop level within N bars afterward (a "the market just
-   swept the pocket and reversed" pattern) compared to `STOP_CLEAR_RUNWAY`'s stop-outs?
-   This is the mechanistic signature the hypothesis actually predicts, not just a WR/EV
-   gap — worth checking even if the top-line WR/EV difference is modest, since it's more
-   diagnostic of *why* a gap exists if one is found.
+5. **Specifically check the STOP_HIT sub-population for a liquidity-sweep signature** —
+   DeepSeek review: define it mechanically and conservatively, not fuzzily, given 1-min
+   bars can't see intrabar ordering (can't distinguish a true sweep-then-reverse from an
+   ordinary stop-out-then-trade-back-through — the same ceiling
+   `table_preentry_inflection_detection_pending_orderflow_data` already documents). Use: a
+   `STOP_HIT` where a subsequent bar trades back through the stop by ≥X pt within N bars,
+   AND the stop-out bar's own `close` does not itself close beyond the stop (a
+   rejection-of-the-break signature). Derive `N`/`X` from the data (e.g. the rolling median
+   bar range) rather than hand-picking them, per the no-static-thresholds rule. Treat this
+   as **corroborating diagnostic evidence**, not a gate — the actual Phase 0 decision rests
+   on the WR/EV gap and the base rate of `STOP_NEAR_OTHER_LEVEL`, with the sweep signature
+   as supporting color for *why*, not the primary test.
+6. **Confounds to control for, beyond day-type/volatility** (DeepSeek review, in
+   roughly decreasing importance):
+   - **Stop-width**: `STOP_NEAR_OTHER_LEVEL` is mechanically more likely for setup_types
+     with wider fixed stops (a wider stop sweeps more price territory) — the within-setup_type
+     stratification in step 4 already controls for this; don't let cross-type pooling
+     reintroduce it.
+   - **Level-density**: "another level near the stop" partly proxies "a dense-level day" —
+     control for `nearLevels.length` at entry, not just day-type, so the test isolates
+     stop-adjacency from "this was just a busy day."
+   - **Selection/survivorship**: Phase 0 only sees the exposure of the *currently-selected*
+     (EV-best) candidates — never the alternative (clear-runway) candidates' exposure. It
+     can show "the current selection is exposed and exposed trades do worse," but it
+     *cannot* by itself show "the alternative would have done better" — that is exactly
+     why Phase 1's paired counterfactual exists. State this limitation explicitly when
+     reporting Phase 0 results so a correlational gap isn't over-read as already answering
+     the causal question.
 
 **Decision point**: if Phase 0 shows no real, controlled, rigor-clean gap, stop here —
 this is the cheap screen this codebase's own conventions call for, and Phase 1's
@@ -100,6 +169,19 @@ a real margin) would actually help. If Phase 0 finds a real signal:
    trigger simultaneously, and fades independently perform worse on those days for
    unrelated reasons)? Control for `dtClass`/day-type before attributing any Phase 1 gap
    to stop placement specifically.
+4. **EV-floor confound** (DeepSeek review): the alternative "max-clearance" candidate is,
+   by construction, a *different* level with lower/different EV than the current
+   selection (that's why it didn't win in the first place) — any Phase 1 comparison is
+   therefore implicitly "EV-best-but-exposed vs. EV-worse-but-clear," which conflates
+   level quality with stop placement unless bounded. Restricting the alternative to
+   candidates "within some EV floor of the pooled-best" (Phase 1 step 1) is the right
+   guard, but that floor itself needs deriving from the data (e.g. a rolling-distribution
+   percentile of EV spread within historical clusters), not a guessed number.
+5. **`computeReplication()` usage, if invoked here**: pass the full population as `units`
+   (never the held-out complement — see "Related prior work" above for the exact bug this
+   guards against), ensure `metricFn` returns `null` for any unit that can't be scored
+   under the variant being tested (never a nonsense-scored value), and surface
+   `distinctDates`/`top5DayPct` alongside `clean` rather than computing and discarding them.
 
 ## What NOT to do
 
@@ -115,20 +197,35 @@ a real margin) would actually help. If Phase 0 finds a real signal:
   `computeReplication()`) is required before any live change, per this codebase's
   standing confound-checklist discipline for comparison-style backtests.
 
-## Open questions for DeepSeek's review
+## DeepSeek review — answers (2026-08-20)
 
-1. Is `TOUCH=15` the right clustering threshold to reuse, or does treating "clustered for
-   confluence purposes" and "clustered for stop-placement risk purposes" as the same
-   distance conflate two different physical questions (confluence is about the ENTRY
-   level; this is about where the STOP lands, potentially a different, setup_type-specific
-   distance)?
-2. Is the Phase 0 → Phase 1 staging the right sequencing, or is there a cheaper way to get
-   at the counterfactual question directly without a full resimulation?
-3. Anything about the liquidity-sweep-signature check (Phase 0 step 5) that's
-   underspecified or likely to be noisy/hard to define cleanly with 1-minute bar data
-   (given this codebase's own established ceiling on tick-level order-flow questions,
-   `table_preentry_inflection_detection_pending_orderflow_data` — is this check asking
-   for more precision than 1-min bars can support)?
-4. Any structural/algebraic confound in the Phase 0 comparison itself (per the
-   confluence-checklist's item 1) that isn't just the day-type/volatility one already
-   named?
+Full review: `scratch/deepseek_stop_placement_spec_review.md`. Independently re-verified
+before trusting (the two `pilot_structural_stop_placement.mjs` code claims and the
+stale-selection-path claim above were all checked directly against the actual code).
+
+1. **Is `TOUCH=15` the right clustering threshold?** Partially — it conflates two
+   different physical questions if used carelessly. Confluence's `TOUCH=15` is about
+   levels near the *entry* price; this spec's real question is whether the *stop* price
+   (`entry ± stopPts`, which varies widely by setup_type, roughly 52-82pt in this
+   codebase) lands near another level. Phase 0 step 3 already gets this right (`TOUCH` as
+   the *proximity tolerance* for "stop near a level," not "clustered at entry") — keep
+   that framing, don't let prose conflate the two uses.
+2. **Is the Phase 0 → Phase 1 staging right?** Yes — confirmed no cheaper path exists to
+   the counterfactual than resimulating from an alternative entry; Phase 0's sweep-signature
+   check (step 5) is the highest-value cheap addition and correctly belongs there, not in
+   Phase 1.
+3. **Is the sweep-signature check asking for more precision than 1-min bars support?**
+   Yes, partly — 1-min OHLC can't distinguish a true sweep-then-reverse from an ordinary
+   stop-out-then-trade-back-through (the same ceiling
+   `table_preentry_inflection_detection_pending_orderflow_data` already documents).
+   Addressed above: define it mechanically (a rejection-of-the-break signature, not fuzzy
+   "swept"), and treat it as corroborating diagnostic evidence, not the primary gate.
+4. **Structural/algebraic confounds beyond day-type/volatility?** Yes, 4 more identified
+   and folded into Phase 0/1 above: stop-width, level-density, selection/survivorship
+   (Phase 0 can show exposure-correlates-with-worse-outcomes but not that the alternative
+   would do better — that's what Phase 1 is for), and an EV-floor confound in Phase 1's
+   alternative-candidate selection.
+
+**Verdict: proceed with Phase 0 as scoped**, with the amendments above applied. Not
+deprioritized by the prior work (see "Related prior work" — mechanisms differ, and that
+prior work's own negative turned out to be a broken check, not real evidence either way).
