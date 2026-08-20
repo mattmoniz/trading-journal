@@ -1356,6 +1356,7 @@ function LiveSessionPanel() {
           _sessions: s.historical_sessions,
           _bar6Checkpoint: s.bar6_checkpoint,
           _bar6ExitRecommended: s.bar6_exit_recommended,
+          _deltaConfirmationState: s.delta_confirmation_state,
           _isCaseEngine: true,
         }));
         // Session Timeline: resolved/expired setups, filtered by the RTH/Non-RTH/Both toggle
@@ -1619,6 +1620,29 @@ function LiveSessionPanel() {
                               🚨 EXIT NOW
                             </span>
                           )}
+                          {isCaseEngine && ev._deltaConfirmationState && (() => {
+                            // Resolves OPEN_DECISION delta_confirmation_session_timeline_gap
+                            // (2026-08-20) -- was surfaced on the live setup card
+                            // (ACDView.jsx) and the HA feed but not here. Same 3-state
+                            // config/copy as ACDView.jsx's rendering, kept in sync manually
+                            // (both are small enough that extracting a shared component
+                            // isn't worth it yet -- revisit if a 3rd consumer appears).
+                            const cfg = {
+                              CONFIRMATION: { color: '#34d399', bg: 'rgba(52,211,153,0.12)', border: 'rgba(52,211,153,0.3)', label: 'Δ CONFIRMS' },
+                              PRICE_ONLY_CONTROL: { color: '#f87171', bg: 'rgba(248,113,113,0.12)', border: 'rgba(248,113,113,0.3)', label: 'Δ PRICE-ONLY' },
+                              NO_EFFORT: { color: '#94a3b8', bg: 'rgba(148,163,184,0.1)', border: 'rgba(148,163,184,0.25)', label: 'Δ NO CONFIRM' },
+                            }[ev._deltaConfirmationState];
+                            if (!cfg) return null;
+                            return (
+                              <span style={{
+                                fontSize: 10, fontWeight: 700, letterSpacing: '0.02em', color: cfg.color,
+                                background: cfg.bg, border: `1px solid ${cfg.border}`,
+                                borderRadius: 3, padding: '1px 4px',
+                              }} title="At bar 10 since entry: does cumulative buy/sell-volume delta back up the favorable price move? Informational only.">
+                                {cfg.label}
+                              </span>
+                            );
+                          })()}
                         </div>
                         {resLabel && (
                           <span style={{
