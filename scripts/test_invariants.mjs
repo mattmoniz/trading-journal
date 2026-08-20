@@ -249,7 +249,21 @@ async function main() {
       if (meta.trailSignalName) {
         const tc = trailCalib[meta.trailSignalName];
         if (!tc) {
-          fail(`${variantType}: no BREAKEVEN_TRAIL_TEST row '${meta.trailSignalName}' — run ${meta.backtestScript}`);
+          // Downgraded from FAIL to WARN 2026-08-20 (resolves OPEN_DECISION
+          // pd_poc_fade_long_trail_lost_breakeven_trail_baseline): a missing row here is
+          // OBSERVATIONALLY IDENTICAL whether the backtest was never run, or was run and
+          // the setup_type legitimately failed testTrailForPopulation()'s own guardrail
+          // funnel (noPullbackData/thinTail/noPlateauPass/failedOosOrBaseline/notRigorClean
+          // -- scripts/lib/breakevenTrailCore.mjs) -- the script only ever INSERTs a row
+          // for actual survivors. Directly confirmed 2026-08-20 for PD_POC_FADE_LONG_TRAIL
+          // specifically (Tier A: noPullbackData, Tier B: failedOosOrBaseline -- both
+          // legitimate methodology failures, re-run by hand against current data), and
+          // breakeven_trail_zero_real_survivors_20260816 already found this is currently
+          // the state for ALL 6 wired trail variants fleet-wide, not a per-type anomaly --
+          // hard-FAILing on an already-known, expected, currently-universal state every
+          // single run is noise, not signal. WARN keeps this visible without false urgency;
+          // still worth a look if it EVER becomes just 1-2 of 6 rather than all of them.
+          warn(`${variantType}: no BREAKEVEN_TRAIL_TEST row '${meta.trailSignalName}' -- expected under the current guardrail funnel (see breakeven_trail_zero_real_survivors_20260816), not necessarily a stale/broken script. Re-run ${meta.backtestScript} if you want to confirm this run's specific funnel-exit reason.`);
         } else {
           const notes = typeof tc.notes === 'string' ? JSON.parse(tc.notes) : tc.notes;
           ok(`${variantType}: BREAKEVEN_TRAIL_TEST trail=${notes?.trail}pt (backtest OOS EV $${notes?.oosEv?.toFixed(2)})`);
