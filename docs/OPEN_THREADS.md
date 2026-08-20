@@ -2,6 +2,15 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## ✅ 2026-08-20: Pre-8/1 decision queue staleness sweep — 3 resolved, 12 confirmed still valid
+
+User asked to review every `OPEN_DECISION` flagged before 2026-08-01 (15 items) for staleness, per CLAUDE.md's "a PENDING decision can be stale" rule. Checked each against current code/DB rather than trusting the text — not a vibe pass:
+
+- **`build_multilevel_confluence_breakdown_continuation_detector`** — resolved, stale. Its own ask (stack-break + volume/delta confirmation) was built the same day it was flagged (`STACK_VOL_BREAK_LIVE`, commit `5d8bf08`) and has since matured into a fully calibrated live signal.
+- **`plateau_check_may_be_too_strict_on_thin_neighbors`** — resolved, stale. The specific PD_POC_FADE_LONG scenario it described no longer exists — checked live, current calibration shows a completely different exclusion reason than the one this decision was about.
+- **`trade_management_continuous_score_needs_more_data`** — resolved and re-flagged as `trade_management_continuous_score_worth_reattempting`. Its own stated blocker ("revisit once real N roughly doubles" from ~200) is cleared — real N is now 1,687 (8.4x) — but the actual re-attempt was never done, so this is "ready to try," not closed.
+- **12 others verified still fully valid**, several with updated numbers worth knowing: `backfill_origin_resolution_bar_time_mismatch_8837_rows`'s count is now 6,044 (was 8,837, partial progress elsewhere); everything else (`vwap_not_structurally_persisted_like_other_levels`, `sizemultiplier_needs_per_factor_instrumentation`, `pd_poc_fade_long_trail_lost_breakeven_trail_baseline`, `ai_setup_agg_not_wired_to_any_live_action`, `idea1_move_in_progress_needs_wider_population`, `floor_s1_fade_long_trail_fires_on_suppressed_base_entry`, `structural_invalidation_ignores_entry_quality`, `3_es_contamination_era_resolved_at_impossible_rows`, `delta_confirmation_session_timeline_gap`, `table_preentry_inflection_detection_pending_orderflow_data`, `overshoot_only_entry_worth_dedicated_pilot`) checked unchanged or inconclusive-but-not-contradicted — left open, not force-closed just for being old. Full per-item verification detail is in this session's transcript, not duplicated here.
+
 ## ✅ 2026-08-20: Weekend/Friday-evening Globex closure gap — real, still-live bug found and fixed
 
 Picked up `detector_fires_during_weekend_globex_closure` (flagged 2026-08-19 by DeepSeek QA of an unrelated repair, root cause not yet found at flag time). Dispatched the trace to DeepSeek (`scratch/deepseek_weekend_globex_gate.md`), independently verified every load-bearing claim against the actual code before acting — all checked out.
