@@ -2,6 +2,17 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## 🔶 2026-08-19/20: Opus Audit 8→9 — "four huge losses" investigation, R1+R2 scoped and committed, NOT YET DEPLOYED
+
+User's original complaint: "trades are great and then we get four huge losses that wipe out everything." Two-audit arc:
+
+- **Audit 8** (`scratch/opus_audit_8_results.md`) proposed 3 entry-quality ideas. Two (already-turned entry gate, cross-setup-type same-direction throttle) were built and tested the same day — both settled negative (see commits `dadef98`/`c3271e5`). The third (order-flow touch-quality gate, the literal `prefire_orderflow_touch_gate_candidate` decision) was explicitly rated do-not-act-yet by Opus itself (N=12 in the decisive bucket).
+- **Audit 9** (`scratch/opus_audit_9_results.md`), dispatched to ask for a genuinely different angle after those three: **conclusion was there isn't a 4th predictor, but the real bad-loss driver isn't a missing signal at all** — it's (1) a static admission floor (`SUPPRESS_MAX_EV=-5`) that let `PD_POC_FADE_SHORT` go live at real EV −$2.40, producing −$649 over 5 trades = 64% of the account's entire −$1,019.50 giveback since the 2026-08-05 peak, and (2) the `OPTIMAL_STOP` circuit breaker silently deadlocked for 107/138 setup_types since the 2026-08-16 cascade-breaker repair (root-causes the previously-stuck `optimal_stop_circuit_breaker_n_count_unreconciled_drop` decision). Both independently re-verified against the live DB before trusting (exact P&L match, exact code match) — see the results file for the full trail, including a real, guaranteed (not predictive) lever found on the exit side: a blind max-holding-period time stop turns 49 losses worse than −$150 into 1.
+
+**R1 (circuit-breaker fix) + R2 (`PD_POC_FADE_SHORT` demotion) are scoped and committed (`ee0f6d8`) but NOT deployed** — server hasn't been restarted, still running pre-fix code. Deliberately held for DeepSeek code review before shipping per direct instruction. Full next-step detail: `OPEN_DECISION r1_r2_opus9_pending_deepseek_review` (HIGH) — **read that before touching `update_optimal_stops.mjs` or `setupEligibility.js` again**, it has the exact dispatch/deploy/verify steps.
+
+Opus Audit 9's remaining recommendations (R3 time-stop, R4 alert re-scope + `level_prices` freshness monitor, the `SUPPRESS_MAX_EV` floor recalibration study, promotion hysteresis) are not started — see the results file §6 for full detail if picking one up.
+
 ## ✅ 2026-08-19: 4 more quick decisions cleared — a real system-wide finding along the way
 
 Batch of the remaining "quick" pending decisions from the queue (52→48 pending):
