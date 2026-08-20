@@ -1,164 +1,178 @@
-# VWAP_MAGNET BACKFILL Entry-Price/Trade-Date Repair Spec
+# VWAP_MAGNET BACKFILL `fired_at`/`resolved_at` Timezone Repair Spec
 
-**Status: 2026-08-20, spec only, not yet built.** Written to be self-contained across a
-context clear — read this doc plus `CLAUDE.md` and you should not need the prior
-conversation. Resolves `OPEN_DECISION vwap_magnet_backfill_entry_price_trade_date_mismatch`
-(HIGH). Read this before touching `active_setups` for any of the 4 setup_types below, or
-before touching `scripts/update_optimal_stops.mjs`'s STOP-side calibration for them.
+**Status: 2026-08-20, ROOT-CAUSED via DeepSeek review + independent verification, spec
+corrected, not yet built.** Written to be self-contained across a context clear — read
+this doc plus `CLAUDE.md` and you should not need the prior conversation. Resolves
+`OPEN_DECISION vwap_magnet_backfill_entry_price_trade_date_mismatch` (HIGH). Read this
+before touching `active_setups` for the 4 setup_types below, or before touching
+`scripts/update_optimal_stops.mjs`'s STOP-side calibration for them.
 
-## The problem, and why it matters now
+**This spec's first version (same date) mischaracterized the defect** — it framed this as
+"`entry_zone_low` doesn't match real market price" and proposed a 2-phase
+archaeology-then-choose-a-strategy plan. A DeepSeek Phase-0 review found the actual root
+cause already diagnosed elsewhere in this codebase's own git history, and every load-bearing
+claim below was independently re-verified against live data (not accepted on DeepSeek's
+word) before rewriting this doc. See "What changed from the first version" at the bottom
+if you're comparing against an earlier read of this file.
 
-`active_setups.entry_zone_low` (and by extension `stop_level`/`t1_level`, computed
-relative to it) does not correspond to real NQ market price at the row's own stored
-`fired_at` timestamp on its own stored `trade_date`, for the **majority** of the
-`resolution_method='BACKFILL'` population of all 4 VWAP_MAGNET-family setup_types:
+## The actual defect
 
-| setup_type | checked | mismatched (>100pt from real price) | pct |
-|---|---|---|---|
-| `VWAP_MAGNET_LONG` | 1,149 | 972 | 84.6% |
-| `VWAP_MAGNET_SHORT` | 575 | 416 | 72.3% |
-| `GLOBEX_VWAP_MAGNET_LONG` | 2,000 (query-capped) | 1,584 | 79.2% |
-| `GLOBEX_VWAP_MAGNET_SHORT` | 1,481 | 1,005 | 67.9% |
+`active_setups.fired_at` (and `resolved_at`) is stored **4 hours early (EDT
+months)/5 hours early (EST months)** for the BACKFILL-origin population of all 4
+VWAP_MAGNET-family setup_types — a naive ET-as-UTC timestamp round-trip bug, **not** a
+corrupted entry price. `entry_zone_low`/`stop_level`/`t1_level`/`resolution`/`actual_pnl`
+are all correct — computed from the true triggering bar — only the two timestamp columns
+carry the wrong clock time.
 
-**Concrete example** (id=73950, `VWAP_MAGNET_LONG`, `trade_date=2026-06-17`,
-`fired_at=11:43:00`): stored `entry_zone_low=29971.75`. Real NQ `close` prices at
-11:40-11:50 ET that same date were 30409-30445 — checked bar-by-bar around the exact
-`fired_at` minute, not a day-average artifact (a day-average lookup coincidentally landed
-near the stored entry because NQ's full-day range that date was ~655pt wide, spanning
-both zones at different times — a red herring, ruled out explicitly). The row's stored
-`resolution='STOP_HIT'`/`actual_pnl=-$61` **is** internally consistent with its own
-stored entry/stop ($2/pt × 30pt + $1 commission = $61) — meaning whatever process
-originally computed this row used the same wrong entry/stop/target throughout, not just
-a display artifact on top of otherwise-correct data.
+**Mechanism** (confirmed via `server/db.js`): `price_bars_primary.ts` and
+`active_setups.fired_at` are both naive `TIMESTAMP WITHOUT TIME ZONE` columns storing ET
+wall-clock digits. `db.js`'s `setTypeParser(1114, val => new Date(val + 'Z'))` relabels
+those ET digits as UTC on read (a deliberate "digit-preservation trick" per the file's own
+header) — but node-postgres's default local-time serializer writes a JS `Date` back out
+using the **process's own timezone** (`America/New_York`), which reapplies the ET offset
+a second time. Net effect on a value that round-trips through a JS `Date` object: shifted
+by the ET/UTC offset, 4h in EDT months, 5h in EST months.
 
-**Why this is urgent, not just a historical curiosity**: these are the **4 highest-volume
-LIVE setup_types today**. CLAUDE.md's "CURRENT STATE" note (under Optimal
-stops/targets) already documents their stops are built on 93-97% synthetic BACKFILL
-data, tracked by the still-open `optimal_stop_100pct_unguarded_fallback_needs_new_formula`
-(HIGH). This finding sharpens that concern from "thin/unvalidated" to "actively
-price-inconsistent with real market history" — meaning today's live `OPTIMAL_STOP`
-calibration for all 4 types is very likely computing MAE/MFE/stop-sweep statistics
-against corrupted price distances, not just a small/synthetic sample.
+**Origin**: `scripts/backtest_vwap_magnet.mjs` (RTH `VWAP_MAGNET_LONG/SHORT`) and
+`scripts/backtest_globex_vwap_magnet.mjs` (`GLOBEX_VWAP_MAGNET_LONG/SHORT`), both built
+2026-07-28. Both scripts set `entry = bars[i].close` and `fired_at = bars[i].ts` from the
+*same* bar index — correct and self-consistent at the script level — but `bars[i].ts`
+picks up the round-trip shift on the way into the DB. **This is not a new bug** — it is
+the same defect commit `5da594c` (2026-08-02, "Fix target-calibration bug: BACKFILL
+fired_at corruption inflated live targets 10-15x") already diagnosed and partially fixed,
+for a *different* consequence (target-calibration lookahead via
+`computeCorrectedTarget()`'s `expandedTrades` population). That fix added an
+`origin_status IN ('ACTIVE','SHADOW')` filter to the *target-calibration* read path — it
+did not correct the stored `fired_at`/`resolved_at` values themselves, and did not touch
+`sweepOptimalStopAndTarget()` (the STOP side), which remains unfiltered — see
+"Interaction" below.
 
-**Blast radius, scoped honestly**: `origin_status='BACKFILL'` rows are synthetic by
-construction and never counted as realized/historical performance (CLAUDE.md's standing
-`active_setups` caveat) — no real-money P&L reporting is corrupted by this. The actual
-live consequence is narrower but still real: `sweepOptimalStopAndTarget()`
-(`scripts/update_optimal_stops.mjs`) has never been `origin_status`-filtered (the exact
-gap `optimal_stop_100pct_unguarded_fallback_needs_new_formula` already names), so this
-corrupted population directly feeds the STOP distance chosen for live trades on these 4
-setup_types right now.
+### Verification (exact match, not approximate)
 
-## Phase 1 — root cause (do this first, don't repair blind)
+For id=73950 (`VWAP_MAGNET_LONG`, stored `fired_at`="2026-06-17 11:43:00", stored
+`entry_zone_low`=29971.75): real NQ `close` at `fired_at + 4 hours` ("2026-06-17
+15:43:00") is **29971.75 — an exact match, diff=0.00**. `resolved_at` ("2026-06-17
+11:44:00", one minute after `fired_at`, consistent with a fast stop-hit in the original
+simulation) shows the same pattern shifted by +4h. The true firing time for this row was
+15:43 ET, not the stored 11:43 ET.
 
-**Goal**: identify which script originally generated these rows, and whether the bug is
-systematic (fixable by understanding the mechanism) or scattered (needs a different
-strategy).
+**The first version's ">100pt from real price" prevalence check (84.6%/72.3%/79.2%/67.9%
+across the 4 setup_types) was measuring something real but mislabeled** — it was
+detecting "NQ moved >100pt over the true 4-5h shift window," not "entry is corrupted."
+The ~15-32% of rows that looked "clean" under that check are simply the rows where NQ
+happened to move <100pt during their true 4-5h window — not a structurally different,
+uncorrupted sub-population. **Re-verify this reframing with one query before building
+anything** (per DeepSeek's flagged gap): confirm `entry_zone_low ≈ close_at(fired_at +
+4h)` for Apr-Oct rows and `+5h` for Nov-Mar rows, at the *exact* `fired_at` instant (not a
+day-average), across a real sample — the single-row check above supports this but a
+population-level confirmation is still worth the one query before treating this as fully
+closed.
 
-1. `git log --all -S"VWAP_MAGNET" --oneline -- 'scripts/**'` and check `scripts/archive/`
-   specifically — per the DB_MIGRATION_PROTOCOL.md convention, understand why the current
-   data is the way it is before changing it. `backfill_level_fades.js` (the script behind
-   the already-investigated `resolution_bar_time` bug) is a *different* setup family;
-   confirm whether VWAP_MAGNET has its own dedicated backfill script or shares one.
-2. Once found, read it for how it joins `entry_zone_low` to `trade_date`/`fired_at`. Given
-   the prevalence is high (68-85%) and remarkably consistent across all 4 related
-   setup_types, this reads as a systematic bug (e.g., a stale/cached price series, an
-   off-by-N-days join, a symbol or table mixup), not random corruption — confirm this
-   hypothesis before assuming a per-row root cause.
-3. **Specific hypotheses to check, in order of plausibility**:
-   - A `trade_date` computed from a *different* timestamp than `fired_at` (e.g., a batch
-     `INSERT` that stamped all rows in a run with one shared/wrong date while `fired_at`
-     varied correctly) — check whether mismatched rows cluster by `created_at`/insertion
-     batch rather than being spread evenly across `trade_date`.
-   - A price series join keyed on the wrong table/symbol/offset (similar in *shape* to
-     the already-fixed ES-symbol-contamination bug, though that bug's specific 2023-11-15
-     to 2023-12-15 window doesn't overlap these dates — check whether this is the *same
-     bug class* recurring via a different code path, not the same historical incident).
-   - A VWAP *computation* bug (the level itself computed from the wrong window/date),
-     downstream of which entry/stop/target got derived correctly relative to a wrong
-     VWAP value — distinguishable from the above by checking whether the mismatch
-     magnitude correlates with how far real intraday VWAP moved that day.
-4. Compute the mismatch's own distribution once the row-selection mechanism is
-   understood: is it consistently "N days/weeks off" (pointing at a date-arithmetic bug)
-   or unstructured (pointing at a join/contamination bug)? This determines whether Phase
-   2's repair path is "shift and re-verify" or "re-derive from scratch."
+## Is this population still growing?
 
-## Phase 2 — decide the fix: repair vs. quarantine vs. re-derive
+Both scripts read "Built 2026-07-28" with no visible cron/scheduler wiring found — check
+`crontab -l` and `run_weekly_backtests.sh`/`run_daily_calibration.sh` for either script
+name before assuming the population is frozen. If neither runs on a schedule, this is a
+**one-shot historical population** (fixed row count as of 2026-07-28), which simplifies
+scoping — the fix targets a known, finite set, not an ongoing stream.
 
-Do not pick a path before Phase 1 is done — the right choice depends on what's actually
-wrong. Options, cheapest to most expensive:
+## Why this still matters live
 
-**(a) Repair — shift/correct the stored fields once the mechanism is understood.** Only
-viable if Phase 1 finds a clean, structured error (e.g., a fixed date offset) that can be
-inverted with confidence. Follow `docs/DB_MIGRATION_PROTOCOL.md` exactly: dry-run first,
-backup before any write, cross-check the corrected entry/stop/target against real bars at
-the corrected timestamp before trusting it (same discipline as
-`repair_resolved_at_timezone_bug_20260727.mjs` and this session's `resolution_bar_time`
-fixes — verify a fresh re-walk against real bars produces the SAME resolution/pnl already
-stored, don't just shift blindly).
+These are the **4 highest-volume LIVE setup_types today**. Per CLAUDE.md's "CURRENT
+STATE" note and the still-open `optimal_stop_100pct_unguarded_fallback_needs_new_formula`
+(HIGH), their stops are built on 93-97% synthetic BACKFILL data, and
+`sweepOptimalStopAndTarget()` has never been `origin_status`-filtered. Unlike the
+already-fixed target-calibration path, this means **today's live STOP calibration for all
+4 types is reading a population where `fired_at`/`resolved_at` (and therefore any
+duration/bars-to-resolution derived from them) are wrong**, even though the underlying
+entry/stop/target/outcome data is fine. The severity is about *timing-derived* statistics
+(bars-to-resolution, any time-of-day conditioning), not price-derived ones (MAE/MFE/stop
+distance itself, which use the correct entry/exit prices directly).
 
-**(b) Quarantine — exclude from calibration without deleting.** If Phase 1 finds
-unstructured/unrecoverable corruption (or if repair confidence is low), add a way to mark
-affected rows so `sweepOptimalStopAndTarget()` and any other consumer can filter them out
-— check first whether an existing column already does this (per CLAUDE.md's "share
-modules instead of reimplementing" convention: `origin_status` already covers a similar
-case elsewhere) before adding a new one. A `resolution_method`-based flag or a new boolean
-(e.g. `entry_price_verified`) are both plausible — decide based on whether other
-setup_types could ever have the same defect and need the same flag.
+## The fix — quarantine first, repair as an optional, decoupled follow-up
 
-**(c) Re-derive from real price history.** If neither (a) nor (b) is satisfying (e.g., the
-*real* resolution/outcome for these touches is unknown and worth recovering, not just
-excluding) — re-walk real `price_bars_primary` bars from a corrected `fired_at`/entry
-point, matching the pattern `scripts/repair_dead_end_shadow_rows_20260727.mjs` used for a
-different historical-casualty population. Most expensive; only worth it if the affected
-population is too large a fraction of real signal to simply exclude (given these are
-majority-BACKFILL/synthetic already, this is the least likely path — lean toward (a) or
-(b) unless Phase 1 reveals something that changes this assessment).
+The first version of this spec ordered repair before quarantine ("cheapest first"). That
+was backwards for this specific bug, per DeepSeek's review:
+
+1. **The live-risk fix and the data fix are different operations.** Adding
+   `origin_status` filtering to `sweepOptimalStopAndTarget()` (exactly what
+   `optimal_stop_100pct_unguarded_fallback_needs_new_formula` already calls for)
+   neutralizes the live-calibration risk completely, independent of whether any BACKFILL
+   row's timestamp is ever corrected. **Do this first, unconditionally, and do not wait
+   on this spec to do it** — it's the same fix regardless of root cause.
+2. **Timestamp repair is optional and lower-priority.** Since `entry_zone_low`/
+   `stop_level`/`t1_level`/`resolution`/`actual_pnl` are already correct, the ONLY reason
+   to repair `fired_at`/`resolved_at` is if some consumer needs correct timing-derived
+   stats from this population (e.g. a bars-to-resolution or time-of-day analysis that
+   pools BACKFILL rows) — check whether one exists before spending effort here.
+3. **If repair is pursued**, it is a straightforward **signed shift**, not the archaeology
+   or re-derivation the first version proposed: `fired_at = fired_at + (is_dst(trade_date)
+   ? interval '4 hours' : interval '5 hours')`, same for `resolved_at`. Follow
+   `docs/DB_MIGRATION_PROTOCOL.md`: dry-run first, backup before write, and verify the
+   shifted timestamp actually lands on a real bar whose `close` matches the stored
+   `entry_zone_low` (per row, not just in aggregate) before trusting the shift direction
+   and magnitude — this is the same discipline this session already applied successfully
+   to the 3 ES-era rows and the 12,641-row `resolution_bar_time` repair (both found via
+   `docs/DB_BACKUP_CATALOG.md`'s 2026-08-20 entries).
 
 ## Interaction with `optimal_stop_100pct_unguarded_fallback_needs_new_formula`
 
-That decision already calls for adding `origin_status` filtering to
-`sweepOptimalStopAndTarget()` — a **separate, structural** fix (scoping to real trades,
-independent of whether any individual BACKFILL row's price data is correct). This spec's
-fix is **data-level** (are the BACKFILL rows themselves trustworthy). Do not conflate
-them, but sequence deliberately:
+**Decoupled, not sequenced** — the first version's "check whether the other decision
+resolved first" framing risked both HIGH decisions waiting on each other indefinitely
+(flagged by DeepSeek as a real deadlock risk, and confirmed still `PENDING` as of this
+rewrite). Correct framing:
 
-- If the `origin_status` filter lands first and is aggressive enough to exclude BACKFILL
-  entirely from these 4 setup_types' calibration, this spec's urgency drops (the
-  corrupted data would no longer feed anything live) — check this before starting Phase 1
-  in a future session, in case the other decision already resolved in the meantime.
-- If this spec's fix lands first, `sweepOptimalStopAndTarget()`'s current unguarded
-  behavior means a repair here immediately changes live stop distances for these 4
-  types — treat that as a real, deliberate one-time re-baseline (matching the
-  `bypassed_for_rebaseline_20260809` precedent already in the circuit-breaker's history),
-  not a quiet routine update. Expect the circuit breaker to trip and require an explicit
-  bypass, similar to prior corrections of this scale.
+- The `origin_status` filter that decision calls for should land **regardless of this
+  spec** — it's a structural fix, valid whether or not any BACKFILL timestamp is ever
+  corrected.
+- Once it lands, `sweepOptimalStopAndTarget()`'s current unguarded behavior means the
+  filter itself immediately changes live stop distances for these 4 types — treat that as
+  a deliberate one-time re-baseline (matching the `bypassed_for_rebaseline_20260809`
+  precedent), not a quiet routine update. Expect the circuit breaker to trip.
+- This spec's own scope (timestamp repair) can proceed independently, whenever picked up,
+  without waiting on the other decision landing first.
 
-## Verification plan (required before closing this decision)
+## Verification plan
 
-1. Dry-run count matches this spec's own numbers (984/416/1584/1005-ish, allowing for
-   real new BACKFILL rows accumulating since 2026-08-20) before any write.
-2. Post-fix, re-run this session's own prevalence check (>100pt from real price at
-   `fired_at`) — expect it to drop to ~0% for whichever rows were repaired, or to
-   correctly disappear from the live-eligible population if quarantined.
-3. Re-run `scripts/update_optimal_stops.mjs` for these 4 setup_types specifically and
-   diff the resulting stop/target against today's live values — expect the circuit
-   breaker to trip (per the interaction note above); do not silently bypass it without
-   reviewing the diff first.
-4. Re-run `scripts/pilot_overshoot_control_check.mjs` (or any other script pooling across
-   these 4 setup_types) and confirm the pooled EV magnitude is plausible (roughly -$100 to
-   +$50/trade range, matching every other setup_type in this codebase) — this was the
-   original symptom that surfaced the bug, and is the cheapest sanity check that the fix
-   actually worked.
-5. `node scripts/test_invariants.mjs` clean (no new FAILs beyond the existing baseline).
+1. **Before any write**: confirm the 4h/5h shift prediction holds across a real sample
+   (not just id=73950) — `entry_zone_low ≈ close_at(fired_at + 4or5h)` for a random
+   sample of ~20 rows per setup_type, checking the exact `fired_at` instant.
+2. **If repairing timestamps**: after the shift, re-verify per row that the shifted
+   `fired_at`'s bar matches `entry_zone_low` and the shifted `resolved_at`'s bar is
+   consistent with the stored `resolution` (STOP_HIT/TARGET_HIT) — the re-walk-consistency
+   check, not just "does the aggregate mismatch rate drop to zero" (which a *wrong* fix,
+   e.g. rewriting `entry_zone_low` instead of `fired_at`, could also satisfy while leaving
+   the row's story internally inconsistent).
+3. **If adding the `origin_status` filter to `sweepOptimalStopAndTarget()`**: diff the
+   resulting stop/target against today's live values for all 4 setup_types before
+   trusting it; expect and review a circuit-breaker trip rather than bypassing blind.
+4. `node scripts/test_invariants.mjs` clean (no new FAILs beyond the existing baseline).
 
 ## What NOT to do
 
-- Do not silently repair the entry price without root-causing Phase 1 first — an
-  unstructured fix risks introducing a *second*, differently-wrong price, indistinguishable
-  from the current bug without the same kind of audit that found this one.
-- Do not re-run any pooled backtest/pilot script across these 4 setup_types and trust its
-  output until this is resolved — flagged explicitly in the parent `OPEN_DECISION`.
-- Do not treat this as urgent enough to bypass the circuit breaker casually once a fix
-  lands — the breaker exists specifically to prevent exactly this class of "stop/target
-  lurches on a data correction" from silently changing live risk.
+- Do not repair `entry_zone_low` to match a still-wrong `fired_at` — this "fixes" the
+  symptom (the >100pt mismatch check) while leaving the row's actual defect (wrong
+  timestamp) in place and now ALSO breaking the previously-correct entry/stop/target
+  consistency. This is the exact trap the first version's own verification plan would not
+  have caught.
+- Do not apply a single fixed offset (e.g. always +4h) across the whole population —
+  DST-dependent, will be wrong for Nov-Mar rows.
+- Do not treat the `origin_status` filter as blocked on this spec, or this spec as blocked
+  on that filter landing — they're decoupled fixes for the same underlying population.
+
+## What changed from the first version (2026-08-20, same day)
+
+- Root cause: was "unknown, needs archaeology in `scripts/archive/`" → now "known,
+  diagnosed in commit `5da594c` (2026-08-02), the exact originating scripts identified
+  (`scripts/backtest_vwap_magnet.mjs`/`backtest_globex_vwap_magnet.mjs`, both live in
+  `scripts/`, not archived)."
+- Defective field: was "`entry_zone_low`" → now "`fired_at`/`resolved_at`"; entry/stop/
+  target/resolution/pnl are all correct.
+- Fix order: was "repair (cheapest) → quarantine → re-derive" → now "quarantine
+  (`origin_status` filter, decoupled and immediate) first; timestamp repair optional and
+  separate."
+- Sequencing with the sibling HIGH decision: was "wait and check if it resolved first" →
+  now "decoupled, no dependency either direction."
+- Verification: added the re-walk-consistency requirement (was implicit/buried, now
+  promoted to the actual verification plan) to prevent a "passes the aggregate check but
+  is still wrong" repair.
