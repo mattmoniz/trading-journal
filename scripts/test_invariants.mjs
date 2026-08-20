@@ -173,6 +173,7 @@ import { computeCorrectedTarget, makeBarIndex } from '../server/services/targetC
 import { getVolBucketAtFire } from '../server/routes/acd.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { listClaims } from './record_claim.mjs';
+import { CAPITAL_EXPOSURE_OVERRIDE } from '../server/services/setupEligibility.js';
 
 config();
 const pool = new pg.Pool({
@@ -1138,18 +1139,28 @@ async function main() {
       if (trippedCount === 0) ok('no OPTIMAL_STOP row is currently sitting in a tripped circuit-breaker state');
     }
 
-    // ── 12b. OPTIMAL_STOP circuit breaker deadlock (deltaN <= 0 can never clear the gate) ──
+    // ── 12b. OPTIMAL_STOP circuit breaker deadlock (deltaN < 0 can never clear the gate) ──
     // Resolves OPEN_DECISION optimal_stop_circuit_breaker_n_count_unreconciled_drop (Opus Audit
     // 9 root cause, 2026-08-19/20): a row frozen with reason='min_delta_n_not_met' is routine
-    // and expected when a growing population is just a few trades short (deltaN > 0, < required)
-    // -- check [5] already WARNs/skips appropriately for that. But deltaN <= 0 means real N is
-    // FLAT OR SHRINKING relative to the stored baseline -- structurally unable to ever clear
-    // minDeltaNRequired() without the baseline itself moving, which (before the 2026-08-19/20 fix
-    // to update_optimal_stops.mjs's frozen-branch return) it could never do on its own. This is
-    // distinct from check [12] (TRIPPED, a different reason) and from check [5]'s per-row EV-drift
-    // concern -- a dedicated check because "the gate is structurally unreachable" is a different
-    // class of problem than "the gate hasn't been cleared yet."
-    console.log('\n[12b] OPTIMAL_STOP circuit breaker deadlock -- deltaN <= 0 can never clear the gate');
+    // and expected when a growing population is just a few trades short (deltaN >= 0, < required)
+    // -- check [5] already WARNs/skips appropriately for that, INCLUDING the deltaN===0 flat case
+    // (a large healthy population sitting exactly at its baseline is not broken, it just needs
+    // ordinary organic growth same as deltaN>0). Only deltaN < 0 means real N has SHRUNK below
+    // the stored baseline -- structurally unable to ever clear minDeltaNRequired() without the
+    // baseline itself moving, which (before the 2026-08-19/20 fix to update_optimal_stops.mjs's
+    // frozen-branch return) it could never do on its own. This is distinct from check [12]
+    // (TRIPPED, a different reason) and from check [5]'s per-row EV-drift concern -- a dedicated
+    // check because "the gate is structurally unreachable" is a different class of problem than
+    // "the gate hasn't been cleared yet." Boundary corrected 2026-08-20 (DeepSeek code review of
+    // commit ee0f6d8, Q4): the original `deltaN <= 0` condition misclassified flat-but-healthy
+    // rows (deltaN===0, e.g. VWAP_MAGNET_LONG/SHORT at the time of this fix) as "deadlocked" --
+    // confirmed live, both FAILed under the old boundary despite being large, growing-normally
+    // populations. Since R1 (the Math.min ratchet) makes a real deltaN<0 deadlock self-healing
+    // the next time this script runs, this check is now closer to a one-time cleanup inventory
+    // than a standing structural alarm -- kept as FAIL (not downgraded to WARN) because a NEW
+    // deltaN<0 case appearing after R1 shipped would mean the ratchet itself has a bug, which is
+    // worth catching loudly.
+    console.log('\n[12b] OPTIMAL_STOP circuit breaker deadlock -- deltaN < 0 can never clear the gate');
     {
       const { rows: cbRows2 } = await client.query(`
         SELECT DISTINCT ON (signal_name) signal_name, notes
@@ -1161,22 +1172,37 @@ async function main() {
         FROM performance_audit WHERE signal_type='SETUP_STATUS'
         ORDER BY signal_name, run_date DESC
       `);
-      const liveEligible = new Set(liveEligibleRows.filter(r => ['ACTIVE', 'PROMOTE', 'DAY_TYPE_MANAGED'].includes(r.recommendation)).map(r => r.signal_name));
-      let deadlocked = 0, deadlockedLiveEligible = [];
+      // Corrected 2026-08-20 (DeepSeek review, Q8.1): "live-eligible" here used to mean purely
+      // "SETUP_STATUS recommendation says so", ignoring CAPITAL_EXPOSURE_OVERRIDE entirely -- so
+      // a type this SAME commit (R2) demoted to SHADOW via the override (e.g. PD_POC_FADE_SHORT)
+      // would still get flagged here as "live-eligible but deadlocked", reading as a fresh
+      // regression when it's actually already safely SHADOW-forced. Exclude override members from
+      // the FAIL-tier set; call them out separately, informationally, since their OPTIMAL_STOP
+      // being deadlocked is still worth knowing about (it's part of why some overrides can't
+      // self-clear), just not at FAIL severity.
+      const liveEligible = new Set(liveEligibleRows.filter(r => ['ACTIVE', 'PROMOTE', 'DAY_TYPE_MANAGED'].includes(r.recommendation) && !CAPITAL_EXPOSURE_OVERRIDE.has(r.signal_name)).map(r => r.signal_name));
+      const overrideEligible = new Set(liveEligibleRows.filter(r => ['ACTIVE', 'PROMOTE', 'DAY_TYPE_MANAGED'].includes(r.recommendation) && CAPITAL_EXPOSURE_OVERRIDE.has(r.signal_name)).map(r => r.signal_name));
+      let deadlocked = 0, deadlockedLiveEligible = [], deadlockedOverride = [];
       for (const row of cbRows2) {
         let n; try { n = JSON.parse(row.notes); } catch (_) { n = null; }
         const cb = n?.circuitBreaker;
-        if (cb?.reason === 'min_delta_n_not_met' && cb.deltaN != null && cb.deltaN <= 0) {
+        if (cb?.reason === 'min_delta_n_not_met' && cb.deltaN != null && cb.deltaN < 0) {
           deadlocked++;
           if (liveEligible.has(row.signal_name)) deadlockedLiveEligible.push({ signal_name: row.signal_name, ...cb });
+          else if (overrideEligible.has(row.signal_name)) deadlockedOverride.push({ signal_name: row.signal_name, ...cb });
+        }
+      }
+      if (deadlockedOverride.length > 0) {
+        for (const r of deadlockedOverride) {
+          console.log(`  INFO  ${r.signal_name}: live-eligible by SETUP_STATUS recommendation but currently SHADOW-forced via CAPITAL_EXPOSURE_OVERRIDE -- its OPTIMAL_STOP is ALSO deadlocked (baselineN=${r.baselineN}, currentN=${r.currentN}, deltaN=${r.deltaN}), not currently a live-capital concern but relevant to when the override's revisitWhen condition can ever be met.`);
         }
       }
       if (deadlocked === 0) {
-        ok('no OPTIMAL_STOP row is deadlocked (deltaN <= 0 under a min_delta_n_not_met freeze)');
+        ok('no OPTIMAL_STOP row is deadlocked (deltaN < 0 under a min_delta_n_not_met freeze)');
       } else {
-        warn(`${deadlocked} OPTIMAL_STOP row(s) deadlocked (min_delta_n_not_met with deltaN <= 0) across the whole table -- their real N has been flat or shrinking since their last accepted recalibration, so the gate they must clear is currently unreachable. Not necessarily a bug by itself (a genuinely rare-touch type can sit here indefinitely) -- see the live-eligible FAILs below for the cases that actually matter.`);
+        warn(`${deadlocked} OPTIMAL_STOP row(s) deadlocked (min_delta_n_not_met with deltaN < 0) across the whole table -- their real N has SHRUNK below their last accepted recalibration baseline, so the gate they must clear was unreachable as of their last run. Not necessarily a bug by itself (a genuinely rare-touch type can sit here indefinitely) -- see the live-eligible FAILs below for the cases that actually matter. Since the 2026-08-19/20 Math.min ratchet fix, this should self-heal the NEXT time this script runs for each row -- if a row still shows here across two consecutive runs post-fix, the ratchet itself likely has a bug.`);
         for (const r of deadlockedLiveEligible) {
-          fail(`${r.signal_name}: live-eligible (ACTIVE/PROMOTE/DAY_TYPE_MANAGED) but its OPTIMAL_STOP is deadlocked -- baselineN=${r.baselineN}, currentN=${r.currentN}, deltaN=${r.deltaN}, needs deltaN>=${r.minDeltaNRequired}. This type's stop/target cannot self-correct until its real N grows past the frozen baseline. Check whether a recent bulk delete/reclassification of active_setups (a repair script, a cascade-breaker fix) collapsed its real N without re-baselining this counter -- see the 2026-08-19/20 fix to update_optimal_stops.mjs's applyCircuitBreaker() frozen-branch lastRecalibratedN handling.`);
+          fail(`${r.signal_name}: live-eligible (ACTIVE/PROMOTE/DAY_TYPE_MANAGED, not on CAPITAL_EXPOSURE_OVERRIDE) but its OPTIMAL_STOP is deadlocked -- baselineN=${r.baselineN}, currentN=${r.currentN}, deltaN=${r.deltaN}, needs deltaN>=${r.minDeltaNRequired}. This type's stop/target cannot self-correct until its real N grows past the frozen baseline. Check whether a recent bulk delete/reclassification of active_setups (a repair script, a cascade-breaker fix) collapsed its real N without re-baselining this counter -- see the 2026-08-19/20 fix to update_optimal_stops.mjs's applyCircuitBreaker() frozen-branch lastRecalibratedN handling.`);
         }
       }
     }

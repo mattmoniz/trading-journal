@@ -125,18 +125,22 @@ export async function getStopCalibrationConfidence(signalName) {
 export const CAPITAL_EXPOSURE_OVERRIDE = new Map([
   ['GLOBEX_VWAP_FADE_LONG', { reason: 'STOP_NEVER_SWEPT', addedDate: '2026-08-19', revisitWhen: 'getStopCalibrationConfidence() returns unvalidated:false -- real N clears MIN_SWEEPABLE_N (27) with a genuinely-swept, non-placeholder OPTIMAL_STOP method AND the fresh sweep is not itself day-clustered (rigor.clustered!==true) -- both conditions, not just the N/method one (flagged 2026-08-19, DeepSeek review of commit 47da9ed: the original wording named only the method condition, not the clustering check the diagnostic actually applies)' }],
   ['IB_BULLISH', { reason: 'STOP_DAY_CLUSTERED', addedDate: '2026-08-19', revisitWhen: 'computeRigor().clustered is false on a fresh sweep (i.e. real trading days spread out past the current 7-day, 97.1%-top5 concentration)' }],
-  // Opus Audit 9 (2026-08-19/20): went ACTIVE 2026-08-18 at recent_90d.real_ev=-$2.40 (all-time
-  // blended -$8.93/-$9.22) -- above the static SUPPRESS_MAX_EV=-5 floor, so the gate admitted it
-  // as designed, but its own applied geometry (stop 82pt/target 47pt -> break-even WR 64.3%
-  // against an achieved real WR of 64.0%) means it was never expected to clear its own costs by
-  // more than noise. Produced -$649.00 over 5 real-capital trades since 2026-08-05 -- 64% of the
-  // entire $1,019.50 equity giveback from that peak, from 7.6% of the trades in that window.
-  // Also flipped SUPPRESS->THIN_N->SUPPRESS->ACTIVE across its last 5 calibration runs -- not a
-  // stable read. Separate from and does not depend on the OPTIMAL_STOP circuit-breaker deadlock
-  // fix (update_optimal_stops.mjs) shipped the same session -- this setup_type's own OPTIMAL_STOP
-  // row is itself deadlocked (baselineN=26/currentN=24), so its stop/target can't even
-  // self-correct right now regardless of whether the EV floor is ever revisited.
-  ['PD_POC_FADE_SHORT', { reason: 'NEGATIVE_REAL_EV_AT_PROMOTION', addedDate: '2026-08-19', revisitWhen: 'recent_90d.real_ev > 0 across at least two consecutive calibration runs with real_n >= 40, AND its OPTIMAL_STOP is no longer circuit-breaker-deadlocked (see check [12b] in test_invariants.mjs)' }],
+  // Opus Audit 9 (2026-08-19/20), reworded 2026-08-20 per DeepSeek code review of commit ee0f6d8
+  // (Q7): the ROBUST basis for this demotion is the applied geometry, not a point-in-time EV
+  // figure -- stop 82pt/target 47pt implies a break-even WR of 166/(166+92)=64.3% (MNQ $2/pt,
+  // $2 round-trip commission), against an achieved real WR of 64.0% at demotion time -- i.e. the
+  // stop/target this type was actually trading on was never expected to clear its own costs by
+  // more than noise, independent of whichever way the EV point estimate happens to be leaning on
+  // a given day. It also flipped SUPPRESS->THIN_N->SUPPRESS->ACTIVE across its last 5 calibration
+  // runs -- not a stable read. DO NOT lead with a dollar figure at N=5 (CLAUDE.md N>=20 floor) --
+  // the -$649/5-trades number from Opus Audit 9 is corroborating color, not the justification;
+  // real_ev has already moved to +$0.49 (real_n=25) as of the 2026-08-19 SETUP_STATUS row, still
+  // below the break-even bar above but proof the point EV alone is not a stable signal to gate on.
+  // Separate from and does not depend on the OPTIMAL_STOP circuit-breaker deadlock fix
+  // (update_optimal_stops.mjs) shipped the same session -- this setup_type's own OPTIMAL_STOP row
+  // is itself deadlocked (baselineN=26/currentN=24 as of 2026-08-19), so its stop/target can't
+  // even self-correct right now regardless of whether the geometry is ever revisited.
+  ['PD_POC_FADE_SHORT', { reason: 'UNSTABLE_NEGATIVE_EXPECTANCY_GEOMETRY', addedDate: '2026-08-19', revisitWhen: 'achieved real WR clears the break-even WR implied by its then-current OPTIMAL_STOP geometry across at least two consecutive calibration runs with real_n >= 40, AND its OPTIMAL_STOP is no longer circuit-breaker-deadlocked (see check [12b] in test_invariants.mjs). Tracked in OPEN_DECISION pd_poc_fade_short_capital_exposure_override_revisit -- query getStopCalibrationConfidence(\'PD_POC_FADE_SHORT\') directly, this condition is not machine-checked.' }],
 ]);
 
 // Canonical "is this setup_type currently allowed to fire ACTIVE" source. Every live insert

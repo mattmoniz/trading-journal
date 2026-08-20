@@ -188,7 +188,12 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
     // shrink (still only ever recorded when actually frozen this run, so ordinary upward
     // growth is unaffected -- baselineN only decreases when currentN has actually dropped
     // below it) while still requiring real forward growth from wherever N actually stands
-    // before the next real recalibration is attempted -- the breaker's whole point.
+    // before the next real recalibration is attempted -- the breaker's whole point. The only
+    // way to clear cheaply off this ratchet is a genuine drop-then-climb (delete N, ratchet
+    // down, re-add N) -- not a realistic organic pattern, and re-adding rows would itself be a
+    // separate defect (DeepSeek review, 2026-08-20, Q2). Note this branch's own `baselineN`/
+    // `deltaN` fields still reflect the OLD baseline this run -- the ratchet only takes visible
+    // effect starting the FOLLOWING run, once `prior.lastRecalibratedN` is re-read above.
     return { stop: prior.stop, target: prior.target, ev: prior.ev,
       circuitBreaker: { tripped: false, reason: 'min_delta_n_not_met', baselineN, currentN, deltaN, minDeltaNRequired: required,
         attemptedStop, attemptedTarget, attemptedMethod, lastRecalibratedN: Math.min(baselineN, currentN) } };
@@ -196,6 +201,10 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
   const stopPctChange = prior.stop ? Math.abs(attemptedStop - prior.stop) / prior.stop : 0;
   const targetPctChange = prior.target ? Math.abs(attemptedTarget - prior.target) / prior.target : 0;
   if (stopPctChange > CIRCUIT_BREAKER_MAX_PCT_CHANGE || targetPctChange > CIRCUIT_BREAKER_MAX_PCT_CHANGE) {
+    // This branch deliberately does NOT apply the Math.min() ratchet above -- harmless, not an
+    // oversight (DeepSeek review, 2026-08-20, Q8.2): reaching here requires deltaN >= required
+    // (the deltaN < required check above already returned otherwise), which implies
+    // currentN > baselineN, so Math.min(baselineN, currentN) would just return baselineN anyway.
     console.error(`  [CIRCUIT BREAKER TRIPPED] ${setupType}: attempted stop=${attemptedStop}(${(stopPctChange * 100).toFixed(0)}%) target=${attemptedTarget}(${(targetPctChange * 100).toFixed(0)}%) vs prior stop=${prior.stop} target=${prior.target} -- keeping prior, see test_invariants.mjs`);
     return { stop: prior.stop, target: prior.target, ev: prior.ev,
       circuitBreaker: { tripped: true, reason: 'pct_change_exceeded', maxPctChange: CIRCUIT_BREAKER_MAX_PCT_CHANGE,
@@ -1193,10 +1202,18 @@ async function main() {
       // 37/38). getStopCalibrationConfidence() (server/services/setupEligibility.js) reads
       // exactly this field to decide STOP_NEVER_SWEPT for CAPITAL_EXPOSURE_OVERRIDE calls, so a
       // stale label there answers a live risk-management question about a number that was never
-      // stored. method now always describes the PROVENANCE of optStop/optTarget as actually
-      // written below; the attempt (if different) already lives in circuitBreaker.attemptedMethod.
+      // stored. Corrected 2026-08-20 (DeepSeek code review, Q3): this only STOPS a frozen run
+      // from re-stamping the attempted method going forward -- it does NOT retroactively fix a
+      // label already stamped wrong by the pre-fix code (that label was itself the prior row's
+      // stored method, which for a type already frozen under the old bug is the earlier bad
+      // attempted-method stamp). Those correct themselves the first time the row genuinely clears
+      // the breaker and gets a real fresh sweep (see the accept branch below, which stamps
+      // targetMethod on a real computation). Also fail LOUD instead of silently falling back to
+      // the attempted method (baseNotes.method) when no prior stored method exists -- the ??
+      // fallback used to reintroduce this exact bug silently for any type reaching this branch
+      // with a null/missing prior notes.method.
       if (decision.circuitBreaker.reason === 'min_delta_n_not_met' || decision.circuitBreaker.reason === 'pct_change_exceeded') {
-        baseNotes = { ...baseNotes, method: priorStoredByType[r.setup_type]?.method ?? baseNotes.method };
+        baseNotes = { ...baseNotes, method: priorStoredByType[r.setup_type]?.method ?? 'unknown-prior-method' };
       }
       // Day-clustering diagnostic (2026-08-18, DeepSeek-recommended -- see MIN_SWEEPABLE_N's
       // comment above for the incident): surfaces whether the REAL trades behind a genuinely
