@@ -53,7 +53,7 @@ import longtermRouter from './routes/longterm.js';
 import patternRouter from './routes/pattern.js';
 import auctionReadRouter from './routes/auctionRead.js';
 import weeklyRouter from './routes/weekly.js';
-import createACDRouter, { expireStaleSetups, nextTradingDay } from './routes/acd.js';
+import createACDRouter, { expireStaleSetups, nextTradingDay, isGlobexWeekClosed } from './routes/acd.js';
 import setupsRouter from './routes/setups.js';
 import phaseChangeRouter from './routes/phaseChange.js';
 import calendarRouter from './routes/calendar.js';
@@ -1349,13 +1349,11 @@ httpServer.listen(PORT, () => {
   setInterval(async () => {
     try {
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const day = etNow.getDay(); // 0=Sun ... 6=Sat
-      const etMin = etNow.getHours() * 60 + etNow.getMinutes();
-      const isSaturday = day === 6;
-      const isSundayBeforeOpen = day === 0 && etMin < 1080; // Globex reopens 6:00 PM ET Sunday
-      const isFridayAfterClose = day === 5 && etMin >= 1020; // Globex closes 5:00 PM ET Friday
-      const isDailyMaintenanceBreak = etMin >= 1020 && etMin < 1080; // 5:00-6:00 PM ET, Mon-Thu
-      if (isSaturday || isSundayBeforeOpen || isFridayAfterClose || isDailyMaintenanceBreak) return;
+      // FIXED 2026-08-20: was 4 predicates hand-rolled inline here, now diverged from an
+      // identical copy in acd.js's own inGlobex gate (fixed same session,
+      // detector_fires_during_weekend_globex_closure) -- both now call the single shared
+      // isGlobexWeekClosed(), extracted to acd.js so it's importable here without a cycle.
+      if (isGlobexWeekClosed(etNow)) return;
       const res = await fetch(`http://localhost:${PORT}/api/acd/setup-detection`, { signal: AbortSignal.timeout(14000) });
       if (!res.ok) {
         console.error(`[detection-poll] ${res.status} from /api/acd/setup-detection`);

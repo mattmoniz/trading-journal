@@ -1174,6 +1174,30 @@ export function nextTradingDay(etDate) {
   return d.toLocaleDateString('en-CA');
 }
 
+// True outside real CME Globex-open hours (Sun 6PM ET -> Fri 5PM ET, with the daily 5-6PM ET
+// maintenance break) -- the exact schedule server/index.js's autonomous poller already encoded
+// inline (isSaturday/isSundayBeforeOpen/isFridayAfterClose/isDailyMaintenanceBreak), extracted
+// here 2026-08-20 (OPEN_DECISION detector_fires_during_weekend_globex_closure, DeepSeek-traced)
+// so it can also gate the ENDPOINT HANDLER itself, not just the server's own poller. FOUND: the
+// poller correctly no-oped through the weekend, but /api/acd/setup-detection's own `inGlobex`
+// check (below) was a bare time-of-day predicate with no day-of-week check at all -- reachable by
+// any OTHER caller (App.jsx's unconditional 60s poll, TradeAlertBanner/MarketPulseBar's 15s
+// polls, none of which gate on weekend/closed state), which produced real phantom
+// PD_POC_FADE_SHORT/PD_VAH_FADE_SHORT active_setups rows against Friday's frozen closing price
+// during a real weekend Globex closure (2026-07-10/11/12). Gating the endpoint's own inGlobex
+// check with this makes it a no-op for every caller regardless of whether that caller itself
+// gates -- the poller keeps its own copy too (harmless double-gating, avoids depending on
+// cross-file import ordering for something this cheap to just also check locally).
+export function isGlobexWeekClosed(etDate) {
+  const day = etDate.getDay(); // 0=Sun ... 6=Sat
+  const etMin = etDate.getHours() * 60 + etDate.getMinutes();
+  const isSaturday = day === 6;
+  const isSundayBeforeOpen = day === 0 && etMin < 18 * 60; // Globex reopens 6:00 PM ET Sunday
+  const isFridayAfterClose = day === 5 && etMin >= 17 * 60; // Globex closes 5:00 PM ET Friday
+  const isDailyMaintenanceBreak = etMin >= 17 * 60 && etMin < 18 * 60; // 5:00-6:00 PM ET daily
+  return isSaturday || isSundayBeforeOpen || isFridayAfterClose || isDailyMaintenanceBreak;
+}
+
 // Detect a Globex-session level fade. Checks current price against PD VAH/VAL/POC.
 // Returns a setup descriptor (same shape as RTH active) or null.
 // First 4 (2026-07-20): prior-period levels whose wider (overnight-inclusive) window was
@@ -1479,12 +1503,17 @@ async function detectGlobexSetup(sessionDate, io) {
       const confluencePairPartner = pairPartners ? [...pairPartners].find(p => otherLevelBases.has(p)) ?? null : null;
       const sizeMultiplier = confluencePairPartner ? 1.15 : 1.0;
 
-      // Globex setups expire at next RTH open (9:30 AM ET, next calendar day)
+      // Globex setups expire at next RTH open (9:30 AM ET). FIXED 2026-08-20 (DeepSeek trace,
+      // detector_fires_during_weekend_globex_closure): the old "+1 calendar day" roll had no
+      // weekend skip, so an evening fire computed a Sat/Sun 09:30 phantom "RTH open" that never
+      // happens (confirmed live on 2 rows from the 2026-07-10/11/12 closure). Now reachable only
+      // Sun 18:00+ through Thu 18:00+ once isGlobexWeekClosed() gates out Fri-evening/weekend
+      // fires above, but hardened here too rather than depending solely on that gate --
+      // nextTradingDay() (already exported, used elsewhere in this file) correctly rolls Fri/Sat
+      // evening fires to Mon and Sun evening fires to Mon, matching real Globex reopen days.
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const expDate = new Date(etNow);
-      if (etNow.getHours() >= 18) expDate.setDate(expDate.getDate() + 1);
-      expDate.setHours(9, 30, 0, 0);
-      const expiresAt = `${expDate.getFullYear()}-${String(expDate.getMonth()+1).padStart(2,'0')}-${String(expDate.getDate()).padStart(2,'0')} 09:30:00`;
+      const expDateStr = etNow.getHours() >= 18 ? nextTradingDay(etNow) : etNow.toLocaleDateString('en-CA');
+      const expiresAt = `${expDateStr} 09:30:00`;
 
       // idx_as_unique_setup is a PARTIAL unique index (WHERE status IN ('ACTIVE','SHADOW'))
       // as of 2026-07-16 -- was a blanket index on every status value, which meant a
@@ -4155,8 +4184,14 @@ export default function createACDRouter(io) {
         return res.json({ setup: null, sessionClosed: true });
       }
 
-      // Globex window: 6 PM–8:30 AM ET — fire level fades against PD VAH/VAL/POC only
-      const inGlobex = etHour >= 18 || etMin < 8 * 60 + 30;
+      // Globex window: 6 PM–8:30 AM ET — fire level fades against PD VAH/VAL/POC only.
+      // FIXED 2026-08-20 (detector_fires_during_weekend_globex_closure): this used to be a bare
+      // time-of-day check with no day-of-week gate, so any ungated caller (a browser left open
+      // over the weekend) could trip it during a real Globex closure -- see isGlobexWeekClosed()'s
+      // comment above for the full incident. The server's own autonomous poller already skips
+      // calling this endpoint at all during closed hours (server/index.js), but other callers
+      // (frontend polls) don't -- gating here makes the endpoint itself safe regardless of caller.
+      const inGlobex = !isGlobexWeekClosed(nowET) && (etHour >= 18 || etMin < 8 * 60 + 30);
       if (inGlobex) {
         const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
         const globexSetup = await detectGlobexSetup(sessionDate, io);
