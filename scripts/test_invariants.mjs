@@ -1382,6 +1382,18 @@ async function main() {
         'GLOBEX_ALREADY_FIRED_TODAY', 'OTD_HARDCODED_KILL', 'IB_DAYTYPE_REAL_N_FLOOR',
         'RISK_CHECK_MAIN', 'RISK_CHECK_SHADOW', 'DIRECTIONAL_CONFLICT_STAND_ASIDE',
         'C_STANDALONE_DEATH_SEQUENCE', 'C_STANDALONE_POC_COUNTER',
+        // Added 2026-08-20 (verify_shadowcandidates_refire_cooldown_fix_live) -- the
+        // 2026-08-19 machine-gun-refire fix (commit b919990) wired REFIRE_COOLDOWN_MINUTES
+        // into the shadowCandidates insert path for the first time; this is that gate's
+        // name, first observed live 2026-08-20 during real RTH hours.
+        'REFIRE_COOLDOWN_SHADOW',
+        // Found missing 2026-08-20 while adding the entry above -- this gate has been live
+        // since the 2026-08-12 cluster-fallback fix (the directional-EV-sorted candidate
+        // walk in the level-fade primary-selection path, acd.js ~7058-7100) and has been
+        // silently WARNing this check for over a week (1637 real hits in the last 7 days
+        // alone) without anyone noticing, since nothing was watching for a stray-vs-real
+        // new gate name distinction until this session's own fix was being applied.
+        'LEVEL_FADE_CLUSTER_FALLBACK_SKIP',
       ]);
       const tableCheck = await client.query(`
         SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='gated_candidates') as exists
