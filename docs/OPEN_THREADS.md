@@ -2,6 +2,20 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## ✅ 2026-08-20: Weekend/Friday-evening Globex closure gap — real, still-live bug found and fixed
+
+Picked up `detector_fires_during_weekend_globex_closure` (flagged 2026-08-19 by DeepSeek QA of an unrelated repair, root cause not yet found at flag time). Dispatched the trace to DeepSeek (`scratch/deepseek_weekend_globex_gate.md`), independently verified every load-bearing claim against the actual code before acting — all checked out.
+
+**Root cause**: `/api/acd/setup-detection`'s `inGlobex` check (`server/routes/acd.js`) was a bare time-of-day predicate (`etHour>=18 || etMin<8:30`) with no day-of-week gate. `server/index.js`'s own autonomous 15s poller already correctly skips calling this endpoint during weekend/maintenance-break hours — but that gate lived **only** in the poller. Any other caller reached the endpoint's own weaker check, and every frontend poll of this exact URL is ungated on weekend state (`App.jsx`'s unconditional 60s poll, `TradeAlertBanner`/`MarketPulseBar`'s 15s polls — none check `isViewActive` for this purpose, let alone weekend state). A browser tab left open over a weekend was enough to trip it. Confirmed: this produced the 5 known phantom `active_setups` rows (`PD_POC_FADE_SHORT` ×2, `PD_VAH_FADE_SHORT` ×3, `origin_status ACTIVE/SHADOW`) against Friday's frozen closing price during the real 2026-07-10/11/12 weekend closure — a still-reachable live gap, not just historical debris.
+
+**Also found and fixed along the way**: `expires_at`'s "next RTH open" computation did a naive `+1 calendar day` roll with no weekend skip, producing phantom Saturday/Sunday 09:30 "RTH open" expiry values.
+
+**Fixed (commit `ff68229`)**: extracted `isGlobexWeekClosed()` to `acd.js` (the same 4 predicates the poller already had — Saturday / Sunday-before-6PM / Friday-after-5PM / daily 5-6PM maintenance break) and gated the endpoint's own `inGlobex` check with it, so the endpoint is safe for **every** caller, not just the poller. `index.js`'s poller now imports and calls the shared helper instead of carrying its own now-redundant copy. `expires_at`'s evening-roll branch now uses the already-exported `nextTradingDay()` instead of the naive roll.
+
+**Verified**: `isGlobexWeekClosed()`/`nextTradingDay()` checked by hand against 8 known timestamps (Sat, Sun before/after reopen, Fri before/after close, normal weekday Globex/RTH/maintenance-break hours) — all correct. `test_invariants.mjs`: identical FAIL set before/after (10 FAILUREs, matching this session's R1/R2 baseline), no regressions. Server restarted, verified healthy (200), handed back to systemd cleanly (no orphaned `nodemon`). `OPEN_DECISION detector_fires_during_weekend_globex_closure` resolved.
+
+**Not fixed, flagged only** (same architectural gap, not confirmed to have produced bad rows): `computeStackVolSignal()`'s own `STACK_VOL_BREAK_LIVE` insert currently avoids the weekend case only by accident of bar-availability timing — but it's called from the same now-gated `inGlobex` branch, so it's covered automatically, no separate action needed.
+
 ## ✅ 2026-08-19/20: Opus Audit 8→9 — "four huge losses" investigation, R1+R2 DEPLOYED after DeepSeek review
 
 User's original complaint: "trades are great and then we get four huge losses that wipe out everything." Two-audit arc:
