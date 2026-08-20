@@ -1,13 +1,24 @@
 # Stop Placement vs. Nearby Structural Levels — Spec
 
-**Status: 2026-08-20, DeepSeek-reviewed, spec corrected, not yet built.** Written to be
-self-contained across a context clear — read this doc plus `CLAUDE.md` and you should not
-need the prior conversation. Resolves `OPEN_DECISION
-stop_placement_ignores_nearby_structural_levels` (MEDIUM, flagged 2026-08-12). Reviewed by
-DeepSeek (`scratch/deepseek_stop_placement_spec_review.md`) — verdict: proceed, with 3
-amendments, all applied below. Independently re-verified before trusting (not accepted on
-DeepSeek's word): the code citations, and a genuine structural bug DeepSeek found in a
-prior, unrelated pilot script (see "Related prior work" below).
+**Status: DEPRIORITIZED 2026-08-20, not built, not an active thread.** Reviewed by
+DeepSeek (`scratch/deepseek_stop_placement_spec_review.md`, verdict: proceed, 3
+amendments, all applied below) and fully scoped — but on reviewing the plan against the
+closest real analog, the decision was made not to schedule effort here. Two reasons: (1)
+the closest comparable prior test (see "Related prior work" below) showed only a marginal
+effect even at its best — roughly one commission-and-slippage round-trip; (2) Phase 1, the
+only phase that could test this spec's actual entry-selection hypothesis, has a structural
+confound that's hard to escape — the "clear runway" alternative candidate is by
+construction a *lower-EV* level than whatever the current selection already picked, so
+even a clean Phase 1 result would leave real ambiguity between "stop placement matters"
+and "the lower-EV pick got lucky." Phase 0 alone (correlation only) can't resolve that
+ambiguity. Kept for reference, not deleted — revisit only if real trade volume grows
+substantially or someone has a sharper way to isolate stop placement from level quality in
+Phase 1. `OPEN_DECISION stop_placement_ignores_nearby_structural_levels` resolved with this
+reasoning.
+
+---
+
+*Below is the spec as scoped and DeepSeek-reviewed, preserved as-is for reference.*
 
 ## The hypothesis
 
