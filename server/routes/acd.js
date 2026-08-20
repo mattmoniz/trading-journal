@@ -7306,6 +7306,43 @@ export default function createACDRouter(io) {
                 return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${hivolLopaceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
+              // OPEN_DECISION sizemultiplier_needs_per_factor_instrumentation (2026-08-20,
+              // DeepSeek-reviewed design): raw INPUT state of every factor the sizeMultiplier
+              // IIFE below reads, captured once here so a future walk-forward-validated joint
+              // model is buildable without reimplementing this whole context-gathering
+              // pipeline. Deliberately raw categorical/boolean inputs, NOT per-factor dollar
+              // contribution -- the IIFE below is order-dependent with absolute sets (SUPPRESS
+              // -> mult=0.25, stacking>=7 -> mult=0.10, loss-streak ceilings), so a
+              // before/after delta per factor would be non-monotonic and misleading; a
+              // regression should learn the interaction/ordering effects itself from clean
+              // inputs. Read-only snapshot of already-computed variables -- does not touch the
+              // IIFE's logic or its returned mult at all. mult_iife/hasLossToday are merged in
+              // at the INSERT site below (hasLossToday isn't known yet at this point in
+              // construction, and DOMINATES real live_multiplier per the comment ~8 lines above
+              // the ceiling application -- omitting it here would make this column silently
+              // uninformative for the majority of real rows, see DeepSeek's review).
+              sizeFactorsAtDetection: {
+                tierDiscount: lv.ev < 30 && confluenceCount < 2,
+                lfConsecWins, lfConsecLosses, lfFirstOfDay,
+                overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
+                buyersAtLevel: !!buyersAtLevel, sellersAtLevel: !!sellersAtLevel,
+                confluencePairPartner: !!confluencePairPartner,
+                eliteZone: !!eliteZone,
+                daysSinceTest,
+                dtaRowRecommendation: dtaRow?.recommendation ?? null,
+                openVsPriorValue: _lfOvOpen ?? null,
+                stackCount: _lfSameDirCounts[dir] ?? 0,
+                nl30Bucket: _lfNl30Bucket ?? null,
+                minutesSinceVisit,
+                vwapExtended: !!(_lfVwap != null && _lfVwapMean != null && _lfVwapStd != null && Math.abs(currentPrice - _lfVwap) > _lfVwapMean + _lfVwapStd),
+                orExpanded: !!_lfOrExpanded,
+                dtClass: dtClass ?? null,
+                regimePersist: !!_lfRegimePersist,
+                smallGapDay: !!_lfSmallGap,
+                deltaNeutral: !!_lfDeltaNeutral,
+                deltaHigh: !!_lfDeltaHigh,
+                sessionConflict: !!sessionConflictFor(dir),
+              },
               sizeMultiplier: (() => {
                 let mult = 1.0;
                 // MARGINAL-tier starting discount: EV < $30 with no confluence → -0.25 base
@@ -7536,7 +7573,14 @@ export default function createACDRouter(io) {
               `, [
                 todayET, type, currentPrice, suppressReason,
                 nearLevels.length,
-                nearLevels.length ? nearLevels.map(l => l.name) : null,
+                // FIXED 2026-08-20 (DeepSeek design review, vwap_not_structurally_persisted_
+                // like_other_levels): was nearLevels.map(l => l.name) -- unstripped, unlike
+                // the main candidate INSERT's .replace(/_FADE$/, '') a few thousand lines up
+                // -- so this SHADOW-population audit insert wrote 'RTH_VWAP_FADE' while the
+                // main path writes 'RTH_VWAP' for the identical level, a real naming
+                // divergence between the two branches for what CLAUDE.md's 2026-07-22 entry
+                // says is the population that actually matters for the confluence hypothesis.
+                nearLevels.length ? nearLevels.map(l => l.name.replace(/_FADE$/, '')) : null,
                 currentPrice, auditStopLevel, auditT1Level,
                 `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
                 auditExpiresAt,
@@ -8484,6 +8528,20 @@ export default function createACDRouter(io) {
           // on top of the real IIFE value (never exceeding 0.5x after any loss today),
           // instead of replacing it outright -- preserves size-up signals (up to 1.5x) on
           // clean days, still enforces Death Sequence protection on loss days.
+          // Snapshot the IIFE's pre-ceiling value + hasLossToday into sizeFactorsAtDetection
+          // (resolves sizemultiplier_needs_per_factor_instrumentation) BEFORE the ceiling
+          // overwrites active.sizeMultiplier below -- hasLossToday isn't known at candidate-
+          // construction time (where sizeFactorsAtDetection's other fields were captured), and
+          // per the comment above, dominates the real persisted value for most rows -- an
+          // instrumentation blob missing it would be silently uninformative for most real data.
+          if (active.sizeFactorsAtDetection) {
+            active.sizeFactorsAtDetection = {
+              ...active.sizeFactorsAtDetection,
+              multIife: active.sizeMultiplier ?? 1.0,
+              hasLossToday: !!hasLossToday,
+              schemaVersion: 1,
+            };
+          }
           active.sizeMultiplier = hasLossToday
             ? Math.min(active.sizeMultiplier ?? 1.0, 0.5)
             : (active.sizeMultiplier ?? 1.0);
@@ -8881,11 +8939,13 @@ export default function createACDRouter(io) {
             size_multiplier, suppression_reason, runner_trail_width,
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
-            ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult
+            ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult,
+            size_factors_at_detection
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -8912,6 +8972,7 @@ export default function createACDRouter(io) {
           // already carry runner_trail_width from this same INSERT -- excluding them here
           // preserves the "no row sets more than one exit-mechanism flag" invariant.
           forceShadow && !isTrailMechanism ? WIDER_TARGET_MULT : null,
+          active.sizeFactorsAtDetection ? JSON.stringify(active.sizeFactorsAtDetection) : null,
         ]);
         let row = ins.rows[0];
         if (!row) {
