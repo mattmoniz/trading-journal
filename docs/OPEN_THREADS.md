@@ -1,6 +1,19 @@
 # Open Threads / Pending Work
 
-Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.## 📋 2026-08-19: Next-session priority queue (post-quick-decisions-sweep)
+Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+
+## ✅ 2026-08-19: 4 more quick decisions cleared — a real system-wide finding along the way
+
+Batch of the remaining "quick" pending decisions from the queue (52→48 pending):
+
+- **`sunday_compute_levels_cron_date_semantics_unclear`**: confirmed real bug, fixed. The 9:30pm Sunday `compute_levels.js` cron wrote `level_prices` keyed to Sunday's own calendar date, but Sunday is never a real trading day — that row was never read live by anything, leaving the whole Sunday 6PM–Monday 8AM Globex window without a fresh row until the separate 8AM Mon-Fri cron. Exported `acd.js`'s existing `nextTradingDay()` (was already module-scope, just missing `export`) and used it in `server/index.js`. Caught and fixed a real bug in my own first draft during review — initially passed raw system time instead of the ET-anchored `nowET` the function needs.
+- **`acd_trail_null_fallback_silent`**: added standing check `[21]` to `test_invariants.mjs` instead of a runtime log nobody would see — flags any `_TRAIL` variant with real fires and `runner_trail_width IS NULL`. Verified live: correctly flags the 3 currently-uncalibrated variants.
+- **`naive_timestamp_epoch_mixing_systematic_audit_needed`**: full audit done — see [server/db.js](../server/db.js)'s corrected comment for the methodology. **The real finding**: this codebase has two parallel, individually-safe naive-timestamp conventions that are only mutually consistent because this machine's OS timezone happens to be America/New_York — never asserted anywhere. Fixed the root cause instead of chasing individual call sites: corrected `db.js`'s comment (confirmed false by an earlier-resolved decision but never actually fixed) and added a fail-fast startup assertion in `server/index.js` (`Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/New_York'`, `process.exit(1)` if not) — protects every current and future call site using either convention, not just the ones individually audited.
+- **`no_invariant_checks_origin_status_matches_status_at_insert`**: added standing check `[22]` to `test_invariants.mjs`, rejecting the originally-sketched fragile static SQL-text parser for a live-data check instead — any row still in `status IN ('ACTIVE','SHADOW')` hasn't been touched since insert, so `origin_status` must equal `status` exactly.
+
+All 4 verified via a full server restart/stop cycle (systemd handback clean, no orphaned dev session) and a clean `test_invariants.mjs` run (same 7 pre-existing unrelated failures, no new ones).
+
+## 📋 2026-08-19: Next-session priority queue (post-quick-decisions-sweep)
 
 After clearing 65→54 pending `OPEN_DECISION`s this session plus the machine-gun refire bug fix, here's the recommended order for whoever picks this up next — not a re-derivation of the whole 54-item list (still there, still sorted by `flag_decision.mjs --list`), just where to actually start:
 

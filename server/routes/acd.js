@@ -1166,7 +1166,7 @@ export async function resolveSetupsByPrice(io) {
 
 // ── Globex helpers ────────────────────────────────────────────────────────────
 
-function nextTradingDay(etDate) {
+export function nextTradingDay(etDate) {
   const d = new Date(etDate);
   d.setDate(d.getDate() + 1);
   if (d.getDay() === 0) d.setDate(d.getDate() + 1); // Sun → Mon

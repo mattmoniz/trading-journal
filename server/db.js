@@ -3,10 +3,22 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Fix double-timezone-conversion bug:
-// TIMESTAMP WITHOUT TIME ZONE is stored as UTC in this app, but node-postgres
-// treats it as local time by default, which shifts times by the UTC offset.
-// Appending 'Z' tells JavaScript to interpret the raw stored value as UTC.
+// CORRECTED 2026-08-19 (OPEN_DECISION db_naive_timestamp_columns_actually_store_et_not_utc,
+// RESOLVED): the comment below was WRONG and sat uncorrected in committed code for months --
+// TIMESTAMP WITHOUT TIME ZONE columns in this DB actually store ET wall-clock, not UTC
+// (confirmed via a live round-trip: INSERT NOW() at 09:15:05 ET stored the literal text
+// "2026-08-19 09:15:05", because this Postgres instance has TimeZone=America/New_York set at
+// the SERVER level -- every timestamptz value implicitly cast into a naive column is
+// converted to ET wall-clock before the zone is dropped). Appending 'Z' below deliberately
+// mislabels those ET digits as UTC -- NOT a fix for node-postgres's local-time default, but a
+// digit-preservation trick: any code that only ever reads the result back out via UTC getters
+// (.getUTCHours()/.toISOString() etc, never .getHours()/.getDate()) gets the correct ET
+// wall-clock digits back, regardless of the machine's own ambient timezone. This is safe for
+// DISPLAY/digit-extraction but NOT for genuine cross-instant arithmetic (elapsed-time math,
+// hours-old checks) -- see the naive_timestamp_epoch_mixing_systematic_audit_needed writeup
+// (docs/OPEN_THREADS.md) for the parallel ::text-cast-then-bare-new-Date() convention used
+// elsewhere in this codebase for that case, which depends on the PROCESS's ambient timezone
+// actually being America/New_York (asserted at startup below, server/index.js).
 pg.types.setTypeParser(1114, (val) => val ? new Date(val + 'Z') : null);
 
 // Return DATE columns as plain 'YYYY-MM-DD' strings instead of Date objects

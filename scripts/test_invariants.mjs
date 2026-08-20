@@ -1483,6 +1483,82 @@ async function main() {
       }
     }
 
+    // ── 21. Trail-mechanism variants must not silently fall back to fixed-stop/fixed-target ──
+    // Resolves OPEN_DECISION acd_trail_null_fallback_silent (2026-08-03, confirmed happening
+    // 2026-08-04): a CONDITIONAL_VARIANTS entry with trailSignalName reads its calibrated trail
+    // width from a BREAKEVEN_TRAIL_TEST performance_audit row at insert time (acd.js's
+    // isTrailMechanism/runnerTrailWidth block and its audit-branch mirror). When no calibration
+    // row exists yet, runner_trail_width silently resolves to null and the row is treated as an
+    // ordinary fixed-stop/fixed-target trade under a _TRAIL label -- no error, no log, nothing
+    // to catch it. This check surfaces exactly that: any trail-mechanism setup_type with real
+    // recent fires where runner_trail_width was never populated.
+    console.log('\n[21] Trail-mechanism variants have a populated runner_trail_width on real fires');
+    {
+      const trailTypes = Object.entries(CONDITIONAL_VARIANTS)
+        .filter(([, v]) => v.trailSignalName)
+        .map(([type]) => type);
+      if (trailTypes.length === 0) {
+        ok('no CONDITIONAL_VARIANTS entries carry a trailSignalName');
+      } else {
+        const { rows: trailFires } = await client.query(`
+          SELECT setup_type,
+                 COUNT(*) as n,
+                 COUNT(*) FILTER (WHERE runner_trail_width IS NULL) as null_width_n
+          FROM active_setups
+          WHERE setup_type = ANY($1) AND origin_status IN ('ACTIVE','SHADOW')
+            AND fired_at >= CURRENT_DATE - 14
+          GROUP BY setup_type
+        `, [trailTypes]);
+        const withGap = trailFires.filter(r => parseInt(r.null_width_n) > 0);
+        if (trailFires.length === 0) {
+          ok('no real trail-mechanism fires in the last 14 days to check');
+        } else if (withGap.length === 0) {
+          ok(`all ${trailFires.length} trail-mechanism type(s) with real fires in the last 14 days had runner_trail_width populated`);
+        } else {
+          for (const r of withGap) {
+            warn(`${r.setup_type}: ${r.null_width_n}/${r.n} real fires in the last 14 days had runner_trail_width IS NULL -- silently downgraded to a plain fixed-stop/fixed-target trade instead of the breakeven-trail mechanism. Check whether its BREAKEVEN_TRAIL_TEST calibration row (signal_name='${CONDITIONAL_VARIANTS[r.setup_type]?.trailSignalName}') is missing or stale -- run scripts/backtest_breakeven_trail.mjs.`);
+          }
+        }
+      }
+    }
+
+    // ── 22. origin_status matches status for every still-unresolved row ──────────
+    // Resolves OPEN_DECISION no_invariant_checks_origin_status_matches_status_at_insert
+    // (2026-08-09). origin_status is immutable-at-insert and bound to whatever `status` was
+    // AT THAT MOMENT (always 'ACTIVE' or 'SHADOW' for a freshly-inserted row -- see
+    // ARCHITECTURE.md's origin_status entry) -- but status itself later transitions to
+    // RESOLVED/EXPIRED/etc as the setup resolves, so a resolved row's status no longer tells
+    // us what it was at insert time. A static SQL-text parser (grep every INSERT INTO
+    // active_setups block, verify origin_status/status bind to the same literal) was
+    // considered and rejected as too fragile (see the decision's own text) -- this uses real
+    // data instead: any row STILL in status IN ('ACTIVE','SHADOW') has not been touched since
+    // insert, so origin_status must equal status exactly, no exceptions. Directly catches the
+    // feared regression (a new/edited INSERT site that sets status but forgets origin_status,
+    // or sets them to different values) the moment it fires live, without needing to parse SQL
+    // text at all. Population can legitimately be 0 depending on when this runs (this table
+    // cycles fast -- most setups resolve same-session) -- that's an honest "nothing to check
+    // right now," not a check that silently does nothing.
+    console.log('\n[22] origin_status matches status for every still-unresolved row');
+    {
+      const { rows: mismatches } = await client.query(`
+        SELECT id, setup_type, status, origin_status, fired_at::text as fired_at
+        FROM active_setups WHERE status IN ('ACTIVE','SHADOW') AND origin_status IS DISTINCT FROM status
+        ORDER BY fired_at DESC LIMIT 20
+      `);
+      const { rows: [{ n: unresolvedN }] } = await client.query(`
+        SELECT COUNT(*) as n FROM active_setups WHERE status IN ('ACTIVE','SHADOW')
+      `);
+      if (parseInt(unresolvedN) === 0) {
+        ok('no currently-unresolved (ACTIVE/SHADOW) rows to check right now -- not a failure, just nothing in flight at this moment');
+      } else if (mismatches.length === 0) {
+        ok(`all ${unresolvedN} currently-unresolved row(s) have origin_status matching status`);
+      } else {
+        for (const r of mismatches) {
+          fail(`active_setups id=${r.id} (${r.setup_type}, fired_at=${r.fired_at}): status='${r.status}' but origin_status='${r.origin_status}' -- these must match for any still-unresolved row. Find the INSERT site that produced this and check it binds origin_status to the same value as status.`);
+        }
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

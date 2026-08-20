@@ -11,6 +11,32 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 dotenv.config();
 
+// Fail-fast TZ guard (2026-08-19, resolves OPEN_DECISION
+// naive_timestamp_epoch_mixing_systematic_audit_needed): this codebase has TWO parallel,
+// individually-safe conventions for handling naive `timestamp without time zone` columns
+// (which this DB's server-level TimeZone=America/New_York setting means store ET wall-clock,
+// not UTC -- see server/db.js's corrected comment) -- (1) the pg type-1114 parser's
+// digit-preservation Z-append trick (safe for display via UTC getters, regardless of this
+// process's own ambient timezone) and (2) a `::text`-cast-then-bare-`new Date()`-reparse
+// convention used throughout server/routes/acd.js and many scripts/ for genuine elapsed-time
+// math (e.g. GET /api/setups/active's minsRemaining) -- correct ONLY because this reparse
+// relies on JS's local-time-string interpretation, which is only right if this PROCESS's own
+// ambient timezone happens to equal America/New_York. That was never asserted anywhere, just
+// true by accident of this machine's OS-level TZ setting (confirmed via `timedatectl`) --
+// silently deploying this app to any container/VM with a different system TZ would make every
+// one of those call sites wrong by the ET/UTC offset, with no error, just a wrong number
+// (exactly the bug class that already invalidated one real backtest -- see the decision's
+// resolution). Converting that implicit, unenforced assumption into an explicit, fail-fast one
+// costs nothing on a correctly-configured machine and prevents an entire silent bug class on
+// a misconfigured one.
+{
+  const procTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (procTZ !== 'America/New_York') {
+    console.error(`FATAL: process timezone is '${procTZ}', expected 'America/New_York'. This app's naive-timestamp handling (server/db.js, and elapsed-time math throughout server/routes/acd.js) silently depends on the process's ambient timezone matching the DB server's TimeZone=America/New_York config. Set TZ=America/New_York in the environment before starting this process.`);
+    process.exit(1);
+  }
+}
+
 // Route imports
 import dailyLogsRouter from './routes/dailyLogs.js';
 import tradesRouter from './routes/trades.js';
@@ -27,7 +53,7 @@ import longtermRouter from './routes/longterm.js';
 import patternRouter from './routes/pattern.js';
 import auctionReadRouter from './routes/auctionRead.js';
 import weeklyRouter from './routes/weekly.js';
-import createACDRouter, { expireStaleSetups } from './routes/acd.js';
+import createACDRouter, { expireStaleSetups, nextTradingDay } from './routes/acd.js';
 import setupsRouter from './routes/setups.js';
 import phaseChangeRouter from './routes/phaseChange.js';
 import calendarRouter from './routes/calendar.js';
@@ -985,13 +1011,26 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[level_fade_audit] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
-  // 9:30 PM Sunday: compute MGI levels for today and tag any new BP fills
+  // 9:30 PM Sunday: compute MGI levels for the upcoming Monday session and tag any new BP fills
+  // Resolves OPEN_DECISION sunday_compute_levels_cron_date_semantics_unclear (2026-08-19):
+  // this cron used to write level_prices keyed to Sunday's OWN calendar date, but
+  // compute_levels.js computes a row to SERVE the given date's live trading session (OR/IB
+  // levels for that session, PRIOR_DAY levels relative to it, etc) -- Sunday itself is not a
+  // real trading day, so that row was never read live by anything. Every other Sunday-evening
+  // Globex fire already stamps active_setups.trade_date as the upcoming Monday (confirmed
+  // live) via the same nextTradingDay() logic used here -- this cron now matches that
+  // convention, so level_prices has a fresh Monday row available for the whole Sunday
+  // 6PM-Monday 8AM Globex window, not just from the separate 8AM Mon-Fri cron onward.
+  // tagTradesForDate() is a different concern (retroactively tags real `trades` journal rows
+  // by their own log_date) and deliberately keeps using Sunday's own calendar date.
   cron.schedule('30 21 * * 0', async () => {
     try {
       const { execSync } = await import('child_process');
       await logProcess('COMPUTE_LEVELS', async () => {
         const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-        execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const sessionDate = nextTradingDay(nowET);
+        execSync(`node scripts/compute_levels.js ${sessionDate}`, { cwd: process.cwd(), timeout: 60000 });
         const { tagTradesForDate } = await import('./services/levelProximityService.js');
         const tagged = await tagTradesForDate(today);
         return { count: tagged };
