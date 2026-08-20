@@ -125,6 +125,18 @@ export async function getStopCalibrationConfidence(signalName) {
 export const CAPITAL_EXPOSURE_OVERRIDE = new Map([
   ['GLOBEX_VWAP_FADE_LONG', { reason: 'STOP_NEVER_SWEPT', addedDate: '2026-08-19', revisitWhen: 'getStopCalibrationConfidence() returns unvalidated:false -- real N clears MIN_SWEEPABLE_N (27) with a genuinely-swept, non-placeholder OPTIMAL_STOP method AND the fresh sweep is not itself day-clustered (rigor.clustered!==true) -- both conditions, not just the N/method one (flagged 2026-08-19, DeepSeek review of commit 47da9ed: the original wording named only the method condition, not the clustering check the diagnostic actually applies)' }],
   ['IB_BULLISH', { reason: 'STOP_DAY_CLUSTERED', addedDate: '2026-08-19', revisitWhen: 'computeRigor().clustered is false on a fresh sweep (i.e. real trading days spread out past the current 7-day, 97.1%-top5 concentration)' }],
+  // Opus Audit 9 (2026-08-19/20): went ACTIVE 2026-08-18 at recent_90d.real_ev=-$2.40 (all-time
+  // blended -$8.93/-$9.22) -- above the static SUPPRESS_MAX_EV=-5 floor, so the gate admitted it
+  // as designed, but its own applied geometry (stop 82pt/target 47pt -> break-even WR 64.3%
+  // against an achieved real WR of 64.0%) means it was never expected to clear its own costs by
+  // more than noise. Produced -$649.00 over 5 real-capital trades since 2026-08-05 -- 64% of the
+  // entire $1,019.50 equity giveback from that peak, from 7.6% of the trades in that window.
+  // Also flipped SUPPRESS->THIN_N->SUPPRESS->ACTIVE across its last 5 calibration runs -- not a
+  // stable read. Separate from and does not depend on the OPTIMAL_STOP circuit-breaker deadlock
+  // fix (update_optimal_stops.mjs) shipped the same session -- this setup_type's own OPTIMAL_STOP
+  // row is itself deadlocked (baselineN=26/currentN=24), so its stop/target can't even
+  // self-correct right now regardless of whether the EV floor is ever revisited.
+  ['PD_POC_FADE_SHORT', { reason: 'NEGATIVE_REAL_EV_AT_PROMOTION', addedDate: '2026-08-19', revisitWhen: 'recent_90d.real_ev > 0 across at least two consecutive calibration runs with real_n >= 40, AND its OPTIMAL_STOP is no longer circuit-breaker-deadlocked (see check [12b] in test_invariants.mjs)' }],
 ]);
 
 // Canonical "is this setup_type currently allowed to fire ACTIVE" source. Every live insert

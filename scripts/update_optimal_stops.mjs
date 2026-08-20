@@ -178,9 +178,20 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
   const deltaN = baselineN != null ? currentN - baselineN : Infinity;
   const required = minDeltaNRequired(baselineN);
   if (deltaN < required) {
+    // FIXED 2026-08-19/20 (Opus Audit 9, resolves OPEN_DECISION
+    // optimal_stop_circuit_breaker_n_count_unreconciled_drop): this branch used to re-emit
+    // `lastRecalibratedN: baselineN` -- the SAME stale baseline every time it stays frozen, so
+    // a one-way population cut (a repair/reclassification that only ever shrinks real N, e.g.
+    // the 2026-08-16 cascade-breaker deletion of 1,072 phantom rows) could permanently deadlock
+    // a type: deltaN = currentN - baselineN would forever be negative/small since baselineN
+    // never moved. Math.min() lets the baseline ratchet DOWN to track a genuine population
+    // shrink (still only ever recorded when actually frozen this run, so ordinary upward
+    // growth is unaffected -- baselineN only decreases when currentN has actually dropped
+    // below it) while still requiring real forward growth from wherever N actually stands
+    // before the next real recalibration is attempted -- the breaker's whole point.
     return { stop: prior.stop, target: prior.target, ev: prior.ev,
       circuitBreaker: { tripped: false, reason: 'min_delta_n_not_met', baselineN, currentN, deltaN, minDeltaNRequired: required,
-        attemptedStop, attemptedTarget, lastRecalibratedN: baselineN } };
+        attemptedStop, attemptedTarget, attemptedMethod, lastRecalibratedN: Math.min(baselineN, currentN) } };
   }
   const stopPctChange = prior.stop ? Math.abs(attemptedStop - prior.stop) / prior.stop : 0;
   const targetPctChange = prior.target ? Math.abs(attemptedTarget - prior.target) / prior.target : 0;
@@ -188,7 +199,7 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
     console.error(`  [CIRCUIT BREAKER TRIPPED] ${setupType}: attempted stop=${attemptedStop}(${(stopPctChange * 100).toFixed(0)}%) target=${attemptedTarget}(${(targetPctChange * 100).toFixed(0)}%) vs prior stop=${prior.stop} target=${prior.target} -- keeping prior, see test_invariants.mjs`);
     return { stop: prior.stop, target: prior.target, ev: prior.ev,
       circuitBreaker: { tripped: true, reason: 'pct_change_exceeded', maxPctChange: CIRCUIT_BREAKER_MAX_PCT_CHANGE,
-        attemptedStop, attemptedTarget, attemptedEv, priorStop: prior.stop, priorTarget: prior.target,
+        attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, priorStop: prior.stop, priorTarget: prior.target,
         stopPctChange: +stopPctChange.toFixed(3), targetPctChange: +targetPctChange.toFixed(3), lastRecalibratedN: baselineN } };
   }
   return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
@@ -1174,6 +1185,19 @@ async function main() {
       optStop = decision.stop; optTarget = decision.target; optEV = decision.ev;
       let baseNotes = null;
       try { baseNotes = JSON.parse(correctedNotes); } catch (_) { baseNotes = { method: targetMethod }; }
+      // FIXED 2026-08-19/20 (Opus Audit 9): baseNotes.method was always targetMethod -- the
+      // ATTEMPTED method -- even on a run where the circuit breaker froze and optStop/optTarget
+      // above got reassigned back to prior.stop/prior.target. That left notes.method describing
+      // a computation whose OUTPUT was never stored (confirmed live: PD_POC_FADE_SHORT stored at
+      // 82/47 but labelled 'volatility-scaled-default', a method whose actual current output is
+      // 37/38). getStopCalibrationConfidence() (server/services/setupEligibility.js) reads
+      // exactly this field to decide STOP_NEVER_SWEPT for CAPITAL_EXPOSURE_OVERRIDE calls, so a
+      // stale label there answers a live risk-management question about a number that was never
+      // stored. method now always describes the PROVENANCE of optStop/optTarget as actually
+      // written below; the attempt (if different) already lives in circuitBreaker.attemptedMethod.
+      if (decision.circuitBreaker.reason === 'min_delta_n_not_met' || decision.circuitBreaker.reason === 'pct_change_exceeded') {
+        baseNotes = { ...baseNotes, method: priorStoredByType[r.setup_type]?.method ?? baseNotes.method };
+      }
       // Day-clustering diagnostic (2026-08-18, DeepSeek-recommended -- see MIN_SWEEPABLE_N's
       // comment above for the incident): surfaces whether the REAL trades behind a genuinely
       // swept value are clustered in a handful of days, using this codebase's own centralized

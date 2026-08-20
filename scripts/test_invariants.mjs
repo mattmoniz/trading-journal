@@ -1138,6 +1138,49 @@ async function main() {
       if (trippedCount === 0) ok('no OPTIMAL_STOP row is currently sitting in a tripped circuit-breaker state');
     }
 
+    // ── 12b. OPTIMAL_STOP circuit breaker deadlock (deltaN <= 0 can never clear the gate) ──
+    // Resolves OPEN_DECISION optimal_stop_circuit_breaker_n_count_unreconciled_drop (Opus Audit
+    // 9 root cause, 2026-08-19/20): a row frozen with reason='min_delta_n_not_met' is routine
+    // and expected when a growing population is just a few trades short (deltaN > 0, < required)
+    // -- check [5] already WARNs/skips appropriately for that. But deltaN <= 0 means real N is
+    // FLAT OR SHRINKING relative to the stored baseline -- structurally unable to ever clear
+    // minDeltaNRequired() without the baseline itself moving, which (before the 2026-08-19/20 fix
+    // to update_optimal_stops.mjs's frozen-branch return) it could never do on its own. This is
+    // distinct from check [12] (TRIPPED, a different reason) and from check [5]'s per-row EV-drift
+    // concern -- a dedicated check because "the gate is structurally unreachable" is a different
+    // class of problem than "the gate hasn't been cleared yet."
+    console.log('\n[12b] OPTIMAL_STOP circuit breaker deadlock -- deltaN <= 0 can never clear the gate');
+    {
+      const { rows: cbRows2 } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const { rows: liveEligibleRows } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, recommendation
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const liveEligible = new Set(liveEligibleRows.filter(r => ['ACTIVE', 'PROMOTE', 'DAY_TYPE_MANAGED'].includes(r.recommendation)).map(r => r.signal_name));
+      let deadlocked = 0, deadlockedLiveEligible = [];
+      for (const row of cbRows2) {
+        let n; try { n = JSON.parse(row.notes); } catch (_) { n = null; }
+        const cb = n?.circuitBreaker;
+        if (cb?.reason === 'min_delta_n_not_met' && cb.deltaN != null && cb.deltaN <= 0) {
+          deadlocked++;
+          if (liveEligible.has(row.signal_name)) deadlockedLiveEligible.push({ signal_name: row.signal_name, ...cb });
+        }
+      }
+      if (deadlocked === 0) {
+        ok('no OPTIMAL_STOP row is deadlocked (deltaN <= 0 under a min_delta_n_not_met freeze)');
+      } else {
+        warn(`${deadlocked} OPTIMAL_STOP row(s) deadlocked (min_delta_n_not_met with deltaN <= 0) across the whole table -- their real N has been flat or shrinking since their last accepted recalibration, so the gate they must clear is currently unreachable. Not necessarily a bug by itself (a genuinely rare-touch type can sit here indefinitely) -- see the live-eligible FAILs below for the cases that actually matter.`);
+        for (const r of deadlockedLiveEligible) {
+          fail(`${r.signal_name}: live-eligible (ACTIVE/PROMOTE/DAY_TYPE_MANAGED) but its OPTIMAL_STOP is deadlocked -- baselineN=${r.baselineN}, currentN=${r.currentN}, deltaN=${r.deltaN}, needs deltaN>=${r.minDeltaNRequired}. This type's stop/target cannot self-correct until its real N grows past the frozen baseline. Check whether a recent bulk delete/reclassification of active_setups (a repair script, a cascade-breaker fix) collapsed its real N without re-baselining this counter -- see the 2026-08-19/20 fix to update_optimal_stops.mjs's applyCircuitBreaker() frozen-branch lastRecalibratedN handling.`);
+        }
+      }
+    }
+
     console.log('\n[13] Aggregate OPTIMAL_STOP distribution -- noise-floor check + week-over-week shift');
     {
       // Market's own real noise floor, computed fresh (no static threshold) -- same convention
