@@ -11648,15 +11648,20 @@ export default function createACDRouter(io) {
   // Polled every 30s during RTH. Range/delta percentiles cached daily.
   router.get('/market/pulse', async (req, res) => {
     try {
-      const now = new Date();
-      const etOffset = -4; // EDT
-      const etNow = new Date(now.getTime() + etOffset * 3600000);
-      const todayET = etNow.toISOString().split('T')[0];
-      const etHour = etNow.getUTCHours();
-      const etMin  = etNow.getUTCMinutes();
+      // FIXED 2026-08-24 (DeepSeek quick-check.html audit): was a hardcoded `etOffset = -4`
+      // (EDT), silently correct only during EDT months -- would have been off by exactly 1hr
+      // every day of EST season (Nov-Mar), shifting the date rollover and RTH-window boundary
+      // an hour early, the same naive-offset bug class CLAUDE.md's hard rules document
+      // elsewhere. Now uses this file's own established DST-aware pattern (toLocaleString/
+      // toLocaleDateString with timeZone: 'America/New_York', e.g. runSetupDetection's
+      // nowET/todayET just above) instead of a hand-computed offset.
+      const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      const etHour = etNow.getHours();
+      const etMin  = etNow.getMinutes();
       const etMinTotal = etHour * 60 + etMin;
       const isRTH = etMinTotal >= 570 && etMinTotal < 960 &&
-        etNow.getUTCDay() >= 1 && etNow.getUTCDay() <= 5;
+        etNow.getDay() >= 1 && etNow.getDay() <= 5;
 
       // Current price + session bars + live setup + ACD state
       const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
