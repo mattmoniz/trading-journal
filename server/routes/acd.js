@@ -239,6 +239,33 @@ async function isInRefireCooldown(tradeDate, setupType) {
   return cooldownQ.rows.length > 0;
 }
 
+// Found 2026-08-20 (live dashboard flooding, IB_BEARISH/BRACKET_BREAKOUT_SHORT — 31
+// duplicate SHADOW rows in 33 minutes during a POST_RTH_DEAD_ZONE chop period):
+// isInRefireCooldown() above only ever changes a fresh row's ACTIVE/SHADOW label via
+// forceShadow — it does NOT stop a brand-new row from being inserted on every single
+// poll once the prior instance resolves (existingSetup only dedupes against a still-OPEN
+// row, by design — see its own comment above). RTH itself wasn't flooding (13 inserts
+// over 6.5hrs for IB_BEARISH, matching the 30min cooldown) because the level simply
+// wasn't touched that often; nothing was actually gating insert *frequency*. This check
+// is the companion fix: it only ever fires when the candidate is ALREADY forceShadow for
+// some other reason (dead-zone, calibration, exposure override, or refire-cooldown
+// itself) — capital-neutral by construction, since a genuinely ACTIVE-eligible fire never
+// reaches this check. SHADOW_NOISE_SUPPRESSION_MINUTES is an operational rate-limit, not
+// a trading threshold (no entries/stops/targets/signal-trigger math involved), so the
+// no-static-thresholds rule doesn't apply — it exists purely to collapse a 1/min
+// duplicate-row flood, short enough that a genuinely later re-touch still gets its own row.
+const SHADOW_NOISE_SUPPRESSION_MINUTES = 5;
+async function recentlyShadowedSameType(tradeDate, setupType) {
+  const q = await query(`
+    SELECT 1 FROM active_setups
+    WHERE trade_date = $1 AND setup_type = $2
+      AND resolution IS NOT NULL
+      AND resolved_at > NOW() - ($3::int * INTERVAL '1 minute')
+    LIMIT 1
+  `, [tradeDate, setupType, SHADOW_NOISE_SUPPRESSION_MINUTES]).catch(() => ({ rows: [] }));
+  return q.rows.length > 0;
+}
+
 // ── Fire-time regime tagging (roster-rebuild roadmap Phase 1, I1, 2026-08-10) ──────
 // Tags every live INSERT with day_type_at_fire/vol_bucket_at_fire/session/
 // minutes_from_open — the regime that was true AT FIRE TIME, populated at insert,
@@ -667,6 +694,25 @@ export async function resolveSetupsByPrice(io) {
     return setCached('_global', 'deltaConfirmationCalib', map, DAY_CACHE_TTL);
   })();
 
+  // Wider-target pressure gate (2026-08-24, RESEARCH_CLAIM
+  // wider_target_pressure_gate_vs_always_extend) — same read-once-per-poll-then-cache
+  // convention as deltaCalib just above. Recomputed weekly by
+  // scripts/calibrate_wider_target_pressure_gate.mjs; null (gate disabled, always-extend
+  // behavior) if the calibration row is somehow missing, never a hardcoded fallback number.
+  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
+  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined
+    ? widerTargetPressureThresholdCached
+    : await (async () => {
+      const r = await query(`
+        SELECT notes FROM performance_audit
+        WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD'
+        ORDER BY run_date DESC LIMIT 1
+      `);
+      let val = null;
+      try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
+      return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
+    })();
+
   let count = 0;
   for (const row of active.rows) {
     const entry = row.entry_zone_high ?? row.entry_zone_low;
@@ -929,10 +975,21 @@ export async function resolveSetupsByPrice(io) {
         // literal as the extendTarget branch's own 9/25 cutoffs above, not a fresh guess.
         const t1Distance = Math.abs(t1 - entry);
         const widerTarget = long ? entry + t1Distance * widerTargetMult : entry - t1Distance * widerTargetMult;
+        // Pressure gate (2026-08-24, RESEARCH_CLAIM wider_target_pressure_gate_vs_always_extend):
+        // buying/selling imbalance on THIS bar — only actually consulted by stepWiderTarget()
+        // on the bar where T1 first hits, harmless to compute every bar since it's just a
+        // ratio of two already-selected columns (sharedBarsRows includes bid_volume/ask_volume).
+        const barTotalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
+        const pressureReading = barTotalVol > 0
+          ? ((long ? bar.ask_volume : bar.bid_volume) - (long ? bar.bid_volume : bar.ask_volume)) / barTotalVol
+          : null;
         const step = stepWiderTarget(
           widerTargetState,
           bar,
-          { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER }
+          {
+            entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER,
+            pressureReading, pressureThreshold: widerTargetPressureThreshold,
+          }
         );
         widerTargetState = step.state;
         if (step.resolution) {
@@ -8927,6 +8984,18 @@ export default function createACDRouter(io) {
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : exposureOverride ? exposureOverride.reason
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
+        const skipRedundantShadowInsert = forceShadow
+          && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
+        if (skipRedundantShadowInsert) {
+          logGatedCandidate({
+            tradeDate: todayET, setupType: active.type, gateName: 'REDUNDANT_SHADOW_SUPPRESSED',
+            gateReason: `${forceShadowReason} + same-type resolved within ${REFIRE_COOLDOWN_MINUTES[active.type] ?? SHADOW_NOISE_SUPPRESSION_MINUTES}min`,
+            entry: active.entry, stop: active.stop, target: safeT1Level,
+          });
+          setupId = null;
+          detectedAt = firedTimeStr.slice(0, 5);
+          persistedLevels = { entry: active.entry, stop: active.stop, target: safeT1Level, targetLabel: safeT1Label };
+        } else {
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const fireTags = await computeFireTags(todayET, 'RTH', etMin);
         const ins = await query(`
@@ -9024,6 +9093,7 @@ export default function createACDRouter(io) {
               expires_at: computeExpiry(active.type),
             });
           } catch (_) {}
+        }
         }
       }
 

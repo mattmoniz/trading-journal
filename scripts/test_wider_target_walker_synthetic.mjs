@@ -161,5 +161,53 @@ function runPath(bars, baseParams) {
   assert(!finalState.widening, 'T9: does not arm when there is no session time left to benefit from arming');
 }
 
+// ── Test 10-12: pressure gate (2026-08-24, RESEARCH_CLAIM
+// wider_target_pressure_gate_vs_always_extend). Adds bid_volume/ask_volume to the bar so
+// pressureReading can be computed the same way the live call site does.
+function barVol(hhmm, high, low, close, bidVol, askVol) {
+  return { ts: `2026-08-24 ${hhmm}:00`, high, low, close, bid_volume: bidVol, ask_volume: askVol };
+}
+
+// ── Test 10: fast T1 hit, but pressure is BELOW the calibrated threshold — should bank
+// immediately with the new BANKED_LOW_PRESSURE method, not arm.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4, pressureThreshold: 0.10 };
+  const bars = [
+    barVol('09:31', 20065, 20050, 20060, 600, 400), // dirImbalance = (400-600)/1000 = -0.20, well below 0.10
+  ];
+  let state = { widening: false };
+  const b = bars[0];
+  const dirImbalance = ((b.ask_volume) - (b.bid_volume)) / (b.ask_volume + b.bid_volume);
+  const step = stepWiderTarget(state, b, { ...params, barCount: 1, pressureReading: dirImbalance });
+  assertEqual(step.resolution, { resolution: 'TARGET_HIT', method: 'BANKED_LOW_PRESSURE', priceAtRes: 20060 }, 'T10: fast T1 hit with weak pressure banks immediately, does not arm');
+  assert(!step.state.widening, 'T10: does not arm when pressure is below the calibrated threshold');
+}
+
+// ── Test 11: fast T1 hit, pressure ABOVE the threshold — should arm exactly as before the
+// gate was added.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4, pressureThreshold: 0.10 };
+  const b = barVol('09:31', 20065, 20050, 20060, 300, 700); // dirImbalance = (700-300)/1000 = +0.40
+  const dirImbalance = (b.ask_volume - b.bid_volume) / (b.ask_volume + b.bid_volume);
+  const step = stepWiderTarget({ widening: false }, b, { ...params, barCount: 1, pressureReading: dirImbalance });
+  assertEqual(step.resolution, null, 'T11: strong pressure arms rather than resolving immediately');
+  assert(step.state.widening, 'T11: arms when pressure clears the calibrated threshold');
+}
+
+// ── Test 12: no threshold supplied (pressureThreshold/pressureReading both null, the
+// default) — must behave EXACTLY like the pre-gate mechanism (backward compatibility for
+// any caller that hasn't wired pressure through yet).
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4 };
+  const bars = [
+    bar('09:31', 20065, 20050, 20060),
+    bar('09:32', 20080, 20070, 20075),
+    bar('09:33', 20095, 20085, 20090),
+  ];
+  const { resolution, finalState } = runPath(bars, params);
+  assert(finalState.widening, 'T12: with no threshold supplied, gate is a no-op — arms exactly as pre-2026-08-24');
+  assertEqual(resolution, { resolution: 'TARGET_HIT', method: 'WIDER_TARGET_HIT', priceAtRes: 20090 }, 'T12: unaffected downstream behavior when the gate is disabled');
+}
+
 console.log(`\n${pass} passed, ${fail} failed.`);
 if (fail > 0) process.exit(1);

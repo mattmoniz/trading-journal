@@ -141,6 +141,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # this back live (12h cache).
 /usr/bin/node scripts/calibrate_delta_confirmation.mjs
 
+# Wider-target pressure gate calibration (2026-08-24, RESEARCH_CLAIM
+# wider_target_pressure_gate_vs_always_extend) -- recomputes the top-tercile buying/selling
+# imbalance threshold that gates the wider-target mechanism's extend decision, on all
+# currently-real armed trades. server/routes/acd.js reads this back live (24h cache), same
+# convention as calibrate_delta_confirmation.mjs just above -- must stay scheduled so the
+# live gate tracks the growing population rather than freezing at whatever it was on
+# 2026-08-24, per the standing "RESEARCH_CLAIM recheck is a flag, not an auto-rerun" rule.
+/usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
+
 # Regime-combination scanner (2026-08-02) -- the read-back half of the value-area regime
 # measurement layer (regime_pos_Nd/regime_label_Nd on active_setups, tagged at insert time
 # by acd.js, no gating). Groups real (origin_status IN ACTIVE/SHADOW) resolved touches by

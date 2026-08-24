@@ -25,11 +25,26 @@
 export const WIDER_TARGET_MULT = 1.5;
 export const MAX_BARS_TO_T1_FOR_WIDER = 4;
 
+// Pressure gate (2026-08-24, RESEARCH_CLAIM wider_target_pressure_gate_vs_always_extend):
+// buying/selling imbalance at the T1-touch bar predicts whether extending past T1 helps or
+// hurts — confirmed on real data through a confound-controlled check (survives controlling
+// for day volatility and setup_type/bet_class composition) and a genuine out-of-sample split
+// (held up on chronologically later data never used to derive the threshold, most cleanly at
+// the top tier: loss rate 4.5% in-sample vs 5.4% out-of-sample). Speed alone (how many bars
+// it took to reach T1) was tested FIRST and did NOT show a clean signal — this gate is
+// pressure-only, not a speed gate, per that finding. `pressureReading`/`pressureThreshold`
+// are both optional (default null) so a caller that doesn't have a calibrated threshold yet
+// gets the pre-2026-08-24 always-extend behavior unchanged — this is purely additive.
+//
 // state: { widening: boolean }
 // bar: { ts: string (ET wall-clock text, HH in bar.ts.slice(11,13)), high, low, close }
-// params: { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1 }
+// params: { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, pressureReading,
+//   pressureThreshold } — pressureReading is the dirImbalance value AT THE T1-TOUCH BAR
+//   (favorable-minus-adverse volume as a fraction of total, already computed by the caller);
+//   pressureThreshold is the calibrated cutoff (read from performance_audit
+//   signal_type='WIDER_TARGET_PRESSURE_GATE' by the caller, never hardcoded here).
 // Returns { state: <next state>, resolution: null | { resolution, method, priceAtRes } }
-export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1 }) {
+export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, pressureReading = null, pressureThreshold = null }) {
   const isSessionEnd = bar.ts.slice(11, 13) >= '16';
   let newState = state;
   let resolution = null;
@@ -57,16 +72,24 @@ export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long
       // (non-flagged) branch already resolves a 16:00 T1-hit as TARGET_HIT/PRICE_CLEAN with
       // no special case, and declining to arm must not change that; this IS behaviorally a
       // plain TARGET_HIT either way (too slow, or fast-but-no-session-time-left-to-benefit).
-      if (barCount <= maxBarsToT1 && !isSessionEnd) {
-        // Fast arrival, eligible — arm the wider-target continuation. Stop stays exactly
-        // where it already was (never moves) — the whole point of building the
-        // original-stop shape, not the T1-floor shape.
+      const pressureGateOk = pressureThreshold == null || pressureReading == null
+        || pressureReading >= pressureThreshold;
+      if (barCount <= maxBarsToT1 && !isSessionEnd && pressureGateOk) {
+        // Fast arrival, eligible, AND (if a calibrated threshold was supplied) pressure
+        // confirms — arm the wider-target continuation. Stop stays exactly where it already
+        // was (never moves) — the whole point of building the original-stop shape, not the
+        // T1-floor shape.
         newState = { widening: true };
+      } else if (barCount <= maxBarsToT1 && !isSessionEnd) {
+        // Fast and in-session, but pressure didn't confirm — bank now rather than extend
+        // blindly. Distinct method string from the plain bank below so this specific outcome
+        // stays analyzable (RESEARCH_CLAIM wider_target_pressure_gate_vs_always_extend).
+        resolution = { resolution: 'TARGET_HIT', method: 'BANKED_LOW_PRESSURE', priceAtRes: t1 };
       } else {
-        // T1 reached, but either not fast enough to qualify or no session time left to
-        // benefit from arming — bank normally, same outcome as if this mechanism didn't
-        // apply at all. Reuses the plain branch's own method string (not a new one) since
-        // this IS behaviorally a plain TARGET_HIT.
+        // T1 reached, but not fast enough to qualify (or no session time left to benefit
+        // from arming) — bank normally, same outcome as if this mechanism didn't apply at
+        // all. Reuses the plain branch's own method string (not a new one) since this IS
+        // behaviorally a plain TARGET_HIT.
         resolution = { resolution: 'TARGET_HIT', method: 'PRICE_CLEAN', priceAtRes: t1 };
       }
     }
