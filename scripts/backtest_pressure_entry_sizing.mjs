@@ -299,6 +299,52 @@ async function main() {
   showComposition("SHORT Z >= 1.0", shortZHigh);
   showComposition("SHORT Z <= -1.0", shortZLow);
 
+  // --- OUT-OF-SAMPLE VALIDATION ---
+  console.log("\n\n================================================");
+  console.log("=== OUT-OF-SAMPLE VALIDATION ===");
+  console.log("================================================\n");
+
+  const zDates = Array.from(new Set(zEnriched.map(r => r.dateStr))).sort();
+  const splitIdx = Math.floor(zDates.length * 0.6);
+  const trainDates = new Set(zDates.slice(0, splitIdx));
+  
+  const trainSet = zEnriched.filter(r => trainDates.has(r.dateStr));
+  const testSet = zEnriched.filter(r => !trainDates.has(r.dateStr));
+
+  console.log(`Split dates: ${zDates.length} total -> ${trainDates.size} train, ${zDates.length - trainDates.size} test`);
+  console.log(`Split trades: ${zEnriched.length} total -> ${trainSet.length} train, ${testSet.length} test`);
+
+  function reportOOS(label, subset) {
+    const b1_long = subset.filter(r => r.isLong);
+    const b1_short = subset.filter(r => !r.isLong);
+
+    console.log(`\n--- ${label} ---`);
+    console.log("LONG:");
+    console.log(printSummaries("Z <= -1.0", b1_long.filter(r => r.z1 <= -1.0)));
+    console.log(printSummaries("-1 < Z < 1", b1_long.filter(r => r.z1 > -1.0 && r.z1 < 1.0)));
+    console.log(printSummaries("Z >= 1.0", b1_long.filter(r => r.z1 >= 1.0)));
+
+    console.log("\nSHORT:");
+    console.log(printSummaries("Z <= -1.0", b1_short.filter(r => r.z1 <= -1.0)));
+    console.log(printSummaries("-1 < Z < 1", b1_short.filter(r => r.z1 > -1.0 && r.z1 < 1.0)));
+    console.log(printSummaries("Z >= 1.0", b1_short.filter(r => r.z1 >= 1.0)));
+  }
+
+  reportOOS("TRAIN SET", trainSet);
+  reportOOS("TEST SET", testSet);
+
+  console.log("\n--- SHORT-side redundancy check (Z>=1.0 conditioned on sellersAtLevel) OOS ---");
+  const trainShortHigh = trainSet.filter(r => !r.isLong && r.z1 >= 1.0);
+  const testShortHigh = testSet.filter(r => !r.isLong && r.z1 >= 1.0);
+
+  console.log("\nTRAIN SHORT Z >= 1.0:");
+  console.log(printSummaries("sellersAtLevel == true", trainShortHigh.filter(r => r.sellersAtLevel)));
+  console.log(printSummaries("sellersAtLevel == false", trainShortHigh.filter(r => !r.sellersAtLevel)));
+
+  console.log("\nTEST SHORT Z >= 1.0:");
+  console.log(printSummaries("sellersAtLevel == true", testShortHigh.filter(r => r.sellersAtLevel)));
+  console.log(printSummaries("sellersAtLevel == false", testShortHigh.filter(r => !r.sellersAtLevel)));
+
   process.exit(0);
 }
 
