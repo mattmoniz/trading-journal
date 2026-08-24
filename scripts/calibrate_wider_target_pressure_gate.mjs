@@ -24,12 +24,31 @@ async function main() {
       entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
       stop_level::float as stop_level, t1_level::float as t1_level, bars_to_resolution
     FROM active_setups
-    WHERE resolution = 'TARGET_HIT' AND origin_status IN ('ACTIVE','SHADOW')
+    WHERE origin_status IN ('ACTIVE','SHADOW')
       AND entry_zone_low IS NOT NULL AND entry_zone_high IS NOT NULL
       AND stop_level IS NOT NULL AND t1_level IS NOT NULL AND fired_at IS NOT NULL
-      AND bars_to_resolution <= ${FIRED_AT_BAR_COUNT_CUTOFF}
     ORDER BY fired_at ASC
   `);
+  // FIXED 2026-08-24 (DeepSeek design-critique finding, independently verified against
+  // live data): this used to filter on the STORED resolution='TARGET_HIT' AND
+  // bars_to_resolution<=4 -- but bars_to_resolution is written at the RESOLVING bar
+  // (acd.js), not the T1-touch/arming bar. A trade that armed (fast T1 touch, pressure
+  // confirmed) and then extended for many more bars before resolving (WIDER_TARGET_HIT/
+  // WIDER_STOP_HIT/WIDER_TIME_EXPIRED) has a bars_to_resolution far above 4 and was being
+  // silently excluded from its own gate's calibration sample -- while every BANKED_LOW_
+  // PRESSURE/plain-bank row (which resolves AT the T1 touch, so bars_to_resolution IS the
+  // touch bar count) stayed in-sample. That's a self-reinforcing loop: recalibration sees
+  // an ever-more low-pressure-only sample, the top-tercile threshold drifts down, more
+  // trades arm, fewer high-pressure readings survive to the next recalibration. Verified
+  // live 2026-08-24: 53 rows show WIDER_*-prefixed resolution_method with
+  // bars_to_resolution mostly >4 (SELECT origin_status,resolution,resolution_method,
+  // COUNT(*),MIN(bars_to_resolution),MAX(bars_to_resolution) FROM active_setups WHERE
+  // wider_target_mult IS NOT NULL GROUP BY 1,2,3) -- all of them would have been dropped
+  // by the old filter. The downstream per-trade bar-walk below already re-derives
+  // t1TouchIdx/barCount from raw bars independently of the stored resolution fields (see
+  // `if (t1TouchIdx === null || barCount > FIRED_AT_BAR_COUNT_CUTOFF) continue;`), so it
+  // is the correct, sole source of eligibility -- the SQL pre-filter was redundant at best
+  // and silently wrong at worst. Removed both clauses; the walk below is unchanged.
   const trades = tradesRes.rows.filter(t => inferDirection(t.setup_type) !== null);
 
   const barsRes = await query(`
