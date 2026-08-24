@@ -150,6 +150,12 @@ echo "=== Weekly backtest run: $(date) ==="
 # 2026-08-24, per the standing "RESEARCH_CLAIM recheck is a flag, not an auto-rerun" rule.
 /usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
 
+# SHORT entry-time selling-pressure sizeMultiplier boost (2026-08-24, RESEARCH_CLAIM
+# pressure_entry_sizing_direction_asymmetric) -- same convention as the pressure gate just
+# above: must stay scheduled so the live boost tracks the real, growing population and
+# floors to 0 automatically on a bad recalibration, rather than freezing at ship time.
+/usr/bin/node scripts/calibrate_pressure_entry_sizing_short.mjs
+
 # Regime-combination scanner (2026-08-02) -- the read-back half of the value-area regime
 # measurement layer (regime_pos_Nd/regime_label_Nd on active_setups, tagged at insert time
 # by acd.js, no gating). Groups real (origin_status IN ACTIVE/SHADOW) resolved touches by

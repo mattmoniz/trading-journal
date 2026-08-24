@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
 import { computeBar6Checkpoint } from '../services/maeMfeReplay.js';
+import { computeDirImbalance } from '../services/entryPressureService.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
@@ -5983,6 +5984,32 @@ export default function createACDRouter(io) {
       const _lfDeltaNeutral = _lfDeltaP25 != null && _lfAbsDelta < _lfDeltaP25;
       const _lfDeltaHigh    = _lfDeltaP75 != null && _lfAbsDelta > _lfDeltaP75;
 
+      // SHORT entry-time selling-pressure calibration (2026-08-24, RESEARCH_CLAIM
+      // pressure_entry_sizing_direction_asymmetric) — same read-once-per-poll-then-cache
+      // convention as deltaCalib/widerTargetPressureThreshold in resolveSetupsByPrice()
+      // above, just scoped here since this factor is consumed by the sizeMultiplier IIFE
+      // below, not the resolution walker. Recomputed weekly by
+      // scripts/calibrate_pressure_entry_sizing_short.mjs, which floors bump to 0 (not a
+      // hardcoded literal) if real forward EV isn't clearly positive — per explicit user
+      // instruction to track this for real degradation rather than freeze it at ship time.
+      // null threshold = factor disabled, never a hardcoded fallback number.
+      const _entryPressureShortCalibCached = getCached('_global', 'entryPressureShortCalib', DAY_CACHE_TTL);
+      const entryPressureShortCalib = _entryPressureShortCalibCached !== undefined
+        ? _entryPressureShortCalibCached
+        : await (async () => {
+          const r = await query(`
+            SELECT notes FROM performance_audit
+            WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
+            ORDER BY run_date DESC LIMIT 1
+          `);
+          let val = { threshold: null, bump: 0 };
+          try {
+            const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
+            if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
+          } catch (_) {}
+          return setCached('_global', 'entryPressureShortCalib', val, DAY_CACHE_TTL);
+        })();
+
       // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
       // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
       // Score distribution: 0→58.8% WR, 1→65.4%, 2→71.8%, 3→78.8% (N=80 CI=[73.8%,85%])
@@ -7180,6 +7207,25 @@ export default function createACDRouter(io) {
             const buyersAtLevel  = isLong  && approachDelta > 0; // buyers defending support on approach
             const sellersAtLevel = !isLong && approachDelta < 0; // sellers pressing resistance on approach
 
+            // Entry-time selling pressure boost (SHORT only) — RESEARCH_CLAIM
+            // pressure_entry_sizing_direction_asymmetric, genuinely out-of-sample validated
+            // 2026-08-24 (chronological train EV=+$8.08 N=22, test EV=+$33.41 N=23, an
+            // absorption mechanism — selling pressure hitting AFTER approachDelta was NOT
+            // already selling — that held in both halves). The companion LONG-side "avoid
+            // high buying pressure" finding did NOT replicate (inverted train/test, discarded)
+            // — deliberately SHORT-only, do not extend to LONG without a fresh OOS check.
+            // computeDirImbalance() on the last fully-completed bar (allRthBarsRow.rows'
+            // last element — this file's own price_bars_primary poll only ever contains
+            // closed bars, same convention exhaustionSignalAtDetection above uses for "the
+            // entry bar"). entryPressureShortCalib is read live from performance_audit
+            // (ENTRY_PRESSURE_SHORT), recalibrated weekly — never a hardcoded threshold/bump.
+            let entryPressureShortBoost = false;
+            if (!isLong && entryPressureShortCalib?.threshold != null) {
+              const _epBar = allRthBarsRow.rows[allRthBarsRow.rows.length - 1];
+              const _epPressure = _epBar ? computeDirImbalance(_epBar.bid_vol, _epBar.ask_vol, false) : null;
+              entryPressureShortBoost = _epPressure !== null && _epPressure >= entryPressureShortCalib.threshold;
+            }
+
             // Confluence+exhaustion interaction signal (informational only — RESEARCH_CLAIM
             // confluence_exhaustion_interaction is still PROVISIONAL, not a validated live edge;
             // do NOT use this to gate sizeMultiplier or suppression). Mirrors
@@ -7383,6 +7429,7 @@ export default function createACDRouter(io) {
                 lfConsecWins, lfConsecLosses, lfFirstOfDay,
                 overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
                 buyersAtLevel: !!buyersAtLevel, sellersAtLevel: !!sellersAtLevel,
+                entryPressureShortBoost: !!entryPressureShortBoost,
                 confluencePairPartner: !!confluencePairPartner,
                 eliteZone: !!eliteZone,
                 daysSinceTest,
@@ -7414,6 +7461,13 @@ export default function createACDRouter(io) {
                 if (!isOvernightAligned(dir) && !isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.25);
                 // Approach delta: buyers/sellers confirming level (research 2026-07-05: +6% WR)
                 if (buyersAtLevel || sellersAtLevel) mult = Math.min(mult + 0.15, 1.5);
+                // Entry-time selling-pressure boost (SHORT only, RESEARCH_CLAIM
+                // pressure_entry_sizing_direction_asymmetric — see entryPressureShortBoost
+                // computation above). Bump read live, recalibrated weekly, floors to 0 on a
+                // bad recalibration — deliberately not a hardcoded literal like this IIFE's
+                // other constants, since N is still thin (N=364 at ship time) and the user
+                // asked this be tracked for real degradation, not frozen at today's number.
+                if (entryPressureShortBoost) mult = Math.min(mult + (entryPressureShortCalib?.bump ?? 0), 1.5);
                 // Specific confluence pair bonus: verified N≥20 pairs (2026-07-05 Gemini Task 4)
                 if (confluencePairPartner) mult = Math.min(mult + 0.15, 1.5);
                 // Elite zone: TURBULENT + with IB direction = 78-82% WR (best segment)
