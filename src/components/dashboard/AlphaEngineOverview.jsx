@@ -591,7 +591,9 @@ function RosterRebuildPanel() {
                 <span style={S.badge(stageMeta.color, stageMeta.color + '18')}>{stageMeta.label}</span>
               </div>
               <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                blended N={bc.n} (real N={bc.realN ?? 'n/a'})
+                blended N={bc.n} {bc.realN != null && bc.realN < 20
+                  ? <span style={{ color: '#fbbf24', fontWeight: 700 }} title="Below this codebase's N>=20 real-data floor -- treat as unvalidated">(⚠ real N={bc.realN})</span>
+                  : <>(real N={bc.realN ?? 'n/a'})</>}
                 {bc.wr != null && <> · WR {bc.wr}%</>}
                 {bc.ev != null && <> · EV <span style={{ color: +bc.ev >= 0 ? '#4ade80' : '#f87171', fontWeight: 700 }}>${bc.ev}</span></>}
                 {bc.rigorClean != null && <> · rigor {bc.rigorClean ? 'clean' : 'unstable'}</>}

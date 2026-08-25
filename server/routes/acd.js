@@ -1308,6 +1308,40 @@ const WIDER_WINDOW_OVERNIGHT_LEVELS = [
   { levelName: 'MONTHLY_OPEN',  type: 'MONTHLY_OPEN_FADE_LONG_OVERNIGHT',   displayName: 'Monthly Open',  dir: 'LONG' },
   { levelName: '10D_IB_MID',    type: '10D_IB_MID_FADE_SHORT_OVERNIGHT',    displayName: '10D IB Mid',    dir: 'SHORT' },
   { levelName: 'WR1',           type: 'WR1_FADE_SHORT_OVERNIGHT',           displayName: 'WR1',           dir: 'SHORT' },
+  // Added 2026-08-25 (OPEN_DECISION keeplevels_rth_only_no_overnight_20260825): 21 more
+  // week/month/quarter/year-scale levels that were previously RTH-only via keepLevelsAll
+  // (gated behind allRthBarsRow.rows.length>=3, i.e. cannot fire before ~9:33 AM ET no
+  // matter what price does overnight -- found tracing why WEEKLY_OPEN missed 2 real
+  // overnight touches the night of 2026-08-24/25). Direction picked from whichever side
+  // currently shows the higher (or less negative) ev_per_trade in that level's existing
+  // RTH-fired SETUP_STATUS THIN_N rows -- a real, data-grounded pick, not arbitrary, and
+  // low-stakes: every one of these is a brand-new _OVERNIGHT-suffixed setup_type with zero
+  // rows today, so getCanonicalLiveStatus()'s fail-closed "no row -> SHADOW" default (see
+  // server/services/setupEligibility.js) means none of these can fire ACTIVE until real
+  // overnight data independently earns it through the normal N>=20 pipeline, same as every
+  // other type in this array. PY_VAL/PY_POC had 0 real N on either side (no data to compare)
+  // -- defaulted to the conventional support/POC-symmetric LONG side.
+  { levelName: 'WEEKLY_OPEN',   type: 'WEEKLY_OPEN_FADE_SHORT_OVERNIGHT',   displayName: 'Weekly Open',   dir: 'SHORT' },
+  { levelName: 'WEEKLY_VWAP',   type: 'WEEKLY_VWAP_FADE_SHORT_OVERNIGHT',   displayName: 'Weekly VWAP',   dir: 'SHORT' },
+  { levelName: 'PW_VAH',        type: 'PW_VAH_FADE_LONG_OVERNIGHT',         displayName: 'PW VAH',        dir: 'LONG'  },
+  { levelName: 'PW_VAL',        type: 'PW_VAL_FADE_LONG_OVERNIGHT',         displayName: 'PW VAL',        dir: 'LONG'  },
+  { levelName: 'PW_POC',        type: 'PW_POC_FADE_SHORT_OVERNIGHT',        displayName: 'PW POC',        dir: 'SHORT' },
+  { levelName: 'PW_HIGH',       type: 'PW_HIGH_FADE_LONG_OVERNIGHT',        displayName: 'PW High',       dir: 'LONG'  },
+  { levelName: 'PW_LOW',        type: 'PW_LOW_FADE_SHORT_OVERNIGHT',        displayName: 'PW Low',        dir: 'SHORT' },
+  { levelName: 'WR2',           type: 'WR2_FADE_SHORT_OVERNIGHT',           displayName: 'WR2',           dir: 'SHORT' },
+  { levelName: 'WS2',           type: 'WS2_FADE_SHORT_OVERNIGHT',           displayName: 'WS2',           dir: 'SHORT' },
+  { levelName: 'MONTHLY_VWAP',  type: 'MONTHLY_VWAP_FADE_SHORT_OVERNIGHT',  displayName: 'Monthly VWAP',  dir: 'SHORT' },
+  { levelName: 'PM_VAH',        type: 'PM_VAH_FADE_SHORT_OVERNIGHT',        displayName: 'PM VAH',        dir: 'SHORT' },
+  { levelName: 'PM_VAL',        type: 'PM_VAL_FADE_SHORT_OVERNIGHT',        displayName: 'PM VAL',        dir: 'SHORT' },
+  { levelName: 'PM_HIGH',       type: 'PM_HIGH_FADE_LONG_OVERNIGHT',        displayName: 'PM High',       dir: 'LONG'  },
+  { levelName: 'PM_LOW',        type: 'PM_LOW_FADE_SHORT_OVERNIGHT',        displayName: 'PM Low',        dir: 'SHORT' },
+  { levelName: 'MR1',           type: 'MR1_FADE_SHORT_OVERNIGHT',           displayName: 'MR1',           dir: 'SHORT' },
+  { levelName: 'MR2',           type: 'MR2_FADE_LONG_OVERNIGHT',            displayName: 'MR2',           dir: 'LONG'  },
+  { levelName: 'MS1',           type: 'MS1_FADE_SHORT_OVERNIGHT',           displayName: 'MS1',           dir: 'SHORT' },
+  { levelName: 'MS2',           type: 'MS2_FADE_SHORT_OVERNIGHT',           displayName: 'MS2',           dir: 'SHORT' },
+  { levelName: 'PY_VAH',        type: 'PY_VAH_FADE_SHORT_OVERNIGHT',        displayName: 'PY VAH',        dir: 'SHORT' },
+  { levelName: 'PY_VAL',        type: 'PY_VAL_FADE_LONG_OVERNIGHT',         displayName: 'PY VAL',        dir: 'LONG'  },
+  { levelName: 'PY_POC',        type: 'PY_POC_FADE_LONG_OVERNIGHT',         displayName: 'PY POC',        dir: 'LONG'  },
 ];
 
 // Dynamic SHADOW->ACTIVE promotion for the 4 wider-window overnight types above —
@@ -1341,7 +1375,7 @@ async function getStackVolBreakLiveStatus(setupType) {
 
 async function detectGlobexSetup(sessionDate, io) {
   try {
-    const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow] = await Promise.all([
+    const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow, recentBarsRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
       // FIXED 2026-08-05 (RESEARCH_CLAIM globexparams_raw_percentile_bug_pd_poc_vah_val): this
@@ -1377,9 +1411,26 @@ async function detectGlobexSetup(sessionDate, io) {
           // Added 2026-08-05: the 3 original PD candidates now read the same real, EV-swept
           // calibration every other overnight level already uses -- see the auditRow comment
           // above for why they didn't before.
-          'PD_VAH_FADE_SHORT', 'PD_VAL_FADE_LONG', 'PD_POC_FADE_SHORT', 'PD_POC_FADE_LONG']]),
+          'PD_VAH_FADE_SHORT', 'PD_VAL_FADE_LONG', 'PD_POC_FADE_SHORT', 'PD_POC_FADE_LONG',
+          // Sweep-reversal types (2026-08-25) -- either direction is possible per level
+          // (whichever side actually breaks), unlike the fixed-dir fade-touch types above.
+          ...WIDER_WINDOW_OVERNIGHT_LEVELS.flatMap(l => [`${l.levelName}_SWEEP_REVERSAL_LONG_OVERNIGHT`, `${l.levelName}_SWEEP_REVERSAL_SHORT_OVERNIGHT`])]]),
       query(`SELECT signal_name, recommendation FROM performance_audit
              WHERE signal_type='CONFLUENCE_AUDIT_OVERNIGHT' AND signal_name LIKE 'PAIR:%'`),
+      // Sweep-reversal breakout detection (2026-08-25, RESEARCH_CLAIM
+      // globex_level_breakout_reverses_harder_than_generic) needs real bar HISTORY (5 prior
+      // bars' one-sidedness + the current bar's own high/low for the quartile-close check),
+      // unlike every other candidate here which only needs the single most-recent px. Last
+      // 2 hours is comfortably enough for both the 5-bar check and a representative
+      // medianBarRange, and cheap at 1-min resolution. CORRECTED same session: raw
+      // price_bars has 56,566 timestamps with TWO DIFFERENT CONTRACTS both present (e.g.
+      // 2024-03-07 00:00:00 has both NQH24 @ ~17973 and NQU24 @ ~18783, an ~810pt fake
+      // jump) -- a DISTINCT ON(ts) "fix" picks an arbitrary one of the two, not necessarily
+      // the correct front-month contract. price_bars_primary already does real, correct
+      // front-month dedup (confirmed zero duplicate timestamps across the full history) --
+      // use that directly instead of hand-deduplicating the raw table.
+      query(`SELECT ts, close::float, high::float, low::float FROM price_bars_primary
+             WHERE symbol='NQ' AND ts >= NOW() - INTERVAL '2 hours' AND ts <= NOW() ORDER BY ts ASC`),
     ]);
     if (!priceRow.rows[0] || !pdRow.rows[0]) return null;
     const px = priceRow.rows[0].price;
@@ -1436,6 +1487,31 @@ async function detectGlobexSetup(sessionDate, io) {
 
     const TOUCH = 15; // proximity window — consistent with RTH level detection system-wide
 
+    // Re-arm-on-resolution minimum trade duration (2026-08-25, OPEN_DECISION
+    // globex_refire_dedup_blocks_genuine_retouches). The old dedup (`existing.rows.length`
+    // below, no filter at all) let a level fire ONCE per (trade_date, setup_type) for the
+    // entire ~15.5hr Globex session, period -- confirmed live: WEEKLY_OPEN_FADE_SHORT_
+    // OVERNIGHT would have caught only the FIRST of 3 real, independent touch-and-resolve
+    // episodes overnight 2026-08-24/25, missing a genuine +$178 winner that touched just 1
+    // minute after the first episode's stop-out. A naive fix (re-arm immediately once the
+    // prior row resolves) risks reproducing the 2026-08-20 RTH flooding incident (31
+    // duplicate SHADOW rows in 33 minutes) -- but per a Gemini design critique, verified
+    // against the RTH engine's own real anti-flood mechanism (recentTypeRows, ~line 7139,
+    // an unconditional 15-min fired_at-based block) that flooding's real signature is a
+    // near-instant resolution (price chopping tightly at the boundary), NOT short elapsed
+    // time since resolution -- last night's genuine re-touch resolved in 10 real minutes
+    // (05:47-05:57) despite re-arming just 1 minute later. So the gate is on the PRIOR
+    // trade's own resolved_at-fired_at duration, not a cooldown after the fact -- this
+    // doesn't delay entry on the NEW touch at all (the exact cost this codebase's own
+    // confirmation-gate research, docs/OPEN_THREADS.md 2026-08-24, found not worth paying).
+    // 3 minutes chosen as comfortably above single-bar noise (1min bars) while still well
+    // under any real overnight stop/target resolution time seen in this session's data.
+    // This is a dedup/plumbing parameter, not a trading threshold (no entry/stop/target/
+    // signal math), matching this codebase's own established exception for the RTH
+    // engine's 15-minute cluster window -- a fixed value is appropriate here, not a
+    // rolling-distribution derivation.
+    const GLOBEX_REFIRE_MIN_TRADE_DURATION_MINUTES = 3;
+
     const pocDir = px >= poc ? 'SHORT' : 'LONG';
     const widerLevelPrices = {};
     for (const r of widerLevelsRow.rows) widerLevelPrices[r.level_name] = r.price;
@@ -1446,6 +1522,65 @@ async function detectGlobexSetup(sessionDate, io) {
     // validated these 4 types, reused here rather than picking new numbers.
     const sessionIsMonday = new Date(sessionDate + 'T12:00:00').getDay() === 1;
     const flatStop = 45, flatTarget = 90;
+
+    // ── Sweep-reversal breakout-fade detection (2026-08-25, RESEARCH_CLAIM
+    // globex_level_breakout_reverses_harder_than_generic) ────────────────────────────────
+    // Real, hand-verified, rigor-clean bar-history pretest + trade-level simulation found
+    // that decisively breaking one of the 29 WIDER_WINDOW_OVERNIGHT_LEVELS overnight is
+    // followed by a LARGER reversal than a generic 20-bar Donchian breakout shows at the
+    // same time-of-night baseline (excess -56.71 to -93.49pt across all 5 structural
+    // groups, N=384-1186/group, computeRigor() clean). Trade-level fade-the-breakout
+    // simulation: N=1089, $41,022 total, $37.67/trade avg, 4/5 groups rigor-clean. Fires
+    // SHADOW-first via getOvernightLevelLiveStatus() below (fail-closed, zero rows exist
+    // for any of these new type names yet) -- same self-promoting pipeline as every other
+    // candidate in this function, no manual promotion. Deliberately uses flatStop/
+    // flatTarget (not a hand-derived "smarter" number) until real N clears the normal
+    // calibration bar -- this is exactly the discipline STOP_SWEEP_LONG/SHORT's own pause
+    // (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep) exists to enforce.
+    const sweepReversalCandidates = [];
+    const recentBars = recentBarsRow.rows;
+    if (recentBars.length >= 6) {
+      const ranges = recentBars.map(b => b.high - b.low).sort((a, b) => a - b);
+      const mid = Math.floor(ranges.length / 2);
+      const medianRange = ranges.length % 2 !== 0 ? ranges[mid] : (ranges[mid - 1] + ranges[mid]) / 2;
+      const lastBar = recentBars[recentBars.length - 1];
+      const prev5 = recentBars.slice(-6, -1);
+      const barRange = lastBar.high - lastBar.low;
+      if (medianRange > 0 && barRange > 0 && prev5.length === 5) {
+        const quartileUp = (lastBar.close - lastBar.low) / barRange >= 0.75;
+        const quartileDown = (lastBar.high - lastBar.close) / barRange >= 0.75;
+        for (const l of WIDER_WINDOW_OVERNIGHT_LEVELS) {
+          const P = widerLevelPrices[l.levelName];
+          if (P == null) continue;
+          // Dose-response check (2026-08-25, real trade-level simulation, N=1089): the whole
+          // edge concentrates in LARGE breakouts. 1.0-1.5x medianRange beyond the level is
+          // net NEGATIVE (-$5.57/trade, N=403); 2.5x+ is where the real effect lives (74.7%
+          // WR, +$109.79/trade, N=380, rigor-clean). A flat >=1x threshold (the pretest's own
+          // detection definition) would fire on the losing bucket too and dilute the real
+          // signal once pooled for calibration. SWEEP_SIZE_MULT=2.5 requires the breakout
+          // margin itself (not just >0) to clear this multiple of that night's own
+          // medianRange -- still a rolling-distribution-derived cutoff (medianRange is
+          // recomputed every poll from real recent bars), the "2.5" is a data-informed
+          // multiplier on it, not a static price/point threshold.
+          const SWEEP_SIZE_MULT = 2.5;
+          const allPrior5Below = prev5.every(b => b.close < P);
+          const allPrior5Above = prev5.every(b => b.close > P);
+          let breakoutDir = null;
+          if (allPrior5Below && lastBar.close > P + medianRange * SWEEP_SIZE_MULT && quartileUp) breakoutDir = 'UP';
+          else if (allPrior5Above && lastBar.close < P - medianRange * SWEEP_SIZE_MULT && quartileDown) breakoutDir = 'DOWN';
+          if (!breakoutDir) continue;
+          const fadeDir = breakoutDir === 'UP' ? 'SHORT' : 'LONG';
+          const type = `${l.levelName}_SWEEP_REVERSAL_${fadeDir}_OVERNIGHT`;
+          sweepReversalCandidates.push({
+            level: lastBar.close, name: `${l.displayName} Sweep Reversal`, type, dir: fadeDir,
+            widerWindowNew: true,
+            widerStop: widerOptMap[type]?.stop ?? flatStop,
+            widerTarget: widerOptMap[type]?.target ?? flatTarget,
+            levelBase: `${l.levelName}_SWEEP_REVERSAL`,
+          });
+        }
+      }
+    }
 
     // ── Globex 24hr VWAP Magnet: sigma-based fade off the 24hr-spanning VWAP ──────────
     // The Globex sibling of the RTH VWAP_MAGNET_LONG/SHORT setup (~line 5310 below,
@@ -1526,15 +1661,31 @@ async function detectGlobexSetup(sessionDate, io) {
         levelBase: 'GLOBEX_VWAP_FADE',
       },
     ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH)
-     .concat(globexVwapCandidate ? [globexVwapCandidate] : []);
+     .concat(globexVwapCandidate ? [globexVwapCandidate] : [])
+     .concat(sweepReversalCandidates);
 
     for (const c of candidates) {
+      // Re-arm-on-resolution (2026-08-25): blocks only a still-open row (ACTIVE/SHADOW), or
+      // a resolved one that resolved suspiciously fast (< GLOBEX_REFIRE_MIN_TRADE_DURATION_
+      // MINUTES since its own fired_at -- the real chop/bad-tick signature, not elapsed time
+      // since resolution). CASCADE_BREAKER audit rows are excluded (same convention as the
+      // RTH engine's clusterAnchorRes, ~line 7109) -- those set resolved_at=fired_at by
+      // construction (zero duration) and would otherwise permanently block re-arm for any
+      // shared-name type (PD_VAH_FADE_SHORT etc.) for the rest of the day.
       const existing = await query(
-        `SELECT 1 FROM active_setups WHERE trade_date=$1 AND setup_type=$2 LIMIT 1`,
-        [sessionDate, c.type]
+        `SELECT 1 FROM active_setups
+         WHERE trade_date=$1 AND setup_type=$2
+           AND (suppression_reason IS NULL OR suppression_reason != 'CASCADE_BREAKER')
+           AND (
+             status IN ('ACTIVE','SHADOW')
+             OR resolved_at IS NULL
+             OR (resolved_at - fired_at) < ($3::int * INTERVAL '1 minute')
+           )
+         LIMIT 1`,
+        [sessionDate, c.type, GLOBEX_REFIRE_MIN_TRADE_DURATION_MINUTES]
       );
       if (existing.rows.length) {
-        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'GLOBEX_ALREADY_FIRED_TODAY', gateReason: 'active_setups already has a row for this (trade_date, setup_type) today', entry: px });
+        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'GLOBEX_ALREADY_FIRED_TODAY', gateReason: 'active_setups already has an open, or too-fast-resolved, row for this (trade_date, setup_type) today', entry: px });
         continue;
       }
 
@@ -11499,12 +11650,18 @@ export default function createACDRouter(io) {
         // Stability/trend classification from backtest_setup_status.mjs's rigor diagnostics
         // (day-clustering + 3-way chronological EV-sign stability, added 2026-07-14). Only
         // meaningful for SETUP_STATUS rows — other signal_types don't write this field.
-        let stabilityTrend = null, stabilityStable = null;
+        // realN: the same all_time_real_n distinction setups.js's /setups/reference already
+        // exposes -- a blended `n` here can be almost entirely synthetic BACKFILL (~80% of
+        // active_setups per CLAUDE.md's own hard rule). This table previously showed only
+        // the blended count with no way to tell, which is exactly the "found a high-N setup
+        // that turned out to be N=3 real" pattern flagged 2026-08-25 -- surface it here too.
+        let stabilityTrend = null, stabilityStable = null, realN = null;
         if (row.signal_type === 'SETUP_STATUS' && row.notes) {
           try {
             const parsed = JSON.parse(row.notes);
             stabilityTrend = parsed.rigor?.trend || null;
             stabilityStable = parsed.rigor?.three_way_stable;
+            realN = parsed.all_time_real_n ?? null;
           } catch (_) {}
         }
 
@@ -11562,6 +11719,7 @@ export default function createACDRouter(io) {
           notes: row.notes,
           stabilityTrend,
           stabilityStable,
+          realN,
         });
       }
 

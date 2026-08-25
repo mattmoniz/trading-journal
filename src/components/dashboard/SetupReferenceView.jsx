@@ -10,7 +10,12 @@ import { API_URL } from '../../constants/api.js';
 // than an accordion of cards. Criteria text: server/config/setupDefinitions.js (static).
 // Numbers: always /api/setups/reference + /api/setups/reference/:type/detail (live),
 // never hand-typed here.
-const REC_COLOR = { ACTIVE: '#4ade80', PROMOTE: '#4ade80', DAY_TYPE_MANAGED: '#22d3ee', THIN_N: '#64748b', SUPPRESS: '#f87171', NOT_YET_CALIBRATED: '#64748b' };
+// THIN_N/NOT_YET_CALIBRATED are caution states, not neutral ones -- they were previously
+// the same muted grey as inert/secondary text, which let a thin-real-N setup look no more
+// notable than a fully-calibrated one at a glance. Amber matches the existing UNDOC badge's
+// "needs a second look" convention. (Font-contrast rule: min 11px, min #94a3b8 -- no more
+// small dark greys for anything the user actually needs to notice.)
+const REC_COLOR = { ACTIVE: '#4ade80', PROMOTE: '#4ade80', DAY_TYPE_MANAGED: '#22d3ee', THIN_N: '#fbbf24', SUPPRESS: '#f87171', NOT_YET_CALIBRATED: '#fbbf24' };
 const TREND_COLOR = { DEGRADING: '#f87171', IMPROVING: '#4ade80', NOISY_BUT_STABLE: '#94a3b8', STABLE: '#4ade80', AMBIGUOUS: '#fbbf24', THIN: '#64748b' };
 
 const DEFAULT_COLS = [
@@ -271,8 +276,25 @@ export default function SetupReferenceView({ onOpenChart }) {
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'left', color: '#94a3b8' }}>{r.group || '—'}</td>;
       case 'recommendation':
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'left' }}><span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 6px', borderRadius: 4, color: REC_COLOR[r.recommendation] || '#64748b', background: (REC_COLOR[r.recommendation] || '#64748b') + '1e' }}>{r.recommendation || '—'}</span></td>;
-      case 'n':
-        return <td key={col.key} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>{r.n ?? '—'}{r.realN != null ? <span style={{ color: '#64748b', fontSize: 10.5 }}> ({r.realN} real)</span> : ''}</td>;
+      case 'n': {
+        // A blended N can be almost entirely synthetic BACKFILL (per CLAUDE.md's own hard
+        // rule: ~80% of active_setups is backfill) -- silently showing "N=94" with the real
+        // count as a barely-visible footnote let that pass as decisive at a glance. Below
+        // this codebase's own N>=20 floor, make the real count the loud number instead.
+        const thin = r.realN != null && r.realN < 20;
+        return (
+          <td key={col.key} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>
+            {r.n ?? '—'}
+            {r.realN != null && (
+              thin
+                ? <span style={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }} title="Below this codebase's N>=20 real-data floor -- treat as unvalidated">
+                    {' '}⚠ {r.realN} real
+                  </span>
+                : <span style={{ color: '#94a3b8', fontSize: 11 }}> ({r.realN} real)</span>
+            )}
+          </td>
+        );
+      }
       case 'wr':
         return <td key={col.key} style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>{r.wr != null ? `${(r.wr * 100).toFixed(1)}%` : '—'}</td>;
       case 'ev':

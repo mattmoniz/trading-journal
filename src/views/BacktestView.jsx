@@ -1733,7 +1733,17 @@ function PerformanceAuditPanel() {
                         case 'mfe': return <td key={c.key} style={{ ...cs, color: '#34d399' }}>{s.mfe != null ? fmtN(s.mfe) + 'pt' : '--'}</td>;
                         case 'p50mae': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.p50mae != null ? fmtN(s.p50mae) + 'pt' : '--'}</td>;
                         case 'p75mae': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.p75mae != null ? fmtN(s.p75mae) + 'pt' : '--'}</td>;
-                        case 'n': return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>{s.n || '--'}</td>;
+                        case 'n': {
+                          // s.realN (SETUP_STATUS rows only) distinguishes real ACTIVE/SHADOW
+                          // fires from a blended count that can be ~80% synthetic BACKFILL --
+                          // flag it loudly when real N is below this codebase's own N>=20
+                          // floor, rather than showing only the blended number (2026-08-25).
+                          const thin = s.realN != null && s.realN < 20;
+                          return <td key={c.key} style={{ ...cs, color: '#94a3b8' }}>
+                            {s.n || '--'}
+                            {thin && <span style={{ color: '#fbbf24', fontWeight: 700, fontSize: 11 }} title="Below the N>=20 real-data floor -- treat as unvalidated"> ⚠ {s.realN} real</span>}
+                          </td>;
+                        }
                         case 'totalPnl': return <td key={c.key} style={{ ...cs, color: evColor(s.totalPnl) }}>{s.totalPnl != null ? '$' + Math.round(s.totalPnl).toLocaleString() : '--'}</td>;
                         case 'regimeFit': return <td key={c.key} style={{ ...cs, whiteSpace: 'nowrap' }}>
                           {s.regimeFit ? (

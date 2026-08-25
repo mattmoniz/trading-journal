@@ -78,6 +78,20 @@
   .setup-mins { font-size: 12px; color: var(--dim); margin-top: 6px; }
   .empty-card { font-size: 13px; color: var(--muted); display: flex; align-items: center; justify-content: center; height: 40px; }
 
+  /* Sweep-reversal watch card (2026-08-25, direct user request: "I'd rather see it fire
+     live and shadow" for the new SWEEP_REVERSAL_LONG/SHORT_OVERNIGHT mechanism). Reuses
+     #setup-card's visual language (same border/grid shape) but stays visually distinct via
+     the amber "WATCHING" tag -- this is a brand-new, unproven, SHADOW-only mechanism (see
+     RESEARCH_CLAIM globex_sweep_reversal_size_filter_dose_response), never promoted to a
+     real alert, so it must never be mistaken for a trusted signal like #setup-card's
+     contents. Hidden entirely (display:none) when nothing has fired today -- deliberately
+     does not show an "empty" placeholder the way #setup-card does, since this is meant to
+     be a rare, notable event, not a permanent fixture of the page. */
+  #sweep-watch { display: none; border: 1.5px solid rgba(245,158,11,0.4); border-radius: 8px; padding: 12px 14px; background: rgba(245,158,11,0.06); margin-bottom: 14px; }
+  #sweep-watch.visible { display: block; }
+  .sweep-watch-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(245,158,11,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+  .sweep-watch-note { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
+
   /* Session timeline */
   #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
@@ -194,6 +208,7 @@
 
 <div class="wrap">
   <div id="setup-card"><div class="empty-card">Loading…</div></div>
+  <div id="sweep-watch"></div>
 
   <div id="timeline-head">
     <h2 id="timeline-title">Session Timeline</h2>
@@ -395,8 +410,76 @@ async function loadTimeline() {
     const data = await fetch('/api/setups/today').then(r => r.json());
     allTimelineRows = Array.isArray(data?.setups) ? data.setups : [];
     renderTimeline();
+    renderSweepWatch();
   } catch (e) { /* keep last good render */ }
   loadResearchNote();
+}
+
+// Sweep-reversal watch (2026-08-25) -- shows the most recent SWEEP_REVERSAL_LONG/SHORT_
+// OVERNIGHT fire today, regardless of the live/all timeline toggle, since this mechanism
+// is SHADOW-only by design and would otherwise never surface here at all (the toggle
+// defaults to 'live' = origin_status==='ACTIVE' only). Uses setup_type directly, not
+// origin_status, to find it -- deliberately independent of whichever fires happen to also
+// clear the unrelated live-eligibility bar. Built via textContent, not innerHTML (same
+// XSS-avoidance convention as renderResearchNote just below) -- setup_type ultimately
+// comes from a config array, not free user input, but no reason to be the one place on
+// this page that breaks the pattern.
+function renderSweepWatch() {
+  const el = $('sweep-watch');
+  // Exact suffix match, not a bare .includes('SWEEP_REVERSAL') -- FAILED_SWEEP_REVERSAL_
+  // LONG/SHORT is a real, unrelated, pre-existing setup type (Setup B from the 2026-08-10
+  // roster rebuild) that a loose substring match collides with. Caught live via a
+  // Playwright check before shipping: this exact collision made the card show FAILED_
+  // SWEEP_REVERSAL fires mislabeled as the brand-new mechanism.
+  const SWEEP_REVERSAL_RE = /_SWEEP_REVERSAL_(LONG|SHORT)_OVERNIGHT$/;
+  const hit = [...allTimelineRows].reverse().find(s => SWEEP_REVERSAL_RE.test(s.setup_type || ''));
+  if (!hit) { el.className = ''; el.textContent = ''; return; }
+
+  const isLong = (hit.setup_type || '').includes('_LONG_');
+  const levelName = (hit.setup_type || '').replace(/_SWEEP_REVERSAL_(LONG|SHORT)_OVERNIGHT$/, '').replace(/_/g, ' ');
+  const resolved = hit.resolution && hit.resolution !== null;
+  const pnl = hit.actual_pnl != null ? Number(hit.actual_pnl) : null;
+
+  el.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'setup-head';
+  const tag = document.createElement('span');
+  tag.className = 'sweep-watch-tag';
+  tag.textContent = 'SWEEP REVERSAL · WATCHING';
+  const typeSpan = document.createElement('span');
+  typeSpan.className = 'setup-type';
+  typeSpan.style.color = isLong ? 'var(--green)' : 'var(--red)';
+  typeSpan.style.flex = '1';
+  typeSpan.textContent = levelName + ' ' + (isLong ? 'LONG' : 'SHORT');
+  head.appendChild(tag);
+  head.appendChild(typeSpan);
+  el.appendChild(head);
+
+  const grid = document.createElement('div');
+  grid.className = 'setup-grid';
+  const addCell = (label, value, color) => {
+    const span = document.createElement('span');
+    span.className = 'k';
+    span.textContent = label + ' ';
+    const b = document.createElement('b');
+    b.className = 'mono';
+    if (color) b.style.color = color;
+    b.textContent = value;
+    span.appendChild(b);
+    grid.appendChild(span);
+  };
+  if (hit.entry_zone_low != null) addCell('Entry', Math.round(hit.entry_zone_low), 'var(--text)');
+  if (hit.stop_level != null) addCell('Stop', Math.round(hit.stop_level), 'var(--red)');
+  if (hit.t1_level != null) addCell('T1', Math.round(hit.t1_level), 'var(--green)');
+  if (resolved) addCell('Result', hit.resolution.replace(/_/g, ' ') + (pnl != null ? ' (' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(0) + ')' : ''), pnl >= 0 ? 'var(--green)' : 'var(--red)');
+  el.appendChild(grid);
+
+  const note = document.createElement('div');
+  note.className = 'sweep-watch-note';
+  note.textContent = 'Fired because price broke decisively through ' + levelName + ' overnight, then this mechanism bet on a reversal. Brand new (2026-08-25) — tracked like a real trade, but not yet a trusted signal. Never shows here unless it actually fires.';
+  el.appendChild(note);
+
+  el.className = 'visible';
 }
 
 // Research & Monitoring note -- same source (/api/setups/today-summary) and content as the
