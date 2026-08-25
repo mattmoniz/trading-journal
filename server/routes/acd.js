@@ -802,8 +802,22 @@ export async function resolveSetupsByPrice(io) {
 
     // Breakeven-then-trail (docs/SCALEOUT_RUNNER_SPEC.md): a non-null runner_trail_width
     // marks this row as using the dynamic path-dependent exit instead of the plain
-    // fixed-stop/fixed-target logic below. Only FLOOR_R1_FADE_SHORT_TRAIL sets this today.
+    // fixed-stop/fixed-target logic below. All 6 wired _TRAIL variants attempt to set
+    // this (CONDITIONAL_VARIANTS, server/config/setupTypes.js) -- comment corrected
+    // 2026-08-24, was stale since the other 5 were wired 2026-07-21.
     const trailWidth = row.runner_trail_width;
+    // FIXED 2026-08-24 (user-flagged: 3 of 6 wired trail variants showing
+    // runner_trail_width IS NULL on every real fire, session-start invariant alert).
+    // Root cause confirmed via a fresh run of scripts/backtest_breakeven_trail.mjs:
+    // 5 of 6 wired variants genuinely fail its statistical guardrails today (OOS/
+    // plateau-robustness checks), not a stale-schedule or code bug -- the calibration
+    // script is working correctly, the trail width just isn't validated for these yet.
+    // Until (if ever) one clears that bar, a null trailWidth here silently falls
+    // through to the shared plain-bank branch below and resolves identically to a
+    // trade that was never trail-eligible at all -- indistinguishable in the data.
+    // This flag makes that visible (see the two PRICE_CLEAN sites below) instead of
+    // leaving it a silent, undetectable dead mechanism.
+    const trailCalibrationMissing = trailWidth == null && CONDITIONAL_VARIANTS[row.setup_type]?.trailSignalName != null;
     // Bank-vs-extend (promote_stackvol_to_tracked_setup, 2026-07-27): a non-null
     // extend_target_level marks this row (STACK_VOL_BREAK_LIVE_LONG/SHORT only, as of
     // 2026-07-27) as using the dynamic bars-to-target exit below instead of the plain
@@ -813,10 +827,12 @@ export async function resolveSetupsByPrice(io) {
     // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17,
     // OPEN_DECISION runner_wider_target_mechanism_build_spec): a non-null wider_target_mult
     // marks this row as using the dynamic wider-target exit below instead of the plain
-    // fixed-stop/fixed-target logic. SHADOW-origin only (set at insert time, see the INSERT
-    // site) -- ACTIVE rows never carry this flag, so real capital is structurally
-    // unreachable by this mechanism. Mutually exclusive with trailWidth/extendTarget -- no
-    // setup_type row sets more than one of the three.
+    // fixed-stop/fixed-target logic. WIRED TO ACTIVE 2026-08-24 (explicit user decision,
+    // real 19-day SHADOW track record: 53 armed trades, net +$1,071.75 vs plain-bank-at-T1)
+    // -- set at insert time regardless of origin_status now (see the INSERT sites). This IS
+    // where real capital exposure begins for this mechanism -- it changes the actual
+    // stop/target of a real, user-visible trade, not just a size hint. Mutually exclusive
+    // with trailWidth/extendTarget -- no setup_type row sets more than one of the three.
     const widerTargetMult = row.wider_target_mult;
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
@@ -1014,13 +1030,17 @@ export async function resolveSetupsByPrice(io) {
         break;
       } else if (t1Hit) {
         resolution = 'TARGET_HIT';
-        method = 'PRICE_CLEAN';
+        // TRAIL_UNCALIBRATED (2026-08-24): this row was designated a _TRAIL variant but
+        // has no working runner_trail_width -- see trailCalibrationMissing above. Fits
+        // resolution_method's VARCHAR(20) (19 chars) -- checked, not assumed, per this
+        // codebase's own VARCHAR-overflow history.
+        method = trailCalibrationMissing ? 'TRAIL_UNCALIBRATED' : 'PRICE_CLEAN';
         resolvedAt = bar.ts;
         priceAtRes = t1;
         break;
       } else if (stopHit) {
         resolution = 'STOP_HIT';
-        method = 'PRICE_CLEAN';
+        method = trailCalibrationMissing ? 'TRAIL_UNCALIBRATED' : 'PRICE_CLEAN';
         resolvedAt = bar.ts;
         priceAtRes = stop;
         break;
@@ -1103,7 +1123,10 @@ export async function resolveSetupsByPrice(io) {
     if (!resolution && trailWidth == null && bars.rows.length > 0 && row.expires_at && nowEt >= row.expires_at) {
       const lastBar = bars.rows[bars.rows.length - 1];
       resolution = 'TIME_EXPIRED';
-      method = 'MARK_TO_MARKET';
+      // Same TRAIL_UNCALIBRATED tagging as the plain t1Hit/stopHit sites above -- this
+      // row never got a working trail either, it just happened to time out instead of
+      // hitting a level first.
+      method = trailCalibrationMissing ? 'TRAIL_UNCALIBRATED' : 'MARK_TO_MARKET';
       resolvedAt = lastBar.ts;
       priceAtRes = lastBar.close;
     }
@@ -9088,13 +9111,18 @@ export default function createACDRouter(io) {
           ...regimeStampValues(regimeStamp),
           ...fireTagValues(fireTags),
           getBetClass(active.type),
-          // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
-          // reuses forceShadow, the SAME boolean already bound to status/origin_status
-          // above ($18) -- no separate string comparison. !isTrailMechanism is required,
-          // not cosmetic: forceShadow is ALSO forced true for trail variants, which
-          // already carry runner_trail_width from this same INSERT -- excluding them here
-          // preserves the "no row sets more than one exit-mechanism flag" invariant.
-          forceShadow && !isTrailMechanism ? WIDER_TARGET_MULT : null,
+          // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17,
+          // WIRED LIVE TO ACTIVE 2026-08-24 -- explicit user decision, real 19-day SHADOW
+          // track record: 53 armed trades, 47 WIDER_TARGET_HIT/5 WIDER_STOP_HIT, net
+          // +$1,071.75 vs a plain-bank-at-T1 counterfactual on the same trades. The
+          // pressure-gate refinement (RESEARCH_CLAIM wider_target_pressure_gate_vs_
+          // always_extend, shipped same day) stays live regardless -- this only removes
+          // the SHADOW-only restriction on the underlying always-extend-when-fast
+          // mechanism, it does not touch the gate logic itself. !isTrailMechanism is
+          // still required, not cosmetic: trail variants already carry runner_trail_width
+          // from this same INSERT -- excluding them here preserves the "no row sets more
+          // than one exit-mechanism flag" invariant.
+          !isTrailMechanism ? WIDER_TARGET_MULT : null,
           active.sizeFactorsAtDetection ? JSON.stringify(active.sizeFactorsAtDetection) : null,
         ]);
         let row = ins.rows[0];
@@ -9248,21 +9276,16 @@ export default function createACDRouter(io) {
               ...regimeStampValues(regimeStamp),
               ...fireTagValues(shadowFireTags),
               getBetClass(shadow.type),
-              // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
-              // st === 'SHADOW' is the dynamic status gate (this site can produce ACTIVE
-              // since the 2026-08-16 promotion fix). ABSORPTION_LONG/COIL_SURGE mirror the
-              // resolver's own needsBars exclusion (acd.js ~505) -- they have their own
-              // custom resolution and never reach the wider-target branch, so tagging them
-              // would be dead value.
-              //
-              // CONDITIONAL_VARIANTS[...]?.trailSignalName exclusion added 2026-08-18 (C1,
-              // docs/OPEN_THREADS.md 2026-08-18): this site was the one wired insert path
-              // missing this check -- the other 2 real wired sites (~8338, ~8725) already
-              // exclude trail-mechanism variants (they carry runner_trail_width instead, and
-              // no row may set more than one of the three exit-mechanism flags). Harmless
-              // today (no _TRAIL variant currently flows through shadowCandidates's roster),
-              // defensive against one being added here later without noticing this gap.
-              (st === 'SHADOW' && shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
+              // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17,
+              // WIRED LIVE TO ACTIVE 2026-08-24 -- see the twin site ~9091 for the full
+              // decision rationale, same change applied here for consistency across both
+              // real insert paths). ABSORPTION_LONG/COIL_SURGE mirror the resolver's own
+              // needsBars exclusion (acd.js ~505) -- they have their own custom resolution
+              // and never reach the wider-target branch, so tagging them would be dead
+              // value. CONDITIONAL_VARIANTS[...]?.trailSignalName exclusion (added
+              // 2026-08-18, C1) preserves the "no row sets more than one exit-mechanism
+              // flag" invariant against trail variants.
+              (shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
             ]).catch(() => {});
           }
