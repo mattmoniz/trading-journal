@@ -1,9 +1,62 @@
 # Cluster Touch Credit — Phased Build Spec
 
-**Status: NOT BUILT. Design-critiqued only (Gemini + DeepSeek, both independent, 2026-08-25).**
-Nothing in this doc is live. Read `docs/OPEN_THREADS.md`'s 2026-08-25 "Cluster touch credit"
+**Status: Phase 0 (verify) + Phase 1 (3 cheap independent fixes) SHIPPED 2026-08-25 — see
+"Phase 0 results" below. Phase 2/3 NOT built, design-critiqued only (Gemini + DeepSeek, both
+independent, 2026-08-25).** Read `docs/OPEN_THREADS.md`'s 2026-08-25 "Cluster touch credit"
 entry for the full narrative (how this was found, both critiques in full) before touching
 anything here — this doc is the buildable plan, that entry is the reasoning trail.
+
+## Phase 0 results (2026-08-25, read-only verification, real numbers)
+
+1. **Sibling-count distribution, RTH real touches** — `confluence_levels_at_detection` has been
+   populated on every real (`origin_status IN ('ACTIVE','SHADOW')`) INSERT since 2026-07-23
+   (917 rows so far). Of those, 562/917 (61%) have 2+ levels within the 15pt cluster radius —
+   confirms the core premise directly: co-location is the common case, not an edge case.
+2. **Early-touch-backfill 1PM-expiry bug, real impact before the fix** — identified backfill rows
+   via their unconditional `expires_at`=13:00:00 ET marker (`resolution_method` mutates away from
+   `'EARLY_TOUCH_BACKFILL'` once a row resolves, so that string can't be used post-resolution;
+   `expires_at` is never rewritten after insert, so it's a durable identifier). 77 real
+   (`origin_status='SHADOW'`) backfill rows all-time; only 2 of those actually fired after 1PM ET,
+   and both still resolved `PRICE_CLEAN` despite the stale expiry — `resolveSetupsByPrice()` walks
+   bars from `fired_at` forward regardless of `expires_at`, so the theorized "instant
+   MARK_TO_MARKET" failure mode didn't materialize in practice. Real bug (fixed anyway, see
+   Phase 1 below), but low realized damage prior to the fix.
+3. **The natural experiment (`detectGlobexSetup()`, no cluster dedup)** — exact-same-minute
+   cross-type grouping badly undercounted real clustering (only 6 pairs found); widening to
+   near-simultaneous (≤10min apart, ≤15pt entry distance, both sides real `ACTIVE`/`SHADOW`
+   origin) found 127 cross-type pairs all-time. Resolution mix: ~67% `PRICE_CLEAN`, ~26%
+   `MARK_TO_MARKET`, remainder `RETROACTIVE_REPAIR`/`WIDER_TARGET_HIT`/`NO_PRICE_DATA`/null.
+   **Inter-sibling P&L correlation: r=-0.14 (n=123)** — near-zero/slightly negative, not the
+   redundant-same-bet correlation Phase 2's independence-floor concern worries about. Directly
+   useful input for `monitor_bet_correlation.mjs`'s r<0.6 gate once Phase 2 wires pooled
+   consumers.
+
+## Phase 1 shipped (2026-08-25)
+
+All 3 items from the Phase 1 section below were implemented in `server/routes/acd.js`:
+1. Early-touch backfill's `sessionEndStr` expiry (was hardcoded `13:00:00`) now computes a real,
+   rollover-safe RTH close (4PM ET, next day if already past) — mirrors the suppressed-audit
+   insert's existing `auditSessionEnd` pattern.
+2. Early-touch backfill's `if (Math.abs(currentPrice - lv.level) <= 15) continue` skip (the false
+   "live path already covers this" assumption) removed entirely — the per-type-per-day dedup
+   check a few lines below already makes this idempotent.
+3. `cluster_attributed_setups` now also gets written onto the WINNER'S OWN row for same-poll,
+   same-cluster candidates the `sortedCandidates` fallback loop skipped on the way to picking it
+   (the literal `FLOOR_R2`-loses-to-`WEEKLY_OPEN` case) — previously only written onto a
+   *different* poll's already-open `clusterAlreadyFired` anchor.
+
+Verified: `node --check` clean, `npm run lint` clean, server restarted onto the new code with
+zero new `scratch/server_errors.jsonl` entries, `/api/acd/setup-detection` returns 200 with a
+well-formed body, `test_invariants.mjs`'s 4 FAILUREs are pre-existing OPTIMAL_STOP
+circuit-breaker trips (`OR5_LOW_FADE_SHORT`/`OR5_MID_FADE_LONG`/`GLOBEX_VWAP_FADE_SHORT`/
+`IB_BULLISH`) fully unrelated to this change.
+
+**Phase 2 (schema + gating safety net) and Phase 3 (the actual sibling-row insert) remain NOT
+built.** Both are live-wiring changes to production gating/suppression logic — CLAUDE.md's
+higher-stakes-work rule requires the 3-phase Gemini workflow (design critique on the approach →
+mine-and-run analysis → review-only pass on the code) before either ships, not just a design
+critique of the plan (which both models already gave 2026-08-25, before Phase 0's real numbers
+existed to critique against).
 
 ## The problem, one sentence
 

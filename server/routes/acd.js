@@ -7147,6 +7147,17 @@ export default function createACDRouter(io) {
             if (rawType === 'FLOOR_S1_FADE_LONG') return 'FLOOR_S1_FADE_LONG_TRAIL';
             if (rawType === 'DAILY_OPEN_FADE_LONG') return 'DAILY_OPEN_FADE_LONG_TRAIL';
             if (rawType === 'CAM_S2_FADE_LONG') return 'CAM_S2_FADE_LONG_TRAIL';
+            // 7th trail variant (2026-08-26): the original 6 were picked by an earlier
+            // backtest but turned out too thin in real live trading to ever pass
+            // backtest_breakeven_trail.mjs's own MIN_N=20 real-T1-reach floor (all 6 sit at
+            // 0-18 real touches, confirmed live -- the mechanism was never "broken," it
+            // correctly refused to guess a trail width with no real evidence). Re-scanned
+            // every currently-eligible setup_type against the real funnel: of 12 candidates
+            // clearing MIN_N, only PD_POC_FADE_SHORT survives (real N=21, Tier B validated
+            // trail=19.3pt, OOS EV +$30.31 vs a -$2.31 OOS fixed-target baseline) --
+            // high-frequency real setups like IB_BEARISH/IB_BULLISH were also tested and
+            // genuinely fail the OOS/plateau guardrails, not wired.
+            if (rawType === 'PD_POC_FADE_SHORT') return 'PD_POC_FADE_SHORT_TRAIL';
             return rawType;
           };
 
@@ -7314,6 +7325,16 @@ export default function createACDRouter(io) {
             // critique 2026-08-12 (scratch/deepseek_response.md) -- see
             // OPEN_DECISION cascade_diag_awaiting_live_data for the full writeup.
             let lv = null, type = null, sameTypeRecentlyFired = false;
+            // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md, found
+            // 2026-08-25): the same-cluster candidates skipped below on the way to finding
+            // the winner (e.g. FLOOR_R2 skipped as SUPPRESSED_FADE while WEEKLY_OPEN wins the
+            // same touch) used to leave zero trace on the winner's own row -- only a
+            // clusterAlreadyFired anchor (a DIFFERENT poll's winner) ever got
+            // cluster_attributed_setups populated. Collected here and tagged onto the winner
+            // at its INSERT site (~9230) once winnerFound -- gives real measurement of how
+            // often/which types this happens to before committing to Phase 3's actual
+            // sibling-row build.
+            const clusterSkippedTypes = [];
             // Explicit flag rather than re-deriving "cleared" from the individual suppression
             // booleans below (2026-08-12 correctness fix, caught before shipping): the side
             // filter (sideOk) excludes a candidate from ever being tried without setting any of
@@ -7347,6 +7368,7 @@ export default function createACDRouter(io) {
                   : s2Double ? 'S2_DOUBLE_COUNTER'
                   : trendCounterFadeFlag ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
                 logGatedCandidate({ tradeDate: todayET, setupType: candType, gateName: 'LEVEL_FADE_CLUSTER_FALLBACK_SKIP', gateReason: skipReason, entry: currentPrice });
+                clusterSkippedTypes.push(candType);
               }
             }
             // No candidate cleared (or clusterAlreadyFired blocked the whole cluster) -- fall
@@ -7540,6 +7562,7 @@ export default function createACDRouter(io) {
             levelScalpSetup = {
               type,
               direction: dir,
+              clusterSkippedTypes: clusterSkippedTypes.length ? clusterSkippedTypes : null,
               entry: currentPrice,
               stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
               target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
@@ -7951,8 +7974,17 @@ export default function createACDRouter(io) {
           // though the live banner path above already missed its window. Idempotent: the
           // actual INSERT (later, near the shadowCandidates persist block) checks for an
           // existing row first and is also ON CONFLICT DO NOTHING-protected.
+          // Cluster touch credit Phase 1 fix #2 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md, found
+          // 2026-08-25): used to `continue` here whenever currentPrice was within 15pt of
+          // lv.level, on the assumption "the live path already covers this." False whenever
+          // >1 level clusters together -- the live winner-selection loop above fires exactly
+          // ONE row per poll for the WHOLE cluster (the EV-sorted winner, or a single
+          // pooled-primary suppressed-audit row), so a cluster LOSER (e.g. FLOOR_R2 sitting
+          // 0.25pt from WEEKLY_OPEN) can be "currently near price" every single poll and still
+          // never get its own row. Removed the skip entirely -- the per-type-per-day dedup
+          // check a few lines below (existing = SELECT 1 ... WHERE setup_type=$2) already
+          // makes this idempotent against a level that DID get its own row via the live path.
           for (const lv of keepLevels) {
-            if (Math.abs(currentPrice - lv.level) <= 15) continue; // live path already covers this
             const touchIdx = allRthBarsRow.rows.findIndex(b => b.low <= lv.level + 15 && b.high >= lv.level - 15);
             if (touchIdx === -1) continue;
             const touchBar = allRthBarsRow.rows[touchIdx];
@@ -8842,7 +8874,22 @@ export default function createACDRouter(io) {
       // `if (!active) return` below, since the whole point is to record touches on
       // polls where nothing live fired). SHADOW status only — never an alert.
       if (backfilledTouches.length > 0) {
-        const sessionEndStr = `${todayET} 13:00:00`;
+        // Cluster touch credit Phase 1 fix #1 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md, found
+        // 2026-08-25): this was unconditionally `${todayET} 13:00:00`, regardless of when
+        // the backfill actually detects the touch. Any early-touch backfill detected after
+        // 1PM ET got an already-past expires_at -> resolveSetupsByPrice/expireStaleSetups
+        // treat it as instantly expired (MARK_TO_MARKET/TIME_EXPIRED) rather than walking
+        // real subsequent bars, silently starving exactly the levels this mechanism exists
+        // to credit. Self-contained calc (not the computeExpiry()/fmtETStr() helpers further
+        // down -- both are const closures defined later in this handler's execution order,
+        // same temporal-dead-zone constraint as the suppressed-audit insert's auditSessionEnd
+        // a few hundred lines up, whose exact rollover-safe pattern this mirrors) -- real RTH
+        // close (4PM ET), rolled to next day if already past.
+        const btNowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        const btSessionEnd = new Date(btNowEt);
+        btSessionEnd.setHours(16, 0, 0, 0);
+        if (btSessionEnd <= btNowEt) btSessionEnd.setDate(btSessionEnd.getDate() + 1);
+        const sessionEndStr = `${btSessionEnd.getFullYear()}-${String(btSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(btSessionEnd.getDate()).padStart(2, '0')} ${String(btSessionEnd.getHours()).padStart(2, '0')}:${String(btSessionEnd.getMinutes()).padStart(2, '0')}:00`;
         (async () => {
           const btVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           for (const bt of backfilledTouches) {
@@ -9289,6 +9336,22 @@ export default function createACDRouter(io) {
           if (row) detectedAt = row.fired_at.slice(11, 16);
         }
         setupId    = row?.id;
+        // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
+        // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
+        // on the way to picking it this poll (the FLOOR_R2-loses-to-WEEKLY_OPEN case) --
+        // previously cluster_attributed_setups was only ever written onto a DIFFERENT poll's
+        // already-open anchor (clusterAlreadyFired), never onto the winner created THIS poll.
+        if (setupId && active.clusterSkippedTypes?.length) {
+          await query(`
+            UPDATE active_setups
+            SET cluster_attributed_setups = (
+              SELECT array_agg(DISTINCT t) FROM unnest(
+                COALESCE(cluster_attributed_setups, ARRAY[]::text[]) || $2::text[]
+              ) AS t
+            )
+            WHERE id = $1
+          `, [setupId, active.clusterSkippedTypes]).catch(() => {});
+        }
         detectedAt = detectedAt || firedTimeStr.slice(0, 5);
         persistedLevels = row ? {
           entry: row.entry_zone_low != null ? +row.entry_zone_low : active.entry,

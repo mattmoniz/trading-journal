@@ -502,6 +502,24 @@ export const CONDITIONAL_VARIANTS = {
     addedDate: '2026-07-21',
     monitorAtN: 20,
   },
+  // 7th trail variant (2026-08-26) -- the original 6 above were picked by an earlier
+  // backtest but never accumulated enough real live touches (0-18 of the required 20) to
+  // pass this mechanism's own MIN_N floor; confirmed none of them has ever produced a
+  // fresh BREAKEVEN_TRAIL_TEST row from real data. Found by re-scanning every currently
+  // real-eligible setup_type (12 clear MIN_N=20) against the actual trail-validation
+  // funnel: PD_POC_FADE_SHORT is the only survivor (real N=21, Tier B, trail=19.3pt,
+  // OOS EV +$30.31 vs a -$2.31 OOS fixed-target baseline). High-frequency real setups
+  // (IB_BEARISH real_n=147, IB_BULLISH real_n=68) were also tested and genuinely fail the
+  // OOS/plateau guardrails -- not a data-volume problem, a real distribution-shape one.
+  PD_POC_FADE_SHORT_TRAIL: {
+    baseType: 'PD_POC_FADE_SHORT',
+    direction: 'SHORT',
+    condition: 'unconditional — every PD_POC_FADE_SHORT touch (exit mechanism changes, not entry)',
+    backtestScript: 'scripts/backtest_breakeven_trail.mjs',
+    trailSignalName: 'B_PD_POC_FADE_SHORT',
+    addedDate: '2026-08-26',
+    monitorAtN: 20,
+  },
 };
 
 /**
