@@ -96,6 +96,8 @@
   #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
+  #vb-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #vb-filter-row .vb-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
   #timeline-stats span b { font-family: monospace; }
 
   /* Research & Monitoring -- SHADOW-only mechanism findings, same content/placement logic
@@ -120,6 +122,13 @@
   .badge.win { color: var(--green); background: rgba(34,197,94,0.12); }
   .badge.loss { color: var(--red); background: rgba(239,68,68,0.12); }
   .badge.other { color: var(--dim); background: rgba(148,163,184,0.1); }
+  /* Volume-building tracking tag (2026-08-28) -- deliberately NEUTRAL (slate, not green/red):
+     this signal has NOT been validated (walk-forward test failed out-of-sample, see
+     fade_roster_volume_building_walkforward_negative RESEARCH_CLAIM) -- it's a tracking marker
+     for accumulating more real data, not an endorsement of the trade. */
+  .vb-tag { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; }
+  .vb-tag.strong { color: #93c5fd; background: rgba(59,130,246,0.14); }
+  .vb-tag.mild { color: #94a3b8; background: rgba(148,163,184,0.08); }
 
   /* Modal */
   #modal-backdrop {
@@ -213,6 +222,7 @@
   <div id="timeline-head">
     <h2 id="timeline-title">Session Timeline</h2>
   </div>
+  <div id="vb-filter-row"></div>
   <div id="research-note"></div>
   <div id="timeline-stats"></div>
   <div id="timeline-list"><div class="loading">Loading…</div></div>
@@ -404,6 +414,13 @@ const COMMISSION_PER_TRADE = 2;
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
 let timelineFilter = localStorage.getItem('timelineFilter') || 'live'; // 'live' | 'all'
+// Volume-building tracking filter (2026-08-28, user request: "keep track of" the signal across
+// ALL setup types regardless of family, ahead of it possibly gating entries later). Purely a
+// client-side display filter on the already-fetched rows -- changing this NEVER affects what
+// fires. 'all' = no filter, 'agree' = both measures agree (median cutoff), 'strong' = both agree
+// AND clear the tighter p60 cutoff (the level this project's dose-response test found real,
+// still not walk-forward validated -- see fade_roster_volume_building_walkforward_negative).
+let vbFilter = localStorage.getItem('vbFilter') || 'all'; // 'all' | 'agree' | 'strong'
 
 async function loadTimeline() {
   try {
@@ -524,6 +541,12 @@ function setTimelineFilter(f) {
   renderTimeline();
 }
 
+function setVbFilter(f) {
+  vbFilter = f;
+  localStorage.setItem('vbFilter', f);
+  renderTimeline();
+}
+
 function renderTimeline() {
   const sessionDate = currentSessionDateET();
   // FIXED 2026-08-09: was showing every date /api/setups/today returned (today's RTH date
@@ -546,6 +569,7 @@ function renderTimeline() {
   const resolved = scoped
     .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
     .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
+    .filter(s => vbFilter === 'all' || (vbFilter === 'agree' && s.vol_building_signal?.agreesMedian) || (vbFilter === 'strong' && s.vol_building_signal?.agreesP60))
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
@@ -571,7 +595,28 @@ function renderTimeline() {
     'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + '</button>'
   ).join('');
   $('timeline-head').appendChild(toggle);
-  toggle.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setTimelineFilter(b.dataset.tf)));
+  // Click handled via delegation below (document-level listener) -- NOT attached per-button here.
+  // These buttons are recreated by innerHTML on every 20s loadTimeline() poll; a listener bound
+  // directly to a button can be destroyed mid-tap if a poll lands between touchstart and click,
+  // silently swallowing the tap (found live 2026-08-28, user reported "I see it but can't click
+  // on it" on the vol-building toggle -- same risk applies here, fixed for both at once).
+
+  // Volume-building tracking toggle (2026-08-28) -- pure display filter, never affects firing.
+  // Counts shown per option so it's obvious how much data exists at each bar before clicking.
+  const vbCountAll = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE')).length;
+  const vbCountAgree = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && s.vol_building_signal?.agreesMedian).length;
+  const vbCountStrong = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && s.vol_building_signal?.agreesP60).length;
+  const vbOptions = [['all', 'All', vbCountAll], ['agree', 'Building', vbCountAgree], ['strong', 'Strong', vbCountStrong]];
+  $('vb-filter-row').innerHTML =
+    '<span class="vb-label" title="Tracking only -- does not affect what fires. See the Vol tag on each row.">Vol Building</span>' +
+    '<div style="display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">' +
+    vbOptions.map(([val, label, count]) =>
+      '<button data-vf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
+      'background:' + (vbFilter === val ? 'rgba(59,130,246,0.25)' : 'rgba(15,23,42,0.8)') + ';' +
+      'color:' + (vbFilter === val ? '#93c5fd' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
+    ).join('') + '</div>';
+  // Click handled via delegation below (document-level listener) -- see comment on the
+  // Live/All toggle above for why per-button listeners are unreliable here.
 
   $('timeline-stats').innerHTML =
     '<span>Wins <b style="color:var(--green)">' + wins + '</b></span>' +
@@ -581,7 +626,13 @@ function renderTimeline() {
     '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + (wins + losses + (resolved.length - wins - losses)) + ' resolved">Comm <b class="mono" style="color:var(--dim)">-$' + commission.toFixed(0) + '</b></span>';
 
   if (resolved.length === 0) {
-    $('timeline-list').innerHTML = '<div class="loading">' + (timelineFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session') + '</div>';
+    // FIXED 2026-08-28 (DeepSeek code QA): this only checked timelineFilter, so filtering to
+    // "Building"/"Strong" with zero matches showed "No live trades fired yet this session" even
+    // when trades clearly had fired (visible in the stats above) -- read as the toggle being
+    // broken rather than an honest "nothing matches this filter" message.
+    const emptyMsg = vbFilter !== 'all' ? 'No trades match this Vol Building filter' :
+      timelineFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session';
+    $('timeline-list').innerHTML = '<div class="loading">' + emptyMsg + '</div>';
     return;
   }
 
@@ -597,10 +648,14 @@ function renderTimeline() {
     const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
     const timeLabel = to12Hour(time);
     const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
+    const vb = s.vol_building_signal;
+    const vbTag = vb?.agreesP60 ? '<span class="vb-tag strong" title="Both volume measures agree, above the tighter p60 cutoff -- tracking only, not yet validated">Vol++</span>' :
+      vb?.agreesMedian ? '<span class="vb-tag mild" title="Both volume measures agree, above median -- tracking only, not yet validated">Vol+</span>' : '';
     return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
+      vbTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -1045,6 +1100,19 @@ document.addEventListener('click', (e) => {
   if (!$('nav-menu').contains(e.target) && !$('hamburger-btn').contains(e.target)) {
     $('nav-menu').classList.remove('open');
   }
+});
+
+// Delegated click handler for the timeline toggles (Live/All, Vol Building). Both toggles'
+// buttons are recreated by innerHTML on every loadTimeline() poll (20s) -- a listener bound
+// directly to a button node is lost if that node gets replaced mid-tap, which reads to a user
+// as "I see it but can't click on it" (found live 2026-08-28). Binding to `document` once and
+// matching via closest() means the handler survives every re-render, since it's never attached
+// to the buttons themselves.
+document.addEventListener('click', (e) => {
+  const tfBtn = e.target.closest('[data-tf]');
+  if (tfBtn) { setTimelineFilter(tfBtn.dataset.tf); return; }
+  const vfBtn = e.target.closest('[data-vf]');
+  if (vfBtn) { setVbFilter(vfBtn.dataset.vf); return; }
 });
 
 // ---- Boot ----

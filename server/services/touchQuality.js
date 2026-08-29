@@ -57,4 +57,85 @@ function classifyTouch({ windowBars, direction, baseline, highVolZCutoff, gaveFu
   };
 }
 
-export { getVolumeBaseline, classifyTouch };
+// Volume-building signal (2026-08-28, docs/OPEN_THREADS.md's roster-wide volume-building
+// thread): does trading interest rise into a touch by TWO reference frames -- the existing
+// time-of-day-relative baseline above (is this loud for this historical clock-time) AND a
+// day-relative baseline (is this loud for how today itself has traded so far). Pooled
+// roster-wide across all real FADE fires, neither measure alone moved the hit rate, but
+// requiring BOTH to agree did (baseline WR=49.5%/EV=-$1.24 -> both-agree WR=51.7%/EV=$2.40,
+// tightened to a p60-both-agree cutoff: WR=54.3%/EV=$7.11 at N=105) -- see RESEARCH_CLAIMs
+// fade_roster_volume_building_pooled_vs_pertype, volz_day_relative_vs_timeofday_reference_frame,
+// fade_roster_volume_building_dose_response_cutoff. Wired live INFORMATIONAL ONLY via
+// active_setups.vol_building_signal -- does not gate/size anything yet, self-recalibrates
+// weekly via scripts/backtest_volume_building_signal.mjs.
+const VOL_BUILD_APPROACH_BARS = 10;
+
+function pearsonCorr(xs, ys) {
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let cov = 0, vx = 0, vy = 0;
+  for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (ys[i] - my); vx += (xs[i] - mx) ** 2; vy += (ys[i] - my) ** 2; }
+  return (vx > 0 && vy > 0) ? cov / Math.sqrt(vx * vy) : 0;
+}
+
+// sessionBars: chronological bars SINCE THIS SESSION'S OWN OPEN (RTH 9:30am or Globex 6pm)
+// through the current/touch bar, each { mod, volume }. touchIdx: index of the touch/current
+// bar within sessionBars. baseline: Map from getVolumeBaseline (mod -> {avg_vol, std_vol}).
+// Day-relative z at each bar uses only bars STRICTLY BEFORE it (no lookahead), matching the
+// backtest convention exactly.
+function computeVolumeBuildingMeasures(sessionBars, touchIdx, baseline) {
+  // FIXED 2026-08-28 (DeepSeek code QA, independently verified): this guard used to only require
+  // touchIdx >= VOL_BUILD_APPROACH_BARS (10), but the day-relative accumulator below only starts
+  // producing values once its own running count reaches 10 -- so for touchIdx 10-13 the
+  // approach-window day-relative measures NEVER had the required 5 values (always null despite
+  // passing the guard), and for touchIdx 14-19 the two "reference frames" were computed over
+  // different effective sample sizes (day-relative over fewer bars than time-of-day). Requiring
+  // touchIdx >= 2*VOL_BUILD_APPROACH_BARS guarantees the day-relative accumulator already has
+  // count>=10 at the FIRST bar of the approach window, so both measures cover the same full
+  // (VOL_BUILD_APPROACH_BARS+1)-bar window consistently.
+  if (touchIdx < 2 * VOL_BUILD_APPROACH_BARS) return { avgVolZ: null, volZTrend: null, avgDayVolZ: null, dayVolZTrend: null };
+  const dayVolZByIdx = new Array(touchIdx + 1).fill(null);
+  let sum = 0, sumSq = 0, count = 0;
+  for (let i = 0; i <= touchIdx; i++) {
+    if (count >= 10) {
+      const mean = sum / count;
+      const variance = Math.max(0, sumSq / count - mean * mean);
+      const std = Math.sqrt(variance);
+      if (std > 0) dayVolZByIdx[i] = (sessionBars[i].volume - mean) / std;
+    }
+    sum += sessionBars[i].volume;
+    sumSq += sessionBars[i].volume ** 2;
+    count++;
+  }
+
+  const volZs = [], dayVolZs = [];
+  for (let i = touchIdx - VOL_BUILD_APPROACH_BARS; i <= touchIdx; i++) {
+    const b = sessionBars[i];
+    const bl = baseline.get(b.mod);
+    if (bl && bl.std_vol > 0) volZs.push((b.volume - bl.avg_vol) / bl.std_vol);
+    if (dayVolZByIdx[i] != null) dayVolZs.push(dayVolZByIdx[i]);
+  }
+  const idxArr = (arr) => Array.from({ length: arr.length }, (_, i) => i);
+  return {
+    avgVolZ: volZs.length >= 5 ? volZs.reduce((a, b) => a + b, 0) / volZs.length : null,
+    volZTrend: volZs.length >= 5 ? pearsonCorr(idxArr(volZs), volZs) : null,
+    avgDayVolZ: dayVolZs.length >= 5 ? dayVolZs.reduce((a, b) => a + b, 0) / dayVolZs.length : null,
+    dayVolZTrend: dayVolZs.length >= 5 ? pearsonCorr(idxArr(dayVolZs), dayVolZs) : null,
+  };
+}
+
+// calib: { avgVolZMed, volZTrendMed, avgDayVolZMed, dayVolZTrendMed, avgVolZP60, volZTrendP60,
+// avgDayVolZP60, dayVolZTrendP60 } from the latest VOLUME_BUILDING_CALIBRATION row.
+function classifyVolumeBuilding(measures, calib) {
+  const { avgVolZ, volZTrend, avgDayVolZ, dayVolZTrend } = measures;
+  if ([avgVolZ, volZTrend, avgDayVolZ, dayVolZTrend].some(v => v == null) || !calib) {
+    return { ...measures, agreesMedian: null, agreesP60: null };
+  }
+  const timeOfDayMedian = avgVolZ > calib.avgVolZMed && volZTrend > calib.volZTrendMed;
+  const dayMedian = avgDayVolZ > calib.avgDayVolZMed && dayVolZTrend > calib.dayVolZTrendMed;
+  const timeOfDayP60 = avgVolZ > calib.avgVolZP60 && volZTrend > calib.volZTrendP60;
+  const dayP60 = avgDayVolZ > calib.avgDayVolZP60 && dayVolZTrend > calib.dayVolZTrendP60;
+  return { ...measures, agreesMedian: timeOfDayMedian && dayMedian, agreesP60: timeOfDayP60 && dayP60 };
+}
+
+export { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding };

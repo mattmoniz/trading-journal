@@ -59,6 +59,8 @@ import phaseChangeRouter from './routes/phaseChange.js';
 import calendarRouter from './routes/calendar.js';
 import { detectPhaseChange } from './services/phaseChangeDetector.js';
 import { detectMomentum60Trend } from './services/minuteBarSignalDetector.js';
+import { detectRthFlush } from './services/rthFlushDetector.js';
+import { detectGlobexFlush } from './services/globexFlushDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
@@ -1070,6 +1072,36 @@ httpServer.listen(PORT, () => {
     } catch (err) { console.error('[compute_levels_weekday] Cron error:', err.message); }
   }, { timezone: 'America/New_York' });
 
+  // 11:00 AM ET Mon-Fri: re-run compute_levels.js for TODAY, after Initial Balance closes.
+  // Found 2026-08-26 (auditing a liquidity-zones census dispatch): both automated
+  // compute_levels.js crons (the Sunday-9:30PM one above and the 8AM Mon-Fri one directly
+  // above) run BEFORE the trading day's own RTH session opens, so `computeLevelsForDate()`'s
+  // CURRENT-category same-day-forming levels (OR5/OR10/OR15/OR30_HIGH/LOW/MID,
+  // IB_HIGH/LOW/MID) can never satisfy their own `or_?.orh`/`ib?.h` guards at either cron's
+  // fire time -- that day's OR/IB literally hasn't formed yet. Confirmed via `acd_daily_log`/
+  // `price_bars_primary` both having correct data for every affected date, and a manual
+  // `node scripts/compute_levels.js <past-date>` immediately producing correct values --
+  // the function is fine, only the timing of the two existing crons is wrong for this one
+  // category. Silently produced a real ~2-week data gap (level_prices frozen at its
+  // 2026-08-12 value for OR5/IB, and OR10/15/30 stuck at their single one-time backfill row)
+  // that only affects historical/research reads of level_prices (`getLevelsForDate()`-style
+  // lookups in backtest/pilot scripts) -- NOT live trading, which computes OR/IB live from
+  // `acd_daily_log`/bars directly, never from this table. This cron does not replace either
+  // existing one (PD_*/PW_*/PY_*/VWAP-to-date etc. are still best refreshed pre-market) --
+  // it only exists to give the CURRENT-category levels one more pass once they can actually
+  // be computed for the day in progress. IB is the latest-forming of the six (10:30 AM
+  // close), so 11:00 AM leaves comfortable margin without waiting long into the session.
+  cron.schedule('0 11 * * 1-5', async () => {
+    try {
+      const { execSync } = await import('child_process');
+      await logProcess('COMPUTE_LEVELS_POST_IB', async () => {
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+        execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        return { count: 1 };
+      });
+    } catch (err) { console.error('[compute_levels_post_ib] Cron error:', err.message); }
+  }, { timezone: 'America/New_York' });
+
   // Value-area regime measurement layer (2026-07-31) — see docs/OPEN_THREADS.md's
   // 2026-07-31 entry. Pure tagging, no gating: computes today's true volume-weighted
   // value area at 7 lookbacks (into value_area_regime_snapshots) so every setup fired
@@ -1451,6 +1483,11 @@ httpServer.listen(PORT, () => {
       // MOMENTUM_60m_60m_TREND — see server/services/minuteBarSignalDetector.js header for why
       // this needed its own poller rather than the level-fade candidates array in acd.js
       detectMomentum60Trend(io).catch(() => {});
+      // RTH_FLUSH / GLOBEX_FLUSH — docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md sec 4.4-4.14.
+      // Own pollers for the same reason as MOMENTUM_60m_60m_TREND: a whole-session structural-
+      // break-then-consolidation pattern, not a price touching a fixed level.
+      detectRthFlush(io).catch(() => {});
+      detectGlobexFlush(io).catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 

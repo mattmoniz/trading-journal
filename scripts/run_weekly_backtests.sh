@@ -266,4 +266,22 @@ echo "=== Weekly backtest run: $(date) ==="
 # wire anything live.
 /usr/bin/node scripts/pilot_momentum60_ib_break_gate.mjs
 
+# RTH_FLUSH_LONG/SHORT + GLOBEX_FLUSH_LONG/SHORT calibration (2026-08-27) --
+# docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md sec 4.4-4.14. Writes SETUP_STATUS + OPTIMAL_STOP
+# rows read live by server/services/rthFlushDetector.js / globexFlushDetector.js. RTH side is
+# solid (N=336, clean/stable). GLOBEX side was found to have a real session-boundary bug
+# (OPEN_DECISION globex_session_boundary_4to5pm_misattribution_bug) that materially weakened its
+# backtested edge after the fix -- wired SHADOW-only, self-recalibrates as real forward data
+# accumulates.
+/usr/bin/node scripts/backtest_flush_patterns.mjs
+
+# VOLUME_BUILDING_CALIBRATION/ROSTER_WIDE_FADE (2026-08-28) -- recalibrates the median and p60
+# cutoffs for the volume-building signal wired live INFORMATIONAL-ONLY onto every real FADE fire
+# (active_setups.vol_building_signal, both RTH and Globex insert paths in acd.js). Does not
+# gate/size anything yet -- self-recalibrates as real forward data accumulates. See
+# docs/OPEN_THREADS.md's 2026-08-28 entry and RESEARCH_CLAIMs fade_roster_volume_building_
+# pooled_vs_pertype / volz_day_relative_vs_timeofday_reference_frame / fade_roster_volume_
+# building_dose_response_cutoff.
+/usr/bin/node scripts/backtest_volume_building_signal.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

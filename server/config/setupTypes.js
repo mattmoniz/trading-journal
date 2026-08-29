@@ -163,6 +163,13 @@ const CONTINUATION_TYPES = new Set([
   // 2026-08-10 (the only one of 181 real setup_types this mapping missed) while building
   // bet_class (roadmap I3) -- added here rather than left to fall through to UNCLASSIFIED.
   'VWAP_RECLAIM_SHORT',
+  // RTH_FLUSH_*/GLOBEX_FLUSH_* (2026-08-27, docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md
+  // sec 4.4-4.14): enters in whichever direction a post-flush consolidation resolves --
+  // a bet that the move CONTINUES in its resolved direction, not a fade of a touched level.
+  // GLOBEX_FLUSH_REVERSAL_LONG/SHORT (added 2026-08-28) are deliberately NOT here -- see
+  // MEAN_REVERSION_OVERRIDE_TYPES below, they trade the OPPOSITE of the departure direction
+  // (a reversion back toward value), matching C_REVERSAL_LONG/SHORT's own classification.
+  'RTH_FLUSH_LONG', 'RTH_FLUSH_SHORT', 'GLOBEX_FLUSH_LONG', 'GLOBEX_FLUSH_SHORT',
 ]);
 const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
   'FAILED_AUCTION_LONG', 'FAILED_AUCTION_SHORT',
@@ -176,6 +183,10 @@ const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
   'GLOBEX_VWAP_MAGNET_LONG', 'GLOBEX_VWAP_MAGNET_SHORT',
   'MOMENTUM_60m_60m_BALANCE_FADE',
   'C_REVERSAL_LONG', 'C_REVERSAL_SHORT',
+  // GLOBEX_FLUSH_REVERSAL_*: departure direction and resolution direction disagree -- price
+  // leaves value one way, then reverts back through/toward it. A reversion bet, same shape as
+  // C_REVERSAL_LONG/SHORT above, not a continuation of the original departure.
+  'GLOBEX_FLUSH_REVERSAL_LONG', 'GLOBEX_FLUSH_REVERSAL_SHORT',
 ]);
 
 export const inferStrategyFamily = (setupType) => {

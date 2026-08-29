@@ -10,7 +10,7 @@ import { query } from '../db.js';
 import { computeBar6Checkpoint } from '../services/maeMfeReplay.js';
 import { computeDirImbalance } from '../services/entryPressureService.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
-import { getVolumeBaseline, classifyTouch } from '../services/touchQuality.js';
+import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
@@ -423,26 +423,96 @@ async function getTouchQualityBaseline(tradeDate) {
   return setCached(tradeDate, 'touchQualityBaseline', baseline);
 }
 
+// Latest VOLUME_BUILDING_CALIBRATION/ROSTER_WIDE_FADE row (scripts/backtest_volume_building_
+// signal.mjs, weekly). Cached per day -- recalibration only runs weekly, no reason to hit the
+// DB on every 15s poll. Returns null if never calibrated yet (classifyVolumeBuilding() handles
+// null calib by returning agreesMedian/agreesP60: null, never throwing).
+async function getVolumeBuildingCalibration(tradeDate) {
+  const cached = getCached(tradeDate, 'volBuildingCalib', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const res = await query(`
+    SELECT notes FROM performance_audit
+    WHERE signal_type='VOLUME_BUILDING_CALIBRATION' AND signal_name='ROSTER_WIDE_FADE'
+    ORDER BY run_date DESC LIMIT 1
+  `);
+  let calib = null;
+  try { calib = res.rows[0]?.notes ? JSON.parse(res.rows[0].notes) : null; } catch (_) { calib = null; }
+  return setCached(tradeDate, 'volBuildingCalib', calib);
+}
+
+// Bars since the most recent session-open boundary (RTH 9:30am=mod570, Globex 6pm=mod1080)
+// through NOW() -- bounded query (ts<=NOW() upper bound per the price_bars_primary convention).
+// FIXED 2026-08-28: the RTH candidates loop previously reused allRthBarsRow.rows for this, which
+// is scoped to the RTH window and stops growing at 4PM close -- any candidate firing during the
+// 4-6PM no-new-entries dead zone (a routine, expected daily event, not rare) was reading the
+// SAME frozen last bar for the entire 2-hour window regardless of its own real fired_at time.
+// Confirmed live: 17 same-afternoon dead-zone SHADOW fires all showed byte-identical volume
+// measures. Querying fresh through NOW() (matching the Globex site's own pattern) fixes both.
+async function getSessionBarsSinceOpen(boundaryMod) {
+  // FIXED 2026-08-28 (DeepSeek code QA, independently verified): the inner boundary-bar lookup
+  // had no date floor, so a missing session-open bar (a real, if occasional, data gap) would
+  // silently match a PRIOR day's boundary bar instead, pulling multiple sessions' worth of bars
+  // into what's supposed to be "this session only" -- corrupting the day-relative measures for
+  // every fire that session. Bounding to the last 20 hours (a session is at most ~15h) means a
+  // missing boundary bar now correctly yields zero rows (caught by the caller's <11-bar guard)
+  // instead of silently spanning sessions.
+  const res = await query(`
+    SELECT COALESCE(bid_volume,0)+COALESCE(ask_volume,0) as volume,
+           (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as mod
+    FROM price_bars_primary
+    WHERE symbol='NQ' AND ts >= (
+      SELECT ts FROM price_bars_primary
+      WHERE symbol='NQ' AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int = $1
+        AND ts <= NOW() AND ts >= NOW() - INTERVAL '20 hours'
+      ORDER BY ts DESC LIMIT 1
+    ) AND ts <= NOW()
+    ORDER BY ts ASC
+  `, [boundaryMod]);
+  return res.rows.map(b => ({ mod: b.mod, volume: Number(b.volume) }));
+}
+
+// sessionBars: chronological bars since THIS candidate's session open through now/the touch
+// bar, each needs { mod, volume } at minimum (extra fields are ignored).
+// Returns the classifyVolumeBuilding() shape, or a fully-null shape if too little session
+// history exists yet (mirrors computeVolumeBuildingMeasures' own touchIdx>=2*APPROACH_BARS guard,
+// updated 2026-08-28 alongside that fix -- short-circuits before the baseline/calibration queries
+// rather than making them and getting nulls back anyway).
+async function computeLiveVolumeBuildingSignal(tradeDate, sessionBars) {
+  if (!sessionBars || sessionBars.length < 21) return { avgVolZ: null, volZTrend: null, avgDayVolZ: null, dayVolZTrend: null, agreesMedian: null, agreesP60: null };
+  const [baseline, calib] = await Promise.all([
+    getTouchQualityBaseline(tradeDate),
+    getVolumeBuildingCalibration(tradeDate),
+  ]);
+  const touchIdx = sessionBars.length - 1;
+  const measures = computeVolumeBuildingMeasures(sessionBars, touchIdx, baseline);
+  return classifyVolumeBuilding(measures, calib);
+}
+
 // Rolling 20-day, per-minute-of-day baseline for trailing-5-bar net price movement
 // ("pace") — same convention as getVolumeBaseline, just on |close - close_5| instead of
 // volume. Backs the STACK_VOL_BREAK_LIVE pace factor (RESEARCH_CLAIM
 // loose_confluence_pace_rth_promising_not_confirmed) — reused directly from
 // scratch/pilot_loose_confluence_pace.mjs's getPaceBaseline(), not reimplemented.
-export async function getPaceBaseline(tradeDate) {
-  const cached = getCached(tradeDate, 'paceBaseline', DAY_CACHE_TTL);
+// lag: bar-lag for the net-move window (default 5, matches the original STACK_VOL_BREAK_LIVE
+// caller). A second caller (fade_touch_quality_test_slice_filter_active_setups, 2026-08-27)
+// needs a 10-bar window to match what was actually backtested — cached separately per lag so
+// neither caller's baseline contaminates the other's.
+export async function getPaceBaseline(tradeDate, lag = 5) {
+  const cacheKey = lag === 5 ? 'paceBaseline' : `paceBaseline${lag}`;
+  const cached = getCached(tradeDate, cacheKey, DAY_CACHE_TTL);
   if (cached) return cached;
   const res = await query(`
     WITH raw_bars AS (
       SELECT ts, (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod, close,
-        LAG(close, 5) OVER (PARTITION BY ts::date ORDER BY ts) as close_5
+        LAG(close, $2) OVER (PARTITION BY ts::date ORDER BY ts) as close_lag
       FROM price_bars_primary
       WHERE ts::date >= $1::date - INTERVAL '20 days' AND ts::date < $1::date AND symbol = 'NQ'
     )
-    SELECT mod, AVG(ABS(close - close_5))::float as avg_pace, STDDEV(ABS(close - close_5))::float as std_pace
-    FROM raw_bars WHERE close_5 IS NOT NULL GROUP BY 1
-  `, [tradeDate]);
+    SELECT mod, AVG(ABS(close - close_lag))::float as avg_pace, STDDEV(ABS(close - close_lag))::float as std_pace
+    FROM raw_bars WHERE close_lag IS NOT NULL GROUP BY 1
+  `, [tradeDate, lag]);
   const baseline = new Map(res.rows.map(r => [r.mod, r]));
-  return setCached(tradeDate, 'paceBaseline', baseline);
+  return setCached(tradeDate, cacheKey, baseline);
 }
 
 let structuralBackfillJob = { status: 'idle', done: 0, total: 0, eventsAdded: 0, error: null };
@@ -1771,17 +1841,22 @@ async function detectGlobexSetup(sessionDate, io) {
       // only, same as RTH, since this app has no broker execution capability.
       const regimeStamp = computeRegimeStamp(entry, await getValueAreaRegimeMap(sessionDate));
       const fireTags = await computeFireTags(sessionDate, 'GLOBEX', etNow.getHours() * 60 + etNow.getMinutes());
+      // Volume-building signal (2026-08-28, informational only -- see touchQuality.js's
+      // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Bars since Globex
+      // open (18:00 ET) through now, correctly spans midnight (getSessionBarsSinceOpen above).
+      const globexVbSessionBars = await getSessionBarsSinceOpen(1080);
+      const globexVolBuildingSignal = await computeLiveVolumeBuildingSignal(sessionDate, globexVbSessionBars);
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
-          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal
         ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
           ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
           ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-          $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+          $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
@@ -1806,7 +1881,7 @@ async function detectGlobexSetup(sessionDate, io) {
           // globex_ambiguous_names_need_session_backfill for the
           // still-open historical-data side of this (existing rows' bet_class not yet
           // corrected retroactively -- this fix only affects future fires).
-          'GLOBEX_LEVEL']);
+          'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
@@ -7489,6 +7564,59 @@ export default function createACDRouter(io) {
               }
             }
 
+            // Touch-quality "TEST" approach: slow pace + rising/building volume over the last
+            // 10 bars into the touch (price genuinely tested the level) vs. "SLICE" (fast pace,
+            // no volume build — price sliced through). RESEARCH_CLAIM
+            // fade_touch_quality_test_slice_filter_active_setups (2026-08-27, PROVISIONAL —
+            // N=28 real but day-clustered though chronologically stable/no sign flip). Found on
+            // ACTIVE-status setup_types specifically: TEST touches WR=75.0%/EV=$49.94 vs
+            // ACTIVE-overall EV=$17.50; the same filter did NOT show a real edge on
+            // SUPPRESS/THIN_N types, so it's scoped to ACTIVE only below, not roster-wide.
+            // User's explicit 2026-08-27 call: wire this now (as an experimental size-up, not
+            // gated behind further rigor) rather than hold for more real N — SHADOW/informational
+            // findings in this app don't need trading-real-money-grade proof before being tried.
+            // Zero-delay-cost, matching every other touch-quality factor in this file — computed
+            // off bars strictly at/before the touch bar (the backtest's own methodology fix:
+            // anchor on the touch bar itself, never on a later fired_at that can lag it).
+            // Cutoffs are 0 (above/below this bar's own seasonal-normal pace, and volume
+            // literally rising vs falling) rather than the backtest's sample median, since 0 is
+            // the natural, non-stale zero-point for a z-score/correlation — not an inherited
+            // static literal that would need manual recalibration as data accumulates.
+            let touchQualityTest = false, touchQualitySlice = false;
+            if (allRthBarsRow.rows.length >= 10) {
+              const _tqBars = allRthBarsRow.rows.slice(-10);
+              const _tqVolBaseline = await getTouchQualityBaseline(todayET);
+              const _tqZs = [];
+              _tqBars.forEach((b, idx) => {
+                const _tqBl = _tqVolBaseline.get(Number(b.et_min));
+                if (_tqBl && _tqBl.std_vol > 0) {
+                  const _tqVol = (b.bid_vol || 0) + (b.ask_vol || 0);
+                  _tqZs.push({ idx, z: (_tqVol - _tqBl.avg_vol) / _tqBl.std_vol });
+                }
+              });
+              if (_tqZs.length >= 5) {
+                const _tqMeanIdx = _tqZs.reduce((s, p) => s + p.idx, 0) / _tqZs.length;
+                const _tqMeanZ = _tqZs.reduce((s, p) => s + p.z, 0) / _tqZs.length;
+                let _tqCov = 0, _tqVarIdx = 0, _tqVarZ = 0;
+                for (const p of _tqZs) {
+                  _tqCov += (p.idx - _tqMeanIdx) * (p.z - _tqMeanZ);
+                  _tqVarIdx += (p.idx - _tqMeanIdx) ** 2;
+                  _tqVarZ += (p.z - _tqMeanZ) ** 2;
+                }
+                const _tqVolZTrend = (_tqVarIdx > 0 && _tqVarZ > 0) ? _tqCov / Math.sqrt(_tqVarIdx * _tqVarZ) : 0;
+                const _tqPaceBaseline10 = await getPaceBaseline(todayET, 10);
+                const _tqEntryBar = _tqBars[_tqBars.length - 1];
+                const _tqPaceBl = _tqPaceBaseline10.get(Number(_tqEntryBar.et_min));
+                if (_tqPaceBl && _tqPaceBl.std_pace > 0) {
+                  const _tqNetPace = Math.abs(_tqEntryBar.close - _tqBars[0].close);
+                  const _tqPaceZ = (_tqNetPace - _tqPaceBl.avg_pace) / _tqPaceBl.std_pace;
+                  const _tqBuilding = _tqMeanZ > 0 && _tqVolZTrend > 0;
+                  touchQualityTest = _tqPaceZ <= 0 && _tqBuilding;
+                  touchQualitySlice = _tqPaceZ > 0 && !_tqBuilding;
+                }
+              }
+            }
+
             // Elite zone: TURBULENT day + fade in IB direction + intraday range confirmation.
             // Research 2026-07-05: range >= 20d avg → 79.99% WR N=39; range < avg → 67.67% WR N=21.
             // turbConfirmed gates out the ~44% of TURBULENT calls that are false (classifier 20% accuracy).
@@ -7643,6 +7771,8 @@ export default function createACDRouter(io) {
                 deltaNeutral: !!_lfDeltaNeutral,
                 deltaHigh: !!_lfDeltaHigh,
                 sessionConflict: !!sessionConflictFor(dir),
+                touchQualityTest: !!touchQualityTest,
+                touchQualitySlice: !!touchQualitySlice,
               },
               sizeMultiplier: (() => {
                 let mult = 1.0;
@@ -7736,6 +7866,15 @@ export default function createACDRouter(io) {
                 // day-type effect. User decision 2026-07-16: extend the existing IB-only flag to
                 // level-fades and fold into sizeMultiplier, not suppress outright.
                 if (sessionConflictFor(dir)) mult = Math.max(mult - 0.25, 0.25);
+                // Touch-quality TEST approach (slow pace + building volume into the touch),
+                // ACTIVE-status setup_types only — RESEARCH_CLAIM
+                // fade_touch_quality_test_slice_filter_active_setups (PROVISIONAL, N=28).
+                // Deliberately NOT applied to SUPPRESS/THIN_N types — the same test found no
+                // real edge there (EV=$0.85 vs -$5.77 baseline, not worth reversing a
+                // suppression call over). Wired experimental per user's explicit 2026-08-27
+                // decision — SHADOW/informational findings here don't need full rigor-clean
+                // proof before being tried, unlike a change to a live SUPPRESS/ACTIVE gate.
+                if (touchQualityTest && !liveStats._suppressedSetups?.has(type)) mult = Math.min(mult + 0.15, 1.5);
                 // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
                 // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
                 if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
@@ -7865,18 +8004,27 @@ export default function createACDRouter(io) {
               // and never reach the wider-target branch in resolveSetupsByPrice().
               const auditWiderTargetMult = (!auditTrailVariant?.trailSignalName
                 && type !== 'ABSORPTION_LONG' && !type.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null;
+              // Volume-building signal (2026-08-28, informational only -- see touchQuality.js's
+              // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment): stamped on
+              // every real touch, including SHADOW, since this SHADOW population is exactly what
+              // scripts/backtest_volume_building_signal.mjs's weekly recalibration reads back.
+              // Bars since RTH open (9:30am) through now, NOT allRthBarsRow.rows -- that array is
+              // scoped to the RTH window and freezes at 4PM close, which silently broke every
+              // dead-zone (4-6PM) SHADOW fire's measurement until fixed the same day.
+              const auditVbSessionBars = await getSessionBarsSinceOpen(570);
+              const auditVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, auditVbSessionBars);
               await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   historical_win_rate, historical_sessions, runner_trail_width, wider_target_mult,
-                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -7898,6 +8046,7 @@ export default function createACDRouter(io) {
                 ...regimeStampValues(auditRegimeStamp),
                 ...fireTagValues(auditFireTags),
                 getBetClass(type),
+                JSON.stringify(auditVolBuildingSignal),
               ]).catch(() => {});
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -8906,15 +9055,25 @@ export default function createACDRouter(io) {
               // same-poll backfill of an earlier-in-the-session touch) -- use it, not the
               // outer etMin, so minutes_from_open reflects when the touch actually happened.
               const btFireTags = await computeFireTags(todayET, 'RTH', bt.etMin);
+              // Volume-building signal, sliced to bars up to bt.etMin ONLY (the touch's own
+              // earlier time, not "now") -- this is a same-poll backfill of an earlier touch, so
+              // using the full current allRthBarsRow.rows array here would leak bars from AFTER
+              // the touch into the measure (the no-lookahead hard rule).
+              const btVbEndIdx = allRthBarsRow.rows.findIndex(b => b.et_min === bt.etMin);
+              const btVbSessionBars = btVbEndIdx >= 0
+                ? allRthBarsRow.rows.slice(0, btVbEndIdx + 1).map(b => ({ mod: b.et_min, volume: (b.bid_vol || 0) + (b.ask_vol || 0) }))
+                : null;
+              const btVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, btVbSessionBars);
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult)
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
@@ -8930,6 +9089,7 @@ export default function createACDRouter(io) {
                 // set runner_trail_width for them either, separate from this task), so skip
                 // wider-target tagging for them rather than double-flag a row.
                 CONDITIONAL_VARIANTS[bt.type]?.trailSignalName != null ? null : WIDER_TARGET_MULT,
+                JSON.stringify(btVolBuildingSignal),
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -9273,6 +9433,12 @@ export default function createACDRouter(io) {
         } else {
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const fireTags = await computeFireTags(todayET, 'RTH', etMin);
+        // Volume-building signal (2026-08-28, informational only -- see touchQuality.js's
+        // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Bars since RTH
+        // open through now, not the frozen allRthBarsRow.rows (see auditVbSessionBars comment
+        // above for the dead-zone freeze bug this avoids).
+        const activeVbSessionBars = await getSessionBarsSinceOpen(570);
+        const activeVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, activeVbSessionBars);
         const ins = await query(`
           INSERT INTO active_setups (
             trade_date, setup_type, fired_at, expires_at, status, origin_status,
@@ -9284,12 +9450,12 @@ export default function createACDRouter(io) {
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
             ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult,
-            size_factors_at_detection
+            size_factors_at_detection, vol_building_signal
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -9322,6 +9488,7 @@ export default function createACDRouter(io) {
           // than one exit-mechanism flag" invariant.
           !isTrailMechanism ? WIDER_TARGET_MULT : null,
           active.sizeFactorsAtDetection ? JSON.stringify(active.sizeFactorsAtDetection) : null,
+          JSON.stringify(activeVolBuildingSignal),
         ]);
         let row = ins.rows[0];
         if (!row) {
