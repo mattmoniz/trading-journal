@@ -5339,22 +5339,25 @@ export default function createACDRouter(io) {
               description: conflicting
                 ? (isBull
                   ? `IB closed bullish but A Up was tested and rejected before 10:00 — conflicting signals. Half conviction only: smaller size, wider stop tolerance.`
-                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. On TURBULENT: strongest. EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`)
+                  : `IB closed bearish but A Down was tested and rejected before 10:00 — conflicting signals. Half conviction only.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. EXECUTION: Lean short on rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`)
                 : (isBull
-                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${_ibLS?._edgeText?.('IB_BULLISH') ?? 'not yet calibrated'} overall. TREND days: strongest. BALANCE: suppressed (below breakeven). EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
-                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. TURBULENT: strongest. BALANCE: suppressed. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
+                  ? `IB closed ${(ibClose - ibMid).toFixed(0)}pts above midpoint with ask volume dominating (${totalAsk.toLocaleString()} vs ${totalBid.toLocaleString()} bid). Buyers controlled the initial balance.\n\nEDGE: IB_BULLISH ${_ibLS?._edgeText?.('IB_BULLISH') ?? 'not yet calibrated'} overall. EXECUTION: Buy pullbacks to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt below entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`
+                  : `IB closed ${(ibMid - ibClose).toFixed(0)}pts below midpoint with bid volume dominating (${totalBid.toLocaleString()} vs ${totalAsk.toLocaleString()} ask). Sellers controlled the initial balance.\n\nEDGE: IB_BEARISH ${_ibLS?._edgeText?.('IB_BEARISH') ?? 'not yet calibrated'} overall. EXECUTION: Short rallies to IB midpoint (${Math.round(ibMid)}). Stop ${ibStopPts}pt above entry (${stop}). Target ${ibTargetPts}pt sweep-optimal.${nearPD2VA ? '\n\n✅ AT PD-2 VA CONFLUENCE — higher conviction.' : ''}`),
               history: await getHistory(nl30State === 'BULLISH' ? 'TRENDING_UP' : nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE'),
-              // Verified live 2026-07-14 (docs/OPEN_THREADS.md has the incident writeup) — the
-              // previous comment here claiming IB_BULLISH TREND was "+$20 EV solid" was stale/
-              // wrong; real numbers are BALANCE N=53 EV=-$47, TREND N=34 EV=-$16, TURBULENT
-              // N=19 EV=+$4 (thin). No day-type clears the bar — IB_BULLISH is now fully
-              // SUPPRESSed via backtest_setup_status.mjs's DAY_TYPE_CONDITIONAL check, so this
-              // tier label is moot for it (ibSetup gets nulled before use either way).
-              // IB_BEARISH: BALANCE N=53 EV=-$15, TREND N=18 EV=-$64, TURBULENT N=30 EV=+$78
-              // (genuinely strong) — correctly gated to fire only on TURBULENT.
-              tier: isBull
-                ? (dtClass === 'TREND' ? 'SOLID' : dtClass === 'TURBULENT' ? 'MARGINAL' : 'WEAK')
-                : (dtClass === 'TURBULENT' ? 'SOLID' : dtClass === 'TREND' ? 'WEAK' : 'MARGINAL'),
+              // No `tier` field here (removed 2026-08-31, docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md
+              // Part 1 item 2) — it was a dtClass-keyed ternary that always evaluated to the
+              // same value (dtClass is null at this point in the live session; acd_daily_log.day_type
+              // isn't written until 8:20 PM ET, see OPEN_DECISION ib_daytype_calibration_structurally_unreachable),
+              // so every live IB_BULLISH fire showed tier='WEAK' and every IB_BEARISH fire showed
+              // tier='MARGINAL' regardless of actual conditions. Grepped: no frontend component
+              // reads this setup's `.tier` field, so removing it is a pure no-op on display today.
+              // The static "TREND days: strongest"/"TURBULENT: strongest. BALANCE: suppressed"
+              // description claims above are also removed for the same reason — not computed
+              // from anything live, and this file's own comment history shows the real "best
+              // day-type" answer has flipped 3 times across independent audits (noise, not a
+              // stable effect). The already-live `_edgeText()` call above still gives the real,
+              // data-derived blended-EV summary; a real day-type breakdown needs the structural
+              // fix tracked in the redesign spec, not a hand-typed replacement here.
             };
             // Session-bias conflict flag — appended post-construction rather than woven into
             // the description ternary above, to avoid touching that already-complex string

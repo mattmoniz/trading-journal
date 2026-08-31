@@ -40,10 +40,18 @@ only genuine trend-continuation bets in a ~118/122-fade roster, matching the use
 breakout-trading preference — a real reason to test properly, not a guarantee of success given
 the priors.
 
-Not started. Suggested order: cheap tier/text fix now (separable, low-risk) → DeepSeek design
-critique on Idea 1 → signal-level forward-return pre-test → only then revisit the original
-day-type-gate question, since it may not transfer if the entry signal is replaced entirely.
-`OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
+**Step 1 shipped same session**: removed the dead `tier` field (`server/routes/acd.js`, a
+dtClass-keyed ternary that always evaluated to the same value — dtClass is null at this point in
+the live session, so every live IB_BULLISH fire showed `tier='WEAK'`, every IB_BEARISH fire
+showed `tier='MARGINAL'`, regardless of actual conditions) and the two hardcoded "TREND days:
+strongest"/"TURBULENT: strongest. BALANCE: suppressed" description claims (unverified static
+text, contradicted by real data). Grepped first to confirm no frontend component reads this
+setup's `.tier` field — pure no-op on display. The live `_edgeText()` call still gives the real
+blended-EV summary. `node --check` + `eslint` clean.
+
+Remaining, not started: DeepSeek design critique on Idea 1 → signal-level forward-return
+pre-test → only then revisit the original day-type-gate question, since it may not transfer if
+the entry signal is replaced entirely. `OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
 
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
 

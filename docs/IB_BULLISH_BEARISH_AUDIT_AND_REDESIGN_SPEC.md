@@ -17,14 +17,17 @@ before touching either setup type again.
    `acd_daily_log.day_type`) is null essentially every time IB closes (~10:30 ET; the column
    isn't populated until 8:20 PM ET), so the day-type-specific stop/target lookup almost always
    falls through to the blended row.
-2. **NEW this session — the live alert's own `tier` label is a dead constant, not a live
-   signal.** `acd.js` ~5355-5357: `tier = isBull ? (dtClass==='TREND' ? 'SOLID' : dtClass==='TURBULENT' ? 'MARGINAL' : 'WEAK') : (dtClass==='TURBULENT' ? 'SOLID' : dtClass==='TREND' ? 'WEAK' : 'MARGINAL')`.
-   Since `dtClass` is null when this evaluates, this collapses to the SAME value every time:
-   every live IB_BULLISH fire shows `tier='WEAK'`, every IB_BEARISH fire shows `tier='MARGINAL'`,
-   regardless of actual conditions. Not a bug that sometimes misfires — it never varies.
-3. **NEW this session — the alert's description text hardcodes an empirically wrong claim.**
-   `acd.js` ~5344-5345: IB_BULLISH's description asserts *"TREND days: strongest. BALANCE:
-   suppressed"*; IB_BEARISH's asserts *"TURBULENT: strongest. BALANCE: suppressed"* — static
+2. ~~**NEW this session — the live alert's own `tier` label is a dead constant, not a live
+   signal.**~~ **FIXED 2026-08-31** (see "Suggested next step" #1 below). Was `acd.js` ~5355-5357:
+   `tier = isBull ? (dtClass==='TREND' ? 'SOLID' : dtClass==='TURBULENT' ? 'MARGINAL' : 'WEAK') : (dtClass==='TURBULENT' ? 'SOLID' : dtClass==='TREND' ? 'WEAK' : 'MARGINAL')`.
+   Since `dtClass` is null when this evaluated, this collapsed to the SAME value every time:
+   every live IB_BULLISH fire showed `tier='WEAK'`, every IB_BEARISH fire showed `tier='MARGINAL'`,
+   regardless of actual conditions. Not a bug that sometimes misfired — it never varied. Removed
+   entirely rather than replaced, since no frontend component read it.
+3. ~~**NEW this session — the alert's description text hardcodes an empirically wrong claim.**~~
+   **FIXED 2026-08-31.** Was `acd.js` ~5344-5345: IB_BULLISH's description asserted *"TREND
+   days: strongest. BALANCE: suppressed"*; IB_BEARISH's asserted *"TURBULENT: strongest. BALANCE:
+   suppressed"* — static
    strings, not computed from anything live. Real (`origin_status='ACTIVE'`) day-type breakdown
    pulled live this session (see below) shows the **opposite** for IB_BEARISH: real `TREND` is
    its one genuinely decent bucket; real `TURBULENT` loses money.
@@ -266,9 +269,11 @@ properly; not worth assuming either way going in.
 
 ## Suggested next step
 
-1. **Do the cheap fix first** — remove the hardcoded `tier`/description claims from the live
-   alert (Part 1, item 1). Low risk, addresses an actively-misleading display today, doesn't
-   require anything else in this doc to be resolved first.
+1. **DONE 2026-08-31** — removed the hardcoded `tier`/description claims from the live alert
+   (Part 1, item 1). `server/routes/acd.js`'s ibSetup construction no longer sets a `tier` field
+   (confirmed via grep that no frontend component read it) and the description no longer asserts
+   "TREND days: strongest"/"TURBULENT: strongest. BALANCE: suppressed" — the live `_edgeText()`
+   call still supplies the real blended-EV summary. Everything below is still open.
 2. **Dispatch this doc (not code) to DeepSeek for a design critique**, per the 3-phase workflow —
    especially the Idea 1 mechanics and the confound-control plan, given how much is already
    riding on getting the rigor right (two real negative priors for this shape of idea).
