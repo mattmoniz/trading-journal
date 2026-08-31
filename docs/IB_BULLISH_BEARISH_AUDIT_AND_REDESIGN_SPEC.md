@@ -245,6 +245,113 @@ as "driving" (the drive-confirmation distance) — both should be rolling, self-
 distribution-derived values (e.g. relative to recent ATR/IB range), not hand-picked constants,
 once the basic pattern is proven worth tuning further.
 
+## DeepSeek design critique (2026-08-31) — incorporated, Idea 1 revised
+
+Dispatched this doc (plan only, no code) to DeepSeek per the suggested next step below. Audited
+before acting on it per the standing "audit all model output" rule — DeepSeek's "bottom line"
+claimed a hard contradiction between Idea 1's self-recalibrating retest tolerance and Idea 3
+deferring self-recalibration. **That specific claim is a misread**: Idea 3's own text already
+says the retest tolerance was "folded into Idea 1... from the start" and only defers the OTHER
+two parameters (break-distance, drive-confirmation-distance). Corrected below; everything else
+in the critique checked out as sound and is incorporated as the new version of Idea 1's spec.
+
+**Resolved definitions (were underspecified, each one would have let an implementer silently
+sample a different population):**
+- **Bar timeframe**: must be stated explicitly before any code is written (1-min vs 5-min changes
+  what "retest bar's low" and "drive confirmation distance" even mean). Decide at build time, not
+  deferred.
+- **First eligible break bar**: the first bar whose *timestamp* > IB close (10:30 ET) — not the
+  10:30 bar itself, and not ambiguous about straddling bars.
+- **Break = a CLOSE below `ibLowToday`** (bearish arm) / above `ibHighToday` (bullish arm, NOT
+  `ibClose`/`ibMid` — those are the dead live code's fields, not the new boundary). A wick-only
+  low print below the level does not count — a close-below is a meaningfully stronger, less noisy
+  event than a wick, and the two must not be conflated.
+- **Retest tolerance is a FIXED fraction of the IB's own range**, computed at 10:30 ET (the IB is
+  complete by then, so this is deterministic and look-ahead-free) — NOT "recent ATR-relative" for
+  this first version. ATR-relative is deferred to Idea 3 alongside the other two parameters,
+  specifically because a trailing-ATR window risks including the current/retest bar and
+  introducing look-ahead if built carelessly. This resolves the misread "contradiction" cleanly:
+  Idea 1 ships with one fixed, provably look-ahead-free tolerance; Idea 3 later makes it (and the
+  other two params) continuous/self-recalibrating once the basic pattern is validated.
+- **"Decisively" back above the boundary** must be a stated rule (one close above? by more than
+  the tolerance? N consecutive closes?) before it can distinguish "valid rejection" from "failed
+  break." Pick one, document it, sweep/plateau it like any other parameter.
+- **"The retest bar"** = the first bar to enter the proximity zone (not the highest-high bar in a
+  multi-bar chop) — pick one and hold it, since it defines the reference low the drive must break.
+- **Drive confirmation** = a CLOSE below the retest bar's low, within a stated validity window
+  (e.g. N bars) after which the retest expires and the detector returns to a wait-for-break state.
+  Without a horizon, a drop 30 bars later would count as the same setup and silently sample a
+  slower, different phenomenon.
+- **One signal per day per level**: if price can break→retest→drive→chop→re-retest→re-drive
+  multiple times in a session, those fires are within-day correlated — pool as one signal per
+  day/level, not independent N.
+- **Distinct, close-sequenced bars for break/retest/drive**: never let a single wide bar satisfy
+  all three events at once off its own high/low — that's look-ahead wearing a "deterministic"
+  costume. Each event must confirm on its own bar's close, in order.
+
+**Confound-control plan revised — the naive "blind-delayed-entry" control was invalid for a
+direction-committed setup:**
+- **Replaces the vague control arm with two concrete designs**: (1) the **all-break-days
+  control** — for every day that breaks the level (the full survivorship-corrected population,
+  before any retest filter), enter at the same landmark/same signed-distance-from-level and hold
+  to the same exit; compare the retest+drive subset against this. This directly tests whether the
+  retest+drive filter adds anything over "price is below the level." (2) The **placebo/level-swap
+  control** — run the IDENTICAL detector with the anchor level swapped for the session open, the
+  IB mid, `ibLow`±X, and a random prior-day level. If the real IB boundary doesn't clearly beat
+  these placebos, the "widely-watched 60-min level" mechanism is dead and nothing downstream
+  matters. **This is now the recommended FIRST step (a0), before any forward-return work** — it's
+  the cheapest possible kill-gate and it's the only experiment that actually tests the thesis
+  "this level is special," as opposed to just re-deriving a fixed-parameter backtest.
+- Control direction must be matched to the SIGNED distance from the level (short only on days
+  price is on the short side at that moment), not "short at the mean time regardless of price
+  location" — the naive version would enter the control against price on the wrong side too,
+  making the signal look artificially better by comparison.
+
+**New confound found, not in the original plan**: **the drive-confirmation distance is itself a
+momentum filter.** Requiring "a new low below the retest bar's low" as the entry trigger means the
+entry is conditioned on the move having already started in the signal's favor — the forward
+return measured from there is partly a momentum-continuation artifact, not a clean level-rejection
+effect. The all-break-days control (above) must also match this "already moved by the confirmation
+distance" condition, or it isolates the momentum filter instead of the level.
+
+**Exit-shape critique — reusing the fade-validated mechanisms wholesale is a category error, not
+just a "needs tuning" fix**: a genuine continuation trade's edge lives in the tail (many small
+losers, a few large winners) — a fixed wider target caps exactly the tail that's the point of the
+trade (wrong SHAPE, not just wrong size); a breakeven-trail is a more plausible fit (cuts small
+failures, lets winners run); the 2-lot scale-out's breakeven-minus-5 runner taxes every near-scratch
+winner and scaling out early truncates the tail that pays for the losers — the default posture for
+a positively-skewed continuation strategy is hold-or-add, not scale-out-early, unless the runner-
+only leg is independently shown to carry the edge. **Choose the exit shape from the observed
+forward-return distribution (skew/tail mass) in the signal-level pre-test, not by importing an
+exit mechanism validated on a completely different (fade) return distribution.**
+
+**Idea 2 boundary, now explicit**: the sizing reuse (elevated volume-building strength → size up
+the runner) is sound *as long as it stays sizing, never selection* — the moment it decides
+whether to take the trade at all, it's silently reintroduced the already-rejected direction-
+prediction claim through the back door. Separately: **fading volume-building as an in-trade exit
+trigger is a different, unvalidated claim** (reversal-timing + direction), not a free byproduct
+of the proven magnitude-only finding — it needs its own independent test, not inherited trust.
+
+**Revised build order** (replaces item 3 in "Suggested next step" below):
+1. **(a0) Placebo/level-swap test** — run the exact break/retest/drive detector on 4 anchor
+   levels (real IB boundary, session open, IB mid, `ibLow`±X / random prior-day level). Cheapest
+   possible kill-gate; no exit, no trade machinery, signal-level only. If the real boundary
+   doesn't beat the placebos, stop — the whole thesis is dead at negligible cost.
+2. **(a) Signal-level forward-return pre-test** — distinct-bar sequencing, next-bar-open entry,
+   compared against the all-break-days control; report the funnel counts (breaks → retests →
+   drives) and the *distribution* of forward returns (skew/tail), not just the mean.
+3. **(a1) Parameter sweep, pre-registered, single-shot** — fixed retest tolerance (fraction of IB
+   range) × drive-confirmation-distance, plateau-checked on ~70% chronologically, one untouched
+   ~30% holdout for exactly one final config (no iterative re-peeking), thirds-stability run on
+   the holdout.
+4. **(b) Exit simulation** — only after (a0)/(a) clear, exit shape chosen from the pre-test's
+   return distribution, next-bar-open fills, slippage/commission, breakeven-minus-5 tax modeled
+   explicitly, not assumed small.
+5. **(b1) Idea 2** — sizing-only reuse, confirmed at the actual runner horizon before relying on
+   it; exhaustion-exit tested as its own separately-validated hypothesis.
+6. **(c) Live wiring, last** — through the existing SHADOW→ACTIVE ramp, kill criteria specified
+   in advance.
+
 ## Rigor requirements before trusting any of Part 1 or Part 2's output
 
 Same non-negotiable bar as every other backtest this session: chronological OOS split, plateau
@@ -274,13 +381,17 @@ properly; not worth assuming either way going in.
    (confirmed via grep that no frontend component read it) and the description no longer asserts
    "TREND days: strongest"/"TURBULENT: strongest. BALANCE: suppressed" — the live `_edgeText()`
    call still supplies the real blended-EV summary. Everything below is still open.
-2. **Dispatch this doc (not code) to DeepSeek for a design critique**, per the 3-phase workflow —
-   especially the Idea 1 mechanics and the confound-control plan, given how much is already
-   riding on getting the rigor right (two real negative priors for this shape of idea).
-3. **Build Idea 1's break/retest/drive detector as a bar-by-bar backtest first** (matching this
-   session's established pattern for exit-mechanism work) — a signal-level forward-return
-   pre-test before any trade machinery, per this codebase's own "new setup type checklist" item
-   4a — before writing any live insert path.
-4. Only once Idea 1 has a real, rigor-clean result does Part 1's original day-type-audit question
-   (fix the gate vs. suppress) become relevant again — if Idea 1 replaces the entry signal
-   entirely, the day-type conditioning built around the OLD signal may not even transfer.
+2. **DONE 2026-08-31** — dispatched this doc to DeepSeek for a design critique, audited the
+   result (caught one misread, rest sound), incorporated into the "DeepSeek design critique"
+   section above. Idea 1's spec is now revised: resolved state-machine definitions, a fixed
+   (not ATR-relative) retest tolerance for this first version, a redesigned confound-control
+   plan (all-break-days control + placebo/level-swap control), a new momentum-filter confound,
+   and a revised exit-shape approach.
+3. **Next**: build the revised order's step (a0) — the placebo/level-swap test — as a Gemini
+   mine-and-run dispatch (DB-backed, matches "Gemini owns heavy mining" convention), per the
+   revised build order above. This is now the cheapest kill-gate and comes BEFORE the
+   signal-level forward-return pre-test that was originally step 3 here.
+4. Only once Idea 1 clears (a0) and (a) with a real, rigor-clean result does Part 1's original
+   day-type-audit question (fix the gate vs. suppress) become relevant again — if Idea 1 replaces
+   the entry signal entirely, the day-type conditioning built around the OLD signal may not even
+   transfer.

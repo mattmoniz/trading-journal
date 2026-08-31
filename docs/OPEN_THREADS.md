@@ -49,9 +49,26 @@ text, contradicted by real data). Grepped first to confirm no frontend component
 setup's `.tier` field — pure no-op on display. The live `_edgeText()` call still gives the real
 blended-EV summary. `node --check` + `eslint` clean.
 
-Remaining, not started: DeepSeek design critique on Idea 1 → signal-level forward-return
-pre-test → only then revisit the original day-type-gate question, since it may not transfer if
-the entry signal is replaced entirely. `OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
+**Step 2 shipped same session**: dispatched the plan (not code) to DeepSeek for a design critique.
+Audited the result before acting on it (per the standing "audit all model output" rule) — caught
+one misread (DeepSeek claimed a hard contradiction between Idea 1's retest tolerance and Idea 3's
+deferral; the spec's own text already resolves this, Idea 3 only defers the OTHER two params).
+Everything else checked out and is now incorporated into the spec: resolved state-machine
+definitions (break=close not wick, fixed-fraction-of-IB-range retest tolerance for v1 not
+ATR-relative, one-signal-per-day, distinct-bar sequencing to kill an intra-bar lookahead risk), a
+redesigned confound-control plan (the naive "blind-delayed-entry" control was invalid for a
+direction-committed setup — replaced with an all-break-days control + a placebo/level-swap
+control), a new confound (drive-confirmation distance is itself a momentum filter), and an
+exit-shape correction (the fade-validated wider-target/2-lot-scaleout mechanisms are a category
+error for a continuation trade's return shape, not just mistuned — must be re-validated from the
+observed forward-return distribution, not reused wholesale). Full detail:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "DeepSeek design critique" section.
+
+**Revised next step**: the placebo/level-swap test (does the real IB boundary beat the same
+detector run on the session open / IB mid / a shifted level / a random level?) is now the
+cheapest kill-gate and comes BEFORE the signal-level forward-return pre-test that was originally
+next — dispatching to Gemini as a mine-and-run (DB-backed).
+`OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
 
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
 
