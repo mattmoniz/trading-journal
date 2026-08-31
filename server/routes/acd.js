@@ -5427,6 +5427,24 @@ export default function createACDRouter(io) {
       // reimplementation — fed a 15-minute OR (9:30-9:45) and a 45-minute confirm window
       // (9:30-10:15, same 1:3 anchor:confirm ratio the live 5-min/15-min pairing already
       // uses, just scaled up), replicating Stage 1's exact VARIANT_15MIN definition.
+      //
+      // Stage 2/3/4 (2026-08-31, scripts/backtest_setup_d_opening_drive_stage{2,3,4}*.mjs,
+      // RESEARCH_CLAIM setup_d_hybrid_drive_magnitude_entry_oos_validated): the pullback-wait
+      // rule below structurally forfeits ~15% of classified drives that never pull back at
+      // all (real EV $85.54/trade on that subgroup vs $37.54/trade for the pullback subgroup
+      // — pure missed opportunity, not a tradeoff). Drive magnitude at confirm-close --
+      // (price - OR boundary)/OR range, signed by direction -- is a real, chronologically
+      // OOS-validated discriminator (train AUC=0.293, test AUC=0.329) for which bucket a day
+      // will fall into. Hybrid rule added: if magnitude clears DRIVE_MAG_IMMEDIATE_THRESHOLD
+      // at confirm-close, fire an IMMEDIATE entry right then (own stop/target, validated
+      // separately) instead of waiting for the pullback that Stage 2 showed is unambiguously
+      // worse when it's actually going to happen but strictly better when it isn't going to.
+      // DRIVE_MAG_IMMEDIATE_THRESHOLD (0.479, a median split of the Stage 4 train fold) and
+      // the immediate-path stop/target (159/80, Stage 2's own sweep on that subgroup) are
+      // hardcoded fallbacks for now -- same bootstrap pattern as stopPts/targetPts below --
+      // no dedicated calibration script/SETUP_STATUS-style row exists yet for this specific
+      // threshold; revisit once real SHADOW data accumulates for both entry paths.
+      const DRIVE_MAG_IMMEDIATE_THRESHOLD = 0.479;
       let openingDrive15Min = null;
       try {
         if (currentPrice && etMin >= 615) { // confirm window (9:30-10:15) must have closed
@@ -5438,27 +5456,55 @@ export default function createACDRouter(io) {
             const odCall = classifyACDOpeningCall(odConfirmBars, odOrH, odOrL);
             if (odCall?.type === 'OPEN_DRIVE') {
               const isLong = odCall.driveDirection === 'UP';
-              // Exact asymmetric pullback band replicated from OPEN_DRIVE above — a
-              // symmetric band would test a different (unvalidated) entry rule.
-              const nearBoundary = isLong
-                ? (currentPrice >= odOrH - 15 && currentPrice <= odOrH + 5)
-                : (currentPrice <= odOrL + 15 && currentPrice >= odOrL - 5);
-              if (nearBoundary) {
-                const type = isLong ? 'OPENING_DRIVE_15MIN_LONG' : 'OPENING_DRIVE_15MIN_SHORT';
-                const opt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[type];
-                // Fallbacks only cover the narrow window before the OPTIMAL_STOP seed row
-                // (Stage 1's own result, stop=85/target=150) exists or if this lookup fails
-                // — same bootstrap-then-real-data-overrides pattern used throughout this file.
-                const stopPts = opt?.stop ?? 85;
-                const targetPts = opt?.target ?? 150;
+              const type = isLong ? 'OPENING_DRIVE_15MIN_LONG' : 'OPENING_DRIVE_15MIN_SHORT';
+              // Drive magnitude uses the confirm-window-CLOSE bar's own price (the first bar
+              // at/after minute 615), matching Stage 2/3/4's exact definition -- NOT
+              // `currentPrice`, which could be several minutes later by the time a poll
+              // catches this and would silently drift the entry away from what was actually
+              // backtested. `existingSetup`'s per-(trade_date,setup_type) dedup (below, at the
+              // INSERT stage) already guarantees this only ever fires once per day regardless
+              // of how many polls see driveMag clear the bar -- no extra time-window guard needed.
+              const odConfirmCloseBar = allRthBarsRow.rows.find(b => b.et_min >= 615);
+              const odRange = (odOrH - odOrL) || 1;
+              const driveMag = odConfirmCloseBar
+                ? (isLong ? (odConfirmCloseBar.close - odOrH) / odRange : (odOrL - odConfirmCloseBar.close) / odRange)
+                : null;
+
+              if (driveMag != null && driveMag >= DRIVE_MAG_IMMEDIATE_THRESHOLD) {
+                const immOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[`${type}_IMMEDIATE`];
+                const stopPts = immOpt?.stop ?? 159;
+                const targetPts = immOpt?.target ?? 80;
+                const entryPx = odConfirmCloseBar.close;
                 openingDrive15Min = {
-                  type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
-                  stop: Math.round(isLong ? currentPrice - stopPts : currentPrice + stopPts),
-                  target: Math.round(isLong ? currentPrice + targetPts : currentPrice - targetPts),
-                  targetLabel: `15-min OR drive reversal-of-pullback (Setup D)`,
-                  description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, price pulled back to the OR boundary. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=138, rigor-clean, beat its own blind-delay control).`,
+                  type, direction: isLong ? 'LONG' : 'SHORT', entry: entryPx,
+                  stop: Math.round(isLong ? entryPx - stopPts : entryPx + stopPts),
+                  target: Math.round(isLong ? entryPx + targetPts : entryPx - targetPts),
+                  targetLabel: `15-min OR drive IMMEDIATE entry (Setup D hybrid)`,
+                  description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, already ${driveMag.toFixed(2)}x the OR range past the boundary at 10:15 — entering immediately rather than waiting for a pullback (Stage 4 hybrid rule, OOS lift $8.89/classified-day). Stop ${stopPts}pt / target ${targetPts}pt.`,
                   history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
                 };
+              } else {
+                // Exact asymmetric pullback band replicated from OPEN_DRIVE above — a
+                // symmetric band would test a different (unvalidated) entry rule.
+                const nearBoundary = isLong
+                  ? (currentPrice >= odOrH - 15 && currentPrice <= odOrH + 5)
+                  : (currentPrice <= odOrL + 15 && currentPrice >= odOrL - 5);
+                if (nearBoundary) {
+                  const opt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[type];
+                  // Fallbacks only cover the narrow window before the OPTIMAL_STOP seed row
+                  // (Stage 1's own result, stop=85/target=150) exists or if this lookup fails
+                  // — same bootstrap-then-real-data-overrides pattern used throughout this file.
+                  const stopPts = opt?.stop ?? 85;
+                  const targetPts = opt?.target ?? 150;
+                  openingDrive15Min = {
+                    type, direction: isLong ? 'LONG' : 'SHORT', entry: currentPrice,
+                    stop: Math.round(isLong ? currentPrice - stopPts : currentPrice + stopPts),
+                    target: Math.round(isLong ? currentPrice + targetPts : currentPrice - targetPts),
+                    targetLabel: `15-min OR drive reversal-of-pullback (Setup D)`,
+                    description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, price pulled back to the OR boundary. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=138, rigor-clean, beat its own blind-delay control).`,
+                    history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+                  };
+                }
               }
             }
           }

@@ -47,10 +47,27 @@ this just "ran out of time to retrace"?) came back reassuring, not conclusive �
 ample-remaining-time and a thin-remaining-time subgroup show a comparable positive edge.
 Recorded as `RESEARCH_CLAIM setup_d_hybrid_drive_magnitude_entry_oos_validated` (PROVISIONAL).
 
-**Next, not yet done**: wire this hybrid rule into the live SHADOW detection logic for
-`OPENING_DRIVE_15MIN_LONG/SHORT` (replacing the pullback-only trigger), and let real forward
-SHADOW data confirm it — standard pipeline, not a jump to ACTIVE. N=69 in the OOS test fold is
-real but still modest by this codebase's usual standard.
+**Wired live SHADOW-only, same session** (`server/routes/acd.js`'s `openingDrive15Min` block):
+at confirm-close, if drive magnitude clears `DRIVE_MAG_IMMEDIATE_THRESHOLD` (0.479, hardcoded
+fallback pending a dedicated calibration row — same bootstrap pattern the pullback path's own
+stop/target already uses), fires immediately using the confirm-close bar's own price (not
+`currentPrice`, to avoid drifting away from what was actually backtested) with its own
+stop/target (159/80); otherwise falls through to the existing pullback-wait logic unchanged.
+`existingSetup`'s per-(trade_date, setup_type) dedup already guarantees this fires at most once
+per day regardless of which branch a given poll takes — no new time-window guard needed.
+`test_invariants.mjs` shows no new regressions (same 6 pre-existing FAILUREs). Still SHADOW-only
+(no real trade alerts) — real forward data needs to accumulate and confirm this before any
+promotion consideration, standard pipeline.
+
+**Separately requested, not yet built**: a real excursion check (MFE/MAE, uncapped) on the
+"immediate entry" population showed the current 80pt target is likely too tight (median real
+favorable run ≈98pt, p75≈140pt, p90≈246pt) and the 159pt stop lets ~25% of trades' real adverse
+excursion through — but MAE and MFE are comparably sized (median 88.5pt vs 98pt), so a wider
+fixed target alone probably isn't the fix; a trailing/runner mechanism (already built and
+validated on a different family earlier this session) is the more promising next angle, not yet
+tested on this specific setup. Sizing-up this setup (user's own suggestion, given its rarity) is
+reasonable in principle but premature before real forward SHADOW data exists to size against —
+revisit once it does.
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
