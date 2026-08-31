@@ -36,12 +36,21 @@ volume-building, lookahead-corrected NL30 alignment, gap status, structural-leve
 came back genuinely null (AUC 0.45–0.51). Recorded as `RESEARCH_CLAIM
 setup_d_drive_magnitude_discriminator` (PROVISIONAL).
 
-**Not yet done**: a concrete, data-derived threshold on drive magnitude (this screen established
-the feature has power, not a cutoff rule), a combined backtest of the resulting hybrid strategy
-(immediate entry above the threshold, patient pullback entry below it) against the pure existing
-baseline, and — given the modest N (205 total, 69 in the OOS fold) and this codebase's standing
-rule on validating a new classifier's own robustness before trusting its conditioning effects — a
-DeepSeek design critique on the threshold-selection methodology before building it.
+**Built and OOS-validated, same session** (`scripts/backtest_setup_d_opening_drive_stage4_hybrid.mjs`):
+a hybrid rule — immediate entry when drive magnitude clears a threshold, otherwise the existing
+pullback-wait entry. Threshold (median split, 0.479 OR-ranges) picked using ONLY the
+chronological train fold (4 pre-registered candidates, no fine grid search), then applied blind
+to the untouched test fold: baseline (pullback-only) EV=$33.07/classified-day → hybrid
+EV=$41.96/classified-day, a real **$8.89/classified-day OOS lift**. Rigor-clean, no
+day-clustering (top5DayPct=2.7%), stable across all 3 chronological thirds. Tautology check (is
+this just "ran out of time to retrace"?) came back reassuring, not conclusive — both an
+ample-remaining-time and a thin-remaining-time subgroup show a comparable positive edge.
+Recorded as `RESEARCH_CLAIM setup_d_hybrid_drive_magnitude_entry_oos_validated` (PROVISIONAL).
+
+**Next, not yet done**: wire this hybrid rule into the live SHADOW detection logic for
+`OPENING_DRIVE_15MIN_LONG/SHORT` (replacing the pullback-only trigger), and let real forward
+SHADOW data confirm it — standard pipeline, not a jump to ACTIVE. N=69 in the OOS test fold is
+real but still modest by this codebase's usual standard.
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
