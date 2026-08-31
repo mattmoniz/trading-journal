@@ -27,6 +27,7 @@ import { resolveDirection, getBetClass } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from '../server/services/widerTargetWalker.js';
+import { firedAtToMod } from '../server/services/sessionBoundary.js';
 import { recordClaim } from './record_claim.mjs';
 
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
@@ -134,6 +135,15 @@ async function main() {
       trade, direction, long, entry, stop, t1, origDistance, t1TouchIdx, baselinePnl, mfePoints,
       trade_date: trade.trade_date, fired_at_ms: trade.fired_at_ms, setup_type: trade.setup_type,
       bet_class: trade.bet_class || getBetClass(trade.setup_type),
+      // FIXED 2026-08-30 (DeepSeek code review round 2, finding R1): walkWiderTarget() below
+      // calls the REAL stepWiderTarget() walker, which now needs firedMod/bar.mod to detect
+      // session-end for a Globex-origin trade -- without it, isPastMechanismSessionEnd()
+      // silently returns false forever (undefined>=960 is false), so the walker's own
+      // session-end trigger became a permanent no-op for this script post-fix. This script's
+      // OWN local isSessionEnd() (string-based, line ~84) is untouched and still gates arming/
+      // the standalone MFE walk correctly-for-RTH same as before -- only the walker's INTERNAL
+      // check needed this.
+      firedMod: firedAtToMod(trade.fired_at),
     });
   }
   console.log(`Armed (eligible) trades: ${armed.length} (no dir: ${noDirection}, not armed/aborted: ${notArmed})`);
@@ -159,10 +169,10 @@ async function main() {
     for (let i = t.t1TouchIdx + 1; i < Math.min(allBars.length, t.t1TouchIdx + 1 + MAX_WALK_BARS); i++) {
       const barCount = i - t.t1TouchIdx; // irrelevant post-arm, stepWiderTarget ignores it in the widening branch
       const b = allBars[i];
-      const bar = { ts: b.ts_et, high: b.high, low: b.low, close: b.close };
+      const bar = { ts: b.ts_et, mod: firedAtToMod(b.ts_et), high: b.high, low: b.low, close: b.close };
       const stepRes = stepWiderTarget(state, bar, {
         entry: t.entry, stop: t.stop, t1: t.t1, widerTarget, long: t.long, barCount,
-        maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER,
+        maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod: t.firedMod,
       });
       state = stepRes.state;
       if (stepRes.resolution) {

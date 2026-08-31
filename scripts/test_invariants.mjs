@@ -1059,6 +1059,7 @@ async function main() {
       // signal there. Only a single aggregate count enters the routine WARN/alert stream --
       // read the detail file when you actually want to triage the backlog, not every run.
       const unscheduled = [];
+      const missingOnDisk = [];
       const seenSourceFiles = new Set();
       for (const row of claimRows) {
         let parsed;
@@ -1069,6 +1070,32 @@ async function main() {
         const scriptName = sourceFile.split('/').pop();
         if (!scheduled.includes(scriptName)) {
           unscheduled.push(`${row.signal_name} -> ${sourceFile}`);
+        }
+        // Added 2026-08-30 (DeepSeek code review round 4, finding S10): a claim's stored
+        // source_file was never checked against the actual filesystem -- a typo'd or renamed
+        // path (found live: poc_rotation_join_confirm_2close.mjs's recordClaim() cited a
+        // sourceFile that had never existed) passed this whole loop silently, since the only
+        // check here is cron-scheduling, not existence. `source_file` is sometimes a single
+        // path, sometimes a "path1, path2" or "path + description" compound string (multiple
+        // real files/services credited together) -- self-caught while building this check
+        // (initial version treated the whole compound string as one path and flagged real,
+        // existing files as missing) -- so each comma/plus-separated token that itself looks
+        // like a real repo-relative path is checked independently, and only a token that both
+        // looks like a path AND doesn't resolve gets flagged. A hand-typed attribution to a
+        // since-deleted one-off script (record_claim.mjs --add at the CLI, no recordClaim() call
+        // to grep for) is a legitimate, deliberate case -- still flagged here, since the point is
+        // "does this path exist," not "was it written programmatically."
+        const candidatePaths = sourceFile.split(/,| \+ /).map(s => s.trim()).filter(s => /^(scripts|server)\//.test(s));
+        const missingTokens = candidatePaths.filter(p => !existsSync(path.resolve(p.split(' ')[0])));
+        if (candidatePaths.length > 0 && missingTokens.length === candidatePaths.length) {
+          missingOnDisk.push(`${row.signal_name} -> ${sourceFile}`);
+        }
+      }
+      if (missingOnDisk.length === 0) {
+        ok('every RESEARCH_CLAIM source_file that looks like a live script path actually exists on disk');
+      } else {
+        for (const line of missingOnDisk) {
+          warn(`RESEARCH_CLAIM source_file does not exist on disk: ${line} -- either a typo in the recordClaim() call, or the script was renamed/deleted after this claim was recorded (re-point it, or accept it's now an untracked-methodology claim like the genuinely-orphaned poc_rotation ones)`);
         }
       }
       const detailFile = path.resolve('scratch/research_claim_unscheduled.txt');
@@ -1354,10 +1381,19 @@ async function main() {
       // non-deterministic bug or a historical price_bars_primary correction that silently
       // changed a past tag -- either way worth surfacing, not silently trusting the stored
       // value forever.
+      // FIXED 2026-08-31: the sample used to include the CURRENT trade_date, which is not a
+      // real determinism test -- getVolBucketAtFire()'s rolling window reads bars from prior
+      // days right up to "now," so re-deriving TODAY's own bucket later in the same session
+      // can legitimately land in a different bucket as more of today's own bars accumulate
+      // (confirmed live: the sole mismatch this check ever found was trade_date=today,
+      // stored=ABOVE_AVG vs fresh=AVG, re-derived hours later same day -- not a historical
+      // price_bars_primary correction, just an inherently moving target). Excluding today
+      // keeps this a genuine test of "does a PAST, settled tag reproduce," which is what the
+      // check's own docstring above claims to verify.
       const sample = await client.query(`
         SELECT DISTINCT trade_date::text, vol_bucket_at_fire
         FROM active_setups
-        WHERE vol_bucket_at_fire IS NOT NULL
+        WHERE vol_bucket_at_fire IS NOT NULL AND trade_date < CURRENT_DATE
         ORDER BY trade_date DESC LIMIT 20
       `).catch(() => ({ rows: [] }));
       if (sample.rows.length === 0) {
@@ -1650,6 +1686,34 @@ async function main() {
       } else {
         for (const r of mismatches) {
           fail(`active_setups id=${r.id} (${r.setup_type}, fired_at=${r.fired_at}): status='${r.status}' but origin_status='${r.origin_status}' -- these must match for any still-unresolved row. Find the INSERT site that produced this and check it binds origin_status to the same value as status.`);
+        }
+      }
+    }
+
+    console.log('\n[23] OPTIMAL_STOP implausible-skew candidates flagged with no prior baseline');
+    {
+      // Added 2026-08-30 alongside applyCircuitBreaker()'s new plausibility gate (DeepSeek code
+      // review, same day): the gate's two "no prior to compare against" paths still ACCEPT an
+      // implausibly-skewed first-ever calibration, just with a console.error at write time --
+      // which only reaches whoever happens to read that day's cron stdout, not the "impossible to
+      // miss every session" standard this codebase holds itself to elsewhere (DTM_WATCH, SHADOW
+      // VALIDATION, etc.). This check makes those flags durable instead of scrolling into a log.
+      const { rows } = await client.query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes::jsonb as notes
+        FROM performance_audit WHERE signal_type='OPTIMAL_STOP'
+          AND notes IS NOT NULL AND notes ~ '^\\s*\\{.*\\}\\s*$' AND notes !~ '\\}\\s*\\{'
+        ORDER BY signal_name, run_date DESC
+      `);
+      const flagged = rows.filter(r => {
+        const reason = r.notes?.circuitBreaker?.reason;
+        return reason === 'no_prior_baseline_implausible_skew_flagged' || reason === 'prior_was_placeholder_implausible_skew_flagged';
+      });
+      if (flagged.length === 0) {
+        ok('no setup_type currently carries an unresolved implausible-skew-with-no-prior flag');
+      } else {
+        for (const r of flagged) {
+          const cb = r.notes.circuitBreaker;
+          warn(`${r.signal_name}: accepted a first-ever/post-placeholder calibration at an implausible skew (${cb.attemptedSkew}x vs cutoff ${cb.plausibleSkewCutoff}x, reason=${cb.reason}) because there was no prior value to freeze back to. Re-derive by hand or wait for more real N to produce a saner candidate -- don't let this sit past one recheck.`);
         }
       }
     }

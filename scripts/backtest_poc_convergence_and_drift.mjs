@@ -15,6 +15,7 @@ import { computeProfile, getRollingDrift } from '../server/services/developingVa
 import { getGlobex24hrBars } from '../server/services/queries.js';
 import { computeRigor, computeReplication } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { findTradingDayGaps } from '../server/services/queries.js';
 
 const TICK = 0.25;
 const RTH_START = 570, RTH_END = 959; // ET minute-of-day, matches developingValueService.js
@@ -32,6 +33,24 @@ async function main() {
   const dvl = (await query(`SELECT trade_date::text as t, poc::float, migration_dir_vs_prior FROM developing_value_log ORDER BY trade_date ASC`)).rows;
   const dates = dvl.map(r => r.t);
   const dateIdx = new Map(dates.map((d, i) => [d, i]));
+
+  // FIXED 2026-08-31 (OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831):
+  // dates[i+1]/dates[i+5] below are treated as "1 trading day ahead"/"5 trading days ahead" of
+  // dates[i] -- silently wrong whenever that span straddles one of the real ~63-day NQ
+  // contract-rollover gaps in price_bars_dedup_hist (Dec2023-May2025, see
+  // server/services/queries.js's header comment). developing_value_log has no rows for the
+  // same gap windows (it's computed FROM the same price data), so it inherits the identical
+  // gap structure. windowSpansGap() below skips any forward-return window that would straddle
+  // one rather than silently mislabeling a multi-month return as "1 day"/"5 days ahead."
+  const dayGaps = findTradingDayGaps(dates, 5);
+  if (dayGaps.length > 0) {
+    console.log(`${dayGaps.length} real trading-day gap(s) > 5 days found (quarterly-contract-rollover-related, expected): ${dayGaps.map(g => `${g.fromDate}->${g.toDate}(${g.gapDays}d)`).join(', ')} -- forward-return windows straddling these will be skipped below.`);
+  }
+  const gapAfterIndex = new Set(dayGaps.map(g => g.fromIndex));
+  function windowSpansGap(startIdx, endIdx) {
+    for (let k = startIdx; k < endIdx; k++) if (gapAfterIndex.has(k)) return true;
+    return false;
+  }
 
   const rthRows = (await query(`
     SELECT ts::date::text as d,
@@ -74,6 +93,7 @@ async function main() {
 
   for (const row of testA) {
     const i = dateIdx.get(row.t);
+    if (i + 5 < dates.length && windowSpansGap(i, i + 5)) { row.converged = row.d_t <= thresholdA; continue; } // ret1/ret5 left undefined -> filtered by evalA's ret1!=null check below
     row.ret1 = fwdReturn(dates[i + 1], i + 1);
     row.ret5 = fwdReturn(dates[i + 1], i + 5);
     row.converged = row.d_t <= thresholdA;
@@ -133,7 +153,7 @@ async function main() {
     const priorCount = i;
     const streak = i >= 2 ? [dvl[i - 1].migration_dir_vs_prior, dvl[i - 2].migration_dir_vs_prior] : [];
     const rets = {};
-    for (const h of [1, 5, 10, 20]) rets[h] = fwdReturn(t, i + h);
+    for (const h of [1, 5, 10, 20]) rets[h] = windowSpansGap(i, i + h) ? null : fwdReturn(t, i + h);
     partB.push({ t, priorCount, drifts, streak, rets });
   }
   const splitB = Math.floor(partB.length * 0.7);

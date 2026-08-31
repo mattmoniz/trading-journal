@@ -72,6 +72,12 @@ async function main() {
   }
 
   const rows = { avgVolZ: [], volZTrend: [], avgDayVolZ: [], dayVolZTrend: [] };
+  const compositeScores = []; // for quintile cutoffs backing the live display gauge
+  const priorAvgs = []; // momentum-context: avg composite score over the preceding (up to) 30
+  // bars WITHIN THE SAME SESSION (never crosses the session boundary -- matches the live
+  // computeLiveVolumeBuildingSignal() guard, a stricter version of the retrospective research
+  // scripts this backs, per RESEARCH_CLAIM building_strength_momentum_feeds_momentum /
+  // momentum_feeds_momentum_robust_across_daytype, 2026-08-29).
   let matched = 0, noMatch = 0, noSession = 0;
   for (const s of setupsRes.rows) {
     const flooredFiredAt = new Date(s.fired_at); flooredFiredAt.setSeconds(0, 0);
@@ -89,8 +95,19 @@ async function main() {
     rows.volZTrend.push(m.volZTrend);
     rows.avgDayVolZ.push(m.avgDayVolZ);
     rows.dayVolZTrend.push(m.dayVolZTrend);
+    compositeScores.push(m.avgVolZ + m.volZTrend + m.avgDayVolZ + m.dayVolZTrend);
+
+    if (touchIdx >= 30) {
+      const priorScores = [];
+      for (let k = touchIdx - 30; k < touchIdx; k++) {
+        const pm = computeVolumeBuildingMeasures(sessionBars, k, baseline);
+        if (pm.avgVolZ != null && pm.avgDayVolZ != null) priorScores.push(pm.avgVolZ + pm.volZTrend + pm.avgDayVolZ + pm.dayVolZTrend);
+      }
+      if (priorScores.length >= 20) priorAvgs.push(priorScores.reduce((a, b) => a + b, 0) / priorScores.length);
+    }
   }
   console.log(`Matched with full measures: N=${matched} (no bar match: ${noMatch}, no session start found: ${noSession})`);
+  console.log(`Momentum-context prior-avg sample: N=${priorAvgs.length}`);
 
   if (matched < 100) {
     console.log('Population too thin (<100) to recalibrate -- leaving prior calibration row in place.');
@@ -106,6 +123,19 @@ async function main() {
     volZTrendP60: +percentile(rows.volZTrend, 0.6).toFixed(4),
     avgDayVolZP60: +percentile(rows.avgDayVolZ, 0.6).toFixed(4),
     dayVolZTrendP60: +percentile(rows.dayVolZTrend, 0.6).toFixed(4),
+    // Momentum-context median (RESEARCH_CLAIM momentum_feeds_momentum_robust_across_daytype):
+    // classifies a spike as ACTIVE- vs QUIET-then-spike. null (not 0) if the sample's too thin
+    // to trust yet -- computeLiveVolumeBuildingSignal() must treat null as "don't classify",
+    // never fall back to a hardcoded number.
+    momentumContextPriorAvgMedian: priorAvgs.length >= 50 ? +median(priorAvgs).toFixed(4) : null,
+    momentumContextCalibratedFrom: priorAvgs.length,
+    // Composite-strength quintile cutoffs (RESEARCH_CLAIM volume_building_no_level_initiative_test
+    // magnitude dose-response, confirmed via independent Gemini replication 2026-08-29) -- backs
+    // the live display gauge's plain-English bucket, informational only.
+    compositeStrengthP20: +percentile(compositeScores, 0.2).toFixed(4),
+    compositeStrengthP40: +percentile(compositeScores, 0.4).toFixed(4),
+    compositeStrengthP60: +percentile(compositeScores, 0.6).toFixed(4),
+    compositeStrengthP80: +percentile(compositeScores, 0.8).toFixed(4),
     calibratedFrom: matched,
     calibratedAt: new Date().toISOString(),
   };

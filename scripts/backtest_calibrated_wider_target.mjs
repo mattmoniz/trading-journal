@@ -3,6 +3,7 @@ import { resolveDirection, getBetClass } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from '../server/services/widerTargetWalker.js';
+import { firedAtToMod } from '../server/services/sessionBoundary.js';
 import { recordClaim } from './record_claim.mjs';
 import fs from 'fs';
 
@@ -62,15 +63,23 @@ async function main() {
     
     let state = { widening: false };
     const startIdx = firstIndexAfter(trade.fired_at_ms);
+    // FIXED 2026-08-30 (DeepSeek code review round 2, finding R1, HIGH -- this loop has NO
+    // runaway bar cap unlike its sibling scripts, so before this fix a trade whose stop/target
+    // never got hit could walk the ENTIRE remaining multi-year bar history once
+    // isPastMechanismSessionEnd()'s internal check silently no-op'd from a missing
+    // firedMod/bar.mod (undefined>=960 is false)): this feeds the live-wired 1.5x multiplier
+    // calibration (widerTargetWalker.js's own header), so getting session-end right here
+    // matters beyond just this script's own numbers.
+    const firedMod = firedAtToMod(trade.fired_at);
     let resolution = null;
     let armed = false;
-    
+
     for (let i = startIdx; i < allBars.length; i++) {
       const barCount = i - startIdx + 1;
       const b = allBars[i];
-      const bar = { ts: b.ts_et, high: b.high, low: b.low, close: b.close };
-      
-      const stepRes = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER });
+      const bar = { ts: b.ts_et, mod: firedAtToMod(b.ts_et), high: b.high, low: b.low, close: b.close };
+
+      const stepRes = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod });
       
       if (!state.widening && stepRes.state.widening) {
         armed = true;

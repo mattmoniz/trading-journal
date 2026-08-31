@@ -16,6 +16,15 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, runTrade, TICK, TARGET_SWEEP, formatET, mean } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. runTrade()'s .pnl stays in
+// points (the T-sweep below picks the same argmax T under either scaling, same reasoning as
+// the parent script); only summarizeArm()'s EV/WR/recordClaim conversion changed.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 const R = 65, PATH = 'standard';
 const DELAYS_MIN = [0, 15, 30, 60]; // bars are 1-min, so delay minutes == delay bars
@@ -25,12 +34,12 @@ function summarizeArm(results, split) {
     const N = filtered.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(filtered.map(r => r.e.t)).size;
-    const wins = filtered.filter(r => r.res.pnl > 0).length;
+    const wins = filtered.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (filtered.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (filtered.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     let rigorStr = 'n/a (N<20)';
     if (N >= 20) {
-        const rigor = computeRigor(filtered.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+        const rigor = computeRigor(filtered.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
         rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
     }
     return { N, distinctDates, wr, ev, rigorStr, valEV: Number(ev) };

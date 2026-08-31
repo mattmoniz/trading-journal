@@ -3,6 +3,7 @@ import { getOpeningRange } from '../server/services/acdBacktest.js';
 import { computeRigor, computeReplication } from '../server/services/rigorDiagnostics.js';
 import { precomputeCrossovers } from './update_optimal_stops.mjs';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { findTradingDayGaps } from '../server/services/queries.js';
 import fs from 'fs';
 
 const WINDOWS = [5, 10, 15, 30];
@@ -66,7 +67,16 @@ async function main() {
     }
     
     const dates = Array.from(barsByDateMap.keys()).sort();
-    
+
+    // FIXED 2026-08-31 (OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831):
+    // dates[i-1] below is treated as "the prior trading session" -- silently wrong on the
+    // handful of dates that are the FIRST real day after one of the real ~63-day NQ
+    // contract-rollover gaps in price_bars_dedup_hist (Dec2023-May2025, see
+    // server/services/queries.js's header comment), where dates[i-1] is actually ~2 months in
+    // the past. This is the mining script behind OR5_LOW_FADE_LONG_GAP_DOWN's live-wired
+    // calibration (scripts/backtest_or5_low_gap_down.mjs) -- same fix applied there.
+    const gapAfterIndex = new Set(findTradingDayGaps(dates, 5).map(g => g.fromIndex));
+
     const dayStats = new Map();
     let allOr5Vols = [];
     for (let i = 0; i < dates.length; i++) {
@@ -74,19 +84,19 @@ async function main() {
         const bars = barsByDateMap.get(date);
         const rthClose = bars[bars.length - 1].close;
         const openBar = bars[0].open;
-        
+
         let or5Vol = 0;
         for (let j = 0; j < Math.min(5, bars.length); j++) {
             or5Vol += bars[j].volume || 0;
         }
         allOr5Vols.push(or5Vol);
-        
+
         let prevRthClose = null;
-        if (i > 0) {
+        if (i > 0 && !gapAfterIndex.has(i - 1)) {
             const prevBars = barsByDateMap.get(dates[i-1]);
             prevRthClose = prevBars[prevBars.length - 1].close;
         }
-        
+
         dayStats.set(date, { rthClose, openBar, or5Vol, prevRthClose });
     }
     

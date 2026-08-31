@@ -20,6 +20,7 @@ import { resolveDirection, getBetClass } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { computeReplication } from '../server/services/rigorDiagnostics.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from '../server/services/widerTargetWalker.js';
+import { firedAtToMod } from '../server/services/sessionBoundary.js';
 import fs from 'fs';
 
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
@@ -70,13 +71,17 @@ async function main() {
     // (AT TIME ZONE 'America/New_York') via a matching SQL-side conversion done once below,
     // not JS Date parsing -- this is the exact bug the prior run had and was corrected for.
     const startIdx = firstIndexAfter(trade._firedAtMs);
+    // FIXED 2026-08-30 (DeepSeek code review round 2, finding R1): stepWiderTarget()'s internal
+    // session-end check now needs firedMod/bar.mod, or isPastMechanismSessionEnd() silently
+    // no-ops (undefined>=960 is false) and only the barCount>3000 runaway cap catches it.
+    const firedMod = firedAtToMod(trade.fired_at);
     let resolution = null;
 
     for (let i = startIdx; i < allBars.length; i++) {
       const barCount = i - startIdx + 1;
       const b = allBars[i];
-      const bar = { ts: b.ts_et, high: b.high, low: b.low, close: b.close };
-      const stepRes = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER });
+      const bar = { ts: b.ts_et, mod: firedAtToMod(b.ts_et), high: b.high, low: b.low, close: b.close };
+      const stepRes = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod });
       if (stepRes.resolution) { resolution = stepRes.resolution; break; }
       state = stepRes.state;
       if (barCount > 3000) { resolution = { resolution: 'RUNAWAY', priceAtRes: null }; break; }

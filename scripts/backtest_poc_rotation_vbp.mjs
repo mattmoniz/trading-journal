@@ -2,6 +2,18 @@ import fs from 'fs';
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): every
+// EV/WR figure this whole thread's foundational script reports used to be a raw price-point
+// difference printed with a "$" prefix, never applying MNQ's real $2/pt or the $2 round-trip
+// commission (LIVE_INSTRUMENT, server/config/instruments.js). runTrade()'s own `.pnl` field
+// stays in points (the T-sweep below picks the same argmax T under either scaling -- a
+// positive affine transform shared by every candidate -- so it's untouched); only the
+// aggregated EV/WR/recordClaim conversion in summarizeArm() below changed.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 export const TICK = 0.25;
 const RTH_START = 570, RTH_END = 959;
@@ -358,12 +370,12 @@ async function runScenario(R, path_convention, THETA, sessions, isPrimary, train
         const N = filtered.length;
         if (N === 0) return { N: 0 };
         const distinctDates = new Set(filtered.map(r => r.e.t)).size;
-        const wins = filtered.filter(r => r.res.pnl > 0).length;
+        const wins = filtered.filter(r => dollarPnl(r) > 0).length;
         const wr = (wins / N * 100).toFixed(1);
-        const ev = (filtered.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+        const ev = (filtered.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
         let rigorStr = '';
         if (N >= 20) {
-            const rigor = computeRigor(filtered.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+            const rigor = computeRigor(filtered.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
             rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
         }
         return { N, distinctDates, wr, ev, rigorStr, valEV: Number(ev) };

@@ -12,6 +12,15 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, TICK, formatET, mean, percentile } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. res.pnl/res.mfe stay in
+// points (mfe is a distance, not a P&L, and is unaffected either way); only
+// summarizeMFE()'s EV/WR/recordClaim conversion changed.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 // R as a PERCENTAGE of the running extreme, not a fixed point value. Found 2026-08-24:
 // NQ's price roughly doubled 2023->2026 (11,300-17,500 -> 23,000-31,000), so the
@@ -77,13 +86,13 @@ function summarizeMFE(results) {
     const N = results.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(results.map(r => r.e.t)).size;
-    const wins = results.filter(r => r.res.pnl > 0).length;
+    const wins = results.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (results.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (results.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     const mfes = results.map(r => r.res.mfe).sort((a, b) => a - b);
     const bars = results.map(r => r.res.bars_to_resolution).sort((a, b) => a - b);
     const stopHitPct = (results.filter(r => r.res.exitReason === 'STOP_HIT').length / N * 100).toFixed(1);
-    const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+    const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
     return {
         N, distinctDates, wr, ev, valEV: Number(ev), stopHitPct,
         rigorStr: `stable=${rigor.stable} cluster=${rigor.clustered}`,

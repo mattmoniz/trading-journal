@@ -22,6 +22,17 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { getRollingATR } from '../server/services/levelProximityService.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, TICK, formatET, mean, percentile } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. res.pnl stays in points
+// (trade-sim/CSV unaffected); only summarize()'s EV/WR/recordClaim conversion changed. The
+// winnerJoin/bestStrat selection logic (below) compares .valEV across candidates that are ALL
+// summed over the SAME 3 exit strategies -- a shared PPT*x-3*COMM affine transform of the raw
+// points totals, so which arm/strategy "wins" is unchanged, only the reported $ value is.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 const PATH = 'standard';
 const R_PCT_REFERENCE_PRICE = 29547.75;
@@ -82,12 +93,12 @@ function summarize(results) {
     const N = results.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(results.map(r => r.e.t)).size;
-    const wins = results.filter(r => r.res.pnl > 0).length;
+    const wins = results.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (results.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (results.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     let rigorStr = 'n/a (N<20)';
     if (N >= 20) {
-        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
         rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
     }
     return { N, distinctDates, wr, ev, valEV: Number(ev), rigorStr };
@@ -183,8 +194,14 @@ async function main() {
             }
         }
         // Pick winning direction = whichever has the higher EV summed across the 3 strategies.
-        const joinTotal = EXIT_STRATEGIES.reduce((s, st) => s + (section1[`JOIN_${st.name}`].valEV || 0), 0);
-        const fadeTotal = EXIT_STRATEGIES.reduce((s, st) => s + (section1[`FADE_${st.name}`].valEV || 0), 0);
+        // FIXED 2026-08-30 (DeepSeek code review round 4, finding S8, latent -- unreachable today,
+        // all 6 cells confirmed N=1935/2322): `|| 0` treated a MISSING (N=0) cell the same as a
+        // real break-even one for this sum. Pre-dollar-fix that was harmless (break-even WAS 0
+        // points); post-fix a real break-even trade is -$2 (commission), so a missing cell would
+        // have silently scored BETTER than a genuinely break-even one. `?? 0` only guards against
+        // null/undefined, not against masking a real negative value the way `|| 0` does.
+        const joinTotal = EXIT_STRATEGIES.reduce((s, st) => s + (section1[`JOIN_${st.name}`].valEV ?? 0), 0);
+        const fadeTotal = EXIT_STRATEGIES.reduce((s, st) => s + (section1[`FADE_${st.name}`].valEV ?? 0), 0);
         const winnerJoin = joinTotal >= fadeTotal;
         const winnerLabel = winnerJoin ? 'JOIN' : 'FADE';
         // Pick winning exit strategy under the winning direction.

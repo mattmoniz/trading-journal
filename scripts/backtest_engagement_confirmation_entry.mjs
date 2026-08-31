@@ -21,17 +21,26 @@
 // (same point distance, not re-optimized) rather than reusing Arm A's numbers — avoids the
 // baseline-mismatch bug class from backtest_scaleout_runner.mjs.
 //
-// RESULT (see RESEARCH_CLAIM engagement_confirmation_entry_timing): both tested trigger
-// definitions (C1: delta favorable 2 consecutive bars; C2: C1 + volume above the
-// population's own rolling median) underperformed BOTH Arm A and the genuine Arm B blind
-// delay, across all 3 pooled views (ALL/CONFLUENCE/NON-CONFLUENCE). The 36/35 setup_types
-// where C1/C2 looked like a train-data winner failed computeReplication() on held-out test
-// data (selected-pool test EV was not better than the never-selected pool) — pure
-// overfitting, not a real generalizable edge. This does NOT prove "watching the tussle
-// never helps" — it specifically debunks these two simple delta-based mechanical proxies.
-// A different trigger definition (stronger delta magnitude, requiring price to reclaim
-// some fraction of its own adverse excursion, per-setup-type wait windows instead of one
-// pooled window) has not been tested and remains open.
+// RESULT — SUPERSEDED 2026-08-31 (OPEN_DECISION engagement_entry_timing_backfill_contam):
+// the population below used to have no origin_status filter (17,259 BACKFILL/UNKNOWN-origin
+// rows silently included alongside 1,501 real ones). Corrected result, see RESEARCH_CLAIM
+// engagement_confirmation_entry_timing for full numbers: the headline itself changed, not
+// just magnitudes — Arm A (immediate entry) goes NEGATIVE in the ALL/NON-CONFLUENCE pooled
+// views (was positive), and Arm B (blind delay) clearly dominates Arm A everywhere,
+// including a sign flip in CONFLUENCE. What survived the correction: C1/C2 (the two
+// delta-based triggers) still don't beat Arm B in any view, and both still fail
+// computeReplication() on held-out data the same way they did before — that part of the
+// original conclusion ("these two simple mechanical proxies don't generalize") still holds.
+// DeepSeek code review round 5 (2026-08-31) flagged real caveats on trusting the corrected
+// numbers at face value beyond the population fix itself: waitWindow (the Arm B/C trigger-
+// scan horizon) is derived from Step A's own resolved-outcome statistic rather than a truly
+// independent constant (pre-existing, not introduced by the origin_status fix); per-
+// setup-type bDelay/volRatioP50 fallbacks fire more often now that N dropped ~7x, changing
+// Arm B/C2's pooled composition in a way that isn't a clean "same test, smaller N"; and the
+// replication gate (trainA.length>=20) now clears far fewer setup_types, so the
+// held-out-replication verdict itself is weaker than before. Worth a dedicated re-look
+// before treating the flipped Arm A/B numbers as more than provisional (already recorded
+// as PROVISIONAL, not CONFIRMED, for exactly this reason).
 
 import { query } from '../server/db.js';
 import { directionFromType, replayBars } from '../server/services/maeMfeReplay.js';
@@ -84,6 +93,37 @@ async function main() {
     levelPricesByDate.get(d).set(r.level_name, r.price);
   }
 
+  // FIXED 2026-08-31 (OPEN_DECISION engagement_entry_timing_backfill_contam, HIGH): this query
+  // used to pull EVERY resolved row regardless of origin_status -- confirmed the same
+  // unfiltered-population bug already found and fixed once in this exact study's sibling,
+  // scripts/backtest_coarser_bar_entry_alignment.mjs (whose own claimText is what flagged this
+  // decision in the first place). ~83% of the original 10,881-touch population was BACKFILL
+  // (synthetic, not real trades), ~34% specifically VWAP_MAGNET rows with a documented 4-5h
+  // fired_at timestamp error (confirmed via 8/8 sampled mismatches in the sibling study) --
+  // meaning this script's bar-by-bar entry-timing simulation was walking from a WRONG fired_at
+  // for a third of its population. Now matches the sibling's exact filter: real trades only
+  // (origin_status IN ACTIVE/SHADOW), and excludes rows where a dynamic exit mechanism
+  // (runner_trail_width/extend_target_level/wider_target_mult) was armed -- this script's
+  // stop/target re-simulation logic models a plain fixed-stop/fixed-target trade only, and a
+  // dynamic-exit row's real actual_pnl doesn't correspond to that shape.
+  const backfillCountRes = await query(`
+    SELECT count(*) as count FROM active_setups
+    WHERE resolution IN ('STOP_HIT','TARGET_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
+      AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL AND t1_level IS NOT NULL
+      AND mae_points IS NOT NULL AND mae_points <= 300 AND mfe_points IS NOT NULL AND mfe_points <= 300
+      AND origin_status NOT IN ('ACTIVE','SHADOW')
+  `);
+  const backfillCount = backfillCountRes.rows[0].count;
+  const dynamicExitCountRes = await query(`
+    SELECT count(*) as count FROM active_setups
+    WHERE resolution IN ('STOP_HIT','TARGET_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
+      AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL AND t1_level IS NOT NULL
+      AND mae_points IS NOT NULL AND mae_points <= 300 AND mfe_points IS NOT NULL AND mfe_points <= 300
+      AND origin_status IN ('ACTIVE','SHADOW')
+      AND (runner_trail_width IS NOT NULL OR extend_target_level IS NOT NULL OR wider_target_mult IS NOT NULL)
+  `);
+  const dynamicExitCount = dynamicExitCountRes.rows[0].count;
+
   const setupsRes = await query(`
     SELECT id, trade_date::text as trade_date, fired_at, resolution, actual_pnl::float, setup_type,
            entry_zone_low::float, COALESCE(entry_zone_high, entry_zone_low)::float as entry_zone_high,
@@ -92,8 +132,11 @@ async function main() {
     WHERE resolution IN ('STOP_HIT', 'TARGET_HIT', 'TIME_EXPIRED') AND actual_pnl IS NOT NULL
       AND entry_zone_low IS NOT NULL AND stop_level IS NOT NULL AND t1_level IS NOT NULL
       AND mae_points IS NOT NULL AND mae_points <= 300 AND mfe_points IS NOT NULL AND mfe_points <= 300
+      AND origin_status IN ('ACTIVE','SHADOW')
+      AND runner_trail_width IS NULL AND extend_target_level IS NULL AND wider_target_mult IS NULL
     ORDER BY trade_date, fired_at
   `);
+  console.log(`Population: ${setupsRes.rows.length} real (origin_status IN ACTIVE/SHADOW, non-dynamic-exit) touches -- excluded ${backfillCount} BACKFILL/UNKNOWN-origin, ${dynamicExitCount} dynamic-exit-mechanism rows.`);
 
   const setupsByDate = new Map();
   for (const s of setupsRes.rows) {

@@ -14,6 +14,11 @@
 import fs from 'fs';
 import { query } from '../server/db.js';
 import { detectSignalEvents, TICK, percentile } from './backtest_poc_rotation_vbp.mjs';
+// This file's EV=$ output is dollar-correct ONLY TRANSITIVELY, via the imported `summarize()`'s
+// own dollarPnl conversion (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars, fixed
+// 2026-08-30) -- this file has no LIVE_INSTRUMENT/dollarPnl of its own (DeepSeek code review
+// round 4, finding S3). Do not write a local summarize()/EV computation here without reusing the
+// import above, or this silently reintroduces the exact points-as-dollars bug.
 import { runStopOnlyFixed, runStopTarget, summarize } from './backtest_poc_rotation_fixed_stop_mfe25_target.mjs';
 import { recordClaim } from './record_claim.mjs';
 

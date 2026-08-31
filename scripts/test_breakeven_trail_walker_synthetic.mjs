@@ -20,8 +20,11 @@ function assert(cond, label) {
   else { fail++; console.error(`FAIL: ${label}`); }
 }
 
-function bar(hhmm, high, low, close) {
-  return { ts: `2026-08-10 ${hhmm}:00`, high, low, close };
+// dateStr optional, mod added 2026-08-30 -- see test_wider_target_walker_synthetic.mjs's
+// identical fix for why (isPastMechanismSessionEnd() needs bar.mod, not a ts string).
+function bar(hhmm, high, low, close, dateStr = '2026-08-10') {
+  const [hh, mm] = hhmm.split(':').map(Number);
+  return { ts: `${dateStr} ${hhmm}:00`, mod: hh * 60 + mm, high, low, close };
 }
 
 function runPath(bars, params) {
@@ -143,6 +146,51 @@ function runPath(bars, params) {
     if (step.resolution) break;
   }
   assertEqual(seen, [20000, 20052, 20052, 20070], 'T7: arms at breakeven (not peak-trailWidth), then ratchet-only from there — increases on new peaks, holds flat on a pullback, never resets backward');
+}
+
+// ── Globex tests (added 2026-08-30, same incident as test_wider_target_walker_synthetic.mjs's
+// Globex tests -- the identical `hour>=16` bug was independently hand-rolled here too).
+
+// ── Test 9 (Globex): armed at 18:01 ET (Globex hours), must NOT immediately mark to market --
+// the old bug would have treated the very first bar of any Globex fire as session-end.
+// (Renumbered 2026-08-30, DeepSeek code review round 2 finding R8 -- this block used to be
+// labeled T6-T8, colliding with the RTH tests' own T6/T7 above.)
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, trailWidth: 20, long: true, firedMod: 18 * 60 };
+  const b = bar('18:01', 20070, 20050, 20065);
+  const step = stepBreakevenTrail({ armedAt: null, peakPrice: null, trailStopPrice: null }, b, params);
+  assertEqual(step.resolution, null, 'T9 (Globex): arms at 18:01 instead of marking to market immediately');
+  assert(step.state.armedAt != null, 'T9 (Globex): armedAt is correctly set for a Globex-hour fire');
+}
+
+// ── Test 10 (Globex): armed trail stays open overnight through a quiet 23:30 bar.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, trailWidth: 20, long: true, firedMod: 18 * 60 };
+  const state = { armedAt: '2026-08-17 18:01:00', peakPrice: 20070, trailStopPrice: 20050 };
+  const b = bar('23:30', 20075, 20060, 20065, '2026-08-17');
+  const step = stepBreakevenTrail(state, b, params);
+  assertEqual(step.resolution, null, 'T10 (Globex): armed overnight trail stays open mid-session, does not falsely mark-to-market');
+}
+
+// ── Test 11 (Globex): once the NEXT RTH open (9:30am ET, following calendar day) arrives with
+// the trail unbreached, marks to market with the trail-specific method string.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, trailWidth: 20, long: true, firedMod: 18 * 60 };
+  const state = { armedAt: '2026-08-17 18:01:00', peakPrice: 20070, trailStopPrice: 20050 };
+  const b = bar('09:31', 20065, 20060, 20062, '2026-08-18');
+  const step = stepBreakevenTrail(state, b, params);
+  assertEqual(step.resolution, { resolution: 'TIME_EXPIRED', method: 'TRAIL_TIME_EXPIRED', priceAtRes: 20062 }, 'T11 (Globex): marks to market at the NEXT RTH open, not immediately at fire time');
+}
+
+// ── Test 12 (dead zone, R3 fix): a trade fired at 16:10 ET (firedMod=970) must NOT instantly
+// mark-to-market on its own fire bar -- before the fix, firedMod=970 fell through to the RTH
+// branch (barMod>=960), and 970>=960 is already true.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, trailWidth: 20, long: true, firedMod: 970 };
+  const b = bar('16:11', 20070, 20050, 20065);
+  const step = stepBreakevenTrail({ armedAt: null, peakPrice: null, trailStopPrice: null }, b, params);
+  assertEqual(step.resolution, null, 'T12 (dead zone): arms at 16:11 (fired 16:10) instead of instantly marking to market');
+  assert(step.state.armedAt != null, 'T12 (dead zone): armedAt is correctly set for a dead-zone fire');
 }
 
 console.log(`\n${pass} passed, ${fail} failed.`);

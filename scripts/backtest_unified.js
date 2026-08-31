@@ -14,6 +14,7 @@
 
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { findTradingDayGaps } from '../server/services/queries.js';
 
 const PT     = 2;   // $2/pt NQ micro
 const COMM   = 2;   // $2 round-trip commission ($1/side x2, corrected 2026-08-11 — matches server/config/instruments.js MNQ.commissionPerRoundTrip)
@@ -416,8 +417,18 @@ function buildPriorWeekLevels(dates, barsByDate) {
 
 // ── 2-session composite POC ───────────────────────────────────────────────────
 function buildTwoDayPOC(dates, barsByDate) {
+  // FIXED 2026-08-31 (OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831):
+  // dates[i-1]/dates[i-2] below are treated as "the prior 2 trading sessions" -- silently
+  // wrong on the handful of dates immediately after one of the real ~63-day NQ
+  // contract-rollover gaps in price_bars_dedup_hist (Dec2023-May2025, see
+  // server/services/queries.js's header comment), where they're actually ~2 months in the
+  // past. Feeds PD2_VAH/PD2_VAL/2D_POC, already confirmed no real edge (CLAUDE.md, 2026-07-17)
+  // independent of this fix -- applied for correctness/completeness, not because this signal
+  // is expected to matter.
+  const gapAfterIndex = new Set(findTradingDayGaps(dates, 5).map(g => g.fromIndex));
   const pocByDate = new Map();
   for (let i = 2; i < dates.length; i++) {
+    if (gapAfterIndex.has(i - 1) || gapAfterIndex.has(i - 2)) continue;
     const bars = [...(barsByDate.get(dates[i-1]) || []), ...(barsByDate.get(dates[i-2]) || [])];
     if (!bars.length) continue;
     const vbk = {};

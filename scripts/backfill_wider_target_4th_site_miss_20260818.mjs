@@ -26,6 +26,7 @@ import { query } from '../server/db.js';
 import { resolveDirection } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../server/services/widerTargetWalker.js';
+import { firedAtToMod } from '../server/services/sessionBoundary.js';
 
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
@@ -71,7 +72,8 @@ async function main() {
     const long = direction === 'LONG';
 
     const barsQ = await query(`
-      SELECT ts::text as ts, high::float, low::float, close::float
+      SELECT ts::text as ts, high::float, low::float, close::float,
+             (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
       FROM price_bars_primary
       WHERE symbol='NQ' AND ts::date = $1 AND ts > $2::timestamp
         AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
@@ -79,6 +81,12 @@ async function main() {
     `, [row.trade_date, row.fired_at]);
     const bars = barsQ.rows;
     if (!bars.length) { skipped.push({ id: row.id, reason: 'no_bar_data' }); continue; }
+    // FIXED 2026-08-30 (DeepSeek code review round 2, finding R1): stepWiderTarget()'s
+    // internal session-end check now needs firedMod -- without it, isPastMechanismSessionEnd()
+    // silently no-ops (undefined>=960 is false). This eligibility gate is scoped to
+    // trade_date>=2026-08-17 SHADOW rows only and this script is a one-off, already-applied
+    // backfill (docstring above) -- but fixed for correctness regardless.
+    const firedMod = firedAtToMod(row.fired_at);
 
     const t1Distance = Math.abs(t1 - entry);
     const widerTarget = long ? entry + t1Distance * WIDER_TARGET_MULT : entry - t1Distance * WIDER_TARGET_MULT;
@@ -89,7 +97,7 @@ async function main() {
 
     for (const bar of bars) {
       barCount++;
-      const step = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER });
+      const step = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod });
       const wasWidening = state.widening;
       state = step.state;
       if (!wasWidening && state.widening && derivedBarsToT1 == null) derivedBarsToT1 = barCount;

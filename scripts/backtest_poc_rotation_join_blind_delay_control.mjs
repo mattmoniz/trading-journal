@@ -15,6 +15,15 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, TICK, formatET, mean, percentile } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. res.pnl stays in points
+// (trade-sim/CSV/MFE distances unaffected); only summarize()'s EV/WR/recordClaim conversion
+// changed.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 const PATH = 'standard';
 const R_PCT_REFERENCE_PRICE = 29547.75;
@@ -75,12 +84,12 @@ function summarize(results) {
     const N = results.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(results.map(r => r.e.t)).size;
-    const wins = results.filter(r => r.res.pnl > 0).length;
+    const wins = results.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (results.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (results.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     let rigorStr = 'n/a (N<20)';
     if (N >= 20) {
-        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
         rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
     }
     const exitBreakdown = {};
@@ -165,8 +174,16 @@ async function main() {
     const pctResult = await runConstruction('PCT_R0.22pct', R_PCT, 'pct', sessions, csvChunks);
 
     if (!fs.existsSync('reports')) fs.mkdirSync('reports');
-    fs.writeFileSync('reports/poc_rotation_join_confirm_wait_trades.csv', csvChunks.join(''));
-    fs.writeFileSync('scratch/poc_rotation_join_confirm_wait_report.json', JSON.stringify({ fixedResult, pctResult }, null, 2));
+    // FIXED 2026-08-30 (DeepSeek code review round 4, finding S2): this used to write the SAME
+    // two paths as backtest_poc_rotation_join_confirm_2close.mjs (copy-paste from that script,
+    // same commit) -- identical CSV header + identical wait{0,2,3,5}_{plain,mfe50,mfe75} variant
+    // labels made the two scripts' output files indistinguishable, and whichever ran second
+    // silently clobbered the other's data. Confirmed real damage: this script's own fresh JSON
+    // was overwritten 5 minutes later by confirm_2close.mjs during the 2026-08-30 poc_rotation
+    // dollar-fix re-run, and the only surviving record of this run's real numbers was its own
+    // stdout log (scratch/poc_rotation_rerun_logs/backtest_poc_rotation_join_blind_delay_control.log).
+    fs.writeFileSync('reports/poc_rotation_join_blind_delay_control_trades.csv', csvChunks.join(''));
+    fs.writeFileSync('scratch/poc_rotation_join_blind_delay_control_report.json', JSON.stringify({ fixedResult, pctResult }, null, 2));
 
     for (const result of [fixedResult, pctResult]) {
         const lines = Object.entries(result.byWait).map(([wb, v]) => {

@@ -6,6 +6,13 @@ import fs from 'fs';
 import { query } from '../server/db.js';
 import { mean, percentile } from './backtest_poc_rotation_vbp.mjs';
 import { detectSignalEvents, TICK, formatET } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV
+// below used to be a raw price-point average printed with a "$" prefix (no recordClaim in
+// this diagnostic-only MFE script, but the console output was still mislabeled).
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
 
 const PATH = 'standard';
 const R_PCT_REFERENCE_PRICE = 29547.75;
@@ -52,9 +59,15 @@ async function runConstruction(label, R, rMode, sessions, csvChunks) {
     }).filter(Boolean);
 
     const mfes = results.map(r => r.res.mfe).sort((a, b) => a - b);
-    const pnls = results.map(r => r.res.pnl);
+    // FIXED 2026-08-30 (DeepSeek code review round 4, finding S7): the conversion used to be
+    // inlined twice (once for pnls, once for the wr filter) instead of via a shared dollarPnl
+    // helper like the other 11 fixed scripts -- a real divergence risk if either copy is edited
+    // without the other. This is also the only one of the 12 fixed scripts with no recordClaim()
+    // call (diagnostic-only), so this dollar conversion feeds console output only.
+    const dollarPnl = r => r.res.pnl * PPT - COMM;
+    const pnls = results.map(dollarPnl);
     const N = results.length;
-    const wr = (results.filter(r => r.res.pnl > 0).length / N * 100).toFixed(1);
+    const wr = (results.filter(r => dollarPnl(r) > 0).length / N * 100).toFixed(1);
     const ev = (pnls.reduce((s, x) => s + x, 0) / N).toFixed(2);
     const stopHitPct = (results.filter(r => r.res.exitReason === 'STOP_HIT').length / N * 100).toFixed(1);
     const timeLimitPct = (results.filter(r => r.res.exitReason === 'TIME_LIMIT').length / N * 100).toFixed(1);

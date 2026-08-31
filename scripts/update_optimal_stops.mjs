@@ -136,7 +136,23 @@ function minDeltaNRequired(baselineN) {
 // placeholder, not a computed optimum) now lives in server/services/setupEligibility.js
 // (2026-08-19) so the live read path (getStopCalibrationConfidence) can never drift out of
 // sync with what this writer actually stamps -- imported above, not redefined here.
-function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, prior, bypass = false }) {
+// PLAUSIBILITY GATE (2026-08-30, DeepSeek-review-adjacent -- found while auditing why the
+// sweep's raw candidates keep proposing stop:target ratios like 356/25 or 188/10 for thin/
+// volatile setup_types: GLOBEX_VWAP_MAGNET_LONG/SHORT, VWAP_MAGNET_SHORT, IB_BEARISH,
+// STOP_SWEEP_LONG all had an unguarded candidate skewed >=12x). None of these ever went live --
+// the risk-ceiling cap and the pct-change breaker below both happen to catch them today -- but
+// nothing explicitly checks the RATIO itself, so a setup_type with no prior baseline yet (the
+// no_prior_baseline/placeholder-prior paths below, which accept unconditionally) has zero
+// protection against exactly this. Cutoff is data-derived (no static thresholds, per this
+// codebase's own hard rule) from the population of ALREADY-LIVE stop:target ratios across every
+// currently-calibrated setup_type -- a candidate more skewed than anything this system currently
+// actually runs is treated as implausible. Computed fresh each run in main() as
+// PLAUSIBLE_SKEW_CUTOFF and threaded in below, not hardcoded here.
+function skewRatio(stop, target) {
+  if (stop == null || target == null || stop <= 0 || target <= 0) return null;
+  return Math.max(stop / target, target / stop);
+}
+function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, prior, bypass = false, plausibleSkewCutoff = null }) {
   // One-time re-baseline escape hatch (2026-08-09, rawByType_origin_status_filter). Named
   // with the date deliberately so it can't be casually reused as a generic "skip the
   // breaker" flag later -- this run's whole point is that the population feeding every
@@ -152,9 +168,20 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
     return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
       circuitBreaker: { tripped: false, reason: 'bypassed_for_rebaseline_20260809', attemptedStop, attemptedTarget, priorStop: prior?.stop ?? null, priorTarget: prior?.target ?? null, lastRecalibratedN: currentN } };
   }
+  const attemptedSkew = skewRatio(attemptedStop, attemptedTarget);
+  const attemptedImplausible = plausibleSkewCutoff != null && attemptedSkew != null && attemptedSkew > plausibleSkewCutoff;
   if (!prior || prior.stop == null || prior.target == null) {
     // No prior row (or a null prior stop/target) -- nothing to compare against yet, let
-    // the natural pipeline output through and establish the first baseline.
+    // the natural pipeline output through and establish the first baseline. Still flag an
+    // implausible skew loudly rather than silently launching a setup_type's FIRST-EVER
+    // calibration at a ratio nothing else in this system currently runs at -- rejecting
+    // outright here would leave a brand-new type permanently uncalibrated instead, worse
+    // than a flagged first value a human can review.
+    if (attemptedImplausible) {
+      console.error(`  [PLAUSIBILITY WARNING] ${setupType}: first-ever calibration stop=${attemptedStop}/target=${attemptedTarget} (skew=${attemptedSkew.toFixed(1)}x) exceeds the live-population cutoff (${plausibleSkewCutoff.toFixed(1)}x) -- accepted with no prior to compare against, flagged for review.`);
+      return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+        circuitBreaker: { tripped: false, reason: 'no_prior_baseline_implausible_skew_flagged', attemptedSkew: +attemptedSkew.toFixed(2), plausibleSkewCutoff: +plausibleSkewCutoff.toFixed(2), lastRecalibratedN: currentN } };
+    }
     return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
       circuitBreaker: { tripped: false, reason: 'no_prior_baseline', lastRecalibratedN: currentN } };
   }
@@ -170,6 +197,11 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
   // here) would not be a real improvement, just a different placeholder wearing the breaker's
   // approval.
   if (isPlaceholderStopMethod(prior.method) && attemptedMethod && !isPlaceholderStopMethod(attemptedMethod)) {
+    if (attemptedImplausible) {
+      console.error(`  [PLAUSIBILITY WARNING] ${setupType}: first genuine calibration stop=${attemptedStop}/target=${attemptedTarget} (skew=${attemptedSkew.toFixed(1)}x) replacing a placeholder exceeds the live-population cutoff (${plausibleSkewCutoff.toFixed(1)}x) -- accepted (no real prior to fall back to), flagged for review.`);
+      return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
+        circuitBreaker: { tripped: false, reason: 'prior_was_placeholder_implausible_skew_flagged', priorMethod: prior.method, attemptedMethod, attemptedSkew: +attemptedSkew.toFixed(2), plausibleSkewCutoff: +plausibleSkewCutoff.toFixed(2), lastRecalibratedN: currentN } };
+    }
     console.error(`  [CIRCUIT BREAKER: PLACEHOLDER PRIOR] ${setupType}: prior stop=${prior.stop}/target=${prior.target} was never swept (method=${prior.method}) -- accepting first genuinely-swept value (method=${attemptedMethod}) stop=${attemptedStop} target=${attemptedTarget} unconditionally.`);
     return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
       circuitBreaker: { tripped: false, reason: 'prior_was_placeholder_accepting_first_genuine_calibration', priorMethod: prior.method, attemptedMethod, priorStop: prior.stop, priorTarget: prior.target, lastRecalibratedN: currentN } };
@@ -210,6 +242,13 @@ function applyCircuitBreaker({ setupType, currentN, attemptedStop, attemptedTarg
       circuitBreaker: { tripped: true, reason: 'pct_change_exceeded', maxPctChange: CIRCUIT_BREAKER_MAX_PCT_CHANGE,
         attemptedStop, attemptedTarget, attemptedEv, attemptedMethod, priorStop: prior.stop, priorTarget: prior.target,
         stopPctChange: +stopPctChange.toFixed(3), targetPctChange: +targetPctChange.toFixed(3), lastRecalibratedN: baselineN } };
+  }
+  if (attemptedImplausible) {
+    console.error(`  [CIRCUIT BREAKER TRIPPED: IMPLAUSIBLE SKEW] ${setupType}: attempted stop=${attemptedStop}/target=${attemptedTarget} (skew=${attemptedSkew.toFixed(1)}x) exceeds the live-population cutoff (${plausibleSkewCutoff.toFixed(1)}x) -- keeping prior stop=${prior.stop}/target=${prior.target}.`);
+    return { stop: prior.stop, target: prior.target, ev: prior.ev,
+      circuitBreaker: { tripped: true, reason: 'implausible_risk_reward_skew', attemptedStop, attemptedTarget, attemptedEv, attemptedMethod,
+        attemptedSkew: +attemptedSkew.toFixed(2), plausibleSkewCutoff: +plausibleSkewCutoff.toFixed(2),
+        priorStop: prior.stop, priorTarget: prior.target, lastRecalibratedN: baselineN } };
   }
   return { stop: attemptedStop, target: attemptedTarget, ev: attemptedEv,
     circuitBreaker: { tripped: false, reason: 'accepted', baselineN, currentN, deltaN, lastRecalibratedN: currentN } };
@@ -836,6 +875,51 @@ async function main() {
     }
   }
 
+  // PLAUSIBLE_SKEW_CUTOFF: data-derived (no static thresholds), recomputed fresh every run.
+  // Feeds applyCircuitBreaker()'s new plausibility gate (2026-08-30) -- see that function's
+  // comment for the incident this closes.
+  //
+  // CORRECTED same day (DeepSeek code review, run independently -- crashed mid-report but left a
+  // real, verified finding before it did): the first version derived this from the LIVE
+  // stop:target population itself. DeepSeek found that circular in a way CIRCUIT_BREAKER_MAX_PCT
+  // _CHANGE's own comment above already warned about for a related threshold: the gate only ever
+  // ACCEPTS candidates at or below the cutoff, and the cutoff is computed FROM accepted values --
+  // a self-reinforcing loop that can only ratchet the bound down over time, never up, and is
+  // further distorted by ~73% of the live population sharing one placeholder method (not
+  // independent observations of a real optimum). Verified directly, not just trusted: confirmed
+  // both the concentration and the ratchet-direction concern hold against the live table.
+  //
+  // Fixed by deriving from an EXTERNAL ground truth instead -- the real (REAL_TRADE_FILTER-
+  // adjacent) population's own p75-MAE-vs-p75-MFE ratio per setup_type (N>=20 only), the same
+  // "ground the bound in real market behavior, not this system's own prior output" principle
+  // CIRCUIT_BREAKER_MAX_PCT_CHANGE's comment concluded was the honest alternative for deltas.
+  // Verified independently: n=28 setup_types, p50=1.18, p95=2.02, max=2.52 -- reassuringly close
+  // to the original (circular) 2.55x, but now grounded in something the sweep doesn't control.
+  let PLAUSIBLE_SKEW_CUTOFF = null;
+  {
+    const maeMfeRes = await query(`
+      SELECT setup_type,
+        percentile_cont(0.75) WITHIN GROUP (ORDER BY mae_points) as p75mae,
+        percentile_cont(0.75) WITHIN GROUP (ORDER BY mfe_points) as p75mfe
+      FROM active_setups
+      WHERE origin_status IN ('ACTIVE','SHADOW') AND resolution IN ('STOP_HIT','TARGET_HIT')
+        AND mae_points IS NOT NULL AND mfe_points IS NOT NULL
+      GROUP BY setup_type
+      HAVING COUNT(*) >= 20
+    `);
+    const marketRatios = maeMfeRes.rows
+      .map(row => (row.p75mae > 0 && row.p75mfe > 0) ? Math.max(row.p75mae / row.p75mfe, row.p75mfe / row.p75mae) : null)
+      .filter(r => r != null)
+      .sort((a, b) => a - b);
+    if (marketRatios.length >= 20) {
+      const idx = Math.min(marketRatios.length - 1, Math.floor(marketRatios.length * 0.95));
+      PLAUSIBLE_SKEW_CUTOFF = marketRatios[idx];
+      console.log(`Plausible stop:target skew cutoff (95th pct of ${marketRatios.length} real p75-MAE:p75-MFE ratios): ${PLAUSIBLE_SKEW_CUTOFF.toFixed(2)}x`);
+    } else {
+      console.log(`Too few setup_types (${marketRatios.length}) with N>=20 real MAE/MFE pairs to derive a plausibility cutoff this run -- gate disabled.`);
+    }
+  }
+
   // 1a2. Real per-setup_type dollars-per-point, derived from resolved trades' actual dollar
   // P&L vs. their real point distance to stop/target — NOT a flat assumed constant, though
   // in practice every setup_type resolves to the same ~$2.01-2.06/pt (MNQ's real $2/pt plus
@@ -1190,6 +1274,7 @@ async function main() {
         attemptedStop, attemptedTarget, attemptedEv, attemptedMethod: targetMethod,
         prior: priorStoredByType[r.setup_type],
         bypass: BYPASS_BREAKER,
+        plausibleSkewCutoff: PLAUSIBLE_SKEW_CUTOFF,
       });
       optStop = decision.stop; optTarget = decision.target; optEV = decision.ev;
       let baseNotes = null;
@@ -1212,7 +1297,12 @@ async function main() {
       // the attempted method (baseNotes.method) when no prior stored method exists -- the ??
       // fallback used to reintroduce this exact bug silently for any type reaching this branch
       // with a null/missing prior notes.method.
-      if (decision.circuitBreaker.reason === 'min_delta_n_not_met' || decision.circuitBreaker.reason === 'pct_change_exceeded') {
+      // FIXED 2026-08-30 (DeepSeek code review, same day the new gate was added): the new
+      // 'implausible_risk_reward_skew' freeze reason (applyCircuitBreaker() above) was missing
+      // from this list -- it also reverts optStop/optTarget to the prior stored values, so it
+      // needs the exact same relabel-to-prior-method fix as the other two freeze reasons, or it
+      // silently reopens the 2026-08-19/20 stale-method-label bug for this one new path.
+      if (decision.circuitBreaker.reason === 'min_delta_n_not_met' || decision.circuitBreaker.reason === 'pct_change_exceeded' || decision.circuitBreaker.reason === 'implausible_risk_reward_skew') {
         baseNotes = { ...baseNotes, method: priorStoredByType[r.setup_type]?.method ?? 'unknown-prior-method' };
       }
       // Day-clustering diagnostic (2026-08-18, DeepSeek-recommended -- see MIN_SWEEPABLE_N's

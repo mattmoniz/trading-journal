@@ -45,6 +45,7 @@ import pool from '../server/db.js';
 import { getOpeningRange } from '../server/services/acdBacktest.js';
 import { precomputeCrossovers } from './update_optimal_stops.mjs';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { findTradingDayGaps } from '../server/services/queries.js';
 
 const STOP_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
 const TARGET_DPP = LIVE_INSTRUMENT.dollarsPerPoint;
@@ -87,12 +88,25 @@ async function main() {
   }
   const dates = Array.from(barsByDateMap.keys()).sort();
 
+  // FIXED 2026-08-31 (OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831):
+  // dates[i-1] below is treated as "the prior trading session" -- silently wrong on the
+  // handful of dates that are the FIRST real day after one of the real ~63-day NQ
+  // contract-rollover gaps in price_bars_dedup_hist (Dec2023-May2025, see
+  // server/services/queries.js's header comment), where dates[i-1] is actually ~2 months in
+  // the past. This is the most exposed of the positional-indexing scripts flagged in this
+  // decision -- the whole premise here is measuring distance from the IMMEDIATELY preceding
+  // close, so a stale multi-month-old close would silently produce a huge, meaningless
+  // "gap down" reading on those specific dates instead of being excluded like any other
+  // missing-data case already is (the `if (prevRthClose == null) continue;` check below).
+  const gapAfterIndex = new Set(findTradingDayGaps(dates, 5).map(g => g.fromIndex));
+
   // Prior-session RTH close per date -- same definition the mining script used
   // (prior day's last RTH bar close), matching lp.PD_CLOSE's live source
   // (developing_value_log.session_close) so the backtest population matches what
   // the live resolveSetupType() override will classify.
   const prevRthCloseByDate = new Map();
   for (let i = 1; i < dates.length; i++) {
+    if (gapAfterIndex.has(i - 1)) continue; // dates[i-1] is not really "yesterday" -- leave prevRthCloseByDate unset, same as any other missing-data date
     const prevBars = barsByDateMap.get(dates[i - 1]);
     prevRthCloseByDate.set(dates[i], prevBars[prevBars.length - 1].close);
   }

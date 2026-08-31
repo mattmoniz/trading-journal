@@ -10,7 +10,9 @@
 // ratchet-only) with a REAL non-zero trailWidth this time -- the earlier
 // "breakeven-at-mfe50" test in this thread used an effectively-zero-buffer snap
 // (stop = exact entry, no further trailing) and it performed terribly (WR collapsed
-// to ~1%) because a zero-buffer stop gets chopped at exactly $0 by ordinary noise
+// to ~1%) because a zero-buffer stop gets chopped at exactly breakeven (0 points -- pre-2026-08-30
+// commission-fix wording said "$0" here; after the fix a 0-point exit is -$2, not $0, but the
+// original point still holds: it's the WORST realistic outcome, not a bad one) by ordinary noise
 // before any trend has a chance to develop. This time the stop trails BEHIND the
 // peak by a real trailWidth, not frozen at breakeven.
 //
@@ -24,6 +26,17 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, TICK, formatET, mean, percentile } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. res.pnl stays in points
+// (trade-sim/CSV unaffected); only summarize()'s EV/WR/recordClaim conversion changed. This
+// mechanism is a single round trip (one stop, one trail-exit, one time-limit close) -- not
+// a scale-in -- so a flat -COMM per trade is correct here (unlike the scale-in scripts,
+// which apply -COMM once per unit added).
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 const PATH = 'standard';
 const R_PCT_REFERENCE_PRICE = 29547.75;
@@ -116,12 +129,12 @@ function summarize(results) {
     const N = results.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(results.map(r => r.e.t)).size;
-    const wins = results.filter(r => r.res.pnl > 0).length;
+    const wins = results.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (results.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (results.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     let rigorStr = 'n/a (N<20)';
     if (N >= 20) {
-        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
         rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
     }
     const exitBreakdown = {};

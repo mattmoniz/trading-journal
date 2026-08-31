@@ -35,6 +35,15 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { detectSignalEvents, TICK, formatET, mean, percentile } from './backtest_poc_rotation_vbp.mjs';
+import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+
+// FIXED 2026-08-30 (OPEN_DECISION poc_rotation_thread_points_mislabeled_as_dollars): EV/WR
+// below used to be raw price points printed with a "$" prefix. res.pnl stays in points
+// (trade-sim/CSV/MFE distances unaffected); only summarizeBucket()'s EV/WR/recordClaim
+// conversion changed.
+const PPT = LIVE_INSTRUMENT.dollarsPerPoint;
+const COMM = LIVE_INSTRUMENT.commissionPerRoundTrip;
+const dollarPnl = r => r.res.pnl * PPT - COMM;
 
 const PATH = 'standard';
 const R_PCT_REFERENCE_PRICE = 29547.75;
@@ -68,13 +77,13 @@ function summarizeBucket(results) {
     const N = results.length;
     if (N === 0) return { N: 0 };
     const distinctDates = new Set(results.map(r => r.e.t)).size;
-    const wins = results.filter(r => r.res.pnl > 0).length;
+    const wins = results.filter(r => dollarPnl(r) > 0).length;
     const wr = (wins / N * 100).toFixed(1);
-    const ev = (results.reduce((s, r) => s + r.res.pnl, 0) / N).toFixed(2);
+    const ev = (results.reduce((s, r) => s + dollarPnl(r), 0) / N).toFixed(2);
     const mfes = results.map(r => r.res.mfe).sort((a, b) => a - b);
     let rigorStr = 'n/a (N<20)';
     if (N >= 20) {
-        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: r.res.pnl })), { dateField: 't', pnlFn: r => r.pnl });
+        const rigor = computeRigor(results.map(r => ({ t: r.e.t, pnl: dollarPnl(r) })), { dateField: 't', pnlFn: r => r.pnl });
         rigorStr = `stable=${rigor.stable} cluster=${rigor.clustered}`;
     }
     return { N, distinctDates, wr, ev, valEV: Number(ev), rigorStr, mfe_mean: mean(mfes).toFixed(2), mfe_p50: percentile(mfes, 0.5).toFixed(2) };
