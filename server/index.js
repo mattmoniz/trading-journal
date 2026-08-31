@@ -1107,7 +1107,13 @@ httpServer.listen(PORT, () => {
       const { execSync } = await import('child_process');
       await logProcess('COMPUTE_LEVELS_POST_IB', async () => {
         const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-        execSync(`node scripts/compute_levels.js ${today}`, { cwd: process.cwd(), timeout: 60000 });
+        // --category=CURRENT (2026-08-31, OPEN_DECISION
+        // compute_levels_11am_cron_overwrites_full_session_levels): this cron exists ONLY to
+        // give the same-day-forming OR/IB levels a pass once they can actually be computed --
+        // without this flag it re-upserts EVERY category, including RTH_VWAP, which at 11am
+        // is still only a partial (9:30-11:00) average and would freeze that partial value
+        // into the same column a full-session read later expects.
+        execSync(`node scripts/compute_levels.js ${today} --category=CURRENT`, { cwd: process.cwd(), timeout: 60000 });
         return { count: 1 };
       });
     } catch (err) { console.error('[compute_levels_post_ib] Cron error:', err.message); }

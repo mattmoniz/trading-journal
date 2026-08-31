@@ -28,6 +28,28 @@ SERVER_MAIN_PID=$(systemctl --user show trading-journal-server.service -p MainPI
 export DUPLICATE_SERVER_COUNT DUPLICATE_SERVER_PIDS
 DUPLICATE_SERVER_PIDS=$(pgrep -f "node_modules/.bin/nodemon server/index.js" 2>/dev/null | tr '\n' ' ')
 DUPLICATE_SERVER_COUNT=$(echo "$DUPLICATE_SERVER_PIDS" | wc -w)
+
+# Orphaned-nodemon-child detector (added 2026-08-31, OPEN_DECISION
+# nodemon_child_orphan_silent_stale_serving). Found live 2026-08-25: the actual process
+# holding port 3002 had its PPID pointing at systemd (the standard orphan-reparent target),
+# NOT at the nodemon supervisor that was supposedly managing it -- health checks (GET
+# /api/health) and the port-holder itself were both fine the entire time, so this is a
+# SILENT failure mode distinct from the two checks above: DUPLICATE_SERVER_COUNT catches too
+# MANY supervisors, the PID-identity check above catches systemd-vs-port-holder drift, but
+# neither catches "exactly one nodemon is alive but has lost its link to the process actually
+# holding the port" -- file-watch-triggered restarts silently stop working with zero visible
+# symptom. Only meaningful to check when exactly one nodemon supervisor exists (0 means no
+# dev session is running nodemon at all -- not an error; 2+ is already flagged loudly by
+# DUPLICATE_SERVER_COUNT above and this check would be noise on top of that).
+export NODEMON_ORPHAN_MISMATCH
+NODEMON_ORPHAN_MISMATCH=""
+if [ "$DUPLICATE_SERVER_COUNT" -eq 1 ] && [ -n "$SERVER_PORT_PID" ]; then
+  NODEMON_PID=$(echo "$DUPLICATE_SERVER_PIDS" | tr -d ' ')
+  PORT_HOLDER_PPID=$(ps -o ppid= -p "$SERVER_PORT_PID" 2>/dev/null | tr -d ' ')
+  if [ -n "$PORT_HOLDER_PPID" ] && [ "$PORT_HOLDER_PPID" != "$NODEMON_PID" ]; then
+    NODEMON_ORPHAN_MISMATCH="nodemon pid=$NODEMON_PID is alive but port 3002's holder (pid=$SERVER_PORT_PID) has ppid=$PORT_HOLDER_PPID instead -- nodemon has lost its link to the actual running process; file-watch restarts are silently not working. Run ./restart.sh to fix."
+  fi
+fi
 ALERT_COUNT=0
 LAST_ALERT=""
 if [ -f "$REPO/scratch/gemini_alerts.txt" ]; then
@@ -412,6 +434,7 @@ const mainPid = process.env.SERVER_MAIN_PID || '';
 const pidMismatch = portPid && mainPid && mainPid !== '0' && portPid !== mainPid;
 const dupServerCount = parseInt(process.env.DUPLICATE_SERVER_COUNT || '0', 10);
 const dupServerPids = (process.env.DUPLICATE_SERVER_PIDS || '').trim();
+const nodemonOrphanMismatch = process.env.NODEMON_ORPHAN_MISMATCH || '';
 const recentServerDownRaw = process.env.RECENT_SERVER_DOWN_ALERTS || '';
 const recentServerDownLines = recentServerDownRaw.split('\n').filter(Boolean);
 const w = process.env.WATCHER_STATUS || 'unknown';
@@ -628,6 +651,16 @@ const lines = [
   '',
   dupServerCount > 1
     ? `🔴 DUPLICATE SERVER SUPERVISORS -- ${dupServerCount} separate nodemon processes running server/index.js at once (PIDs: ${dupServerPids}). Only one can hold port 3002 -- the rest crash-loop against it and each other forever, which is exactly what tripped trading-journal-server.service into a permanent 'failed' state on 2026-08-18.\n  ACTION: check \`ss -tlnp | grep 3002\` to find which PID actually holds the port, then \`kill -9\` every other one in the list above. start.sh/restart.sh/\`npm run server\` all share one takeover path now (scripts/lib/server-lifecycle.sh) that's supposed to prevent this -- if you're seeing this, something bypassed all three (e.g. \`nodemon server/index.js\` run directly instead of through \`npm run server\`).`
+    : '',
+  '',
+  // Orphaned-nodemon-child detector (2026-08-31, OPEN_DECISION
+  // nodemon_child_orphan_silent_stale_serving) -- a DIFFERENT silent failure mode than both
+  // checks above: exactly one nodemon is alive, port 3002 responds fine, but nodemon has lost
+  // its link to the process actually holding the port, so file-watch-triggered restarts
+  // silently stop working with zero visible symptom (found live 2026-08-25, a code edit sat
+  // live for 15+ minutes before anyone noticed).
+  nodemonOrphanMismatch
+    ? `🔴 NODEMON ORPHAN MISMATCH -- ${nodemonOrphanMismatch}`
     : '',
   '',
   recentServerDownLines.length > 0

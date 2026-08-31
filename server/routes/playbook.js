@@ -144,10 +144,15 @@ router.post('/assess', async (req, res) => {
       ),
       // Last 6 × 15-min bars — current price, trend, delta, bar body quality
       // sim_time clips to bars up to that ET hour:min for historical replay
+      // price_bars_primary, not raw price_bars (2026-08-31, OPEN_DECISION
+      // price_bars_multicontract_collision_audit): raw price_bars has 56,566
+      // timestamps where two different NQ contracts both have a row at the exact
+      // same instant -- a bare symbol='NQ' filter with no contract disambiguation
+      // can silently pick either one. price_bars_primary already resolves this.
       query(
         `SELECT ts, open, high, low, close, volume,
                 COALESCE(ask_volume, 0) as ask_vol, COALESCE(bid_volume, 0) as bid_vol
-         FROM price_bars
+         FROM price_bars_primary
          WHERE symbol = 'NQ' AND ts::date = $1
            AND EXTRACT(HOUR FROM ts) BETWEEN 9 AND 20
            AND EXTRACT(MINUTE FROM ts) % 15 = 0
@@ -505,9 +510,11 @@ router.post('/daily-review/:date/generate', async (req, res) => {
                 bars_to_resolution, size_multiplier, suppression_reason
          FROM active_setups WHERE trade_date = $1 ORDER BY fired_at`, [date]
       ),
+      // price_bars_primary, not raw price_bars (see the comment on this file's
+      // first query -- OPEN_DECISION price_bars_multicontract_collision_audit).
       query(
         `SELECT ts, open, high, low, close, volume
-         FROM price_bars
+         FROM price_bars_primary
          WHERE symbol = 'NQ' AND ts::date = $1
            AND EXTRACT(HOUR FROM ts AT TIME ZONE 'America/New_York') BETWEEN 9 AND 15
            AND EXTRACT(MINUTE FROM ts AT TIME ZONE 'America/New_York') % 15 = 0
@@ -726,9 +733,11 @@ router.post('/daily-review/:date/augment', async (req, res) => {
       if (dr.type !== 'BARS_1MIN') return { ...dr, data: 'not supported' };
       const [start, end] = (dr.window || '').split(/[–\-]/).map(t => t.trim());
       if (!start || !end) return { ...dr, data: 'invalid window' };
+      // price_bars_primary, not raw price_bars (see this file's first query --
+      // OPEN_DECISION price_bars_multicontract_collision_audit).
       const { rows } = await query(
         `SELECT ts, open, high, low, close, volume
-         FROM price_bars
+         FROM price_bars_primary
          WHERE symbol = 'NQ' AND ts::date = $1
            AND TO_CHAR(ts AT TIME ZONE 'America/New_York', 'HH24:MI') BETWEEN $2 AND $3
          ORDER BY ts`, [date, start, end]

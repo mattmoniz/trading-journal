@@ -54,7 +54,12 @@ async function main() {
           WHERE EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) < 630
         )::float                                                              AS ib_low,
         COUNT(*)                                                              AS bars
-      FROM price_bars
+      FROM price_bars_primary
+      -- price_bars_primary, not raw price_bars (2026-08-31, OPEN_DECISION
+      -- price_bars_multicontract_collision_audit) -- raw price_bars has 56,566
+      -- timestamps where two different NQ contracts both have a row at the exact
+      -- same instant; a bare symbol='NQ' filter has no way to pick the right one.
+      -- Verified: near-identical query time (489ms vs 465ms), no regression.
       WHERE symbol = 'NQ'
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
         AND ts::date <= CURRENT_DATE

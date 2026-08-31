@@ -652,7 +652,7 @@ export async function runDailyCoaching(targetDate, io) {
       const barsQ = await query(`
         SELECT close::float, high::float, low::float, open::float,
           EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) as et_min
-        FROM price_bars WHERE symbol='NQ' AND ts::date = $1
+        FROM price_bars_primary WHERE symbol='NQ' AND ts::date = $1
           AND EXTRACT(hour FROM ts) BETWEEN 9 AND 15
         ORDER BY ts
       `, [targetDate]);
@@ -690,7 +690,10 @@ export async function runDailyCoaching(targetDate, io) {
           SELECT AVG(sess_range)::float AS avg_range_20
           FROM (
             SELECT MAX(high) - MIN(low) AS sess_range
-            FROM price_bars
+            FROM price_bars_primary
+            -- price_bars_primary, not raw price_bars (2026-08-31, OPEN_DECISION
+            -- price_bars_multicontract_collision_audit) -- avoids a possible
+            -- multi-contract collision on a colliding timestamp.
             WHERE symbol = 'NQ' AND ts::date < $1
               AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
             GROUP BY ts::date HAVING COUNT(*) >= 200

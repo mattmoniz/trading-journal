@@ -528,6 +528,15 @@ const args = process.argv.slice(2);
 const isBackfill = args.includes('--backfill');
 const fromIdx = args.indexOf('--from');
 const fromDate = fromIdx >= 0 ? args[fromIdx + 1] : null;
+// --category=X (2026-08-31, OPEN_DECISION compute_levels_11am_cron_overwrites_full_session_levels):
+// still computes every category exactly as before (no change to any query above), only
+// filters what actually gets upserted -- lets the 11am-ET post-IB cron (server/index.js)
+// re-run JUST the same-day-forming CURRENT levels (OR/IB) without also re-writing RTH_VWAP
+// with a partial-session (9:30-11:00) average into the same column a full-session read
+// would use. Omitted entirely (the normal case, every other caller) = writes everything,
+// unchanged behavior.
+const categoryArg = args.find(a => a.startsWith('--category='));
+const categoryFilter = categoryArg ? categoryArg.split('=')[1] : null;
 
 if (isBackfill) {
   // Get all trading dates from developing_value_log
@@ -552,10 +561,12 @@ if (isBackfill) {
   }
   console.log(`Done. ${done} dates processed.`);
 } else {
-  // Single date
-  const date = args[0] || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  console.log(`Computing levels for ${date}...`);
-  const levels = await computeLevelsForDate(date);
+  // Single date -- args[0] is the date positional, so skip anything starting with '--'
+  // (a flag like --category=X) when looking for it.
+  const date = args.find(a => !a.startsWith('--')) || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  console.log(`Computing levels for ${date}${categoryFilter ? ` (category=${categoryFilter} only)` : ''}...`);
+  const allLevels = await computeLevelsForDate(date);
+  const levels = categoryFilter ? allLevels.filter(l => l.category === categoryFilter) : allLevels;
   await writeLevels(date, levels);
   console.log(`Wrote ${levels.length} levels:`);
   levels.forEach(l => console.log(`  ${l.name.padEnd(16)} ${l.price}  [${l.category}]`));
