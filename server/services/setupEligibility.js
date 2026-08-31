@@ -140,7 +140,16 @@ export const CAPITAL_EXPOSURE_OVERRIDE = new Map([
   // (update_optimal_stops.mjs) shipped the same session -- this setup_type's own OPTIMAL_STOP row
   // is itself deadlocked (baselineN=26/currentN=24 as of 2026-08-19), so its stop/target can't
   // even self-correct right now regardless of whether the geometry is ever revisited.
-  ['PD_POC_FADE_SHORT', { reason: 'UNSTABLE_NEGATIVE_EXPECTANCY_GEOMETRY', addedDate: '2026-08-19', revisitWhen: 'achieved real WR clears the break-even WR implied by its then-current OPTIMAL_STOP geometry across at least two consecutive calibration runs with real_n >= 40, AND its OPTIMAL_STOP is no longer circuit-breaker-deadlocked (see check [12b] in test_invariants.mjs). Tracked in OPEN_DECISION pd_poc_fade_short_capital_exposure_override_revisit -- query getStopCalibrationConfidence(\'PD_POC_FADE_SHORT\') directly, this condition is not machine-checked.' }],
+  //
+  // REMOVED 2026-08-31 (OPEN_DECISION pd_poc_fade_short_capital_exposure_override_revisit,
+  // user-confirmed): all 3 stated revisitWhen conditions checked directly and confirmed met.
+  // Current live geometry is stop=47/target=30 (break-even WR=61.0%, re-calibrated since the
+  // 82/47 figure above). Last 3 CONSECUTIVE SETUP_STATUS runs (not just the required 2) all
+  // clear it: real_wr 64.3% (08-27, real_n=42), 62.8% (08-28, real_n=43), 63.6% (08-30,
+  // real_n=44) -- all above the required real_n>=40. getStopCalibrationConfidence() returns
+  // unvalidated:false, and this setup_type is absent from test_invariants.mjs's circuit-
+  // breaker-tripped failure list -- no longer deadlocked. PD_POC_FADE_SHORT now returns to
+  // normal SETUP_STATUS-driven eligibility.
 ]);
 
 // Canonical "is this setup_type currently allowed to fire ACTIVE" source. Every live insert
