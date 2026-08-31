@@ -24,12 +24,24 @@ vs -0.20) and is actually mildly counterproductive as a filter within the exclus
 (bottom tercile $111.43 > top tercile $65.07) — ruled out as the tool for this specific job.
 Recorded as `RESEARCH_CLAIM setup_d_immediate_entry_vs_pullback_decomposition` (PROVISIONAL).
 
-**In progress**: a broader discriminator screen (drive magnitude, order-flow imbalance,
-volume-building, lookahead-corrected NL30 alignment, gap status, structural-level proximity) —
-does anything available by 10:15am ET predict overlap-vs-exclusive before it happens? Dispatched
-to Gemini, result pending. Per this codebase's standing rule on newly-built classifiers, any
-discriminator found here needs its own independent OOS validation before being wired, not just a
-full-sample screen.
+**Discriminator screen ran, same session** (`scripts/backtest_setup_d_opening_drive_stage3_screen.mjs`,
+dispatched to Gemini, independently re-verified byte-for-byte): of 6 candidates, **drive
+magnitude at confirm-close is a real, OOS-validated discriminator** — `(price - OR boundary) /
+OR range`, signed by direction. Exclusive days had already traveled a median 0.69 OR-ranges by
+10:15am vs 0.38 for overlap days; holds on a chronological train/test split (train AUC=0.293,
+test AUC=0.329, same direction, doesn't decay). Honest caveat: this is close to "already-traveled-
+further is mechanically harder to fully retrace," not a hidden order-flow secret — still real,
+previously-unused information though. All 5 other candidates (order-flow imbalance,
+volume-building, lookahead-corrected NL30 alignment, gap status, structural-level proximity)
+came back genuinely null (AUC 0.45–0.51). Recorded as `RESEARCH_CLAIM
+setup_d_drive_magnitude_discriminator` (PROVISIONAL).
+
+**Not yet done**: a concrete, data-derived threshold on drive magnitude (this screen established
+the feature has power, not a cutoff rule), a combined backtest of the resulting hybrid strategy
+(immediate entry above the threshold, patient pullback entry below it) against the pure existing
+baseline, and — given the modest N (205 total, 69 in the OOS fold) and this codebase's standing
+rule on validating a new classifier's own robustness before trusting its conditioning effects — a
+DeepSeek design critique on the threshold-selection methodology before building it.
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
