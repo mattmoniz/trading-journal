@@ -1,32 +1,49 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-08-31: IB_BULLISH/IB_BEARISH audit + redesign scoped — found a live misleading-text bug beyond the already-known gate issue
+## 🔶 2026-08-31: IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped around building it properly
 
 User question ("IB_BEARISH continues to stink, how is it still live") led to a real-data audit
-that found more than the already-known `ib_daytype_calibration_structurally_unreachable` gate
-bug. Confirmed live: the alert's `tier` label (`SOLID`/`MARGINAL`/`WEAK`) is a dead constant in
-practice (`dtClass` is null essentially every time IB closes, collapsing the ternary to the same
-value every fire — `WEAK` for every IB_BULLISH, `MARGINAL` for every IB_BEARISH), and the
-description text hardcodes "TURBULENT: strongest" (IB_BEARISH) / "TREND days: strongest"
-(IB_BULLISH) as static strings — empirically **wrong** per this session's real
-(`origin_status='ACTIVE'`) day-type pull: IB_BEARISH's real `TREND` bucket is decent (+$11.23,
-N=86), real `TURBULENT` loses (-$9.14, N=39) — the reverse of the hardcoded claim. The "best
-day-type" conclusion has flipped 3 times across this file's own comment history from 3
-independent audits — a strong signal of noise being re-discovered as signal, not a stable
-effect.
+that found a live misleading-text bug beyond the already-known
+`ib_daytype_calibration_structurally_unreachable` gate issue — the alert's `tier` label is a
+dead constant (`dtClass` null collapses it to the same value every fire), and the description
+text hardcodes a "best day-type" claim that's empirically wrong per real data, one that has
+flipped 3 times across 3 independent audits in this file's own comment history (noise being
+re-discovered as signal, not a stable effect).
 
-Full audit scope + 3 redesign ideas written: `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`.
-Two parts: (1) a cheap immediate fix (remove the wrong hardcoded claims from the live alert,
-separable from the rest) plus a proper real-data-only + IB-window-split re-derivation script;
-(2) three redesign ideas if the day-type-conditioning approach turns out to have nothing
-salvageable — reusing the already-validated, already-live `vol_building_signal` (forward-
-accumulating, only 4/229 real IB fires stamped so far); replacing the binary
-`ibBullish`/`ibBearish` AND with a continuous self-recalibrating conviction score (same shape
-of fix as the volume-building work); or an early-follow-through confirmation window (with the
-immortal-time-bias control DeepSeek caught on the scale-out thread earlier this session). Not
-started — recommends a design-critique dispatch before building the audit script, per CLAUDE.md's
-3-phase workflow for higher-stakes work. `OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped`
-(HIGH).
+**Then the user clarified what these setups are actually supposed to be**: capitalize on a
+break-and-retest of the 60-min Initial Balance boundary, then drive until the move exhausts.
+That reframed the whole thread — confirmed the live code (`computeIbBullBear()`) implements
+none of it: no break-of-boundary check (only a midpoint-position check), zero "retest" logic
+anywhere in `acd.js`, no drive/continuation confirmation, fires as one unconditional snapshot
+the instant IB closes. The entry signal never tested the thesis it's named for, which plausibly
+explains the whole history of unstable, contradictory day-type findings.
+
+Rectified against siblings per user request: `OPEN_TEST_DRIVE_LONG/SHORT` (test-then-drive off
+the open) is the closest existing analog and is a decisive real negative (EV -$29.54/-$14.74,
+N=113/106, suppressed since 2026-07-05) — a real prior worth weighing, though the IB boundary
+(60-min-earned, widely-watched) is a different anchor than a single open price. The general
+structural-breakout-retest engine (`docs/STRUCTURAL_BREAKOUT_RETEST_SPEC.md`) already tested
+this same shape of idea on swing pivots and got a clean 0/8 negative — second independent
+caution. `IB_HIGH_FADE`/`IB_LOW_FADE` (fade thesis) and `STOP_SWEEP_LONG/SHORT` (reversal
+thesis, currently `ACTIVE` and fine) confirmed as different families, left alone.
+
+Full doc rewritten: `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md` now leads with a
+concrete break/retest/drive detector (Idea 1, PRIMARY) as the real redesign — required confound
+controls (immortal-time-bias, structural-advantage control arm) explicit up front, given the two
+negative priors. Exit shape naturally pairs with the wider-target/breakeven-trail mechanisms or
+the 2-lot scale-out thread scoped earlier this same session (a continuation trade fits a
+runner-style exit far better than the current fixed 30-45pt target). Two refinements folded in:
+reusing the already-live `vol_building_signal` specifically as a live drive-vs-exhaustion gauge
+DURING the trade (not just an entry filter, per the user's own refinement), and a continuous-
+strength upgrade path for the break/retest/drive parameters once validated. Would be one of the
+only genuine trend-continuation bets in a ~118/122-fade roster, matching the user's documented
+breakout-trading preference — a real reason to test properly, not a guarantee of success given
+the priors.
+
+Not started. Suggested order: cheap tier/text fix now (separable, low-risk) → DeepSeek design
+critique on Idea 1 → signal-level forward-return pre-test → only then revisit the original
+day-type-gate question, since it may not transfer if the entry signal is replaced entirely.
+`OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
 
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
 

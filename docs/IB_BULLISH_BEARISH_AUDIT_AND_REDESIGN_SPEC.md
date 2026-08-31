@@ -2,8 +2,13 @@
 
 **Status: scoped and written up, zero code changed, zero backtest run.** Triggered by a direct
 user question ("how is IB_BEARISH still live") that uncovered a live, currently-misleading bug
-on top of the already-known day-type-gate problem. Read this doc fresh before touching either
-setup type again.
+on top of the already-known day-type-gate problem. **Then user clarified the setups' actual
+intended thesis** (break-and-retest of the 60-min Initial Balance boundary, then drive until the
+move exhausts) — confirmed the current code implements neither the break, the retest, nor a
+drive-confirmation, just a much weaker midpoint-position snapshot. That reframed this from "fix
+the day-type gate" to "the entry signal itself needs rebuilding" — Part 2's Idea 1 is now the
+primary redesign candidate, not a patch on top of the existing signal. Read this doc fresh
+before touching either setup type again.
 
 ## What's already confirmed wrong (this session, live-verified)
 
@@ -49,6 +54,69 @@ Recent 90d aggregate (real): `IB_BEARISH` EV=**-$5.99**/trade (N=145), trend cla
 `DEGRADING`, z-score trend `DECAYING` (0.69→0.53→**-2.46**). `IB_BULLISH` recent 90d real EV=
 +$9.24/trade (N=74) — currently fine in aggregate, but `z_trend`=`MIXED`, all-time EV -$6.82.
 
+## THE CENTRAL FINDING (user-clarified 2026-08-31): the current code doesn't test the intended thesis at all
+
+User's own framing of what these setups are supposed to be: **capitalize on a break-and-retest
+of the 60-minute Initial Balance low, then drive down until it stops going down (mirror for a
+break-and-retest of the IB high, driving up)**. That's a 3-stage price-action pattern — break,
+retest, confirmed continuation.
+
+**None of that exists in the current code.** Confirmed by grep — zero occurrences of "retest"
+anywhere in `acd.js`. The actual live logic (`computeIbBullBear()`, `caseEngine.js` ~157, fired
+from `acd.js` ~5271 the instant `etMin >= 630`, i.e. immediately at IB close, no wait after
+that):
+```
+ibBullish = ibClose > ibMid && totalAsk > totalBid
+ibBearish = ibClose < ibMid && totalBid > totalAsk
+```
+This just asks "did price close in the upper/lower **half** of the 60-min range, with more
+aggressive volume on that side" — no check that price ever actually broke beyond `ibHigh`/`ibLow`
+(the midpoint is a much weaker bar than the actual boundary), no retest, no continuation
+confirmation. It fires as a single, immediate, unconditional bet the moment IB closes. This is
+a fundamentally different (and weaker) signal than the one these setups are named for and
+supposed to represent — which plausibly explains why 3 independent audits of "which day-type is
+this good on" have each reached a different answer: the entry isn't anchored to a real,
+specific price-action event, so what gets captured is closer to noise than a repeatable pattern.
+
+### Rectify against sibling setups before redesigning in isolation
+
+Checked the rest of the roster for anything else touching this same concept, so the redesign
+doesn't duplicate or conflict with an existing sibling:
+
+- **`IB_HIGH_FADE_*`/`IB_LOW_FADE_*`** — a genuinely different thesis (fade/rejection AT the IB
+  boundary, not a breakout-continuation through it). Not part of this family, leave alone.
+- **`OPEN_DRIVE_LONG/SHORT`** — "price drives directionally away from the open with **no**
+  test" (`caseEngine.js` ~130). Same "drive" word, different anchor (the session open, a single
+  instant, not a 60-min-formed range) and explicitly the *no-retest* variant. Currently
+  `THIN_N`, real numbers thin/mixed (LONG EV=-$9.20 N=61, SHORT EV=+$2.27 N=64) — not a strong
+  prior either way.
+- **`OPEN_TEST_DRIVE_LONG/SHORT`** — "price tests then rejects the open, driving up/down"
+  (`caseEngine.js` ~138). This is the **closest existing structural analog** to what the user
+  described — test/retest then drive — just anchored to the open instead of the IB boundary.
+  **Real result: decisively negative.** WR 21.2%/21.7%, EV **-$29.54/trade** (N=113, LONG) and
+  **-$14.74/trade** (N=106, SHORT), suppressed live since 2026-07-05. This is a real, relevant
+  caution for the IB redesign — a structurally similar "test-then-drive" pattern already failed
+  hard for a different anchor level. Not a reason to abandon the IB-specific version (the IB
+  boundary is a level earned over 60 minutes of real price discovery and widely watched by other
+  market participants, unlike a single instantaneous open price — a legitimate reason it could
+  behave differently), but it raises the rigor bar: the new IB version needs to convincingly beat
+  this prior, not just look plausible in isolation.
+- **`STOP_SWEEP_LONG/SHORT`** — a genuinely different thesis (sweep beyond a level THEN
+  *reverse*, the opposite of a continuation drive). Currently `ACTIVE`, modestly positive
+  (EV +$2.00/+$7.77). Shares the same IB-window-recalibration decision
+  (`ib_bullbear_window_fix_recalibration_needed`) since it also reads IB boundaries, but it's a
+  different pattern — leave the entry logic alone, just make sure it gets included when that
+  window recalibration is eventually done.
+- **General structural breakout/retest research (`docs/STRUCTURAL_BREAKOUT_RETEST_SPEC.md`)** —
+  already tested this exact SHAPE of idea (dynamically-discovered swing-pivot levels, break +
+  retest + continuation) with real rigor and got a clean negative: 0/8 gated cells passed.
+  **Doesn't automatically transfer** — IB high/low is a specific, calendar-anchored, widely-
+  watched level, not an arbitrary discovered swing pivot — but it's the second independent prior
+  pointing the same direction (test/retest-then-continue ideas have a real track record of
+  failing in this codebase once actually tested), and that methodology's confound-control
+  lessons (entry-price-vs-fixed-exit structural advantage, the exact failure mode already caught
+  once on the candle-pattern/overshoot incident) apply directly to building this correctly.
+
 ## Part 1 — Audit scope (fix/verify what exists)
 
 1. **Immediate, low-risk fix (separable from the bigger redesign question)**: remove or correct
@@ -86,52 +154,74 @@ Recent 90d aggregate (real): `IB_BEARISH` EV=**-$5.99**/trade (N=145), trend cla
 
 ## Part 2 — New approach ideas (design-only, not started)
 
-The common thread across everything found in Part 1: `computeIbBullBear()` is a **binary
-snapshot** (`ibClose > ibMid AND totalAsk > totalBid`) computed **once**, at a fixed moment (IB
-close), with a **downstream binary day-type gate that can't even be read live**. This is the
-same shape of problem the volume-building work fixed — a static, single-snapshot binary
-classifier, no rolling self-recalibration, no separation of magnitude from direction. Three
-concrete alternative framings, roughly in order of buildable-now-ness:
+Given the central finding above, the redesign priority is inverted from the first draft of this
+doc: don't patch the day-type gate around a signal that never tested the intended thesis —
+**build the actual break-retest-drive pattern**, then decide whether the day-type conditioning
+still matters on top of it. Idea 1 is the primary candidate; Ideas 2-3 are refinements once 1
+exists, not independent alternatives to it.
 
-### Idea A — Reuse the already-validated volume-building signal instead of a frozen day-type read
+### Idea 1 (PRIMARY) — Build the real break/retest/drive pattern, replacing `computeIbBullBear()`
 
-`active_setups.vol_building_signal` (JSONB: `compositeStrength`, `avgVolZ`, `momentumContext`,
-etc.) is **already computed, already live, already self-recalibrating weekly** — no new research
-needed, it's wired informational-only across all real fades since 2026-08-28. Question: does
-IB_BULLISH/IB_BEARISH's edge condition on volume-building strength at the moment of the IB-close
-signal (e.g., does a HIGH `compositeStrength` reading distinguish real winners from real
-losers), instead of (or alongside) the broken day-type read? This directly reuses a signal this
-codebase has already spent real validation effort on, rather than inventing something new.
-**Real limitation**: coverage is thin right now — only 4 of 229 real IB fires have
-`vol_building_signal` populated (it's only been stamping since 2026-08-28), so this can only be
-tested going forward from here, not against the full historical population. Frame as a
-forward-accumulating informational tag first (matching the volume-building convention itself —
-tag now, test once N≥20 accumulates), not an immediate backtest.
+Concrete mechanics for `IB_BEARISH` (mirror for `IB_BULLISH`):
+1. **Break**: after the 60-min IB completes (10:30 ET, `ibLowToday` already computed live), price
+   trades below `ibLowToday` — a genuine boundary break, not a midpoint check.
+2. **Retest**: price subsequently trades back up to approach/touch `ibLowToday` again from below,
+   without closing decisively back above it (a rejection at the broken level from the underside).
+3. **Drive (the actual entry trigger)**: price resumes down after the retest — e.g. a new local
+   low below the retest bar's own low, or a close below the retest bar's low, confirming the
+   level held as resistance and continuation is underway. This is what should actually arm the
+   trade, not the IB-close snapshot.
+4. **Exit shape**: "drive until it stops going down" is a trend-continuation description, not a
+   fixed-small-target description — the current 30.5pt/45.8pt sweep-optimal targets almost
+   certainly cap a supposed continuation trade far too early, which may itself explain real
+   underperformance even on days the direction call was right. This is a natural fit for the
+   wider-target/breakeven-trail mechanisms already built in this codebase, or the 2-lot
+   scale-out-with-runner mechanism scoped earlier this same session
+   (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`) — a quick partial plus a protected runner is
+   a much more natural match for a genuine continuation setup than for the fade-heavy roster it
+   was originally tested on.
 
-### Idea B — Replace the binary AND with a continuous, self-recalibrating conviction score
+**Required rigor, given two independent real priors already point negative** (`OPEN_TEST_DRIVE`'s
+decisive real failure, the general structural-breakout-retest engine's clean 0/8 negative):
+- **No lookahead / no immortal-time-bias**: the retest-then-drive population is, by construction,
+  a survivorship-filtered subset (only trades that got as far as a retest). Compare against
+  trades alive at the same landmark bar (post-break, pre-retest), never against a population that
+  includes early breaks that never got a retest at all — the exact bias DeepSeek caught on the
+  scale-out confirmation-gate thread this session.
+- **Structural-advantage control arm**: since a "wait for break+retest" entry is inherently later
+  and closer to the eventual move than a naive immediate entry, include a blind-delayed-entry
+  control (same average entry timing/distance, no actual signal) to rule out the entry-price-vs-
+  fixed-exit confound that has burned this codebase before (the overshoot-entry incident cut an
+  apparent ~$77/trade edge down to ~$6).
+- Chronological OOS split, plateau check on any swept parameter (retest tolerance, drive
+  confirmation distance), `computeRigor()` (with `zTrend`) on the winning config.
+- A genuine negative — "the IB boundary doesn't behave differently from the open, break-retest-
+  drive still doesn't work here" — is a fully legitimate outcome given the priors already stacked
+  against this shape of idea.
 
-Instead of `ibBullish = (ibClose > ibMid) AND (totalAsk > totalBid)` (a 0/1 flag that treats a
-razor-thin IB close identically to a decisive one), compute a continuous composite: e.g.
-`(ibClose - ibMid) / (ibHigh - ibLow)` (a -0.5..+0.5 continuous position measure) combined with
-`totalAsk / (totalAsk + totalBid)` (a continuous 0..1 order-flow-imbalance ratio), each z-scored
-against a rolling distribution of past IBs' own such measures (matching the "no static
-thresholds" hard rule — no hardcoded 50/50 midpoint cutoff). This gives a genuine conviction
-score instead of a binary label, and — critically — lets magnitude and direction be tested
-*separately*, the exact methodological split that made the volume-building finding trustworthy
-(direction was a clean negative there; magnitude was real). Worth checking whether IB conviction
-strength predicts move SIZE regardless of the bullish/bearish label, independent of whether the
-label itself predicts direction correctly.
+### Idea 2 — Volume-building as a live drive-vs-exhaustion gauge (not just an entry filter)
 
-### Idea C — Early follow-through confirmation instead of betting on the IB-close snapshot alone
+User's own refinement: volume-building's documented behavior is a **real-time gauge with short
+persistence** (median ~4min episodes), not a one-shot predictive alert — that's a better fit for
+monitoring an in-progress drive than for a static entry checkbox. Two uses, not one:
+- **At entry**: does elevated volume-building strength at the break/retest moment distinguish
+  real drives that continue from ones that stall? (Still worth checking as a filter.)
+- **During the trade**: keep reading `vol_building_signal`'s live composite strength while the
+  drive is underway — tighten/trail the stop as it fades, since fading volume-building is
+  plausibly the live signature of "stopping going down" (the user's own exit description) rather
+  than waiting for a fixed target or a static trailing distance. This pairs naturally with Idea
+  1's runner-style exit shape.
+- Same coverage caveat as before: only stamped since 2026-08-28, forward-accumulating, can't be
+  backtested against the full historical IB population yet.
 
-Given the one real, moderately-sized surviving signal (`IB_BEARISH` on real `TREND` days) points
-at continuation/persistence mattering, consider: instead of firing purely on the binary
-IB-close read, add a confirmation window — does price actually *continue* in the IB-implied
-direction in the first N bars after IB close, before committing? This is directly analogous to
-the scale-out confirmation-gate thread earlier this session — **must be built with the same
-immortal-time-bias control DeepSeek caught there** (compare confirmed-and-continued trades only
-against other trades alive at the same landmark bar, never against a population that includes
-early failures) and a genuine structural-control arm, not a naive "confirmed vs. everyone" split.
+### Idea 3 — Continuous break/retest strength instead of a binary pass/fail
+
+Once Idea 1's basic break→retest→drive structure exists, the same "no static thresholds"
+upgrade path from the original draft still applies to ITS parameters: how far below `ibLowToday`
+counts as a genuine break (currently would be a hardcoded literal), how close a retest needs to
+come, how much continuation counts as "driving" — each of these should be a rolling,
+self-recalibrating distribution-derived value (e.g. relative to recent ATR/IB range), not a
+hand-picked constant, once the basic pattern is validated enough to be worth tuning.
 
 ## Rigor requirements before trusting any of Part 1 or Part 2's output
 
@@ -142,12 +232,31 @@ re-verification before anything gets promoted or wired. A genuine negative — "
 interaction survives, IB_BULLISH/IB_BEARISH should just be suppressed outright" — is a fully
 legitimate outcome of this audit, not a failure to find something.
 
+## Why this is worth the effort despite two negative priors already stacked against it
+
+Worth stating plainly: `OPEN_TEST_DRIVE`'s real -$29.54/-$14.74/trade failure and the general
+structural-breakout-retest engine's clean 0/8 negative are real reasons for skepticism, not
+reasons to skip the audit. But a correctly-built IB break-retest-drive setup would be one of the
+only genuine trend-continuation bets in a roster that's ~118/122 mean-reversion fades — this
+codebase has an existing, previously-unaddressed gap here (see memory
+`user-trading-style-breakout-preference`), and IB high/low is a meaningfully different anchor
+than either of the two priors (a session open, or an arbitrary discovered swing pivot) — it's a
+level formed over a full 60 minutes of real price discovery and widely watched by other market
+participants. That's a real reason it could behave differently, not just optimism. Worth testing
+properly; not worth assuming either way going in.
+
 ## Suggested next step
 
-1. Do the cheap fix first (remove the hardcoded tier/description claims) — low risk, addresses
-   an actively-misleading live display today, doesn't require the full audit to be done first.
-2. Dispatch this doc (not code) to DeepSeek for a design critique per the 3-phase workflow.
-3. Build the real-data-only, window-split audit script from Part 1.
-4. Only after Part 1's output is in hand, decide which (if any) of Part 2's ideas is worth a
-   real build — don't start Idea A/B/C code before Part 1 settles whether there's anything left
-   to save in the day-type-conditioning approach at all.
+1. **Do the cheap fix first** — remove the hardcoded `tier`/description claims from the live
+   alert (Part 1, item 1). Low risk, addresses an actively-misleading display today, doesn't
+   require anything else in this doc to be resolved first.
+2. **Dispatch this doc (not code) to DeepSeek for a design critique**, per the 3-phase workflow —
+   especially the Idea 1 mechanics and the confound-control plan, given how much is already
+   riding on getting the rigor right (two real negative priors for this shape of idea).
+3. **Build Idea 1's break/retest/drive detector as a bar-by-bar backtest first** (matching this
+   session's established pattern for exit-mechanism work) — a signal-level forward-return
+   pre-test before any trade machinery, per this codebase's own "new setup type checklist" item
+   4a — before writing any live insert path.
+4. Only once Idea 1 has a real, rigor-clean result does Part 1's original day-type-audit question
+   (fix the gate vs. suppress) become relevant again — if Idea 1 replaces the entry signal
+   entirely, the day-type conditioning built around the OLD signal may not even transfer.
