@@ -165,8 +165,14 @@ exists, not independent alternatives to it.
 Concrete mechanics for `IB_BEARISH` (mirror for `IB_BULLISH`):
 1. **Break**: after the 60-min IB completes (10:30 ET, `ibLowToday` already computed live), price
    trades below `ibLowToday` — a genuine boundary break, not a midpoint check.
-2. **Retest**: price subsequently trades back up to approach/touch `ibLowToday` again from below,
-   without closing decisively back above it (a rejection at the broken level from the underside).
+2. **Retest**: price subsequently trades back up to NEAR `ibLowToday` again from below — user
+   confirmed 2026-08-31 this does NOT require an exact touch, a proximity zone counts — without
+   closing decisively back above the boundary (a rejection at the broken level from the
+   underside). "Near" should be a rolling, self-recalibrating distance (e.g. a fraction of the
+   IB's own range, or a recent-ATR-relative tolerance), not a fixed point value — this pulls
+   forward part of what Idea 3 originally scoped as a later upgrade, since the user is specifying
+   proximity-tolerance as core to the definition from the start, not a refinement to add once a
+   fixed-touch version is already validated.
 3. **Drive (the actual entry trigger)**: price resumes down after the retest — e.g. a new local
    low below the retest bar's own low, or a close below the retest bar's low, confirming the
    level held as resistance and continuation is underway. This is what should actually arm the
@@ -199,29 +205,42 @@ decisive real failure, the general structural-breakout-retest engine's clean 0/8
   drive still doesn't work here" — is a fully legitimate outcome given the priors already stacked
   against this shape of idea.
 
-### Idea 2 — Volume-building as a live drive-vs-exhaustion gauge (not just an entry filter)
+### Idea 2 — Volume-building to identify which break/retest/drive setups become big winners
 
-User's own refinement: volume-building's documented behavior is a **real-time gauge with short
-persistence** (median ~4min episodes), not a one-shot predictive alert — that's a better fit for
-monitoring an in-progress drive than for a static entry checkbox. Two uses, not one:
-- **At entry**: does elevated volume-building strength at the break/retest moment distinguish
-  real drives that continue from ones that stall? (Still worth checking as a filter.)
-- **During the trade**: keep reading `vol_building_signal`'s live composite strength while the
-  drive is underway — tighten/trail the stop as it fades, since fading volume-building is
-  plausibly the live signature of "stopping going down" (the user's own exit description) rather
-  than waiting for a fixed target or a static trailing distance. This pairs naturally with Idea
-  1's runner-style exit shape.
+User's own framing (2026-08-31): "worth using the volume building stuff... because they should
+be big winners" — i.e. don't just check whether volume-building agrees with direction, use it
+specifically to select which drive-confirmed setups are likely to turn into large moves worth a
+runner. This is a well-grounded hypothesis, not a fresh guess: volume-building's **most
+rigorously validated finding** (confound-checked, RTH+Globex independently) is specifically a
+**magnitude** prediction — top-decile composite strength correlates with a ~44% larger 20-min
+excursion than bottom-decile, **in either direction** — while its direction-prediction property
+was a clean, separately-tested negative. A break/retest/drive setup is, by construction, already
+direction-committed (the break tells you which way) — so pairing it with volume-building's
+proven magnitude signal at the drive-confirmation moment is a natural fit: use elevated
+`compositeStrength` as a real, evidence-based reason to size up / trust the runner further,
+rather than a generic "does it agree" filter. Two uses, not mutually exclusive:
+- **At drive confirmation**: does elevated volume-building strength at that moment predict which
+  confirmed drives actually become the big winners, vs. the ones that stall quickly? This is the
+  primary hypothesis to test, directly reusing the already-proven magnitude property.
+- **During the trade**: volume-building is also documented as a real-time gauge with short
+  persistence (median ~4min episodes) — keep reading it live while the drive is underway and
+  tighten/trail as it fades, since fading volume-building is plausibly the live signature of
+  "stopping going down" (the user's own exit description) rather than a fixed target or static
+  trailing distance. Pairs naturally with Idea 1's runner-style exit shape.
 - Same coverage caveat as before: only stamped since 2026-08-28, forward-accumulating, can't be
-  backtested against the full historical IB population yet.
+  backtested against the full historical IB population yet — but that's less of a blocker for
+  this idea specifically, since Idea 1's own detector is also being built from scratch and both
+  can accumulate real data together going forward rather than needing a historical backtest.
 
 ### Idea 3 — Continuous break/retest strength instead of a binary pass/fail
 
-Once Idea 1's basic break→retest→drive structure exists, the same "no static thresholds"
-upgrade path from the original draft still applies to ITS parameters: how far below `ibLowToday`
-counts as a genuine break (currently would be a hardcoded literal), how close a retest needs to
-come, how much continuation counts as "driving" — each of these should be a rolling,
-self-recalibrating distribution-derived value (e.g. relative to recent ATR/IB range), not a
-hand-picked constant, once the basic pattern is validated enough to be worth tuning.
+The retest-proximity tolerance is now specified as rolling/self-recalibrating from the start
+(folded into Idea 1 above, per the user's clarification). Two parameters still worth the same
+treatment once Idea 1's basic structure is validated: how far below `ibLowToday` counts as a
+genuine break (currently would default to a hardcoded literal), and how much continuation counts
+as "driving" (the drive-confirmation distance) — both should be rolling, self-recalibrating
+distribution-derived values (e.g. relative to recent ATR/IB range), not hand-picked constants,
+once the basic pattern is proven worth tuning further.
 
 ## Rigor requirements before trusting any of Part 1 or Part 2's output
 
