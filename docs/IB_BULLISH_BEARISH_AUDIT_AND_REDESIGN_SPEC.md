@@ -352,6 +352,49 @@ of the proven magnitude-only finding — it needs its own independent test, not 
 6. **(c) Live wiring, last** — through the existing SHADOW→ACTIVE ramp, kill criteria specified
    in advance.
 
+## Step (a0) result (2026-08-31): placebo/level-swap test — CLEAN NEGATIVE
+
+Dispatched to Gemini as a mine-and-run per the revised build order. Gemini's script omitted its
+own print/output calls (would have produced zero output as pasted into the response) — re-added
+them and re-ran the identical logic directly against `gemini_readonly`; every number reproduced
+exactly (`scratch/reproduce_ib_placebo_test.mjs`). Confirmed no day-clustering risk (the state
+machine allows at most one signal per day per arm by construction).
+
+**NQ 1-min RTH bars, 2022-12-14 to 2026-08-31 (449 trading days).** Same break/retest/drive logic
+(0.15×IB-range tolerance, close-below-retest-bar's-own-low/high within 20 bars) applied
+identically to 4 anchor levels — only the anchor price differs:
+
+| Arm | Bearish N | 20m/40m/60m (pt) | Bullish N | 20m/40m/60m (pt) |
+|---|---|---|---|---|
+| A: Real IB boundary | 155 | -2.76 / +1.43 / **-8.27** | 195 | -1.73 / +1.52 / -2.30 |
+| B: Session open | 141 | -4.21 / +1.52 / +1.76 | 162 | +0.42 / +0.35 / +0.02 |
+| C: IB midpoint | 200 | **+6.99 / +2.96 / +6.24** | 221 | -0.03 / +4.21 / +3.16 |
+| D: Shifted (±1 IB range) | 42 | -19.07 / -29.04 / -20.85 | 31 | -3.05 / -7.75 / -3.18 |
+
+The real IB boundary (Arm A) shows flat-to-negative, sign-inconsistent returns on both sides —
+**worse than Arm C, an economically meaningless midpoint level, on the bearish side across all 3
+horizons.** The all-break-days control (raw break of the real boundary, no retest/drive filter)
+performed statistically indistinguishably from the full setup (-2.68/+2.32/-3.37 vs
+-2.76/+1.43/-8.27 bearish) — retest+drive added no measurable EV over trading the raw break.
+
+**This directly refutes the one differentiator that justified testing IB despite the two prior
+negatives** ("a 60-min-earned, widely-watched level, unlike a session open or an arbitrary
+pivot") — the real boundary did not outperform either an arbitrary shifted level or an
+even-more-arbitrary midpoint. DeepSeek's design critique predicted exactly this outcome on
+mechanism grounds before the test ran (a discretionary "traders defend this level" effect
+plausibly arbitraged out of a liquid, algo-dominated micro contract) and called this the single
+highest-value, cheapest de-risking step for exactly this reason.
+
+Recorded as `RESEARCH_CLAIM ib_break_retest_drive_placebo_test_negative` (CONFIRMED — the
+independent re-run IS the confirmation, not a second pending check). **Recommendation, not yet
+actioned pending user confirmation**: treat Idea 1 (break/retest/drive replacing
+`computeIbBullBear()`) as NOT supported by this first, cheapest test. Do not proceed to the
+signal-level forward-return pre-test (step a) or any exit-mechanism work for this redesign as
+currently configured. Options from here: (a) a materially different anchor/mechanism entirely,
+(b) accept the negative and suppress `IB_BULLISH`/`IB_BEARISH` outright (a fully legitimate
+outcome this spec already names as acceptable), or (c) something else — a decision for the user,
+not something to auto-resolve.
+
 ## Rigor requirements before trusting any of Part 1 or Part 2's output
 
 Same non-negotiable bar as every other backtest this session: chronological OOS split, plateau

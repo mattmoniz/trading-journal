@@ -64,10 +64,24 @@ error for a continuation trade's return shape, not just mistuned — must be re-
 observed forward-return distribution, not reused wholesale). Full detail:
 `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "DeepSeek design critique" section.
 
-**Revised next step**: the placebo/level-swap test (does the real IB boundary beat the same
-detector run on the session open / IB mid / a shifted level / a random level?) is now the
-cheapest kill-gate and comes BEFORE the signal-level forward-return pre-test that was originally
-next — dispatching to Gemini as a mine-and-run (DB-backed).
+**Step 3 (the placebo/level-swap test) ran and came back CLEAN NEGATIVE, same session.**
+Dispatched to Gemini, independently re-verified (Gemini's script omitted its own print calls;
+re-added them, re-ran directly against `gemini_readonly`, every number reproduced exactly — see
+`scratch/reproduce_ib_placebo_test.mjs`). NQ 1-min RTH bars, 2022-12-14 to 2026-08-31, 449 days.
+The real IB boundary showed flat-to-negative, sign-inconsistent forward returns and was actually
+WORSE than an economically meaningless IB-midpoint placebo on the bearish side across all 3
+horizons (20/40/60min) — this directly refutes the one differentiator ("a widely-watched,
+60-min-earned level") that justified testing IB despite the two prior negatives (`OPEN_TEST_DRIVE`,
+the structural-breakout-retest engine). The all-break-days control also showed the retest+drive
+filter adds no measurable EV over trading the raw break. DeepSeek's design critique predicted
+this exact outcome on mechanism grounds before the test ran. Recorded as
+`RESEARCH_CLAIM ib_break_retest_drive_placebo_test_negative` (CONFIRMED). Full numbers:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "Step (a0) result" section.
+
+**Recommendation pending user confirmation, not yet actioned**: treat Idea 1 as not supported;
+don't proceed to the forward-return pre-test or exit-mechanism work as currently configured.
+Open question for the user: try a materially different mechanism, accept the negative and
+suppress `IB_BULLISH`/`IB_BEARISH` outright, or something else.
 `OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
 
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
