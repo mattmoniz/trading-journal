@@ -386,14 +386,25 @@ plausibly arbitraged out of a liquid, algo-dominated micro contract) and called 
 highest-value, cheapest de-risking step for exactly this reason.
 
 Recorded as `RESEARCH_CLAIM ib_break_retest_drive_placebo_test_negative` (CONFIRMED — the
-independent re-run IS the confirmation, not a second pending check). **Recommendation, not yet
-actioned pending user confirmation**: treat Idea 1 (break/retest/drive replacing
-`computeIbBullBear()`) as NOT supported by this first, cheapest test. Do not proceed to the
-signal-level forward-return pre-test (step a) or any exit-mechanism work for this redesign as
-currently configured. Options from here: (a) a materially different anchor/mechanism entirely,
-(b) accept the negative and suppress `IB_BULLISH`/`IB_BEARISH` outright (a fully legitimate
-outcome this spec already names as acceptable), or (c) something else — a decision for the user,
-not something to auto-resolve.
+independent re-run IS the confirmation, not a second pending check).
+
+## RESOLVED 2026-08-31 (user-confirmed): both setup types suppressed, thread closed
+
+User's direct call given the full weight of evidence above: **"dump them both."** Implemented via
+a new, deliberate `MANUAL_SUPPRESS_OVERRIDE` in `scripts/backtest_setup_status.mjs` (removed
+`IB_BULLISH`/`IB_BEARISH` from `DAY_TYPE_CONDITIONAL` — that carve-out was itself part of the
+problem, giving them a pass whenever at least one day-type bucket happened to clear the bar,
+which is exactly why the "good bucket" answer kept flip-flopping across audits). Ran the pipeline
+live: both now show `recommendation='SUPPRESS'` in `performance_audit` as of 2026-08-31, which
+`_suppressedSetups` picks up on the next poll — same real, no-banner, no-real-trade-alert
+treatment as every other suppressed setup_type (SHADOW-only, keeps accumulating forward-test
+data silently in case of a future genuine recovery attempt, matching this codebase's standard
+mechanism). Do not remove the override based on a routine automatic recovery signal — see the
+override's own `REVISIT` condition in the code (a materially different, freshly-tested
+mechanism, not this file's own PROMOTE logic).
+
+**This does not close the door on the underlying idea** — see "Next: capitalizing on big
+breaks" below for the user's follow-up direction (the same session, same day).
 
 ## Rigor requirements before trusting any of Part 1 or Part 2's output
 

@@ -123,8 +123,44 @@ const PROMOTE_MIN_EV   = 0;    // any positive real EV
 // and therefore can't be evaluated as a single suppress/promote decision. These are managed
 // by DAY_TYPE_ALPHA in acd.js, which applies per-(setup_type × day_type) sizing adjustments.
 const DAY_TYPE_CONDITIONAL = new Set([
-  'IB_BULLISH',  // TREND=76%+WR, BALANCE=51% → overall EV dragged by BALANCE (which self-gates)
-  'IB_BEARISH',  // same pattern — TURBULENT elite, BALANCE marginal
+  // IB_BULLISH/IB_BEARISH REMOVED 2026-08-31 -- see MANUAL_SUPPRESS_OVERRIDE below. Their
+  // DAY_TYPE_CONDITIONAL treatment assumed a real day-type interaction exists to condition on;
+  // this session's audit (docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md) found the "good
+  // bucket" has flipped 3 times across independent audits -- the signature of noise being
+  // re-discovered as signal, not a real effect -- which is exactly why this carve-out kept
+  // giving them a pass (at least one bucket always happens to clear the -$5 bar) despite
+  // negative all-time blended EV. If a genuinely new DAY_TYPE_CONDITIONAL candidate shows up,
+  // add it here as its own entry with its own justification -- don't reuse this comment.
+]);
+
+// Deliberate, human-reviewed manual suppression -- NOT a threshold the automatic SUPPRESS/
+// PROMOTE/THIN_N logic below computed (that stays the default path for everything else per
+// CLAUDE.md's "Unified suppression pipeline" hard rule), and NOT the same axis as
+// CAPITAL_EXPOSURE_OVERRIDE (setupEligibility.js -- that's specifically for a type whose WR/EV
+// clears the bar but whose stop/target calibration is known-thin). This is a THIRD, narrower
+// axis: a type user-confirmed dead based on a full qualitative audit that a blended-EV/N
+// threshold can't capture on its own.
+//
+// IB_BULLISH/IB_BEARISH, added 2026-08-31 (user-confirmed, "dump them both", following
+// docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md's full audit): the live signal
+// (computeIbBullBear()) never tested the setups' own named thesis (break-and-retest of the IB
+// boundary, then drive) -- it's a same-instant midpoint-position + order-flow snapshot with no
+// break/retest/drive logic at all. The proposed real-thesis replacement (Idea 1) was tested at
+// its cheapest kill-gate (a placebo/level-swap test, Gemini mine-and-run, independently
+// re-verified) and came back clean negative -- the real IB boundary did not outperform an
+// economically meaningless midpoint or an arbitrary shifted level. Two other real negatives
+// already exist in this codebase for this same shape of idea (OPEN_TEST_DRIVE_LONG/SHORT,
+// EV -$29.54/-$14.74/trade; the structural-breakout-retest engine, 0/8). IB_BULLISH was also
+// separately already SHADOW-only since 2026-08-19 via CAPITAL_EXPOSURE_OVERRIDE (day-clustered
+// stop/target calibration) -- a second, independent red flag.
+// REVISIT: only if a materially different mechanism/anchor is designed, tested from scratch,
+// and clears this codebase's standard rigor bar (chronological OOS, plateau, computeRigor,
+// real N≥20) -- not by this file's own automatic recovery logic, which this override
+// deliberately bypasses. Remove the entry only after that fresh work, not because a routine
+// scan stops flagging it.
+const MANUAL_SUPPRESS_OVERRIDE = new Map([
+  ['IB_BULLISH', { reason: 'no_real_thesis_tested_plus_placebo_test_negative', addedDate: '2026-08-31' }],
+  ['IB_BEARISH', { reason: 'no_real_thesis_tested_plus_placebo_test_negative', addedDate: '2026-08-31' }],
 ]);
 
 async function run() {
@@ -344,6 +380,17 @@ async function run() {
     const ev     = +r.ev;
     const rec90  = recent[type];
     const wasSuppressed = currentStatus[type] === 'SUPPRESS';
+
+    // Manual suppress override (see MANUAL_SUPPRESS_OVERRIDE above) — a deliberate,
+    // human-reviewed kill that bypasses this file's own automatic recommendation logic
+    // entirely, including the recovery/PROMOTE path. Checked first, before any other branch.
+    if (MANUAL_SUPPRESS_OVERRIDE.has(type)) {
+      const override = MANUAL_SUPPRESS_OVERRIDE.get(type);
+      suppressed++;
+      console.log(`  SUPPRESS ${type.padEnd(38)} manual override: ${override.reason} (added ${override.addedDate})`);
+      results.push({ type, n, realN, wr, ev, totalPnl: +r.total_pnl, recommendation: 'SUPPRESS', rec90, manualOverride: override });
+      continue;
+    }
 
     // Day-type conditional setups: skip the blended-EV suppress/promote check — managed
     // per-day-type by DAY_TYPE_ALPHA / the dtClass checks in acd.js instead. But still apply

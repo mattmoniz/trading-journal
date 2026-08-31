@@ -1,6 +1,6 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-08-31: IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped around building it properly
+## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
 User question ("IB_BEARISH continues to stink, how is it still live") led to a real-data audit
 that found a live misleading-text bug beyond the already-known
@@ -78,11 +78,18 @@ this exact outcome on mechanism grounds before the test ran. Recorded as
 `RESEARCH_CLAIM ib_break_retest_drive_placebo_test_negative` (CONFIRMED). Full numbers:
 `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "Step (a0) result" section.
 
-**Recommendation pending user confirmation, not yet actioned**: treat Idea 1 as not supported;
-don't proceed to the forward-return pre-test or exit-mechanism work as currently configured.
-Open question for the user: try a materially different mechanism, accept the negative and
-suppress `IB_BULLISH`/`IB_BEARISH` outright, or something else.
-`OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped` (HIGH).
+**RESOLVED, same session: user confirmed "dump them both."** Implemented via a new
+`MANUAL_SUPPRESS_OVERRIDE` in `scripts/backtest_setup_status.mjs` (removed both from
+`DAY_TYPE_CONDITIONAL`, which was itself the mechanism giving them a pass whenever any one
+bucket cleared the bar). Ran the pipeline live — both now show `recommendation='SUPPRESS'` in
+`performance_audit`, picked up by `_suppressedSetups` on the next poll, same SHADOW-only
+treatment as every other suppressed setup_type. `OPEN_DECISION
+ib_bullish_bearish_audit_and_redesign_scoped` resolved. Full detail:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s final section.
+
+**New thread opened the same turn**: user wants to figure out how to capitalize on genuine big
+breaks/continuation moves — not a revival of the IB-specific idea, a fresh direction. Not yet
+scoped.
 
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
 
