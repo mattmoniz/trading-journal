@@ -112,7 +112,12 @@ export async function loadAndTagTrades(config) {
       a.or_high::float - a.or_low::float as or_width, a.day_type, a.or_high::float as orH, a.or_low::float as orL,
       (EXTRACT(hour FROM s.fired_at)*60+EXTRACT(minute FROM s.fired_at))::int as fired_min
     FROM active_setups s LEFT JOIN acd_daily_log a ON a.trade_date=s.trade_date
-    WHERE s.resolution IN ('TARGET_HIT','STOP_HIT') AND s.entry_zone_low IS NOT NULL
+    -- TIME_EXPIRED included (2026-08-31, OPEN_DECISION
+    -- time_expired_display_stats_sweep_remaining, user-confirmed): these rows now carry a
+    -- real mark-to-market actual_pnl, so excluding them skewed the simulation input toward
+    -- cleaner TARGET_HIT/STOP_HIT outcomes than real trading actually produces. The win
+    -- classification just below is updated to match (sign of pnl for TIME_EXPIRED rows).
+    WHERE s.resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND s.entry_zone_low IS NOT NULL
       AND s.trade_date BETWEEN $1 AND $2
     ORDER BY s.trade_date, s.fired_at`, [dateStart, dateEnd]),
     query(`SELECT trade_date::text as d, SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30 FROM acd_daily_log WHERE daily_score IS NOT NULL ORDER BY trade_date`),
@@ -170,7 +175,9 @@ export async function loadAndTagTrades(config) {
     else if (align === 'COUNTER' && (t.dayType || t.day_type) === 'TREND') conviction = 'LOW';
 
     const stopDist = t.stop ? Math.abs(t.entry - t.stop) : 50;
-    const win = t.resolution === 'TARGET_HIT';
+    // TIME_EXPIRED classified by sign of real pnl (2026-08-31, same fix as the query above) --
+    // was unconditionally non-win before, even on a TIME_EXPIRED row with positive real pnl.
+    const win = t.resolution === 'TARGET_HIT' || (t.resolution === 'TIME_EXPIRED' && t.pnl > 0);
     // FIXED 2026-07-17: was Math.abs(t.pnl / 5) unconditionally -- for real pipeline trades,
     // t.pnl is genuine dollar P&L from active_setups.actual_pnl (computed at this
     // instrument's real $2/pt), so dividing by 5 silently assumed $5/pt (matches neither

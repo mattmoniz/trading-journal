@@ -822,13 +822,20 @@ router.get('/stats/capture-ratio', async (req, res) => {
         -- capture-ratio measurement, it silently blends in a strategy simulation.
         -- Confirmed live: over a 60-day window, BACKFILL contributed $11,092.98 of
         -- model_pnl (698 of ~994 rows) vs ACTIVE+SHADOW's real $3,146.76 combined.
+        -- TIME_EXPIRED included (2026-08-31, OPEN_DECISION
+        -- time_expired_display_stats_sweep_remaining, user-confirmed): these rows now carry
+        -- a real mark-to-market actual_pnl (resolveSetupsByPrice's TIME_EXPIRED fix), so
+        -- excluding them from model_pnl silently dropped real dollars from this comparison.
+        -- Classified as a win/loss by the SIGN of actual_pnl (TARGET_HIT/STOP_HIT keep their
+        -- own explicit classification, unaffected) so model_wins+model_losses still sums to
+        -- n_setups rather than leaving TIME_EXPIRED rows uncounted in either bucket.
         SELECT trade_date,
           SUM(actual_pnl) AS model_pnl,
           COUNT(*) AS n_setups,
-          SUM(CASE WHEN resolution='TARGET_HIT' THEN 1 ELSE 0 END) AS model_wins,
-          SUM(CASE WHEN resolution='STOP_HIT' THEN 1 ELSE 0 END) AS model_losses
+          SUM(CASE WHEN resolution='TARGET_HIT' OR (resolution='TIME_EXPIRED' AND actual_pnl > 0) THEN 1 ELSE 0 END) AS model_wins,
+          SUM(CASE WHEN resolution='STOP_HIT' OR (resolution='TIME_EXPIRED' AND actual_pnl <= 0) THEN 1 ELSE 0 END) AS model_losses
         FROM active_setups
-        WHERE status='RESOLVED' AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+        WHERE status='RESOLVED' AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
           AND origin_status IN ('ACTIVE','SHADOW')
         GROUP BY trade_date
       ),

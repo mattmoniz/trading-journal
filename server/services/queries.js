@@ -438,3 +438,28 @@ export function assertNoTradingDayGaps(sortedDateStrings, { maxGapDays = 5, cont
     );
   }
 }
+
+// Companion guard to the gap functions above, but for a DIFFERENT failure mode (2026-08-31,
+// OPEN_DECISION price_bars_nqh26_contract_thin_and_early_20260928): this window has NO missing
+// dates (findTradingDayGaps() would not flag it -- every date has SOME row), but real
+// front-month volume is missing anyway. NQZ25 (Dec2025) should have been front-month for
+// essentially all of 2025-09-20 through 2025-12-19, but price_bars_dedup_hist only has its
+// genuine front-month volume (400k-990k/day) for 2025-11-19 through 2025-12-12 -- outside
+// that, the table has only NQH26's thin (~1-2% of real volume) background-contract data for
+// the same calendar dates. PRICE-only reads are largely unaffected (NQH26 tracks NQZ25's
+// price closely even on thin volume, not independently verified); VOLUME-based measures
+// (rolling volume baselines, ATR-by-volume, order-flow imbalance, anything from
+// touchQuality.js's getVolumeBaseline()) computed over a window touching these dates are
+// silently using the wrong contract's volume.
+export const THIN_VOLUME_WINDOWS = [
+  { from: '2025-09-20', to: '2025-11-18', reason: 'NQZ25 missing its own first ~2 months; price_bars_dedup_hist has only NQH26 thin background-contract volume for these dates' },
+];
+
+// True if [fromDate, toDate] (inclusive, 'YYYY-MM-DD' strings) overlaps any known thin-volume
+// window. Call this before trusting a VOLUME-based (not price-only) rolling measure whose
+// window could reach back into 2025-09/2025-11 -- most live callers use a short trailing
+// lookback relative to today and will never overlap this as time moves forward, but any
+// full-history backtest or a lookback long enough to reach back that far should check.
+export function overlapsThinVolumeWindow(fromDate, toDate) {
+  return THIN_VOLUME_WINDOWS.some(w => fromDate <= w.to && toDate >= w.from);
+}
