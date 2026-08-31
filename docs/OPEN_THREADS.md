@@ -1,5 +1,31 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-08-31 (RESOLVED): condition_memory rebuilt after a month-long daily_performance_log pipeline gap
+
+Two-part fix, resolves `OPEN_DECISION condition_memory_needs_rebuild_not_backfill` (HIGH, open
+since 2026-08-19). **Part 1 — pipeline gap**: the catch-up mechanism that populates
+`daily_performance_log` only ever checked whether *today's* row existed, so a trade landing
+after its own calendar day had passed (confirmed: 2026-08-03 and 2026-08-12 trades were both
+imported in one batch on 2026-08-12 20:52 ET, 9 days late for 08-03, amid a server-instability
+window matching the already-fixed pre-2026-08-18 "multiple simultaneous nodemon supervisors"
+bug class) permanently never got backfilled — `daily_performance_log` stalled at 2026-07-31 for
+a month with zero errors logged. Fixed with a bounded historical scan added to `server/index.js`'s
+existing 30-min self-healing cron; both missing dates manually backfilled and verified same turn.
+
+**Part 2 — condition_memory rebuild**: the original double-counting concern (occurrences/wins/
+losses inflated up to ~6x by a since-removed redundant `setInterval`, fixed 2026-08-19 with an
+idempotency guard that stops NEW corruption but does nothing to un-corrupt existing counters).
+Confirmed before rebuilding: `sum(occurrences)=1088` across 31 rows vs. only 343 real qualifying
+`daily_performance_log` rows (~3.2x inflated in aggregate). Rebuilt via `scripts/rebuild_condition_memory_20260831.mjs`
+— backed up first (`condition_memory_backup_20260831`, cataloged in `docs/DB_BACKUP_CATALOG.md`),
+wiped, then replayed every qualifying date chronologically through the now-idempotent
+`updateConditionMemory()`. Deliberately done in this order (pipeline fix first) per the original
+decision's own sequencing note — rebuilding from a still-broken source would have just
+re-encoded a fresh gap. Verified: post-rebuild `sum(occurrences)=343` exactly matches the
+qualifying date count, live endpoints (`/api/pattern/combinations`, `/api/pattern/today-combination`)
+spot-checked, `test_invariants.mjs` shows no new failures (6 present failures are pre-existing
+OPTIMAL_STOP circuit-breaker trips, confirmed unrelated and already tracked separately).
+
 ## 🔶 2026-08-31: 2-lot scale-out (breakeven-minus-5 runner) — SECOND pass with a real structural target, both open questions resolved, PROVISIONAL
 
 Follow-up to the same-day scoping doc (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`). First
