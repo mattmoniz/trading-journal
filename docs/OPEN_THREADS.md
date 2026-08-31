@@ -1,5 +1,22 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
+
+Resolves `OPEN_DECISION add_z_score_trend_to_rigor_stability_gate`. `computeRigor()`'s existing
+3-way chronological `stable` check collapses each third to a same-sign boolean, so two
+setup_types passing it identically can have very different real trajectories (the original
+finding: `GLOBEX_VWAP_MAGNET_LONG`'s per-third z-score strengthened 1.49→2.84→3.02 while its
+RTH sibling eroded toward noise 2.46→1.78→0.94, both "stable"). Added `zScores {z1,z2,z3}` and
+`zTrend` (`STRENGTHENING`/`DECAYING`/`MIXED`, null when thin) as standing output fields —
+each third's mean divided by its own standard error, same ≥5-events-per-third gate as the
+existing fields, informational only, never feeds `clean`. Surfaced everywhere `boundaryStraddle`
+(the 2026-08-17 precedent) already was: `rigorContext()` plus all 3 real consumer sites in
+`backtest_setup_status.mjs` (the local helper, the main SUPPRESS/PROMOTE gate's notes, and the
+`SETUP_STATUS_DOW` sub-pass's notes + blended_rigor). Verified via a live re-run: 0 DOW
+suppressions before and after (unchanged from baseline — `clean`'s gating logic untouched),
+`zTrend` populated for exactly the same rows where `stable` is computable, `test_invariants.mjs`
+shows no new failures.
+
 ## 🔶 2026-08-31 (RESOLVED): condition_memory rebuilt after a month-long daily_performance_log pipeline gap
 
 Two-part fix, resolves `OPEN_DECISION condition_memory_needs_rebuild_not_backfill` (HIGH, open

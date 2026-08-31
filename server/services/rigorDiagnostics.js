@@ -27,7 +27,7 @@
 // are evaluated (e.g. for regime-conditioned chronological stability).
 export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } = {}) {
   const events = filterFn ? rawEvents.filter(filterFn) : rawEvents;
-  if (!events.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null, boundaryStraddle: null, clustered: false, clean: null };
+  if (!events.length) return { distinctDates: 0, top5DayPct: null, stable: null, thirds: null, boundaryStraddle: null, clustered: false, clean: null, zScores: null, zTrend: null };
 
   const perDay = new Map();
   for (const e of events) {
@@ -39,7 +39,7 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
   const clustered = top5DayPct > 50;
 
   const third = Math.floor(events.length / 3);
-  let stable = null, thirds = null, boundaryStraddle = null;
+  let stable = null, thirds = null, boundaryStraddle = null, zScores = null, zTrend = null;
   if (third >= 5) {
     const g1 = events.slice(0, third), g2 = events.slice(third, 2 * third), g3 = events.slice(2 * third);
     const evOf = g => g.reduce((s, e) => s + pnlFn(e), 0) / g.length;
@@ -47,6 +47,35 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
     const overallSign = Math.sign(events.reduce((s, e) => s + pnlFn(e), 0));
     stable = [ev1, ev2, ev3].every(v => Math.sign(v) === overallSign);
     thirds = { ev1: +ev1.toFixed(2), ev2: +ev2.toFixed(2), ev3: +ev3.toFixed(2) };
+
+    // 2026-08-04 (OPEN_DECISION add_z_score_trend_to_rigor_stability_gate): `stable`
+    // collapses each third to a boolean same-sign check, so two setup_types that both pass
+    // it identically can still have very different underlying trajectories -- one genuinely
+    // strengthening (GLOBEX_VWAP_MAGNET_LONG's real per-third z-score went 1.49->2.84->3.02),
+    // the other eroding toward noise (its RTH sibling went 2.46->1.78->0.94) -- both "stable",
+    // neither distinguishable from the boolean alone. z-score here is each third's mean
+    // divided by its own standard error (mean / (stdDev / sqrt(n))) -- a standard one-sample
+    // z/t-stat, capturing both magnitude AND sample confidence, not just EV's raw point value.
+    // Informational only, matching this module's own convention -- never feeds `clean`.
+    const zOf = g => {
+      const vals = g.map(pnlFn);
+      const n = vals.length;
+      const mean = vals.reduce((a, b) => a + b, 0) / n;
+      if (n < 2) return null;
+      const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1);
+      const sd = Math.sqrt(variance);
+      if (!sd) return null; // zero variance -- z undefined, not zero
+      return mean / (sd / Math.sqrt(n));
+    };
+    const z1 = zOf(g1), z2 = zOf(g2), z3 = zOf(g3);
+    zScores = {
+      z1: z1 != null ? +z1.toFixed(2) : null,
+      z2: z2 != null ? +z2.toFixed(2) : null,
+      z3: z3 != null ? +z3.toFixed(2) : null,
+    };
+    if (z1 != null && z2 != null && z3 != null) {
+      zTrend = z3 > z2 && z2 > z1 ? 'STRENGTHENING' : z3 < z2 && z2 < z1 ? 'DECAYING' : 'MIXED';
+    }
 
     // 2026-08-17 (OPEN_DECISION computerigor_stable_clustered_independence_gap): the
     // clustered check (top5DayPct, by DAY) and stable check (sign consistency, by EVENT
@@ -80,11 +109,14 @@ export function computeRigor(rawEvents, { dateField = 'date', pnlFn, filterFn } 
     stable,
     thirds,
     boundaryStraddle,
+    zScores,
+    zTrend,
     clean: stable === true && !clustered, // the single "trust this" bit — both checks must pass
     // deliberately NOT: clean = stable === true && !clustered && !boundaryStraddle. Not yet
     // wired -- see the OPEN_DECISION above. Tightening `clean` here would ripple into every
     // current consumer (including the SETUP_STATUS_DOW gate fixed 2026-08-17) and needs its
-    // own dedicated audit before gating anything.
+    // own dedicated audit before gating anything. zTrend is even further out from `clean` --
+    // purely descriptive (emerging vs. decaying), never a gate input.
   };
 }
 
@@ -96,6 +128,8 @@ export function rigorContext(rigor) {
     three_way_stable: rigor.stable,
     thirds: rigor.thirds,
     boundary_straddle: rigor.boundaryStraddle,
+    z_scores: rigor.zScores,
+    z_trend: rigor.zTrend,
     clean: rigor.clean,
   };
 }
