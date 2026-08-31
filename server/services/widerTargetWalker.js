@@ -22,6 +22,8 @@
 // live INSERT sites (acd.js ~8293/8680/8825) and a `maxBarsToT1: 4` literal at the live
 // resolveSetupsByPrice() call site (acd.js ~813), with no single named source. All 4
 // sites plus the new counterfactual endpoint now import these instead.
+import { isPastMechanismSessionEnd } from './sessionBoundary.js';
+
 export const WIDER_TARGET_MULT = 1.5;
 export const MAX_BARS_TO_T1_FOR_WIDER = 4;
 
@@ -37,15 +39,19 @@ export const MAX_BARS_TO_T1_FOR_WIDER = 4;
 // gets the pre-2026-08-24 always-extend behavior unchanged — this is purely additive.
 //
 // state: { widening: boolean }
-// bar: { ts: string (ET wall-clock text, HH in bar.ts.slice(11,13)), high, low, close }
-// params: { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, pressureReading,
-//   pressureThreshold } — pressureReading is the dirImbalance value AT THE T1-TOUCH BAR
-//   (favorable-minus-adverse volume as a fraction of total, already computed by the caller);
-//   pressureThreshold is the calibrated cutoff (read from performance_audit
+// bar: { ts: string (ET wall-clock text), mod: int (ET minutes, already computed by every
+//   caller's bar query), high, low, close }
+// params: { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, firedMod, pressureReading,
+//   pressureThreshold } — firedMod is the trade's own fired_at time-of-day in ET minutes
+//   (server/services/sessionBoundary.js's firedAtToMod()), REQUIRED so session-end can be judged
+//   correctly for a Globex-origin trade, not just an RTH one (see isPastMechanismSessionEnd()'s
+//   own header for the incident this fixes). pressureReading is the dirImbalance value AT THE
+//   T1-TOUCH BAR (favorable-minus-adverse volume as a fraction of total, already computed by the
+//   caller); pressureThreshold is the calibrated cutoff (read from performance_audit
 //   signal_type='WIDER_TARGET_PRESSURE_GATE' by the caller, never hardcoded here).
 // Returns { state: <next state>, resolution: null | { resolution, method, priceAtRes } }
-export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, pressureReading = null, pressureThreshold = null }) {
-  const isSessionEnd = bar.ts.slice(11, 13) >= '16';
+export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1, firedMod, pressureReading = null, pressureThreshold = null }) {
+  const isSessionEnd = isPastMechanismSessionEnd(bar.mod, firedMod);
   let newState = state;
   let resolution = null;
 
@@ -72,8 +78,17 @@ export function stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long
       // (non-flagged) branch already resolves a 16:00 T1-hit as TARGET_HIT/PRICE_CLEAN with
       // no special case, and declining to arm must not change that; this IS behaviorally a
       // plain TARGET_HIT either way (too slow, or fast-but-no-session-time-left-to-benefit).
-      const pressureGateOk = pressureThreshold == null || pressureReading == null
-        || pressureReading >= pressureThreshold;
+      // FIXED 2026-08-31 (OPEN_DECISION wider_target_pressure_gate_fails_open_on_null_reading,
+      // DeepSeek design critique 2026-08-24): a null pressureReading used to count as "gate
+      // passed" alongside a null pressureThreshold, indistinguishable from a genuinely missing
+      // aggressor-volume ingest (bid_volume/ask_volume are integer DEFAULT 0 NOT NULL, so a bar
+      // whose breakdown was simply never ingested reads identically to one with zero volume) --
+      // silently arming the trade instead of banking it. Now fails CLOSED: once a real
+      // calibrated threshold exists, a missing reading locks in (banks) rather than extends.
+      // A null pressureThreshold (no calibrated threshold supplied at all -- the pre-2026-08-24
+      // caller shape) is unaffected -- still always-extend, unchanged.
+      const pressureGateOk = pressureThreshold == null
+        || (pressureReading != null && pressureReading >= pressureThreshold);
       if (barCount <= maxBarsToT1 && !isSessionEnd && pressureGateOk) {
         // Fast arrival, eligible, AND (if a calibrated threshold was supplied) pressure
         // confirms — arm the wider-target continuation. Stop stays exactly where it already

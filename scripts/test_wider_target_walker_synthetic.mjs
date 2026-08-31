@@ -7,6 +7,7 @@
 // Run: node scripts/test_wider_target_walker_synthetic.mjs
 
 import { stepWiderTarget } from '../server/services/widerTargetWalker.js';
+import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../server/services/sessionBoundary.js';
 
 let pass = 0, fail = 0;
 function assertEqual(actual, expected, label) {
@@ -19,8 +20,15 @@ function assert(cond, label) {
   else { fail++; console.error(`FAIL: ${label}`); }
 }
 
-function bar(hhmm, high, low, close) {
-  return { ts: `2026-08-17 ${hhmm}:00`, high, low, close };
+// dateStr optional (defaults to the original fixed test date) -- Globex test cases below need a
+// bar that lands on the FOLLOWING calendar date once a trade fired in the evening runs past
+// midnight. mod matches the real system's convention (every real caller's bar query already
+// computes this column) -- added 2026-08-30 alongside stepWiderTarget()'s firedMod param;
+// without it isPastMechanismSessionEnd(bar.mod, ...) always saw bar.mod===undefined and every
+// session-end check silently went false, which is exactly what broke T6/T9 until this fix.
+function bar(hhmm, high, low, close, dateStr = '2026-08-17') {
+  const [hh, mm] = hhmm.split(':').map(Number);
+  return { ts: `${dateStr} ${hhmm}:00`, mod: hh * 60 + mm, high, low, close };
 }
 
 function runPath(bars, baseParams) {
@@ -207,6 +215,112 @@ function barVol(hhmm, high, low, close, bidVol, askVol) {
   const { resolution, finalState } = runPath(bars, params);
   assert(finalState.widening, 'T12: with no threshold supplied, gate is a no-op — arms exactly as pre-2026-08-24');
   assertEqual(resolution, { resolution: 'TARGET_HIT', method: 'WIDER_TARGET_HIT', priceAtRes: 20090 }, 'T12: unaffected downstream behavior when the gate is disabled');
+}
+
+// ── Globex tests (added 2026-08-30, user-flagged real trade id 109426, a PD_POC_FADE_SHORT
+// fired at 18:00 ET whose wider-target counterfactual came back "no_bar_data"). Before this
+// fix, isSessionEnd was computed as `bar.ts.slice(11,13) >= '16'` with no knowledge of the
+// trade's own origin session -- a bar fired at 18:00 ET already has hour 18 >= 16, so the VERY
+// FIRST bar of ANY Globex-hour fire was immediately treated as session-end, permanently
+// blocking this mechanism from ever arming on an overnight trade (confirmed empirically: no
+// real Globex-hour fire has ever armed wider_target_mult, table-wide). These tests prove the
+// fix, not just that the RTH regression tests above still pass.
+
+// ── Test 13 (Globex): a trade fired at 18:00 ET hits T1 fast (bar 1) and must ARM widening.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4, firedMod: 18 * 60 };
+  const b = bar('18:01', 20065, 20050, 20060);
+  const step = stepWiderTarget({ widening: false }, b, { ...params, barCount: 1 });
+  assertEqual(step.resolution, null, 'T13 (Globex): fast T1 hit at 18:01 arms widening instead of resolving immediately');
+  assert(step.state.widening, 'T13 (Globex): widening state correctly arms for a Globex-hour fire');
+}
+
+// ── Test 14 (Globex): once armed, the walk must continue through the evening without
+// prematurely marking to market -- neither the wider target nor the stop is hit at 23:30.
+{
+  const params = { entry: 20000, stop: 20000 - 40, widerTarget: 20000 + 90, long: true, firedMod: 18 * 60 };
+  const b = bar('23:30', 20070, 20060, 20065, '2026-08-17');
+  const step = stepWiderTarget({ widening: true }, b, { ...params, t1: 20000 + 60, barCount: 30 });
+  assertEqual(step.resolution, null, 'T14 (Globex): armed overnight trade stays open mid-session, does not falsely mark-to-market');
+}
+
+// ── Test 15 (Globex): once the NEXT RTH open (9:30am ET, following calendar day) arrives with
+// the wider target still unhit, the trade correctly marks to market -- proving the session-end
+// boundary is judged against the trade's OWN origin session, not a blanket RTH-only cutoff.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, firedMod: 18 * 60 };
+  const b = bar('09:31', 20070, 20060, 20065, '2026-08-18');
+  const step = stepWiderTarget({ widening: true }, b, { ...params, barCount: 200 });
+  assertEqual(step.resolution, { resolution: 'TIME_EXPIRED', method: 'WIDER_TIME_EXPIRED', priceAtRes: 20065 }, 'T15 (Globex): marks to market at the NEXT RTH open, not immediately at fire time');
+}
+
+// ── Test 16 (Globex regression guard): the same fired-at-18:00 setup, checked against a quiet
+// bar at 18:01 with no T1/stop hit -- proves bar.mod (1081) does NOT trigger session-end now,
+// where the old `hour>=16` check would have marked-to-market immediately.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, firedMod: 18 * 60 };
+  const b = bar('18:01', 19995, 19990, 19992);
+  const step = stepWiderTarget({ widening: false }, b, { ...params, barCount: 1 });
+  assertEqual(step.resolution, null, 'T16 (Globex regression guard): a quiet bar at 18:01 does not falsely mark-to-market the way the pre-fix hour>=16 check would have');
+}
+
+// ── Tests 17-20 (added 2026-08-30, DeepSeek code review round 2, finding R8): T13-T16 above
+// only ever exercise firedMod=1080 (18:00 exactly). Nothing covered the 4-6pm dead zone (R3's
+// fix) or an early-morning Globex fire (R4's fix), and nothing asserted firedAtToMod()'s new
+// type guard (R7). These close that gap.
+
+// ── Test 17 (dead zone): a trade fired at 16:10 ET (firedMod=970, inside the POST_RTH dead
+// zone) must NOT instantly mark-to-market on its own fire bar -- before the R3 fix,
+// firedMod=970 fell through to the RTH branch (`barMod>=960`), and since 970>=960 is already
+// true, isSessionEnd fired on bar 1 itself.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4, firedMod: 970 };
+  const b = bar('16:11', 20065, 20050, 20060);
+  const step = stepWiderTarget({ widening: false }, b, { ...params, barCount: 1 });
+  assertEqual(step.resolution, null, 'T17 (dead zone): fast T1 hit at 16:11 (fired 16:10) arms widening instead of instantly marking-to-market');
+  assert(step.state.widening, 'T17 (dead zone): widening state correctly arms for a dead-zone fire');
+  assert(!isPastMechanismSessionEnd(970, 970), 'T17b: isPastMechanismSessionEnd is false on the dead-zone trade\'s own fire-time bar');
+  assert(isPastMechanismSessionEnd(570, 970), 'T17c: a dead-zone-origin trade DOES mark session-end once the next RTH open (9:30am) arrives');
+}
+
+// ── Test 18 (early-morning Globex): a trade fired at 03:20 ET (firedMod=200) has its next RTH
+// open LATER THE SAME calendar day (9:30am), not the following day -- the walker itself is
+// date-agnostic (only acd.js's date arithmetic, fixed separately as R4, needs the calendar-day
+// distinction), so this just confirms isFiredInRTH/isPastMechanismSessionEnd route an
+// early-morning firedMod through the same "next RTH open" rule as an evening one.
+{
+  assert(!isFiredInRTH(200), 'T18a: firedMod=200 (03:20 ET) is correctly NOT classified RTH-origin');
+  assert(!isPastMechanismSessionEnd(569, 200), 'T18b: bar at 09:29 is still before the next RTH open for a 03:20 fire');
+  assert(isPastMechanismSessionEnd(570, 200), 'T18c: bar at 09:30 correctly marks session-end for a 03:20 fire');
+}
+
+// ── Test 19 (R2 regression guard): the evening-bar-numerically-larger-than-570 case DeepSeek's
+// review specifically flagged -- an 18:01 ET bar (mod=1081) on a Globex-origin trade must NOT
+// read as session-end, proving the `barMod<960` upper bound in isPastMechanismSessionEnd is
+// load-bearing, not dead code.
+{
+  assert(!isPastMechanismSessionEnd(1081, 1080), 'T19: an 18:01 ET bar does not falsely mark session-end for an 18:00-fired trade');
+}
+
+// ── Test 20 (R7 guard): firedAtToMod() must throw on a UTC-ISO-suffixed string rather than
+// silently misparsing it as naive ET wall-clock text.
+{
+  let threw = false;
+  try { firedAtToMod('2026-08-17T22:01:00.000Z'); } catch (e) { threw = true; }
+  assert(threw, 'T20: firedAtToMod() throws on a Z-suffixed UTC ISO string instead of silently misparsing it');
+  assertEqual(firedAtToMod('2026-08-17 22:01:00'), 22 * 60 + 1, 'T20b: firedAtToMod() still parses the standard naive ET text convention correctly');
+}
+
+// ── Test 21 (2026-08-31, OPEN_DECISION wider_target_pressure_gate_fails_open_on_null_reading):
+// a calibrated threshold IS supplied, but the reading itself is null (missing aggressor-volume
+// data, e.g. bid_volume/ask_volume both DEFAULT 0 -> totalVol<=0 at the live call site) -- must
+// now fail CLOSED (bank, do not arm), not fail open the way it used to.
+{
+  const params = { entry: 20000, stop: 20000 - 40, t1: 20000 + 60, widerTarget: 20000 + 90, long: true, maxBarsToT1: 4, pressureThreshold: 0.10 };
+  const b = barVol('09:31', 20065, 20050, 20060, 0, 0); // no volume ingested -> pressureReading null at the live call site
+  const step = stepWiderTarget({ widening: false }, b, { ...params, barCount: 1, pressureReading: null });
+  assertEqual(step.resolution, { resolution: 'TARGET_HIT', method: 'BANKED_LOW_PRESSURE', priceAtRes: 20060 }, 'T21: a missing pressure reading (threshold set) banks immediately, does not arm');
+  assert(!step.state.widening, 'T21: does not arm when the pressure reading is null despite a calibrated threshold existing');
 }
 
 console.log(`\n${pass} passed, ${fail} failed.`);

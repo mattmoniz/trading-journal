@@ -28,12 +28,13 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
+import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
 
@@ -78,6 +79,20 @@ function cascadeDiagLog(line) {
   try {
     fs.appendFileSync(path.join(__dirname, '../../scratch/cascade_diag.log'), `${new Date().toISOString()} ${line}\n`);
   } catch (_) {}
+}
+
+// FIXED 2026-08-31 (OPEN_DECISION confluence_levels_naming_canonicalization_4_sites): the
+// RTH candidate array's VWAP level object is named 'RTH_VWAP_FADE' (so a bare `_FADE` strip
+// yields 'RTH_VWAP'), but backtest_confluence.js's availableLevels.VWAP key and the Globex
+// candidates' own levelBase both already use bare 'VWAP' for the identical RTH developing
+// level -- pick that as canonical rather than introducing a third variant. Used only for
+// confluence_levels_at_detection entries (display/analysis text elsewhere, e.g. lv.name in
+// trade-note strings, is untouched -- this is purely a naming-consistency fix for the
+// persisted confluence array, zero live-behavior risk, confirmed the column has no
+// calibration consumer per this decision's own audit).
+function canonicalConfluenceLevelName(name) {
+  const stripped = (name || '').replace(/_FADE$/, '');
+  return stripped === 'RTH_VWAP' ? 'VWAP' : stripped;
 }
 
 // ── Setup-detection level cache (structural data that changes at most daily) ──
@@ -478,14 +493,52 @@ async function getSessionBarsSinceOpen(boundaryMod) {
 // updated 2026-08-28 alongside that fix -- short-circuits before the baseline/calibration queries
 // rather than making them and getting nulls back anyway).
 async function computeLiveVolumeBuildingSignal(tradeDate, sessionBars) {
-  if (!sessionBars || sessionBars.length < 21) return { avgVolZ: null, volZTrend: null, avgDayVolZ: null, dayVolZTrend: null, agreesMedian: null, agreesP60: null };
+  // FIXED 2026-08-30 (DeepSeek code review): this early-return omitted compositeStrengthPriorAvg,
+  // which the normal return path below always includes -- left inconsistent key sets on the
+  // stored JSONB across rows depending on which path produced them. Both paths now return the
+  // exact same shape.
+  if (!sessionBars || sessionBars.length < 21) return { avgVolZ: null, volZTrend: null, avgDayVolZ: null, dayVolZTrend: null, agreesMedian: null, agreesP60: null, compositeStrength: null, compositeStrengthPriorAvg: null, momentumContext: null };
   const [baseline, calib] = await Promise.all([
     getTouchQualityBaseline(tradeDate),
     getVolumeBuildingCalibration(tradeDate),
   ]);
   const touchIdx = sessionBars.length - 1;
   const measures = computeVolumeBuildingMeasures(sessionBars, touchIdx, baseline);
-  return classifyVolumeBuilding(measures, calib);
+  const classified = classifyVolumeBuilding(measures, calib);
+  const compositeStrength = [measures.avgVolZ, measures.volZTrend, measures.avgDayVolZ, measures.dayVolZTrend].every(v => v != null)
+    ? measures.avgVolZ + measures.volZTrend + measures.avgDayVolZ + measures.dayVolZTrend
+    : null;
+
+  // Momentum-context (RESEARCH_CLAIM building_strength_momentum_feeds_momentum /
+  // momentum_feeds_momentum_robust_across_daytype, 2026-08-29, independently confirmed by Gemini
+  // and re-run locally 2026-08-29): an ACTIVE-then-spike (this bar riding on an already-elevated
+  // recent backdrop) predicts a bigger move than a QUIET-then-spike, and holds across every
+  // day-type -- the more robust of the two building-strength findings. Informational only, not
+  // wired to any gating/sizing decision. Prior-30-bar average is bounded to THIS session only
+  // (never reaches into a prior session across a multi-hour gap) -- stricter than the retrospective
+  // research scripts, which scanned a flat bar array and could occasionally leak across a session
+  // boundary for spikes very early in a session.
+  let compositeStrengthPriorAvg = null, momentumContext = null;
+  if (compositeStrength != null && touchIdx >= 30 && calib?.momentumContextPriorAvgMedian != null) {
+    const priorScores = [];
+    for (let k = touchIdx - 30; k < touchIdx; k++) {
+      const pm = computeVolumeBuildingMeasures(sessionBars, k, baseline);
+      if ([pm.avgVolZ, pm.volZTrend, pm.avgDayVolZ, pm.dayVolZTrend].every(v => v != null)) {
+        priorScores.push(pm.avgVolZ + pm.volZTrend + pm.avgDayVolZ + pm.dayVolZTrend);
+      }
+    }
+    if (priorScores.length >= 20) {
+      compositeStrengthPriorAvg = priorScores.reduce((a, b) => a + b, 0) / priorScores.length;
+      momentumContext = compositeStrengthPriorAvg >= calib.momentumContextPriorAvgMedian ? 'ACTIVE' : 'QUIET';
+    }
+  }
+
+  return {
+    ...classified,
+    compositeStrength: compositeStrength != null ? +compositeStrength.toFixed(4) : null,
+    compositeStrengthPriorAvg: compositeStrengthPriorAvg != null ? +compositeStrengthPriorAvg.toFixed(4) : null,
+    momentumContext,
+  };
 }
 
 // Rolling 20-day, per-minute-of-day baseline for trailing-5-bar net price movement
@@ -933,6 +986,13 @@ export async function resolveSetupsByPrice(io) {
     // population exactly, see server/services/widerTargetWalker.js's own header); false the
     // whole way through for a slower arrival, which just takes t1 normally.
     let widerTargetState = { widening: false };
+    // FIXED 2026-08-30 (user-flagged, real Overnight/Globex PD_POC_FADE_SHORT fire): computed
+    // once per row (not per bar) and fed into every session-end check below. row.fired_at is
+    // already ::text-cast (this file's standard convention). See
+    // server/services/sessionBoundary.js's isPastMechanismSessionEnd() for the incident this
+    // closes -- all three exit mechanisms below independently hand-rolled an RTH-only
+    // `hour>=16` check that silently misjudged session-end for any Globex-fired trade.
+    const firedMod = firedAtToMod(row.fired_at);
 
     for (const bar of bars.rows) {
       barCount++;
@@ -942,8 +1002,9 @@ export async function resolveSetupsByPrice(io) {
       runMae = Math.max(runMae, adverse);
 
       if (extendTarget != null) {
-        // bar.ts is ET wall-clock TEXT (see the fired_at comment atop this function).
-        const isSessionEnd = bar.ts.slice(11, 13) >= '16';
+        // FIXED 2026-08-30 (see the firedMod comment above the bar loop) -- was
+        // `bar.ts.slice(11,13) >= '16'`, RTH-only.
+        const isSessionEnd = isPastMechanismSessionEnd(bar.mod, firedMod);
         const stopHit = long ? bar.low <= stop : bar.high >= stop;
 
         if (!extending) {
@@ -1034,7 +1095,7 @@ export async function resolveSetupsByPrice(io) {
         const step = stepBreakevenTrail(
           { armedAt, peakPrice, trailStopPrice },
           bar,
-          { entry, stop, t1, trailWidth, long }
+          { entry, stop, t1, trailWidth, long, firedMod }
         );
         armedAt = step.state.armedAt;
         peakPrice = step.state.peakPrice;
@@ -1074,7 +1135,7 @@ export async function resolveSetupsByPrice(io) {
           widerTargetState,
           bar,
           {
-            entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER,
+            entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
             pressureReading, pressureThreshold: widerTargetPressureThreshold,
           }
         );
@@ -1846,25 +1907,85 @@ async function detectGlobexSetup(sessionDate, io) {
       // open (18:00 ET) through now, correctly spans midnight (getSessionBarsSinceOpen above).
       const globexVbSessionBars = await getSessionBarsSinceOpen(1080);
       const globexVolBuildingSignal = await computeLiveVolumeBuildingSignal(sessionDate, globexVbSessionBars);
+      // FIXED 2026-08-31 (user-flagged, real PD_POC_FADE_LONG/PD_VAL_FADE_LONG fires that hit
+      // T1 in 3 bars but never widened): this INSERT's column list never included
+      // runner_trail_width/wider_target_mult/extend_target_level AT ALL -- every setup_type
+      // firing through detectGlobexSetup() (all 4 original PD_VAH/VAL/POC types plus every
+      // WIDER_WINDOW_OVERNIGHT_LEVELS type, ~30+ setup_types total) had never been eligible for
+      // either exit mechanism, full stop, since this insert site's creation. extend_target_level
+      // (the bank-vs-extend mechanism) is unrelated to any Globex level type and stays NULL,
+      // same as every other insert site that doesn't set it.
+      //
+      // CORRECTED 2026-08-31 (DeepSeek code review round 5, finding T1): the first version of
+      // this fix looked up CONDITIONAL_VARIANTS[c.type] directly -- structurally dead, since
+      // CONDITIONAL_VARIANTS is keyed by _TRAIL variant names, not base types, and
+      // detectGlobexSetup() never calls the RTH engine's resolveSetupType() (a different,
+      // later-defined closure, out of scope here) to convert one to the other. Every Globex fire
+      // was silently getting wider-target only, never the RTH sibling's breakeven-trail, for the
+      // 2 base types that have one (PD_POC_FADE_LONG/SHORT). User confirmed (OPEN_DECISION
+      // globex_trail_diversion_never_applied_20260831): Globex touches of these 2 types SHOULD
+      // divert to trail too, matching RTH -- not a Globex-specific "wider-target is fine here"
+      // choice. Fixed with resolveUnconditionalTrailVariant() (server/config/setupTypes.js,
+      // derived FROM CONDITIONAL_VARIANTS's own baseType field, not a second hand-copied list)
+      // rather than reaching into the RTH closure -- covers the 7 UNCONDITIONAL diversions only
+      // (every touch diverts, no entry-condition check), which is the only kind that can apply
+      // here; resolveSetupType()'s 2 CONDITIONAL entries (WPP_FADE_SHORT_GAP_UP,
+      // OR5_LOW_FADE_LONG_GAP_DOWN) depend on RTH-only same-session data with no Globex analog
+      // and are deliberately not reachable from this site.
+      // Scoping note: globexResolvedType is used ONLY to look up the right trail calibration
+      // below -- the row's own stored setup_type stays c.type (the raw base name), NOT the
+      // _TRAIL-suffixed variant. Renaming it to match RTH's stored convention would also require
+      // updating the re-arm dedup check (~line 1792, keys off setup_type) and the live-status
+      // check (~line 1843, getOvernightLevelLiveStatus) to the resolved name too, and those
+      // touch real live-firing behavior -- out of scope for this fix, which is specifically
+      // "does the trail EXIT MECHANISM engage correctly," not "does setup_type match RTH's
+      // naming." Consequence: a Globex PD_POC_FADE_LONG/SHORT trail fire now correctly gets a
+      // real runner_trail_width when calibration exists, but is still NOT visible to
+      // test_invariants.mjs check [21] or CONDITIONAL_VARIANTS trail-health monitoring generally
+      // (both filter by setup_type=X_TRAIL) -- that visibility gap is a separate, smaller
+      // follow-up if ever wanted, not resolved here.
+      const globexResolvedType = resolveUnconditionalTrailVariant(c.type);
+      const globexTrailVariant = CONDITIONAL_VARIANTS[globexResolvedType];
+      let globexRunnerTrailWidth = null;
+      if (globexTrailVariant?.trailSignalName) {
+        const globexTrailRow = await query(
+          `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
+           WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
+           ORDER BY signal_name, run_date DESC`,
+          [globexTrailVariant.trailSignalName]
+        ).catch(() => ({ rows: [] }));
+        const globexTrailNotes = globexTrailRow.rows[0]?.notes;
+        const globexTrailParsed = typeof globexTrailNotes === 'string' ? JSON.parse(globexTrailNotes) : globexTrailNotes;
+        globexRunnerTrailWidth = globexTrailParsed?.trail ?? null;
+      }
+      const globexWiderTargetMult = !globexTrailVariant?.trailSignalName ? WIDER_TARGET_MULT : null;
       const ins = await query(`
         INSERT INTO active_setups (
           trade_date, setup_type, fired_at, expires_at, status, origin_status,
           entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
+          runner_trail_width, wider_target_mult,
           ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal
-        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,
-          ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
-          ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-          $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+        ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,$15,$16,
+          ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
+          ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+          $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
       `, [sessionDate, c.type, expiresAt, entry, entry, stop, target, `T1: ${Math.round(T1)}pt (${c.name})`, entry,
           live.status, live.reason,
           candidates.length,
-          candidates.map(x => x.name),
+          // FIXED 2026-08-31 (confluence_levels_naming_canonicalization_4_sites): was
+          // candidates.map(x => x.name) -- human-readable display strings ('Globex 24hr
+          // VWAP', 'PD VAH', 'PD VAL', 'PD POC', not canonical level identifiers at all).
+          // Every candidate object already carries levelBase (used for confluence PAIR
+          // matching a few lines up, ~1850) -- reuse it here too instead of a second,
+          // inconsistent naming source for the same array.
+          candidates.map(x => x.levelBase),
           sizeMultiplier,
+          globexRunnerTrailWidth, globexWiderTargetMult,
           ...regimeStampValues(regimeStamp),
           ...fireTagValues(fireTags),
           // 'GLOBEX_LEVEL' hardcoded directly (roadmap Phase 7, Setup F consolidation,
@@ -7918,7 +8039,7 @@ export default function createACDRouter(io) {
               buyersAtLevel,
               sellersAtLevel,
               confluenceCount,
-              confluenceLevels: nearLevels.map(l => l.name.replace(/_FADE$/, '')),
+              confluenceLevels: nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
               stackCount: _lfSameDirCounts[dir] ?? 0,
               tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
               exhaustionSignalAtDetection,
@@ -8036,7 +8157,12 @@ export default function createACDRouter(io) {
                 // main path writes 'RTH_VWAP' for the identical level, a real naming
                 // divergence between the two branches for what CLAUDE.md's 2026-07-22 entry
                 // says is the population that actually matters for the confluence hypothesis.
-                nearLevels.length ? nearLevels.map(l => l.name.replace(/_FADE$/, '')) : null,
+                // FIXED AGAIN 2026-08-31 (confluence_levels_naming_canonicalization_4_sites):
+                // canonicalConfluenceLevelName() also normalizes 'RTH_VWAP' -> 'VWAP', matching
+                // backtest_confluence.js's own availableLevels.VWAP key and the Globex
+                // candidates' levelBase convention -- see that helper's header for why 'VWAP'
+                // (not 'RTH_VWAP') is the chosen canonical form.
+                nearLevels.length ? nearLevels.map(l => canonicalConfluenceLevelName(l.name)) : null,
                 currentPrice, auditStopLevel, auditT1Level,
                 `T1: ${auditTargetPts}pt · Stop: ${auditStopPts}pt (suppressed audit)`,
                 auditExpiresAt,
@@ -9064,16 +9190,41 @@ export default function createACDRouter(io) {
                 ? allRthBarsRow.rows.slice(0, btVbEndIdx + 1).map(b => ({ mod: b.et_min, volume: (b.bid_vol || 0) + (b.ask_vol || 0) }))
                 : null;
               const btVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, btVbSessionBars);
+              // FIXED 2026-08-31 (OPEN_DECISION breakeven_trail_backfill_path_latent_width_gap):
+              // this was the ONE remaining insert path (of 3: this one, the RTH main candidate
+              // INSERT ~9505, and the suppressed-audit INSERT ~8104) that didn't do the
+              // runner_trail_width lookup at all -- a resolveSetupType()-diverted _TRAIL row
+              // fired through here would resolve with runner_trail_width permanently NULL
+              // (silently downgraded to a plain fixed-stop/fixed-target trade), reproducing the
+              // exact bug the other 2 sites were already fixed for. Same lookup, third copy --
+              // currently a defensive/latent fix (all 6 live _TRAIL variants are THIN_N in
+              // SETUP_STATUS today, per breakeven_trail_zero_real_survivors_20260816, so
+              // _suppressedSetups skips them before backfilledTouches is even populated) but
+              // stops this path from reproducing the bug the moment any _TRAIL type is ever
+              // promoted out of THIN_N.
+              const btTrailVariant = CONDITIONAL_VARIANTS[bt.type];
+              let btRunnerTrailWidth = null;
+              if (btTrailVariant?.trailSignalName) {
+                const btTrailRow = await query(
+                  `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
+                   WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
+                   ORDER BY signal_name, run_date DESC`,
+                  [btTrailVariant.trailSignalName]
+                ).catch(() => ({ rows: [] }));
+                const btTrailNotes = btTrailRow.rows[0]?.notes;
+                const btTrailParsed = typeof btTrailNotes === 'string' ? JSON.parse(btTrailNotes) : btTrailNotes;
+                btRunnerTrailWidth = btTrailParsed?.trail ?? null;
+              }
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal)
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
+                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
@@ -9083,13 +9234,11 @@ export default function createACDRouter(io) {
                 ...fireTagValues(btFireTags),
                 getBetClass(bt.type),
                 // Wider-target-on-fast-resolving-trades (docs/OPEN_THREADS.md 2026-08-17):
-                // always-SHADOW here (no status gate needed), but resolveSetupType() can
-                // divert a backfilled touch to a _TRAIL CONDITIONAL_VARIANTS entry -- those
-                // are trail-mechanism rows (a pre-existing gap: this site doesn't currently
-                // set runner_trail_width for them either, separate from this task), so skip
-                // wider-target tagging for them rather than double-flag a row.
-                CONDITIONAL_VARIANTS[bt.type]?.trailSignalName != null ? null : WIDER_TARGET_MULT,
+                // always-SHADOW here (no status gate needed). Skip wider-target tagging for
+                // trail-mechanism rows so a row is never double-flagged for both mechanisms.
+                btTrailVariant?.trailSignalName != null ? null : WIDER_TARGET_MULT,
                 JSON.stringify(btVolBuildingSignal),
+                btRunnerTrailWidth,
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -9642,13 +9791,23 @@ export default function createACDRouter(io) {
                  });
             const st = shadowIsLive ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
+            // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
+            // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
+            // from this insert site entirely (a 5th active_setups INSERT this file has, distinct
+            // from the 4 wired 2026-08-28) while checking whether STOP_SWEEP -- which fires via
+            // shadowCandidates, not the main candidates array -- was being tracked. It wasn't;
+            // fixed here for every setup_type that fires through this loop (STOP_SWEEP_LONG/SHORT,
+            // IB_BEARISH, C_PAIRED_SHORT, etc.), not just STOP_SWEEP specifically.
+            const shadowVbSessionBars = await getSessionBarsSinceOpen(570);
+            const shadowVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, shadowVbSessionBars);
             await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult)
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
                 ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1})
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
               ON CONFLICT DO NOTHING
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
@@ -9668,6 +9827,7 @@ export default function createACDRouter(io) {
               // flag" invariant against trail variants.
               (shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
+              JSON.stringify(shadowVolBuildingSignal),
             ]).catch(() => {});
           }
         })();
@@ -10234,17 +10394,59 @@ export default function createACDRouter(io) {
       }
       const long = direction === 'LONG';
 
-      // Same bar-fetch convention as computeMaeMfe() (maeMfeReplay.js): from fired_at
-      // through the RTH session close (<=960 ET-minutes), bounded by trade_date -- a single
-      // historical trade, not an unbounded price_bars_primary scan (CLAUDE.md's own
-      // "needs an explicit upper bound too" convention for this VIEW).
+      // FIXED 2026-08-30 (user-flagged, real Overnight/Globex PD_POC_FADE_SHORT fire, id
+      // 109426): this used to bound to `ts::date = row.trade_date AND mod<=960` -- RTH-only on
+      // BOTH axes. trade_date for a Globex fire is the NEXT session's date (this codebase's
+      // session-date convention: firing at/after 18:00 ET rolls to nextTradingDay), which
+      // doesn't even match the CALENDAR date the fire and its bars actually sit on. CORRECTED
+      // 2026-08-30 (DeepSeek code review round 2, finding R5): this did NOT return zero rows for
+      // every Overnight/Globex trade as originally stated here -- for an 18:00-23:59 fire it
+      // returned the NEXT calendar day's 00:00-16:00 bars (a real but wrong window: the actual
+      // overnight bars between fired_at and the next day's close were skipped entirely, not
+      // empty). Still a real bug, just not the one first diagnosed -- not a one-off gap either
+      // way. Upper bound is now computed from fired_at's own calendar date and time-of-
+      // day (still a real, explicit upper bound per CLAUDE.md's price_bars_primary convention,
+      // just session-aware instead of hardcoded to RTH close): an RTH-fired trade still bounds
+      // at the same day's 4pm ET; a Globex-fired trade bounds at 9:30am ET the FOLLOWING
+      // calendar day (the next RTH open -- matches isPastMechanismSessionEnd()'s own definition
+      // of "no more session time left to benefit," server/services/sessionBoundary.js).
+      // FIXED 2026-08-30 (DeepSeek code review round 2, finding R4): the original version's
+      // "next RTH open" branch (firedMod>=1080 || firedMod<570) always added a calendar day,
+      // which is right for an 18:00-23:59 fire (next RTH open IS tomorrow) but wrong for a
+      // 00:00-09:29 fire (next RTH open is LATER THE SAME calendar day) -- a ~24h over-fetch.
+      // Benign in practice (the bar loop below breaks at the first mod>=570 bar regardless of
+      // how far the upper bound reaches), but the comment claimed a specific window this code
+      // didn't actually produce, so fixed for real. Also now routes the 4-6pm dead zone (firedMod
+      // 960-1079) through the "next day" branch too, matching isPastMechanismSessionEnd()'s own
+      // R3 fix (a dead-zone fire has no RTH time left today either).
+      const firedMod = firedAtToMod(row.fired_at);
+      const firedInRTH = isFiredInRTH(firedMod);
+      const firedCalDate = row.fired_at.slice(0, 10);
+      let upperBound;
+      if (firedInRTH) {
+        upperBound = `${firedCalDate} 16:00:00`;
+      } else if (firedMod < 570) {
+        // 00:00-09:29 ET: next RTH open (9:30am) is later THIS SAME calendar day.
+        upperBound = `${firedCalDate} 09:30:00`;
+      } else {
+        // 16:00-23:59 ET (dead zone or evening Globex): next RTH open is 9:30am the next
+        // TRADING day -- NOT simply "+1 calendar day" (DeepSeek code review round 3, found live
+        // while re-verifying the R4 fix): a Friday dead-zone/evening fire needs Monday, not
+        // Saturday, and this codebase already has a canonical, weekday-aware helper for exactly
+        // this (nextTradingDay(), used identically at ~line 4550/9900/10000/10082/11091 for the
+        // 18:00 ET session-date rollover) -- reused here rather than hand-rolling calendar
+        // arithmetic a second, narrower way. (Does not special-case market holidays, matching
+        // nextTradingDay()'s own existing scope everywhere else it's used in this file.)
+        const firedDateAsEt = new Date(new Date(`${firedCalDate}T12:00:00Z`).toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        upperBound = `${nextTradingDay(firedDateAsEt)} 09:30:00`;
+      }
       const barsQ = await query(`
-        SELECT ts::text as ts, high::float, low::float, close::float
+        SELECT ts::text as ts, high::float, low::float, close::float,
+               (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
         FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date = $1 AND ts > $2::timestamp
-          AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) <= 960
+        WHERE symbol='NQ' AND ts > $1::timestamp AND ts <= $2::timestamp
         ORDER BY ts
-      `, [row.trade_date, row.fired_at]);
+      `, [row.fired_at, upperBound]);
       const bars = barsQ.rows;
       if (!bars.length) return res.json({ eligible: false, reason: 'no_bar_data' });
 
@@ -10257,7 +10459,7 @@ export default function createACDRouter(io) {
 
       for (const bar of bars) {
         barCount++;
-        const step = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER });
+        const step = stepWiderTarget(state, bar, { entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod });
         const wasWidening = state.widening;
         state = step.state;
         if (!wasWidening && state.widening && derivedBarsToT1 == null) derivedBarsToT1 = barCount;
@@ -10966,6 +11168,79 @@ export default function createACDRouter(io) {
         degrading,
         lastRunDate,
         schedule: 'Re-evaluated weekly (Sun 10:30 PM ET, scripts/run_weekly_backtests.sh) via backtest_setup_status.mjs — every live setup_type, every run.',
+      });
+    } catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  // Live, non-directional volume-building-strength gauge (RESEARCH_CLAIM
+  // volume_building_no_level_initiative_test / building_strength_momentum_feeds_momentum /
+  // momentum_feeds_momentum_robust_across_daytype, 2026-08-29, independently confirmed by
+  // Gemini + re-run locally). Deliberately informational/read-only — does not gate or size
+  // anything live, mirrors rigor-stability-coverage above. Predicts move MAGNITUDE (a bigger
+  // swing coming soon), never direction — two independent tests (price momentum, order-flow
+  // imbalance) both found direction absent. Reuses the exact same live function every real
+  // setup fire already gets tagged with (computeLiveVolumeBuildingSignal) so this reads the
+  // identical measure a human would see on a fired setup, just computed continuously instead
+  // of only at a level touch.
+  router.get('/acd/building-strength-live', async (req, res) => {
+    try {
+      // FIXED 2026-08-30 (DeepSeek code review): was unconditionally using todayET as tradeDate,
+      // but this codebase's own session-date convention (2 other precedents in this file, e.g.
+      // line ~4537) rolls to nextTradingDay() once etHour>=18 -- without that, this endpoint used
+      // a DIFFERENT tradeDate than the Globex live INSERT site during 18:00-23:59 ET, pulling a
+      // different getTouchQualityBaseline() and breaking the "reads the identical measure a human
+      // would see on a fired setup" claim in exactly that window.
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const etHour = nowET.getHours();
+      const etMinNow = etHour * 60 + nowET.getMinutes();
+      const boundaryMod = (etMinNow >= 570 && etMinNow < 1080) ? 570 : 1080;
+      const todayET = nowET.toLocaleDateString('en-CA');
+      const tradeDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
+
+      // Market-status flag (DeepSeek code review): boundaryMod stays 570 clear through the 4-5PM
+      // dead zone AND the 5-6PM CME maintenance halt, so a bare session:'RTH' during 17:00-18:00 ET
+      // would silently describe a frozen/stale reading (no new bars arrive during the halt) as if
+      // it were live. Callers should treat DEAD_ZONE/MAINTENANCE_HALT readings as stale.
+      const marketStatus = boundaryMod === 1080 ? 'GLOBEX_OPEN'
+        : etMinNow < 960 ? 'RTH_OPEN'
+        : etMinNow < 1020 ? 'DEAD_ZONE'
+        : 'MAINTENANCE_HALT';
+
+      const sessionBars = await getSessionBarsSinceOpen(boundaryMod);
+      const [signal, calib] = await Promise.all([
+        computeLiveVolumeBuildingSignal(tradeDate, sessionBars),
+        getVolumeBuildingCalibration(tradeDate),
+      ]);
+
+      // Caveat (DeepSeek code review, 2026-08-29): compositeStrengthP20/P40/P60/P80 are calibrated
+      // from real FADE-touch moments only (necessarily higher-activity than a random instant --
+      // confirmed: momentumContextPriorAvgMedian -0.79 vs compositeStrengthP60 0.11, a real gap).
+      // This bucket therefore reads "vs. a typical level-touch moment," not "vs. any random
+      // moment" -- expect it to sit HIGH/ELEVATED somewhat less often in continuous live use than
+      // the percentile labels alone would suggest. Informational-display nuance, not a bug.
+      // FIXED 2026-08-30 (DeepSeek code review): guard used to check only compositeStrengthP20 for
+      // non-null before reading P40/P60/P80 too -- a calib row with P20 present but the others
+      // null (shouldn't happen given they're all set in the same write, but not guaranteed by
+      // anything) would have silently labeled every reading 'HIGH'. Now requires all 4.
+      let bucket = null;
+      if (signal.compositeStrength != null && [calib?.compositeStrengthP20, calib?.compositeStrengthP40, calib?.compositeStrengthP60, calib?.compositeStrengthP80].every(v => v != null)) {
+        const s = signal.compositeStrength;
+        bucket = s < calib.compositeStrengthP20 ? 'VERY_QUIET'
+          : s < calib.compositeStrengthP40 ? 'QUIET'
+          : s < calib.compositeStrengthP60 ? 'NORMAL'
+          : s < calib.compositeStrengthP80 ? 'ELEVATED'
+          : 'HIGH';
+      }
+
+      res.json({
+        session: boundaryMod === 570 ? 'RTH' : 'GLOBEX',
+        marketStatus,
+        compositeStrength: signal.compositeStrength,
+        bucket,
+        momentumContext: signal.momentumContext,
+        barsInSession: sessionBars.length,
+        calibratedFrom: calib?.calibratedFrom ?? null,
+        note: 'Informational only, non-directional — predicts move MAGNITUDE (a bigger swing coming soon, either direction), not which way. See docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md.',
       });
     } catch (err) { res.status(500).json({ error: err.message }); }
   });

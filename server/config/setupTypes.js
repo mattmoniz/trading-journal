@@ -557,3 +557,80 @@ export const CONDITIONAL_VARIANTS = {
 export const UNCALIBRATED_SHADOW_TYPES = new Set([
   'GAP_FILL_LONG', 'A_UP_WEAK', 'A_DOWN_STRONG',
 ]);
+
+/**
+ * classifyLevelFormation() — 2026-08-30, born from the volume-building-strength research thread
+ * (docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md). Distinguishes SAME_DAY_FORMING levels
+ * (Initial Balance / Opening Range, any length — established fresh THIS session) from
+ * PRIOR_DAY_OR_DEVELOPING levels (fixed from a completed prior period, or a slowly-accumulating
+ * running average — floor pivots, camarilla, prior-day/week/year value areas, VWAP variants,
+ * overnight high/low, session-open references). A different axis from inferStrategyFamily()
+ * above (MEAN_REVERSION/CONTINUATION) and from getBetClass() (roadmap bet-class buckets) — this
+ * one is specifically about WHEN a level came into existence relative to the current session, not
+ * what kind of trade it produces.
+ *
+ * Found to matter a lot: RESEARCH_CLAIM momentum_ctx_sameday_effect_sharpened_full_reclassify —
+ * whether a fade's approach showed real recent volume/pace activity predicts fade outcome ~5.5x
+ * more strongly for SAME_DAY_FORMING levels ($11.95/trade gap, N=324) than for
+ * PRIOR_DAY_OR_DEVELOPING ones ($2.17/trade, N=618). First version of this classifier lived only
+ * as copy-pasted regex in throwaway scratch scripts and had a real gap (missed OR*_HIGH/LOW,
+ * only caught OR*_MID) that diluted the true-OTHER residual with 90% avoidable noise — promoted
+ * here so no future script re-derives (and potentially re-drifts) this by hand.
+ */
+// CORRECTED 2026-08-30 (DeepSeek code review, same day as the original build): the first version
+// was hand-rolled regex against setup_type name patterns and got it wrong on 54 of 168 live FADE
+// setup_types -- worst, it put 13 real PRIOR_PERIOD setup_types (PD_IB_HIGH/LOW/MID, PD_OR_MID,
+// 5D_OR_MID, 10D_IB_MID -- all literally "PD_" for Prior Day) INTO SAME_DAY_FORMING, contaminating
+// ~15% of the headline research bucket with the wrong population. Worse: this duplicated an axis
+// that already existed as a real, authoritative table -- setupDefinitions.js's own
+// LEVEL_FADE_DEFINITIONS[].rule field (SAME_DAY_FORMING/PRIOR_PERIOD/...), built 2026-07-20
+// specifically to be "the single source of truth... keyed by the same base level names already
+// used in server/config/setupTypes.js." Skipping that check violated this codebase's own "check
+// whether an existing column/function already answers this" rule. Fixed by projecting off that
+// table instead of re-deriving the classification by hand.
+import { LEVEL_FADE_DEFINITIONS, stripToBaseLevel } from './setupDefinitions.js';
+
+export const classifyLevelFormation = (setupType) => {
+  if (!setupType) return 'OTHER';
+  const base = stripToBaseLevel(setupType);
+  const rule = LEVEL_FADE_DEFINITIONS[base]?.rule;
+  if (rule === 'SAME_DAY_FORMING') return 'SAME_DAY_FORMING';
+  if (rule === 'PRIOR_PERIOD') return 'PRIOR_DAY_OR_DEVELOPING';
+  return 'OTHER'; // MOMENTUM_PATTERN, OVERNIGHT_RANGE, DAY_TYPE_CONDITIONAL, or no definition at all
+};
+
+// Added 2026-08-31 (OPEN_DECISION globex_trail_diversion_never_applied_20260831, user-confirmed
+// "add trail diversion to Globex too"). server/routes/acd.js's RTH engine has its own local
+// resolveSetupType() closure (~line 7285) that hand-lists the 7 UNCONDITIONAL trail-diversion
+// base types (every touch of that type gets the breakeven-trail mechanism, no entry-condition
+// check) inline, duplicating exactly what CONDITIONAL_VARIANTS already encodes via each entry's
+// own `baseType` field and `condition: 'unconditional...'` string. detectGlobexSetup() needed
+// the SAME unconditional-only mapping (it has no access to the RTH closure's scope -- allRthBarsRow/
+// lp aren't available there, and those are only needed by resolveSetupType()'s two CONDITIONAL
+// entries, WPP_FADE_SHORT/OR5_LOW_FADE_LONG, which are RTH-Opening-Range-specific and don't apply
+// to Globex anyway) -- rather than hand-copying the same 7-line if-chain a second time (the
+// original sin this whole OPEN_DECISION traces back to), this derives the mapping FROM
+// CONDITIONAL_VARIANTS directly, so there is exactly one place a new unconditional trail variant
+// ever needs to be added. Deliberately does NOT touch the RTH resolveSetupType() closure itself
+// (lower-risk additive change; that function's own conditional entries are out of scope here).
+const UNCONDITIONAL_VARIANT_BY_BASE_TYPE = (() => {
+  const map = {};
+  for (const [variantName, v] of Object.entries(CONDITIONAL_VARIANTS)) {
+    if (v.baseType && typeof v.condition === 'string' && v.condition.startsWith('unconditional')) {
+      map[v.baseType] = variantName;
+    }
+  }
+  return map;
+})();
+
+/**
+ * Given a RAW (undiverted) setup_type, returns its unconditional trail-diversion variant name
+ * (e.g. 'PD_POC_FADE_LONG' -> 'PD_POC_FADE_LONG_TRAIL') if one exists in CONDITIONAL_VARIANTS,
+ * else returns the input unchanged. Only covers UNCONDITIONAL diversions (every touch of the
+ * base type diverts, no entry-condition check) -- the RTH-only conditional diversions
+ * (WPP_FADE_SHORT_GAP_UP, OR5_LOW_FADE_LONG_GAP_DOWN) are NOT handled here, since they depend on
+ * RTH-specific same-session data (today's opening range) that has no Globex/overnight analog.
+ */
+export function resolveUnconditionalTrailVariant(rawType) {
+  return UNCONDITIONAL_VARIANT_BY_BASE_TYPE[rawType] ?? rawType;
+}
