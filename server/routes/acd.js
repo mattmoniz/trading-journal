@@ -6327,10 +6327,28 @@ export default function createACDRouter(io) {
       let _lfDeltaP25 = _cachedDeltaPerc?.p25 ?? null;
       let _lfDeltaP75 = _cachedDeltaPerc?.p75 ?? null;
       if (_lfDeltaP25 == null) {
+        // FIXED 2026-08-31 (OPEN_DECISION lf_session_delta_partial_vs_fullday_percentile_mismatch,
+        // user-confirmed): this used to be a flat FULL-DAY sum percentile (one number per day,
+        // GROUP BY ts::date, no time cutoff), compared live against _lfSessionDelta -- a
+        // PARTIAL-day running sum as of fire time. Re-read the original 2026-07-08 validating
+        // backtest (scripts/archive/backtest_session_delta.mjs) to resolve which convention it
+        // actually used: it computed cumulative delta from 9:30 up through EACH HISTORICAL
+        // SETUP'S OWN fire time, then took percentiles across all of those -- i.e. a percentile
+        // of PARTIAL-day cumulative delta sampled at whatever time each trade happened to fire,
+        // never a full-day total. The live code's threshold was a different, unvalidated
+        // simplification, not what was actually proven (this is why _lfDeltaHigh fired on only
+        // 1/704 real trades and _lfDeltaNeutral fired on 609/704 -- a full-day bar is much
+        // harder to clear early in the session). Rebuilt below to sample the RUNNING cumulative
+        // delta at every minute of every historical session (not just at setup-fire moments,
+        // which aren't cheaply queryable here) and pool percentiles across all of those
+        // (day, minute) readings -- the same underlying statistic (partial-day cumulative delta
+        // at an arbitrary point in the session), just a denser, unbiased sample of it.
         const _lfDeltaPercQ = await query(`
-          WITH session_deltas AS (
+          WITH minute_deltas AS (
             SELECT ts::date AS bar_date,
-              SUM(COALESCE(ask_volume,0) - COALESCE(bid_volume,0)) AS net_delta
+              (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
+                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York'))::int AS et_min,
+              COALESCE(ask_volume,0) - COALESCE(bid_volume,0) AS bar_delta
             FROM price_bars_primary
             WHERE symbol='NQ'
               AND ts::date IN (
@@ -6340,12 +6358,15 @@ export default function createACDRouter(io) {
               )
               AND EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
                 + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') BETWEEN 570 AND 959
-            GROUP BY ts::date
+          ), running AS (
+            SELECT bar_date, et_min,
+              SUM(bar_delta) OVER (PARTITION BY bar_date ORDER BY et_min) AS cum_delta
+            FROM minute_deltas
           )
           SELECT
-            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(net_delta)) AS p25,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ABS(net_delta)) AS p75
-          FROM session_deltas
+            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p25,
+            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p75
+          FROM running
         `, [todayET]).catch(() => ({ rows: [{}] }));
         _lfDeltaP25 = _lfDeltaPercQ.rows[0]?.p25 ?? null;
         _lfDeltaP75 = _lfDeltaPercQ.rows[0]?.p75 ?? null;
@@ -7704,8 +7725,17 @@ export default function createACDRouter(io) {
             // the natural, non-stale zero-point for a z-score/correlation — not an inherited
             // static literal that would need manual recalibration as data accumulates.
             let touchQualityTest = false, touchQualitySlice = false;
-            if (allRthBarsRow.rows.length >= 10) {
-              const _tqBars = allRthBarsRow.rows.slice(-10);
+            // 11 bars, not 10 (fixed 2026-08-31, OPEN_DECISION
+            // touchqualitytest_pace_window_off_by_one_affects_live_sizing, user-confirmed):
+            // _tqNetPace below measures the span from _tqBars[0] to the entry bar
+            // (_tqBars[length-1]) -- a 10-bar slice is only a 9-INTERVAL span, but it's
+            // z-scored against getPaceBaseline(todayET, 10), a genuine 10-interval baseline
+            // (LAG(close,10)). The mismatch systematically made touchQualityTest over-fire
+            // and touchQualitySlice under-fire vs. what scratch/fade_slice_test_real_touch_time.mjs
+            // actually validated (which used an 11-element/10-interval window, matching the
+            // baseline). 11 bars = 10 intervals, now matches.
+            if (allRthBarsRow.rows.length >= 11) {
+              const _tqBars = allRthBarsRow.rows.slice(-11);
               const _tqVolBaseline = await getTouchQualityBaseline(todayET);
               const _tqZs = [];
               _tqBars.forEach((b, idx) => {
