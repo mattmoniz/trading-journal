@@ -1,8 +1,57 @@
-# 2-Lot Scale-Out with a Breakeven-Minus-5 Runner — Scoped, Not Started (2026-08-31)
+# 2-Lot Scale-Out with a Breakeven-Minus-5 Runner (2026-08-31)
 
-**Status: scoped and recorded, zero code written, zero backtest run.** User explicitly asked
-for this to be its own focused thread, not squeezed into other work — read this doc fresh at
-the start of that session rather than reconstructing from conversation history.
+**Status: first-pass bar-by-bar backtest run and PROVISIONAL result recorded** (same day as
+scoping — `scripts/backtest_twolot_scaleout_be_minus5.mjs`, `RESEARCH_CLAIM
+twolot_scaleout_be_minus5_orshort_firstpass`). See "First-pass result" below before re-deriving
+from scratch. Open Questions 2 and 4 (runner-arm timing, runner target) remain unconfirmed with
+the user — the script made an explicit, documented simplification for each; do not treat those
+choices as settled.
+
+## First-pass result (2026-08-31)
+
+Population: real-only (`origin_status IN ('ACTIVE','SHADOW')`) OR-length SHORT-fade family
+(OR5/OR10/OR30 × HIGH/LOW/MID), N=139 direction-confirmed, all 139 walkable against
+`price_bars_primary`. 458 additional BACKFILL rows excluded per the standing origin_status rule.
+
+Swept Lot 1's T1 distance over [12,16,20,24,30]pt; Lot 2 arms to entry+5pt (short-side
+breakeven-minus-5) the instant Lot 1 fills, runs to the setup's own calibrated `t1_level`.
+Compared against **Baseline 1** (exit-all-at-the-same-T1-distance, no runner at all) at every
+candidate.
+
+**Best candidate: T1=12pt.** Delta (beMinus5 vs exit-all-no-runner) mean=+$10.27/trade, N=139.
+Plateau-clean (T1=16pt neighbor also positive, +$6.86). Chronological OOS: train mean=+$12.04
+(N=97), test mean=+$6.19 (N=42), same-sign. `computeRigor`: stable=true, clustered=false,
+clean=true. Bootstrap (2000 resamples): 99.7% positive-mean.
+
+**Read the composition, not just the mean — this is the one thing worth internalizing before
+anyone gets excited about a "+$10/trade" headline:**
+- 27.3% (38/139): Lot 1 never even fills — no difference from doing nothing differently.
+- 39.6% (55/139): Lot 1 fills, then the runner gives back the deliberate small loss — a fixed,
+  deterministic **-$34/trade** relative to the no-runner baseline (this is the "breakeven minus
+  5" mechanism doing exactly what it's designed to do: capping the runner's downside at a small
+  known cost).
+- 33.1% (46/139): Lot 1 fills, the runner reaches its target — a real win, ranging $40-$176
+  better than the no-runner baseline.
+
+The positive $10.27 mean is entirely a minority-right-tail effect (the 33% that reach target),
+not something the median trade experiences — the median delta is exactly $0, purely because of
+tie-clustering between the "never filled" and "fixed -$34" buckets, not because the effect is
+fake (hand-traced and confirmed deterministic, not a bug). This is a legitimate, expected shape
+for a payoff-asymmetric mechanism, not a red flag by itself — but it means "N=139, +$10.27 mean"
+alone is a misleading way to describe this to a human deciding whether to use it. Present the
+three-way split whenever this finding is referenced.
+
+**Not yet done, needed before any live/SHADOW wiring decision:**
+- Confirm Open Questions 2 and 4 with the user (see below — both were given a documented
+  default, not a confirmed answer).
+- Independent re-verification (this is a single script's own first-pass output — the standing
+  "a number computed twice by the same script isn't verified" rule applies).
+- Comparison against the actual current live/described strategy (T1 ~10-15pt + exact-breakeven
+  runner) as its own baseline, not just against a synthetic "exit-all" baseline — the script
+  computed an `exactBe` arm for reference but did not make it the primary comparison.
+- N=139 clears the general N≥20 floor in aggregate, but the outcome-composition breakdown above
+  means each of the 3 buckets individually is thinner than that — worth keeping in mind before
+  treating any bucket's own number as decisive.
 
 ## The idea
 
@@ -105,10 +154,10 @@ codebase's standing conventions)
 - A genuine negative ("current strategy is fine, don't change it") is a legitimate, expected,
   real answer — do not lean toward finding an improvement just because one was asked for.
 
-## Suggested first step for the next session
+## Suggested next step for the next session
 
-Read `project_scaleout_optimization_parked.md` (memory) and this doc, resolve Open Question 1
-(does real multi-lot-replayable data exist) before writing any simulation code, then scope
-whether to build this as a from-scratch bar-by-bar walker (recommended, matches this codebase's
-"export the real function, reuse the walk conventions already established" pattern from every
-other exit-mechanism backtest this session) or as an MAE/MFE-based approximation.
+Open Question 1 is resolved (real per-touch bar-by-bar walk, no native multi-lot records
+needed — see First-pass result above). Remaining: confirm Open Questions 2 and 4 with the user,
+then re-run with the confirmed mechanism, add the "current strategy as actually described"
+baseline as primary (not just the exit-all-no-runner synthetic baseline), and get independent
+re-verification before this goes anywhere near a live/SHADOW wiring decision.

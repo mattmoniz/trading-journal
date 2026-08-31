@@ -1,5 +1,30 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-08-31: 2-lot scale-out (breakeven-minus-5 runner) — first-pass backtest run, PROVISIONAL, needs 2 open questions confirmed
+
+Follow-up to the same-day scoping doc (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`). Built
+and ran `scripts/backtest_twolot_scaleout_be_minus5.mjs`, a bar-by-bar walker over the real
+(`origin_status IN ('ACTIVE','SHADOW')`) OR-length SHORT-fade family (OR5/OR10/OR30 ×
+HIGH/LOW/MID, N=139, all walkable). Best T1 candidate (12pt): delta vs exit-all-no-runner
+mean=+$10.27/trade, plateau-clean, chronological OOS same-sign (train +$12.04/N=97, test
++$6.19/N=42), `computeRigor` clean, bootstrap 99.7% positive. **Read the composition before
+trusting the headline number**: 27.3% of trades never even fill Lot 1 (no difference), 39.6%
+fill and then eat the mechanism's own deliberate fixed -$34 give-back, and the entire positive
+mean comes from the remaining 33.1% reaching the runner's target ($40-$176 better than
+baseline) — median delta is exactly $0 (tie-clustering artifact, hand-traced and confirmed not a
+bug, not evidence the effect is fake). Full breakdown in the spec doc.
+
+**Not decided/confirmed yet:**
+- Open Question 2 (does the runner arm the INSTANT Lot 1's target fills, or after some other
+  condition?) and Open Question 4 (should the runner target be the setup's own calibrated
+  `t1_level`, as this first pass assumed, or a genuine structural-level join, or open-ended?) —
+  both were given a documented default, not a user-confirmed answer.
+- This compared against a synthetic "exit-all-at-T1" baseline, not against the user's actual
+  described current strategy (T1 ~10-15pt + exact-breakeven runner, no small-loss tolerance) —
+  the script computed an `exactBe` reference arm but did not make it primary.
+- No independent re-verification yet (single script's own first-pass output).
+`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_firstpass`, `PROVISIONAL`.
+
 ## 🔶 2026-08-30: Real, systemic Globex session-end bug found and fixed in 3 live exit mechanisms
 
 User asked "why didn't the target widen at 3 bars" on a real Overnight/Globex `PD_POC_FADE_SHORT`
