@@ -1253,6 +1253,33 @@ httpServer.listen(PORT, () => {
         }
       }
 
+      // Pattern Memory HISTORICAL catch-up (2026-08-31, OPEN_DECISION
+      // condition_memory_needs_rebuild_not_backfill) -- the same-day check above only ever
+      // looks at `today`, so a trade whose data lands AFTER its own calendar day has already
+      // passed (a late Sierra Chart import, a manual reconciliation, or the server being down
+      // during that evening's catch-up window) permanently never gets a daily_performance_log
+      // row -- nothing else in this codebase ever re-scans the past for this gap. Confirmed
+      // live: 2026-08-03 and 2026-08-12 trades were both imported in a single batch on
+      // 2026-08-12 20:52 ET (9 days late for the 08-03 rows), by which point `today` had moved
+      // on and neither date was ever re-checked -- daily_performance_log stalled at 2026-07-31
+      // for a month with zero errors logged anywhere. Runs every tick (not hour/day-gated,
+      // since it's catching up PAST dates, not today), bounded to a 90-day lookback and capped
+      // at 5 dates per tick to avoid a large backlog hammering the DB in one go.
+      const missingDplRows = await query(`
+        SELECT DISTINCT t.log_date::text as trade_date
+        FROM trades t
+        WHERE t.pnl IS NOT NULL
+          AND t.log_date >= (CURRENT_DATE - INTERVAL '90 days')
+          AND t.log_date < CURRENT_DATE
+          AND NOT EXISTS (SELECT 1 FROM daily_performance_log d WHERE d.trade_date = t.log_date)
+        ORDER BY t.log_date ASC
+        LIMIT 5
+      `);
+      for (const row of missingDplRows.rows) {
+        console.log(`[catch-up] Pattern Memory historical gap found for ${row.trade_date} (trades exist, no daily_performance_log row, not today) — running now`);
+        await runNightlyUpdate(row.trade_date, io);
+      }
+
       // Daily coaching — due 4:30 PM Mon–Fri; catch up after 5 PM
       // Re-run only if coaching has never run OR it ran with 0 live-account trades but live fills now exist.
       // Uses LIKE '%-PRO%' to match live accounts — avoids infinite loop when sim-only fills exist.
