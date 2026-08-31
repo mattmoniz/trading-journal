@@ -1,5 +1,36 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-08-31: Setup D (OPENING_DRIVE_15MIN) Stage 2 — a real, currently 100%-forfeited opportunity found; discriminator screen in progress
+
+Follow-up to the (resolved, below) IB_BULLISH/IB_BEARISH thread — user's redirect: "figure out
+how to capitalize on big breaks." Landscape check first: `BRACKET_BREAKOUT_SHORT` is a real,
+decisive loser (real EV -$42.60/trade, N=20, stable); everything else in the breakout family has
+essentially no real trade history except `OPENING_DRIVE_15MIN_LONG/SHORT` (Setup D), which
+already passed a real Stage 1 bar-history validation (N=138, rigor-clean, beat a blind-delay
+control) but has fired only 2 real times in 20 days — thin by starvation, not by failure.
+
+**Stage 2** (`scripts/backtest_setup_d_opening_drive_stage2.mjs`, dispatched to Gemini, every
+number independently re-verified by re-running directly): tested (a) an immediate-entry variant
+(no pullback wait) and (b) a volume-building magnitude split on both entry styles. Immediate
+entry alone fails OOS (-$1.80/trade vs Arm A's $38.15) — driven by ~46pt of real average worse
+entry price. **User's own question ("are they addressing the same trade just differently?") led
+to the real finding**: decomposing immediate-entry's 205 signals into "overlap" (139 days that
+also pull back — Arm A's entry fires) vs "exclusive" (66 days that NEVER pull back — Arm A
+structurally can't take these at all) showed the exclusive population alone is worth
+**EV=$85.54/trade — more than double Arm A's $37.54/trade on its own population** — a real,
+currently 100%-unexploited opportunity (~15% of all classified-drive days). Volume-building does
+NOT discriminate which bucket a day falls into (score distributions barely differ, median -0.41
+vs -0.20) and is actually mildly counterproductive as a filter within the exclusive bucket
+(bottom tercile $111.43 > top tercile $65.07) — ruled out as the tool for this specific job.
+Recorded as `RESEARCH_CLAIM setup_d_immediate_entry_vs_pullback_decomposition` (PROVISIONAL).
+
+**In progress**: a broader discriminator screen (drive magnitude, order-flow imbalance,
+volume-building, lookahead-corrected NL30 alignment, gap status, structural-level proximity) —
+does anything available by 10:15am ET predict overlap-vs-exclusive before it happens? Dispatched
+to Gemini, result pending. Per this codebase's standing rule on newly-built classifiers, any
+discriminator found here needs its own independent OOS validation before being wired, not just a
+full-sample screen.
+
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
 User question ("IB_BEARISH continues to stink, how is it still live") led to a real-data audit
