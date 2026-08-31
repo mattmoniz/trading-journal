@@ -1,9 +1,9 @@
 // 2-lot scale-out with a breakeven-minus-5 runner, scoped in
 // docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md. User's idea: Lot 1 takes a quick close
 // target; once it fills, Lot 2's stop moves to entry-minus-5 (long) / entry-plus-5 (short)
-// -- a deliberate small-loss tolerance, NOT exact breakeven -- and runs toward the setup's
-// own calibrated target. Scoped to the OR-length SHORT-fade family per user context
-// ("the OR short").
+// -- a deliberate small-loss tolerance, NOT exact breakeven -- and runs toward a real
+// structural level. Scoped to the OR-length SHORT-fade family per user context ("the OR
+// short").
 //
 // Resolves Open Question 1 from the spec: active_setups has no native multi-lot records
 // (each row is one system-detected touch, not a real N-contract fill), so this models a
@@ -11,11 +11,19 @@
 // -exited 1-contract lots -- the "from-scratch bar-by-bar walker" path the spec recommends,
 // matching the walk conventions in backtest_wider_target_breakeven_floor.mjs.
 //
-// Runner target (Open Question 4): uses the setup's own calibrated t1_level as Lot 2's
-// target -- least-arbitrary choice available without a structural-level join; flagged as a
-// modeling simplification, not a resolved answer.
-// Runner arm timing (Open Question 2): stop arms to BE-minus-5 the instant Lot 1's T1 fills
-// (most natural reading, per the spec) -- not yet independently confirmed with the user.
+// Runner target (Open Question 4, user-confirmed 2026-08-31: "structural level"): the first
+// pass used the setup's own tight t1_level, which the user agreed likely understated the
+// runner's upside. This version reads server/routes/acd.js's `keepLevelsAll` level set from
+// `level_prices` (the same table that feeds live level-fade candidates) and picks the
+// NEAREST known level below entry-minus-Lot1Dist (short direction) -- i.e. strictly beyond
+// where Lot 1 already exits, so the runner genuinely runs further, not just holds the same
+// distance with a looser stop. Restricted to categories that are ALWAYS known ahead of the
+// live session (PRIOR_DAY/WEEKLY/MONTHLY/QUARTERLY/YEARLY/PIVOT/CAMARILLA/OVERNIGHT/prior-
+// period VWAP/opens) -- excludes the 'CURRENT' category (OR/IB values, same-day-forming,
+// already used for entry -- reusing one as the runner target would be circular) and RTH_VWAP
+// (same-session, forming intraday) to avoid any lookahead per this codebase's standing rule.
+// Runner arm timing (Open Question 2, user-confirmed 2026-08-31: instant): stop arms to
+// BE-minus-5 the instant Lot 1's target fills.
 import { query } from '../server/db.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
@@ -32,6 +40,12 @@ const OR_SHORT_TYPES = [
   'OR5_HIGH_FADE_SHORT', 'OR5_LOW_FADE_SHORT', 'OR5_MID_FADE_SHORT',
   'OR10_HIGH_FADE_SHORT', 'OR10_LOW_FADE_SHORT', 'OR10_MID_FADE_SHORT',
   'OR30_HIGH_FADE_SHORT', 'OR30_LOW_FADE_SHORT', 'OR30_MID_FADE_SHORT',
+];
+
+// Prior-period-only categories, matching level_prices.category values -- see header comment.
+const SAFE_LEVEL_CATEGORIES = [
+  'PRIOR_DAY', 'PRIOR', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY',
+  'PIVOT', 'CAMARILLA', 'WEEKLY_PIVOT', 'MONTHLY_PIVOT', 'OVERNIGHT',
 ];
 
 // 1 lot = 1 MNQ contract; commission is per-contract-round-trip, so splitting into 2 lots
@@ -62,6 +76,29 @@ async function main() {
   console.log(`Direction-confirmed SHORT: N=${trades.length}`);
   if (trades.length === 0) { console.log('No usable trades. DONE'); process.exit(0); }
 
+  const tradeDates = [...new Set(trades.map(t => t.trade_date))];
+  const levelsRes = await query(`
+    SELECT trade_date::text as trade_date, level_name, price::float as price
+    FROM level_prices
+    WHERE trade_date = ANY($1) AND category = ANY($2) AND price IS NOT NULL
+  `, [tradeDates, SAFE_LEVEL_CATEGORIES]);
+  const levelsByDate = new Map();
+  for (const row of levelsRes.rows) {
+    if (!levelsByDate.has(row.trade_date)) levelsByDate.set(row.trade_date, []);
+    levelsByDate.get(row.trade_date).push({ name: row.level_name, price: row.price });
+  }
+  console.log(`Structural levels loaded for ${levelsByDate.size}/${tradeDates.length} trade dates (${levelsRes.rows.length} level rows, categories: ${SAFE_LEVEL_CATEGORIES.join(',')})`);
+
+  // Nearest known structural level strictly below `threshold` (short direction: the runner
+  // needs to run further down than Lot 1 already went) -- null if none exists that day.
+  function nearestLevelBelow(dateLevels, threshold) {
+    let best = null;
+    for (const lvl of (dateLevels || [])) {
+      if (lvl.price < threshold && (best === null || lvl.price > best.price)) best = lvl;
+    }
+    return best;
+  }
+
   const barsRes = await query(`SELECT ts, high::float as high, low::float as low, close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts ASC`);
   const allBars = barsRes.rows.map(b => ({ ts: new Date(b.ts).getTime(), high: b.high, low: b.low, close: b.close }));
   function firstIndexAfter(t) {
@@ -75,13 +112,18 @@ async function main() {
     const long = false; // SHORT-only population, confirmed above
     const entry = trade.entry_zone_high ?? trade.entry_zone_low; // matches existing convention
     const origStop = trade.stop_level;
-    const runnerTarget = trade.t1_level; // Open Question 4 simplification, see header
+    const dateLevels = levelsByDate.get(trade.trade_date);
     const startIdx = firstIndexAfter(new Date(trade.fired_at).getTime());
     if (startIdx >= allBars.length) return null;
 
     const perCandidate = {};
     for (const t1Dist of T1_CANDIDATES) {
       const lot1Target = entry - t1Dist; // short: target is below entry
+      const structuralLevel = nearestLevelBelow(dateLevels, lot1Target);
+      if (!structuralLevel) { perCandidate[t1Dist] = { excluded: 'no_structural_level' }; continue; }
+      const runnerTarget = structuralLevel.price;
+      const runnerLevelName = structuralLevel.name;
+      const runnerDistance = lot1Target - runnerTarget; // how much further the runner runs past Lot 1
 
       // Phase 1: walk until Lot 1's target or the original stop hits (whichever first;
       // same-bar conflict is scored conservatively as the stop, matching the reference
@@ -109,7 +151,7 @@ async function main() {
         };
         continue;
       }
-      if (lot1TouchIdx === null) { perCandidate[t1Dist] = null; continue; }
+      if (lot1TouchIdx === null) { perCandidate[t1Dist] = { excluded: 'lot1_unreachable' }; continue; }
 
       const lot1Pnl = lotPnl(entry, lot1Target, long);
 
@@ -142,6 +184,8 @@ async function main() {
         runnerOutcome: beMinus5Runner.outcome,
         beMinus5Pnl: lot1Pnl + beMinus5Runner.pnl,
         exactBePnl: lot1Pnl + walkRunner(exactBeStop).pnl,
+        runnerLevelName,
+        runnerDistance,
       };
     }
     return { date: trade.trade_date, setupType: trade.setup_type, perCandidate };
@@ -162,7 +206,11 @@ async function main() {
   console.log('\n=== Sweep: Lot 1 T1 distance vs 2 baselines (real N only, ACTIVE+SHADOW) ===');
   const perCandidateSummary = {};
   for (const t1Dist of T1_CANDIDATES) {
-    const rows = walked.filter(w => w.perCandidate[t1Dist] != null);
+    const rows = walked.filter(w => w.perCandidate[t1Dist] != null && !w.perCandidate[t1Dist].excluded);
+    const excludedNoLevel = walked.filter(w => w.perCandidate[t1Dist]?.excluded === 'no_structural_level').length;
+    const excludedUnreachable = walked.filter(w => w.perCandidate[t1Dist]?.excluded === 'lot1_unreachable').length;
+    if (excludedNoLevel > 0) console.log(`  (T1=${t1Dist}pt: ${excludedNoLevel} trade(s) excluded -- no known structural level beyond Lot 1's exit that date)`);
+    if (excludedUnreachable > 0) console.log(`  (T1=${t1Dist}pt: ${excludedUnreachable} trade(s) excluded -- Lot 1's target unreachable within ${MAX_WALK_BARS} bars)`);
     const noRunner = rows.map(r => r.perCandidate[t1Dist].noRunnerPnl);
     const beMinus5 = rows.map(r => r.perCandidate[t1Dist].beMinus5Pnl);
     const exactBe = rows.map(r => r.perCandidate[t1Dist].exactBePnl);
@@ -213,6 +261,21 @@ async function main() {
   console.log(`Runner timed out (${MAX_WALK_BARS}-bar cap, marked-to-market): ${outcomeCounts.timedOut}/${nTotal} (${(outcomeCounts.timedOut/nTotal*100).toFixed(1)}%)`);
   console.log(`Positive mean is a minority-right-tail effect: only the targetHit fraction beats noRunner; the stopHit fraction pays a fixed known cost, matching the mechanism's own "small deliberate loss" design intent, not a flaw.`);
 
+  // Which structural levels actually served as the runner's target, and how far past Lot 1
+  // they typically sat -- transparency on what "structural level" meant in practice this pass.
+  const levelUsage = {};
+  const runnerDistances = [];
+  for (const r of bestRows) {
+    const pc = r.perCandidate[best.t1Dist];
+    if (!pc.lot1Filled) continue;
+    levelUsage[pc.runnerLevelName] = (levelUsage[pc.runnerLevelName] || 0) + 1;
+    runnerDistances.push(pc.runnerDistance);
+  }
+  const avgRunnerDistance = runnerDistances.length ? runnerDistances.reduce((a, b) => a + b, 0) / runnerDistances.length : 0;
+  console.log(`\n=== Structural level usage (T1=${best.t1Dist}pt, trades where Lot 1 filled) ===`);
+  console.log(`Level types used as runner target: ${JSON.stringify(levelUsage)}`);
+  console.log(`Avg distance runner target sits beyond Lot 1's own exit: ${avgRunnerDistance.toFixed(1)}pt`);
+
   const sortedByDate = [...bestRows].sort((a, b) => a.date.localeCompare(b.date));
   const splitIdx = Math.floor(sortedByDate.length * 0.7);
   const train = sortedByDate.slice(0, splitIdx);
@@ -254,17 +317,19 @@ async function main() {
   // Always PROVISIONAL on a first pass -- CONFIRMED requires independent re-verification,
   // per this codebase's RESEARCH_CLAIM convention, not a single script's own output.
 
-  const claimText = `2-lot scale-out with a breakeven-minus-5 runner (docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md), first-pass bar-by-bar walk. Population: real (ACTIVE+SHADOW only) OR-length SHORT-fade family fires (OR5/OR10/OR30 x HIGH/LOW/MID, N=${trades.length} direction-confirmed, ${walked.length} walkable). Swept Lot 1 T1 distance over [${T1_CANDIDATES.join(',')}]pt; Lot 2 arms to entry+5pt (short-side BE-minus-5) the instant Lot 1 fills, runs to the setup's own calibrated t1_level.
+  const claimText = `2-lot scale-out with a breakeven-minus-5 runner (docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md), SECOND pass with both open questions user-confirmed 2026-08-31: runner arms to BE-minus-5 the INSTANT Lot 1 fills, and the runner's target is a real structural level (nearest known level_prices row below Lot 1's own exit, from prior-period-only categories -- PRIOR_DAY/WEEKLY/MONTHLY/QUARTERLY/YEARLY/PIVOT/CAMARILLA/OVERNIGHT -- never same-day-forming OR/IB levels, no lookahead). Supersedes twolot_scaleout_be_minus5_orshort_firstpass (which used the setup's own tight t1_level as a placeholder runner target).
+Population: real (ACTIVE+SHADOW only) OR-length SHORT-fade family fires (OR5/OR10/OR30 x HIGH/LOW/MID, N=${trades.length} direction-confirmed, ${walked.length} walkable). Swept Lot 1 T1 distance over [${T1_CANDIDATES.join(',')}]pt.
 Best candidate: T1=${best.t1Dist}pt, delta (beMinus5 vs exit-all-no-runner) mean=$${best.mean.toFixed(2)}, N=${bestRows.length}. Plateau=${isPlateau} (neighbor deltas: ${neighborMeans.map(m => '$' + m.toFixed(2)).join(', ')}).
 Chronological OOS: train mean=$${sTrain.mean.toFixed(2)} (N=${sTrain.n}), test mean=$${sTest.mean.toFixed(2)} (N=${sTest.n}), sign agreement=${oosAgrees}.
 computeRigor: stable=${rigor.stable} clustered=${rigor.clustered} clean=${rigor.clean}.
 Bootstrap (${bootN} resamples): ${(bootPositivePct*100).toFixed(1)}% positive-mean.
-Sample is thin (${thin ? 'below N=20/10-per-split floor' : 'clears N floors'}) -- ${thin ? 'not decisive either way; needs more real forward data before any live/SHADOW wiring decision' : 'clears the N floor but still a first-pass single-script result, needs independent re-verification before promotion'}.
-Outcome composition (NOT just the aggregate mean): lot1NeverFilled=${outcomeCounts.lot1NeverFilled}/${nTotal} (${(outcomeCounts.lot1NeverFilled/nTotal*100).toFixed(1)}%, delta=$0 by construction), runnerStopHit=${outcomeCounts.stopHit}/${nTotal} (${(outcomeCounts.stopHit/nTotal*100).toFixed(1)}%, fixed $${stopHitDelta.toFixed(2)} give-back vs noRunner -- the mechanism's own deliberate small-loss cost), runnerTargetHit=${outcomeCounts.targetHit}/${nTotal} (${(outcomeCounts.targetHit/nTotal*100).toFixed(1)}%, real wins driving the entire positive mean). The positive $${best.mean.toFixed(2)} mean is a minority-right-tail effect (only ${(outcomeCounts.targetHit/nTotal*100).toFixed(0)}% of trades), not a typical-trade improvement -- median delta is $0 exactly because of tie-clustering between the zero and fixed-loss buckets, not because the effect is fake. Self-audited: hand-traced the stopHit branch's constant delta to confirm it's the correct, deterministic consequence of a fixed T1/fixed-stop-offset combination, not a bug.
-Modeling simplifications not yet confirmed with user (see spec Open Questions 2-4): runner arms the instant Lot 1 fills; Lot 1's target is a literal sweep candidate, not the setup's own calibrated t1_level; Lot 2's target reuses the setup's own t1_level rather than a genuine structural-level join. Not wired live, not compared against the actual current live/described strategy (exact-BE reference arm computed instead, see full script output) -- exit-all baseline used as primary comparison per spec's Baseline 1.`;
+Sample is thin (${thin ? 'below N=20/10-per-split floor' : 'clears N floors'}) -- ${thin ? 'not decisive either way; needs more real forward data before any live/SHADOW wiring decision' : 'clears the N floor but still a single-script result, needs independent re-verification before promotion'}.
+Outcome composition (NOT just the aggregate mean): lot1NeverFilled=${outcomeCounts.lot1NeverFilled}/${nTotal} (${(outcomeCounts.lot1NeverFilled/nTotal*100).toFixed(1)}%, delta=$0 by construction), runnerStopHit=${outcomeCounts.stopHit}/${nTotal} (${(outcomeCounts.stopHit/nTotal*100).toFixed(1)}%, fixed $${stopHitDelta.toFixed(2)} give-back vs noRunner -- the mechanism's own deliberate small-loss cost), runnerTargetHit=${outcomeCounts.targetHit}/${nTotal} (${(outcomeCounts.targetHit/nTotal*100).toFixed(1)}%, real wins driving the entire positive mean). The positive $${best.mean.toFixed(2)} mean is a minority-right-tail effect (only ${(outcomeCounts.targetHit/nTotal*100).toFixed(0)}% of trades), not a typical-trade improvement.
+Structural level usage: ${JSON.stringify(levelUsage)}, avg distance beyond Lot 1's exit=${avgRunnerDistance.toFixed(1)}pt.
+Remaining gaps: single-script result, no independent re-verification yet; not compared against the user's actual current live/described strategy (exact-BE reference arm computed instead, see full script output) -- exit-all baseline used as primary comparison per spec's Baseline 1; some trades excluded per-candidate where no structural level existed below Lot 1's exit that date (see script output for counts) -- this shrinks N unevenly across T1 candidates, a real limitation of relying on level_prices coverage rather than a synthetic target.`;
 
   await recordClaim({
-    slug: 'twolot_scaleout_be_minus5_orshort_firstpass',
+    slug: 'twolot_scaleout_be_minus5_orshort_structural',
     claimText,
     sourceFile: 'scripts/backtest_twolot_scaleout_be_minus5.mjs',
     sampleSize: bestRows.length,

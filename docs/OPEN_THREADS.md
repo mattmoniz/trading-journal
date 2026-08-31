@@ -1,29 +1,34 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-08-31: 2-lot scale-out (breakeven-minus-5 runner) — first-pass backtest run, PROVISIONAL, needs 2 open questions confirmed
+## 🔶 2026-08-31: 2-lot scale-out (breakeven-minus-5 runner) — SECOND pass with a real structural target, both open questions resolved, PROVISIONAL
 
-Follow-up to the same-day scoping doc (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`). Built
-and ran `scripts/backtest_twolot_scaleout_be_minus5.mjs`, a bar-by-bar walker over the real
-(`origin_status IN ('ACTIVE','SHADOW')`) OR-length SHORT-fade family (OR5/OR10/OR30 ×
-HIGH/LOW/MID, N=139, all walkable). Best T1 candidate (12pt): delta vs exit-all-no-runner
-mean=+$10.27/trade, plateau-clean, chronological OOS same-sign (train +$12.04/N=97, test
-+$6.19/N=42), `computeRigor` clean, bootstrap 99.7% positive. **Read the composition before
-trusting the headline number**: 27.3% of trades never even fill Lot 1 (no difference), 39.6%
-fill and then eat the mechanism's own deliberate fixed -$34 give-back, and the entire positive
-mean comes from the remaining 33.1% reaching the runner's target ($40-$176 better than
-baseline) — median delta is exactly $0 (tie-clustering artifact, hand-traced and confirmed not a
-bug, not evidence the effect is fake). Full breakdown in the spec doc.
+Follow-up to the same-day scoping doc (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`). First
+pass (`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_firstpass`, now superseded) used the
+setup's own tight `t1_level` as a placeholder runner target — user confirmed both remaining open
+questions the same day (runner arms the INSTANT Lot 1 fills; runner target should be a real
+structural level, not the setup's own tight target), so `scripts/backtest_twolot_scaleout_be_minus5.mjs`
+was rebuilt to pull the nearest known `level_prices` level below Lot 1's exit (prior-period-only
+categories, no lookahead — see script header for the full category list) as the runner target.
 
-**Not decided/confirmed yet:**
-- Open Question 2 (does the runner arm the INSTANT Lot 1's target fills, or after some other
-  condition?) and Open Question 4 (should the runner target be the setup's own calibrated
-  `t1_level`, as this first pass assumed, or a genuine structural-level join, or open-ended?) —
-  both were given a documented default, not a user-confirmed answer.
-- This compared against a synthetic "exit-all-at-T1" baseline, not against the user's actual
-  described current strategy (T1 ~10-15pt + exact-breakeven runner, no small-loss tolerance) —
-  the script computed an `exactBe` reference arm but did not make it primary.
-- No independent re-verification yet (single script's own first-pass output).
-`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_firstpass`, `PROVISIONAL`.
+Population: real (`ACTIVE`+`SHADOW`) OR-length SHORT-fade family, N=140 (picked up 1 new fire
+since the first pass), 139 walkable, 130 usable at the winning T1 candidate (9 excluded per
+candidate where no structural level existed below Lot 1's exit that date). **Best T1=12pt**:
+delta vs exit-all-no-runner mean=**+$7.63/trade**, plateau-clean, `computeRigor` clean, bootstrap
+98.9% positive. **Meaningfully stronger OOS behavior than the first pass**: train +$7.57/trade
+(N=91) vs test +$7.75/trade (N=39) — nearly identical, versus the first pass's train/test
+near-halving ($12.04→$6.19). Outcome composition also improved: targetHit share rose from 33.1%
+to **46.2%** (now the largest of the three buckets, not just a minority tail) — structurally
+explained, not a fluke: the first pass's target could sometimes sit closer than a wider T1
+candidate and "win" trivially; the structural-level version can't, by construction. Full
+breakdown, level-usage distribution, and remaining gaps in the spec doc's "Second-pass result."
+
+**Still not done:** independent re-verification (single script's own output); comparison against
+the user's actual current live/described strategy as the *primary* baseline (an `exactBe`
+reference arm is computed, exit-all-no-runner remains primary). Broader generalization to other
+"struggling" setup_types was raised and explicitly deferred by the user — tracked separately,
+`OPEN_DECISION twolot_scaleout_generalize_to_other_setups` (LOW), with a recommended screen
+(Setup Reference's "Left on Table" metric) for whenever it's picked up.
+`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_structural`, `PROVISIONAL`.
 
 ## 🔶 2026-08-30: Real, systemic Globex session-end bug found and fixed in 3 live exit mechanisms
 

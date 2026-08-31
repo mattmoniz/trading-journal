@@ -1,13 +1,67 @@
 # 2-Lot Scale-Out with a Breakeven-Minus-5 Runner (2026-08-31)
 
-**Status: first-pass bar-by-bar backtest run and PROVISIONAL result recorded** (same day as
-scoping — `scripts/backtest_twolot_scaleout_be_minus5.mjs`, `RESEARCH_CLAIM
-twolot_scaleout_be_minus5_orshort_firstpass`). See "First-pass result" below before re-deriving
-from scratch. Open Questions 2 and 4 (runner-arm timing, runner target) remain unconfirmed with
-the user — the script made an explicit, documented simplification for each; do not treat those
-choices as settled.
+**Status: SECOND-pass bar-by-bar backtest run, both open questions user-confirmed, PROVISIONAL
+result recorded** — `scripts/backtest_twolot_scaleout_be_minus5.mjs`, `RESEARCH_CLAIM
+twolot_scaleout_be_minus5_orshort_structural` (supersedes the first-pass
+`twolot_scaleout_be_minus5_orshort_firstpass` claim, which used the setup's own t1_level as a
+placeholder runner target). User confirmed both Open Questions 2 and 4 the same day: runner
+arms to BE-minus-5 the **instant** Lot 1 fills, and the runner's target is a **real structural
+level**, not the setup's own tight target. See "Second-pass result" below.
 
-## First-pass result (2026-08-31)
+## Second-pass result (2026-08-31) — structural runner target, both open questions resolved
+
+Runner target now comes from `level_prices` (the same table that feeds live level-fade
+candidates in `acd.js`'s `keepLevelsAll`), restricted to categories that are always known
+*before* the live session — `PRIOR_DAY`/`PRIOR`/`WEEKLY`/`MONTHLY`/`QUARTERLY`/`YEARLY`/
+`PIVOT`/`CAMARILLA`/`WEEKLY_PIVOT`/`MONTHLY_PIVOT`/`OVERNIGHT` — explicitly excluding the
+same-day-forming `CURRENT` category (OR/IB values already used for entry) and `RTH_VWAP` (forms
+intraday), so there's no lookahead. For each trade/T1-candidate, the target is the nearest known
+level strictly below where Lot 1 already exits — i.e. the runner genuinely runs further, not
+just holds the same distance under a looser stop.
+
+Population: real (`ACTIVE`+`SHADOW`) OR-length SHORT-fade family, N=140 direction-confirmed
+(picked up 1 new fire since the first pass), 139 walkable. Structural levels available for
+30/34 trade dates; 9 of 139 trades excluded per T1 candidate where no qualifying level existed
+below Lot 1's exit that date (a real, honest limitation of relying on actual level coverage
+rather than a synthetic always-available target).
+
+**Best candidate: T1=12pt** (same as the first pass). Delta (beMinus5 vs exit-all-no-runner)
+mean=**+$7.63/trade**, N=130. Plateau-clean (T1=16pt neighbor +$4.84). **Chronological OOS is
+now much tighter than the first pass**: train mean=+$7.57 (N=91), test mean=+$7.75 (N=39) —
+nearly identical, test even slightly higher, a real improvement over the first pass's
+train/test near-halving ($12.04→$6.19). `computeRigor`: stable=true, clustered=false,
+clean=true. Bootstrap (2000 resamples): 98.9% positive-mean.
+
+**Outcome composition** (same three-way read as the first pass, now genuinely stronger):
+- 26.9% (35/130): Lot 1 never fills — no difference.
+- 26.9% (35/130): Lot 1 fills, runner gives back the fixed **-$34/trade** deliberate small
+  loss — down from 39.6% in the first pass.
+- **46.2%** (60/130): Lot 1 fills, runner reaches the real structural target — up from 33.1% in
+  the first pass, now the largest of the three buckets, not just the tail.
+
+Structural levels actually used span a wide mix — no single dominant level type (heaviest were
+`ONL` 10x, `PD_LOW`/`CAM_S3`/`FLOOR_S3`/`PM_POC` 5-7x each, the rest single digits) — average
+distance the runner target sits beyond Lot 1's own exit: **25.3pt**.
+
+**Read this as a genuinely stronger, more honestly-derived result than the first pass** — not
+just a different number. The improvement (higher win-share, tighter OOS agreement) is
+structurally explained: the first pass's runner target (the setup's own t1_level) could
+sometimes sit closer than a wider T1 candidate, letting the runner "win" trivially without
+really running further — the structural-level version can't do that by construction (level must
+be strictly beyond Lot 1's exit).
+
+**Still not done before this goes near a live/SHADOW wiring decision:**
+- Independent re-verification (still a single script's own output).
+- Comparison against the user's actual current live/described strategy (T1 ~10-15pt +
+  exact-breakeven, no small-loss tolerance) as the *primary* baseline — the `exactBe` arm is
+  computed as a reference (beMinus5 modestly ahead at T1=12: $1.41/trade) but exit-all-no-runner
+  remains the primary comparison in this pass.
+- The 9-trades-excluded-per-candidate gap (no structural level some dates) means the usable
+  population shifts unevenly across T1 candidates — worth keeping in mind reading the sweep.
+- Broader generalization to other "struggling" setups was raised and explicitly deferred by the
+  user — tracked separately, `OPEN_DECISION twolot_scaleout_generalize_to_other_setups` (LOW).
+
+## First-pass result (2026-08-31, superseded by the above — kept for history)
 
 Population: real-only (`origin_status IN ('ACTIVE','SHADOW')`) OR-length SHORT-fade family
 (OR5/OR10/OR30 × HIGH/LOW/MID), N=139 direction-confirmed, all 139 walkable against
@@ -156,8 +210,11 @@ codebase's standing conventions)
 
 ## Suggested next step for the next session
 
-Open Question 1 is resolved (real per-touch bar-by-bar walk, no native multi-lot records
-needed — see First-pass result above). Remaining: confirm Open Questions 2 and 4 with the user,
-then re-run with the confirmed mechanism, add the "current strategy as actually described"
-baseline as primary (not just the exit-all-no-runner synthetic baseline), and get independent
-re-verification before this goes anywhere near a live/SHADOW wiring decision.
+Open Questions 1, 2, and 4 are all resolved (see Second-pass result above). Open Question 3
+(Lot 1's target — literal sweep vs. data-derived) was already sanctioned as a literal sweep for
+an exploratory first pass; revisit only if this mechanism gets close to a live decision.
+Remaining: make the "current strategy as actually described" (T1 ~10-15pt + exact-breakeven)
+the *primary* baseline instead of the synthetic exit-all-no-runner one, and get independent
+re-verification before this goes anywhere near a live/SHADOW wiring decision. The
+struggling-setups generalization question is separately parked — see
+`OPEN_DECISION twolot_scaleout_generalize_to_other_setups`.
