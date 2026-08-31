@@ -1,5 +1,33 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-08-31: IB_BULLISH/IB_BEARISH audit + redesign scoped — found a live misleading-text bug beyond the already-known gate issue
+
+User question ("IB_BEARISH continues to stink, how is it still live") led to a real-data audit
+that found more than the already-known `ib_daytype_calibration_structurally_unreachable` gate
+bug. Confirmed live: the alert's `tier` label (`SOLID`/`MARGINAL`/`WEAK`) is a dead constant in
+practice (`dtClass` is null essentially every time IB closes, collapsing the ternary to the same
+value every fire — `WEAK` for every IB_BULLISH, `MARGINAL` for every IB_BEARISH), and the
+description text hardcodes "TURBULENT: strongest" (IB_BEARISH) / "TREND days: strongest"
+(IB_BULLISH) as static strings — empirically **wrong** per this session's real
+(`origin_status='ACTIVE'`) day-type pull: IB_BEARISH's real `TREND` bucket is decent (+$11.23,
+N=86), real `TURBULENT` loses (-$9.14, N=39) — the reverse of the hardcoded claim. The "best
+day-type" conclusion has flipped 3 times across this file's own comment history from 3
+independent audits — a strong signal of noise being re-discovered as signal, not a stable
+effect.
+
+Full audit scope + 3 redesign ideas written: `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`.
+Two parts: (1) a cheap immediate fix (remove the wrong hardcoded claims from the live alert,
+separable from the rest) plus a proper real-data-only + IB-window-split re-derivation script;
+(2) three redesign ideas if the day-type-conditioning approach turns out to have nothing
+salvageable — reusing the already-validated, already-live `vol_building_signal` (forward-
+accumulating, only 4/229 real IB fires stamped so far); replacing the binary
+`ibBullish`/`ibBearish` AND with a continuous self-recalibrating conviction score (same shape
+of fix as the volume-building work); or an early-follow-through confirmation window (with the
+immortal-time-bias control DeepSeek caught on the scale-out thread earlier this session). Not
+started — recommends a design-critique dispatch before building the audit script, per CLAUDE.md's
+3-phase workflow for higher-stakes work. `OPEN_DECISION ib_bullish_bearish_audit_and_redesign_scoped`
+(HIGH).
+
 ## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
 
 Resolves `OPEN_DECISION add_z_score_trend_to_rigor_stability_gate`. `computeRigor()`'s existing
