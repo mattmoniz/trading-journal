@@ -1871,3 +1871,76 @@ closely. `RESEARCH_CLAIM globex_flush_precursor_signals_do_not_transfer` (CONFIR
 negative, not a thin/inconclusive one; every check ran on real, adequate N). Nothing wired from
 this finding, and nothing it found contradicts anything already live.
 
+## 5. DeepSeek design critique on Idea E (2026-08-29) — refinements before it's testable
+
+Dispatched as a phase-0, read-only design critique (no code, no execution) after the user recalled
+this idea from a prior session and asked how to refine it. Full context read: this section's own
+Idea E (§2, lines 371-430), `developingValueService.js`, `RUNNER_OPTIMIZATION_NOTES_20260814.md`,
+the flush mechanism files, and `touchQuality.js`.
+
+**Before testing `nodeZ` at all — the phenomenon it's meant to explain might not be real yet.** The
+IB-vs-POC/VAH/VAL/VWAP family split (§4) has N=9-13 per side. A cheaper, non-structural competing
+explanation: only 9/124 IB touches ever clear the ROSTER-WIDE p60 cutoff, because IB's volume
+profile is structurally different early in a session — the roster-wide yardstick may simply be
+wrong for IB, with nothing left to explain once judged fairly. **Gate 0, run before anything else:
+re-score IB against its own family-specific cutoff.** [Update: this was run same day — the IB
+reversal SURVIVED (got slightly cleaner, not weaker) under its own cutoff, so this alternate
+explanation is ruled out and Idea E is better-motivated, not worse. See `docs/OPEN_THREADS.md`'s
+2026-08-29 entry.]
+
+**Three measurement fixes to `nodeZ` before it's testable:**
+1. The formula as originally specified (line 385-386) is dimensionally inconsistent — numerator is
+   a window SUM, denominator is a per-bucket MEAN, so an average location scores ≈100 not 0. Fix:
+   compare against the distribution of equal-width rolling window sums and report a **percentile
+   rank**, not a z-score.
+2. Percentile over z-score for a second reason: volume-at-price histograms are severely
+   right-skewed (POC dominates) — a z-score squashes the LVN side (the side that actually matters)
+   into a narrow band.
+3. `OFF_PROFILE` (a level entirely outside the prior profile's range — gap days, trend days) must
+   be its own category, not scored as "extreme LVN" — that smuggles a regime variable in wearing a
+   volume-structure label.
+
+**A real, verified data-quality risk found along the way**: `computeVolumeProfileForRange`
+(`developingValueService.js:104`) selects raw `volume::float` with no COALESCE, while every other
+signal in this codebase (`touchQuality.js`, `rthFlushDetector.js`, `backtest_flush_patterns.mjs`)
+uses `COALESCE(bid_volume,0)+COALESCE(ask_volume,0)`. Independently verified against the live DB:
+0 NULL `volume` rows currently (no active crash risk), but **186 real rows where `volume` and
+`bid_volume+ask_volume` genuinely disagree** — meaning `nodeZ` (built from raw `volume`) and the
+volume-building signal (built from bid+ask) could measure subtly different things on the same bar.
+Check before trusting any cross-comparison between the two.
+
+**The cheapest possible test, and it spends no P&L**: a pure census (Gate 0) checking whether
+`nodeZ` varies *within* family before ever looking at outcomes. Pre-registered pass criterion:
+≥25% of IB touches must land in the pooled top tercile AND ≥25% of PD_POC touches outside it — if
+IB's `nodeZ` distribution barely overlaps the profile-derived families', `nodeZ ≈ f(family)` by
+construction and the idea dies for free. **Globex VWAP is the single most decisive/falsifying test
+case** — unlike PD_POC/VAH/VAL (near-maximal `nodeZ` by definition, since they're read directly off
+the histogram), Globex VWAP has no such guarantee. If it scores middling/low `nodeZ` and still
+shows the positive building split, the "profile-derived → real volume → building works" story is
+broken at exactly the case supposed to carry it.
+
+**An even cheaper competitor to test in the same pass**: `vaPos` = signed distance from the prior
+completed POC, normalized by that profile's VA width — needs no new histogram at all, since
+`PD_POC`/`PD_VAH`/`PD_VAL` are already in `level_prices` per trade_date with a lookahead-safe
+accessor already written (`backtest_flush_patterns.mjs::loadLevels()`). If `vaPos` explains the
+split as well as `nodeZ`, don't build the histogram scorer at all. **Caveat needing verification**:
+whether `developing_value_log`'s row for a date is the EOD-completed profile or a mid-session
+snapshot — if the latter, `level_prices`' PD_* values are the safer "prior completed profile"
+source, not `developing_value_log`.
+
+**What falsifies Idea E**: Gate 0's within-family overlap fails; Globex VWAP scores middling/low
+`nodeZ`; family survives conditioning on `nodeZ` but not vice versa; the family-specific-cutoff
+re-check makes the split disappear (it didn't — see above); or `vaPos` matches/beats `nodeZ`.
+
+**Redundancy-with-the-known-failure-mode check**: this repo has 3 independent confirmed negatives
+on "wait to watch a defense/structure signal complete before entering" (§0.1). Idea E as specified
+never delays entry — `nodeZ`/`vaPos` are functions of (level price, prior COMPLETED profile), known
+before the session opens, same information class as `setup_type` itself. Two specific ways this
+could accidentally reintroduce the failure: (1) using a DEVELOPING (not complete) intraday profile
+— keep the hypothesis test strictly prior-session; (2) phrasing a future finding as "at high-nodeZ
+levels, wait for building to confirm" — that IS the already-failed mechanism again. The interaction
+must be evaluated at the same instant as the touch, never as an additional wait.
+
+Full DeepSeek response: `scratch/deepseek_response.md` as of 2026-08-29 (ephemeral, will be
+overwritten by the next dispatch — this section is the durable copy).
+

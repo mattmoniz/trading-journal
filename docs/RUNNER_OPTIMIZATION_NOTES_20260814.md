@@ -299,6 +299,83 @@ is a "someday, probably not" list, not a near-term backlog. Full text:
    exactly the shape of higher-stakes work (gates real trade risk management) that rule
    exists for.
 
+## 4. DeepSeek design critique on applying this to RTH_FLUSH/GLOBEX_FLUSH (2026-08-29)
+
+Dispatched as a phase-0, read-only design critique after the user recalled this thread and asked
+how to refine it for the flush mechanism shipped 2026-08-28 (`server/services/flushMechanics.js`,
+`rthFlushDetector.js`, `globexFlushDetector.js`). No code written, nothing run.
+
+**Don't bolt a zigzag on — flush already denominates its own risk.** The Gemini optimizer above
+searches 3 free parameters (`pivot_threshold`, `tick_offset`, `activation_r`) under a utility
+function whose own weights this doc already flags as possibly arbitrary. Unnecessary here: flush
+hands you a real risk unit for free — the balance width `W = balanceHigh - balanceLow`, which IS
+the structural stop distance (`flushMechanics.js:43-46`). Every trail distance should be
+denominated in `W`, not ATR/%/ticks — zero new free parameters, per-trade data-derived, and it
+auto-scales with the pattern's own volatility.
+
+**"Most recent confirmed swing point," made mechanism-native**: apply `computeBalanceAndResolution()`
+recursively to post-entry bars, trailing to the low edge of the most recent completed post-entry
+balance (long) — reuses the real exported function instead of inventing a generic zigzag pivot.
+**Honest problem, flagged by DeepSeek and worth taking seriously**: 30 bars is slow relative to how
+fast flush trades actually move — the one live trade round-tripped 47.75pt in 67 minutes, so a
+30-bar re-balance anchor's first output might land after the move that mattered. **Suggested MVP
+instead**: a parameter-free rolling 30-bar low (long) as the trailing anchor, armed at 1×W
+favorable (not a swept activation multiplier), using the same tick/floor cushion convention
+`breakevenTrailCore.mjs` already uses.
+
+**The single most useful point in the whole critique: this does NOT need to wait for more live
+flush trades, and the schema blocker above does NOT apply to it.** `backtest_flush_patterns.mjs`'s
+`evalFromTrigger()` already returns `sessBars` + `entryIdx`, and `simulateExit()` is a 15-line bar
+walk — a trail arm is a drop-in SECOND exit simulator over the exact N=336 RTH population that
+already produced the live calibration. No `custom_fields->'sierra_data'` rewrite, no `bar_time`
+column, no scipy, no differential evolution — the blocker documented in §1 above only applies to
+the generic trades-table version of this idea, not a flush-specific re-simulation. Three things
+that must match exactly or the comparison is meaningless: (1) same horizon — `simulateExit` marks
+to the session's last close, a trail that walks further gets a free ride; (2) same same-bar
+tie-break convention (stop-hit-first, pessimistic); (3) paired per-trade differences on the
+IDENTICAL trade set (same entries, same stops, only the exit rule differs) — the one comparison
+shape where the entry-price-advantage confound genuinely cannot appear. **Do RTH first, not
+Globex** — RTH never crosses a date boundary, so the known 4-5PM Globex misattribution bug can't
+contaminate it, and Globex's own numbers are still flagged provisional.
+
+**The baseline that actually matters, and a redundancy nobody had named yet**: `rthFlushDetector.js`
+already widens the target from ~77pt to ~190pt when volume is building through the approach
+(a 2-tier conditional target, already live). A trail is therefore a THIRD mechanism aimed at the
+same tail, alongside that widened target and the existing `runner_trail_width` mechanism — all
+three mutually exclusive by construction. **Testing a trail against the flat 77pt target instead
+of the already-live building-widened target is a guaranteed false positive** — of course a trail
+beats a target that's already been superseded for the exact trades most likely to run.
+
+**What should explicitly wait**: the full 3-parameter DE optimizer (a largest-of-K machine on a
+self-flagged-arbitrary utility function — test 2-3 pre-registered variants instead); wiring
+anything live (RTH_FLUSH is itself SHADOW-only pending N≥20, and separately, 5 of 6 existing
+`_TRAIL` variants elsewhere in this codebase currently fail their own calibration guardrails —
+wiring a trail into an unproven mechanism confounds two unproven things at once); and any
+conclusion drawn from the N=1 real flush trade — pull that trade's own actual balance width `W`
+before reasoning about whether a 1×W arm would even have triggered on it.
+
+**Redundancy check against the known "waiting costs more than it's worth" failure mode**: this
+idea is structurally immune on the entry side (exit-only, and the whole point of a runner/tail
+decision is that the wait is already sunk by the time it fires). But there IS an exit-side
+analogue worth naming: a trail's own confirmation lag is a real, paid cost (pullback depth +
+lag, surrendered on every trade that doesn't run) — the already-closed 2-bar structural trail
+negative in §0 above (-$1.54/trade) is exactly that same *shape* of cost showing up on an unrelated
+signal, not the same failure mode, but the same lesson: the null hypothesis for any trail test
+should be "the tail gain does not exceed the giveback tax," not the reverse.
+
+**Watch-out list (combined with the sibling critique in `LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md`
+§5)**: don't score a trail with an MFE-derived metric ("% of MFE captured" is the exit-side twin of
+a tautological defense measure — use paired P&L differences instead); stored `mfe_points` is
+truncated at exit (`resolveSetupsByPrice`'s bar loop breaks the moment resolution is set), so
+estimating "what a trail would have captured" from it is biased — re-walk bars over a fixed horizon
+instead, matching `breakevenTrailCore.mjs`'s own convention; and don't validate the mechanism and
+wire it live in the same pass — settle "does a structural trail beat the building-widened target on
+N=336" fully before touching anything live, same discipline `DEFENDED_LEVEL_RETEST_SPEC.md` already
+established for cluster-selection.
+
+Full DeepSeek response: `scratch/deepseek_response.md` as of 2026-08-29 (ephemeral — this section
+is the durable copy).
+
 ## Process note: why this needed rescuing
 
 `scratch/antigravity_response.md` (Gemini's summary) and `scratch/deepseek_response.md`

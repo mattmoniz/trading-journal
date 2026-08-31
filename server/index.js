@@ -159,6 +159,17 @@ app.get('/quick-check', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'quick-check.html'));
 });
 
+// Setup-performance page (2026-08-29, direct user request): per-setup real N/WR/EV table +
+// a day-by-day cumulative P&L chart, linked from quick-check.html's nav. Same standalone
+// static-page pattern as quick-check.html above -- explicit route, not generic static
+// serving, since the Cloudflare Tunnel's ingress only allow-lists exact paths (see the
+// comment on the redirect below) -- this path must ALSO be added to
+// ~/.cloudflared/config.yml's ingress rules (outside this repo) or it 404s through the
+// tunnel even though it works locally.
+app.get('/setup-performance', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'setup-performance.html'));
+});
+
 // Bare-root redirect — found 2026-07-30: the Cloudflare Tunnel's ingress only
 // allow-lists exact paths (see ~/.cloudflared/config.yml), so hitting the tunnel
 // hostname's root with no path (e.g. a bookmark saved as just the domain) fell

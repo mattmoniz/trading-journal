@@ -345,3 +345,96 @@ export async function getTrailing24hrVwapStd(date, days = 30, sigmaMult = 1.5) {
   const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
   return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
 }
+
+// ── Trading-day-array gap guard ──────────────────────────────────────────────
+// Added 2026-08-31 (OPEN_DECISION price_bars_primary_systemic_quarterly_data_gap). Root cause
+// confirmed by direct query: price_bars_dedup_hist (the historical branch price_bars_primary's
+// view unions in -- essentially ALL historical data, since the view's other, calendar-JOIN
+// branch only ever applies to ts > dedup_hist's own max(ts), which is always very recent) has
+// real, permanent gaps of ~63-70 days each at ALL 6 consecutive NQ contract rollovers from
+// Dec2023 through Mar2025 inclusive -- 2023-12-14->2024-02-15, 2024-03-14->2024-05-23,
+// 2024-06-20->2024-08-22, 2024-09-19->2024-11-21, 2024-12-19->2025-02-20, 2025-03-20->2025-05-22.
+// In each case the OLD contract's data stops dead at its own expiration (e.g. NQU24's last bar is
+// a partial day exactly on its 3rd-Friday expiration) and the NEW contract's data doesn't begin
+// until ~2 months later (e.g. NQZ24 starts 2024-11-21, not shortly after NQU24 expired) --
+// consistent with a chart/feed manually re-pointed to each new front-month contract roughly one
+// full rollover cycle late, for 6 consecutive quarters running, before the process was fixed (no
+// multi-week gaps found after 2025-05-22; one much smaller ~2-month window of THIN, not absent,
+// data around the 2025-09 rollover was found while investigating this and is a DIFFERENT,
+// NOT-yet-root-caused issue, flagged separately as OPEN_DECISION
+// price_bars_nqh26_contract_thin_and_early_20260928). This data cannot be recovered (it was
+// apparently never captured), so this is a standing guard against silently trusting it, not a
+// fix to the data itself.
+//
+// A script that builds `const dates = [...]` from DISTINCT trading days and then indexes it
+// positionally (dates[i], dates[i+1], a fixed windowSize slice, etc.) to mean "the next N
+// trading days" will silently produce a corrupted multi-month window disguised as a short one
+// whenever that window straddles one of these gaps -- confirmed to have actually happened in
+// scripts/backtest_turn_of_month_effect.mjs (22% of its sample) and (in a different, less
+// exposed way) scripts/backtest_range_boundary_rejection_traversal.mjs before this fix. 4 more
+// scripts with the same dates[i-1]/dates[i+1] pattern found via grep but not yet audited/fixed --
+// tracked as OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831.
+//
+// findTradingDayGaps() is the low-level primitive (for a caller that wants to split its own
+// index into contiguous segments rather than fail outright); assertNoTradingDayGaps() is the
+// simple default -- throws loudly rather than silently producing a corrupted window, matching
+// this codebase's fail-loud convention elsewhere (the OPTIMAL_STOP circuit breaker,
+// record_claim.mjs's VARCHAR guards). 5-day default maxGapDays comfortably covers real trading
+// closures (a 3-4 day holiday weekend) while still catching anything resembling the 61-day
+// contract-rollover gaps above.
+
+/**
+ * Returns every gap > maxGapDays between consecutive entries of a SORTED array of
+ * 'YYYY-MM-DD' trading-day date strings.
+ *
+ * IMPORTANT for a caller using its own raw `pg.Client` instead of this codebase's shared
+ * `query()` (server/db.js): importing this function is NOT side-effect-free (DeepSeek code
+ * review round 5, finding T4) -- this whole module imports `query` from `../db.js` at the top,
+ * and db.js calls `pg.types.setTypeParser(...)` at MODULE LOAD, a process-wide mutation of pg's
+ * shared type registry (affects every pg.Client/Pool in the process, not just server/db.js's
+ * own). A raw pg.Client that expected `date` columns as JS `Date` objects will silently start
+ * getting plain strings instead the moment anything in the same process imports this file --
+ * exactly what broke scripts/backtest_turn_of_month_effect.mjs's `.toISOString()` calls when it
+ * first imported this helper. Safest fix if this bites again: migrate the caller onto `query()`
+ * (matches this codebase's own convention anyway), not work around the type-parser change.
+ */
+export function findTradingDayGaps(sortedDateStrings, maxGapDays = 5) {
+  const gaps = [];
+  for (let i = 1; i < sortedDateStrings.length; i++) {
+    const prev = new Date(sortedDateStrings[i - 1] + 'T00:00:00Z');
+    const curr = new Date(sortedDateStrings[i] + 'T00:00:00Z');
+    const gapDays = Math.round((curr - prev) / 86400000);
+    // Guard added 2026-08-31 (DeepSeek code review round 5, finding T3): a malformed date
+    // string produces gapDays=NaN, and NaN > maxGapDays is false -- silently NOT flagged as a
+    // gap, the opposite of this function's whole purpose. No current caller feeds malformed
+    // dates, but fail loud rather than silently pass a bad input through as "no gap found."
+    if (Number.isNaN(gapDays)) {
+      throw new Error(`findTradingDayGaps: could not parse a date pair as YYYY-MM-DD ('${sortedDateStrings[i - 1]}', '${sortedDateStrings[i]}') -- gapDays computed as NaN`);
+    }
+    if (gapDays > maxGapDays) {
+      gaps.push({ fromIndex: i - 1, toIndex: i, fromDate: sortedDateStrings[i - 1], toDate: sortedDateStrings[i], gapDays });
+    }
+  }
+  return gaps;
+}
+
+/**
+ * Throws if a SORTED array of 'YYYY-MM-DD' trading-day date strings has any gap wider than
+ * maxGapDays -- call this immediately after building any positionally-indexed trading-day array
+ * from price_bars_primary (or anything derived from it) and BEFORE treating dates[i+1] as "the
+ * next trading day." `context` is prepended to the error for a faster trace back to the caller.
+ */
+export function assertNoTradingDayGaps(sortedDateStrings, { maxGapDays = 5, context = '' } = {}) {
+  const gaps = findTradingDayGaps(sortedDateStrings, maxGapDays);
+  if (gaps.length > 0) {
+    const detail = gaps.map(g => `${g.fromDate} -> ${g.toDate} (${g.gapDays}d)`).join(', ');
+    throw new Error(
+      `assertNoTradingDayGaps${context ? ` (${context})` : ''}: ${gaps.length} gap(s) > ${maxGapDays} day(s) found in a ` +
+      `positionally-indexed trading-day array of ${sortedDateStrings.length} entries -- indexing dates[i]/dates[i+1] as ` +
+      `adjacent days will silently corrupt any window straddling one of these into a much-longer-than-intended one: ${detail}. ` +
+      `Known, root-caused source: real quarterly NQ contract-rollover gaps in price_bars_dedup_hist, 2024-09 through 2025-05 ` +
+      `(OPEN_DECISION price_bars_primary_systemic_quarterly_data_gap). Either exclude the affected date range from your ` +
+      `query, or split your positional index at each gap boundary (findTradingDayGaps()) instead of treating it as continuous.`
+    );
+  }
+}

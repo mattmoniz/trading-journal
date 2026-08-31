@@ -6,6 +6,7 @@ import { inferDirection, STACK_VOL_THRESHOLDS, CONDITIONAL_VARIANTS } from '../c
 import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFadeDefinition, getSetupGroup } from '../config/setupDefinitions.js';
 import { INSTRUMENTS } from '../config/instruments.js';
 import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
+import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
 
 const router = express.Router();
 
@@ -938,6 +939,108 @@ router.get('/setups/reference/:setupType/detail', async (req, res) => {
     });
   } catch (err) {
     console.error('[setups/reference/detail]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/setups/performance-summary — dedicated page (quick-check.html link, per direct
+// user request 2026-08-29: "a table... how each setup is doing in ev and a line chart...
+// net day over day performance"). Real (origin_status IN ACTIVE,SHADOW) trades only, per
+// this codebase's own real-vs-blended distinction -- the ~80%-synthetic BACKFILL population
+// is excluded entirely, not just de-emphasized. Two pieces:
+//  1. `setups`: one row per setup_type with real N/WR/EV, read from the LATEST SETUP_STATUS
+//     row's notes (DISTINCT ON pattern, matching /setups/reference above) -- never
+//     hand-computed here, per the "never hand-type a WR/N/$ literal" hard rule AND the
+//     "single source of truth" rule (backtest_setup_status.mjs already computes this weekly).
+//  2. `dailySeries`: real day-by-day SUM(actual_pnl) per (trade_date, setup_type,
+//     origin_status), for the frontend to build cumulative curves from -- computed fresh
+//     here since SETUP_STATUS doesn't persist a daily breakdown, only summary stats.
+//     origin_status is included per row (not pre-summed) so the frontend can offer a
+//     Live/All toggle -- FIXED 2026-08-29: the first version of this endpoint pooled
+//     ACTIVE+SHADOW into one number with no way to separate them, which silently buried
+//     the real "live" P&L (ACTIVE only, +$2,397.61) inside a much larger combined number
+//     dominated by SHADOW background-tracking (-$6,016.47) -- caught live when the user
+//     said "live still shows the original pnl" and it didn't match this page's default view.
+router.get('/setups/performance-summary', async (req, res) => {
+  try {
+    // FIXED 2026-08-30 (DeepSeek code review, OPEN_DECISION
+    // setups_performance_summary_three_disagreeing_populations): the chart (dailyQ) and table
+    // (perStatusQ) queries below used two DIFFERENT ad hoc filters, and NEITHER matched this
+    // codebase's own canonical REAL_TRADE_FILTER (scripts/backtest_setup_status.mjs) -- the
+    // chart didn't restrict `resolution` at all (silently included MTM/RECOVERY_MTM rows), the
+    // table restricted to STOP_HIT/TARGET_HIT only (silently EXCLUDED real TIME_EXPIRED
+    // resolutions that got a genuine mark-to-market close, and never checked resolution_method
+    // or ib_window_stale_basis at all). Result: 3 disagreeing ACTIVE P&L numbers on one page
+    // ($2,397.61 chart / $2,112.11 table / $1,422.11 canonical). Both queries now use the exact
+    // same population as every other real-N/real-EV computation in this codebase.
+    const [statusQ, dailyQ] = await Promise.all([
+      query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes
+        FROM performance_audit WHERE signal_type='SETUP_STATUS'
+        ORDER BY signal_name, run_date DESC
+      `),
+      query(`
+        SELECT trade_date::text as trade_date, setup_type, origin_status,
+               SUM(actual_pnl)::float as pnl, COUNT(*)::int as n
+        FROM active_setups
+        WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+          AND actual_pnl IS NOT NULL AND ${REAL_TRADE_FILTER}
+        GROUP BY trade_date, setup_type, origin_status
+        ORDER BY trade_date ASC
+      `),
+    ]);
+
+    // Live-computed N/WR/EV per (setup_type, origin_status) -- NOT read from SETUP_STATUS's
+    // stored notes, because that "real_n"/"real_ev" already means ACTIVE+SHADOW combined
+    // (excludes only synthetic BACKFILL), the same pooling that buried the real live number
+    // in the chart above. Computed separately for 'ACTIVE' and 'ACTIVE,SHADOW' so the
+    // frontend Live/All toggle controls the table the same way it controls the chart.
+    const perStatusQ = await query(`
+      SELECT setup_type, origin_status,
+             COUNT(*)::int as n,
+             (100.0 * COUNT(*) FILTER (WHERE resolution='TARGET_HIT') / NULLIF(COUNT(*),0))::float as wr,
+             AVG(actual_pnl)::float as ev,
+             SUM(actual_pnl)::float as total_pnl
+      FROM active_setups
+      WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+        AND actual_pnl IS NOT NULL AND ${REAL_TRADE_FILTER}
+      GROUP BY setup_type, origin_status
+    `);
+    const rigorByType = new Map();
+    for (const row of statusQ.rows) {
+      let n; try { n = JSON.parse(row.notes); } catch (_) { continue; }
+      rigorByType.set(row.signal_name, {
+        rigor_trend: n?.rigor?.trend ?? null,
+        rigor_stable: n?.rigor?.three_way_stable ?? null,
+        top5_day_pct: n?.rigor?.top5_day_pct ?? null,
+      });
+    }
+    const byType = new Map(); // setup_type -> { active: {n,wr,ev,total_pnl}, all: {...} }
+    for (const row of perStatusQ.rows) {
+      const cur = byType.get(row.setup_type) || { active: { n: 0, ev: 0, total_pnl: 0, wins: 0 }, all: { n: 0, ev: 0, total_pnl: 0, wins: 0 } };
+      const wins = Math.round((row.wr ?? 0) / 100 * row.n);
+      cur.all.n += row.n; cur.all.total_pnl += row.total_pnl; cur.all.wins += wins;
+      if (row.origin_status === 'ACTIVE') { cur.active.n += row.n; cur.active.total_pnl += row.total_pnl; cur.active.wins += wins; }
+      byType.set(row.setup_type, cur);
+    }
+    const setups = [];
+    for (const [setupType, agg] of byType.entries()) {
+      if (agg.all.n < 1) continue;
+      const rigor = rigorByType.get(setupType) || {};
+      setups.push({
+        setup_type: setupType,
+        active_n: agg.active.n, active_wr: agg.active.n ? +(100 * agg.active.wins / agg.active.n).toFixed(1) : null,
+        active_ev: agg.active.n ? +(agg.active.total_pnl / agg.active.n).toFixed(2) : null, active_total_pnl: +agg.active.total_pnl.toFixed(2),
+        all_n: agg.all.n, all_wr: agg.all.n ? +(100 * agg.all.wins / agg.all.n).toFixed(1) : null,
+        all_ev: agg.all.n ? +(agg.all.total_pnl / agg.all.n).toFixed(2) : null, all_total_pnl: +agg.all.total_pnl.toFixed(2),
+        ...rigor,
+      });
+    }
+    setups.sort((a, b) => (b.all_ev ?? -Infinity) - (a.all_ev ?? -Infinity));
+
+    res.json({ setups, dailySeries: dailyQ.rows });
+  } catch (err) {
+    console.error('[setups/performance-summary]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

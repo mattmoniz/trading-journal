@@ -16,7 +16,7 @@ const ACDView = lazy(() => import('./views/ACDView.jsx'));
 // from this import since they added nothing but a reason to keep PlaybookView eager here.
 const PlaybookPage = lazy(() => import('./views/PlaybookView.jsx'));
 import { QuickTradeLog, SystemHealthSummary, TradeFeedbackBar } from './components/dashboard/QuickTradeLog.jsx';
-import { MNQ_DOLLARS_PER_POINT } from './constants/contract.js';
+import { MNQ_DOLLARS_PER_POINT, LIVE_INSTRUMENT } from './constants/contract.js';
 import { io } from 'socket.io-client';
 import './App.css';
 import { formatTimestamp, formatFieldTimestamp, isStale, latestOf } from './utils/timestamps.js';
@@ -1322,20 +1322,20 @@ function LiveSessionPanel() {
           return 1;
         };
 
-        const SKIP_TYPES = new Set(['A Up tested', 'A Down tested', 'PM VAH tested', 'PW High tested', 'PM VAL tested', 'PW Low tested']);
-        const CASE_ENGINE_TYPES = new Set(['IB_BULLISH','IB_BEARISH','BRACKET_BREAKOUT_LONG','BRACKET_BREAKOUT_SHORT',
-          'OPEN_DRIVE_LONG','OPEN_DRIVE_SHORT','OPEN_TEST_DRIVE_LONG','OPEN_TEST_DRIVE_SHORT',
-          'TRT_LONG','TRT_SHORT','TRT_MAH_LONG','TRT_MAH_SHORT']);
-
         // Build unified timeline: merge acd_setup_events + active_setups
         // active_setups has entry/t1/stop and resolution; acd_setup_events has all level events
-        const caseSetupMap = {};
-        for (const s of activeSetups) {
-          const timeKey = s.fired_at_str ? s.fired_at_str.slice(11, 16) : null;
-          if (timeKey) caseSetupMap[s.setup_type + '_' + timeKey] = s;
-        }
-        // Events: regular level signals (skip tested) + inject case-engine setups in time order
-        const regularEvents = events.filter(e => e && !SKIP_TYPES.has(e.setup_type) && !CASE_ENGINE_TYPES.has(e.setup_type));
+        // REMOVED 2026-08-31 (OPEN_DECISION app_jsx_dead_casesetupmap_regularevents_code): this
+        // block used to also declare SKIP_TYPES/CASE_ENGINE_TYPES/caseSetupMap/regularEvents --
+        // leftover scaffolding from an earlier version of this timeline that intended to scope
+        // bar6_checkpoint/historical_win_rate/delta-confirmation enrichment to only the 12
+        // CASE_ENGINE_TYPES via caseSetupMap lookups. Confirmed via grep: none of those 4 were
+        // ever read again anywhere in this file -- the actual shipped code below maps EVERY
+        // activeSetups row into caseEvents with _isCaseEngine=true unconditionally, not gated by
+        // CASE_ENGINE_TYPES membership at all, making the dead code's original intent moot.
+        // Deleted the 4 truly-dead declarations only -- _isCaseEngine/caseEvents themselves are
+        // UNCHANGED (still unconditional for every row); whether they SHOULD be scoped to true
+        // case-engine types only is a real behavior-change question, not something to change
+        // without asking first, and is left open in the tracking decision.
         // Case-engine setups from active_setups (not in events list)
         const caseEvents = activeSetups.filter(Boolean).map(s => ({
           setup_type: s.setup_type,
@@ -1397,11 +1397,16 @@ function LiveSessionPanel() {
 
         // Running tally stats — respects the same session+live filters as the timeline list
         // above. Commission/gross derived from totalPnl (already NET -- every resolution path
-        // subtracts the $1 round-trip commission before storing actual_pnl) the same way as
-        // quick-check.html's own computeRangeStats() -- COMMISSION_PER_TRADE=$1 matches
-        // server/routes/acd.js's live resolution constant (CLAUDE.md hard rule: MNQ, $2/pt,
-        // $1 round-trip commission).
-        const COMMISSION_PER_TRADE = 1;
+        // subtracts the real $2 round-trip commission before storing actual_pnl) the same way
+        // as quick-check.html's own computeRangeStats().
+        // FIXED 2026-08-31: was a hardcoded local `const COMMISSION_PER_TRADE = 1`, silently
+        // undercounting Comm/Gross P&L on this card by half since at least the 2026-08-11
+        // commission correction (MNQ is $1/side, $2 round-trip -- CLAUDE.md hard rule; this is
+        // the exact bug class quick-check.html's own COMMISSION_PER_TRADE was already caught
+        // and fixed for on 2026-08-13, but this copy in App.jsx was never updated to match).
+        // Now imports the real value from src/constants/contract.js instead of a second,
+        // independently-drifting local literal.
+        const COMMISSION_PER_TRADE = LIVE_INSTRUMENT.commissionPerRoundTrip;
         let wins = 0;
         let losses = 0;
         let totalPnl = 0;

@@ -9,12 +9,19 @@
 // byte-behavior-identical against the pre-extraction inline version via
 // scripts/test_breakeven_trail_walker_synthetic.mjs.
 //
+import { isPastMechanismSessionEnd } from './sessionBoundary.js';
+
 // state: { armedAt: string|null, peakPrice: number|null, trailStopPrice: number|null }
-// bar: { ts: string (ET wall-clock text, HH in bar.ts.slice(11,13)), high, low, close }
-// params: { entry, stop, t1, trailWidth, long }
+// bar: { ts: string (ET wall-clock text), mod: int (ET minutes, already computed by every
+//   caller's bar query), high, low, close }
+// params: { entry, stop, t1, trailWidth, long, firedMod } — firedMod is the trade's own
+//   fired_at time-of-day in ET minutes (server/services/sessionBoundary.js's firedAtToMod()),
+//   REQUIRED so session-end can be judged correctly for a Globex-origin trade, not just an RTH
+//   one (found 2026-08-30 alongside the identical bug in widerTargetWalker.js -- see
+//   isPastMechanismSessionEnd()'s own header for the incident).
 // Returns { state: <next state>, resolution: null | { resolution, method, priceAtRes } }
-export function stepBreakevenTrail(state, bar, { entry, stop, t1, trailWidth, long }) {
-  const isSessionEnd = bar.ts.slice(11, 13) >= '16';
+export function stepBreakevenTrail(state, bar, { entry, stop, t1, trailWidth, long, firedMod }) {
+  const isSessionEnd = isPastMechanismSessionEnd(bar.mod, firedMod);
   let newState = state;
   let resolution = null;
 

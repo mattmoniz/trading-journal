@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Setup Performance</title>
+<style>
+  :root {
+    --green: #22c55e; --green-soft: #4ade80;
+    --red: #ef4444; --red-soft: #f87171;
+    --amber: #f59e0b; --amber-soft: #fbbf24;
+    --muted: #94a3b8; --dim: #64748b;
+    --text: #e2e8f0;
+    --bg: #0b1120; --card: rgba(15,23,42,0.7);
+    --border: rgba(51,65,85,0.5);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; padding-bottom: 40px;
+  }
+  .mono { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  #pulse-bar {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(15,23,42,0.96); border-bottom: 1px solid var(--border);
+    padding: 10px 14px 10px 46px; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px);
+  }
+  #pulse-bar a { color: var(--text); text-decoration: none; font-weight: 700; font-size: 15px; }
+  #back-btn {
+    position: fixed; top: 8px; left: 10px; z-index: 300;
+    width: 30px; height: 30px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--border);
+    color: var(--text); font-size: 16px; cursor: pointer; user-select: none; text-decoration: none;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; margin-bottom: 14px;
+  }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 10px; }
+  /* Chart section */
+  #setup-select {
+    width: 100%; padding: 8px 10px; margin-bottom: 8px; border-radius: 6px;
+    background: rgba(15,23,42,0.8); border: 1px solid var(--border); color: var(--text); font-size: 13px;
+  }
+  canvas.equity { width: 100%; height: 170px; display: block; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; }
+  #chart-stats { display: flex; gap: 14px; font-size: 12px; margin-top: 8px; flex-wrap: wrap; }
+  #chart-stats span b { font-family: monospace; }
+  /* Table */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th {
+    color: var(--dim); font-weight: 600; text-transform: uppercase; font-size: 10px;
+    letter-spacing: 0.04em; cursor: pointer; user-select: none; position: sticky; top: 0; background: var(--bg);
+  }
+  th.sorted { color: var(--muted); }
+  tbody tr:hover { background: rgba(255,255,255,0.03); }
+  .thin-n { color: var(--dim); }
+  .thin-n td { opacity: 0.65; }
+  .table-scroll { overflow-x: auto; }
+  .badge { font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
+  .badge.stable { color: var(--green-soft); background: rgba(34,197,94,0.12); }
+  .badge.degrading { color: var(--red-soft); background: rgba(239,68,68,0.12); }
+  .badge.noisy { color: var(--amber-soft); background: rgba(245,158,11,0.12); }
+  .badge.improving { color: var(--green-soft); background: rgba(34,197,94,0.12); }
+  .loading { text-align: center; color: var(--dim); padding: 20px; font-size: 13px; }
+  .note { font-size: 11px; color: var(--dim); margin-top: 8px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<a id="back-btn" href="/quick-check" title="Back to Quick Check">←</a>
+<div id="pulse-bar"><a href="/quick-check">Setup Performance</a></div>
+
+<div class="wrap">
+
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <h2 style="margin:0;">Cumulative P&amp;L by Setup</h2>
+      <div id="live-toggle" style="display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);"></div>
+    </div>
+    <select id="setup-select"><option value="__ALL__">All setups combined</option></select>
+    <canvas id="setup-equity" class="equity"></canvas>
+    <div id="chart-stats"></div>
+    <div class="note"><b>Live</b> = origin_status='ACTIVE' only — real, actually-alerted trades. <b>All</b> additionally includes SHADOW (background/experimental tracking that never fired as a real alert). Synthetic BACKFILL data is excluded entirely either way. Day-by-day cumulative dollars, not a per-trade curve.</div>
+  </div>
+
+  <div class="card">
+    <h2>Every Setup With Trade History</h2>
+    <div class="table-scroll">
+      <table id="setup-table">
+        <thead>
+          <tr>
+            <th data-sort="setup_type">Setup</th>
+            <th data-sort="n">N</th>
+            <th data-sort="wr">WR%</th>
+            <th data-sort="ev" class="sorted">EV/trade</th>
+            <th data-sort="total_pnl">Total P&amp;L</th>
+            <th data-sort="rigor_trend">Trend</th>
+          </tr>
+        </thead>
+        <tbody id="setup-table-body"><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="note">Rows with N&lt;20 are dimmed — below this project's own N≥20 floor for a decisive claim, shown for visibility, not to be trusted as a stable edge. Sorted by EV/trade by default, click any column header to re-sort. "Trend" is a chronological 3-way stability check (does the last third of history still show the same sign as the average).</div>
+  </div>
+
+</div>
+
+<script>
+function $(id) { return document.getElementById(id); }
+
+let ALL_SETUPS = [];
+let DAILY_SERIES = []; // [{trade_date, setup_type, origin_status, pnl, n}]
+let sortKey = 'ev', sortDir = -1;
+// 'live' = ACTIVE only (real, actually-alerted trades) -- matches the Live/All convention
+// already used everywhere else in this app (quick-check.html's own toggles). FIXED
+// 2026-08-29: this page originally had no such split, silently pooling ACTIVE+SHADOW into
+// one number -- the real live P&L (+$2,397.61) was buried inside a much larger SHADOW-
+// dominated combined number (-$3,618.86). Defaults to 'live' so the first thing shown
+// matches what "live" means everywhere else in the app.
+let liveFilter = localStorage.getItem('setupPerfLiveFilter') || 'live';
+
+function fmtMoney(v, withSign) {
+  if (v == null) return '—';
+  const sign = v < 0 ? '-' : (withSign ? '+' : '');
+  return sign + '$' + Math.abs(v).toFixed(v % 1 === 0 ? 0 : 2);
+}
+function fmtAxisMoney(v) {
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  return sign + '$' + (abs >= 1000 ? (abs / 1000).toFixed(1) + 'k' : abs.toFixed(0));
+}
+function trendBadgeClass(trend, stable) {
+  if (stable) return 'stable';
+  if (trend === 'DEGRADING') return 'degrading';
+  if (trend === 'IMPROVING') return 'improving';
+  if (trend === 'NOISY_BUT_STABLE') return 'noisy';
+  return '';
+}
+
+async function loadPerformanceSummary() {
+  try {
+    const data = await fetch('/api/setups/performance-summary').then(r => r.json());
+    ALL_SETUPS = data.setups || [];
+    DAILY_SERIES = data.dailySeries || [];
+    renderLiveToggle();
+    populateSetupDropdown();
+    renderTable();
+    renderChart($('setup-select') ? $('setup-select').value : '__ALL__');
+  } catch (e) {
+    $('setup-table-body').innerHTML = '<tr><td colspan="6" class="loading">Failed to load</td></tr>';
+  }
+}
+
+// Normalizes each setup's fields to the CURRENT liveFilter view, so table/sort/chart logic
+// never needs to branch on active_* vs all_* directly.
+function viewRows() {
+  const pfx = liveFilter === 'live' ? 'active_' : 'all_';
+  return ALL_SETUPS.map(s => ({
+    setup_type: s.setup_type,
+    n: s[pfx + 'n'], wr: s[pfx + 'wr'], ev: s[pfx + 'ev'], total_pnl: s[pfx + 'total_pnl'],
+    rigor_trend: s.rigor_trend, rigor_stable: s.rigor_stable,
+  })).filter(s => s.n > 0);
+}
+
+function renderLiveToggle() {
+  const el = $('live-toggle');
+  el.innerHTML = [['live', 'Live'], ['all', 'All']].map(([val, label]) =>
+    '<button data-live="' + val + '" style="padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;border:none;' +
+    'background:' + (liveFilter === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)') + ';' +
+    'color:' + (liveFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + '</button>'
+  ).join('');
+}
+// Delegated (not per-button) on purpose -- this codebase already hit the exact bug where a
+// per-button listener gets destroyed if the button is recreated between touchstart/click
+// (quick-check.html's Vol Building toggle, 2026-08-28). This page doesn't currently poll,
+// but the toggle IS recreated on every load, so the safer pattern is used from the start.
+document.addEventListener('click', (e) => {
+  const liveBtn = e.target.closest('[data-live]');
+  if (liveBtn) {
+    liveFilter = liveBtn.dataset.live;
+    localStorage.setItem('setupPerfLiveFilter', liveFilter);
+    renderLiveToggle();
+    populateSetupDropdown();
+    renderTable();
+    renderChart($('setup-select').value);
+    return;
+  }
+});
+
+function populateSetupDropdown() {
+  const sel = $('setup-select');
+  const prevValue = sel.value || '__ALL__';
+  sel.innerHTML = '<option value="__ALL__">All setups combined</option>';
+  // Only offer setups with enough daily rows to make a chart worth looking at.
+  const eligible = viewRows().filter(s => s.n >= 3).sort((a, b) => a.setup_type.localeCompare(b.setup_type));
+  for (const s of eligible) {
+    const opt = document.createElement('option');
+    opt.value = s.setup_type;
+    opt.textContent = s.setup_type.replace(/_/g, ' ') + ' (N=' + s.n + ')';
+    sel.appendChild(opt);
+  }
+  sel.value = [...sel.options].some(o => o.value === prevValue) ? prevValue : '__ALL__';
+  sel.onchange = () => renderChart(sel.value);
+}
+
+function renderTable() {
+  const tbody = $('setup-table-body');
+  const rows = viewRows().sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="loading">' + (liveFilter === 'live' ? 'No live (ACTIVE-origin) trades yet' : 'No trades yet') + '</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(s => {
+    const thin = s.n < 20;
+    const evColor = s.ev >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+    const pnlColor = s.total_pnl >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+    const badgeCls = trendBadgeClass(s.rigor_trend, s.rigor_stable);
+    const trendLabel = s.rigor_stable ? 'STABLE' : (s.rigor_trend || '—');
+    return '<tr class="' + (thin ? 'thin-n' : '') + '" title="' + (thin ? 'N<20 — below this project\'s own decisive-stat floor' : '') + '">' +
+      '<td>' + s.setup_type.replace(/_/g, ' ') + '</td>' +
+      '<td class="mono">' + s.n + '</td>' +
+      '<td class="mono">' + (s.wr != null ? s.wr.toFixed(1) + '%' : '—') + '</td>' +
+      '<td class="mono" style="color:' + evColor + '">' + fmtMoney(s.ev, true) + '</td>' +
+      '<td class="mono" style="color:' + pnlColor + '">' + fmtMoney(s.total_pnl, true) + '</td>' +
+      '<td>' + (badgeCls ? '<span class="badge ' + badgeCls + '">' + trendLabel + '</span>' : '—') + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+document.addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-sort]');
+  if (!th) return;
+  const key = th.dataset.sort;
+  if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = key === 'setup_type' ? 1 : -1; }
+  document.querySelectorAll('#setup-table th').forEach(h => h.classList.remove('sorted'));
+  th.classList.add('sorted');
+  renderTable();
+});
+
+// Filters DAILY_SERIES by the current Live/All state, optionally to one setup_type, then
+// aggregates to one row per date (a setup can have both ACTIVE and SHADOW rows on the same
+// day, which must be summed together once liveFilter allows both through).
+function filteredDailyByDate(setupType) {
+  const statusOk = (s) => liveFilter === 'live' ? s === 'ACTIVE' : true;
+  const filtered = DAILY_SERIES.filter(r => statusOk(r.origin_status) && (setupType === '__ALL__' || r.setup_type === setupType));
+  const byDate = new Map();
+  for (const r of filtered) {
+    const cur = byDate.get(r.trade_date) || { trade_date: r.trade_date, pnl: 0, n: 0 };
+    cur.pnl += r.pnl; cur.n += r.n;
+    byDate.set(r.trade_date, cur);
+  }
+  return [...byDate.values()].sort((a, b) => a.trade_date.localeCompare(b.trade_date));
+}
+
+function renderChart(setupType) {
+  const canvas = $('setup-equity');
+  const rows = filteredDailyByDate(setupType);
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  if (rows.length < 2) {
+    ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Not enough days of real data yet', w / 2, h / 2);
+    $('chart-stats').innerHTML = '';
+    return;
+  }
+
+  let running = 0;
+  const points = [0], dates = [rows[0].trade_date];
+  for (const r of rows) { running += r.pnl; points.push(running); dates.push(r.trade_date); }
+
+  const min = Math.min(0, ...points), max = Math.max(0, ...points);
+  const valRange = (max - min) || 1;
+  const padL = 52, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (points.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  const yTicks = [...new Set([min, 0, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const t of yTicks) {
+    const y = yAt(t);
+    ctx.strokeStyle = t === 0 ? 'rgba(148,163,184,0.3)' : 'rgba(148,163,184,0.12)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,0.75)';
+    ctx.fillText(fmtAxisMoney(t), padL - 6, y + 3);
+  }
+
+  const xTickCount = Math.min(5, points.length);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (points.length - 1));
+    const x = xAt(idx);
+    const [, mo, d] = (dates[idx] || '').split('-');
+    ctx.fillText(mo && d ? mo + '/' + d : '', Math.min(Math.max(x, padL + 20), w - padR - 20), h - 4);
+  }
+
+  const finalPnl = points[points.length - 1];
+  const lineColor = finalPnl >= 0 ? '#4ade80' : '#f87171';
+  const fillColor = finalPnl >= 0 ? 'rgba(74,222,128,0.12)' : 'rgba(248,113,113,0.12)';
+
+  ctx.beginPath();
+  points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.lineTo(xAt(points.length - 1), yAt(0)); ctx.lineTo(xAt(0), yAt(0)); ctx.closePath();
+  ctx.fillStyle = fillColor; ctx.fill();
+
+  ctx.beginPath();
+  points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+  ctx.fillText((finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0), w - padR - 2, padT + 12);
+
+  const totalN = rows.reduce((s, r) => s + r.n, 0);
+  const days = rows.length;
+  $('chart-stats').innerHTML =
+    '<span>Trades <b class="mono">' + totalN + '</b></span>' +
+    '<span>Days <b class="mono">' + days + '</b></span>' +
+    '<span>Net <b class="mono" style="color:' + lineColor + '">' + (finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0) + '</b></span>';
+}
+
+window.addEventListener('resize', () => renderChart($('setup-select').value));
+loadPerformanceSummary();
+</script>
+</body>
+</html>

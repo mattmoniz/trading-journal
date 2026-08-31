@@ -293,13 +293,23 @@ const OTHER_GROUP_MAP = {
   STACK_VOL_BREAK_LIVE_LONG: 'Volume/Level Break', STACK_VOL_BREAK_LIVE_SHORT: 'Volume/Level Break',
 };
 
+/** Strip conditional-variant/exit-mechanism/session suffixes to reach the base level name
+ * (e.g. 'PD_IB_HIGH_FADE_LONG' -> 'PD_IB_HIGH'). Shared by getSetupGroup() and
+ * classifyLevelFormation() (server/config/setupTypes.js) -- both need the same base-level
+ * resolution and must never re-derive this regex independently (see setupTypes.js's
+ * classifyLevelFormation() history: an ad hoc, disagreeing copy of this exact stripping problem
+ * mis-tagged 13 real prior-period setup_types as same-day-forming, found by DeepSeek code review
+ * 2026-08-30). */
+export function stripToBaseLevel(setupType) {
+  return setupType
+    .replace(/_FADE_(LONG|SHORT)(_TRAIL)?(_GAP_(UP|DOWN))?(_OVERNIGHT)?$/, '')
+    .replace(/_OVERNIGHT$/, '');
+}
+
 /** Derive a Key-Levels-style family Group label from a setup_type string. */
 export function getSetupGroup(setupType) {
   if (OTHER_GROUP_MAP[setupType]) return OTHER_GROUP_MAP[setupType];
-  // Strip conditional-variant/exit-mechanism/session suffixes to reach the base level name.
-  const base = setupType
-    .replace(/_FADE_(LONG|SHORT)(_TRAIL)?(_GAP_(UP|DOWN))?(_OVERNIGHT)?$/, '')
-    .replace(/_OVERNIGHT$/, '');
+  const base = stripToBaseLevel(setupType);
   if (LEVEL_GROUP_MAP[base]) return LEVEL_GROUP_MAP[base];
   if (LEVEL_GROUP_MAP[setupType]) return LEVEL_GROUP_MAP[setupType];
   return null;

@@ -225,6 +225,44 @@ ORDER BY l.signal_name, (b->>'ev')::float DESC;
 SQLEOF
 )
 
+# OPTIMAL_STOP real-population clustering watch — built 2026-08-30 after a user question ("does
+# anything look funny with stops and targets") led to finding IB_BULLISH's live stop/target is
+# calibrated from real N=60 that's 89.2% concentrated in just 5 calendar dates (8 distinct dates
+# total). Critically, DTM_WATCH above CANNOT see this: SETUP_STATUS's own rigor field describes
+# the BLENDED (real+BACKFILL) population (141 distinct dates, 32.9% top5 -- looks fine), while the
+# real clustering lives only on the narrower, real-only population OPTIMAL_STOP's sweep actually
+# runs on. A setup can look stable in one place and be riding on a handful of days in the other.
+# Same "impossible to miss every session" pattern as DTM_WATCH -- does not re-judge or suppress
+# anything, just surfaces what's already computed and currently buried.
+export OPTSTOP_CLUSTER_WATCH
+OPTSTOP_CLUSTER_WATCH=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+WITH latest_stop AS (
+  -- notes::jsonb excludes rows that don't parse as valid JSON (found live 2026-08-30:
+  -- FLOOR_R1_FADE_LONG has a historical row with a second object literally string-concatenated
+  -- onto the first, from a 2026-08-09 "noiseFloorRevert" annotation bug -- a single such row
+  -- would otherwise abort this entire query's cast, not just skip itself). Flagged separately
+  -- (OPEN_DECISION optstop_notes_malformed_json_concatenation) for someone to clean up the
+  -- underlying data; this filter just keeps this watch itself from going dark because of it.
+  SELECT DISTINCT ON (signal_name) signal_name, notes::jsonb as notes
+  FROM performance_audit WHERE signal_type='OPTIMAL_STOP' AND notes IS NOT NULL AND notes ~ '^\s*\{.*\}\s*$' AND notes !~ '\}\s*\{'
+  ORDER BY signal_name, run_date DESC
+),
+latest_status AS (
+  SELECT DISTINCT ON (signal_name) signal_name, recommendation
+  FROM performance_audit WHERE signal_type='SETUP_STATUS'
+  ORDER BY signal_name, run_date DESC
+)
+SELECT ls.signal_name, (ls.notes->'rigor'->>'top5DayPct'),
+  (ls.notes->'rigor'->>'distinctDates'), (ls.notes->'circuitBreaker'->>'tripped'),
+  (ls.notes->'circuitBreaker'->>'lastRecalibratedN')
+FROM latest_stop ls
+JOIN latest_status st ON st.signal_name = ls.signal_name AND st.recommendation NOT IN ('SUPPRESS')
+WHERE (ls.notes->'rigor'->>'clustered') = 'true'
+   OR ((ls.notes->'rigor'->>'top5DayPct')::float >= 70)
+ORDER BY (ls.notes->'rigor'->>'top5DayPct')::float DESC;
+SQLEOF
+)
+
 # SHADOW validation watch — built 2026-07-17 after Opus Audit #3 found the closed loop that
 # should prove suppression decisions are correct didn't exist: `active_setups.status` gets
 # overwritten to RESOLVED/EXPIRED on resolution, permanently destroying whether a trade fired
@@ -385,6 +423,7 @@ const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
 const openDecisionsRaw = process.env.OPEN_DECISIONS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
+const optstopClusterRaw = process.env.OPTSTOP_CLUSTER_WATCH || '';
 const shadowValRaw = process.env.SHADOW_VALIDATION || '';
 const targetMethodRaw = process.env.TARGET_METHOD_WATCH || '';
 const correctedSuppressedRaw = process.env.CORRECTED_BUT_SUPPRESSED || '';
@@ -482,6 +521,15 @@ for (const [type, data] of Object.entries(dtmRowsByType)) {
   if (isFragile) dtmFragile++;
   const bucketStr = data.buckets.map(b => `${b.dayType} N=${b.n} EV=$${b.ev.toFixed(2)}${fragileGood.some(f => f.dayType === b.dayType) ? ' ⚠️' : ''}`).join(', ');
   dtmLines.push(`  ${isFragile ? '⚠️ ' : '   '}${type.padEnd(15)} blended EV=$${data.blendedEv.toFixed(2)} N=${data.blendedN}  [${bucketStr}]`);
+}
+
+// OPTIMAL_STOP clustering watch: any currently-live setup_type whose REAL calibration sample
+// (not the blended one DTM_WATCH already shows) is concentrated in a handful of dates.
+const optstopClusterLines = [];
+for (const line of optstopClusterRaw.split('\n').filter(Boolean)) {
+  const [type, top5Pct, distinctDates, tripped, lastN] = line.split('|');
+  const trippedFlag = tripped === 'true' ? ' [circuit breaker currently frozen -- would move further without it]' : '';
+  optstopClusterLines.push(`  ⚠️ ${type.padEnd(24)} real N=${lastN}, ${top5Pct}% of it from just its top 5 dates (${distinctDates} distinct dates total)${trippedFlag}`);
 }
 
 // SHADOW validation: for every currently-SUPPRESS/THIN_N setup_type, what did its real
@@ -588,6 +636,10 @@ const lines = [
   '',
   dtmLines.length > 0
     ? `${dtmFragile > 0 ? '⚠️ ' : '✅'} DAY_TYPE_MANAGED WATCH — live per-day-type-carve-out types, not gated by the standard SUPPRESS check:\n${dtmLines.join('\n')}${dtmFragile > 0 ? `\n  ${dtmFragile} type(s) have ⚠️ flagged buckets — only reason not SUPPRESSed is a bucket within $10 of the bar or N<50. Re-read before trusting; this is exactly how IB_BULLISH regressed 2026-07-15 (docs/OPEN_THREADS.md).` : ''}`
+    : '',
+  '',
+  optstopClusterLines.length > 0
+    ? `⚠️ OPTIMAL_STOP CLUSTERING WATCH — live setup_type(s) whose REAL calibration sample is concentrated in a handful of dates (invisible to DAY_TYPE_MANAGED WATCH above, which only sees the blended population):\n${optstopClusterLines.join('\n')}\n  A "stable" live stop/target here may just mean a circuit breaker is freezing it, not that the calibration is actually trustworthy at this breadth. Re-read before trusting; found 2026-08-30 (OPEN_DECISION optstop_sweep_implausible_rr_thin_samples).`
     : '',
   '',
   shadowValLines.length > 0
