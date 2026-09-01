@@ -3720,3 +3720,96 @@ Gemini built the real-tick pilot script (`scripts/backtest_poc_realtick_converge
 
 **Still queued, unbuilt, gated behind this pilot's result per DeepSeek's original build order** (`scratch/deepseek_poc_multiframe_design_review.md`): Idea #2 (multi-timeframe POC comparison, reframed to 4H-over-24hr per that review's §2c finding that same-session RTH-vs-4H is near-degenerate) and Idea #1 (pullback-to-recent-POC entry mechanism, itself gated on a positive rolling-drift result — which came back negative, so #1 is likely dead regardless of #4's outcome). Also still open: the rotation ("Pinch," 65-point reversal) construction the user separately described, scoped in `scratch/deepseek_poc_realtick_convergence_design_review.md` §6 but explicitly held behind the volume-bar pilot's verdict, which never landed.
 
+
+---
+## Archive batch: 2026-09-01 (moved 1 sections older than 2026-08-25)
+
+## 🔶 2026-08-24: Rotation VBP ("Pinch," 65-point reversal) vs 24hr POC — built, tested extensively, real findings, PAUSED mid-optimization
+
+Full build-out of the scope below (`docs/POC_ROTATION_VBP_SPEC.md`), across one long session. Not
+resolved — paused by direct request while iterating on the exit mechanism. Summary so a future
+session (or this one, resumed) doesn't have to re-derive any of this:
+
+**1. Design critique (DeepSeek)**: the naive candidate rule ("down-leg converging → long, up-leg
+→ short") is algebraically a leg-direction fade — the 24hr-POC join contributes zero sign
+information, only timing. Recommended a `SIGNAL` / `SAME_SELECTION_NO_SIGNAL` / `NEVER_SELECTED`
+comparison instead of a single-arm directional test. `scratch/deepseek_poc_rotation_vbp_design_review.md`.
+
+**2. First Gemini build + audit-caught overfitting bug**: Gemini's 3-arm mechanism check swept the
+profit target with no train/test holdout, in-sample-optimizing specifically for the SIGNAL arm.
+Caught before trusting it, fixed directly (chronological 70/30 split, same discipline as
+`backtest_poc_convergence_directional_and_trade.mjs`). Corrected result: SIGNAL beats
+SAME_SELECTION_NO_SIGNAL by ~+$6/trade held-out, but NOT robust to a sub-bar interpolation-path
+sensitivity check (drops to +$2.43 under the alternate convention with a wildly different optimal
+target) and SIGNAL's own EV fails chronological stability. `scripts/backtest_poc_rotation_vbp.mjs`.
+
+**3. Real bug found: R=65 fixed-point threshold drifts with price.** NQ roughly doubled 2023→2026
+(~11,300–17,500 → ~23,000–31,000); events/session rose 2.5→5.7 tracking the price growth almost
+exactly, not real behavior change. Fixed: `R` is now also selectable as a percentage
+(`rMode='pct'`, `R_PCT = 65/29547.75 ≈ 0.22%`, calibrated off current price) — `detectSignalEvents()`
+supports both modes, every later script tests both in parallel. Percentage mode only partially
+flattens the drift (4.48→6.03 events/session 2023→2026, down from 2.5→5.7) — the residual may be a
+real vol-regime difference, not leftover bug.
+
+**4. No-target/MFE exploration**: EV is always small-to-negative with no profit-taking mechanism
+(MFE mostly evaporates before a stop-only trade resolves). Fixed 10pt stop + target=mfe25/50/75/90:
+all negative but trending less-negative as target widens (mfe90 nearly breakeven in the fixed-R65
+construction). A naive "snap to breakeven once, no further trail" mechanism was dramatically worse
+(WR collapsed to ~1%) — a zero-buffer stop gets chopped at exactly $0 by ordinary chop before
+locking in anything.
+
+**5. Delta Intensity (definition borrowed from the untracked `docs/Holy_Grail_Breakout_Spec.md`/
+`docs/Sniper_Reversal_Spec.md` docs — NOT their unaudited performance numbers) tested two ways**:
+post-hoc bucketing (the ≥50% threshold those docs treat as a strength signal was the *worst*
+bucket, stably so, in both R-constructions) and as a real pre-trade gate (0.20/0.30/0.40 sign-
+aligned, 15pt stop) — 22 of 24 grid cells negative, gate mostly just thins the population without
+adding edge.
+
+**6. Sent the original thesis to Gemini fresh, unprimed (no stats, no prior verdicts)** —
+independently found JOIN (trade WITH the leg's own direction, i.e. trend-continuation) clearly
+beats FADE, and that high Delta Intensity *hurts* EV (exhaustion-climax read, not conviction).
+**But**: used raw POC (the exact discontinuous "argmax teleport" statistic this thread already
+proved unstable and moved away from), and its actual event-generation script is missing from disk
+— a real reproducibility gap, same failure class this codebase has hit with Gemini before.
+`scratch/antigravity_response.md`.
+
+**7. Rebuilt on this thread's own audited construction (`med50`, next-bar-open entry, matching
+Gemini's 3 exit strategies)** — `scripts/backtest_poc_rotation_join_fade_levels.mjs`:
+- **JOIN > FADE replicates** across both R-constructions and all 3 exit strategies (real
+  cross-methodology agreement — two independently-built convergence metrics, same direction).
+  Within-run chronological stability is still weak on most cells though.
+- **Delta Intensity finding REVERSES**: under the corrected construction + the winning exit,
+  EV rises monotonically with intensity (Delta≥0.2: +$4.26/+$3.34) — the opposite of Gemini's own
+  read. Direct contradiction, not a partial disagreement.
+- **New test: proximity to real tracked market levels** (reused `levelProximityService.js`'s
+  `getRollingATR()` + the real `level_prices` table, 472 sessions, ATR-scaled AT_LEVEL/LATE/CHASING
+  — not a static point cutoff). Mild, consistent lift for AT_LEVEL vs. baseline in both
+  constructions, but ~97-98% of all convergence events already land near *some* tracked level (the
+  level set is dense), so the "far from any level" contrast group is too thin (N=10/17) to trust.
+- **Best variant found**: JOIN + hold 60min/20pt stop/no target (no fixed target at all — this
+  beat both fixed-R:R targets in the grid), EV $2.17/$1.57, improving to $2.37/$2.35 when
+  restricted to AT a strong level.
+
+**8. MFE breakdown of that winner** (`scripts/backtest_poc_rotation_join_time60_mfe.mjs`): the 65%
+of trades that eventually stop out had already reached a median ~11-12pt of favorable room before
+reversing; the 34% that survive to the 60-minute mark are sitting on a median ~44-54pt at some
+point during the hold. Real, uncaptured room either way.
+
+**9. First attempt at capturing it failed, mechanically explained, not a dead end**:
+`scripts/backtest_poc_rotation_join_time60_trail.mjs` — a real ratcheting trail (not the earlier
+zero-buffer snap), activation = mfe25 (~7.5pt, data-derived), trail width swept 10/15/20pt. Every
+width made EV *worse* than the no-trail baseline (down to -$2.38, chronologically stable). Root
+cause: trail width ≥ activation distance means the stop floors at breakeven the instant it arms —
+recreates the exact same zero-buffer trap from item 4, just with extra steps. **Paused here by
+direct request.** Next step, queued not started: re-run with a wider activation (mfe50 ≈ 20pt)
+against the same trail widths, so the trail has room to sit above breakeven before the floor can
+dominate it.
+
+**Status**: nothing here is wired live or recommended for SHADOW — every claim recorded
+`PROVISIONAL`. Real scripts, real DB claims, all reproducible on disk this time (unlike item 6):
+`backtest_poc_rotation_vbp.mjs`, `_entry_delay_mfe.mjs`, `_fixed_stop_mfe25_target.mjs`,
+`_fixed_stop_mfe_sweep.mjs`, `_delta_intensity_filter.mjs`, `_delta20_pretrade_stop15.mjs`,
+`_join_fade_levels.mjs`, `_join_time60_mfe.mjs`, `_join_time60_trail.mjs` (all under `scripts/`,
+`poc_rotation_` prefix). Full scope doc, still accurate for the mechanics:
+[docs/POC_ROTATION_VBP_SPEC.md](POC_ROTATION_VBP_SPEC.md).
+
