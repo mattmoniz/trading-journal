@@ -339,4 +339,16 @@ echo "=== Weekly backtest run: $(date) ==="
 # this codebase's no-dead-ends convention.
 /usr/bin/node scripts/backtest_displacement_since_last_visit.mjs
 
+# Promotion-gate placebo-control test (2026-09-01) -- does the SETUP_STATUS PROMOTE gate admit
+# setup_types that underperform MORE than a statistically-matched "just missed the bar" placebo
+# group, or is the observed post-promotion underperformance just regression to the mean (winner's
+# curse)? v2 of this test, built after DeepSeek's design critique killed v1 for being doubly
+# confounded (overlap with the already-confirmed stop-tightening cohort, plus regression-to-mean
+# on its own). First run: SUPPORTS pure regression to the mean (JUST_MISSED underperformed its own
+# estimate MORE than PROMOTED did, -$42.59 vs -$15.57, computeReplication replicates=true) -- but
+# PROMOTED N=7 is far below this codebase's N>=20 floor and computeRigor shows clean=false for it.
+# RESEARCH_CLAIM promotion_gate_regression_to_mean_thin_20260901 (PROVISIONAL, not decision-grade).
+# Self-recalibrates weekly as real N grows toward the N>=20 recheck floor.
+/usr/bin/node scripts/backtest_promotion_gate_placebo_control.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

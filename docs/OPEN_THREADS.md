@@ -161,7 +161,30 @@ didn't quite clear `PROMOTE_MIN_N=15`/`PROMOTE_MIN_WR=0.52`/`PROMOTE_MIN_EV=0`, 
 constants from `scripts/backtest_setup_status.mjs`) — if the promoted cohort underperforms at the
 same rate as the just-missed cohort, it's pure mean reversion and the gate is fine; only if
 promoted underperforms MORE is there a real bug. Dispatched to Gemini 2026-09-01 ~17:50 ET
-(30min budget); result pending.
+(30min budget).
+
+**Result (audited before trusting, per standing rule): script is legitimate, result is real but
+too thin to close out.** `scripts/backtest_promotion_gate_placebo_control.mjs` — verified correct
+`created_at < fired_at` no-lookahead join, `computeRigor()`/`computeReplication()` genuinely
+imported not reimplemented, MTM/IB-window-stale exclusions match established convention. Result
+(all-data cut): `PROMOTED` underperformed its own promotion-time estimate by -$15.57 (N=7,
+estEv=+$7.71→fwdEv=-$7.86); `JUST_MISSED` placebo underperformed its near-threshold estimate by
+**more**, -$42.59 (N=22, estEv=-$0.86→fwdEv=-$43.45). `computeReplication()`: replicates=true,
+held-out favorable fraction=1.0. Stop-width control: 100% of both cohorts' forward trades fell in
+the same 30-50pt bucket, cleanly ruling out that confound. **Supports pure regression to the mean
+(winner's curse), not a promotion-gate bug** — but `PROMOTED` N=7 badly violates this codebase's
+own N≥20 floor, and `computeRigor()` shows `clean=false` for `PROMOTED` in both the all-data and
+strict (excluding known multi-calibration-run days) cuts. Also flagged: the script didn't filter
+to decisive outcomes only (`STOP_HIT`/`TARGET_HIT`) like the rest of this session's analysis,
+relying instead on excluding `MARK_TO_MARKET`/`RECOVERY_MTM` resolutions as a rough proxy — not
+identical. `RESEARCH_CLAIM promotion_gate_regression_to_mean_thin_20260901` (PROVISIONAL, NOT
+decision-grade — flagged with an `unblockCondition` to recheck once `PROMOTED` real N clears 20).
+Wired into `scripts/run_weekly_backtests.sh` so it self-recalibrates as real N grows. **This is
+the honest current state of the selection-edge residual: the leading hypothesis (a promotion-gate
+bug) now looks unlikely rather than confirmed-wrong — a real, if thin, negative — and the
+remaining ~86% of the Aug-H2 ACTIVE-underperforms-SHADOW gap (the "no contest" fires) stays
+genuinely unexplained.** No further mechanism is queued to test next; would need a fresh angle if
+resumed.
 
 <details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
 SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
