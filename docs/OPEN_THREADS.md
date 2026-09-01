@@ -141,7 +141,27 @@ remains genuinely unexplained. `RESEARCH_CLAIM active_selection_edge_cluster_inh
 (PROVISIONAL). Every mechanism checkable via direct query has now been tried (day-type mix, roster
 dilution, IB-specific bugs, stop-width, cluster-inheritance) — the next step needs a real
 resimulation-style backtest (recompute `SETUP_STATUS` eligibility under different historical
-windows), not another ad hoc query. Not yet built.
+windows), not another ad hoc query.
+
+**Built and dispatched same session, via the full 3-phase workflow (scope → DeepSeek design
+critique → Gemini mine-and-run).** v1 of this resimulation test (compare `NEWLY_PROMOTED` vs
+`ALWAYS_ACTIVE` setup_types' forward performance) was killed by DeepSeek's design critique before
+ever reaching Gemini — genuinely useful, not wasted effort: v1's no-lookahead construction was
+backwards (`run_date <= date` instead of the correct `created_at < fired_at`, inverting the exact
+convention Opus Audit #9 established), and more fundamentally, v1 was **doubly confounded from
+independent directions** — the `NEWLY_PROMOTED` cohort mechanically overlaps with the
+already-confirmed stop-tightening cohort, AND any group selected for clearing a noisy small-N
+real-EV bar is a textbook regression-to-the-mean ("winner's curse") setup that would underperform
+its own promotion-time estimate even with a completely unbiased gate. A positive v1 result would
+have been predicted under the null by both mechanisms simultaneously — it could never have
+distinguished a real gate bug from ordinary statistics. **v2** (`scratch/promotion_flip_
+attribution_test_design.md`) fixes both: correct `created_at < fired_at` reconstruction, plus a
+**"just-missed-the-bar" placebo control** (setup_types that were statistically just as good but
+didn't quite clear `PROMOTE_MIN_N=15`/`PROMOTE_MIN_WR=0.52`/`PROMOTE_MIN_EV=0`, verified exact
+constants from `scripts/backtest_setup_status.mjs`) — if the promoted cohort underperforms at the
+same rate as the just-missed cohort, it's pure mean reversion and the gate is fine; only if
+promoted underperforms MORE is there a real bug. Dispatched to Gemini 2026-09-01 ~17:50 ET
+(30min budget); result pending.
 
 <details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
 SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
