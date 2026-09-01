@@ -852,7 +852,24 @@ router.get('/setups/reference/:setupType/detail', async (req, res) => {
     const { setupType } = req.params;
     const REAL_N_FLOOR = 5;
 
-    const [distQ, byDayQ, byHourQ] = await Promise.all([
+    // By-regime breakdown (OPEN_DECISION build_regime_breakdown_setup_reference_panel,
+    // user request 2026-08-02: "if I wanted to track the setups against all different
+    // regimes, am I able to see that somewhere"). Real (ACTIVE/SHADOW) only, same reasoning
+    // as byDay/byHour above -- a per-bucket breakdown has no meaningful blended fallback.
+    // Deliberately an exploratory research view (thin data honestly labeled, not hidden),
+    // NOT a live badge -- matches the user's own standing feedback against more passive
+    // live badges. UNION ALL across all 7 REGIME_LOOKBACKS (10/20/30/45/60/90/180) so one
+    // query returns every lookback's regime_label_Nd/actual_pnl in one round trip.
+    const REGIME_LOOKBACKS = [10, 20, 30, 45, 60, 90, 180];
+    const byRegimeSql = REGIME_LOOKBACKS.map(L => `
+        SELECT ${L} as lookback, regime_label_${L}d as label, actual_pnl
+        FROM active_setups
+        WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+          AND resolution IN ('TARGET_HIT','STOP_HIT') AND actual_pnl IS NOT NULL
+          AND regime_label_${L}d IS NOT NULL
+      `).join(' UNION ALL ') + ' ORDER BY lookback, label';
+
+    const [distQ, byDayQ, byHourQ, byRegimeQ] = await Promise.all([
       // Full percentile bundle, real vs blended computed in parallel so we can pick
       // whichever has enough N without a second round-trip.
       query(`
@@ -909,6 +926,7 @@ router.get('/setups/reference/:setupType/detail', async (req, res) => {
         GROUP BY EXTRACT(HOUR FROM fired_at)
         ORDER BY hour
       `, [setupType]),
+      query(byRegimeSql, [setupType]),
     ]);
 
     const d = distQ.rows[0] || {};
@@ -920,6 +938,26 @@ router.get('/setups/reference/:setupType/detail', async (req, res) => {
     const mfe = { p25: pick('real_mfe_p25', 'all_mfe_p25'), p50: pick('real_mfe_p50', 'all_mfe_p50'), p75: pick('real_mfe_p75', 'all_mfe_p75'), p90: pick('real_mfe_p90', 'all_mfe_p90') };
     const mae = { p25: pick('real_mae_p25', 'all_mae_p25'), p50: pick('real_mae_p50', 'all_mae_p50'), p75: pick('real_mae_p75', 'all_mae_p75') };
     const timeToPeak = { p25: pick('real_bars_p25', 'all_bars_p25'), p50: pick('real_bars_p50', 'all_bars_p50'), p75: pick('real_bars_p75', 'all_bars_p75') };
+
+    // Group the raw (lookback, label, actual_pnl) rows into n/avg_pnl/wr_pct per bucket --
+    // done in JS rather than SQL GROUP BY since actual_pnl needs a real WR (>0 count), not
+    // just AVG, and this keeps the query itself simple/auditable.
+    const byRegimeMap = new Map();
+    for (const r of byRegimeQ.rows) {
+      const key = `${r.lookback}|${r.label}`;
+      if (!byRegimeMap.has(key)) byRegimeMap.set(key, { lookback: r.lookback, label: r.label, n: 0, wins: 0, pnlSum: 0 });
+      const b = byRegimeMap.get(key);
+      b.n++;
+      if (Number(r.actual_pnl) > 0) b.wins++;
+      b.pnlSum += Number(r.actual_pnl);
+    }
+    const byRegime = [...byRegimeMap.values()]
+      .map(b => ({
+        lookback: b.lookback, label: b.label, n: b.n,
+        wrPct: Math.round((b.wins / b.n) * 100),
+        avgPnl: +(b.pnlSum / b.n).toFixed(2),
+      }))
+      .sort((a, b) => a.lookback - b.lookback || a.label.localeCompare(b.label));
     const avgPnl = useReal ? d.real_avg_pnl : d.all_avg_pnl;
 
     res.json({
@@ -936,6 +974,7 @@ router.get('/setups/reference/:setupType/detail', async (req, res) => {
         date: r.date, touches: r.touches, respects: r.respects,
         levelPrice: r.level_price != null ? Math.round(r.level_price) : null,
       })),
+      byRegime,
     });
   } catch (err) {
     console.error('[setups/reference/detail]', err.message);

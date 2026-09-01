@@ -110,6 +110,50 @@ function SrHourBreakdown({ byHour }) {
   );
 }
 
+// By-Regime breakdown (OPEN_DECISION build_regime_breakdown_setup_reference_panel, user
+// request 2026-08-02: "if I wanted to track the setups against all different regimes, am I
+// able to see that somewhere"). Deliberately an exploratory research view, not a live badge
+// (user has standing feedback against more passive live badges) -- thin data is honestly
+// labeled (low-N rows dimmed, not hidden), self-populating as real N grows. Rows are grouped
+// by lookback (10/20/30/45/60/90/180 days), each with an Edge/Mid split.
+function SrRegimeBreakdown({ byRegime }) {
+  if (!byRegime?.length) return null;
+  const THIN_N = 20; // matches this codebase's own standing N>=20 significance floor
+  return (
+    <div style={{ padding: '12px 18px', borderBottom: '1px solid #1e293b' }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: '#cbd5e1', marginBottom: 8 }}>By Regime (value-area position)</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid #1e293b' }}>
+            <th style={{ padding: '3px 6px', textAlign: 'left', color: '#64748b', fontWeight: 500 }}>Lookback</th>
+            <th style={{ padding: '3px 6px', textAlign: 'left', color: '#64748b', fontWeight: 500 }}>Label</th>
+            <th style={{ padding: '3px 6px', textAlign: 'center', color: '#64748b', fontWeight: 500 }}>N</th>
+            <th style={{ padding: '3px 6px', textAlign: 'center', color: '#64748b', fontWeight: 500 }}>WR</th>
+            <th style={{ padding: '3px 6px', textAlign: 'right', color: '#64748b', fontWeight: 500 }}>Avg P&L</th>
+          </tr>
+        </thead>
+        <tbody>
+          {byRegime.map((r, i) => {
+            const thin = r.n < THIN_N;
+            const pnlCol = r.avgPnl > 0 ? '#4ade80' : r.avgPnl < 0 ? '#f87171' : '#94a3b8';
+            return (
+              <tr key={`${r.lookback}-${r.label}`} style={{ opacity: thin ? 0.5 : 1, background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}
+                title={thin ? `N=${r.n} — below this codebase's own N>=20 floor, directional only` : undefined}>
+                <td style={{ padding: '3px 6px', color: '#94a3b8' }}>{r.lookback}d</td>
+                <td style={{ padding: '3px 6px', color: '#cbd5e1' }}>{r.label}</td>
+                <td style={{ padding: '3px 6px', textAlign: 'center', color: '#94a3b8' }}>{r.n}{thin ? '*' : ''}</td>
+                <td style={{ padding: '3px 6px', textAlign: 'center', color: '#94a3b8' }}>{r.wrPct}%</td>
+                <td style={{ padding: '3px 6px', textAlign: 'right', color: pnlCol, fontWeight: 600 }}>${r.avgPnl.toFixed(2)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ fontSize: 10.5, color: '#64748b', marginTop: 4 }}>* N below 20 — directional only, not yet statistically decisive</div>
+    </div>
+  );
+}
+
 function SrDetailPanel({ setupType, displayName, onClose, onOpenChart }) {
   const [detail, setDetail] = useState(null);
   useEffect(() => {
@@ -132,6 +176,7 @@ function SrDetailPanel({ setupType, displayName, onClose, onOpenChart }) {
         <>
           <SrMfeBar mfe={detail.mfe} mae={detail.mae} avgPnl={detail.avgPnl} />
           <SrHourBreakdown byHour={detail.byHour} />
+          <SrRegimeBreakdown byRegime={detail.byRegime} />
           <div style={{ padding: '8px 18px', borderBottom: '1px solid #1e293b', fontSize: 12.5, color: '#64748b', flexShrink: 0 }}>
             {detail.details.length} real touch-day{detail.details.length === 1 ? '' : 's'} · <span style={{ color: '#a78bfa' }}>click a date</span> to view the chart
             {detail.timeToPeak?.p50 != null && (
