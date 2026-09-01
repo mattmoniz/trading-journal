@@ -468,13 +468,13 @@ async function getLiveEdgesContext() {
     query(`
       SELECT s.id, s.setup_type, TO_CHAR(s.fired_at, 'HH24:MI') as fired_time, s.fired_at,
              s.entry_zone_low::float, s.entry_zone_high::float, s.stop_level::float, s.t1_level::float,
-             s.price_at_detection::float, s.resolution, s.status, s.trade_date::text as t_date,
+             s.price_at_detection::float, s.resolution, s.status, s.origin_status, s.trade_date::text as t_date,
              s.actual_pnl::float, s.nl30_at_detection::int as nl30_at_detection,
              EXTRACT(HOUR FROM s.fired_at AT TIME ZONE 'America/New_York')::int as hour_of_day,
              s.touch_quality, s.touch_quality_vol_z::float, s.bar6_checkpoint, s.bar6_exit_recommended,
              s.delta_confirmation_state
       FROM active_setups s
-      WHERE s.trade_date = $1 AND s.status != 'SHADOW'
+      WHERE s.trade_date = $1 AND s.origin_status NOT IN ('SHADOW', 'BACKFILL')
       ORDER BY s.fired_at DESC
     `, [targetDate]),
     // Baseline win rates

@@ -1,5 +1,85 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-01: Opus Audit #11 — the "firehose" problem (user watching a dense afternoon firing stream)
+
+User watched a ~2.5hr stretch (13:02-15:23 ET) of the live activity feed showing ~26 fires across
+11+ setup_types, mostly stop-outs, and asked whether the system knows when to stop firing / change
+approach, whether it can catch a genuinely large trade, and whether there's a better way to decide
+when a trade fires. Dispatched to a full Opus strategic audit (`docs/OPUS_AUDIT_PROMPT_11.md` →
+`scratch/opus_audit_11_results.md`, both real DB queries + code tracing, not reasoned in the
+abstract).
+
+**Finding 1 (fixed same session): ~77% of the screenshot was a display bug, not a firing
+problem.** `server/routes/antigravityEdges.js`'s `/antigravity/edges-context` "Active setups"
+query filtered on `s.status != 'SHADOW'` — but `status` transitions to `RESOLVED`/`EXPIRED` the
+moment ANY row resolves, shadow or real, so every SHADOW fire leaked into the live feed a few
+minutes after firing. Of the 31 visible feed entries in the screenshot window, only **7 were real
+`ACTIVE` fires**; 24 were SHADOW-origin. **Fixed**: query now selects `s.origin_status` and
+filters `origin_status NOT IN ('SHADOW','BACKFILL')` (the immutable, correct field) instead of the
+mutable `status` column. Verified live against the running server post-fix: today's feed dropped
+from 31 mixed rows to 27 genuinely real `ACTIVE` rows.
+
+**Finding 2 (the real one, NOT fixed, needs a design decision): real `ACTIVE` win rate collapsed
+68.7%→30.1% between 2026-07-H2 and 2026-08-H2** (28.6% in Sept), payoff structure unchanged (avg
+win flat ~$80, avg loss shrank) — a pure hit-rate collapse. Equity peaked +$4,919.61 on 08-05, now
++$1,739.51 (-64.6%, 14 of last 18 sessions negative). SHADOW-origin population on the same tape
+declined only gently (63%→41%), so generic chop is an incomplete explanation. `RESEARCH_CLAIM
+active_vs_shadow_wr_divergence_since_20260806` (PROVISIONAL, full confound checklist applied —
+composition artifact, parameter asymmetry, entry-ordinal, single-type domination all controlled
+and the gap survives each; honest limits stated: over full history the gap nearly vanishes, this
+emerged specifically in the Aug-H2→Sep window). `OPEN_DECISION
+roster_level_wr_circuit_breaker_scoped` (HIGH) — recommended design: key on rolling
+DECISIVE-OUTCOME WIN RATE (not loss count, not fire count — both tested and found to run the wrong
+way, see below), `origin_status='ACTIVE'`-scoped, σ-derived threshold, shipped SHADOW-parallel/
+log-only first with a pre-registered kill criterion. Diagnosing WHY the divergence happened should
+come before building the breaker — a mechanical fix beats throttling around an unknown cause.
+
+**Finding 3: portfolio loss-count/dollars do NOT predict the next fire's outcome — the naive
+"throttle after losses" intuition is INVERTED on this system's real data.** By running realized $
+today, the deepest-drawdown bucket (≤-$300) has the BEST EV (+$18.44, WR 64.1%) and the
+flat/first-trade bucket is the WORST (-$17.53). `RESEARCH_CLAIM
+portfolio_loss_density_inverted_next_fire` (PROVISIONAL, all buckets `computeRigor()`-flagged
+clustered/unstable — the loss-density variable itself explains nothing; every bucket's most recent
+chronological third is negative regardless of loss context, which is really just Finding 2 showing
+up again). **Direct implication: the live "Death Sequence" 0.5x sizeMultiplier ceiling
+(`hasLossToday`, `acd.js:9008/9340`) may be sized in the wrong direction per this data** — not
+changed, flagged for the same `roster_level_wr_circuit_breaker_scoped` decision above. A hard
+fire-count cap was separately tested and also rejected — high-fire days are the PROFITABLE ones
+(2026-07-29 fired 61 times for +$1,231); a count cap would have truncated the system's best day.
+
+**Finding 4: will it catch larger trades? No, structurally — a correctly-identified design fact,
+not a bug.** Zero of the OR5/OR10/OR15/IB types in the screenshot are wired to any trail/runner
+mechanism (`CONDITIONAL_VARIANTS` has 7 `_TRAIL` entries, none in the OR/IB families). Six of
+today's types share one generic `volatility-scaled-default` calibration (37pt stop/38pt target,
+~$76 hard ceiling); `OR10_*`/`OR15_*` fired today with **no `OPTIMAL_STOP` row at all**. Realized
+OR-family ceiling all-time: $118. The one trail-wired type that fired today
+(`PD_POC_FADE_SHORT_TRAIL`) produced the day's single largest real winner, +$146.90 (N=1,
+suggestive only). This roster is scalp-sized mean-reversion by design; catching a real
+continuation move needs either repairing the already-built-but-mostly-broken
+`BREAKEVEN_TRAIL_TEST` machinery (5 of 6 blended survivors non-functional since 2026-08-04, see
+existing `OPEN_DECISION breakeven_trail_4_more_variants_lost_calibration_row`) or the longer-horizon
+IB break/retest/drive redesign (`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`).
+
+**Finding 5 (new decisive info on an old, already-resolved thread): the disabled `cascadeBreaker`
+mechanism's trigger query has no `origin_status` filter**, so its historical counterfactual
+analysis (`cascade_breaker_validation_single_day_artifact`,
+`cascade_breaker_suppressed_ev_unstable_recent_reversal`, both `PROVISIONAL`) was measuring
+SHADOW/BACKFILL noise, not real trade behavior — the identical bug class already fixed once in
+`hasLossToday`. Correctly scoped to real ACTIVE trades, the old trigger (≥3 distinct-type stops in
+45min) would have fired on only 6 of 444 real trades (1.4%) — structurally unvalidatable either
+way. `OPEN_DECISION cascade_breaker_query_missing_origin_status_filter` (MEDIUM) — either fold the
+fixed mechanism into the new WR circuit breaker design above, or delete `cascadeBreaker` and its
+audit-row insert rather than leave a disabled mechanism + two now-explained stale claims + a live
+SHADOW audit-write sitting in the tree. Independent, still-open from the prior thread: the
+frontend "FADE REGIME OFF" banner still displays based on `cascadeBreaker.active` even though
+nothing has been blocked by it since 2026-08-05.
+
+**Also found, not yet fixed**: the RTH refire cooldown (`isInRefireCooldown()`/
+`REFIRE_COOLDOWN_MINUTES`, real and wired at `acd.js:9747`/`9968`, contrary to what the audit brief
+assumed) is a hardcoded ~15-entry static minute map covering ~15 of ~130 live types — a standing
+no-static-thresholds violation, not evaluated further this session. Full detail, all query
+provenance, and the complete confound-checklist workthrough: `scratch/opus_audit_11_results.md`.
+
 ## ✅ 2026-09-01 (RESOLVED, clean negative): post-stop price continuation / order-flow imbalance as a refire quality signal
 
 User's idea, prompted by a real chart showing sustained one-sided cumulative delta: after a
