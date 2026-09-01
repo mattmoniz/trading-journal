@@ -1,5 +1,26 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED, wired live): slow+deep adverse-grind early exit — new informational mechanism
+
+Resolves `OPEN_DECISION slow_deep_adverse_grind_early_exit`. The CONFIRMED finding (N=691,
+family-gated across 4 bet_classes, rigor-clean, replicates — `docs/SLOW_DEEP_EARLY_EXIT_SPEC.md`)
+had no live mechanism built. Added `computeSlowDeepEarlyExit()` (`server/services/maeMfeReplay.js`),
+matching `computeBar6Checkpoint()`'s exact precedent — a pure function called once from
+`resolveSetupsByPrice()`'s shared resolution loop with the same `bars.rows` array, compute-once-
+never-overwrite. Walks forward bars tracking running MAE; the first bar where MAE crosses 75% of
+the trade's own original stop distance sets `speed=FAST` (≤2 bars) or `SLOW` (3+ bars), matching
+the CONFIRMED claim's own bar-count convention exactly. `ruleSaysExit=true` only when `speed=SLOW`
+AND the setup's bet_class is one of the 4 validated families — family-gated per the spec's own
+"never ship pooled" rule.
+
+New columns `active_setups.slow_deep_exit_speed`/`slow_deep_exit_recommended`, migrated live,
+`schema.sql` regenerated (also caught up broader unrelated drift since the last 2026-06-30
+snapshot). Purely informational — this system has no broker execution capability, matching the
+same caveat `bar6_exit_recommended` already carries. Server restarted, HTTP 200 confirmed,
+`test_invariants.mjs` shows the same 8 pre-existing FAILUREs as baseline (no regressions), lint
+clean. **Not done**: frontend display on `quick-check.html` — DB tracking was the priority piece,
+matching the same precedent used for the OR-range/RVol tagging earlier this session.
+
 ## ✅ 2026-09-01 (RESOLVED): 3 more backlog items — 2 turned out already-stale, 1 needed user input
 
 - **`vwap_reclaim_hold_rth_only_build_worth_it`** — RESOLVED as STALE. This "should we build it"
