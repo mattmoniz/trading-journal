@@ -328,4 +328,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # 5). Self-recalibrates weekly as real N grows.
 /usr/bin/node scripts/backtest_approach_pace_fade_quality.mjs
 
+# Displacement-since-last-visit fade-quality test (2026-09-01) -- user's idea: instead of a
+# time-based refire cooldown, does how far price has traveled from a level since it was last
+# visited predict quality (clustering=bad, real departure-and-return=legitimate)? CONFIRMED
+# NEGATIVE at full-roster scale (N=958): pooled AUC=0.514 (noise), and family breakdown
+# genuinely disagrees in SIGN (SAME_DAY_FORMING favors clustering, OTHER favors displacement) --
+# not just thin data, a real inconsistency. The single-setup exploratory read (11/12 refires from
+# one day showing clustering=better) was describing one unusual session, not a real pattern.
+# Approach pace (above) remains the validated lead from this investigation. Kept scheduled per
+# this codebase's no-dead-ends convention.
+/usr/bin/node scripts/backtest_displacement_since_last_visit.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

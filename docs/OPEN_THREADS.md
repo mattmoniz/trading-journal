@@ -41,6 +41,20 @@ pans out. Does not replace the separate, already-flagged `OPEN_DECISION
 wire_refire_cooldown_into_detectglobexsetup` (the dead-config bug fix) — the two are
 complementary, not either/or.
 
+**User's follow-up idea, tested and closed** ("just quieting the refires vs waiting until
+something more legitimate turns the odds in our favor... how far has price moved from the first
+failed trade") — a displacement-based "watcher" instead of a time-based cooldown: has price
+genuinely left the level and come back (a real re-test) vs. just chopping/clustering around it
+(should be ignored)? The single-setup exploratory check (12 `PD_VAH_FADE_SHORT` refires) looked
+like clustering wins, but 11 of 12 came from a single day (2026-08-28) — too thin/clustered to
+trust. Built the full-roster version (`scripts/backtest_displacement_since_last_visit.mjs`,
+N=958, 30+ distinct days): **clean negative, not just inconclusive**. Pooled AUC=0.514 (noise),
+and — unlike pace, which agreed in direction across every family — the formation-type breakdown
+genuinely disagrees in SIGN (`SAME_DAY_FORMING` favors clustering, `OTHER` favors displacement).
+`RESEARCH_CLAIM displacement_since_last_visit_fade_quality` (CONFIRMED negative). The single-day
+read was real but not generalizable. Approach pace remains the one validated lead from this whole
+refire-quality investigation. Kept scheduled per this codebase's no-dead-ends convention.
+
 ## 🔶 2026-09-01 (in progress, methodology corrected mid-session): SAME_DAY_FORMING volume-building fade filter re-verified and STRENGTHENED, day-thin — standing weekly recheck wired
 
 User asked to forward-test/wire the parked `momentum_ctx_sameday_walkforward_stable` finding
