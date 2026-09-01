@@ -2,6 +2,50 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## 🔶 2026-08-31: Setup D — direction asymmetry, drawdown, day-type, and monster-day threads (late-session round)
+
+Continuation of the Setup D thread below, prompted by user follow-ups after the exit-mechanism
+work closed out. Several distinct findings, all independently re-verified:
+
+- **Win rate reveals shorts carry the whole edge**: current live 159/80 hits target 55.0%
+  overall (needs 66.5% to break even on target/stop alone — the strategy survives on what the
+  31% "expired" bucket does, not the raw hit rate). Split by direction: **SHORT hits 69.4%**
+  (self-sufficient, clears break-even on its own) vs **LONG only 41.2%**, with LONG's defining
+  failure being *failing to commit* (41% of longs neither hit target nor stop, just meander to
+  session end) rather than getting stopped out more. Recorded as `RESEARCH_CLAIM
+  setup_d_direction_split_winrate_long_weak_link`.
+- **LONG-side entry filter screen** (5 candidates: drive magnitude, order-flow, volume-building,
+  NL30, gap): one real but thin, counterintuitive lead — lighter volume-building at entry lifts
+  LONG's hit rate from 41% to 56% (N=25 vs 26) — still short of the 66.5% break-even bar. Verdict:
+  LONG's weakness is structural, not fixable with a smarter filter on what's been tested.
+- **Real drawdown check**: worst historical losing streak (both directions combined) is 4 trades,
+  -$964; worst peak-to-trough drawdown $1,088 — both centered on the most recent stretch in the
+  data (late July–Aug 2026). With only ~100 trades on record, a worse streak than anything
+  observed (e.g. 5 stops in a row, ~$1,600) hasn't happened yet but isn't statistically far-fetched.
+- **Day-type check**: LONG's only losing bucket is TURBULENT days (50% WR, N=8, thin) — BALANCE
+  and TREND are fine. SHORT is robust across all three. Not usable live as stated, though — day_type
+  isn't known until ~8:20pm ET, well after the 10:15am entry decision (same structural gap that
+  broke IB_BULLISH/IB_BEARISH).
+- **Monster-day early-warning screen**: does anything before 10:15am predict a 600+pt session?
+  Dispatched to Gemini, then independently audited — **2 real lookahead bugs found and fixed**
+  (Overnight Range joined to the wrong night; Gap Size compared today's open to today's own
+  not-yet-existing close — both corrected in `scripts/test_monster_day_predictors.mjs`, full
+  before/after numbers in `reports/monster_day_predictors_2026-08-31.md`). Core finding survives
+  correction: a real, clean, pre-entry signal for "today will be a monster day" exists (best:
+  first-15-min OR range, AUC=0.881), but the days it correctly flags have WORSE average PnL
+  ($18.79 vs $54.27) — extends `docs/COMPRESSION_TAIL_MFE_SPEC.md`'s existing finding that wide
+  mornings predict chop, not clean trend. No early-warning-based exit adjustment is justified.
+  Recorded as `RESEARCH_CLAIM setup_d_monster_day_predictors_corrected_still_negative`.
+- Real full-population NQ daily range check (not just Setup-D-triggering days): mean 317pt,
+  median 275pt across all 449 trading days — confirms the user's own instinct that daily range
+  typically runs north of 300, with a real fat right tail (max 1,620pt) pulling the mean up.
+
+**Where this leaves Setup D**: entry (hybrid drive-magnitude rule) and exit (159/80, single entry)
+both stand as tested. The clearest actionable open thread is the long/short asymmetry — SHORT is
+a real, standalone, well-validated edge; LONG is a genuinely weak, close-to-coin-flip signal that
+survives mostly on its non-resolving trades landing near flat rather than losing badly. Sizing
+longs down (or pausing them) relative to shorts is the natural next decision, not yet made.
+
 ## 🔶 2026-08-31: Setup D (OPENING_DRIVE_15MIN) Stage 2 — a real, currently 100%-forfeited opportunity found; discriminator screen in progress
 
 Follow-up to the (resolved, below) IB_BULLISH/IB_BEARISH thread — user's redirect: "figure out
