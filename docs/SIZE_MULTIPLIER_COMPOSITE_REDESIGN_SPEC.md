@@ -1,5 +1,50 @@
 # sizeMultiplier composite redesign — scoping spec (2026-08-30)
 
+**Status: Phase 0 critique done (2026-09-01), REDIRECTED — do not proceed to Phase 1 as scoped.**
+See "Phase 0 critique result" section below, added after the critique overturned this doc's own
+premise. Read that section before doing anything else with this spec.
+
+## Phase 0 critique result (2026-09-01) — the premise is wrong, redirect before Phase 1
+
+Dispatched to DeepSeek per the rollout plan (§6). DeepSeek used real DB tool access to verify its
+claims empirically rather than critique in the abstract (timed out mid-writeup at 15min, but had
+already run its verification) — its core finding was independently re-confirmed directly against
+the DB (N=63 real `ACTIVE`/`SHADOW` fires with `size_factors_at_detection` populated,
+2026-08-20–2026-08-31):
+
+- **`dtaRowRecommendation` NULL on 63/63 (100%)** — the day-type bump never fires.
+- **`entryPressureShortBoost` TRUE on 0/63 (0%)** — the entry-pressure boost never fires.
+- **`dtClass` NULL on 63/63 (100%)** — matches the already-tracked `OPEN_DECISION
+  dtclass_null_all_day_neuters_multiple_live_gates`; the TREND-day penalty, OR-expansion bias,
+  and regime-persist factors (all keyed on `dtClass`) are dead too.
+- **`smallGapDay` TRUE on 57/63 (90.5%)** — behaves as a near-constant, not a feature.
+- **Only 4 distinct `size_multiplier` values exist across all 63 real fires**: `{0.10: 27, 0.25:
+  34, 1.25: 1, 1.30: 1}` — 97% sit at the two clamp floors.
+
+**The two factors §1 held up as the model of "self-recalibration done right"** (day-type bump,
+entry-pressure short boost) **are exactly the two that never fire on any real row.** Real output
+variance is almost entirely driven by loss-streak (`lfConsecLosses` inside the IIFE +
+`hasLossToday` downstream), not the other ~23 factors this spec proposed making continuous.
+Recorded as `RESEARCH_CLAIM sizemultiplier_factor_hygiene_audit_reveals_dead_factors`
+(PROVISIONAL — the sample is day-clustered, 92% top-5-day concentration, but 0%/100% factor rates
+are extreme enough to be structural, not sampling noise; `dtClass`'s null rate is independently
+corroborated by an unrelated, already-tracked decision).
+
+**This means §3's proposed pipeline (z-score → derived weight → correlation check → calibration
+curve) would fit a fancier model on top of mostly-dead/constant inputs.** Building the composite
+as scoped, without fixing this first, would very likely just re-derive "loss streak is everything"
+with extra steps — the exact circularity risk §7 already worried about, arriving from a different
+direction than expected. §6's Phase 1 (Gemini mine-and-run comparison) is premature until this is
+addressed.
+
+**Redirected next step**: a factor-hygiene/saturation census first — which factors are dead
+(never fire), saturated (always fire), or genuinely varying — fix or remove the dead ones (the
+`dtClass` fix is already separately scoped elsewhere), *then* decide whether a composite redesign
+is still worth building on whatever factors actually vary on real data. This is cheaper than the
+originally-scoped Phase 1 and answers the more fundamental question first. Not yet done.
+
+---
+
 **Status: design-only, nothing built or wired.** Triggered by a user question during a
 Vol+/Vol++ walkthrough: "is sizeMultiplier's dynamic use rigid, or intuitive like the
 volume-building work?" Answer, verified directly against the live code: **rigid.** This doc

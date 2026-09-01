@@ -1,5 +1,32 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-01: sizeMultiplier composite redesign Phase 0 — critique overturns the spec's own premise, redirected
+
+`OPEN_DECISION sizemultiplier_composite_redesign_scoped_pending_review` — dispatched
+`docs/SIZE_MULTIPLIER_COMPOSITE_REDESIGN_SPEC.md` to DeepSeek for the Phase 0 design critique its
+own rollout plan called for. DeepSeek used real DB tool access to verify its claims rather than
+critique abstractly (timed out mid-writeup at 15min, but had already run its verification) — its
+finding was independently re-confirmed directly against the DB (N=63 real `ACTIVE`/`SHADOW` fires
+with `size_factors_at_detection`, larger than DeepSeek's own N=41 subset, same pattern):
+`dtaRowRecommendation` NULL 63/63, `entryPressureShortBoost` TRUE 0/63, `dtClass` NULL 63/63
+(matches the already-tracked `dtclass_null_all_day_neuters_multiple_live_gates`), `smallGapDay`
+TRUE 57/63. Only 4 distinct `size_multiplier` values exist across all real fires
+(`{0.10:27, 0.25:34, 1.25:1, 1.30:1}`) — 97% sit at the two clamp floors.
+
+**The 2 factors the spec held up as the model of "self-recalibration done right" (day-type bump,
+entry-pressure boost) are exactly the two that never fire on any real row.** Real output variance
+is almost entirely loss-streak-driven (`lfConsecLosses` + `hasLossToday`), not the other ~23
+factors the spec proposed making continuous. Recorded as `RESEARCH_CLAIM
+sizemultiplier_factor_hygiene_audit_reveals_dead_factors` (PROVISIONAL — sample is day-clustered,
+92% top-5-day, but the 0%/100% factor rates are extreme enough to be structural).
+
+**Redirected, not resolved**: building a composite score on top of the current stack would fit a
+fancier model on mostly-dead/constant inputs — the spec's own Phase 1 (Gemini mine-and-run
+comparison) is premature. Next step is a factor-hygiene/saturation census (fix or remove dead
+factors, especially `dtClass` which is already separately scoped) *before* deciding whether a
+composite redesign is still worth building on whatever factors actually vary. Spec doc updated
+with a "Phase 0 critique result" section at its top; not yet done.
+
 ## ✅ 2026-09-01 (RESOLVED): RTH VWAP_MAGNET's "stable loser" reading was a short-history artifact, not real
 
 Resolves `OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained` (open since 2026-08-04).
