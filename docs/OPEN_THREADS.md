@@ -1,5 +1,46 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): 8-hour server outage overnight, missed a real move — `check_watcher.mjs` had been silently missing
+
+User's own recollection ("I think there was a watcher that crashed last night and it missed a big
+trade") — confirmed real, not misremembered. `trading-journal-server.service` was down **2026-08-31
+14:43 to 22:53 ET, over 8 hours**, spanning RTH close through the evening Globex open. Real,
+meaningful move happened during the exact outage window: a 105pt swing in 30 minutes (15:21-15:51
+ET) and a 156pt full range — comparable to or larger than most live setups' entire stop-to-target
+distance, a genuine missed opportunity, not a quiet stretch.
+
+**Root cause**: `trading-journal-watcher.service` (the Gemini error watcher, whose whole job is
+detecting the main server going down and auto-restarting it via `systemctl`) had not itself
+restarted since before 2026-08-25 — over a week, not just one night. Its own second-order safety
+net — a cron job every 5 minutes (`crontab -l`) meant to check whether the watcher is alive and
+restart IT if not — had been failing on **every single run** with `MODULE_NOT_FOUND`, because
+`scratch/check_watcher.mjs` (the file the cron entry points at) simply did not exist on disk.
+`scratch/` is gitignored, so a prior commit message mentioning its addition ("Add Gemini AGENTS.md
++ check_watcher.mjs") never actually tracked the file — it's unclear whether it was ever real on
+disk or was lost at some point, but either way nothing has been supervising the watcher's own
+liveness for at least a week, and the systemd unit's `Restart=on-failure` doesn't help against
+non-crash failure modes (a graceful stop, a WSL2/session-level interruption) — matches the same
+`Restart=on-failure` blind spot already documented for the main server in
+`overnight_globex_fix_never_ran_uninterrupted` (2026-07-17/18).
+
+**Fixed same session**: rewrote `scratch/check_watcher.mjs` — minimal, single-purpose (checks
+`systemctl --user is-active trading-journal-watcher.service`, restarts if not, logs only on
+action so it doesn't spam `scratch/gemini_watcher.log` every 5 minutes forever). Tested both paths
+live: silent no-op when the watcher is healthy (confirmed), and a real stop→detect→restart→verify
+cycle when it's down (confirmed — stopped the service, ran the script, it correctly restarted and
+verified success within the same run). `loginctl show-user` confirms linger is enabled and
+`cron.service` itself is healthy, so this was genuinely just the missing file, not a deeper
+session/linger issue.
+
+**Known residual limitation, worth a future follow-up, not fixed now**: `scratch/
+check_watcher.mjs` and `scratch/gemini_error_watcher.mjs` both live in the gitignored `scratch/`
+directory, referenced by a systemd unit file and a crontab entry that point at that path — meaning
+neither script is actually version-controlled, and this exact "the file silently vanished from
+disk with no tracked history" failure mode could recur. Moving both into `scripts/` (tracked) would
+need updating `~/.config/systemd/user/trading-journal-watcher.service`'s `ExecStart` and the
+crontab entry to match — a slightly bigger change than today's fix, left as a follow-up rather than
+done opportunistically here.
+
 ## 🔶 2026-09-01: root-causing the real ACTIVE WR collapse — stop-tightening is a real, partial cause, not the whole story
 
 Follow-up to Opus Audit #11 (below). User asked directly what changed between July and August to
