@@ -1,6 +1,7 @@
 import pool from '../server/db.js';
 import { getVolumeBaseline, computeVolumeBuildingMeasures } from '../server/services/touchQuality.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { classifyLevelFormation } from '../server/config/setupTypes.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -273,7 +274,11 @@ async function main() {
                   levelName: ln,
                   resolution,
                   compositeStrength,
-                  isRth
+                  isRth,
+                  // reused verbatim (share-modules convention) -- do not re-derive by hand,
+                  // classifyLevelFormation()'s first draft had a real coverage gap (missed
+                  // OR*_HIGH/OR*_LOW) that diluted an earlier finding before being caught.
+                  formation: classifyLevelFormation(ln),
                 });
               }
             }
@@ -343,6 +348,15 @@ async function main() {
   out += analyzeSubset(results, "Pooled (All Touches)");
   out += analyzeSubset(results.filter(r => r.isRth), "RTH Only");
   out += analyzeSubset(results.filter(r => !r.isRth), "Globex Only");
+
+  // Cross-validation against the already-parked SAME_DAY_FORMING vs PRIOR_DAY_OR_DEVELOPING
+  // finding (docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b, N=324/618, $11.95 vs $2.17
+  // per-trade gap on realized P&L) -- does the RUN/HELD behavioral measure (a different,
+  // much larger population, N in the tens of thousands here) concentrate the same way?
+  out += `\n## Cross-check against the parked SAME_DAY_FORMING vs PRIOR_DAY_OR_DEVELOPING split\n\n`;
+  out += analyzeSubset(results.filter(r => r.formation === 'SAME_DAY_FORMING'), "SAME_DAY_FORMING (IB/OR family)");
+  out += analyzeSubset(results.filter(r => r.formation === 'PRIOR_DAY_OR_DEVELOPING'), "PRIOR_DAY_OR_DEVELOPING (PD_POC/VAH/VAL, VWAP, pivots, etc)");
+  out += analyzeSubset(results.filter(r => r.formation === 'OTHER'), "OTHER (unclassified)");
 
   const runs = results.filter(r => r.resolution === 'RUN');
   const held = results.filter(r => r.resolution === 'HELD');

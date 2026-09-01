@@ -284,4 +284,20 @@ echo "=== Weekly backtest run: $(date) ==="
 # building_dose_response_cutoff.
 /usr/bin/node scripts/backtest_volume_building_signal.mjs
 
+# SAME_DAY_FORMING (IB/OR family) volume-building fade-quality re-verification (2026-09-01) --
+# re-checks docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b's parked walk-forward finding
+# (original N=324, $11.95-12.19/trade gap, "stable") against the CURRENT real trade population.
+# First re-check already found the effect had weakened and the binary ACTIVE/QUIET median split
+# no longer held cleanly stable -- but a tercile split (bottom/mid/top of the prior-30-bar
+# backdrop) isolated a real, non-reversing top-tercile effect ($18.06/trade, N=90) concentrated
+# in only 12 distinct days (74.4% from the top 5) -- too day-thin to wire yet. NOT a live gate/
+# size factor. Standing promotion trigger (OPEN_DECISION same_day_forming_volbuild_promotion_
+# trigger): re-run weekly: promote to a real size-multiplier factor once the TOP tercile spans
+# >=25-30 distinct days with day-clustering (top5DayPct) under ~50%, AND the chronological
+# progression still shows no genuine negative period. This is a staleness-preventing weekly
+# recompute, not a fixed-calendar wait -- promotes the moment the DATA clears the bar, which
+# real trade volume (15-30 real IB/OR fires/day recently) suggests is a few weeks out, not months,
+# if the pattern holds.
+/usr/bin/node scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

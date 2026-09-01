@@ -1,5 +1,31 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-01 (in progress): SAME_DAY_FORMING volume-building fade filter re-verified, day-thin — standing weekly recheck wired
+
+User asked to forward-test/wire the parked `momentum_ctx_sameday_walkforward_stable` finding
+(docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b, original N=324, $11.95-12.19/trade, IB/OR
+family only) given real IB/OR trade N is now healthy (446 real fires/39 days). Re-verified at the
+current N via `scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs` (reuses
+`computeVolumeBuildingMeasures`/`classifyLevelFormation` verbatim, walk-forward no-lookahead,
+150-trade warmup matching the original methodology exactly — caught and fixed a mismatch on the
+first run, 20 vs 150). **The original binary ACTIVE/QUIET median split weakened and lost
+stability** (gap $11.95→$3.59/trade, chronological thirds sign-flipped negative twice) — but a
+**tercile split** (bottom/mid/top of the prior-30-bar backdrop, same precedent as this codebase's
+existing DEFENDED/UNDEFENDED tercile convention) found the real effect concentrated in the TOP
+tercile specifically: N=90, EV=$18.06/trade, chronological progression $0.00→$36.10→$18.07 —
+**never negative, no real sign reversal** (an earlier "unstable" read was Claude's own bug —
+diluted the rigor check with zero-padded non-TOP rows instead of filtering to TOP-only first,
+caught by comparing against the correctly-computed per-third numbers). The real blocker is day
+diversity, not instability: only 12 distinct days make up the TOP-tercile population, 74.4% from
+the top 5. Wired as a **standing weekly recheck** (added to `run_weekly_backtests.sh`) rather than
+a one-off — `RESEARCH_CLAIM same_day_forming_volbuild_top_tercile_fade_quality` upserts fresh
+day-count/clustering/EV numbers every week; `OPEN_DECISION
+same_day_forming_volbuild_promotion_trigger` names the concrete bar (TOP tercile ≥25 distinct days,
+day-clustering <50%, no negative chronological period) — the script itself flags "PROMOTION BAR
+CLEARED" and sets `rigorStatus='CLEARS_PROMOTION_BAR'` the run it clears, rather than requiring
+anyone to re-derive day-counts by hand. Real IB/OR volume (15-30 fires/day recently) suggests this
+is realistically weeks, not months, away if the pattern holds.
+
 ## ✅ 2026-09-01 (RESOLVED): idea D Step 5 built (too thin) + a large volume-building validation (user's idea) + a real Globex refire-cooldown gap found
 
 **Idea D Step 5** (`scripts/backtest_liquidity_zones_idea_d_step5.mjs`): extends the Step 0 census
