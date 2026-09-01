@@ -262,11 +262,25 @@ const STOP_SWEEP_PAUSED = new Set(['STOP_SWEEP_LONG', 'STOP_SWEEP_SHORT']);
 // dead for anything that fires as a shadow candidate rather than winning the
 // single `active` pick — which is most of the time for these types. This is why
 // IB_BEARISH kept machine-gunning despite already being "covered" by this map.
+// EXTENDED 2026-09-01 (user-flagged live dashboard pattern, GLOBEX_VWAP_MAGNET_LONG and
+// OR5_MID/LOW_FADE_SHORT refiring repeatedly and losing): added PD_VAH_FADE_SHORT and the OR5
+// family after confirming the exact same signature (real refires within 30min of the prior
+// resolution lose decisively worse than fresh touches) via direct query against real ACTIVE
+// trades -- PD_VAH_FADE_SHORT: refire WR=25.0%/EV=-$16.50 (N=12) vs baseline WR=53.6%/EV=+$8.23
+// (N=28), 24 distinct days; OR5 family: refire WR=16.7%/EV=-$46.33 (N=6) vs baseline
+// WR=50.0%/EV=+$10.21 (N=48), 18 distinct days. GLOBEX_VWAP_MAGNET_LONG/SHORT were already
+// listed here but this map alone was NEVER SUFFICIENT for them -- see the dead-config-gap fix
+// where detectGlobexSetup() is wired to actually call isInRefireCooldown() (it previously had its
+// own, much narrower re-arm-on-resolution check and never consulted this map at all).
 const REFIRE_COOLDOWN_MINUTES = {
   IB_BEARISH: 30, IB_BULLISH: 30,
   VWAP_MAGNET_LONG: 30, VWAP_MAGNET_SHORT: 30,
   GLOBEX_VWAP_MAGNET_LONG: 30, GLOBEX_VWAP_MAGNET_SHORT: 30,
   STOP_SWEEP_LONG: 30, C_PAIRED_SHORT: 30,
+  PD_VAH_FADE_SHORT: 30,
+  OR5_MID_FADE_LONG: 30, OR5_MID_FADE_SHORT: 30,
+  OR5_LOW_FADE_LONG: 30, OR5_LOW_FADE_SHORT: 30,
+  OR5_HIGH_FADE_LONG: 30, OR5_HIGH_FADE_SHORT: 30,
 };
 
 async function isInRefireCooldown(tradeDate, setupType) {
@@ -1899,6 +1913,18 @@ async function detectGlobexSetup(sessionDate, io) {
       );
       if (existing.rows.length) {
         logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'GLOBEX_ALREADY_FIRED_TODAY', gateReason: 'active_setups already has an open, or too-fast-resolved, row for this (trade_date, setup_type) today', entry: px });
+        continue;
+      }
+
+      // FIXED 2026-09-01 (dead-config gap, user-flagged live dashboard pattern): this function
+      // never called isInRefireCooldown()/consulted REFIRE_COOLDOWN_MINUTES at all -- that map
+      // looked like real protection for GLOBEX_VWAP_MAGNET_LONG/SHORT (both listed in it) but
+      // provided none here, since the re-arm-on-resolution check above is a DIFFERENT, narrower
+      // thing (only blocks a refire if the PRIOR trade resolved suspiciously fast, not a
+      // time-since-resolution cooldown). Confirmed live: GLOBEX_VWAP_MAGNET_LONG refired every
+      // 2-11 minutes for 2.5hrs on 2026-09-01, 6 of 9 refires losing, none blocked by anything.
+      if (await isInRefireCooldown(sessionDate, c.type)) {
+        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'REFIRE_COOLDOWN', gateReason: `same-type resolved within ${REFIRE_COOLDOWN_MINUTES[c.type]}min`, entry: px });
         continue;
       }
 
