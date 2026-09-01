@@ -46,12 +46,29 @@ regime-mix explanation.
 
 **Root cause remains partially open.** `OPEN_DECISION roster_level_wr_circuit_breaker_scoped`
 (flagged in Audit #11 below) is unaffected by this — a circuit breaker is a safety net regardless
-of full root-cause attribution. Open follow-up: what explains the residual August-wide-stop
-underperformance not accounted for by stop width alone (candidates not yet tested: the
-`bbc2574`/`4a0a263` SUPPRESS/PROMOTE methodology changes shuffling which types get to fire even at
-a given stop width; a genuine August market-quality change not captured by the coarse `day_type`
-classifier). Full detail, all query provenance: `scratch/antigravity_response.md` +
-`RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse`'s claim text.
+of full root-cause attribution. Full detail, all query provenance: `scratch/antigravity_response.md`
++ `RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse`'s claim text.
+
+**Continued digging (same session): 2 more candidate explanations tested and ruled out, narrowing
+to a systemic-cause hypothesis.** (1) **Not IB-specific** — excluding `IB_BULLISH`/`IB_BEARISH`
+entirely, the collapse persists and is just as stark (non-IB: Jul WR=72.0%/EV=+$25.73 N=93 vs Aug
+WR=37.9%/EV=-$13.41 N=124); even August's widest-stop non-IB trades are still deeply negative.
+Also checked whether the 2026-08-12 IB-window correction (30min→60min IB definition,
+`docs/IB_WINDOW_RECALIBRATION_SPEC.md`) explains IB's own share — it doesn't cleanly: excluding
+the 15 stale-window-flagged July rows barely moves July's IB numbers (67.1%→66.4% WR). (2) **Not
+roster dilution** — weekly distinct real-firing setup_type count actually SHRANK across the window
+(17→14→8→7 types/week in July down to 9→9→7→7→6 in August), with at most 1 genuinely new type per
+week in August. The roster got MORE concentrated in already-established types, not diluted by
+unproven ones. `RESEARCH_CLAIM wr_collapse_residual_not_ib_specific_not_roster_dilution`
+(PROVISIONAL). **Combined with the already-ruled-out day-type-mix and single-day/single-setup
+explanations, the residual now looks systemic — a roster-wide effect, not attributable to any one
+setup_type, signal-definition bug, or composition shift.** Leading untested candidate: the
+SUPPRESS/PROMOTE methodology overhaul that landed the same week as the stop/target fix (`bbc2574`,
+2026-08-10, gate on real EV not blended; `4a0a263`, 2026-08-03, exclude `TIME_EXPIRED` from
+population queries) could have a roster-wide effect via a shared codepath no single-setup
+spot-check would surface. Properly testing this needs resimulating `SETUP_STATUS`/`OPTIMAL_STOP`
+calibration under pre- vs. post-8/3 logic across the whole roster — a real backtest script, not
+another ad hoc query. Not yet built.
 
 ## 🔶 2026-09-01: Opus Audit #11 — the "firehose" problem (user watching a dense afternoon firing stream)
 
