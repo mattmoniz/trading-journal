@@ -157,6 +157,46 @@ const BAR6_FROZEN_CUTOFF = 0.873;
 // captured value). Live code tracks its own bar6Close/status inline (identical bar 0-6 /
 // worstBarIdx<=2 convention) and calls this for the exit-rule math specifically, rather than
 // re-deriving the targetDistFraction formula a second time.
+// Slow+deep adverse-grind early exit (RESEARCH_CLAIM slow_deep_adverse_grind_early_exit,
+// docs/SLOW_DEEP_EARLY_EXIT_SPEC.md, CONFIRMED 2026-08-30, N=691, family-gated, rigor-clean,
+// replicates at bet_class granularity). Extracted here matching computeBar6Checkpoint's own
+// precedent — a pure function called once from acd.js's resolution loop with the same
+// `bars.rows` array, never re-derived at a second site. Real finding: a trade reaching 75%
+// of its own original stop distance SLOWLY (3+ bars/1-indexed, i.e. checkpointOffset>=2 in
+// the 0-indexed pilot script's own convention — scripts/pilot_zero_mfe_early_stop.mjs Part 4)
+// beats holding by real $/trade; a FAST (1-2 bars) trade recovers more often and exiting it
+// is actively harmful (delta -$12.45/trade at this same trigger in the validated backtest) —
+// do NOT exit FAST ones. Only the 4 validated bet_classes (VALUE_FADE/CONTINUATION_LEGACY/
+// GLOBEX_LEVEL/FAILED_SWEEP_REVERSAL) get `ruleSaysExit=true`; every other bet_class
+// (OPENING_DRIVE_15MIN had N=1, untrusted) still gets a computed speed/checkpoint for
+// visibility but never a recommendation, matching the spec's own "never ship pooled" rule.
+const SLOW_DEEP_TRIGGER_FRACTION = 0.75; // frozen, matches the CONFIRMED claim's own trigger
+const SLOW_DEEP_ELIGIBLE_BET_CLASSES = new Set(['VALUE_FADE', 'CONTINUATION_LEGACY', 'GLOBEX_LEVEL', 'FAILED_SWEEP_REVERSAL']);
+
+function computeSlowDeepEarlyExit(forwardBars, entry, stop, direction, betClass) {
+  if (!forwardBars || !forwardBars.length) return null;
+  const stopDist = Math.abs(entry - stop);
+  if (stopDist === 0) return null;
+  const maeTarget = stopDist * SLOW_DEEP_TRIGGER_FRACTION;
+  let mae = 0;
+  for (let i = 0; i < forwardBars.length; i++) {
+    const b = forwardBars[i];
+    const adverse = direction === 'LONG' ? Math.max(0, entry - b.low) : Math.max(0, b.high - entry);
+    mae = Math.max(mae, adverse);
+    if (mae >= maeTarget) {
+      const barsToTrigger = i + 1; // 1-indexed, matches acd.js's own barCount convention
+      const speed = barsToTrigger <= 2 ? 'FAST' : 'SLOW';
+      return {
+        speed,
+        barsToTrigger,
+        exitPrice: b.close,
+        ruleSaysExit: speed === 'SLOW' && SLOW_DEEP_ELIGIBLE_BET_CLASSES.has(betClass),
+      };
+    }
+  }
+  return null; // never reached 75% of the original stop distance
+}
+
 function computeExitRuleAtBar6(entry, bar6Close, t1, direction, status) {
   const distToTarget = direction === 'LONG' ? (t1 - bar6Close) : (bar6Close - t1);
   const distEntryToTarget = direction === 'LONG' ? (t1 - entry) : (entry - t1);
@@ -182,4 +222,4 @@ function computeBar6Checkpoint(forwardBars, entry, stop, t1, direction, pnlPerPo
   return { worstBarIdx, status, targetDistFraction, bar6Close, pnlAtBar6, ruleSaysExit };
 }
 
-export { directionFromType, replayBars, computeMaeMfe, computeBar6Checkpoint, computeExitRuleAtBar6, BAR6_FROZEN_CUTOFF };
+export { directionFromType, replayBars, computeMaeMfe, computeBar6Checkpoint, computeExitRuleAtBar6, BAR6_FROZEN_CUTOFF, computeSlowDeepEarlyExit };

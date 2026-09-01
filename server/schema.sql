@@ -402,7 +402,9 @@ CREATE TABLE public.active_setups (
     size_factors_at_detection text,
     vol_building_signal jsonb,
     or_range_at_detection numeric,
-    rvol_20d_at_detection numeric
+    rvol_20d_at_detection numeric,
+    slow_deep_exit_speed character varying(10),
+    slow_deep_exit_recommended boolean
 );
 
 

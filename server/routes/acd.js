@@ -7,7 +7,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import multer from 'multer';
 import { query } from '../db.js';
-import { computeBar6Checkpoint } from '../services/maeMfeReplay.js';
+import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from '../services/maeMfeReplay.js';
 import { computeDirImbalance } from '../services/entryPressureService.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding } from '../services/touchQuality.js';
@@ -1238,6 +1238,24 @@ export async function resolveSetupsByPrice(io) {
         await query(
           `UPDATE active_setups SET bar6_checkpoint=$2, bar6_exit_recommended=$3, updated_at=NOW() WHERE id=$1 AND bar6_checkpoint IS NULL`,
           [row.id, bar6.status, bar6.ruleSaysExit]
+        ).catch(() => {});
+      }
+    }
+
+    // Slow+deep adverse-grind early exit (RESEARCH_CLAIM slow_deep_adverse_grind_early_exit,
+    // docs/SLOW_DEEP_EARLY_EXIT_SPEC.md, CONFIRMED 2026-08-30) -- same compute-once,
+    // never-overwrite convention as bar6_checkpoint above, same `bars.rows` array. Unlike
+    // bar6 (fixed bar-7 gate), this can trigger as early as bar 1 -- computeSlowDeepEarlyExit()
+    // itself returns null until the trade genuinely crosses 75% of its own original stop
+    // distance, so no extra barCount gate is needed here. Purely informational, same as
+    // every other checkpoint in this loop -- this system has no order/broker execution
+    // capability, so `slow_deep_exit_recommended` can never auto-close a position.
+    {
+      const slowDeep = computeSlowDeepEarlyExit(bars.rows, entry, stop, long ? 'LONG' : 'SHORT', getBetClass(row.setup_type));
+      if (slowDeep) {
+        await query(
+          `UPDATE active_setups SET slow_deep_exit_speed=$2, slow_deep_exit_recommended=$3, updated_at=NOW() WHERE id=$1 AND slow_deep_exit_speed IS NULL`,
+          [row.id, slowDeep.speed, slowDeep.ruleSaysExit]
         ).catch(() => {});
       }
     }
