@@ -2,6 +2,24 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## ✅ 2026-09-01 (RESOLVED): breakeven-trail 5-of-6-uncalibrated decision closed; contaminated `B_FLOOR_S1_FADE_LONG` row nulled
+
+Resolves `OPEN_DECISION breakeven_trail_zero_real_survivors_20260816`. Checked current state before
+acting (the last update to this decision was 2026-08-16/20) rather than redo stale analysis:
+**`PD_POC_FADE_SHORT` has since genuinely graduated** — a real `BREAKEVEN_TRAIL_TEST` row exists
+(run_date 2026-08-25, real N=24, trail=19.3pt, OOS EV +$30.31 vs -$2.31 fixed-target baseline),
+already tracked and already wired live on both RTH and Globex (2026-08-31 `resolveUnconditionalTrailVariant`
+work) — left untouched. The other 5 wired `_TRAIL` variants remain uncalibrated (no current
+`BREAKEVEN_TRAIL_TEST` row at all — 0/5, not 0/6 as previously framed).
+
+Took the decision's own option (b) for the one remaining stale row: `B_FLOOR_S1_FADE_LONG` still has
+real (`ACTIVE`/`SHADOW`) `TARGET_HIT` N=0 (all 68 real target-hits are `BACKFILL`-origin) — nulled
+`notes.trail` on all 5 historical weekly rows for this signal_name (all held an identical stale
+trail=20.3pt, confirmed before nulling, so no distinct history was lost; original value preserved
+per-row as `notes._original_trail_before_null`). The live consumer now falls back to a plain
+fixed-target trade for `FLOOR_S1_FADE_LONG_TRAIL` instead of trailing on a synthetic-only basis,
+matching the `OPTIMAL_STOP` circuit-breaker precedent. Verified via read-back same turn.
+
 ## ✅ 2026-08-31 (RESOLVED): Setup D's range+RVol finding wired for live tracking — no longer a dead end
 
 Follow-up to the range+RVol combo finding above (`RESEARCH_CLAIM
