@@ -300,4 +300,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # if the pattern holds.
 /usr/bin/node scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs
 
+# PRIOR_DAY_OR_DEVELOPING (PD_POC/VAH/VAL, VWAP, pivots) volume-building fade-quality follow-up
+# (2026-09-01, "chase it" per user) -- CONFIRMED NEGATIVE as of first run: despite a much larger,
+# cleaner bar-level RUN/HELD signal for this family than SAME_DAY_FORMING has (RESEARCH_CLAIM
+# volume_building_run_held_by_level_formation_type, N=28,984, stable), no tercile bucket of real
+# fade P&L shows a usable edge (BOTTOM -$6.29, MID $0.49, TOP -$2.09, N=655) -- a real, if
+# counterintuitive, dissociation between "does the level mechanically break" and "does this
+# calibrated fade profit." Kept scheduled per this codebase's own no-dead-ends convention (same
+# treatment as the other CONFIRMED-negative entries in this file) rather than declared
+# permanently closed -- self-recalibrates as real N grows, in case the picture changes.
+/usr/bin/node scripts/backtest_priorday_volbuild_walkforward.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

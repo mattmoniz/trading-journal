@@ -26,6 +26,22 @@ CLEARED" and sets `rigorStatus='CLEARS_PROMOTION_BAR'` the run it clears, rather
 anyone to re-derive day-counts by hand. Real IB/OR volume (15-30 fires/day recently) suggests this
 is realistically weeks, not months, away if the pattern holds.
 
+**Follow-up chased same session** (user: "yes chase it") — does the much larger, cleaner
+PRIOR_DAY_OR_DEVELOPING RUN/HELD signal (N=28,984, stable, `RESEARCH_CLAIM
+volume_building_run_held_by_level_formation_type`) translate into a real fade-quality edge for
+that family, the way a tercile split revealed one for SAME_DAY_FORMING above? Reused the same
+walk-forward methodology (extracted to a shared `scripts/lib/volbuildWalkforwardTercile.mjs` so
+both scripts share one implementation, not two hand-copies) on the 655 real PRIOR_DAY_OR_DEVELOPING
+fade trades. **Clean negative, not day-thin**: no tercile bucket shows a usable edge (BOTTOM
+-$6.29, MID $0.49, TOP -$2.09), and the TOP tercile — where the RUN/HELD signal was cleanest —
+sign-flips across chronological thirds (-$8.09→$6.29→-$4.47) with 65.8% day-clustering.
+`RESEARCH_CLAIM prior_day_volbuild_top_tercile_fade_quality` (CONFIRMED negative). Genuine
+dissociation between "does the level mechanically break" and "does this specific calibrated fade
+profit" — the two questions don't transfer, even when one is answered very cleanly. Kept scheduled
+in `run_weekly_backtests.sh` per this codebase's no-dead-ends convention rather than declared
+permanently closed, in case more real N changes the picture — but do not re-attempt this exact
+connective test for this family without a genuinely different angle.
+
 ## ✅ 2026-09-01 (RESOLVED): idea D Step 5 built (too thin) + a large volume-building validation (user's idea) + a real Globex refire-cooldown gap found
 
 **Idea D Step 5** (`scripts/backtest_liquidity_zones_idea_d_step5.mjs`): extends the Step 0 census
