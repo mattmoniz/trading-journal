@@ -287,28 +287,33 @@ echo "=== Weekly backtest run: $(date) ==="
 # SAME_DAY_FORMING (IB/OR family) volume-building fade-quality re-verification (2026-09-01) --
 # re-checks docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b's parked walk-forward finding
 # (original N=324, $11.95-12.19/trade gap, "stable") against the CURRENT real trade population.
-# First re-check already found the effect had weakened and the binary ACTIVE/QUIET median split
-# no longer held cleanly stable -- but a tercile split (bottom/mid/top of the prior-30-bar
-# backdrop) isolated a real, non-reversing top-tercile effect ($18.06/trade, N=90) concentrated
-# in only 12 distinct days (74.4% from the top 5) -- too day-thin to wire yet. NOT a live gate/
-# size factor. Standing promotion trigger (OPEN_DECISION same_day_forming_volbuild_promotion_
-# trigger): re-run weekly: promote to a real size-multiplier factor once the TOP tercile spans
-# >=25-30 distinct days with day-clustering (top5DayPct) under ~50%, AND the chronological
-# progression still shows no genuine negative period. This is a staleness-preventing weekly
-# recompute, not a fixed-calendar wait -- promotes the moment the DATA clears the bar, which
-# real trade volume (15-30 real IB/OR fires/day recently) suggests is a few weeks out, not months,
-# if the pattern holds.
+# CORRECTED SAME DAY (user caught 2 real methodology bugs): the first re-check used a 30-bar
+# smoothed backdrop average + tercile split, inconsistent with the RUN/HELD test's own measure
+# (at-touch compositeStrength) and bucketing (quartile) -- see scripts/lib/volbuildWalkforward
+# AtTouch.mjs's header for the full story. Corrected version is STRONGER, not weaker: genuinely
+# monotonic Q1-Q4 ($-7.28/$1.25/$10.17/$26.87), Q4 chronologically stable=true. Sole remaining
+# blocker is day-diversity: Q4 spans only 12 distinct days (67.2% from top 5) -- too day-thin to
+# wire yet, NOT a live gate/size factor. Standing promotion trigger (OPEN_DECISION
+# same_day_forming_volbuild_quartile_promotion_trigger): re-run weekly: promote to a real
+# size-multiplier factor once Q4 spans >=25 distinct days, day-clustering (top5DayPct) under 50%,
+# the split stays monotonic and chronologically stable, AND no negative chronological period.
+# This is a staleness-preventing weekly recompute, not a fixed-calendar wait -- promotes the
+# moment the DATA clears the bar, which real trade volume (15-30 real IB/OR fires/day recently)
+# suggests is a few weeks out, not months, if the pattern holds.
 /usr/bin/node scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs
 
 # PRIOR_DAY_OR_DEVELOPING (PD_POC/VAH/VAL, VWAP, pivots) volume-building fade-quality follow-up
-# (2026-09-01, "chase it" per user) -- CONFIRMED NEGATIVE as of first run: despite a much larger,
+# (2026-09-01, "chase it" per user) -- the SAME_DAY_FORMING correction above applies here too
+# (at-touch compositeStrength, quartile split, not the original smoothed-backdrop/tercile
+# version). CORRECTED RESULT: still NOT a clean positive -- U-shaped, not monotonic ($2.44/-$9.02/
+# -$6.01/$3.14), Q4 unstable (63.5% day-clustering) and declining over chronological thirds
+# ($9.30->$7.30->-$7.63). Genuinely INCONCLUSIVE, not confirmed-negative -- despite a much larger,
 # cleaner bar-level RUN/HELD signal for this family than SAME_DAY_FORMING has (RESEARCH_CLAIM
-# volume_building_run_held_by_level_formation_type, N=28,984, stable), no tercile bucket of real
-# fade P&L shows a usable edge (BOTTOM -$6.29, MID $0.49, TOP -$2.09, N=655) -- a real, if
-# counterintuitive, dissociation between "does the level mechanically break" and "does this
-# calibrated fade profit." Kept scheduled per this codebase's own no-dead-ends convention (same
-# treatment as the other CONFIRMED-negative entries in this file) rather than declared
-# permanently closed -- self-recalibrates as real N grows, in case the picture changes.
+# volume_building_run_held_by_level_formation_type, N=28,984, stable), no quartile bucket of real
+# fade P&L shows a decisive, stable edge either way. Kept scheduled per this codebase's own
+# no-dead-ends convention rather than declared permanently closed -- self-recalibrates as real N
+# grows. Do NOT re-run with yet another ad hoc bucket/measure choice hunting for a positive --
+# multiple-comparisons fishing risk already flagged once this thread.
 /usr/bin/node scripts/backtest_priorday_volbuild_walkforward.mjs
 
 echo "=== Weekly backtest run complete: $(date) ==="

@@ -1,46 +1,57 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-09-01 (in progress): SAME_DAY_FORMING volume-building fade filter re-verified, day-thin — standing weekly recheck wired
+## 🔶 2026-09-01 (in progress, methodology corrected mid-session): SAME_DAY_FORMING volume-building fade filter re-verified and STRENGTHENED, day-thin — standing weekly recheck wired
 
 User asked to forward-test/wire the parked `momentum_ctx_sameday_walkforward_stable` finding
 (docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b, original N=324, $11.95-12.19/trade, IB/OR
-family only) given real IB/OR trade N is now healthy (446 real fires/39 days). Re-verified at the
-current N via `scripts/backtest_ib_or_volbuild_walkforward_refresh.mjs` (reuses
-`computeVolumeBuildingMeasures`/`classifyLevelFormation` verbatim, walk-forward no-lookahead,
-150-trade warmup matching the original methodology exactly — caught and fixed a mismatch on the
-first run, 20 vs 150). **The original binary ACTIVE/QUIET median split weakened and lost
-stability** (gap $11.95→$3.59/trade, chronological thirds sign-flipped negative twice) — but a
-**tercile split** (bottom/mid/top of the prior-30-bar backdrop, same precedent as this codebase's
-existing DEFENDED/UNDEFENDED tercile convention) found the real effect concentrated in the TOP
-tercile specifically: N=90, EV=$18.06/trade, chronological progression $0.00→$36.10→$18.07 —
-**never negative, no real sign reversal** (an earlier "unstable" read was Claude's own bug —
-diluted the rigor check with zero-padded non-TOP rows instead of filtering to TOP-only first,
-caught by comparing against the correctly-computed per-third numbers). The real blocker is day
-diversity, not instability: only 12 distinct days make up the TOP-tercile population, 74.4% from
-the top 5. Wired as a **standing weekly recheck** (added to `run_weekly_backtests.sh`) rather than
-a one-off — `RESEARCH_CLAIM same_day_forming_volbuild_top_tercile_fade_quality` upserts fresh
-day-count/clustering/EV numbers every week; `OPEN_DECISION
-same_day_forming_volbuild_promotion_trigger` names the concrete bar (TOP tercile ≥25 distinct days,
-day-clustering <50%, no negative chronological period) — the script itself flags "PROMOTION BAR
-CLEARED" and sets `rigorStatus='CLEARS_PROMOTION_BAR'` the run it clears, rather than requiring
-anyone to re-derive day-counts by hand. Real IB/OR volume (15-30 fires/day recently) suggests this
-is realistically weeks, not months, away if the pattern holds.
+family only) given real IB/OR trade N is now healthy (446 real fires/39 days).
+
+**First pass** (smoothed 30-bar backdrop average, tercile split): binary median weakened/lost
+stability ($3.59/trade); a tercile split found a real, non-reversing top-tercile effect
+($18.06/trade, N=90) blocked only on day-diversity (12 distinct days).
+
+**User directly challenged the methodology** ("I thought we were testing using terciles? ... your
+very quick to discard when negative" / "it looks like you are terciling over a small timeframe")
+after the PRIOR_DAY_OR_DEVELOPING follow-up (below) came back looking like a clean negative on the
+first pass. Two real bugs, not just style: (1) the test measured a 30-bar **trailing average** of
+compositeStrength, not compositeStrength **at the touch bar itself** — a different variable than
+the one the large RUN/HELD test (N=36,848) actually found its signal with; (2) tercile split was
+inconsistent with that RUN/HELD test's own quartile bucketing, risking exactly the coarse-bucket-
+hides-a-real-effect failure this thread had already seen once (SAME_DAY_FORMING's binary split
+hiding what terciles revealed). **Corrected methodology (AT-TOUCH compositeStrength, quartile
+split, shared in `scripts/lib/volbuildWalkforwardAtTouch.mjs`) made the SAME_DAY_FORMING finding
+STRONGER, not weaker**: genuinely monotonic Q1→Q4 ($-7.28/$1.25/$10.17/$26.87), Q4 chronologically
+stable=true (was borderline before), progression $32.95→$30.24→$16.42. Still blocked only on
+day-diversity: Q4 spans 12 distinct days (67.2% from top 5), same constraint as before, need ≥25.
+Wired as a **standing weekly recheck** (`run_weekly_backtests.sh`) — `RESEARCH_CLAIM
+same_day_forming_volbuild_quartile_fade_quality` upserts fresh numbers weekly; `OPEN_DECISION
+same_day_forming_volbuild_quartile_promotion_trigger` (superseding the pre-correction version)
+names the concrete bar. Real IB/OR volume (15-30 fires/day) suggests weeks, not months, away.
 
 **Follow-up chased same session** (user: "yes chase it") — does the much larger, cleaner
 PRIOR_DAY_OR_DEVELOPING RUN/HELD signal (N=28,984, stable, `RESEARCH_CLAIM
 volume_building_run_held_by_level_formation_type`) translate into a real fade-quality edge for
-that family, the way a tercile split revealed one for SAME_DAY_FORMING above? Reused the same
-walk-forward methodology (extracted to a shared `scripts/lib/volbuildWalkforwardTercile.mjs` so
-both scripts share one implementation, not two hand-copies) on the 655 real PRIOR_DAY_OR_DEVELOPING
-fade trades. **Clean negative, not day-thin**: no tercile bucket shows a usable edge (BOTTOM
--$6.29, MID $0.49, TOP -$2.09), and the TOP tercile — where the RUN/HELD signal was cleanest —
-sign-flips across chronological thirds (-$8.09→$6.29→-$4.47) with 65.8% day-clustering.
-`RESEARCH_CLAIM prior_day_volbuild_top_tercile_fade_quality` (CONFIRMED negative). Genuine
-dissociation between "does the level mechanically break" and "does this specific calibrated fade
-profit" — the two questions don't transfer, even when one is answered very cleanly. Kept scheduled
-in `run_weekly_backtests.sh` per this codebase's no-dead-ends convention rather than declared
-permanently closed, in case more real N changes the picture — but do not re-attempt this exact
-connective test for this family without a genuinely different angle.
+that family? Reused the same shared walk-forward lib. **First pass looked like a clean negative**
+(no tercile bucket positive) — but this was the SAME flawed methodology (smoothed backdrop,
+tercile) that undersold SAME_DAY_FORMING, so declaring "CONFIRMED negative" off one bucketing
+choice was premature, exactly the pattern the user's pushback named. **Corrected version (at-touch,
+quartile) is still NOT a clean positive** — genuinely inconclusive, not confirmed either way:
+U-shaped, not monotonic ($2.44/-$9.02/-$6.01/$3.14), Q4 unstable (63.5% day-clustering) and
+*declining* over chronological thirds ($9.30→$7.30→-$7.63). A raw (non-walk-forward, in-sample
+only) top-decile check hinted at more promise (+$8.66/trade) but isn't trustworthy on its own —
+at this point 4 different cuts have been tried on the same historical data, and continuing to hunt
+for a positive cut is exactly the multiple-comparisons fishing this project's rigor culture exists
+to prevent. `RESEARCH_CLAIM prior_day_volbuild_quartile_fade_quality` (PROVISIONAL, genuinely
+inconclusive — not CONFIRMED negative, that status was walked back). Kept scheduled in
+`run_weekly_backtests.sh` per this codebase's no-dead-ends convention. **Do not re-run with yet
+another ad hoc bucket/measure choice** — if revisited, it needs real accumulating forward N via
+the weekly recheck, not a new cut chosen after seeing the data.
+
+**Process lesson, stated directly because it recurred**: don't declare a rigor check's result
+(positive OR negative) final after trying only one bucketing/measure choice, especially right
+after a different bucketing choice already proved decisive for a sibling test in the same session.
+Test consistency across related claims (did I use the same measure the other test that found the
+underlying signal used?) before trusting either a positive or a negative.
 
 ## ✅ 2026-09-01 (RESOLVED): idea D Step 5 built (too thin) + a large volume-building validation (user's idea) + a real Globex refire-cooldown gap found
 
