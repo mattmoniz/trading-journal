@@ -1,5 +1,31 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-01: what actually discriminates GLOBEX_VWAP_MAGNET/PD_VAH_FADE_SHORT refire outcomes — approach pace, a real lead
+
+User pushed back on the earlier refire-cooldown fix ("id hate to just mute something that is live
+rather than find out a more strict way to trade it") and asked directly: when these refiring
+setups DO work out, is it more volume, more confluence, something else? Tested 4 candidates via
+real AUC on the 58 real (`origin_status='ACTIVE'`) fires of `GLOBEX_VWAP_MAGNET_LONG/SHORT` +
+`PD_VAH_FADE_SHORT`: `confluence_score_at_detection` (AUC=0.462, noise), reconstructed
+`minutesSinceVisit`/freshness (AUC=0.554, weak — and structurally can't discriminate this
+population since 52/58 trades already share the same "just visited" status by construction of
+being refires), volume-building compositeStrength with full 58/58 bar-reconstructed coverage
+(AUC=0.477, noise — an initial N=14-coverage read of 0.625 was sampling noise from the live
+column's sparse population). **One real signal: approach pace** (points/bar over the 15 bars into
+the touch) — AUC=0.776, clean monotonic tercile WR (slow=15.0%/mid=40.0%/fast=66.7%),
+chronologically stable and strengthening ($13.67→$52.17→$105.93), 12 distinct days. Mechanistically
+sensible: a slow grind into a level suggests weak participation likely to chew through it; a sharp
+spike is the classic exhaustion-and-reverse pattern a fade wants. `RESEARCH_CLAIM
+approach_pace_discriminates_globex_refire_setups` (PROVISIONAL). **Real caveat**: dominated by
+`PD_VAH_FADE_SHORT` (N=14/18 in the fast tercile) — `GLOBEX_VWAP_MAGNET` itself only has N=2 per
+direction here, too thin to validate specifically for the setup type that started this thread.
+First-pass exploratory (N=58, single test), not yet a proper walk-forward backtest on the broader
+roster. `OPEN_DECISION build_approach_pace_entry_quality_filter` scopes the real next step: a
+proper backtest script on the full fade roster, then — if it holds — an actual entry-quality
+gate/size factor, not just a time-based cooldown. Does not replace the separate, already-flagged
+`OPEN_DECISION wire_refire_cooldown_into_detectglobexsetup` (the dead-config bug fix) — the two
+are complementary, not either/or.
+
 ## 🔶 2026-09-01 (in progress, methodology corrected mid-session): SAME_DAY_FORMING volume-building fade filter re-verified and STRENGTHENED, day-thin — standing weekly recheck wired
 
 User asked to forward-test/wire the parked `momentum_ctx_sameday_walkforward_stable` finding
