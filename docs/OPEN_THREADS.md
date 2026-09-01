@@ -1,5 +1,31 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): POC-rotation-JOIN promotion decided YES, build deferred as its own session
+
+Resolves `OPEN_DECISION poc_rotation_join_promote_to_live_setup_type`. Reviewed the actual
+detection mechanism (`detectSignalEvents()`, `scripts/backtest_poc_rotation_vbp.mjs`) before
+deciding — it's a genuine ZigZag-style leg/pivot detector with an incremental running-median
+fair-value tracker, not a simple level-touch check. Porting it into `acd.js`'s live 15s-poll
+detection loop safely is comparable in scope/risk to the VWAP-reclaim structural-stop build
+already deferred this session, not a quick wire.
+
+**Decision: yes, worth pursuing.** The base trade construction has real, independently-replicated
+confluence findings with somewhere to attach (ONH/ONL EV $21.18/trade N=335; WS1 EV $22.15/trade
+N=42) and the user has asked to wire this in multiple times. Not attempted this session — flagged
+the actual build as its own new decision (`poc_rotation_join_build_live_detector`) with the full
+5-step scope (port the detector live, pick/confirm the canonical exit, wire the confluence
+findings, SETUP_STATUS/OPTIMAL_STOP calibration, SHADOW-only per N<20) since "should we start" and
+"build it" are different questions.
+
+## 🔶 2026-09-01 (in progress): 3 more research items dispatched to Gemini
+
+`prefire_orderflow_touch_gate_candidate` (a genuine pre-entry order-flow filter pilot, reusing the
+live `volZ`/`oneSidedRatio` block `STACK_VOL_BREAK_LIVE` already uses), the liquidity-zones spec's
+"idea D" free census (`liquidity_zones_defended_levels_ideas_pending_test`), and day-type-
+conditioning the inherited-vs-same-day raw expansion signal
+(`volume_building_thread_untouched_angles_for_later`, sub-item a) — all dispatched together.
+Not yet returned; audit before trusting any number, per the standing rule.
+
 ## ✅ 2026-09-01 (RESOLVED): all 3 dtClass-gated sizing/standdown gates come back negative — extends the trend-gate finding
 
 Resolves `OPEN_DECISION dtclass_other_3_gates_untested`. The 2 combined Gemini dispatch tasks
