@@ -1,5 +1,33 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): all 3 dtClass-gated sizing/standdown gates come back negative — extends the trend-gate finding
+
+Resolves `OPEN_DECISION dtclass_other_3_gates_untested`. The 2 combined Gemini dispatch tasks
+finished with very different outcomes — audited both before trusting either.
+
+**Task 1 (dtClass gates) succeeded, after a real bug fix.** The delivered script
+(`scripts/backtest_dtclass_sizing_standdown_gates.mjs`) filtered its loss-streak lookback on
+`fired_at < candidate's fired_at` — a genuine lookahead bug (a prior trade that fired earlier but
+*resolved after* the candidate fired could get counted using an outcome that wasn't actually
+knowable yet). Fixed to `resolved_at <` before running. Result, real (`ACTIVE`/`SHADOW`) fade
+population N=1122, live-reassessment TREND reads 68.0% of the time (consistent with the
+already-established ~70.6% false-positive rate for touch-moment evaluation): **all 3 gates come
+back negative or unreliable** if swapped from the dead `dtClass` source to the live reassessment
+engine — TREND-day sizing penalty (delta -$187.95, N=763, not rigor-clean), OR-expansion bonus
+(delta +$125.90 but 98% day-clustered, not trustworthy), STAND DOWN filter (delta -$1534.80 across
+574 suppressed rows). **Do not wire any of the 3** — extends, rather than contradicts, the
+original 2026-08-03 `isTrendCounterFade` finding. Recorded as `dtclass_gate_a/b/c` RESEARCH_CLAIMs.
+
+**Task 2 (IB-range exit signal) failed audit, discarded rather than run.** Its script
+(`scripts/backtest_ib_range_exit_daytype_gated.mjs`) had 3 disqualifying problems: used $20/pt
+(full NQ) instead of this codebase's MNQ $2/pt (a direct hard-rule violation), no `computeRigor()`
+call despite explicit instruction, and the comparison itself didn't test the actual research
+question (compared average MFE points across buckets — a market-move measure, not what an actual
+hold-longer exit mechanism would capture; its own comments call it "very simple/a proxy for now").
+Deleted rather than left as a misleading starting point. `wire_intraday_ib_range_exit_signal`
+stays genuinely PENDING — re-flagged with the specific fixes a real rebuild needs (real $/pt
+constant, `computeRigor()`, an actual net-P&L delta comparison instead of an MFE-magnitude proxy).
+
 ## ✅ 2026-09-01 (RESOLVED): bar-10 stop-cushion checkpoint re-attempted at 8x larger population — real, no longer reverses
 
 Resolves `OPEN_DECISION trade_management_continuous_score_worth_reattempting`. Re-ran
