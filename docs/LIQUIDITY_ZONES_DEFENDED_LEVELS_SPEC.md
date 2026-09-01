@@ -1990,3 +1990,50 @@ floor, a real EV comparison needs its own N≥20 per arm (already-visited-partne
 cluster), which may still be thin; that decision's text scopes a SHADOW-tagging-first path as the
 likely near-term shape rather than a full live wire on day one.
 
+### 4.24 Step 5 built (N=20 descriptive, N=14 with resolved P&L, too thin) + a large independent validation via volume-building (2026-09-01)
+
+Built `scripts/backtest_liquidity_zones_idea_d_step5.mjs`, extending the rigorous Step 0 census
+with `clusterFreshFrac` and `clusterMaxAccepted` (idea C's `acceptedTimeFrac` applied per cluster
+member, reused verbatim). Population matches the census exactly (N=20) after fixing a real bug
+found during its own first run: casting `fired_at` to `::text` and re-parsing via `new Date(str)`
+hits a DIFFERENT naive-timestamp footgun than §4.23's — a non-ISO space-separated string parses as
+LOCAL time in V8, while node-pg's own timestamp parsing treats the same raw value as UTC-labeled —
+a 4hr shift that inflated `anchorAlreadyVisited` and starved the population to N=5 before the fix.
+Of the corrected N=20, only 14 have resolved P&L, and the 2×2 `confluenceCount`×`clusterFreshFrac`
+control lands 1-7 per cell — real, but too thin to be decisive. `RESEARCH_CLAIM
+liquidity_zones_idea_d_step5_full_build` (PROVISIONAL) recommends SHADOW-tagging to accumulate
+real N rather than a premature live wire.
+
+**Independent, much larger validation, at the user's suggestion**: does the already-live
+volume-building composite-strength signal (`server/services/touchQuality.js`, the same formula
+`acd.js` uses live) predict whether a level touch resolves RUN (consumed) vs HELD (defended)? This
+sidesteps idea D's N-starvation entirely by testing at bar-level scale rather than through the thin
+`active_setups`-conditioned population, matching this codebase's own "market behavior hypotheses go
+through bar history first" convention. Dispatched to Gemini, which produced a methodologically
+sound script but timed out (15min) on scale (479 dates × 78 levels). Claude audited it in full
+(catching zero methodology issues — the reused touch-ledger and imported `computeVolumeBuilding
+Measures`/`classifyVolumeBuilding` were correct), found and fixed a real performance bug (an
+O(session-length) backward walk per touch, redundant across thousands of touches sharing a
+session — replaced with an O(1) precomputed lookup, verified byte-identical output on the same
+5-date sample), and scoped the run to the most recent 120 trading days (a 5-date pilot alone
+already cleared N>2000, full 2.5yr history wasn't needed for power, and 120 distinct days makes
+the day-clustering check meaningful where 5 days is 100% clustered by construction).
+
+**Result: real, large, stable.** N=36,848 scoreable touches (RUN=4,973/HELD=31,875) across the
+full 78-level universe. RUN rate rises monotonically with compositeStrength: pooled 6.5%→24.5%
+across quartiles; **holds independently in both RTH (N=8,682, 5.8%→15.9%→14.7%) and Globex
+(N=28,166, 2.8%→24.4%, cleanly monotonic)** per this codebase's RTH/Globex hard rule. Chronological
+stability (`computeRigor`): stable across thirds in all 3 splits. Day-clustering: 10.4%/17.2%/11.1%
+(pooled/RTH/Globex) — genuinely diverse, not a few chop days driving it. `RESEARCH_CLAIM
+volume_building_strength_predicts_level_run_vs_held` (CONFIRMED).
+
+**Important caveat, not to be skipped**: this validates a MARKET-BEHAVIOR fact (levels with high
+order-flow buildup are more likely to break), not directly that filtering the existing fade roster
+by this measure improves WR/EV — a more direct connective test of exactly that (compositeStrength
+as a fade-roster P&L filter) was already tried and rejected as a blanket rule in
+`docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md` (opposite-signed within-family results). This
+finding is a stronger, more targeted behavioral test (RUN/HELD directly, not realized P&L which
+depends on family-specific stop/target placement) and reinforces the liquidity-zones concept's
+validity — but is not license to re-attempt the already-rejected blanket P&L filter without first
+addressing why that one failed by family.
+

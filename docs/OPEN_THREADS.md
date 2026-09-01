@@ -1,5 +1,57 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): idea D Step 5 built (too thin) + a large volume-building validation (user's idea) + a real Globex refire-cooldown gap found
+
+**Idea D Step 5** (`scripts/backtest_liquidity_zones_idea_d_step5.mjs`): extends the Step 0 census
+with `clusterFreshFrac`/`clusterMaxAccepted`. N=20 matches the census exactly after fixing a real
+bug (a different naive-timestamp footgun than the one below — `fired_at::text` + `new Date(str)`
+parses as local time in V8 vs node-pg's UTC-labeled native parsing, a 4hr shift that starved the
+population to N=5 before the fix). Only 14 of 20 have resolved P&L, split 1-7 per 2×2 cell — too
+thin to be decisive. `RESEARCH_CLAIM liquidity_zones_idea_d_step5_full_build` (PROVISIONAL).
+
+**Volume-building cross-check** (the user's own idea — "can we use volume build work to help
+verify liquidity zones"): does volume-building composite strength at a level touch predict RUN
+(consumed) vs HELD (defended)? Dispatched to Gemini; it produced a correct script but timed out
+(15min, 479 dates × 78 levels is genuinely heavy). Claude audited it in full, found and fixed a
+real performance bug (O(session-length) backward walk per touch → O(1) precomputed lookup,
+verified byte-identical output before trusting the fix), scoped to the most recent 120 trading
+days, and ran it for real: **N=36,848 scoreable touches, RUN rate rises monotonically with
+compositeStrength (pooled 6.5%→24.5%), holds independently in both RTH and Globex, chronologically
+stable, not day-clustered (10-17%)**. `RESEARCH_CLAIM
+volume_building_strength_predicts_level_run_vs_held` (CONFIRMED) — a real, large, independent
+validation of the liquidity-zones concept, though a caveat applies: this is a market-behavior
+finding, not license to re-run the already-rejected blanket fade-roster P&L filter using the same
+measure. Full writeup: `docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md` §4.24.
+
+**Separate, unrelated finding surfaced mid-session** (user noticed a real dashboard pattern —
+`GLOBEX_VWAP_MAGNET_LONG` firing 9 times in 2.5hrs, mostly losers): `REFIRE_COOLDOWN_MINUTES=30`
+exists in `acd.js` for `GLOBEX_VWAP_MAGNET_LONG/SHORT` but is **never consulted by
+`detectGlobexSetup()`** (the function that actually fires them) — that function has its own,
+narrower re-arm check (blocks a refire only if the prior trade resolved in under 3min, a bad-tick
+filter, not a time-since-resolution cooldown). Confirmed via real `origin_status='ACTIVE'` trade
+data: every refire in the flagged cluster fired 2-11 minutes after the prior resolution, not 30.
+Tested whether to broaden the fix to all Globex setup types — **no**: most (`PD_POC_FADE_LONG/
+SHORT`, `GLOBEX_VWAP_FADE_LONG`, `PD_VAL_FADE_LONG`) have never refired within 30min in real
+trading history at all. Two real candidates: `GLOBEX_VWAP_MAGNET_LONG/SHORT` (design-intent
+matches, but its entire real history is only 12 trades across 3 days — too thin to prove refiring
+itself is the problem vs. the setup being weak overall) and `PD_VAH_FADE_SHORT` (not currently in
+the cooldown map, but a real, 24-distinct-day negative: refire WR 25.0%/EV -$16.50 (N=12) vs.
+baseline WR 53.6%/EV +$8.23 (N=28)). An apparent 84-fire single day (2026-07-29) turned out to be
+stale `SHADOW`-only flooding predating the 2026-08-20 `SHADOW_NOISE_SUPPRESSION_MINUTES` fix for
+exactly this pattern — excluded from the real analysis. `RESEARCH_CLAIM
+globex_refire_within_30min_penalty_by_setup_type` (PROVISIONAL). Recommended fix (not yet shipped
+— live entry-gating change, needs explicit go-ahead): wire `detectGlobexSetup()` to consult
+`isInRefireCooldown()`/`REFIRE_COOLDOWN_MINUTES` for `GLOBEX_VWAP_MAGNET_LONG/SHORT`, and add
+`PD_VAH_FADE_SHORT` to that map. `OPEN_DECISION wire_refire_cooldown_into_detectglobexsetup`.
+
+**Also flagged, not yet designed**: user's own idea for a "dip absorption speed" signal (does a
+small adverse move get bought/sold back quickly and repeatedly, as a stay-in-the-trade signal) —
+distinct from liquidity zones (dynamic in-trend behavior, not static level defense), closer to the
+existing exit-management/runner thread. Real scoping gap found immediately: this codebase has no
+volume-bar/tick-bar data source, only 1-minute time bars — the user's own reference granularity
+(500/1000-volume bars) doesn't exist here today. `OPEN_DECISION
+adverse_move_absorption_speed_runner_signal`.
+
 ## ✅ 2026-09-01 (RESOLVED): liquidity-zones idea D census contradiction reconciled — a 3rd SQL bug, not a real negative
 
 Resumed after a context clear left `OPEN_DECISION liquidity_zones_idea_d_census_contradiction`
