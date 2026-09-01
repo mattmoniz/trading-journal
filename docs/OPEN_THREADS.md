@@ -1,5 +1,59 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): RTH VWAP_MAGNET's "stable loser" reading was a short-history artifact, not real
+
+Resolves `OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained` (open since 2026-08-04).
+The original finding compared `GLOBEX_VWAP_MAGNET_LONG` (real, strengthening edge, ~3.5yr
+reconstruction) against RTH `VWAP_MAGNET_SHORT` (a "stable loser across all 3 chronological
+thirds") at the same S=100/T=60 configuration — an unexplained session-dependent flip. The RTH
+side's reconstruction depended on `getTrailingVwapStd()`, which reads `session_analysis.close_vs_vwap`
+— only ~109 real days deep (back to 2026-03-25), nowhere near the Globex side's ~3.9yr
+`price_bars_primary`-derived history.
+
+Built `getTrailingRthVwapDists`/`getTrailingRthVwapStdFullHistory` (`server/services/queries.js`)
+— the RTH-bar equivalent of the Globex helper, computing the same quantity directly from
+`price_bars_primary`'s full history instead of the short table. Verified byte-identical to
+`session_analysis.close_vs_vwap` on 5 overlapping dates before trusting it. Re-ran the identical
+S=100/T=60 reconstruction both ways in the same pass (`scripts/backtest_vwap_magnet_rth_extended_window.mjs`):
+
+| | N | Mean P&L | SHORT | Rigor |
+|---|---|---|---|---|
+| Old (109-day window) | 271 | +$2.28 | **-$15.10/trade** | not stable/clean |
+| New (3.9yr window) | 747 | +$18.19 | **+$20.44/trade** | stable, clean |
+
+With 2.75x the data, RTH `VWAP_MAGNET_SHORT` flips from a "stable loser" to the strongest leg of
+the comparison. **Neither original hypothesis (a: real session mechanism / b: no mechanism, be
+skeptical of Globex too) was right — the actual answer is (c): the RTH-loser reading was itself a
+short-history statistical artifact**, exactly as the original decision's own text speculated might
+be the case. Recorded as `RESEARCH_CLAIM vwap_magnet_rth_extended_window_reconstruction`
+(PROVISIONAL — single-script, not yet independently re-verified). Does not by itself explain
+Globex's strengthening z-trend (a separate, still-open question) — isolates that the RTH side
+specifically was the artifact. New functions are backtest/reconstruction-only, not wired into any
+live path — `getTrailingVwapStd` (the live threshold source) is unchanged.
+
+## ✅ 2026-09-01 (RESOLVED, not promoted): 2-lot scale-out with breakeven-minus-5 runner — closed against the corrected baseline
+
+Resolves `OPEN_DECISION twolot_scaleout_breakeven_minus5_runner_scoped_20260831`. The 2026-08-31
+second-pass headline (+$7.63/trade) compared the mechanism against a synthetic "exit-all-no-runner"
+strawman, not the user's actual current strategy — the second pass's own text had already computed
+an `exactBe` reference arm (2-lot, exact-breakeven runner) without promoting it to primary. Doing
+that promotion: **delta beMinus5 vs exactBe is only +$1.39/trade at T1=12pt**, and **negative at 3
+of the other 4 T1 candidates** (T1=16: -$0.34, T1=20: -$1.18, T1=30: -$0.41; T1=24: +$0.19 near
+zero). Most of the original edge was a structural-baseline artifact (beating giving-up-the-runner-
+entirely, not beating what's actually already being done).
+
+**Independent re-verification**: dispatched to Gemini with an explicit instruction to build a
+fresh implementation blind to the existing script. Gemini's independent build
+(`scratch/reverify_be_minus5.mjs`) corroborated the qualitative result (+$2.30/trade at T1=12,
+thin/mixed-sign elsewhere) — audited the actual script (not just the writeup) and confirmed it
+independently arrived at the same same-bar-ambiguity handling and the same real-`stop_level`
+design choice without having seen this codebase's code, genuine convergent validation.
+
+**Conclusion: closed, not built.** The real edge over the user's actual strategy is too thin and
+not robust across the T1 neighborhood to justify live/SHADOW execution plumbing. `docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`
+updated with a "Third-pass result — CLOSED" section; `OPEN_DECISION twolot_scaleout_generalize_to_other_setups`
+(the deferred "apply this elsewhere" question) is now moot for this specific mechanism.
+
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
 ## ✅ 2026-09-01 (RESOLVED): breakeven-trail 5-of-6-uncalibrated decision closed; contaminated `B_FLOOR_S1_FADE_LONG` row nulled

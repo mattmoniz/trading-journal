@@ -1,5 +1,12 @@
 # 2-Lot Scale-Out with a Breakeven-Minus-5 Runner (2026-08-31)
 
+**Status: CLOSED 2026-09-01, not promoted.** Resolves `OPEN_DECISION
+twolot_scaleout_breakeven_minus5_runner_scoped_20260831`. The headline second-pass number below
+(+$7.63/trade) compared beMinus5 against a synthetic "exit-all-no-runner" strawman baseline, not
+the user's actual current strategy — see "Third-pass result" below for the corrected comparison
+and why this mechanism is closed as a tested, honest negative-ish result rather than built/wired.
+Second-pass detail preserved below for history/methodology reference.
+
 **Status: SECOND-pass bar-by-bar backtest run, both open questions user-confirmed, PROVISIONAL
 result recorded** — `scripts/backtest_twolot_scaleout_be_minus5.mjs`, `RESEARCH_CLAIM
 twolot_scaleout_be_minus5_orshort_structural` (supersedes the first-pass
@@ -7,6 +14,32 @@ twolot_scaleout_be_minus5_orshort_structural` (supersedes the first-pass
 placeholder runner target). User confirmed both Open Questions 2 and 4 the same day: runner
 arms to BE-minus-5 the **instant** Lot 1 fills, and the runner's target is a **real structural
 level**, not the setup's own tight target. See "Second-pass result" below.
+
+## Third-pass result (2026-09-01) — corrected baseline, independently re-verified, CLOSED
+
+The second pass's own text (below) already flagged that `exactBe` — not exit-all-no-runner — is
+the user's actual current strategy, and had computed it as a reference arm without promoting it
+to primary. Doing that promotion is what this pass is: **delta beMinus5 vs exactBe is only
++$1.39/trade at T1=12pt** (vs the headline +$7.63 against the strawman), and **negative at 3 of
+the other 4 T1 candidates** (T1=16: -$0.34, T1=20: -$1.18, T1=30: -$0.41; T1=24: +$0.19, near
+zero). Most of the original headline number reflects beating a strawman (giving up the runner
+entirely), not beating what's actually already being done.
+
+**Independent re-verification** (the other still-open item): dispatched to Gemini with an
+explicit instruction to build a fresh implementation blind to this script's code, not rerun it.
+Gemini's independent script (`scratch/reverify_be_minus5.mjs`) found the same qualitative result:
++$2.30/trade at T1=12, thin/mixed-sign at the other 4 candidates. Audited the actual script (not
+just its prose summary) — it independently arrived at the same same-bar-ambiguity handling (skip
+runner evaluation on the bar Lot 1's target fills) and the same real-`stop_level`-for-Lot-1 design
+choice, without having seen this codebase's script — genuine convergent validation from two
+different implementations, not the same bug reproduced twice.
+
+**Conclusion: do not build live/SHADOW execution plumbing on this finding.** The real edge over
+the user's actual current strategy is thin, positive mainly at one T1 candidate, and not robust
+across the T1 neighborhood. This is a tested, honest negative-ish result — not ruled out entirely
+(a small real edge at T1=12 may exist), but not strong enough to justify building anything. Worth
+revisiting only if a future pass finds a target-selection variant with a robust vs-exactBe edge
+across multiple T1s, not just one.
 
 ## Second-pass result (2026-08-31) — structural runner target, both open questions resolved
 

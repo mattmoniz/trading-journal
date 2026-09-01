@@ -346,6 +346,64 @@ export async function getTrailing24hrVwapStd(date, days = 30, sigmaMult = 1.5) {
   return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
 }
 
+/**
+ * RTH-session-bar-derived rolling VWAP distance — the RTH sibling of
+ * getTrailingRthVwapDists's Globex cousin (getTrailing24hrVwapDists above), built
+ * 2026-09-01 to resolve OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained's
+ * named confound: getTrailingVwapStd() (used live by RTH VWAP_MAGNET) reads
+ * session_analysis.close_vs_vwap, which only goes back to 2026-03-25 (~109 real days,
+ * confirmed live 2026-09-01) — nowhere near price_bars_primary's real ~3.9yr NQ history
+ * (back to 2022-12-14) that the Globex sibling's calibration draws from. This function
+ * computes the same quantity (RTH session close minus RTH session VWAP, matching
+ * patternScannerService.js's scanSession() BETWEEN 570 AND 959 window and HLC/3 volume
+ * weighting exactly) directly from price_bars_primary, so a longer, non-session_analysis-
+ * limited RTH reconstruction can be built and compared against the existing short one —
+ * NOT wired into any live path, this is a backtest/reconstruction-only helper. Does not
+ * replace getTrailingVwapStd's live threshold (still deliberately session_analysis-backed,
+ * unchanged) — this is for reconstructing history further back than that table allows.
+ */
+export async function getTrailingRthVwapDists(date, days = 30) {
+  const ck = `mb:rthVwapDists:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
+  const DAY_CACHE_TTL = 12 * 60 * 60 * 1000;
+  const bulkRes = await query(`
+    SELECT ts::date::text as d, high::float, low::float, close::float,
+           volume::bigint as vol
+    FROM price_bars_primary WHERE symbol='NQ'
+      AND ts::date >= $1::date - $2::int AND ts::date < $1
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts`, [date, days]).catch(() => ({ rows: [] }));
+  const byDay = new Map();
+  for (const b of bulkRes.rows) {
+    if (!byDay.has(b.d)) byDay.set(b.d, []);
+    byDay.get(b.d).push(b);
+  }
+  const dists = [];
+  for (const [, dayBars] of byDay) {
+    if (dayBars.length < 30) continue; // matches scanSession()'s own thin-day guard
+    let pv = 0, v = 0;
+    for (const b of dayBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
+    const vwap = pv / v;
+    const closePrice = dayBars[dayBars.length - 1].close;
+    dists.push(closePrice - vwap);
+  }
+  return cacheSet(ck, dists, DAY_CACHE_TTL);
+}
+
+/**
+ * Rolling RTH VWAP-distance std over the FULL price_bars_primary history — see
+ * getTrailingRthVwapDists's header. Same threshold formula (max(50, std*sigmaMult)) as
+ * getTrailingVwapStd/getTrailing24hrVwapStd for direct comparability.
+ */
+export async function getTrailingRthVwapStdFullHistory(date, days = 30, sigmaMult = 1.5) {
+  const vals = await getTrailingRthVwapDists(date, days);
+  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+  const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+  return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
+}
+
 // ── Trading-day-array gap guard ──────────────────────────────────────────────
 // Added 2026-08-31 (OPEN_DECISION price_bars_primary_systemic_quarterly_data_gap). Root cause
 // confirmed by direct query: price_bars_dedup_hist (the historical branch price_bars_primary's
