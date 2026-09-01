@@ -1,5 +1,32 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): GLOBEX_FLUSH missed a real ~530pt overnight move — 2 real bugs found and fixed
+
+User asked "did we catch the overnight drop?" — investigation of a genuine ~530pt NQ move
+(2026-08-31 evening into 2026-09-01 morning) found `GLOBEX_FLUSH_LONG/SHORT/REVERSAL_LONG/
+REVERSAL_SHORT` fired **zero** times despite this being exactly the mechanism built to catch this
+shape of move. Two real, distinct bugs, found in sequence (the first hypothesis was wrong and
+corrected before shipping anything):
+
+1. **Restart fragility** (`server/services/globexFlushDetector.js`) — the armed departure state
+   lived only in an in-memory module variable across the ~17hr overnight watch window, no DB
+   persistence. 339 `SERVER_SHUTDOWN` events in the 7 days checked — restarts are routine in this
+   codebase's dev workflow, never a rare edge case. Fixed by removing the cache and re-deriving
+   the departure fresh from real bar/level history every poll, matching `rthFlushDetector.js`'s
+   own already-restart-safe design (RTH never caches its trigger at all).
+2. **Narrow trigger window** — the actual explanation for last night, found *after* first
+   wrongly concluding bug #1 alone explained it (a manual check used the wrong day's PD_VAH,
+   caught before it shipped). The departure check only looked in a fixed 30-minute window right
+   at RTH close (4:00-4:30 PM ET) — last night's real value-area break didn't happen until
+   **10:35 PM ET**, ~6 hours after that window closed, structurally invisible regardless of
+   server uptime. Widened to check the full overnight watch period (4 PM through 9:30 AM).
+
+**Retroactively verified against real data**: the fixed logic now correctly finds the DOWN
+departure at 22:35 ET and would have fired `GLOBEX_FLUSH_SHORT` at 22:42 ET (entry 29436.75) —
+well ahead of the continued slide to ~29040. Server restarted, healthy, `test_invariants.mjs`
+shows no regressions from this change (one new unrelated FAIL, confirmed pre-existing calibration
+drift on `IB_HIGH_FADE_SHORT`, zero code overlap with the touched file).
+
 ## ✅ 2026-09-01 (RESOLVED): POC-rotation-JOIN promotion decided YES, build deferred as its own session
 
 Resolves `OPEN_DECISION poc_rotation_join_promote_to_live_setup_type`. Reviewed the actual
