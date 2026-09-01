@@ -36,6 +36,20 @@ work closed out. Several distinct findings, all independently re-verified:
   ($18.79 vs $54.27) — extends `docs/COMPRESSION_TAIL_MFE_SPEC.md`'s existing finding that wide
   mornings predict chop, not clean trend. No early-warning-based exit adjustment is justified.
   Recorded as `RESEARCH_CLAIM setup_d_monster_day_predictors_corrected_still_negative`.
+- **Follow-up, the strongest lead found all session**: does OR range COMBINED WITH relative
+  volume (RVol) predict something the monster-day screen missed? `scripts/backtest_setup_d_range_rvol_combo.mjs` —
+  splitting into quadrants (OR range vs its own median) × (RVol vs its own median), the
+  "HIGH range + HIGH RVol" bucket is the worst by a wide margin (avg PnL -$9.65, N=31, contains
+  9 of the 11 real monster days) vs "LOW range + LOW RVol" (+$69.09, N=29) at a 20-day RVol
+  window. **Deliberately swept 5 RVol lookback windows (10/15/20/25/30 days) before trusting
+  any single one** — the user's own habitual 10-day convention initially showed this, then
+  reversed sign under a chronological-stability check (first-half direction flipped). Sweeping
+  the neighborhood found 15/20/25/30-day all agree (same direction in BOTH chronological
+  halves), only the thinnest (10-day) window disagrees — consistent with 10-day being the noisy
+  outlier, not the true answer. This is the one filter idea from today that survived a genuine
+  robustness check across parameter choices, not just one lucky number. Recorded as
+  `RESEARCH_CLAIM setup_d_range_rvol_combo_robust_across_windows` (PROVISIONAL — still needs
+  real forward SHADOW confirmation before hardening into a live filter).
 - Real full-population NQ daily range check (not just Setup-D-triggering days): mean 317pt,
   median 275pt across all 449 trading days — confirms the user's own instinct that daily range
   typically runs north of 300, with a real fat right tail (max 1,620pt) pulling the mean up.
