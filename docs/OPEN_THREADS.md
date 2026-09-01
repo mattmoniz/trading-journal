@@ -83,10 +83,31 @@ ATR-low, bullish ones tend to fall short of the ATR-high — a directional bias,
 Recorded as `RESEARCH_CLAIM setup_d_atr_weekly_level_exit_negative` (CONFIRMED). User's own take:
 "ATR gives a general target but not spot on" — consistent with the data.
 
-**In progress**: two more specific claims — a bearish minimum-continuation floor ("~200pt
-minimum" once volume-building is confirmed sustained) and a bullish bimodal pattern ("shoots up
-quickly OR grinds up all day" rather than one continuous spread) — dispatched to Gemini, result
-pending.
+**Bearish floor / bullish bimodality claims, tested and closed out**: the claimed "~200pt minimum"
+for bearish drives once volume-building is confirmed sustained is false — even the top-tercile
+building subset shows median MFE only ≈119pt (N=16, thin), with 200+ reached by roughly the top
+15-25% of cases, not a floor. The "shoots up quickly OR grinds up all day" bullish pattern is real
+but not in the way floated — fast-peaking drives (<60 bars) are typically the SMALLER moves
+(median ≈60pt, N=21), slow-grinding ones (≥180 bars) the bigger ones (median ≈118pt, N=11, thin) —
+different-sized outcomes, not two equal paths to the same result.
+
+**Exit-mechanism comparison, tested and closed out**: a proper fixed-target sweep, the already-live
+breakeven-trail runner, and the already-live wider-target-on-fast-arrival mechanism (both reused,
+not reimplemented) were all tested against the current live 159/80 on this exact population, with
+one real bug caught and fixed along the way (a walk-loop off-by-one vs this codebase's own
+`resolve()` convention — made zero practical difference once corrected, since 1-min bar ranges are
+far smaller than these stop/target distances). Breakeven-trail is a clear loser (-$21 OOS,
+confirms it's a mean-reversion-tuned mechanism, a category error here). Wider-target is a wash
+(effectively identical to baseline; this setup develops too slowly for the mechanism's own
+fast-arrival assumptions to even engage). A tighter fixed target initially looked like a small
+win but its own OOS thirds are decaying badly ($171→$78→**-$104**) — not trustworthy. **No change
+made** — the live 159/80 stands, nothing tested earns the right to replace it. Recorded as
+`RESEARCH_CLAIM setup_d_exit_mechanism_comparison_negative` (CONFIRMED).
+
+**In progress**: a wider, stability-checked fixed-target sweep (60-250pt, checking chronological
+thirds this time, not just raw OOS EV) and a genuine re-entry test (does price keep running enough
+after an exit — stop, target, or expiry — to justify a mechanical re-entry, split by which kind of
+exit preceded it) — dispatched to Gemini, result pending.
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
