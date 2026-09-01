@@ -1,5 +1,26 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED, clean negative): post-stop price continuation / order-flow imbalance as a refire quality signal
+
+User's idea, prompted by a real chart showing sustained one-sided cumulative delta: after a
+stop-out, does what price/order-flow actually did in the window between the stop and a same-type
+refire predict the refire's outcome — was the move that caused the stop CONTINUING (real momentum
+against the fade) or reverting/fizzling (more legitimate re-test)? Two direction-aware measures,
+independent of the already-confirmed-negative `displacement_since_last_visit_fade_quality` test
+(that one used generic magnitude; this one specifically tracks further movement in the failed
+trade's own adverse direction, plus order-flow imbalance over the same window). Tested on real
+(`origin_status='ACTIVE'`) same-type refires specifically after a `STOP_HIT` (not after a win),
+N=156 across 21 distinct days (top5DayPct=55.1%, thin-ish but not disqualifying). **Clean
+negative**: post-stop continuation AUC=0.516, post-stop order-flow imbalance AUC=0.516 — both
+indistinguishable from chance. Tercile spread (T3 EV=$14.67 vs T1/T2 both negative) looked
+suggestive but isn't a real monotonic relationship given the AUC — consistent with noise, not a
+graded effect. Formation-type breakdown (`SAME_DAY_FORMING` LOW-cont EV=$0.17 vs HIGH-cont
+EV=-$8.42, N=18/26) is directionally interesting but too thin to trust on its own. `RESEARCH_CLAIM
+postloss_aggression_predicts_refire_outcome` (PROVISIONAL, 30-day recheck). Script:
+`scripts/backtest_postloss_aggression_refire.mjs`. Approach pace (below) remains the one validated
+lead from the whole refire-quality investigation; this closes out the last of the user's proposed
+angles on it.
+
 ## 🔶 2026-09-01: what actually discriminates GLOBEX_VWAP_MAGNET/PD_VAH_FADE_SHORT refire outcomes — approach pace, a real lead
 
 User pushed back on the earlier refire-cooldown fix ("id hate to just mute something that is live
