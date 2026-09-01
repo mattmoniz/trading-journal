@@ -1,5 +1,50 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): 4 more backlog items closed — exit-mechanism family, VWAP_RECLAIM_SHORT, 18-script cron audit
+
+Continuation of the same-session backlog-clearing pattern, same "check for newer superseding work
+before redoing anything" discipline throughout.
+
+- **`exit_logic_family_holistic_reassessment_20260818`** — RESOLVED. Verified, both in code and
+  empirically against the DB, that the 4 independently-built exit-timing mechanisms (bar6,
+  wider-target, slow-deep-early-exit, breakeven-trail) cannot produce contradictory signals on the
+  same trade: bar6 is purely informational (never changes resolution), slow-deep isn't wired live
+  at all, and `wider_target_mult`/`runner_trail_width` (the 2 that DO change resolution) are
+  mutually exclusive by design at every one of 5 INSERT sites checked — confirmed empirically, 0
+  of 1600 real `wider_target_mult` rows and 0 of 3 real `runner_trail_width` rows ever co-occur.
+  bar6's cutoff re-check is already tracked separately (`verify_bar6_exit_recommended_live`).
+  Sharing machinery between slow-deep and bar6 is deferred until slow-deep clears CONFIRMED
+  (still PROVISIONAL, unwired). Breakeven-trail is worth keeping scheduled — `PD_POC_FADE_SHORT`
+  already graduated to real calibration earlier this same session.
+- **`vwap_reclaim_short_structural_stop_not_yet_built`** — decision point RESOLVED (build itself
+  deferred as new decision `vwap_reclaim_short_build_structural_stop`). Real forward SHADOW data
+  has accumulated (N=20, right at the N≥20 trigger this decision set): EV=-$39.78 to -$43.58/trade,
+  WR 19-25%, `SETUP_STATUS`=THIN_N, all 3 chronological thirds negative — the fixed-point-stop
+  simplification is underperforming badly vs. Phase 1's validated structural-stop prediction
+  (EV=+$5.96/trade). Per the decision's own pre-stated logic, this means: yes, build the real
+  structural-stop resolution path. Not attempted this session — genuine risk to a shared,
+  heavily-loaded function (`resolveSetupsByPrice()`), deserves its own dedicated, reviewed session.
+- **`roadmap_phase0_18_scripts_need_recordclaim_wiring`** — RESOLVED. Individually inspected all
+  18 scripts. None actually need `recordClaim()`/cron wiring — they're one-time diagnostics (2
+  literally self-labeled "one-off, not scheduled" / "INCONCLUSIVE" in their own header comments)
+  whose findings are already superseded by later, more current live-wired work (bar6 mechanism,
+  BIGMOVE_LIVE_SIGNAL, the current flagship 1yr prop-walkthrough script, the closed candle-pattern
+  spec) or already fed into the standard `SETUP_STATUS` pipeline. Caveat: categorization based on
+  documented history + each script's own comments, not a line-by-line status re-verification of
+  all 18 `RESEARCH_CLAIM` rows.
+
+## 🔶 2026-09-01 (in progress): 2 dtClass-gated backtests + IB-range exit signal, dispatched to Gemini
+
+`dtclass_other_3_gates_untested` (the 2 remaining sizeMultiplier/standDown gates keyed on the
+permanently-null `dtClass` — freshly relevant after today's sizeMultiplier audit independently
+confirmed `dtClass` is NULL on 63/63 real fires) and `wire_intraday_ib_range_exit_signal`
+(compression-based exit timing, needs day-type as a REQUIRED live condition, not the dead
+end-of-day column the original test used) both need the same live day-type reassessment engine
+(`dayTypeReassessmentService.js`/`computeCase()`) and the same rigor discipline as the
+already-resolved `backtest_trend_gate_suppression.mjs`. Dispatched together to Gemini
+(2026-09-01) with explicit instruction to reuse that exact pattern, not reimplement. Not yet
+returned — check back before trusting any number, per the standing audit-Gemini-output rule.
+
 ## 🔶 2026-09-01: sizeMultiplier composite redesign Phase 0 — critique overturns the spec's own premise, redirected
 
 `OPEN_DECISION sizemultiplier_composite_redesign_scoped_pending_review` — dispatched
