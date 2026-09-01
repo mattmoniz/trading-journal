@@ -1,5 +1,7 @@
 # Open Threads / Pending Work
 
+Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+
 ## 🔶 2026-08-31: Setup D (OPENING_DRIVE_15MIN) Stage 2 — a real, currently 100%-forfeited opportunity found; discriminator screen in progress
 
 Follow-up to the (resolved, below) IB_BULLISH/IB_BEARISH thread — user's redirect: "figure out
@@ -68,6 +70,23 @@ validated on a different family earlier this session) is the more promising next
 tested on this specific setup. Sizing-up this setup (user's own suggestion, given its rarity) is
 reasonable in principle but premature before real forward SHADOW data exists to size against —
 revisit once it does.
+
+**Exit-mechanism follow-ups, all tested and closed out this session** (user: "test all avenues"):
+velocity (magnitude/time-to-break) added nothing beyond drive magnitude as a discriminator or MFE
+predictor (test AUC ≈ random). A fixed multiple of the trailing-20-day 1-min-bar-range as an
+ATR-scaled target/stop lost decisively to the current fixed 159/80 both in-sample and OOS. A
+precisely-confirmed Sierra Chart "ATR Ranges" level (read directly from the user's own study
+settings: session-open ± 10-session RTH ATR) does NOT reliably pin the real MFE — spread over 200
+points in the middle 50% of trades — nor does a prior-week high/low for overshoots (N=20, same
+problem). One real, smaller pattern did emerge: bearish big-break drives tend to reach/exceed the
+ATR-low, bullish ones tend to fall short of the ATR-high — a directional bias, not a magnet.
+Recorded as `RESEARCH_CLAIM setup_d_atr_weekly_level_exit_negative` (CONFIRMED). User's own take:
+"ATR gives a general target but not spot on" — consistent with the data.
+
+**In progress**: two more specific claims — a bearish minimum-continuation floor ("~200pt
+minimum" once volume-building is confirmed sustained) and a bullish bimodal pattern ("shoots up
+quickly OR grinds up all day" rather than one continuous spread) — dispatched to Gemini, result
+pending.
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
@@ -1584,28 +1603,6 @@ dominate it.
 `poc_rotation_` prefix). Full scope doc, still accurate for the mechanics:
 [docs/POC_ROTATION_VBP_SPEC.md](POC_ROTATION_VBP_SPEC.md).
 
-## ✅ 2026-08-23: POC convergence → tradeable directional setup — full arc resolved, confirmed negative
-
-Continuation of the real-tick-paused entry above. With the tick pipeline stuck on host-level WSL2 instability (not this codebase's fault, see that entry), work continued on the lighter 1-min-bar approximation instead — but first the same `med50` fix (volume-weighted median instead of raw POC/argmax as the primary convergence statistic — see the real-tick entry for why the argmax teleports) was ported into `scripts/backtest_poc_volume_bar_convergence_pilot.mjs` (v3). Result: real, credible numbers this time (bucket thresholds 21-38pt, not collapsing to the tick floor; 500v and 1000v giving genuinely different, not suspiciously identical, results) — convergence on ~85% of test days, but only N=11 total, no distinguishable raw-movement signal (too thin to call decisively either way).
-
-**User then supplied the actual trading rule**, first via a real chart screenshot (a separate 65-point "rotation" volume profile, held for a later thread) and then precisely in words: it's not the static position of the two POCs relative to each other — it's **both the RTH-developing and 24hr-inclusive volume-weighted medians migrating the *same direction* into a meeting point that coincides with current price**: both declining into price → support → long; both rising into price → resistance → short.
-
-**DeepSeek designed the full pipeline this needed** (`scratch/deepseek_poc_convergence_setup_design_review.md`) — the exact directional rule (`k=10`-checkpoint lookback, both medians must move ≥1 tick the same way, plus a price-coincidence condition `θ_px` = train-median distance floor), a structural stop (2 consecutive 1-min closes back through the converged level, confirming the user's own instinct that a fixed-point stop sits past real S/R), and a target derivation swept chronologically off the structural-stop simulation's own MAE/MFE (never the reverted order-blind or p40-MAE shortcuts already known-bad elsewhere in this codebase). **The review's own honest confound read**: operationalized this way, the rule is close to a value-anchored fade — a category this system already tests extensively — and the only genuinely new part (the RTH/24hr *join* itself) has an unproven, likely-low-prior lift on top of that. It explicitly recommended NOT jumping to SHADOW at N=11, and instead widening to the full history and running the directional question as its own cheap pre-test first.
-
-**Widened to the full 379-session `developing_value_log` history and ran both the directional pre-test and the full structural-stop trade simulation in one Gemini dispatch** (`scripts/backtest_poc_convergence_directional_and_trade.mjs`) — audited line-by-line before trusting it (TIME_EXPIRED mark-to-market verified not zeroed, lookahead-safe entry at next-bar-open verified, chronological not order-blind target sweep verified, `recordClaim()` calls verified actually present and DB-matching) and found genuinely clean this time, no repeat of the fabricated-data or O(N²) bugs from the two earlier Gemini dispatches in this thread. **Result: both LONG and SHORT lost against baseline** (mean delta -$13.79 / -$30.48, N=3 each — thin, but decisively wrong-signed, not just inconclusive), and the actual simulated trades came back 16.7% WR / -$30.58 EV (N=6). Recorded as two REJECTED `RESEARCH_CLAIM`s (`poc_convergence_directional_pretest`, `poc_convergence_structural_stop_trade_sim`). **SHADOW is not warranted on this framing.**
-
-**Where this leaves things**: the underlying convergence phenomenon (RTH and 24hr developing value meeting up) is real and now cleanly measured on the approximation. This specific directional trading rule built on top of it is not — tested properly, on the full history, with a real trade simulation, not just a thin pilot. The real-tick pipeline (separately paused, see above) was never needed to reach this verdict — the design review's own reasoning (§5) was that the 1-min approximation is adequate for a directional go/no-go, and that held up. Not recommending further investment in this specific directional framing; if revisited, start from the design review's "case (b)" alternative (a magnitude/volatility formulation, or the reversed sign) rather than re-testing what just failed.
-
-## 🔶 2026-08-23: Real-tick POC convergence pilot — PAUSED for environment reasons, not a research verdict
-
-Part of the same POC-migration thread as the entries below. The completed-session convergence and rolling-drift tests both came back clean negatives (see the 2026-08-20/21 entry). The user clarified their real observation is *intraday* and on a **volume chart** (500v/1000v, "doesn't matter which"), not clock time — two 1-min-bar approximation pilots for that were built and both produced untrustworthy results (a discontinuous "argmax teleport" artifact, hand-traced to a real 309pt jump on a ~340-contract addition against a 138k-contract base). A full DeepSeek design review (`scratch/deepseek_poc_realtick_convergence_design_review.md`) diagnosed this correctly as *both* a real, irreducible property of mixing a diffuse overnight distribution with a concentrated RTH one *and* an artifact amplified by the 1-min interpolation — fix: use the volume-weighted median (`med50`) as the primary convergence statistic instead of the raw POC/argmax, which is discontinuous by construction.
-
-Gemini built the real-tick pilot script (`scripts/backtest_poc_realtick_convergence_pilot.py` — `.scid` parsing, CME sub-trade unbundling, a faithful Python port of `computeProfile`, the `med50` fix, the flip-magnitude diagnostic that would settle artifact-vs-real with real data). Claude found and fixed a real O(N²)-per-session performance bug in it (naive full-profile recompute at every checkpoint instead of an incremental update) before it could ever finish a run.
-
-**Never got a clean run — not because of the methodology, but because the host machine started crash-looping** (confirmed via `last reboot`/`journalctl`: 10+ WSL2 VM restarts in under 20 minutes, some ~1 minute apart, predating the heaviest of these script runs — most likely a pre-existing Windows/WSL2-level issue, not something this research caused, though that's not fully provable from inside the guest OS). After several failed attempts across repeated reboots, the user asked to stop rather than keep fighting the environment. **This is a pause, not a negative finding** — the script is written, reviewed, and ready to run as-is once the environment is stable; do not rebuild it from scratch in a future session. The 953MB local tick-file copy (`scratch/NQU6.CME.scid`) was deleted since the run isn't happening; re-copy from `/mnt/c/SierraChart/Data/NQU6.CME.scid` (per `ARCHITECTURE.md`'s documented location, `scripts/backtest_mnq_structural_trailing.py`'s parser for reference) before resuming.
-
-**Still queued, unbuilt, gated behind this pilot's result per DeepSeek's original build order** (`scratch/deepseek_poc_multiframe_design_review.md`): Idea #2 (multi-timeframe POC comparison, reframed to 4H-over-24hr per that review's §2c finding that same-session RTH-vs-4H is near-degenerate) and Idea #1 (pullback-to-recent-POC entry mechanism, itself gated on a positive rolling-drift result — which came back negative, so #1 is likely dead regardless of #4's outcome). Also still open: the rotation ("Pinch," 65-point reversal) construction the user separately described, scoped in `scratch/deepseek_poc_realtick_convergence_design_review.md` §6 but explicitly held behind the volume-bar pilot's verdict, which never landed.
-
 ## 🔴 CURRENT TOP PRIORITY (set 2026-07-29): risk management, not more entry-signal research
 
 **STALE NUMBER CORRECTED 2026-08-19 (Opus Audit 8, `scratch/opus_audit_8_results.md`):** the
@@ -2138,3 +2135,4 @@ Don't reflexively reach for either without re-measuring first — finishing the 
   - **`do_not_ingest_tick_depth_into_postgres`** — resolved as a standing architectural decision with no action item (was sitting PENDING with nothing left to do).
   - **`time_expired_display_stats_sweep_remaining`** — RESOLVED, user-confirmed. `stats.js`'s capture-ratio and `monteCarloService.js` both now include TIME_EXPIRED trades (real mark-to-market P&L), classified win/loss by sign. `patternMemoryUpdate.js`'s TARGET_HIT-only queries audited and correctly left as-is (different semantic — move magnitude on a clean hit, not a general win/loss aggregate).
   - **`condition_memory_needs_rebuild_not_backfill`** — escalated to HIGH, not resolved. Found something bigger than the original double-counting concern while scoping the rebuild: `daily_performance_log`'s last row is 2026-07-31, a full month dead, despite real `trades` data existing through 2026-08-12 that should have triggered the pipeline's own catch-up mechanism. Not root-caused this session (deliberately not rabbit-holed) — needs its own focused investigation before any rebuild, since rebuilding from a still-broken source would just re-encode a fresh gap.
+
