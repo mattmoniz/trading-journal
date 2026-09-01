@@ -122,6 +122,33 @@ function setCached(tradeDate, key, val) {
   return val;
 }
 
+// Trailing 20-day average OR-window (9:30-9:45am ET) volume, STRICTLY PRIOR days only
+// (ts::date < tradeDate, no lookahead) -- the RVol baseline for Setup D's
+// orRangeAtDetection/rvol20dAtDetection tagging (RESEARCH_CLAIM
+// setup_d_range_rvol_combo_robust_across_windows). Day-cached like every other
+// day-stable query in this file -- this doesn't change intraday, no reason to re-query
+// every 15s poll.
+async function getOrVolBaseline20d(tradeDate) {
+  const cached = getCached(tradeDate, 'orVolBaseline20d', DAY_CACHE_TTL);
+  if (cached != null) return cached;
+  const res = await query(`
+    WITH dates AS (
+      SELECT DISTINCT ts::date as dt FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date < $1
+      ORDER BY dt DESC LIMIT 20
+    )
+    SELECT AVG(daily_vol) as avg_or_vol FROM (
+      SELECT ts::date as dt, SUM(COALESCE(bid_volume,0) + COALESCE(ask_volume,0)) as daily_vol
+      FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date IN (SELECT dt FROM dates)
+        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
+      GROUP BY ts::date
+    ) per_day
+  `, [tradeDate]).catch(() => ({ rows: [] }));
+  const val = res.rows[0]?.avg_or_vol != null ? +res.rows[0].avg_or_vol : null;
+  return setCached(tradeDate, 'orVolBaseline20d', val);
+}
+
 // Volatility-scaled default stop/target — replaces the bare hardcoded 90pt/40pt literal
 // fallback (OPEN_DECISION hardcoded_stop90_target40_fallback_needs_fix, DeepSeek blast-radius
 // investigation 2026-08-19). Previously, a candidate with neither a real OPTIMAL_STOP row nor
@@ -5470,6 +5497,20 @@ export default function createACDRouter(io) {
                 ? (isLong ? (odConfirmCloseBar.close - odOrH) / odRange : (odOrL - odConfirmCloseBar.close) / odRange)
                 : null;
 
+              // OR range + RVol tagging (2026-08-31, RESEARCH_CLAIM
+              // setup_d_range_rvol_combo_robust_across_windows) -- informational only, does
+              // NOT gate/size this fire. A wide OR range COMBINED WITH elevated relative
+              // volume was found to be the worst-performing quadrant for this setup (swept
+              // 5 RVol lookback windows before trusting any single one -- 20-day sits in the
+              // middle of the range that held up across both chronological halves of
+              // history). Stamped here so future real fires can be checked against the
+              // backtest finding, not left as a dead end per this codebase's own "no dead
+              // ends" rule. `orVolBaseline20d` is a day-cached trailing-20-day average of
+              // this same OR-window's volume, prior days only -- see getOrVolBaseline20d().
+              const odOrVol = odOrBars.reduce((s, b) => s + (b.bid_vol || 0) + (b.ask_vol || 0), 0);
+              const odRvolBaseline = await getOrVolBaseline20d(todayET);
+              const odRvol20d = odRvolBaseline ? odOrVol / odRvolBaseline : null;
+
               if (driveMag != null && driveMag >= DRIVE_MAG_IMMEDIATE_THRESHOLD) {
                 const immOpt = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._opt?.[`${type}_IMMEDIATE`];
                 const stopPts = immOpt?.stop ?? 159;
@@ -5482,6 +5523,7 @@ export default function createACDRouter(io) {
                   targetLabel: `15-min OR drive IMMEDIATE entry (Setup D hybrid)`,
                   description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, already ${driveMag.toFixed(2)}x the OR range past the boundary at 10:15 — entering immediately rather than waiting for a pullback (Stage 4 hybrid rule, OOS lift $8.89/classified-day). Stop ${stopPts}pt / target ${targetPts}pt.`,
                   history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+                  orRangeAtDetection: odRange, rvol20dAtDetection: odRvol20d,
                 };
               } else {
                 // Exact asymmetric pullback band replicated from OPEN_DRIVE above — a
@@ -5503,6 +5545,7 @@ export default function createACDRouter(io) {
                     targetLabel: `15-min OR drive reversal-of-pullback (Setup D)`,
                     description: `15-min Opening Range drive confirmed ${isLong ? 'up' : 'down'}, price pulled back to the OR boundary. Stage 1 bar-history backtest: stop ${stopPts}pt / target ${targetPts}pt (N=138, rigor-clean, beat its own blind-delay control).`,
                     history: { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },
+                    orRangeAtDetection: odRange, rvol20dAtDetection: odRvol20d,
                   };
                 }
               }
@@ -9678,12 +9721,13 @@ export default function createACDRouter(io) {
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
             ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult,
-            size_factors_at_detection, vol_building_signal
+            size_factors_at_detection, vol_building_signal, or_range_at_detection, rvol_20d_at_detection
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -9717,6 +9761,11 @@ export default function createACDRouter(io) {
           !isTrailMechanism ? WIDER_TARGET_MULT : null,
           active.sizeFactorsAtDetection ? JSON.stringify(active.sizeFactorsAtDetection) : null,
           JSON.stringify(activeVolBuildingSignal),
+          // Setup D OR-range/RVol tagging (RESEARCH_CLAIM
+          // setup_d_range_rvol_combo_robust_across_windows) -- null for every other
+          // setup_type, which never sets these properties on their candidate object.
+          active.orRangeAtDetection ?? null,
+          active.rvol20dAtDetection ?? null,
         ]);
         let row = ins.rows[0];
         if (!row) {

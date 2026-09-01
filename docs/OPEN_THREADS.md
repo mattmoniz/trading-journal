@@ -2,6 +2,30 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## ✅ 2026-08-31 (RESOLVED): Setup D's range+RVol finding wired for live tracking — no longer a dead end
+
+Follow-up to the range+RVol combo finding above (`RESEARCH_CLAIM
+setup_d_range_rvol_combo_robust_across_windows`) — user asked "how can I track this?" and the
+honest answer was "not yet, it's backtest-only." Per this codebase's own "no dead ends" hard rule,
+wired it properly rather than leaving it a passive claim: added `active_setups.or_range_at_detection`/
+`.rvol_20d_at_detection` (real migration — `ALTER TABLE`, `server/schema.sql` regenerated,
+`ARCHITECTURE.md` updated), stamped on every future `OPENING_DRIVE_15MIN_LONG/SHORT` fire (both
+the immediate and pullback entry paths) via a new day-cached `getOrVolBaseline20d()` helper
+(trailing-20-day OR-window volume average, strictly prior days, no lookahead). NULL for every
+other setup_type, which never sets these on their candidate object. `node --check`/`eslint` clean,
+`test_invariants.mjs` shows no new regressions (the one new FAIL, `GLOBEX_VWAP_FADE_LONG`, is an
+unrelated OPTIMAL_STOP calibration drift, confirmed out of scope).
+
+**Discovered along the way**: the dev server's systemd unit had been cleanly stopped (not crashed)
+8 hours prior — restarted via the standard `./start.sh` per the existing dev workflow.
+
+**Still not done**: no frontend display of the new columns yet (Setup History view could show
+them per-fire, matching how `SHADOW`/`BACKFILL` tags already render) — the DB-level tracking is
+the priority piece (satisfies "persisted queryable" + "has a recheck path" once real SHADOW fires
+accumulate), frontend display is a nice-to-have, not blocking. No live filter/downweight wired
+yet either — this is tagging only, matching the deliberate `vol_building_signal`/`regime_pos_Nd`
+precedent (informational, not gating) until real forward data confirms the backtest finding.
+
 ## 🔶 2026-08-31: Setup D — direction asymmetry, drawdown, day-type, and monster-day threads (late-session round)
 
 Continuation of the Setup D thread below, prompted by user follow-ups after the exit-mechanism

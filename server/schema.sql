@@ -3,8 +3,8 @@
 --
 
 
--- Dumped from database version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
--- Dumped by pg_dump version 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1)
+-- Dumped from database version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+-- Dumped by pg_dump version 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -398,7 +398,11 @@ CREATE TABLE public.active_setups (
     minutes_from_open integer,
     bet_class character varying(24),
     wider_target_mult numeric,
-    ib_window_stale_basis boolean
+    ib_window_stale_basis boolean,
+    size_factors_at_detection text,
+    vol_building_signal jsonb,
+    or_range_at_detection numeric,
+    rvol_20d_at_detection numeric
 );
 
 
@@ -446,6 +450,115 @@ CREATE TABLE public.active_setups_backfill_backup_20260714 (
     replay_resolution character varying(20),
     size_multiplier numeric(5,3),
     suppression_reason text
+);
+
+
+--
+-- Name: active_setups_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.active_setups_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: active_setups_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
+
+
+--
+-- Name: active_setups_backfill_resolution_bar_time_backup_20260820; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_backfill_resolution_bar_time_backup_20260820 (
+    id integer DEFAULT nextval('public.active_setups_id_seq'::regclass) NOT NULL,
+    trade_date date DEFAULT CURRENT_DATE NOT NULL,
+    setup_type character varying(60) NOT NULL,
+    fired_at timestamp without time zone NOT NULL,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10) DEFAULT 'ACTIVE'::character varying NOT NULL,
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone DEFAULT now(),
+    updated_at timestamp without time zone DEFAULT now(),
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean GENERATED ALWAYS AS ((((EXTRACT(hour FROM fired_at) > (9)::numeric) OR ((EXTRACT(hour FROM fired_at) = (9)::numeric) AND (EXTRACT(minute FROM fired_at) >= (30)::numeric))) AND (EXTRACT(hour FROM fired_at) < (16)::numeric))) STORED,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20),
+    cluster_attributed_setups text[],
+    hivol_lopace_at_detection boolean,
+    regime_pos_10d numeric(8,4),
+    regime_label_10d character varying(4),
+    regime_pos_20d numeric(8,4),
+    regime_label_20d character varying(4),
+    regime_pos_30d numeric(8,4),
+    regime_label_30d character varying(4),
+    regime_pos_45d numeric(8,4),
+    regime_label_45d character varying(4),
+    regime_pos_60d numeric(8,4),
+    regime_label_60d character varying(4),
+    regime_pos_90d numeric(8,4),
+    regime_label_90d character varying(4),
+    regime_pos_180d numeric(8,4),
+    regime_label_180d character varying(4),
+    va_width_pctile_60d numeric,
+    va_overlap_streak integer,
+    ib_range_pctile_60d numeric,
+    selected_over text[],
+    day_type_at_fire character varying(20),
+    vol_bucket_at_fire character varying(12),
+    session character varying(8),
+    minutes_from_open integer,
+    bet_class character varying(24),
+    wider_target_mult numeric,
+    ib_window_stale_basis boolean
 );
 
 
@@ -793,6 +906,18 @@ CREATE TABLE public.active_setups_globex_betclass_backup_20260811 (
 
 
 --
+-- Name: active_setups_globex_betclass_backup_20260831; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_globex_betclass_backup_20260831 (
+    id integer,
+    setup_type character varying(60),
+    bet_class character varying(24),
+    fired_at timestamp without time zone
+);
+
+
+--
 -- Name: active_setups_globex_vwap_fade_backfill_backup_20260728; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1051,26 +1176,6 @@ CREATE TABLE public.active_setups_ib_window_backup_20260714 (
     size_multiplier numeric(5,3),
     suppression_reason text
 );
-
-
---
--- Name: active_setups_id_seq; Type: SEQUENCE; Schema: public; Owner: -
---
-
-CREATE SEQUENCE public.active_setups_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
---
--- Name: active_setups_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
---
-
-ALTER SEQUENCE public.active_setups_id_seq OWNED BY public.active_setups.id;
 
 
 --
@@ -1781,7 +1886,7 @@ CREATE TABLE public.active_setups_resolution_bar_time_backup_20260727 (
 --
 
 CREATE TABLE public.active_setups_resolved_at_tz_bug_backup_20260727 (
-    id integer,
+    id integer NOT NULL,
     trade_date date,
     setup_type character varying(60),
     fired_at timestamp without time zone,
@@ -2495,6 +2600,42 @@ CREATE TABLE public.condition_memory (
     last_seen date,
     created_at timestamp without time zone DEFAULT now(),
     updated_at timestamp without time zone DEFAULT now()
+);
+
+
+--
+-- Name: condition_memory_backup_20260831; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.condition_memory_backup_20260831 (
+    id integer,
+    structural_state character varying(30),
+    nl30_bucket character varying(15),
+    opening_call character varying(30),
+    a_signal_quality character varying(20),
+    confluence_bucket character varying(15),
+    counter_trend boolean,
+    occurrences integer,
+    wins integer,
+    losses integer,
+    breakeven integer,
+    t1_hits integer,
+    stops integer,
+    total_pnl numeric,
+    win_rate numeric,
+    t1_hit_rate numeric,
+    avg_pnl numeric,
+    expectancy numeric,
+    occurrences_last30 integer,
+    wins_last30 integer,
+    win_rate_last30 numeric,
+    avg_pnl_last30 numeric,
+    win_rate_trend character varying(12),
+    sufficient_data boolean,
+    first_seen date,
+    last_seen date,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone
 );
 
 
@@ -7515,6 +7656,14 @@ ALTER TABLE ONLY public.acd_weekly_log
 
 
 --
+-- Name: active_setups_backfill_resolution_bar_time_backup_20260820 active_setups_backfill_resolution_bar_time_backup_20260820_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.active_setups_backfill_resolution_bar_time_backup_20260820
+    ADD CONSTRAINT active_setups_backfill_resolution_bar_time_backup_20260820_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: active_setups active_setups_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7528,6 +7677,14 @@ ALTER TABLE ONLY public.active_setups
 
 ALTER TABLE ONLY public.active_setups_resolution_bar_time_backup_20260727
     ADD CONSTRAINT active_setups_resolution_bar_time_backup_20260727_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: active_setups_resolved_at_tz_bug_backup_20260727 active_setups_resolved_at_tz_bug_backup_20260727_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.active_setups_resolved_at_tz_bug_backup_20260727
+    ADD CONSTRAINT active_setups_resolved_at_tz_bug_backup_20260727_pkey PRIMARY KEY (id);
 
 
 --
@@ -8712,6 +8869,48 @@ ALTER TABLE ONLY public.weekly_ib_structure
 
 ALTER TABLE ONLY public.weekly_ib_structure
     ADD CONSTRAINT weekly_ib_structure_week_start_key UNIQUE (week_start);
+
+
+--
+-- Name: active_setups_backfill_resolu_trade_date_setup_type_coalesc_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX active_setups_backfill_resolu_trade_date_setup_type_coalesc_idx ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (trade_date, setup_type, COALESCE(status, ''::character varying)) WHERE ((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'SHADOW'::character varying])::text[]));
+
+
+--
+-- Name: active_setups_backfill_resolu_trade_date_setup_type_fired_a_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX active_setups_backfill_resolu_trade_date_setup_type_fired_a_idx ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (trade_date, setup_type, fired_at);
+
+
+--
+-- Name: active_setups_backfill_resolution_bar_time_back_trade_date_idx1; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX active_setups_backfill_resolution_bar_time_back_trade_date_idx1 ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (trade_date) WHERE ((mae_points IS NULL) AND (entry_zone_low IS NOT NULL) AND (stop_level IS NOT NULL) AND (t1_level IS NOT NULL));
+
+
+--
+-- Name: active_setups_backfill_resolution_bar_time_backu_trade_date_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX active_setups_backfill_resolution_bar_time_backu_trade_date_idx ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (trade_date);
+
+
+--
+-- Name: active_setups_backfill_resolution_bar_time_backup_20_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX active_setups_backfill_resolution_bar_time_backup_20_status_idx ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (status);
+
+
+--
+-- Name: active_setups_backfill_resolution_bar_time_backup__fired_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX active_setups_backfill_resolution_bar_time_backup__fired_at_idx ON public.active_setups_backfill_resolution_bar_time_backup_20260820 USING btree (fired_at);
 
 
 --
