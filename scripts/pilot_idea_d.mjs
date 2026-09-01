@@ -51,14 +51,28 @@ async function main() {
     // would materially undercount "fresh" anchors (a wider lookback finds more prior visits),
     // which could have made idea D look more N-starved than the real minutesSinceVisit===null
     // population actually is. Corrected to same-day RTH-only, matching the live semantics.
+    //
+    // SECOND FIX (audit finding, 2026-09-01, found on reconciling the 92%/N=12 vs 0.0%/N=766
+    // contradiction): this query originally used the SAME parameter ($1) both cast to ::date
+    // (for the day boundary) and compared bare against `ts` (a timestamp column). Postgres
+    // unifies a parameter's type across every appearance in one query -- the explicit ::date
+    // cast made $1 resolve to `date` everywhere, silently truncating the time-of-day off the
+    // bare `ts < $1` comparison too (verified directly: `SELECT $1 as raw_param` with a mixed
+    // ::date/bare-usage query returned '2026-08-20', not the full timestamp). That collapsed
+    // `ts < $1` to `ts < <midnight of that day>`, which can never be true together with
+    // `time >= 570` (9:30am) -- so barRes was UNCONDITIONALLY EMPTY for every single row,
+    // making both anchorVisited and anyPartnerVisited vacuously false for the entire population.
+    // The 0.0%/N=766 result was a pure SQL artifact, not a real negative. Fixed by using two
+    // separate parameters: $1 (bare, timestamp comparison) and $2 (the row's own trade_date_str,
+    // ::date comparison) -- confirmed this returns real bars again.
     const barRes = await query(`
       SELECT close::float
       FROM price_bars_primary
       WHERE symbol='NQ'
-        AND ts::date = $1::date
-        AND ts < $1
+        AND ts::date = $2::date
+        AND ts < $1::timestamp
         AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) >= 570
-    `, [trade.fired_at]);
+    `, [trade.fired_at, trade.trade_date_str]);
 
     // Check anchor freshness
     let anchorVisited = false;

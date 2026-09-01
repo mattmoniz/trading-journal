@@ -1,5 +1,41 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): liquidity-zones idea D census contradiction reconciled — a 3rd SQL bug, not a real negative
+
+Resumed after a context clear left `OPEN_DECISION liquidity_zones_idea_d_census_contradiction`
+mid-investigation (flagged, not yet root-caused): the same-day 92%/N=12 (§4.1, 2026-08-26) vs.
+0.0%/N=766 (Task 2 above, 2026-09-01) idea-D-census disagreement. Found both scripts
+(`scratch/census_idea_d_cluster_freshness.mjs` and `scripts/pilot_idea_d.mjs`), read both in full,
+and reproduced the disagreement directly against the DB rather than trusting either number.
+
+**Root cause: a 3rd, previously undiscovered bug in `pilot_idea_d.mjs`**, distinct from the 2 fixed
+in the same-day audit above. Its bar-window query used one `$1` parameter both cast `::date` (day
+boundary) and compared bare against a `timestamp` column (`ts < $1`). Postgres unifies a parameter's
+type across every appearance in a single query — the explicit `::date` cast silently truncated the
+bare comparison to midnight too (confirmed directly: `SELECT $1 as raw_param` in a query mixing
+`::date` and bare usage of the same param returned `'2026-08-20'`, no time-of-day at all). That made
+`ts < $1` equivalent to `ts < <midnight>`, impossible together with the script's own `time >= 570`
+filter — **the bar-window query returned zero rows for literally every input row**, mechanically
+forcing both `anchorVisited` and `anyPartnerVisited` to false regardless of the real data. The
+0.0%/N=766 "decisive negative" was a pure artifact.
+
+Fixed (two separate query params). Corrected script: **1/6 (16.7%)** — N-starved, and using a
+narrower/less rigorous construction than the 2026-08-26 script (FADE-only population, `entry_zone`
+midpoint as an anchor-price proxy instead of a real `level_prices` lookup, no same-day-forming-level
+formation gate). Re-ran the 2026-08-26 script's more rigorous construction fresh against 6 more days
+of data instead: **N grew 12→20 (clears this codebase's N≥20 floor for the first time), rate held
+92%→90%.** Per the spec's own pre-registered rule, **idea D genuinely survives Step 0 and is worth
+building** — the opposite of what the buggy same-day audit concluded.
+
+`RESEARCH_CLAIM liquidity_zones_idea_d_free_census_rigorous_construction` (CONFIRMED, N=20/90%) is
+now the load-bearing number; `RESEARCH_CLAIM liquidity_zones_idea_d_free_census` (the
+`pilot_idea_d.mjs` N=6 result) is kept as directional-only, not weighed against it.
+`OPEN_DECISION liquidity_zones_idea_d_census_contradiction` resolved. New `OPEN_DECISION
+liquidity_zones_idea_d_step5_build_needed` (MEDIUM) flags the real remaining work — a genuine
+EV/WR-tested comparison (already-visited-partner cluster vs. genuinely-fresh cluster), which needs
+its own N≥20 per arm and will likely start as a SHADOW-tagging pass rather than a full live wire.
+Full writeup: `docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md` §4.23.
+
 ## ✅ 2026-09-01 (RESOLVED): POC_ROTATION_JOIN_LONG/SHORT built and shipped live (SHADOW-only)
 
 Resolves `OPEN_DECISION poc_rotation_join_build_live_detector`. Ported
@@ -64,15 +100,19 @@ found and fixed, one script clean as-is:
   formula genuinely matches `acd.js`'s live `STACK_VOL_BREAK_LIVE` code), one caveat noted (uses
   the bar strictly before `fired_at`, not the exact trigger bar — a related but not identical
   test). Result: negative, no monotonic predictive power, N=1446.
-- **Task 2 (liquidity-zones idea D census)**: **2 real bugs**. (1) reconstructed "anchor freshness"
+- **Task 2 (liquidity-zones idea D census)**: **2 real bugs found and fixed here**, plus **a 3rd,
+  more severe one found later the same day (see the 2026-09-01 "idea D census contradiction
+  reconciled" entry below — this paragraph's "0.0%/N=766, dies for free" conclusion was WRONG,
+  a pure SQL artifact, not a real result; do not cite it).** (1) reconstructed "anchor freshness"
   using a window going back to 6PM the prior evening, but the real live `minutesSinceVisit` only
   ever looks at same-day RTH bars — a materially wider, non-equivalent window. (2) `fired_at` was
   never cast to `::text`, so a JS Date object got passed back as a SQL parameter and silently
   shifted 4 hours by the session timezone on round-trip (verified directly: Postgres rendered a
   09:37 ET touch as 05:37 ET) — this codebase's own documented naive-timestamp footgun, hit again.
-  After both fixes: N grew 154→766, the negative got *more* decisive (14.9%→0.0% partner-visited).
-  Idea D still dies for free, exactly as the spec predicted — the bugs didn't flip the conclusion,
-  but they were real and needed fixing before the number could be trusted.
+  These 2 fixes alone were genuinely correct and needed — but a 3rd bug (a Postgres parameter
+  type-unification issue that made the bar-window query unconditionally empty for every row) was
+  still present after them and wasn't caught in this audit pass; it made the "N grew 154→766,
+  14.9%→0.0%" result meaningless. See the later entry for the real, reconciled finding.
 - **Task 3 (volume-building day-type conditioning)**: clean methodology, the closest audit given
   it's the one positive finding — verified the composite score formula matches `acd.js`'s real
   live `compositeStrength` computation exactly (not an invented formula), correct ground-truth

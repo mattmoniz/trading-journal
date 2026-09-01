@@ -1944,3 +1944,49 @@ must be evaluated at the same instant as the touch, never as an additional wait.
 Full DeepSeek response: `scratch/deepseek_response.md` as of 2026-08-29 (ephemeral, will be
 overwritten by the next dispatch — this section is the durable copy).
 
+### 4.23 Idea D census contradiction reconciled (2026-09-01) — Step 0 genuinely SURVIVES at N=20
+
+A Gemini-dispatched Step 0 re-run this same day (`scripts/pilot_idea_d.mjs`, see
+`docs/OPEN_THREADS.md`'s 2026-09-01 "audited 3 Gemini scripts" entry) reported the OPPOSITE of
+§4.1's 92%/N=12 finding: 0.0% partner-visited at N=766, after fixing 2 real bugs (a too-wide
+anchor-freshness window, an uncast `fired_at` timezone bug). Flagged as `OPEN_DECISION
+liquidity_zones_idea_d_census_contradiction`, investigation interrupted mid-session by a context
+clear before root-causing it.
+
+**Root cause, found by diffing the two scripts line by line and reproducing directly against the
+live DB**: `pilot_idea_d.mjs`'s bar-window query had a THIRD, previously-undiscovered bug — it used
+the same `$1` parameter both cast `::date` (for the day boundary) and compared bare against a
+`timestamp` column (`ts < $1`). Postgres unifies a parameter's type across every appearance in one
+query; the explicit `::date` cast made `$1` resolve to `date` everywhere, silently truncating the
+time-of-day off the bare comparison too — confirmed directly via `SELECT $1 as raw_param` in a
+mixed `::date`/bare-usage query, which returned `'2026-08-20'`, not the full timestamp. That
+collapsed `ts < $1` to `ts < <midnight of that day>`, which can never be true together with the
+script's own `time >= 570` (9:30am) filter — so **the bar-window query was unconditionally EMPTY
+for every single row**, mechanically forcing both `anchorVisited` and `anyPartnerVisited` to false
+regardless of the real data. The 0.0%/N=766 result was a pure SQL artifact, not a real negative —
+neither the 2 already-documented bug fixes nor the true underlying phenomenon had anything to do
+with it.
+
+**Fixed** (two separate query params instead of one dual-cast param). The corrected script now
+returns **1/6 (16.7%)** — N-starved, not decisive either way, and using a narrower/less rigorous
+construction than §4.1's script (`setup_type LIKE '%_FADE_%'` only, `entry_zone` midpoint as an
+anchor-price proxy instead of a real `level_prices` lookup, no same-day-forming-level formation
+gate on anchor or partners).
+
+**Re-ran §4.1's original, more rigorous construction** (`scratch/census_idea_d_cluster_freshness.mjs`
+— real per-anchor `level_prices` lookup, same-day-forming-level formation gating on both anchor and
+partners, RTH-vs-Globex-conditional session-start) fresh against 6 additional days of data: **N grew
+12→20** (clears this codebase's N≥20 decisive floor for the first time) and **the rate held stable,
+92%→90%**. Per the spec's own pre-registered rule (§2, single digits ⇒ dead, double digits ⇒ worth
+building), **idea D genuinely clears Step 0 and is worth building.**
+
+`RESEARCH_CLAIM liquidity_zones_idea_d_free_census_rigorous_construction` (CONFIRMED, N=20, 90%) is
+now the load-bearing number for this thread; `RESEARCH_CLAIM liquidity_zones_idea_d_free_census`
+(the `pilot_idea_d.mjs` result, N=6) is kept only as a directional data point, not weighed against
+it. `OPEN_DECISION liquidity_zones_idea_d_census_contradiction` resolved with this writeup.
+**Step 5 (idea D's real EV/WR-tested build) is now live remaining work** — flagged as
+`OPEN_DECISION liquidity_zones_idea_d_step5_build_needed` — note N=20 is only the descriptive-census
+floor, a real EV comparison needs its own N≥20 per arm (already-visited-partner vs. genuinely-fresh
+cluster), which may still be thin; that decision's text scopes a SHADOW-tagging-first path as the
+likely near-term shape rather than a full live wire on day one.
+
