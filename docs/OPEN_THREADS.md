@@ -104,10 +104,21 @@ win but its own OOS thirds are decaying badly ($171→$78→**-$104**) — not t
 made** — the live 159/80 stands, nothing tested earns the right to replace it. Recorded as
 `RESEARCH_CLAIM setup_d_exit_mechanism_comparison_negative` (CONFIRMED).
 
-**In progress**: a wider, stability-checked fixed-target sweep (60-250pt, checking chronological
-thirds this time, not just raw OOS EV) and a genuine re-entry test (does price keep running enough
-after an exit — stop, target, or expiry — to justify a mechanical re-entry, split by which kind of
-exit preceded it) — dispatched to Gemini, result pending.
+**Wider target sweep and re-entry test, both settled** (`scripts/backtest_setup_d_stage6_widersweep_reentry.mjs`,
+independently re-run, numbers reproduced): a comprehensive fixed-target sweep (60-250pt × 3 stops)
+confirms the current 80/159 is the actual WINNER of the whole grid — nothing wider comes close
+(100pt drops to $24, 120pt+ falls to near-zero or negative). Re-entry after an exit is a decisive
+loser (single-entry EV=$36.53/day vs with-re-entry=-$4.96/day) — re-entering specifically after a
+TARGET_HIT is catastrophic (N=55, -$77.66 added EV per bucket), re-entering after a STOP_HIT is
+mildly positive but far too small to offset it (N=14, +$8.79), and the whole idea gets worse over
+time, not better. Recorded as `RESEARCH_CLAIM setup_d_wider_target_sweep_settled_negative` and
+`RESEARCH_CLAIM setup_d_reentry_after_exit_negative` (both CONFIRMED).
+
+**Setup D exit-mechanism thread now fully closed**: after testing ATR-scaled targets, ATR/weekly
+pinning levels, the breakeven-trail runner, the wider-target mechanism, a comprehensive fixed-target
+sweep, and re-entry — all negative — the live 159/80, single-entry, no-re-entry exit stands as the
+validated-by-elimination design. No further exit-mechanism work planned unless new evidence
+surfaces (e.g. once real forward SHADOW data accumulates for the entry rule itself).
 
 ## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
 
