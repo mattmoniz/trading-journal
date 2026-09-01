@@ -791,7 +791,7 @@ export async function resolveSetupsByPrice(io) {
   // where this function reads fired_at, since string comparison here needs to match
   // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
   const needsBars = active.rows.filter(row => {
-    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE')) return false;
+    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN')) return false;
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const { stop_level: stop, t1_level: t1 } = row;
     if (entry == null || stop == null || t1 == null) return false;
@@ -875,6 +875,43 @@ export async function resolveSetupsByPrice(io) {
     // TRT_LONG trade-brief text), so this is deliberately imported, not redeclared.
     const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
     const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+
+  // Custom resolution for POC_ROTATION_JOIN_LONG/SHORT — Time60_Stop20 exit (see
+  // server/services/pocRotationJoinDetector.js header): 20pt stop, checked bar-by-bar
+  // since fired_at (unlike ABSORPTION_LONG/COIL_SURGE below, which only check a current-
+  // price snapshot — this construction's validated backtest exit is a real bar-walk, so
+  // a snapshot-only check could miss an intrabar stop touch), OR a 60-minute time limit
+  // with mark-to-market at the last available bar's close. t1_level is an unreachable
+  // informational placeholder (never checked) — this is a genuinely target-less exit
+  // shape, deliberately NOT routed through the shared generic bar-walk further below
+  // (WIDER_TARGET/trail/extend logic) per this session's standing caution about editing
+  // resolveSetupsByPrice()'s complex shared path without its own review.
+    if (row.setup_type.startsWith('POC_ROTATION_JOIN')) {
+      const stop = row.stop_level;
+      if (entry == null || stop == null) continue;
+      const long = row.setup_type.endsWith('_LONG');
+      const barsSinceFired = await query(`
+        SELECT ts::text as ts, high::float, low::float, close::float
+        FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
+      `, [row.fired_at, nowEt]);
+      let resolution = null, priceAtRes = null, resolvedAt = null, method = null;
+      for (const bar of barsSinceFired.rows) {
+        const stopHit = long ? bar.low <= stop : bar.high >= stop;
+        if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
+      }
+      if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
+        const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
+        resolution = 'TIME_EXPIRED'; method = 'MARK_TO_MARKET'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+      }
+      if (resolution) {
+        const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW() WHERE id=$1 AND status=$7`,
+          [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution });
+        count++;
+      }
+      continue;
+    }
 
   // Custom resolution for ABSORPTION_LONG: "did price move up meaningfully?"
     if (row.setup_type === 'ABSORPTION_LONG') {

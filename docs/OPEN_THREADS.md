@@ -1,5 +1,58 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): POC_ROTATION_JOIN_LONG/SHORT built and shipped live (SHADOW-only)
+
+Resolves `OPEN_DECISION poc_rotation_join_build_live_detector`. Ported
+`detectSignalEvents()` (the ZigZag-style leg/pivot + running-median-fair-value
+convergence detector, originally built and audited in
+`scripts/backtest_poc_rotation_vbp.mjs`) into a live, poll-computable form:
+
+- **Extracted the canonical detector** into `server/services/pocRotationService.js`
+  (moved, not copied — `backtest_poc_rotation_vbp.mjs` now re-exports it unchanged so
+  its 14 existing downstream importers keep working without modification). Verified via
+  a fresh backtest re-run before/after the extraction: N grew 767→775 from real new
+  sessions between runs, same methodology, no behavior change.
+- **New live poller** `server/services/pocRotationJoinDetector.js`, wired into
+  `server/index.js`'s existing 60s `setInterval` alongside `detectRthFlush`/
+  `detectGlobexFlush`/`detectMomentum60Trend` (same "own poller, not the level-touch
+  candidates array" pattern — this is a whole-session leg-tracking construction, not a
+  price touching a fixed level). **Stateless/restart-safe by design**, directly applying
+  this same session's GLOBEX_FLUSH restart-fragility lesson: every poll recomputes
+  `detectSignalEvents()` fresh from real bar history; the one in-memory cache field is a
+  poll-skip optimization only, never a correctness dependency (a reset just re-attempts
+  inserting already-fired events, which harmlessly no-ops against `active_setups`'
+  unique index).
+- **Construction**: JOIN direction (trade WITH the leg that just converged back to the
+  running 24hr median fair value) + Time60_Stop20 exit (20pt stop, 60-minute time limit,
+  mark-to-market, **no fixed price target**) — the validated winner per
+  `RESEARCH_CLAIM poc_rotation_join_fade_levels_med50_fixed` (N=1935, WR=29.2%,
+  EV=+$2.40/trade, real but thin, not rigor-clean).
+- **Resolution**: since this is a genuinely target-less exit shape, it does NOT go
+  through `resolveSetupsByPrice()`'s shared generic bar-walk (WIDER_TARGET/trail/extend
+  logic) — added its own custom early-`continue` branch there instead, matching the
+  existing `ABSORPTION_LONG`/`COIL_SURGE` precedent, deliberately avoiding edits to that
+  complex shared critical path without its own review. `t1_level` on the live row is an
+  unreachable informational placeholder (entry ± 1000pt), never checked for resolution.
+- **Session span**: the full 6PM–5PM ET window continuously (matches
+  `developing_value_log`'s convention), not RTH-only or Globex-only — legs freely cross
+  both, so this satisfies CLAUDE.md's RTH+Globex-both-required rule structurally rather
+  than via two separate calibrations (per the backtest's own KNOWN LIMITATION note).
+- **Checklist items closed**: `bet_class` (added to `CONTINUATION_TYPES` — JOIN is a
+  continuation-shaped bet, not a fade), `SETUP_DISPLAY_LABELS`, `setupDefinitions.js`
+  (Setup Reference), `ARCHITECTURE.md` services table, `SETUP_STATUS` seeded via a live
+  `backtest_setup_status.mjs` run (THIN_N, N=1 each, closing the "zero real touches ever
+  is not automatically SHADOW-safe" gap immediately rather than waiting for the weekly
+  cron). `SHADOW`-only throughout (real N=0 < 20).
+- **Verified end-to-end in the actual restarted server process** (not just a manual
+  script): 2 real events fired live within the first two 60s poll cycles after restart
+  and resolved correctly — one `STOP_HIT` at exactly -$42 (20pt×$2/pt + $2 commission,
+  confirming the custom branch's bar-by-bar stop check works), two more via
+  `TIME_EXPIRED`/`MARK_TO_MARKET` at +$132/+$186.50 (confirming the time-limit path).
+- **Deliberately NOT wired yet**: the ONH/ONL (`RESEARCH_CLAIM
+  poc_rotation_join_onh_onl_confluence`, N=335, EV $21.18) and WS1 (N=42, EV $22.15)
+  confluence findings — get the base type accumulating real data first, per the original
+  decision's own explicit sequencing. Revisit as a follow-up once real N grows.
+
 ## ✅ 2026-09-01 (RESOLVED): audited 3 Gemini scripts from the combined dispatch — 2 real bugs found and fixed
 
 Resolves `prefire_orderflow_touch_gate_candidate` and `liquidity_zones_defended_levels_ideas_pending_test`

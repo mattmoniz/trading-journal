@@ -61,6 +61,7 @@ import { detectPhaseChange } from './services/phaseChangeDetector.js';
 import { detectMomentum60Trend } from './services/minuteBarSignalDetector.js';
 import { detectRthFlush } from './services/rthFlushDetector.js';
 import { detectGlobexFlush } from './services/globexFlushDetector.js';
+import { detectPocRotationJoin } from './services/pocRotationJoinDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
@@ -1532,6 +1533,10 @@ httpServer.listen(PORT, () => {
       // break-then-consolidation pattern, not a price touching a fixed level.
       detectRthFlush(io).catch(() => {});
       detectGlobexFlush(io).catch(() => {});
+      // POC_ROTATION_JOIN_LONG/SHORT — OPEN_DECISION poc_rotation_join_build_live_detector
+      // (2026-09-01). Own poller for the same reason as the flush detectors above: a
+      // whole-session leg/pivot-tracking pattern, not a price touching a fixed level.
+      detectPocRotationJoin(io).catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 

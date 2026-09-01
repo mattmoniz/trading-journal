@@ -231,6 +231,18 @@ export const OTHER_SETUP_DEFINITIONS = {
   // which doesn't apply here — this setup is calibrated on its own real Globex data).
   GLOBEX_VWAP_FADE_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Fade Long', globexOnly: true, criteria: 'Fires on an ordinary touch (within 15pt) of the running 24hr VWAP (Globex 6PM ET open through now) while price is currently below it — direction is dynamic from current price side (like PD_POC), not a fixed per-level bias. Globex-only, no RTH sibling by this exact name (see RTH_VWAP_FADE_LONG for the RTH version).' },
   GLOBEX_VWAP_FADE_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'Globex VWAP Fade Short', globexOnly: true, criteria: 'Fires on an ordinary touch (within 15pt) of the running 24hr VWAP (Globex 6PM ET open through now) while price is currently above it — direction is dynamic from current price side (like PD_POC), not a fixed per-level bias. Globex-only, no RTH sibling by this exact name (see RTH_VWAP_FADE_SHORT for the RTH version).' },
+  // POC_ROTATION_JOIN (2026-09-01, server/services/pocRotationJoinDetector.js): NOT a
+  // level touch -- a whole-session ZigZag-style leg/pivot detector. Tracks price legs
+  // (reversal >= 65pt from the running extreme) and their convergence back to a running
+  // 24hr volume-weighted median fair value (within THETA = the median 1-min bar range).
+  // JOIN = trade WITH the leg's own direction once it converges. Spans the full 6PM-5PM
+  // ET session continuously (not RTH-only or Globex-only). Exit is Time60_Stop20: 20pt
+  // stop, 60-minute time limit with mark-to-market, NO fixed price target (t1_level on
+  // the live row is an informational-only unreachable placeholder). RESEARCH_CLAIM
+  // poc_rotation_join_fade_levels_med50_fixed: N=1935, WR=29.2%, EV=+$2.40/trade (real
+  // but thin edge, not rigor-clean) -- SHADOW-only pending real forward N>=20.
+  POC_ROTATION_JOIN_LONG:  { rule: 'MOMENTUM_PATTERN', displayName: 'POC Rotation Join Long', globexOnly: false, criteria: 'A rotation leg (>=65pt reversal from the running extreme) converges back to the running 24hr median fair value while moving UP -- trades WITH that leg (JOIN), betting the up-move continues. Exit: 20pt stop, 60-minute time limit (mark-to-market), no fixed target.' },
+  POC_ROTATION_JOIN_SHORT: { rule: 'MOMENTUM_PATTERN', displayName: 'POC Rotation Join Short', globexOnly: false, criteria: 'A rotation leg (>=65pt reversal from the running extreme) converges back to the running 24hr median fair value while moving DOWN -- trades WITH that leg (JOIN), betting the down-move continues. Exit: 20pt stop, 60-minute time limit (mark-to-market), no fixed target.' },
 };
 
 // Level-family "Group" labels — matches the Key Levels table's grouping convention

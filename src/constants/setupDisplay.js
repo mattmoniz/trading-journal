@@ -39,6 +39,8 @@ export const SETUP_DISPLAY_LABELS = {
   STACK_VOL_BREAK_LIVE_LONG:  'Stack Vol Break ↑',
   STACK_VOL_BREAK_LIVE_SHORT: 'Stack Vol Break ↓',
   VWAP_RECLAIM_SHORT:         'VWAP Reclaim ↓',
+  POC_ROTATION_JOIN_LONG:     'POC Rotation Join ↑',
+  POC_ROTATION_JOIN_SHORT:    'POC Rotation Join ↓',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level

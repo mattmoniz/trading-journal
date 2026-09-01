@@ -170,6 +170,10 @@ const CONTINUATION_TYPES = new Set([
   // MEAN_REVERSION_OVERRIDE_TYPES below, they trade the OPPOSITE of the departure direction
   // (a reversion back toward value), matching C_REVERSAL_LONG/SHORT's own classification.
   'RTH_FLUSH_LONG', 'RTH_FLUSH_SHORT', 'GLOBEX_FLUSH_LONG', 'GLOBEX_FLUSH_SHORT',
+  // POC_ROTATION_JOIN_LONG/SHORT (2026-09-01, server/services/pocRotationJoinDetector.js):
+  // JOIN = trade WITH the rotation leg's own direction once it converges back to the
+  // running 24hr median fair value -- a bet the leg's move continues, not a fade of it.
+  'POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT',
 ]);
 const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
   'FAILED_AUCTION_LONG', 'FAILED_AUCTION_SHORT',
