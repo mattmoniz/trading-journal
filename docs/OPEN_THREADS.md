@@ -20,11 +20,26 @@ approach_pace_discriminates_globex_refire_setups` (PROVISIONAL). **Real caveat**
 `PD_VAH_FADE_SHORT` (N=14/18 in the fast tercile) — `GLOBEX_VWAP_MAGNET` itself only has N=2 per
 direction here, too thin to validate specifically for the setup type that started this thread.
 First-pass exploratory (N=58, single test), not yet a proper walk-forward backtest on the broader
-roster. `OPEN_DECISION build_approach_pace_entry_quality_filter` scopes the real next step: a
-proper backtest script on the full fade roster, then — if it holds — an actual entry-quality
-gate/size factor, not just a time-based cooldown. Does not replace the separate, already-flagged
-`OPEN_DECISION wire_refire_cooldown_into_detectglobexsetup` (the dead-config bug fix) — the two
-are complementary, not either/or.
+roster.
+
+**Built out same session** (user: "yes" to scoping the real backtest) —
+`scripts/backtest_approach_pace_fade_quality.mjs` on the FULL real fade roster (N=1354, not just
+the 3 refire-prone types). **Stronger and broader than the exploratory pass, not just a
+replication**: clean monotonic walk-forward quartile EV ($-7.22/$-0.43/$5.59/$7.44), Q4
+chronologically stable, holds independently in both RTH (AUC=0.540, N=1010) and Globex (AUC=0.563,
+N=344) per this codebase's hard rule, and — resolving the earlier concentration worry — broad
+across **76 distinct setup_types** in the fast-approach quartile with the top type only 9.1%
+share. `RESEARCH_CLAIM approach_pace_fade_quality_full_roster` (PROVISIONAL). Wired into
+`run_weekly_backtests.sh` as a standing recheck. `OPEN_DECISION
+wire_approach_pace_as_size_factor` scopes the real remaining work before this sizes real risk: a
+bar-by-bar stop/target simulation (per the new-setup-type checklist's own item 5 — the current
+result is a correlation against trades' own already-calibrated exits, not a from-scratch
+simulation) and a sensitivity check on the 15-bar window (taken from the exploratory pass,
+never independently swept). If both hold, this is a real candidate cross-cutting size factor for
+the whole fade roster — a meaningfully bigger win than the original refire-cooldown fix, if it
+pans out. Does not replace the separate, already-flagged `OPEN_DECISION
+wire_refire_cooldown_into_detectglobexsetup` (the dead-config bug fix) — the two are
+complementary, not either/or.
 
 ## 🔶 2026-09-01 (in progress, methodology corrected mid-session): SAME_DAY_FORMING volume-building fade filter re-verified and STRENGTHENED, day-thin — standing weekly recheck wired
 

@@ -316,4 +316,16 @@ echo "=== Weekly backtest run: $(date) ==="
 # multiple-comparisons fishing risk already flagged once this thread.
 /usr/bin/node scripts/backtest_priorday_volbuild_walkforward.mjs
 
+# Approach-pace fade-quality signal (2026-09-01) -- found while root-causing why GLOBEX_VWAP_MAGNET/
+# PD_VAH_FADE_SHORT refires lose (user: "find a more strict way to trade it" rather than just a
+# cooldown). Points-traveled-per-bar over the 15 bars into the touch. Full-roster walk-forward
+# result (N=1354, 22+ distinct days): clean monotonic quartile EV ($-7.22/$-0.43/$5.59/$7.44),
+# stable, holds in both RTH (AUC=0.540) and Globex (AUC=0.563), broad across 76 setup_types (top
+# type only 9.1% share -- not a single-setup artifact like the exploratory N=58 pass looked like).
+# RESEARCH_CLAIM approach_pace_fade_quality_full_roster. NOT wired live yet -- OPEN_DECISION
+# wire_approach_pace_as_size_factor scopes what's needed first (real stop/target bar-by-bar
+# simulation, not just raw P&L correlation, per this codebase's own new-setup-type checklist item
+# 5). Self-recalibrates weekly as real N grows.
+/usr/bin/node scripts/backtest_approach_pace_fade_quality.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
