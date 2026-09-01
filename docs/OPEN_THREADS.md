@@ -1,5 +1,42 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): audited 3 Gemini scripts from the combined dispatch — 2 real bugs found and fixed
+
+Resolves `prefire_orderflow_touch_gate_candidate` and `liquidity_zones_defended_levels_ideas_pending_test`
+(Step 0 only) and `volume_building_thread_untouched_angles_for_later` (sub-item a only). Each of the
+3 delivered scripts was read in full before trusting anything, per the standing rule — 2 real bugs
+found and fixed, one script clean as-is:
+
+- **Task 1 (pre-fire order-flow gate)**: clean methodology (verified the `volZ`/`oneSidedRatio`
+  formula genuinely matches `acd.js`'s live `STACK_VOL_BREAK_LIVE` code), one caveat noted (uses
+  the bar strictly before `fired_at`, not the exact trigger bar — a related but not identical
+  test). Result: negative, no monotonic predictive power, N=1446.
+- **Task 2 (liquidity-zones idea D census)**: **2 real bugs**. (1) reconstructed "anchor freshness"
+  using a window going back to 6PM the prior evening, but the real live `minutesSinceVisit` only
+  ever looks at same-day RTH bars — a materially wider, non-equivalent window. (2) `fired_at` was
+  never cast to `::text`, so a JS Date object got passed back as a SQL parameter and silently
+  shifted 4 hours by the session timezone on round-trip (verified directly: Postgres rendered a
+  09:37 ET touch as 05:37 ET) — this codebase's own documented naive-timestamp footgun, hit again.
+  After both fixes: N grew 154→766, the negative got *more* decisive (14.9%→0.0% partner-visited).
+  Idea D still dies for free, exactly as the spec predicted — the bugs didn't flip the conclusion,
+  but they were real and needed fixing before the number could be trusted.
+- **Task 3 (volume-building day-type conditioning)**: clean methodology, the closest audit given
+  it's the one positive finding — verified the composite score formula matches `acd.js`'s real
+  live `compositeStrength` computation exactly (not an invented formula), correct ground-truth
+  day-type source, canonical `classifyLevelFormation()`, no lookahead. Reproduced identically on
+  independent re-run (N=1161). Real finding: day-type composition doesn't explain the inherited-
+  vs-same-day dose-response gap, but a real BALANCE-day sign-flip interaction does (high
+  volume-building hurts same-day levels, helps inherited ones) — TREND shows an unexplained
+  same-sign puzzle in both groups, flagged for later.
+
+**Common gap across all 3**: none of Gemini's `recordClaim()` calls populated `sampleSize`/
+`winRate`/`evPerTrade`/`rigorStatus` — only free-text `claimText`, leaving the RESEARCH_CLAIM
+ledger's structured N/EV columns blank. Fixed in all 3 before finalizing. 3 throwaway scaffolding
+scripts (`check_msv.mjs`, `read_claims.mjs`, `read_all_claims.mjs`) deleted — exploration
+artifacts, not deliverables. Remaining follow-on work re-flagged as its own decisions:
+`liquidity_zones_steps_1_through_4_remaining` (MEDIUM) and
+`volume_building_inherited_level_remaining_angles_bc` (LOW).
+
 ## ✅ 2026-09-01 (RESOLVED): GLOBEX_FLUSH missed a real ~530pt overnight move — 2 real bugs found and fixed
 
 User asked "did we catch the overnight drop?" — investigation of a genuine ~530pt NQ move
