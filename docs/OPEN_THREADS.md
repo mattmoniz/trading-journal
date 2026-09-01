@@ -1,5 +1,29 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): bar-10 stop-cushion checkpoint re-attempted at 8x larger population — real, no longer reverses
+
+Resolves `OPEN_DECISION trade_management_continuous_score_worth_reattempting`. Re-ran
+`scripts/backtest_stop_cushion_checkpoint.mjs` — the exact bar-10 "how much stop-cushion remains"
+test that reversed sign at N~200 back on 2026-07-27 — against the current real population
+(N=907 checkpoint-eligible events, up ~4.5x from the eligible-subset count, ~8x on the base
+ACTIVE/SHADOW population this decision's own trigger was keyed to). Result this time: a real,
+clean effect that does **not** reverse. Median split at stopCushionFraction=0.967: LOW cushion
+(closer to stop at bar 10) N=453, EV=**-$37.37/trade**; HIGH cushion (more room) N=454, EV=**+$13.09/trade**
+— delta $50.46/trade. Chronological 70/30 split holds up (train delta $53.35 N=634, test delta
+$42.99 N=273, same sign, similar magnitude — no reversal). `computeRigor`: stable=true,
+clustered=false, clean=true (all 3 chronological thirds negative for the LOW-cushion group).
+Recorded as `RESEARCH_CLAIM bar10_stop_cushion_reattempt_larger_population` (PROVISIONAL).
+
+**Real open caveat before this goes anywhere near live/SHADOW**: it may substantially overlap
+with the already-live `bar6_checkpoint`/`targetDistFraction` mechanism — both measure "how far
+underwater is this trade," just at different fixed bars (6 vs 10). Before trusting this as a
+genuinely *additive* signal rather than a later, redundant re-measurement of what bar6 already
+captures, check the correlation between the bar-6 and bar-10 reads on the same trades, and
+whether bar-10 adds real incremental information conditional on the bar-6 read. Also not yet done:
+`bet_class` split (this codebase's own standing pooling-risk caution) and `computeReplication()`.
+Does **not** itself build "the fuller continuous per-bar re-evaluation function" the original
+2026-07-26 idea envisioned — that remains a separate, larger undertaking.
+
 ## ✅ 2026-09-01 (RESOLVED, wired live): slow+deep adverse-grind early exit — new informational mechanism
 
 Resolves `OPEN_DECISION slow_deep_adverse_grind_early_exit`. The CONFIRMED finding (N=691,
