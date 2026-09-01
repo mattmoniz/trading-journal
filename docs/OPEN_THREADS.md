@@ -81,8 +81,14 @@ work closed out. Several distinct findings, all independently re-verified:
 **Where this leaves Setup D**: entry (hybrid drive-magnitude rule) and exit (159/80, single entry)
 both stand as tested. The clearest actionable open thread is the long/short asymmetry — SHORT is
 a real, standalone, well-validated edge; LONG is a genuinely weak, close-to-coin-flip signal that
-survives mostly on its non-resolving trades landing near flat rather than losing badly. Sizing
-longs down (or pausing them) relative to shorts is the natural next decision, not yet made.
+survives mostly on its non-resolving trades landing near flat rather than losing badly.
+
+**RESOLVED 2026-09-01**: flagged as `OPEN_DECISION setup_d_long_short_sizing_asymmetry` and put to
+the user directly (live-capital-sizing-affecting). **Decision: leave as-is for now** — no sizing
+change, both LONG and SHORT stay SHADOW-only at the existing 159/80 combined exit (which already
+implicitly prices in the asymmetry). Revisit once real N grows past the current ~2-fires-in-20-days
+starvation level — re-check the direction split and the volume-building LONG filter lead
+(41%→56% hit rate, N=25/26) with a larger sample before deciding size-down vs pause.
 
 ## 🔶 2026-08-31: Setup D (OPENING_DRIVE_15MIN) Stage 2 — a real, currently 100%-forfeited opportunity found; discriminator screen in progress
 
