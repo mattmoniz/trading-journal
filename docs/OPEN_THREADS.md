@@ -1,5 +1,38 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): 3 more backlog items — 2 turned out already-stale, 1 needed user input
+
+- **`vwap_reclaim_hold_rth_only_build_worth_it`** — RESOLVED as STALE. This "should we build it"
+  decision was overtaken by action the SAME DAY it was flagged (2026-08-04, commit `abdf396`) and
+  never marked resolved — `VWAP_RECLAIM_SHORT` is genuinely live SHADOW-only, including the
+  mutual-exclusion gate against `RTH_VWAP_FADE` the decision worried about (verified both exist in
+  code). The real open question now is different and already tracked: real forward SHADOW data on
+  the shipped version is deeply negative (see this session's earlier `vwap_reclaim_short_structural_stop_not_yet_built`
+  resolution) — ironically validating this decision's own stated worry about narrow single-cell
+  survivors failing out-of-sample, just via live data rather than a fresh backtest.
+- **`value_fade_daytype_positive_signal_needs_live_gate_research`** — RESOLVED, accepted as
+  currently unactionable. Checked for a viable new live regime signal before defaulting to that:
+  none exists (the only candidate, the value-area regime layer, is explicitly tagging-only/
+  unvalidated per its own documentation) and re-testing the already-tried reassessment engine
+  would very likely hit the same structural bias already found for `isTrendCounterFade` (fade-touch
+  moments look like momentary trends). The BALANCE-day-positive edge stays real but unactionable;
+  path 1 (a genuinely new signal) stays open in principle, not permanently closed.
+- **`claude_md_restructuring_scoped_not_executed`** — RESOLVED as STALE. The restructuring this
+  decision tracked ("not started") had actually already been executed the same day it was flagged
+  (2026-08-12, per `docs/CLAUDE_MD_RESTRUCTURING_PLAN.md`'s own "Result" section — 4 commits, all
+  3 detail files genuinely exist with real content, verified directly). CLAUDE.md has since grown
+  back to 111KB (from 99KB post-split) over the 3 weeks since, as new hard rules/conventions were
+  added in full narrative form without re-applying the same condensation discipline going forward.
+  Re-flagged the actual remaining work as a fresh decision (`claude_md_needs_recondensation_20260901`,
+  LOW) rather than reusing the stale slug — this is "condense 3 weeks of new content," not "redo
+  the original split." Not started; per the original plan's own caution, this is a real multi-hour
+  task that shouldn't be rushed into a single sitting.
+- **`rolling_window_backtest_generalization_idea`** — user narrowed scope to the OR family only,
+  then asked to skip describing the boundary basis for now. Left parked, unchanged.
+- Also ran the scheduled `archive_open_threads.mjs` manually (cron catch-up hadn't caught it) —
+  `docs/OPEN_THREADS.md` was 404KB against its own 250KB cap; moved 1 old section out, still over
+  cap but that's expected given how active the last 7 days have been, not a new problem.
+
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
 ## ✅ 2026-09-01 (RESOLVED): 4 more backlog items closed — exit-mechanism family, VWAP_RECLAIM_SHORT, 18-script cron audit
