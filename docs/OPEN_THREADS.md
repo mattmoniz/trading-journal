@@ -44,7 +44,89 @@ collapse happened WITHIN the same day-type, `BALANCE` days alone went 75.7%→30
 of the stop-width thread and not contradicted by any of the above — still stands as ruling out a
 regime-mix explanation.
 
-**Root cause remains partially open.** `OPEN_DECISION roster_level_wr_circuit_breaker_scoped`
+**RESOLVED (superseding the "systemic, SUPPRESS/PROMOTE" hypothesis below): the real root cause
+was already found and mostly fixed by a PRIOR session (Opus Audit #9, 2026-08-19) that this
+session never checked for before starting its own dig from scratch — a real process miss, worth
+naming.** Dispatched DeepSeek to QA this session's own reasoning chain (not just Gemini's), which
+correctly flagged that every suspect named (8/3-8/12) predates the actual cliff (Aug-H2,
+8/16-8/31) and pointed at a dense, unexamined cluster of commits landing 8/16-8/19. Reading
+`scratch/opus_audit_9_results.md` (2026-08-19, triggered by the user's own complaint that night —
+*"trades are great and then we get four huge losses that wipe out everything"*) revealed it had
+already precisely diagnosed this: **the giveback since the account's exact 2026-08-05 peak was NOT
+diffuse — 3 setup_types (`PD_POC_FADE_SHORT` -$649/N=5, `IB_BULLISH` -$380/N=21,
+`GLOBEX_VWAP_FADE_LONG` -$240/N=9) explained essentially all of it, while the other 10 real types
+combined were net POSITIVE (+$249.50/N=31).** Root cause: (1) the ACTIVE promotion floor is a
+static `EV ≥ -$5/trade`, letting `PD_POC_FADE_SHORT` go live at real EV -$2.40; (2) its
+`OPTIMAL_STOP` circuit breaker was **deadlocked** — a legitimate 8/16 cleanup deleted 1,072
+phantom SHADOW rows, collapsing real-N counts, but the frozen-branch code re-emitted the
+pre-deletion baseline forever (`lastRecalibratedN: baselineN` instead of tracking the shrink),
+permanently blocking recalibration for **107 of 138 setup_types (78% of the roster, 11 of 17
+live-eligible)** — a systemic, roster-wide defect, just a completely different mechanism than this
+session's own SUPPRESS/PROMOTE hypothesis. `PD_POC_FADE_SHORT` was left trading a stale, in-sample
+82pt/47pt stop (break-even WR 64.3% vs achieved 64.0% — a coin flip at $166 risk/trade).
+
+Fixed same-night/next-morning (commits `ee0f6d8` 8/19 23:44, `30eb1a2` 8/20 06:34, DeepSeek-reviewed
+before deploy): baseline now ratchets down on a real population shrink, all 3 culprit types added to
+`CAPITAL_EXPOSURE_OVERRIDE` (`server/services/setupEligibility.js`). **Verified this session that the
+fix held**: those 3 types combined for only 1 stray real fire (the morning of 8/20 itself) across
+the rest of August — the override worked. `PD_POC_FADE_SHORT` was later properly recalibrated
+(47pt/30pt, break-even WR 61.0%) and, after 3 consecutive clean `SETUP_STATUS` runs, was correctly
+re-promoted 2026-08-31 (`OPEN_DECISION pd_poc_fade_short_capital_exposure_override_revisit`,
+user-confirmed).
+
+**But that only explains Aug 6-19. A SECOND, distinct wave hit Aug 20-31 that Audit #9 never saw**
+(it stopped at 8/19): `IB_BEARISH` alone lost **-$838 over 12 real trades (EV -$69.83)**, plus
+`PD_VAH_FADE_SHORT` (-$398/N=23) and `OR5_LOW_FADE_SHORT` (-$246/N=13). Checked whether this is the
+same circuit-breaker-deadlock mechanism: it isn't, cleanly — `IB_BEARISH`'s stop DID unstick once
+(8/20, `deltaN=18`, method `accepted`) but the freshly-recalibrated value landed at almost the same
+tight geometry it was already stuck at (51pt/50pt, break-even WR≈50.5%). Its real August 20-31
+trades ran roughly 16% WR against that bar — a genuine edge failure, not a stale-calibration
+artifact. Plausibly connected to (not yet proven) the 2026-08-12 IB-window correction revealing
+`IB_BEARISH`'s true post-correction edge is much thinner than its pre-correction blended history
+suggested (see the earlier IB-window-reclassification thread above). **The good news, checked
+live just now**: the pipeline did eventually catch this — `IB_BEARISH` flipped to `SUPPRESS` on
+2026-08-31 (real WR had fallen to 35.7%) and has zero real fires today (2026-09-01). It caught it,
+just ~2 weeks slower than the damage.
+
+**Lesson for future sessions, worth internalizing**: before starting a fresh multi-hour root-cause
+investigation into "why did performance degrade," check `scratch/opus_audit_*.md` and
+`docs/OPEN_THREADS.md` for a prior session that may have already diagnosed the same window — this
+session duplicated real effort by not doing that first, and only found Audit #9 because DeepSeek's
+QA pass on this session's OWN reasoning happened to surface the exact commit cluster that led to
+it. `OPEN_DECISION roster_level_wr_circuit_breaker_scoped` (Audit #11, above) remains open and
+relevant regardless — a rolling-WR circuit breaker would have caught both waves faster than the
+existing all-time-average `SETUP_STATUS` gate did.
+
+**Reframe (user-requested pooled ACTIVE+SHADOW view — reveals a more fundamental question than
+either individual setup's collapse):**
+
+| period | ACTIVE+SHADOW pooled | ACTIVE only | SHADOW only |
+|---|---|---|---|
+| Jul-H1 | 64.7% / +$23.21 | 68.4% / +$14.18 | 60.0% / +$34.64 |
+| Jul-H2 | 60.3% / +$0.87 | 68.7% / +$13.30 | 56.6% / **-$4.65** |
+| Aug-H1 | 49.1% / -$3.89 | 60.9% / +$6.51 | 46.5% / -$6.19 |
+| Aug-H2 | 46.2% / -$6.32 | 30.1% / -$23.76 | 47.6% / -$4.82 |
+
+**The broader detection-logic population (SHADOW) was already negative by Jul-H2** — meaning the
+underlying signal quality had been softening since mid-July. `ACTIVE` wasn't immune to this; it was
+successfully **cherry-picking a strong subset out of an already-weakening pool**, staying positive
+through July and early August despite the broader decline. Aug-H2's collapse is better understood
+as **ACTIVE losing its selection edge over SHADOW** (the two converge to similarly negative EV)
+rather than a sudden new problem — consistent with Audit #11's finding that ACTIVE underperformed
+SHADOW on shared setup_types since 2026-08-06. `OPEN_DECISION
+active_selection_edge_over_shadow_lost_early_august` (HIGH) — this is now the more fundamental open
+question than either of the two now-root-caused individual-setup waves above: what changed in HOW
+candidates get selected/promoted from SHADOW into ACTIVE that would explain the selection
+mechanism's edge disappearing? The SUPPRESS/PROMOTE methodology changes (`bbc2574`/`4a0a263`) this
+session originally (wrongly) treated as explaining the individual-setup collapses may still be
+relevant to this narrower, different question. `RESEARCH_CLAIM wr_collapse_two_wave_root_cause_20260901`
+(CONFIRMED) has the full synthesis.
+
+<details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
+SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
+but was superseded by the two-wave root cause above)</summary>
+
+`OPEN_DECISION roster_level_wr_circuit_breaker_scoped`
 (flagged in Audit #11 below) is unaffected by this — a circuit breaker is a safety net regardless
 of full root-cause attribution. Full detail, all query provenance: `scratch/antigravity_response.md`
 + `RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse`'s claim text.
@@ -69,6 +151,8 @@ population queries) could have a roster-wide effect via a shared codepath no sin
 spot-check would surface. Properly testing this needs resimulating `SETUP_STATUS`/`OPTIMAL_STOP`
 calibration under pre- vs. post-8/3 logic across the whole roster — a real backtest script, not
 another ad hoc query. Not yet built.
+
+</details>
 
 ## 🔶 2026-09-01: Opus Audit #11 — the "firehose" problem (user watching a dense afternoon firing stream)
 
