@@ -1,5 +1,58 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-01: root-causing the real ACTIVE WR collapse — stop-tightening is a real, partial cause, not the whole story
+
+Follow-up to Opus Audit #11 (below). User asked directly what changed between July and August to
+cause the collapse. I ruled out two cheap explanations myself first (see `RESEARCH_CLAIM
+wr_collapse_not_refire_flood_or_single_day`): not `IB_BEARISH`'s July refire-flood (excluding it
+entirely, the collapse survives and is slightly worse: 74.4%→31.8% WR), not one lucky/unlucky day
+(excluding 2026-07-29, WR barely moves). Dispatched a dedicated Gemini root-cause mine-and-run
+(`scratch/claude_request.md` → `scratch/antigravity_response.md`).
+
+**Gemini's claim: commit `d81d411` (2026-08-03) is THE root cause** — it fixed a real bug
+(`optStopQ` reading raw `p75_mae` percentiles instead of the true EV-swept `optimal_stop`), which
+crushed live stop distances for many setup_types (e.g. `PD_VAH_FADE_SHORT` 67.8pt→32pt,
+`IB_BEARISH` ~87pt→51pt), and this alone explains the collapse.
+
+**Audited before accepting, per CLAUDE.md's standing rule — and it doesn't fully hold up.**
+`d81d411` was not a careless change: it was pre-verified via `computeEvAtStopTarget()` resimulation
+(77/116 setup_types improve, 39 degrade — the degradations reasoned through as fixing a thin-tail
+overfitting bug, not a regression) and DeepSeek-reviewed before shipping (see `RESEARCH_CLAIM
+optstop_percentile_vs_ev_sweep_bug_fixed_20260803`, which itself flagged "real-world verification
+pending" and never got circled back on — a real gap in this codebase's own recheck discipline).
+Direct verification of Gemini's two named setups **contradicted its causal story on timing**:
+`IB_BEARISH` went 4-for-4 (100% WR) in its first 4 real trades immediately after its stop
+tightened (08-07 to 08-14) — the tightening didn't hurt it immediately; its real losing streak
+started weeks later (08-17 onward). `PD_VAH_FADE_SHORT`'s post-tightening sample is only N=3, too
+thin to be decisive either way.
+
+**But a proper pooled test (N=425, all real ACTIVE decisive trades Jul1-Sep1, bucketed by actual
+stop distance) found a real, partial mechanism Gemini's anecdotes had missed.** Tight stops
+(14-50pt) show WR=38.7%/EV=-$6.86; wide (78-92pt) show WR=71.6%/EV=+$10.86 — a clean, monotonic
+gradient. This is confounded with calendar time (75% of tight-stop trades are August, 86% of
+wide-stop trades are July), but **the gradient survives within-period controls**: within July
+alone, tight vs wide is 60.7%/+$10.88 vs 75.0%/+$21.84 (N=84 each); within August alone, tight vs
+wide is 24.1%/-$18.79 vs 57.9%/-$5.41 (N=57-58 each). Stop width is a real, structural contributor
+(EV degrades with it, not just WR — rules out a pure mechanical artifact).
+
+**It is NOT the sole explanation.** August's WIDEST stops (50-92pt, matched to July's typical
+width) still underperform July's TIGHTEST stops (57.9%/-$5.41 vs 60.7%/+$10.88) — there's a real,
+unexplained "August got worse across every stop-width bucket" residual on top of the stop-width
+effect. `RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse` (PROVISIONAL).
+Gemini's separate Hypothesis-1 finding (day-type regime mix did NOT shift meaningfully — the WR
+collapse happened WITHIN the same day-type, `BALANCE` days alone went 75.7%→30.9%) is independent
+of the stop-width thread and not contradicted by any of the above — still stands as ruling out a
+regime-mix explanation.
+
+**Root cause remains partially open.** `OPEN_DECISION roster_level_wr_circuit_breaker_scoped`
+(flagged in Audit #11 below) is unaffected by this — a circuit breaker is a safety net regardless
+of full root-cause attribution. Open follow-up: what explains the residual August-wide-stop
+underperformance not accounted for by stop width alone (candidates not yet tested: the
+`bbc2574`/`4a0a263` SUPPRESS/PROMOTE methodology changes shuffling which types get to fire even at
+a given stop width; a genuine August market-quality change not captured by the coarse `day_type`
+classifier). Full detail, all query provenance: `scratch/antigravity_response.md` +
+`RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse`'s claim text.
+
 ## 🔶 2026-09-01: Opus Audit #11 — the "firehose" problem (user watching a dense afternoon firing stream)
 
 User watched a ~2.5hr stretch (13:02-15:23 ET) of the live activity feed showing ~26 fires across
