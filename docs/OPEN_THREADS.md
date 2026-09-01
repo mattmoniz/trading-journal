@@ -122,6 +122,27 @@ session originally (wrongly) treated as explaining the individual-setup collapse
 relevant to this narrower, different question. `RESEARCH_CLAIM wr_collapse_two_wave_root_cause_20260901`
 (CONFIRMED) has the full synthesis.
 
+**Follow-up same session (still open): checked whether the selection-edge loss is the 4 known-bad
+types re-appearing, or a cluster-slot-inheritance effect — found the latter is real but minor.**
+Excluding the 4 known-bad types entirely, `ACTIVE` (N=62) still underperforms `SHADOW` (N=859) on
+the rest of the roster in Aug-H2 (32.3%/-$11.26 vs 46.0%/-$5.59) — not just those 4. Same-type
+controlled comparison: 4 of 6 shared setup_types show `ACTIVE` worse than `SHADOW` of the identical
+type in the identical window (`OR5_LOW_FADE_SHORT` gap=-$13.03, matching its own live 0-for-7
+losing streak flagged in `OPEN_DECISION or5_low_fade_short_recent_0for7_watch`). Using the
+`active_setups.selected_over` instrumentation (built for exactly this "which candidate wins the
+primary-fire slot" question): confirmed a real **cluster-slot-inheritance effect** — 12 of 83 real
+Aug-H2 `ACTIVE` fires explicitly beat another simultaneously-detected candidate (11 beat
+`IB_BEARISH`, 1 beat `IB_BULLISH` — both since-suppressed strugglers), meaning a correlated/
+overlapping setup absorbed the "primary fire" slot as its stronger cluster-mate got progressively
+suppressed through late August. Those 12 performed just as badly (25.0%/-$18.67) as everything
+else — but this only covers 12/83 (14%) of the population. **The other 71 fires (86%) had no
+contest at all and were independently, deeply negative (31.0%/-$24.62)** — the bulk of the gap
+remains genuinely unexplained. `RESEARCH_CLAIM active_selection_edge_cluster_inheritance_partial_20260901`
+(PROVISIONAL). Every mechanism checkable via direct query has now been tried (day-type mix, roster
+dilution, IB-specific bugs, stop-width, cluster-inheritance) — the next step needs a real
+resimulation-style backtest (recompute `SETUP_STATUS` eligibility under different historical
+windows), not another ad hoc query. Not yet built.
+
 <details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
 SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
 but was superseded by the two-wave root cause above)</summary>
