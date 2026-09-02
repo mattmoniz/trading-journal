@@ -160,8 +160,8 @@ export function computeIbBullBear(ibBars) {
   const ibLow  = Math.min(...ibBars.map(b => b.low));
   const ibMid  = (ibHigh + ibLow) / 2;
   const ibClose  = ibBars[ibBars.length - 1].close;
-  const totalAsk = ibBars.reduce((s, b) => s + b.ask_vol, 0);
-  const totalBid = ibBars.reduce((s, b) => s + b.bid_vol, 0);
+  const totalAsk = ibBars.reduce((s, b) => s + (b.ask_vol || 0), 0);
+  const totalBid = ibBars.reduce((s, b) => s + (b.bid_vol || 0), 0);
   const ibBullish = ibClose > ibMid && totalAsk > totalBid;
   const ibBearish = ibClose < ibMid && totalBid > totalAsk;
   return { ibHigh, ibLow, ibMid, ibClose, totalAsk, totalBid, ibBullish, ibBearish };

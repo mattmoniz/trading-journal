@@ -2348,17 +2348,37 @@ export async function expireStaleSetups(io) {
 
 // Structural invalidation: expire SHORT setups when price > OR High, LONG when price < OR Low.
 // Called alongside expireStaleSetups on every setup-detection poll.
+//
+// IB_HIGH/IB_LOW exception (found live 2026-09-02, user flagged 3x same-morning
+// IB_HIGH_FADE_SHORT "inv." fires on quick-check.html): the 8 IB_HIGH_*/IB_LOW_*/
+// PD_IB_HIGH_*/PD_IB_LOW_* setup types fade the 60-min Initial Balance high/low, which is
+// virtually always outside the much narrower Opening Range (OR forms in the first ~5-30min,
+// IB in the first 60) -- confirmed live that day: OR High 29102.75 vs IB High 29193, with
+// price never once closing back at/below OR High between 10:15am-1:10pm, so every
+// IB_HIGH_FADE_SHORT entry (which by construction fires near IB High, ~29180-29193) was
+// already "invalidated" by the OR-High check from the moment it fired, regardless of what
+// price did afterward. Historically 13 real (ACTIVE/SHADOW) IB_HIGH/IB_LOW fades were cut
+// short this way (35% of all real POST_ENTRY structural invalidations). Fix: these 8 types
+// use the setup's own IB high/low as the invalidation boundary instead of OR high/low --
+// every other setup type's OR-based invalidation is unchanged.
 export async function structurallyInvalidateSetups(io) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  const [priceRow, acdRow] = await Promise.all([
+  const [priceRow, acdRow, ibRow] = await Promise.all([
     query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
+    query(`
+      SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+    `, [todayET]),
   ]);
 
   const currentPrice = priceRow.rows[0]?.close;
   const orHigh = acdRow.rows[0]?.or_high;
   const orLow  = acdRow.rows[0]?.or_low;
+  const ibHigh = ibRow.rows[0]?.ib_high;
+  const ibLow  = ibRow.rows[0]?.ib_low;
   if (!currentPrice || !orHigh || !orLow) return 0;
 
   // isBearish/isBullish + the dead bearishPattern/bullishPattern arrays removed 2026-08-17
@@ -2412,6 +2432,15 @@ export async function structurallyInvalidateSetups(io) {
       shouldInvalidate = isLong
         ? (row.stop_level != null && currentPrice <= row.stop_level)
         : (row.stop_level != null && currentPrice >= row.stop_level);
+    } else if (row.setup_type.includes('IB_HIGH') || row.setup_type.includes('IB_LOW')) {
+      // Use the setup's own IB high/low, not the narrower OR high/low -- see header comment.
+      // Falls back to OR (the pre-fix behavior) only if IB bars aren't available yet (e.g. a
+      // stale SHADOW row from before 10:30 ET IB close) rather than skipping the check.
+      const boundHigh = ibHigh ?? orHigh;
+      const boundLow  = ibLow  ?? orLow;
+      shouldInvalidate =
+        (direction === 'SHORT' && currentPrice > boundHigh) ||
+        (direction === 'LONG'  && currentPrice < boundLow);
     } else {
       shouldInvalidate =
         (direction === 'SHORT' && currentPrice > orHigh) ||

@@ -1,5 +1,61 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-02 (in progress): IB_HIGH/IB_LOW structural-invalidation boundary bug found+fixed live; dtClass Gate B split-by-class comes back negative
+
+**IB_HIGH/IB_LOW invalidation bug — fixed, walk-forward tested, NOT yet committed.** User flagged
+3x same-morning `IB_HIGH_FADE_SHORT` "inv." fires on quick-check.html. Root cause:
+`structurallyInvalidateSetups()` (server/routes/acd.js) killed a SHORT setup the instant price
+closed above the day's Opening Range High — a 5-30min level — but the 8 `IB_HIGH_*`/`IB_LOW_*`/
+`PD_IB_HIGH_*`/`PD_IB_LOW_*` setup types fade the 60-min Initial Balance high/low, which is
+virtually always outside the narrower OR (confirmed that day: OR High 29102.75 vs IB High 29193).
+Every one of these entries was born already past the OR-based kill-switch trigger, regardless of
+what price did afterward — not noise, a structural mismatch. Historically 13 real trades were cut
+short this way (35% of all real POST_ENTRY structural invalidations ever recorded). **Fixed**:
+those 8 setup types now use their own IB high/low as the invalidation boundary; every other
+setup type's OR-based invalidation is unchanged (zero blast radius elsewhere).
+Walk-forward re-simulation (`scripts/backtest_ib_high_low_invalidation_boundary_fix.mjs`, clean
+bar-by-bar re-walk of all N=264 real historical trades of these 8 types under both rules, not
+just what the live poller happened to catch): OLD rule total=-$1324.00, NEW rule total=-$514.00,
+**delta=+$810.00 across 65 changed trades**. Real and directionally consistent (all 3
+chronological thirds positive: $25.95/$4.67/$7.26 per trade) but NOT rigor-clean (54% of the
+delta from 5 of 24 distinct days) — recorded as `RESEARCH_CLAIM
+ib_high_low_invalidation_boundary_fix_walk_forward` (PROVISIONAL, 30-day recheck), not overclaimed
+as settled. Checked whether this bug had demoted anything: **no** — the two setup types it
+actually touches (`IB_HIGH_FADE_SHORT`, `IB_LOW_FADE_LONG`) were already `ACTIVE` despite the bug;
+the 6 others sitting at `SUPPRESS`/`THIN_N` are unaffected (either genuinely unprofitable on their
+own merits, or thin purely on real-N count, not touched by this bug's $0-delta geometry).
+**Not yet committed** — code change is live (nodemon picked it up) but awaiting explicit
+go-ahead to `git commit`.
+
+**dtClass Gate B split-by-class: informative negative, extends `docs/DTCLASS_LIVE_READ_WIRING_AND_REGIME_SPEC.md`.**
+That spec (continued this session) predicted splitting the blended OR-expansion `+0.10`
+sizeMultiplier bonus (acd.js ~8285, tested blended 2026-09-01 as `dtclass_gate_b`,
+POSITIVE_UNSTABLE/98%-day-clustered) into BALANCE-only vs TURBULENT-only sub-gates would reveal a
+clean BALANCE-specific signal, since the live day-type read's real accuracy
+(`daytype_accuracy_log`) is 65.0% for BALANCE vs 17.8% for TURBULENT. Built and ran
+`scripts/backtest_dtclass_gate_b_split_by_class.mjs` (N=1237 real fade trades replayed): **neither
+sub-gate is wireable.** BALANCE-only: N=49 but only 7 distinct dates, 91.8% concentrated in the
+top 5, EV/trade only $2.71. TURBULENT-only: N=76 but only **2 distinct dates total** (100%
+concentration) — an N=2 problem wearing an N=76 costume. Both POSITIVE_UNSTABLE, neither
+trustworthy. Recorded as `RESEARCH_CLAIM dtclass_gate_b_balance`/`dtclass_gate_b_turbulent`
+(PROVISIONAL, 30-day recheck — more real dates will accumulate live).
+
+Also shipped this session (trivial, safe): guarded `computeIbBullBear()`'s `ask_vol`/`bid_vol`
+reduce against `undefined` (caseEngine.js), matching the sibling `confirmedDeltaDir()` convention
+— closes a latent NaN footgun, zero live impact today (current callers already pass safe values).
+
+**Still not started from the spec's phased plan**: item 1 (display-tier `dayTypeEdge`/
+`dayTypeWarn` live-read wiring — turns out entangled with the DAY_TYPE_ALPHA `dtaRow` that also
+feeds real sizing at acd.js ~8259-8263, not the clean-cut "cosmetic only" swap the spec assumed;
+needs its own separate variable, not attempted), item 6 (GARCH_VOL_SCALE per-setup pilot — table
+confirmed stale, last row 2026-07-18, ~6.5 weeks behind), item 7 (a properly cross-validated
+trend/balance classifier trained against `classifyGroundTruth()`). `ABSORPTION_LONG`'s
+`dtClass==='BALANCE'` gate (acd.js ~6228, the other BALANCE-keyed consumer) confirmed to have
+**zero real fires ever** — can't be backtested the active_setups-replay way; would need a full
+bar-level "new setup type checklist" pre-test if ever revisited, out of scope for this thread.
+
+`OPEN_DECISION dtclass_live_read_wiring_and_regime_scope` stays PENDING — updated, not resolved.
+
 ## ✅ 2026-09-02 (RESOLVED, negative): Full-day overnight/RTH momentum grid search — nothing tradeable found
 
 User's real goal, stated directly: "capture a larger overnight move that I can bank on being in
