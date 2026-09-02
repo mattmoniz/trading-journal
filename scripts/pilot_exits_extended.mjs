@@ -28,16 +28,29 @@ function aggregate5Min(bars) {
     const bucket = m - (m % 5);
     if (!current || current.bucket !== bucket) {
       if (current) out.push(current);
-      current = { bucket, ts: b.ts, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume };
+      current = { bucket, ts: b.ts, open: b.open, high: b.high, low: b.low, close: b.close, volume: Number(b.volume) };
     } else {
       current.high = Math.max(current.high, b.high);
       current.low = Math.min(current.low, b.low);
       current.close = b.close;
-      current.volume += b.volume;
+      current.volume += Number(b.volume);
     }
   }
   if (current) out.push(current);
   return out;
+}
+
+function computeRangeSlope(trueRanges) {
+  const n = trueRanges.length;
+  if (n < 2) return 0;
+  const meanX = (n - 1) / 2;
+  const meanY = trueRanges.reduce((s, r) => s + r, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (i - meanX) * (trueRanges[i] - meanY);
+    den += (i - meanX) ** 2;
+  }
+  return den > 0 ? num / den : 0;
 }
 
 async function getLiveTargets() {
@@ -58,8 +71,27 @@ async function getLiveTargets() {
   return dict;
 }
 
+function getTradePnl(trade, exitIdx1Min) {
+  const isLong = trade.dir === 'UP';
+  let stopHit = false;
+  let pnl = 0;
+  for (let i = trade.entryIdx; i <= exitIdx1Min && i < trade.bars.length; i++) {
+    const bb = trade.bars[i];
+    if ((isLong && bb.low <= trade.stopPrice) || (!isLong && bb.high >= trade.stopPrice)) {
+      stopHit = true;
+      pnl = -Math.abs(trade.entryPrice - trade.stopPrice) * PT - COMM;
+      break;
+    }
+  }
+  if (!stopHit) {
+    const exitBar = trade.bars[Math.min(exitIdx1Min, trade.bars.length - 1)];
+    const exitPrice = exitBar.close;
+    pnl = (isLong ? exitPrice - trade.entryPrice : trade.entryPrice - exitPrice) * PT - COMM;
+  }
+  return pnl;
+}
+
 async function evaluateTrade(t, baselinePts) {
-  // Common eval info
   const bars = t.bars;
   const entryIdx = t.entryIdx;
   const entry = t.entryPrice;
@@ -68,7 +100,6 @@ async function evaluateTrade(t, baselinePts) {
   const isLong = dir === 'UP';
   const baselineTgt = isLong ? entry + baselinePts : entry - baselinePts;
   
-  // Track baseline trade
   let baselinePnl = null;
   let maxFav = 0;
   for (let i = entryIdx + 1; i < bars.length; i++) {
@@ -83,17 +114,42 @@ async function evaluateTrade(t, baselinePts) {
     if (stopHit) { baselinePnl = -Math.abs(entry - stop) * PT - COMM; break; }
     if (tgtHit) { baselinePnl = Math.abs(baselineTgt - entry) * PT - COMM; break; }
   }
-  if (baselinePnl === null) baselinePnl = 0; // expired
+  if (baselinePnl === null) baselinePnl = 0;
   
   t.mfe = maxFav;
   t.baselinePnl = baselinePnl;
-  
-  // Meaningful favorable move filter: if MFE < 20 pts, it's mostly noise
   t.meaningful = maxFav >= 20;
 
-  // VWAP Slope Exit eval
-  const postBars = bars.slice(entryIdx); 
+  const postBars = bars.slice(entryIdx);
   const fiveMinBars = aggregate5Min(postBars);
+  t.fiveMinBars = fiveMinBars;
+  t.postBars = postBars;
+
+  const trueRanges = fiveMinBars.map((b, i) => {
+    const prevClose = i > 0 ? fiveMinBars[i-1].close : b.open;
+    return Math.max(b.high - b.low, Math.abs(b.high - prevClose), Math.abs(b.low - prevClose));
+  });
+  t.trueRanges = trueRanges;
+  
+  const dirs = [];
+  for (let i = 1; i < fiveMinBars.length; i++) {
+    const d = fiveMinBars[i].close > fiveMinBars[i - 1].close ? 1 : (fiveMinBars[i].close < fiveMinBars[i - 1].close ? -1 : 0);
+    dirs.push(d);
+  }
+  t.dirs = dirs;
+
+  // volZs for post-entry
+  t.volZs = [];
+  for (const b of postBars) {
+    const bl = t.volBaseline.get(b.mod);
+    if (bl && bl.std_vol > 0) {
+      t.volZs.push((Number(b.volume) - bl.avg_vol) / bl.std_vol);
+    } else {
+      t.volZs.push(0);
+    }
+  }
+
+  // VWAP logic from original
   if (fiveMinBars.length > 2) {
     const vwapSeries = computeRunningVwapSeries(fiveMinBars);
     const slopes = [];
@@ -108,43 +164,80 @@ async function evaluateTrade(t, baselinePts) {
         atrNorm: (atr && atr > 0) ? signedSlope / atr : null 
       });
     }
-    t.slopes = slopes;
-    t.fiveMinBars = fiveMinBars;
+    t.vwapSlopes = slopes;
   }
-  
-  // Structural Exit eval
-  t.structExitFoundAt = null;
-  const l = t.levels;
-  if (l) {
-    const cands = [l['PD_VAH'], l['PD_VAL'], l['PD_POC'], l['ONH'], l['ONL'], l['IB_HIGH'], l['IB_LOW']].filter(x => x != null);
-    if (cands.length > 0) {
-      // nearest level in direction of travel
-      let targetLev = null;
-      if (isLong) {
-        const aboves = cands.filter(x => x > entry + 5);
-        if (aboves.length > 0) targetLev = Math.min(...aboves);
-      } else {
-        const belows = cands.filter(x => x < entry - 5);
-        if (belows.length > 0) targetLev = Math.max(...belows);
-      }
-      
-      if (targetLev) {
-        t.structTargetLev = targetLev;
-        // simulate structural trade
-        for (let i = entryIdx + 1; i < bars.length; i++) {
-          const b = bars[i];
-          const stopHit = isLong ? b.low <= stop : b.high >= stop;
-          const tgtHit = isLong ? b.high >= targetLev : b.low <= targetLev;
-          if (stopHit && tgtHit) { t.structPnl = -(entry - stop) * PT - COMM; t.structExitFoundAt = i; break; }
-          if (stopHit) { t.structPnl = -Math.abs(entry - stop) * PT - COMM; t.structExitFoundAt = i; break; }
-          if (tgtHit) { t.structPnl = Math.abs(targetLev - entry) * PT - COMM; t.structExitFoundAt = i; break; }
-        }
-        if (t.structExitFoundAt === null) {
-          t.structPnl = 0; 
-        }
-      }
+}
+
+function simulateRangeSlope(trade, windowK, thresh, confirmDur) {
+  let flatRun = 0;
+  for (let i = windowK; i < trade.fiveMinBars.length; i++) {
+    const slice = trade.trueRanges.slice(i - windowK + 1, i + 1);
+    const slope = computeRangeSlope(slice);
+    if (slope <= thresh) {
+      flatRun++;
+    } else {
+      flatRun = 0;
+    }
+    if (flatRun >= confirmDur) {
+      const exit1Min = trade.bars.findIndex(b => b.ts === trade.fiveMinBars[i].ts) + 4; 
+      return getTradePnl(trade, exit1Min);
     }
   }
+  return getTradePnl(trade, trade.bars.length - 1);
+}
+
+function simulateDirectionalPersistence(trade, minRun, maxNotMetDur) {
+  const tradeSign = trade.dir === 'UP' ? 1 : -1;
+  let notMetCount = 0;
+  let currentRun = 0;
+  for (let i = 0; i < trade.dirs.length; i++) {
+    if (trade.dirs[i] === tradeSign) {
+      currentRun++;
+    } else {
+      currentRun = 0;
+    }
+    if (currentRun >= minRun) {
+      notMetCount = 0;
+    } else {
+      notMetCount++;
+    }
+    if (notMetCount >= maxNotMetDur) {
+      const exit1Min = trade.bars.findIndex(b => b.ts === trade.fiveMinBars[i+1].ts) + 4; 
+      return getTradePnl(trade, exit1Min);
+    }
+  }
+  return getTradePnl(trade, trade.bars.length - 1);
+}
+
+function simulateVolRollover(trade, M, N) {
+  const volZs = trade.volZs; 
+  if (!volZs || volZs.length < M + N) return getTradePnl(trade, trade.bars.length - 1);
+  for (let i = M; i < volZs.length - N; i++) {
+    let rising = true;
+    for (let j = i - M; j < i; j++) {
+      if (volZs[j] >= volZs[j+1]) { rising = false; break; }
+    }
+    if (!rising) continue;
+    
+    let declining = true;
+    for (let j = i; j < i + N; j++) {
+      if (volZs[j] <= volZs[j+1]) { declining = false; break; }
+    }
+    
+    if (declining) {
+      return getTradePnl(trade, trade.entryIdx + i + N);
+    }
+  }
+  return getTradePnl(trade, trade.bars.length - 1);
+}
+
+
+const volBaselineCache = new Map();
+async function getCachedVolumeBaseline(query, d) {
+  if (volBaselineCache.has(d)) return volBaselineCache.get(d);
+  const bl = await getVolumeBaseline(query, d);
+  volBaselineCache.set(d, bl);
+  return bl;
 }
 
 async function main() {
@@ -156,7 +249,6 @@ async function main() {
     levels.get(r.d)[r.level_name] = r.price;
   }
 
-  // To build IB_HIGH/IB_LOW daily map
   const ibQ = await query(`
     SELECT ts::date::text as d, MAX(high)::float as ib_high, MIN(low)::float as ib_low
     FROM price_bars_primary WHERE symbol='NQ' AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
@@ -189,6 +281,7 @@ async function main() {
 
   const population = [];
 
+  // RTH
   for (const [d, bars] of rthDays.entries()) {
     if (bars.length < 40) continue;
     const l = levels.get(d) || {};
@@ -212,17 +305,44 @@ async function main() {
         const setup = `RTH_FLUSH_${res.resolutionDir === 'UP' ? 'LONG' : 'SHORT'}`;
         const c = calib[setup];
         if (c) {
-          // just use base target to simplify, since we are doing head to head on same trades
-          population.push({
-            date: d, window: 'RTH', dir: res.resolutionDir, mode: 'CONTINUATION', 
-            entryIdx: triggerIdx + 1 + res.resolutionIdx, entryPrice: res.entryPrice, stopPrice: res.stopPrice,
-            bars, levels: l, baselinePts: c.target
-          });
+          let targetPts = c.target;
+          if (c.buildingTarget != null && c.avgVolZMedian != null && c.volZTrendMedian != null) {
+            const volBaseline = await getCachedVolumeBaseline(query, d);
+            const preEntryBars = bars.slice(triggerIdx + 1, res.resolutionIdx + triggerIdx + 2);
+            const volZs = [];
+            for (const b of preEntryBars) {
+              const bl = volBaseline.get(b.mod);
+              if (bl && bl.std_vol > 0) volZs.push((Number(b.volume) - bl.avg_vol) / bl.std_vol);
+            }
+            if (volZs.length >= 5) {
+              const avgVolZ = volZs.reduce((a, b) => a + b, 0) / volZs.length;
+              const n = volZs.length, xs = Array.from({ length: n }, (_, i) => i);
+              const mx = xs.reduce((a, b) => a + b, 0) / n;
+              let cov = 0, vx = 0, vy = 0;
+              for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (volZs[i] - avgVolZ); vx += (xs[i] - mx) ** 2; vy += (volZs[i] - avgVolZ) ** 2; }
+              const volZTrend = (vx > 0 && vy > 0) ? cov / Math.sqrt(vx * vy) : 0;
+              if (avgVolZ > c.avgVolZMedian && volZTrend > c.volZTrendMedian) targetPts = c.buildingTarget;
+            }
+            population.push({
+              date: d, window: 'RTH', dir: res.resolutionDir, mode: 'CONTINUATION', 
+              entryIdx: triggerIdx + 1 + res.resolutionIdx, entryPrice: res.entryPrice, stopPrice: res.stopPrice,
+              bars, levels: l, baselinePts: targetPts, volBaseline
+            });
+          } else {
+             // Fallback
+             const volBaseline = await getCachedVolumeBaseline(query, d);
+             population.push({
+                date: d, window: 'RTH', dir: res.resolutionDir, mode: 'CONTINUATION', 
+                entryIdx: triggerIdx + 1 + res.resolutionIdx, entryPrice: res.entryPrice, stopPrice: res.stopPrice,
+                bars, levels: l, baselinePts: targetPts, volBaseline
+             });
+          }
         }
       }
     }
   }
 
+  // GLOBEX
   let currentGlobexDay = null;
   let currentGlobexBars = [];
   for (const b of allBars) {
@@ -246,63 +366,6 @@ async function main() {
   const meaningful = population.filter(t => t.meaningful);
   console.log(`Meaningful moves (MFE >= 20): ${meaningful.length} (out of ${population.length})`);
 
-  function simulateVWAP(trade, thresh, isNorm, flatDurationBars) {
-    if (!trade.slopes) return 0;
-    let flatRun = 0;
-    const isLong = trade.dir === 'UP';
-    let pnl = null;
-    let mfeAtExit = 0;
-    for (const s of trade.slopes) {
-      const val = isNorm ? s.atrNorm : s.val;
-      if (val === null) continue;
-      
-      if (val < thresh) flatRun++;
-      else flatRun = 0;
-      
-      // if flattened for duration, exit at close of that 5-min bar
-      if (flatRun >= flatDurationBars) {
-        const exitBar = trade.fiveMinBars[s.fiveMinIdx];
-        const exitPrice = exitBar.close;
-        const entry = trade.entryPrice;
-        
-        // ensure stop wasn't hit before this 5 min bar completed
-        let stopHit = false;
-        let pnlOverride = 0;
-        const start1M = trade.entryIdx;
-        const end1M = trade.bars.findIndex(b => b.ts === exitBar.ts) + 4; // approximate
-        for (let i = start1M; i <= end1M && i < trade.bars.length; i++) {
-          const bb = trade.bars[i];
-          if ((isLong && bb.low <= trade.stopPrice) || (!isLong && bb.high >= trade.stopPrice)) {
-            stopHit = true;
-            pnlOverride = -(Math.abs(entry - trade.stopPrice)) * PT - COMM;
-            break;
-          }
-        }
-        
-        if (stopHit) pnl = pnlOverride;
-        else pnl = Math.abs(exitPrice - entry) * (isLong ? 1 : -1) * (entry < exitPrice ? (isLong?1:-1) : (isLong?-1:1)) * PT - COMM; 
-        
-        // wait, pnl logic:
-        if (!stopHit) {
-          pnl = isLong ? (exitPrice - entry)*PT - COMM : (entry - exitPrice)*PT - COMM;
-        }
-        break;
-      }
-    }
-    
-    // if never flattened, exited at end of session
-    if (pnl === null) {
-      const exitPrice = trade.bars[trade.bars.length-1].close;
-      pnl = isLong ? (exitPrice - trade.entryPrice)*PT - COMM : (trade.entryPrice - exitPrice)*PT - COMM;
-    }
-    return pnl;
-  }
-
-  // Sweeps
-  const thresholdsRaw = [0.1, 0.25, 0.5, 1.0, 2.0];
-  const thresholdsNorm = [0.05, 0.1, 0.2, 0.5];
-  const durations = [2, 3, 4]; // 10, 15, 20 mins
-
   const res = { rth_cont: [], rth_rev: [], glbx_cont: [], glbx_rev: [] };
   
   function getBucket(w, m) {
@@ -315,48 +378,75 @@ async function main() {
   }
 
   const out = {};
+  
+  // Sweeps configurations
+  const rangeSlopeConfigs = [
+    { k: 3, th: 0, dur: 2 },
+    { k: 4, th: 0, dur: 3 },
+    { k: 6, th: -0.5, dur: 3 },
+    { k: 4, th: -1, dur: 4 }
+  ];
+  const dpConfigs = [
+    { run: 2, dur: 3 },
+    { run: 3, dur: 4 },
+    { run: 3, dur: 6 }
+  ];
+  const volConfigs = [
+    { m: 2, n: 2 },
+    { m: 3, n: 2 },
+    { m: 3, n: 3 }
+  ];
+
   for (const [key, list] of Object.entries(res)) {
     if (list.length < 5) continue;
     const basePnl = list.reduce((s,x)=>s+x.baselinePnl,0)/list.length;
-    
-    // Structural
-    const hasStruct = list.filter(x=>x.structPnl !== undefined);
-    const structPnl = hasStruct.length ? hasStruct.reduce((s,x)=>s+x.structPnl,0)/hasStruct.length : null;
-    
-    let bestVwap = { pnl: -999, conf: '' };
-    for (const d of durations) {
-      for (const th of thresholdsRaw) {
-        const ev = list.reduce((s,x)=>s+simulateVWAP(x, th, false, d),0)/list.length;
-        if (ev > bestVwap.pnl) bestVwap = { pnl: ev, conf: `RAW th=${th} d=${d}` };
-      }
-      for (const th of thresholdsNorm) {
-        const ev = list.reduce((s,x)=>s+simulateVWAP(x, th, true, d),0)/list.length;
-        if (ev > bestVwap.pnl) bestVwap = { pnl: ev, conf: `NORM th=${th} d=${d}` };
-      }
-    }
-    
-    // PNL differences paired
-    let structBeatCount = 0;
-    for (const t of hasStruct) if (t.structPnl > t.baselinePnl) structBeatCount++;
 
-    // Rigor check on the structural exit's own P&L (day-clustering / chronological stability) --
-    // imported but never actually called in the original pass, added per user follow-up request.
-    const structRigor = hasStruct.length >= 10
-      ? computeRigor(hasStruct, { dateField: 'date', pnlFn: (x) => x.structPnl })
-      : null;
+    let bestRangeSlope = { ev: -999, conf: '', cfg: null };
+    for (const c of rangeSlopeConfigs) {
+      const ev = list.reduce((s,x)=>s+simulateRangeSlope(x, c.k, c.th, c.dur),0)/list.length;
+      if (ev > bestRangeSlope.ev) bestRangeSlope = { ev, conf: `K=${c.k}, TH=${c.th}, DUR=${c.dur}`, cfg: c };
+    }
+
+    let bestDP = { ev: -999, conf: '', cfg: null };
+    for (const c of dpConfigs) {
+      const ev = list.reduce((s,x)=>s+simulateDirectionalPersistence(x, c.run, c.dur),0)/list.length;
+      if (ev > bestDP.ev) bestDP = { ev, conf: `RUN=${c.run}, DUR=${c.dur}`, cfg: c };
+    }
+
+    let bestVol = { ev: -999, conf: '', cfg: null };
+    for (const c of volConfigs) {
+      const ev = list.reduce((s,x)=>s+simulateVolRollover(x, c.m, c.n),0)/list.length;
+      if (ev > bestVol.ev) bestVol = { ev, conf: `M=${c.m}, N=${c.n}`, cfg: c };
+    }
 
     out[key] = {
       n: list.length,
       baselineEv: basePnl,
-      structEv: structPnl,
-      structRigor: structRigor ? { clean: structRigor.clean, distinctDates: structRigor.distinctDates, top5DayPct: structRigor.top5DayPct, stable: structRigor.stable, clustered: structRigor.clustered } : null,
-      structWinRateVsBase: hasStruct.length ? structBeatCount / hasStruct.length : 0,
-      bestVwapEv: bestVwap.pnl,
-      bestVwapConf: bestVwap.conf
+      bestRangeSlopeEv: bestRangeSlope.ev,
+      bestRangeSlopeConf: bestRangeSlope.conf,
+      bestDirectionalPersistenceEv: bestDP.ev,
+      bestDirectionalPersistenceConf: bestDP.conf,
+      bestVolumeRolloverEv: bestVol.ev,
+      bestVolumeRolloverConf: bestVol.conf
     };
+
+    if (list.length >= 10) {
+        // rigor for the ACTUAL winning config of each sweep, not an arbitrary fixed config --
+        // a rigor check on a different config than the one being reported as "best" proves nothing
+        // about the reported number.
+        const rsRigor = computeRigor(list, { dateField: 'date', pnlFn: (x) => simulateRangeSlope(x, bestRangeSlope.cfg.k, bestRangeSlope.cfg.th, bestRangeSlope.cfg.dur) });
+        const dpRigor = computeRigor(list, { dateField: 'date', pnlFn: (x) => simulateDirectionalPersistence(x, bestDP.cfg.run, bestDP.cfg.dur) });
+        const volRigor = computeRigor(list, { dateField: 'date', pnlFn: (x) => simulateVolRollover(x, bestVol.cfg.m, bestVol.cfg.n) });
+        out[key].rigor = {
+            rangeSlope: rsRigor ? { clean: rsRigor.clean, distinctDates: rsRigor.distinctDates, top5DayPct: rsRigor.top5DayPct, stable: rsRigor.stable, clustered: rsRigor.clustered } : null,
+            dp: dpRigor ? { clean: dpRigor.clean, distinctDates: dpRigor.distinctDates, top5DayPct: dpRigor.top5DayPct, stable: dpRigor.stable, clustered: dpRigor.clustered } : null,
+            volRollover: volRigor ? { clean: volRigor.clean, distinctDates: volRigor.distinctDates, top5DayPct: volRigor.top5DayPct, stable: volRigor.stable, clustered: volRigor.clustered } : null,
+        }
+    }
   }
-  
-  fs.writeFileSync('scratch/pilot_exits_out.json', JSON.stringify(out, null, 2));
+
+  fs.writeFileSync('scratch/pilot_exits_extended_out.json', JSON.stringify(out, null, 2));
+  console.log("Done.");
 }
 
 async function processGlobexDay(d, bars, levels, calib, population) {
@@ -370,7 +460,7 @@ async function processGlobexDay(d, bars, levels, calib, population) {
     if (bars[i].close > vah) { triggerIdx = i; triggerDir = 'UP'; triggerTs = bars[i].ts; triggerPrice = bars[i].close; break; }
     if (bars[i].close < val) { triggerIdx = i; triggerDir = 'DOWN'; triggerTs = bars[i].ts; triggerPrice = bars[i].close; break; }
   }
-
+  
   if (triggerIdx !== null) {
     const postBars = bars.slice(triggerIdx + 1);
     const res = computeBalanceAndResolution(postBars);
@@ -379,11 +469,8 @@ async function processGlobexDay(d, bars, levels, calib, population) {
       const setup = mode === 'CONTINUATION' ? `GLOBEX_FLUSH_${res.resolutionDir === 'UP'?'LONG':'SHORT'}` : `GLOBEX_FLUSH_REVERSAL_${res.resolutionDir === 'UP'?'LONG':'SHORT'}`;
       const c = calib[setup];
       if (c && c.tierTargets) {
-        // Real live scoring (matches globexFlushDetector.js:210-212 exactly), not a fixed
-        // conservative tier -- picking tierTargets[0] unconditionally understated the true
-        // live baseline for any trade that would have actually scored 1 or 2.
         const pace = computeEntryPace(triggerPrice, triggerTs, res.entryPrice, postBars[res.resolutionIdx].ts);
-        const volBaseline = await getVolumeBaseline(query, d);
+        const volBaseline = await getCachedVolumeBaseline(query, d);
         const preEntryBars = postBars.slice(0, res.resolutionIdx + 1);
         const volZs = [];
         for (const b of preEntryBars) {
@@ -399,13 +486,16 @@ async function processGlobexDay(d, bars, levels, calib, population) {
           for (let i = 0; i < n; i++) { cov += (xs[i] - mx) * (volZs[i] - avgVolZ); vx += (xs[i] - mx) ** 2; vy += (volZs[i] - avgVolZ) ** 2; }
           volZTrend = (vx > 0 && vy > 0) ? cov / Math.sqrt(vx * vy) : 0;
         }
+
         let score = 0;
         if (pace !== null && pace <= c.paceCutoffPtsPerMin) score++;
         if (avgVolZ !== null && volZTrend !== null && avgVolZ > c.avgVolZMedian && volZTrend > c.volZTrendMedian) score++;
+        const targetPts = c.tierTargets[score];
+
         population.push({
-          date: d, window: 'GLOBEX', dir: res.resolutionDir, mode,
+          date: d, window: 'GLOBEX', dir: res.resolutionDir, mode, 
           entryIdx: triggerIdx + 1 + res.resolutionIdx, entryPrice: res.entryPrice, stopPrice: res.stopPrice,
-          bars, levels: l, baselinePts: c.tierTargets[score]
+          bars, levels: l, baselinePts: targetPts, volBaseline
         });
       }
     }

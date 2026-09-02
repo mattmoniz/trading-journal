@@ -68,6 +68,56 @@ trust the VWAP-slope numbers as reported; would need a genuine train/test split 
 `scripts/pilot_exits.mjs` before this was recorded; the fixed query is the only surviving change to
 the script.
 
+**UPDATE same day**: dispatched a follow-up to test DeepSeek's other 3 post-entry ideas (#1
+range-expansion slope, #2 directional persistence, #4 volume rollover — all post-entry/in-trade
+gauges, distinct from the pre-entry precursor versions already tested). Found and fixed TWO more
+real bugs in the process:
+
+1. **The structural-exit baseline above was itself wrong.** It used `tierTargets[0]` (the fixed
+   conservative tier) for every Globex trade regardless of that trade's actual pace/volume-building
+   conditions, instead of the real live score-based tier selection
+   (`globexFlushDetector.js:210-212`: `score++` for good pace, `score++` for volume-building,
+   `tierTargets[score]`). Fixed in `pilot_exits.mjs` to match. Corrected Globex baselines are
+   substantially higher (Continuation $3.65→$13.49/trade, Reversal $13.24→$30.84/trade) and **this
+   reverses the Globex-reversal structural-exit finding** — it now underperforms baseline
+   ($18.59 vs $30.84). Globex-continuation still nominally beats its corrected baseline
+   ($16.44 vs $13.49) but only wins on 42.4% of individual trades and is date-concentrated (33
+   distinct dates) — weak, not decisive. `RESEARCH_CLAIM globex_flush_structural_next_level_exit`
+   updated in place with the correction; do not cite the original same-day version (Globex Reversal
+   "+$5.35/trade") — it was an artifact of the wrong baseline.
+2. **Gemini's rigor check tested the wrong config** — `computeRigor()` was called against
+   `configs[0]` (the first entry in each sweep array) instead of the actual best-performing config
+   being reported as the headline number, and volume-rollover had no rigor check at all. Fixed in
+   `scripts/pilot_exits_extended.mjs` to rigor-check the real winning config for all three
+   mechanisms. Also found (and fixed, non-correctness, just slow) that a volume-baseline memoization
+   cache Gemini's own report claimed to add existed but was never actually called at any of its 3
+   real call sites.
+
+**Corrected results for the 3 new post-entry mechanisms** (against the corrected baseline, rigor
+against the actual winning config):
+- **Range-expansion slope** (`RESEARCH_CLAIM flush_post_entry_range_expansion_slope_exit`,
+  PROVISIONAL): real positive for BOTH Globex modes, rigor-clean — Continuation $13.49→$33.89/trade,
+  Reversal $30.84→$38.72/trade (both N=119, clean/stable, top5DayPct=4.2%). RTH underperforms
+  ($67.62→$41.28, N=222, rigor-clean negative). Best-of-4-configs sweep, no held-out split — same
+  caveat as the VWAP-slope result.
+- **Directional persistence** (`RESEARCH_CLAIM flush_post_entry_directional_persistence_exit`,
+  CONFIRMED negative): clean negative everywhere — RTH $67.62→$35.91, Globex-cont
+  $13.49→$13.13 (flat, and fails rigor stability), Globex-rev $30.84→$6.29 (badly underperforms,
+  also fails rigor stability).
+- **Volume rollover** (`RESEARCH_CLAIM flush_post_entry_volume_rollover_exit`, PROVISIONAL):
+  genuinely mixed. RTH underperforms. Globex-continuation shows a huge EV ($13.49→$50.84) but FAILS
+  rigor (clean=false, stable=false) — a textbook too-good-to-trust number, do not act on it. Globex
+  reversal shows an equally large EV ($30.84→$59.88) and PASSES rigor (clean=true, stable=true,
+  top5DayPct=4.2%) — the strongest single number of all the post-entry ideas tested, but the sibling
+  cell failing rigor on identical methodology is a real reason for caution; recommend an independent
+  re-check before this graduates past PROVISIONAL.
+
+Net picture across everything tested this session for "catch more of a Globex flush move": range-
+expansion slope and (cautiously) volume rollover on the reversal side are the two live candidates
+worth a follow-up validation pass; the earlier structural-exit and VWAP-slope findings are weaker
+than first reported once baselines are computed correctly; directional persistence (both pre- and
+post-entry forms) is a clean, closed negative. Nothing here is wired live.
+
 ## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
 
 Full arc, in order: scoped from Audit #11's R2 recommendation (`roster_level_wr_circuit_breaker_scoped`,
