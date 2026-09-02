@@ -14,8 +14,10 @@
 // Confirmed 2026-09-02: zero live callers anywhere (server/ or scripts/) ever picked
 // up the regime functions themselves — removed as dead code (see git history for the
 // removed buildRegimeMap()/buildPostRotationFlagMap()/buildVolRegimeMap()/
-// conditionedMultiplier() if resurrecting this line of research). The 3 math helpers
-// below are still real, still used (scripts/backfill_unified_levels.mjs), kept.
+// conditionedMultiplier() if resurrecting this line of research). CORRECTED same day
+// (DeepSeek review caught this): of the 3 math helpers below, only percentile() has a
+// real caller (scripts/backfill_unified_levels.mjs) — mean()/std() are themselves now
+// dead exports too, kept only because they're 3-line helpers with no harm in staying.
 
 export function mean(arr) {
   return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
