@@ -1,5 +1,67 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-02 (RESOLVED): `wire_flush_post_entry_exit_signals_globex` built and shipped end-to-end
+
+Follow-up to the 2026-09-01 "catch more of a big move" thread below — its HIGH-priority
+next-session item, `OPEN_DECISION wire_flush_post_entry_exit_signals_globex`, is now fully
+built, not just scoped.
+
+**Found and fixed first, before wiring**: `pilot_exits.mjs`/`pilot_exits_extended.mjs`'s `COMM`
+constant was `$1`, should be `$2` (MNQ's `commissionPerRoundTrip`) — every $/trade figure the
+2026-09-01 thread recorded was $1/trade too generous. Fixed and re-ran; all directional
+conclusions (which config wins, which mechanism passes rigor) were unchanged, only absolute
+numbers moved. Corrected in the 3 affected `RESEARCH_CLAIM` rows.
+
+**Built, all 3 required parts + both monitoring surfaces**:
+1. **Persistence**: `acd.js`'s `resolveSetupsByPrice()` calls `detectPostEntryExitSignals()`
+   (extracted from `pilot_exits_extended.mjs`'s existing `simulateRangeSlope()`/
+   `simulateVolRollover()` — same detection loop, not recoded) on every open real
+   (ACTIVE/SHADOW) `GLOBEX_FLUSH_*` position each 15s poll. New `active_setups.
+   post_entry_exit_signals` JSONB column (schema regenerated, `ARCHITECTURE.md` updated).
+   Each mechanism (`range_slope`, both Globex modes; `vol_rollover`, Reversal-mode only —
+   Continuation fails rigor) persists once: `{mechanism, fired_at, fired_price,
+   hypothetical_pnl, config}`. Never touches the row's real `actual_pnl`/`resolution`.
+2. **Segmentation**: ALL-fires vs BIG-MOVE-ONLY (top tercile by `mfe_points`), folded into part 3.
+3. **Promotion/retirement trigger**: `scripts/backtest_flush_post_entry_exit_signals_promotion.mjs`
+   (wired into `run_weekly_backtests.sh`). No-ops below N=20 real fires per mechanism/mode;
+   once N≥20, always writes a final verdict — paired against the trade's own real `actual_pnl`
+   (not a resimulated baseline) via `computeRigor()`. Positive → `RESEARCH_CLAIM` CONFIRMED +
+   flags a new `OPEN_DECISION` proposing to actually change `globexFlushDetector.js`'s live
+   target logic (human call, not automatic). Negative → CONFIRMED-negative, closes the
+   mechanism out.
+4. **Monitoring**: `GET /api/setups/flush-exit-signals-summary` (new route, reuses
+   `evalBucket()`/`modeOf()`/`MECHANISMS` from the promotion script — one aggregation, not two
+   copies) feeds both surfaces the decision required: (a) `quick-check.html` RangeSlope/VolRoll
+   row tags matching the existing Vol++/Tx1.5 `.vb-tag` pattern, **tap** (not hover — the
+   touchscreen-can't-hover gap the 2nd revision caught) opens a popup reusing the existing
+   `#modal`/`#modal-backdrop` chrome, showing this trade's own hypothetical $ + the mechanism's
+   running cumulative; (b) a new ledger card on `setup-performance.html` (ALL + BIG-MOVE-ONLY,
+   current claim status).
+
+**Two real bugs caught and fixed mid-build, both before they could bite**: `pilot_exits_
+extended.mjs` and (once written) the new promotion script both had an unconditional `main()`/
+`process.exit()` call at module scope — importing either into a live route (as this build
+needed to) would have run the multi-year backtest sweep, or killed the running server process
+outright, on every server boot. Guarded both behind `import.meta.url === file://${process.argv[1]}`
+checks before any import landed. Also, the pre-commit hook caught a real hardcoded-trading-date
+`new Date().toISOString()` call in the promotion script before it was committed — fixed to
+`SELECT CURRENT_DATE::text`, the hook working exactly as designed.
+
+**Verified live at every step, not just at the end**: server restart clean after each change,
+`/api/acd/setup-detection` and the new endpoint both respond correctly, `scratch/
+server_errors.jsonl` shows zero new entries across the whole build, `test_invariants.mjs` shows
+the same 12 pre-existing (unrelated circuit-breaker) failures before and after. Both HTML pages
+Playwright-checked: no console/page/request errors, and a synthetic-row test on quick-check.html
+confirmed the full tag→tap→popup path (including `stopPropagation` correctly preventing the
+underlying row's own trade-detail modal from also opening).
+
+**Real data is still thin (0 real `GLOBEX_FLUSH_*` fires with a persisted signal as of
+shipping)** — this is a brand-new mechanism on a low-frequency setup family, so both new UI
+surfaces correctly show PROVISIONAL/thin-N rather than a fabricated number. The weekly cron
+will self-populate the ledger and eventually trigger a real promotion/retirement verdict as
+real volume accumulates — nothing further to do manually. `OPEN_DECISION
+wire_flush_post_entry_exit_signals_globex` and its `_impl_note` follow-up both marked RESOLVED.
+
 ## ✅ 2026-09-01 (RESOLVED): "catch more of a big move" thread — ATR precursor validated, flush exit mechanisms tested, a real Gemini-dispatch bug found+fixed
 
 User asked (after the bad-R:R `RTH_FLUSH_LONG` thread) whether anything in the data can help catch
