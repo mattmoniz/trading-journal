@@ -7,6 +7,7 @@ import { OTHER_SETUP_DEFINITIONS, GLOBEX_CAPABLE_TYPES, WINDOW_RULES, getLevelFa
 import { INSTRUMENTS } from '../config/instruments.js';
 import { getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { REAL_TRADE_FILTER } from '../../scripts/backtest_setup_status.mjs';
+import { MECHANISMS, MIN_REAL_N, evalBucket, modeOf } from '../../scripts/backtest_flush_post_entry_exit_signals_promotion.mjs';
 
 const router = express.Router();
 
@@ -1080,6 +1081,69 @@ router.get('/setups/performance-summary', async (req, res) => {
     res.json({ setups, dailySeries: dailyQ.rows });
   } catch (err) {
     console.error('[setups/performance-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/setups/flush-exit-signals-summary — the ONE source of truth both monitoring
+// surfaces from OPEN_DECISION wire_flush_post_entry_exit_signals_globex's part-3 monitoring
+// requirement read from: quick-check.html's per-row tap popup (per-trade hypothetical + this
+// mechanism's running cumulative) and setup-performance.html's cumulative ledger section.
+// Reuses evalBucket()/modeOf()/MECHANISMS (scripts/backtest_flush_post_entry_exit_signals_
+// promotion.mjs) unchanged -- the exact same aggregation the weekly promotion/retirement
+// trigger uses, not a second hand-computed copy that could silently disagree with it.
+router.get('/setups/flush-exit-signals-summary', async (req, res) => {
+  try {
+    const [firesQ, claimsQ] = await Promise.all([
+      query(`
+        SELECT setup_type, actual_pnl::float as actual_pnl, mfe_points::float as mfe_points,
+               post_entry_exit_signals
+        FROM active_setups
+        WHERE setup_type LIKE 'GLOBEX_FLUSH%'
+          AND origin_status IN ('ACTIVE','SHADOW')
+          AND actual_pnl IS NOT NULL
+          AND post_entry_exit_signals IS NOT NULL
+      `),
+      query(`
+        SELECT DISTINCT ON (signal_name) signal_name, notes
+        FROM performance_audit WHERE signal_type='RESEARCH_CLAIM'
+          AND signal_name = ANY($1)
+        ORDER BY signal_name, run_date DESC
+      `, [MECHANISMS.flatMap(m => [m.claimSlug, `${m.claimSlug}_live_verdict`])]),
+    ]);
+    // status lives inside notes (JSON), not a dedicated column -- see record_claim.mjs.
+    const claimStatus = new Map(claimsQ.rows.map(r => {
+      let status = null;
+      try { status = JSON.parse(r.notes).status; } catch (_) {}
+      return [r.signal_name, status];
+    }));
+
+    const summary = [];
+    for (const m of MECHANISMS) {
+      for (const mode of m.modes) {
+        const fires = firesQ.rows.filter(r => modeOf(r.setup_type) === mode && r.post_entry_exit_signals?.[m.key]);
+        const withMfe = fires.filter(f => f.mfe_points != null);
+        let bigMoveOnly = [];
+        if (withMfe.length >= 3) {
+          const sorted = [...withMfe].sort((a, b) => a.mfe_points - b.mfe_points);
+          const tercileCut = sorted[Math.floor(sorted.length * 2 / 3)].mfe_points;
+          bigMoveOnly = fires.filter(f => f.mfe_points != null && f.mfe_points >= tercileCut);
+        }
+        const all = evalBucket(fires, m.key);
+        const big = evalBucket(bigMoveOnly, m.key);
+        // A verdict (once N>=20 cleared it once) beats a still-PROVISIONAL claim's status --
+        // prefer the live-verdict slug's recommendation, fall back to the original pilot claim.
+        const status = claimStatus.get(`${m.claimSlug}_live_verdict`) ?? claimStatus.get(m.claimSlug) ?? 'PROVISIONAL';
+        summary.push({
+          mechanism: m.key, mode, minRealN: MIN_REAL_N, status,
+          all: { n: all.n, avgDelta: all.avgDelta != null ? +all.avgDelta.toFixed(2) : null, thin: all.thin },
+          bigMoveOnly: { n: big.n, avgDelta: big.avgDelta != null ? +big.avgDelta.toFixed(2) : null, thin: big.thin },
+        });
+      }
+    }
+    res.json({ summary });
+  } catch (err) {
+    console.error('[setups/flush-exit-signals-summary]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

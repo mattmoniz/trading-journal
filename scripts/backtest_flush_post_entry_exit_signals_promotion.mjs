@@ -19,20 +19,22 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 import { flagDecision } from './flag_decision.mjs';
 
-const MIN_REAL_N = 20;
+export const MIN_REAL_N = 20;
 
 // Mirrors RANGE_SLOPE_LIVE_CONFIG/VOL_ROLLOVER_LIVE_CONFIG in pilot_exits_extended.mjs --
-// only mode combinations acd.js actually tracks live have a promotion path here.
-const MECHANISMS = [
+// only mode combinations acd.js actually tracks live have a promotion path here. Exported so
+// the /api/setups/flush-exit-signals-summary route (server/routes/setups.js) and this script
+// share one definition of which mechanism/mode pairs exist, instead of two copies drifting.
+export const MECHANISMS = [
   { key: 'range_slope', modes: ['CONTINUATION', 'REVERSAL'], claimSlug: 'flush_post_entry_range_expansion_slope_exit' },
   { key: 'vol_rollover', modes: ['REVERSAL'], claimSlug: 'flush_post_entry_volume_rollover_exit' },
 ];
 
-function modeOf(setupType) {
+export function modeOf(setupType) {
   return setupType.includes('REVERSAL') ? 'REVERSAL' : 'CONTINUATION';
 }
 
-function evalBucket(bucket, mechKey) {
+export function evalBucket(bucket, mechKey) {
   if (bucket.length < MIN_REAL_N) return { n: bucket.length, thin: true };
   const delta = (r) => Number(r.post_entry_exit_signals[mechKey].hypothetical_pnl) - Number(r.actual_pnl);
   const avgDelta = bucket.reduce((s, r) => s + delta(r), 0) / bucket.length;
@@ -115,4 +117,11 @@ async function main() {
   }
 }
 
-main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+// Guarded (2026-09-02, same reasoning as pilot_exits_extended.mjs's identical fix): this file
+// is about to be imported as a module too (evalBucket/modeOf/MECHANISMS, by the
+// /api/setups/flush-exit-signals-summary route) -- main() must only run when this file is
+// executed directly as a CLI script. Without this guard, importing it would call process.exit()
+// from inside the running server process on every server boot.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+}
