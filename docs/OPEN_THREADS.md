@@ -1,5 +1,52 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-02 (in progress): Roster-wide invalidation-boundary bug (beyond IB) + sibling-reversal gate shipped live
+
+**Roster-wide invalidation-boundary audit, spec written, not yet built.** Same session as the
+IB_HIGH/IB_LOW fix below: user asked "does this affect other setups too? I bet there's more" —
+DeepSeek roster audit (self-verified before accepting, caught it overstating one claim about
+`a_up_time` coverage along the way) confirmed yes: the OR-based blanket invalidation check is
+wrong for every fade family whose level sits outside the Opening Range, not just the 8 already-
+fixed IB types. Top offender: `PD_VAH`/`PD_VAL`/`PD_POC` (combined real N=238, 91 born-past-OR at
+entry) — same shape as the shipped IB fix, resolves from `level_prices` by name. `PW_VAH/VAL/POC`,
+`IB_MID_SCALP`, `FLOOR_R1`, `CAM_S2`, `ONL/ONH`, `PD_IB_MID` are next (7 families total). Full
+scope, ranked list, proposed resolver code, and 3 explicitly-unresolved open questions (OR-
+fallback semantics, ONH inclusion, whether PD_IB_MID belongs with this batch or the earlier IB
+fix): `docs/ROSTER_WIDE_INVALIDATION_BOUNDARY_WHITELIST_SPEC.md`. Confirmed NOT the same bug:
+`OR5_HIGH/LOW/MID_FADE` (level literally IS the OR, apparent anomaly traced to a small backfill-
+entry overshoot, not a boundary mismatch) and `GLOBEX_VWAP_FADE`/`RTH_VWAP_FADE` (live-computed
+rolling VWAPs, not static named lookups -- need the separate universal `structural_level_touched`
+rewrite, not this whitelist extension; also currently *unguarded* overnight, not mis-bounded).
+**Not started**: needs its own walk-forward backtest (same methodology as the IB fix), phase-0
+design critique, then a code-review pass -- see the spec's "suggested entry point." Tracked as
+`OPEN_DECISION roster_wide_invalidation_boundary_whitelist_scoped`.
+
+**Sibling-reversal gate ("post-win opposite-family reversal") — shipped live, RTH + Globex.**
+Separate thread, same session: user watched quick-check.html and spotted the same family firing
+both directions close together, apparently erasing a win. User-designed rule: after a real win
+(ACTIVE or SHADOW), the family's opposite direction can't fire as the very next real trade until
+a different family's real trade fires; the winning direction itself stays unrestricted. Went
+through 3 real correction rounds before shipping: (1) DeepSeek design critique caught a fired-vs-
+resolved-order bug (was mostly re-measuring the *already-live* `isCrossDirectionFastFlip` gate's
+own territory, not this new pattern); (2) user pushback ("something is missing") caught a second
+bug -- the population filter silently dropped 557 real trades with a `_TRAIL`/`_GAP_*`/
+`_OVERNIGHT` suffix; (3) user pushback again resolved a genuine design ambiguity (non-directional
+context signals like `IB_BULLISH` don't count as "a different family," in either direction).
+Final backtest: N=30, EV -$36.36/trade, total -$1,090.75, rigor-clean (18 distinct dates, no
+sign reversal) -- real-money (ACTIVE-only) slice is thin (N=3, +$95.75), user explicitly chose to
+wire for all trades regardless so SHADOW data keeps accumulating on what this gate holds back.
+Shipped as `isPostWinOppositeFamilyBlocked()` (`server/routes/acd.js` ~356), wired into both the
+RTH and Globex forceShadow chains, `suppression_reason='POST_WIN_OPP_FAMILY_REV'`. **A real bug
+was found and fixed before the code-review dispatch even went out** (self-caught, not by
+DeepSeek): both call sites originally passed the pre-existing `rthLevelBase`/
+`crossDirectionLevelBase` variables (borrowed from the sibling `isCrossDirectionFastFlip` gate),
+which only strip a trailing `_LONG`/`_SHORT` and leave `_TRAIL`/`_GAP_*`/`_OVERNIGHT` in place --
+silently exempting every suffixed candidate from this new gate. Fixed to use the (correctly
+suffix-stripping) `postWinFamilyOf()` instead, without touching the existing gate's variables.
+**Code review dispatched to DeepSeek, not yet returned as of this entry** -- verify its findings
+(if any) before trusting this gate further; `scripts/backtest_post_win_opposite_family_reversal.mjs`
+has the full corrected methodology if it needs re-running.
+
 ## 🔶 2026-09-02 (in progress): IB_HIGH/IB_LOW structural-invalidation boundary bug found+fixed live; dtClass Gate B split-by-class comes back negative
 
 **IB_HIGH/IB_LOW invalidation bug — fixed, walk-forward tested, NOT yet committed.** User flagged
