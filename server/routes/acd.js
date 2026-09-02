@@ -352,6 +352,69 @@ async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
   return q.rows.length > 0 ? cooldownMin : false;
 }
 
+// "Sibling reversal" gate (2026-09-02, user-spotted live on quick-check.html + user-designed
+// rule, phase-0 design critique by DeepSeek, 2 real bugs found and fixed in the backtest before
+// wiring -- see docs/OPEN_THREADS.md's 2026-09-02 entry for the full derivation). Distinct from
+// isCrossDirectionFastFlip() above: that gate is a fixed TIME window and fires regardless of
+// whether the first trade won or lost; this one is OUTCOME-conditioned (only triggers after a
+// real TARGET_HIT) and duration-based on a DIFFERENT FAMILY firing, not a fixed number of
+// minutes. User's rule, verbatim: "the very next trade cannot be from the same family in the
+// opposite direction" after a win, "until a different family setup fires first" -- the original
+// winning direction can keep firing regardless.
+//
+// SHADOW counts the same as ACTIVE for both arming (a SHADOW win still triggers the block) and
+// resetting (a SHADOW-origin different-family fire still clears it) -- explicit user decision,
+// since quick-check.html shows both on the same timeline with no visual distinction and the
+// user's own words were "I don't want sibling trades to fire," not "I don't want sibling trades
+// to fire only when real money was on the line." Non-directional signals (IB_BULLISH,
+// ZONE_EDGE_FADE, etc -- no LONG/SHORT pairing) are invisible to this check either way: they
+// can't arm it, can't be blocked by it, and don't count as "a different family" for the reset
+// (explicit user decision after finding 3 of 30 backtested cases hinged on this exact question --
+// "no we're done with ib bullish bearish").
+//
+// Backtested (scripts/backtest_post_win_opposite_family_reversal.mjs, corrected twice -- fired-
+// vs-resolved-order timing per DeepSeek's design critique, then a _TRAIL/_GAP_*/_OVERNIGHT
+// suffix population gap per user pushback): N=30 real historical matches, EV -$36.36/trade,
+// total -$1,090.75, rigor-clean (18 distinct dates, not clustered, no chronological sign
+// reversal). Real-money (ACTIVE-only) slice is thin (N=3, +$95.75) -- user explicitly chose to
+// wire this for ALL trades regardless, not just the ACTIVE-only slice, so SHADOW data keeps
+// accumulating on exactly what this gate holds back going forward, the same "force SHADOW, don't
+// skip" convention as every other gate in this file.
+function postWinFamilyOf(setupType) {
+  return setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '').replace(/_(LONG|SHORT)$/, '');
+}
+function postWinDirOf(setupType) {
+  const stripped = setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '');
+  if (stripped.endsWith('_LONG')) return 'LONG';
+  if (stripped.endsWith('_SHORT')) return 'SHORT';
+  return null; // non-directional (IB_BULLISH, ZONE_EDGE_FADE, etc) -- no paired sibling
+}
+async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
+  const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
+  // Most recent real win (ACTIVE or SHADOW) in the OPPOSITE direction of this family --
+  // suffix-stripped setup_type must equal exactly `${family}_${oppositeDir}`.
+  const winQ = await query(`
+    SELECT resolved_at::text AS resolved_at FROM active_setups
+    WHERE trade_date = $1 AND origin_status IN ('ACTIVE','SHADOW')
+      AND resolution = 'TARGET_HIT' AND resolved_at IS NOT NULL
+      AND regexp_replace(setup_type, '_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$', '') = $2
+    ORDER BY resolved_at DESC LIMIT 1
+  `, [tradeDate, `${family}_${oppositeDir}`]).catch(() => ({ rows: [] }));
+  if (!winQ.rows.length) return false;
+  const winResolvedAt = winQ.rows[0].resolved_at;
+  // Has any DIFFERENT family's real directional trade (ACTIVE or SHADOW) fired since that win?
+  // Non-directional types (no _LONG/_SHORT suffix even after stripping TRAIL/GAP/OVERNIGHT) are
+  // invisible here -- they don't count as "a different family firing" (explicit user decision).
+  const resetQ = await query(`
+    SELECT 1 FROM active_setups
+    WHERE trade_date = $1 AND fired_at > $2 AND origin_status IN ('ACTIVE','SHADOW')
+      AND regexp_replace(setup_type, '_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$', '') ~ '_(LONG|SHORT)$'
+      AND regexp_replace(regexp_replace(setup_type, '_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$', ''), '_(LONG|SHORT)$', '') != $3
+    LIMIT 1
+  `, [tradeDate, winResolvedAt, family]).catch(() => ({ rows: [] }));
+  return resetQ.rows.length === 0; // still blocked if nothing else real has fired since the win
+}
+
 async function isInRefireCooldown(tradeDate, setupType) {
   const cooldownMin = REFIRE_COOLDOWN_MINUTES[setupType];
   if (!cooldownMin) return false;
@@ -2090,6 +2153,11 @@ async function detectGlobexSetup(sessionDate, io) {
       // skipping. See isCrossDirectionFastFlip()/getCrossDirectionFlipCalib() above.
       if (crossDirectionCooldownMin) {
         live = { status: 'SHADOW', reason: `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min` };
+      }
+      // Sibling-reversal override (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header.
+      // Same "force SHADOW, don't skip" convention as the check just above.
+      if (!crossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(sessionDate, crossDirectionLevelBase, c.dir)) {
+        live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
       }
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
@@ -9964,21 +10032,29 @@ export default function createACDRouter(io) {
         const rthLevelBase = active.type.replace(/_(LONG|SHORT)$/, '');
         const rthDir = inferDirection(active.type);
         const crossDirectionCooldownMin = rthDir ? await isCrossDirectionFastFlip(todayET, rthLevelBase, rthDir) : false;
+        // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header
+        // (~line 356). Only checked when the fast-flip gate above didn't already catch it, same
+        // short-circuit pattern used everywhere else in this forceShadow chain.
+        const postWinOppBlocked = !crossDirectionCooldownMin && rthDir
+          ? await isPostWinOppositeFamilyBlocked(todayET, rthLevelBase, rthDir)
+          : false;
         const forceShadow = isTrailMechanism
           || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
           || inNewEntryDeadZone
           || inRefireCooldown
           || !!exposureOverride
-          || !!crossDirectionCooldownMin;
+          || !!crossDirectionCooldownMin
+          || postWinOppBlocked;
         // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
         if (cascadeBreaker.active) {
-          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin}`);
+          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin} postWinOppBlocked=${postWinOppBlocked}`);
         }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : exposureOverride ? exposureOverride.reason
           : crossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min`
+          : postWinOppBlocked ? 'POST_WIN_OPP_FAMILY_REV'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const skipRedundantShadowInsert = forceShadow
           && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
