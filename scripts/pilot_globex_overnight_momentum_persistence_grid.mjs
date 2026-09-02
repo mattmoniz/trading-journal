@@ -2,7 +2,10 @@ import fs from 'fs';
 import { query } from '../server/db.js';
 import { recordClaim } from './record_claim.mjs';
 
-function pearson(x, y) {
+// Exported (2026-09-02) so downstream analyses (e.g. pilot_globex_0330_rolling_seasonality.mjs)
+// reuse this exact math instead of a second hand-copied implementation, per CLAUDE.md's
+// "export the real function, never reimplement" rule.
+export function pearson(x, y) {
   const n = x.length;
   if (n === 0) return 0;
   let sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0, sumXY = 0;
@@ -17,7 +20,7 @@ function pearson(x, y) {
   return num / den;
 }
 
-function permutationTest(x, y, realCorr, draws = 1000) {
+export function permutationTest(x, y, realCorr, draws = 1000) {
   if (x.length < 2) return 1.0;
   let count = 0;
   const n = x.length;
