@@ -284,25 +284,47 @@ const REFIRE_COOLDOWN_MINUTES = {
   OR5_HIGH_FADE_LONG: 30, OR5_HIGH_FADE_SHORT: 30,
 };
 
-// Cross-direction fast-flip cooldown (2026-09-01, user-spotted live whipsaw:
+// Cross-direction fast-flip gate (2026-09-01/02, user-spotted live whipsaw:
 // GLOBEX_VWAP_FADE_LONG hit T1 07:35, GLOBEX_VWAP_FADE_SHORT fired 07:37 -- 2 minutes later,
 // 22 minutes before the LONG even resolved -- and stopped out). REFIRE_COOLDOWN_MINUTES above
 // only ever gates the SAME setup_type re-firing itself; it does nothing for the OPPOSITE
 // direction of the same underlying level firing while the first is still open, which is a
 // structurally different failure mode (holding both sides of the same trade idea at once).
-// Tested directly (scripts/pilot_opposite_direction_post_win_pause.mjs, RESEARCH_CLAIM
-// globex_vwap_fade_fast_flip_underperforms): overlap in general is NOT bad (net positive,
-// roster-wide and for GLOBEX_VWAP_FADE specifically) -- but within it, a clean monotonic
-// gradient by elapsed time since the opposite direction fired: <=5min N=22 WR=50.0%
-// EV=-$7.55/trade; 5-15min N=22 EV=$0.09; >15min N=35 EV=+$13.11 (stable=true). Only the fast
-// bucket is negative -- this constant matches that boundary exactly, not an arbitrary round
-// number. Scoped to GLOBEX_VWAP_FADE only (the levelBase with direct evidence) -- do not
-// extend to other families without the same per-family verification (PD_POC_FADE showed the
-// opposite lean in the same test, thin).
-const CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES = { GLOBEX_VWAP_FADE: 5 };
+//
+// GENERALIZED 2026-09-02 (user pushback: a single hardcoded family was exactly the
+// hardcoded-list-goes-stale anti-pattern this codebase avoids everywhere else, and "anything
+// in live should be in all trades where applicable"). scripts/backtest_cross_direction_fast_
+// flip.mjs (weekly) tests EVERY real paired-direction family (derived from live data, not a
+// hardcoded list) for the same fast/medium/slow-flip gradient found for GLOBEX_VWAP_FADE
+// (RESEARCH_CLAIM globex_vwap_fade_fast_flip_underperforms: <=5min N=22 EV=-$7.55 vs 5-15min
+// EV=$0.09 vs >15min EV=+$13.11), and writes a real calibrated cooldown to performance_audit
+// (signal_type='CROSS_DIRECTION_FLIP_CALIB') only when a family's own fast bucket clears N>=20
+// AND shows the same monotonic shape. Read live here, cached per day -- fail-open (no gate) for
+// any family with no GATE-recommended row yet, since a false negative (missing a real pattern)
+// is far lower-risk than a false positive (blocking a good trade on no evidence) for a
+// mechanism that gates live capital. A gated candidate is NOT skipped outright -- see the call
+// site below, which forces it to SHADOW instead of continuing past insertion entirely, so real
+// outcome data keeps accumulating on exactly the trades this gate holds back (the only way to
+// actually verify later whether it's still helping, not silently costing good trades).
+async function getCrossDirectionFlipCalib(tradeDate) {
+  const cached = getCached(tradeDate, 'crossDirectionFlipCalib', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const r = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, recommendation, notes
+    FROM performance_audit WHERE signal_type='CROSS_DIRECTION_FLIP_CALIB'
+    ORDER BY signal_name, run_date DESC
+  `);
+  const map = {};
+  for (const row of r.rows) {
+    if (row.recommendation !== 'GATE') continue;
+    try { map[row.signal_name] = JSON.parse(row.notes).cooldownMinutes; } catch (_) {}
+  }
+  return setCached(tradeDate, 'crossDirectionFlipCalib', map);
+}
 
 async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
-  const cooldownMin = CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES[levelBase];
+  const calib = await getCrossDirectionFlipCalib(tradeDate);
+  const cooldownMin = calib[levelBase];
   if (!cooldownMin) return false;
   const oppositeType = `${levelBase}_${dir === 'LONG' ? 'SHORT' : 'LONG'}`;
   const q = await query(`
@@ -312,7 +334,7 @@ async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
       AND fired_at > NOW() - ($3::int * INTERVAL '1 minute')
     LIMIT 1
   `, [tradeDate, oppositeType, cooldownMin]).catch(() => ({ rows: [] }));
-  return q.rows.length > 0;
+  return q.rows.length > 0 ? cooldownMin : false;
 }
 
 async function isInRefireCooldown(tradeDate, setupType) {
@@ -1989,10 +2011,14 @@ async function detectGlobexSetup(sessionDate, io) {
         continue;
       }
 
-      if (c.levelBase && await isCrossDirectionFastFlip(sessionDate, c.levelBase, c.dir)) {
-        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'CROSS_DIRECTION_FAST_FLIP', gateReason: `opposite direction of ${c.levelBase} fired within ${CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES[c.levelBase]}min and is still open`, entry: px });
-        continue;
-      }
+      // Not a `continue`/skip like the two gates above -- deliberately lets the candidate
+      // proceed to a real INSERT below, forced to SHADOW (see the `live` override just past
+      // getOvernightLevelLiveStatus()). A full skip would mean no row at all for exactly the
+      // trades this gate holds back, which is a dead end: nobody could ever check later
+      // whether the gate is still justified or is quietly costing good trades. SHADOW-tracking
+      // it keeps real outcome data flowing into backtest_cross_direction_fast_flip.mjs's own
+      // weekly re-calibration.
+      const crossDirectionCooldownMin = c.levelBase ? await isCrossDirectionFastFlip(sessionDate, c.levelBase, c.dir) : false;
 
       // Every candidate now carries widerStop/widerTarget from the real OPTIMAL_STOP source
       // (see the candidates array above) -- the old widerWindowNew-vs-globexParams() branch
@@ -2027,9 +2053,17 @@ async function detectGlobexSetup(sessionDate, io) {
       // SUPPRESS/SUPPRESS/THIN_N by the unified SETUP_STATUS pipeline regardless of this
       // code-level flag, so un-pausing them here doesn't put them live -- verified directly,
       // not assumed.
-      const live = c.widerWindowNew
+      let live = c.widerWindowNew
         ? await getOvernightLevelLiveStatus(c.type)
         : { status: 'ACTIVE', reason: null };
+      // Cross-direction fast-flip override -- forces SHADOW regardless of what the normal
+      // eligibility check above returned, but still inserts a real, resolvable row (both
+      // status and origin_status become 'SHADOW' via the shared $10 param below, the same
+      // convention getOvernightLevelLiveStatus()'s own SHADOW return already uses) rather than
+      // skipping. See isCrossDirectionFastFlip()/getCrossDirectionFlipCalib() above.
+      if (crossDirectionCooldownMin) {
+        live = { status: 'SHADOW', reason: `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min` };
+      }
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
       // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
