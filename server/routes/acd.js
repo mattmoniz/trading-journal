@@ -2359,12 +2359,33 @@ export async function expireStaleSetups(io) {
 // already "invalidated" by the OR-High check from the moment it fired, regardless of what
 // price did afterward. Historically 13 real (ACTIVE/SHADOW) IB_HIGH/IB_LOW fades were cut
 // short this way (35% of all real POST_ENTRY structural invalidations). Fix: these 8 types
-// use the setup's own IB high/low as the invalidation boundary instead of OR high/low --
-// every other setup type's OR-based invalidation is unchanged.
+// use the setup's own IB level as the invalidation boundary instead of OR high/low -- every
+// other setup type's OR-based invalidation is unchanged.
+//
+// CORRECTED 2026-09-02 (DeepSeek code review, self-verified against compute_levels.js and
+// acd.js's own live level sources before accepting): the first version of this fix got 2 of
+// the 8 types genuinely right (IB_HIGH_FADE_SHORT, IB_LOW_FADE_LONG -- confirmed live-ACTIVE,
+// the two that motivated the fix) but the other 6 were wrong two different ways:
+// (a) PD_IB_HIGH_FADE_*/PD_IB_LOW_FADE_* fade the PRIOR DAY's IB (acd.js ~7534:
+//     `lp.PD_IB_HIGH`/`lp.PD_IB_LOW`, read from level_prices; gate 570/9:30 ET per
+//     scripts/repair_ib_dependent_window_mismatch.mjs), not today's IB -- the first version
+//     recomputed TODAY's IB for these too, a different level entirely with no containment
+//     relationship to today's OR (unlike today's IB, which structurally contains today's OR).
+// (b) IB_HIGH/IB_LOW can each fire as BOTH directions (approachDir at ~7038: price can
+//     approach IB High from below -> SHORT fading resistance, or from above -> LONG
+//     defending it as support), so a direction-only boundary pick (SHORT->high, LONG->low)
+//     is only correct for the "natural" pairing and picks the wrong (opposite, effectively
+//     unreachable same-session) extreme for IB_HIGH_FADE_LONG/IB_LOW_FADE_SHORT -- which is
+//     why the walk-forward backtest showed exactly $0 delta for those two, a symptom of the
+//     bug, not evidence of "no effect." Fixed: resolve the correct LEVEL first (today's IB
+//     high/low for IB_HIGH_FADE_*/IB_LOW_FADE_*, prior-day IB high/low via level_prices for
+//     PD_IB_HIGH_FADE_*/PD_IB_LOW_FADE_*), independent of direction, then apply the universal
+//     rule SHORT invalidates above ITS level / LONG invalidates below ITS level -- correct
+//     regardless of which side price approached from.
 export async function structurallyInvalidateSetups(io) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-  const [priceRow, acdRow, ibRow] = await Promise.all([
+  const [priceRow, acdRow, ibRow, pdIbRow] = await Promise.all([
     query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
     query(`
@@ -2372,6 +2393,10 @@ export async function structurallyInvalidateSetups(io) {
       FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
     `, [todayET]),
+    // Same source acd.js's live fire path itself reads (lp.PD_IB_HIGH/lp.PD_IB_LOW,
+    // ~7534) -- prior-day IB, already fully formed and available from the 8am cron, not
+    // recomputed here (would risk drifting from compute_levels.js's own logic).
+    query(`SELECT level_name, price::float FROM level_prices WHERE trade_date=$1 AND level_name IN ('PD_IB_HIGH','PD_IB_LOW')`, [todayET]),
   ]);
 
   const currentPrice = priceRow.rows[0]?.close;
@@ -2379,6 +2404,8 @@ export async function structurallyInvalidateSetups(io) {
   const orLow  = acdRow.rows[0]?.or_low;
   const ibHigh = ibRow.rows[0]?.ib_high;
   const ibLow  = ibRow.rows[0]?.ib_low;
+  const pdIbHigh = pdIbRow.rows.find(r => r.level_name === 'PD_IB_HIGH')?.price;
+  const pdIbLow  = pdIbRow.rows.find(r => r.level_name === 'PD_IB_LOW')?.price;
   if (!currentPrice || !orHigh || !orLow) return 0;
 
   // isBearish/isBullish + the dead bearishPattern/bullishPattern arrays removed 2026-08-17
@@ -2433,14 +2460,23 @@ export async function structurallyInvalidateSetups(io) {
         ? (row.stop_level != null && currentPrice <= row.stop_level)
         : (row.stop_level != null && currentPrice >= row.stop_level);
     } else if (row.setup_type.includes('IB_HIGH') || row.setup_type.includes('IB_LOW')) {
-      // Use the setup's own IB high/low, not the narrower OR high/low -- see header comment.
-      // Falls back to OR (the pre-fix behavior) only if IB bars aren't available yet (e.g. a
-      // stale SHADOW row from before 10:30 ET IB close) rather than skipping the check.
-      const boundHigh = ibHigh ?? orHigh;
-      const boundLow  = ibLow  ?? orLow;
-      shouldInvalidate =
-        (direction === 'SHORT' && currentPrice > boundHigh) ||
-        (direction === 'LONG'  && currentPrice < boundLow);
+      // Use the setup's own level, not the narrower OR high/low -- see header comment.
+      // Resolve WHICH level first (today's IB for IB_HIGH_FADE_*/IB_LOW_FADE_*, prior-day IB
+      // via level_prices for PD_IB_HIGH_FADE_*/PD_IB_LOW_FADE_* -- these are genuinely
+      // different levels on different days, not interchangeable), independent of direction --
+      // then apply the universal rule (SHORT invalidates above its level, LONG below), since
+      // IB_HIGH/IB_LOW can each fire as either direction depending on which side price
+      // approached from (approachDir, ~line 7038) and a direction-only high/low pick is wrong
+      // for the "reversal" pairing (IB_HIGH_FADE_LONG defends IB High as support -- it should
+      // invalidate on a break BELOW IB High, not on price crossing all the way down to IB Low).
+      const isPriorDay = row.setup_type.startsWith('PD_IB_');
+      const isHighLevel = row.setup_type.includes('IB_HIGH');
+      // Falls back to OR only if the real level truly isn't available (e.g. today's IB
+      // bars not formed yet, or the level_prices PD row missing) rather than skipping the check.
+      const level = isPriorDay
+        ? (isHighLevel ? (pdIbHigh ?? orHigh) : (pdIbLow ?? orLow))
+        : (isHighLevel ? (ibHigh ?? orHigh) : (ibLow ?? orLow));
+      shouldInvalidate = direction === 'SHORT' ? currentPrice > level : currentPrice < level;
     } else {
       shouldInvalidate =
         (direction === 'SHORT' && currentPrice > orHigh) ||
