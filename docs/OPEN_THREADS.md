@@ -1,48 +1,54 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-09-02 (in progress): Unified live-gate checkpoint spec — FIRST priority for next session
+## 🔶 2026-09-02: Unified live-gate checkpoint spec — sequencing item 1 shipped, 2 more pending
 
 Follow-up to the sibling-reversal gate below: DeepSeek's code review of the initial wiring found
 it only reached 2 of `active_setups`'s 7 INSERT sites, missing the RTH `shadowCandidates` loop
 (the real fire path for `STOP_SWEEP`/`VWAP_MAGNET`/`C_PAIRED`/`C_REVERSAL`/`TRT`/
 `BRACKET_BREAKOUT`) and `STACK_VOL_BREAK_LIVE`. Both gaps fixed directly same session (commit
-`ab81fce`) -- the other 2 flagged sites turned out to already hardcode `status='SHADOW'`
-unconditionally, so there was nothing to gate there. User then asked the structural question
-directly: "shouldn't there be one insert site?" -- pointing at the real cause: 4 live-capable
-INSERT sites each hand-assemble their own `forceShadow` boolean independently, with no single
-place a future gate is guaranteed to reach (this is the SECOND time this exact gap has bitten a
-gate -- `isCrossDirectionFastFlip` hit it first, built Globex-only, needed a separate later fix
-for RTH). Full scope -- why NOT to merge the 4 INSERT statements themselves (genuinely different
-context/columns/applicable-checks per site, confirmed e.g. `isTrailMechanism` is scoped only to
-the RTH active slot), the proposed shared `evaluateLiveGates()` checkpoint function, and the
-required per-site check-applicability audit before implementation: `docs/
-UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`. **User explicitly ranked this spec FIRST priority for the
-next session, ahead of the roster-wide invalidation-boundary whitelist spec below** (which stays
-real and pending, just second in line). Design critique dispatched to DeepSeek same session --
-check `scratch/deepseek_response.md` / this thread for whether it returned before context was
-cleared. Tracked as `OPEN_DECISION unified_live_gate_checkpoint_scoped` (HIGH). Zero
-implementation code written.
+`ab81fce`). User then asked the structural question directly: "shouldn't there be one insert
+site?" A follow-up DeepSeek design critique of the resulting spec found the scope itself was
+wrong the same way the original bug was: the "4 live-capable sites" census undercounted by 3 --
+`minuteBarSignalDetector.js`/`rthFlushDetector.js`/`globexFlushDetector.js` each hand-roll their
+own N≥20/ev≥-5 `getLiveStatus()` with **zero** exposure to any of the 7 gates. Real total: 10
+`active_setups` INSERT sites, 7 live-capable. DeepSeek also rejected the original
+`evaluateLiveGates({forceShadow,reason})` shape (can't express skip-vs-shadow) and recommended a
+3-step sequence instead of building the full runtime refactor immediately: (1) ship a cheap
+`test_invariants.mjs` structural coverage census now, zero live risk; (2) fix the base-eligibility
+divergence (`getCanonicalLiveStatus` vs `isLiveEligible` vs the RTH active slot's fail-**open**
+`_suppressedSetups.has()`) as its own higher-risk change; (3) only then build the corrected
+`runLiveGates` shape (per-site ordered gate-id lists, skip/shadow disposition) one site at a time
+under a dual-run assertion. **Item (1) SHIPPED** (`scripts/test_invariants.mjs` check [24],
+verified 0 new FAILs / +8 known-gap WARNs vs a git-stash A/B baseline). Items (2) and (3) remain
+PENDING and unscoped. Full corrected spec: `docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`. Tracked as
+`OPEN_DECISION unified_live_gate_checkpoint_scoped` (HIGH, still open pending items 2-3).
 
-## 🔶 2026-09-02 (in progress): Roster-wide invalidation-boundary bug (beyond IB) + sibling-reversal gate shipped live
+## 🔶 2026-09-02 RESOLVED NEGATIVE: Roster-wide invalidation-boundary bug (beyond IB) — sibling-reversal gate shipped live
 
-**Roster-wide invalidation-boundary audit, spec written, not yet built.** Same session as the
-IB_HIGH/IB_LOW fix below: user asked "does this affect other setups too? I bet there's more" —
-DeepSeek roster audit (self-verified before accepting, caught it overstating one claim about
-`a_up_time` coverage along the way) confirmed yes: the OR-based blanket invalidation check is
-wrong for every fade family whose level sits outside the Opening Range, not just the 8 already-
-fixed IB types. Top offender: `PD_VAH`/`PD_VAL`/`PD_POC` (combined real N=238, 91 born-past-OR at
-entry) — same shape as the shipped IB fix, resolves from `level_prices` by name. `PW_VAH/VAL/POC`,
-`IB_MID_SCALP`, `FLOOR_R1`, `CAM_S2`, `ONL/ONH`, `PD_IB_MID` are next (7 families total). Full
-scope, ranked list, proposed resolver code, and 3 explicitly-unresolved open questions (OR-
-fallback semantics, ONH inclusion, whether PD_IB_MID belongs with this batch or the earlier IB
-fix): `docs/ROSTER_WIDE_INVALIDATION_BOUNDARY_WHITELIST_SPEC.md`. Confirmed NOT the same bug:
-`OR5_HIGH/LOW/MID_FADE` (level literally IS the OR, apparent anomaly traced to a small backfill-
-entry overshoot, not a boundary mismatch) and `GLOBEX_VWAP_FADE`/`RTH_VWAP_FADE` (live-computed
-rolling VWAPs, not static named lookups -- need the separate universal `structural_level_touched`
-rewrite, not this whitelist extension; also currently *unguarded* overnight, not mis-bounded).
-**Not started**: needs its own walk-forward backtest (same methodology as the IB fix), phase-0
-design critique, then a code-review pass -- see the spec's "suggested entry point." Tracked as
-`OPEN_DECISION roster_wide_invalidation_boundary_whitelist_scoped`.
+**Roster-wide invalidation-boundary extension: built, backtested twice, resolved NEGATIVE, not
+shipped.** Same session as the IB_HIGH/IB_LOW fix below: user asked "does this affect other
+setups too? I bet there's more" — a DeepSeek roster audit confirmed the same OR-based blanket
+invalidation bug *shape* extends to 7 more families (`PD_VAH`/`PD_VAL`/`PD_POC`, `PW_VAH/VAL/POC`,
+`IB_MID_SCALP`, `FLOOR_R1`, `CAM_S2`, `ONL/ONH`, `PD_IB_MID`). Two designs were built and
+backtested: (1) unconditional own-level replacement, mirroring the IB fix exactly -- pooled
++$1774.34 looked positive, but DeepSeek's own audit found 65% was a SHADOW-only artifact plus
+day-clustering, and the real ACTIVE-only number (+$338.62/152) was itself the net of 2 live
+families getting WORSE (PD_VAH -$217/51 real, PD_VAL -$349/26 real); (2) DeepSeek's proposed
+"wider-of-two" boundary (`SHORT: max(orHigh, ownLevel)`, `LONG: min(orLow, ownLevel)` -- never
+fires earlier in TIME than today's live rule) -- DeepSeek predicted this would push the
+ACTIVE-only delta ABOVE +$338.62, but a fresh backtest re-run plus an independent DB cross-check
+of the real changed trades found ACTIVE-only delta = **-$196.50**, worse than doing nothing.
+Root cause (unlike the IB case, where `OR ⊂ IB` is a mathematical invariant giving a clean
+unconditional relaxation): these 7 families' own level has no consistent containment relationship
+to the OR, and "never invalidates earlier in time" does not imply "never invalidates at a worse
+price" -- a relaxed boundary lets price drift further adverse before finally crossing it. Only
+`PD_VAH_FADE_SHORT` clearly improved on real trades (+$56.50/7); everything else with real N nets
+flat-to-negative. Confirmed NOT the same bug: `OR5_HIGH/LOW/MID_FADE` (level literally IS the OR)
+and `GLOBEX_VWAP_FADE`/`RTH_VWAP_FADE` (live-computed rolling VWAPs, need a separate universal
+rewrite). Full writeup, both backtests, and what would need to be true to revisit this (a smarter
+per-trade mechanism, not another static boundary substitution): `docs/
+ROSTER_WIDE_INVALIDATION_BOUNDARY_WHITELIST_SPEC.md` (rewritten with a RESOLVED NEGATIVE header).
+`OPEN_DECISION roster_wide_invalidation_boundary_whitelist_scoped` RESOLVED same day.
 
 **Sibling-reversal gate ("post-win opposite-family reversal") — shipped live, RTH + Globex.**
 Separate thread, same session: user watched quick-check.html and spotted the same family firing

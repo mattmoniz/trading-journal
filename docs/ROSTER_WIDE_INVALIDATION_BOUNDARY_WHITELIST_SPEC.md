@@ -1,12 +1,63 @@
-# Roster-wide invalidation-boundary whitelist extension — scope (2026-09-02)
+# Roster-wide invalidation-boundary whitelist extension — RESOLVED NEGATIVE (2026-09-02)
 
-**Status: scoped, zero code changed for this specific extension.** Follow-up to the same-day
-IB_HIGH/IB_LOW invalidation-boundary fix (`docs/OPEN_THREADS.md`'s 2026-09-02 entry) and the
-DeepSeek roster-wide audit that found the same bug shape extends well beyond the 8 already-fixed
-IB types. Read this doc fresh before touching `structurallyInvalidateSetups()` again.
+**Status: tested, NOT shipped, zero live code changed.** Do not re-attempt this exact mechanism
+(a static per-family boundary substitution, whitelisted or wider-of-two) without a genuinely new
+idea — both variants were built, backtested, and independently verified negative-to-mixed for
+real capital. Read this doc fresh before touching `structurallyInvalidateSetups()` again, and
+read it *before* re-opening this thread, not after.
 
-**Priority: SECOND — user explicitly ranked `docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md` ahead of
-this one.** Do that one first next session.
+## Why this is resolved negative, not just "not started yet"
+
+Two full designs were built and backtested (`scripts/backtest_roster_wide_invalidation_boundary_fix.mjs`,
+2 DeepSeek design-critique rounds):
+
+1. **Unconditional own-level replacement** (mirrors the shipped IB fix exactly): pooled delta
+   looked positive (+$1774.34) but DeepSeek's own audit found 65% of it was a SHADOW-only
+   artifact plus day-clustering, and the real ACTIVE-only number (+$338.62/152 trades) was itself
+   the *net* of 2 live-firing families getting **worse** (PD_VAH -$217/51 real, PD_VAL -$349/26
+   real) against others improving — not a clean win. Traced to a real mechanism: unlike IB (where
+   `OR ⊂ IB` is a mathematical invariant, so IB's own level is *always* wider than the OR), these
+   7 families' own level has no consistent containment relationship to the OR — whether using it
+   relaxes or *tightens* the invalidation trigger flips by direction and by session.
+2. **Wider-of-two boundary** (`SHORT: max(orHigh, ownLevel)`, `LONG: min(orLow, ownLevel)` — never
+   fires *earlier in time* than today's live OR-based rule, DeepSeek's proposed fix for #1's
+   direction-asymmetry problem): DeepSeek predicted this would push the ACTIVE-only delta **above**
+   +$338.62, reasoning "never tighter (in timing) ⇒ can only remove net-negative trades." **This
+   prediction was independently verified FALSE against a fresh backtest run + a direct DB
+   cross-check of the real changed trades**: ACTIVE-only delta = **-$196.50** (worse than doing
+   nothing, and worse than design #1). The mechanism: "never invalidates earlier in time" is not
+   the same as "never invalidates at a worse price" — when the own level genuinely is wider than
+   the OR on a given trade, the position rides further adverse excursion before finally crossing
+   the (now wider) boundary, and that extra excursion is realized as a worse mark-to-market loss
+   at the later invalidation point, even though the trade is never "tightened" in DeepSeek's
+   timing sense. DeepSeek's own Q2 answer had already warned this was possible in principle
+   ("relaxation is not monotone in P&L, per-trade") but then still asserted the aggregate would
+   improve — that specific aggregate claim was the part that didn't hold up. A per-setup_type
+   breakdown of the real ACTIVE-only changed trades found only `PD_VAH_FADE_SHORT` clearly
+   improved (+$56.50/7 trades); `IB_MID_SCALP_FADE_LONG` (-$84/4), `PD_VAL_FADE_LONG` (-$128/4),
+   and `PD_POC_FADE_LONG` (-$53.50/2) all net negative on real trades; nothing else has enough
+   real N to judge (FLOOR_R1 has exactly 1 real changed trade).
+
+**Bottom line: neither design has a real-money-verified positive case, and no individual
+setup_type has enough real N on its own to justify shipping just that one.** This is a genuine,
+tested negative for this class of fix on these 7 families — not an unstarted idea and not a
+methodology failure (the backtest reuses the same DeepSeek-reviewed walk-forward methodology as
+the already-shipped, working IB fix).
+
+## What WOULD need to be true to revisit this
+
+A smarter per-trade mechanism than a static boundary substitution — e.g. a margin/buffer past the
+level rather than a bare close-through check, or requiring 2 consecutive closes, or conditioning
+on same-day gap structure (the underlying variable that actually determines whether relaxing
+helps or hurts, per the mechanism above) — would need its own fresh backtest and design critique.
+Simply re-trying "own level" or "wider-of-two" again without a new idea will reproduce this same
+negative result.
+
+## Original scoping (2026-09-02, preserved for context — see above for the resolution)
+
+Follow-up to the same-day IB_HIGH/IB_LOW invalidation-boundary fix (`docs/OPEN_THREADS.md`'s
+2026-09-02 entry) and the DeepSeek roster-wide audit that found the same bug *shape* (not the
+same underlying cause, per above) extends well beyond the 8 already-fixed IB types.
 
 ## The bug, restated precisely (already fixed for 8 types, NOT yet fixed for the rest)
 
