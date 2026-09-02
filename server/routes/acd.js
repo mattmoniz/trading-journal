@@ -2155,8 +2155,11 @@ async function detectGlobexSetup(sessionDate, io) {
         live = { status: 'SHADOW', reason: `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min` };
       }
       // Sibling-reversal override (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header.
-      // Same "force SHADOW, don't skip" convention as the check just above.
-      if (!crossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(sessionDate, crossDirectionLevelBase, c.dir)) {
+      // Same "force SHADOW, don't skip" convention as the check just above. Uses
+      // postWinFamilyOf(), NOT crossDirectionLevelBase -- the latter only strips a trailing
+      // _LONG/_SHORT and leaves a _TRAIL/_GAP_*/_OVERNIGHT suffix in place (e.g.
+      // 'CAM_S2_FADE_LONG_TRAIL' stays as-is), which would silently never match any real win.
+      if (!crossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(sessionDate, postWinFamilyOf(c.type), c.dir)) {
         live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
       }
 
@@ -10034,9 +10037,12 @@ export default function createACDRouter(io) {
         const crossDirectionCooldownMin = rthDir ? await isCrossDirectionFastFlip(todayET, rthLevelBase, rthDir) : false;
         // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header
         // (~line 356). Only checked when the fast-flip gate above didn't already catch it, same
-        // short-circuit pattern used everywhere else in this forceShadow chain.
+        // short-circuit pattern used everywhere else in this forceShadow chain. Uses
+        // postWinFamilyOf(), NOT rthLevelBase -- the latter only strips a trailing _LONG/_SHORT
+        // and leaves a _TRAIL/_GAP_*/_OVERNIGHT suffix in place, which would silently never
+        // match any real win (found and fixed before this shipped, not by DeepSeek review).
         const postWinOppBlocked = !crossDirectionCooldownMin && rthDir
-          ? await isPostWinOppositeFamilyBlocked(todayET, rthLevelBase, rthDir)
+          ? await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(active.type), rthDir)
           : false;
         const forceShadow = isTrailMechanism
           || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
