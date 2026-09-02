@@ -38,14 +38,39 @@ import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 
-function familyOf(setupType) {
+export function familyOf(setupType) {
   return setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '').replace(/_(LONG|SHORT)$/, '');
 }
-function dirOf(setupType) {
+export function dirOf(setupType) {
   const stripped = setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '');
   if (stripped.endsWith('_LONG')) return 'LONG';
   if (stripped.endsWith('_SHORT')) return 'SHORT';
   return null; // non-directional type (IB_BULLISH, ZONE_EDGE_FADE, etc) -- no paired sibling
+}
+
+// Extracted 2026-09-02 (exported for scripts/prop_challenge_trailing_dd_chronological.mjs to
+// reuse directly -- "export the real function" convention -- rather than re-deriving this same
+// identification loop by hand). Behavior byte-identical to the original inline version.
+export function computeFlaggedReversalIds(allTrades) {
+  const flaggedIds = new Set();
+  for (let i = 0; i < allTrades.length; i++) {
+    const a = allTrades[i];
+    if (a.resolution !== 'TARGET_HIT' || !a.resolved_at) continue;
+    const dirA = dirOf(a.setup_type);
+    if (!dirA) continue;
+    const famA = familyOf(a.setup_type);
+    const candidates = allTrades.filter(t => t.fired_at > a.resolved_at).sort((x, y) => x.fired_at.localeCompare(y.fired_at));
+    for (const b of candidates) {
+      const dirB = dirOf(b.setup_type);
+      if (!dirB) continue;
+      const famB = familyOf(b.setup_type);
+      if (famB !== famA) break;
+      if (dirB === dirA) continue;
+      flaggedIds.add(b.id);
+      break;
+    }
+  }
+  return flaggedIds;
 }
 
 async function main() {
@@ -63,25 +88,7 @@ async function main() {
   `);
   console.log(`[post_win_reversal] N=${allTrades.length} real decisive trades (all types, chronological)`);
 
-  const flaggedIds = new Set();
-  for (let i = 0; i < allTrades.length; i++) {
-    const a = allTrades[i];
-    if (a.resolution !== 'TARGET_HIT' || !a.resolved_at) continue;
-    const dirA = dirOf(a.setup_type);
-    if (!dirA) continue;
-    const famA = familyOf(a.setup_type);
-    // Scan trades that fired strictly AFTER A actually resolved (not just after A fired).
-    const candidates = allTrades.filter(t => t.fired_at > a.resolved_at).sort((x, y) => x.fired_at.localeCompare(y.fired_at));
-    for (const b of candidates) {
-      const dirB = dirOf(b.setup_type);
-      if (!dirB) continue; // non-directional: skip past, doesn't reset or flag
-      const famB = familyOf(b.setup_type);
-      if (famB !== famA) break; // a different family fired first -- no flag for this A
-      if (dirB === dirA) continue; // same-family same-direction re-fire: allowed, keep scanning
-      flaggedIds.add(b.id); // same family, opposite direction, after resolution -- flagged
-      break;
-    }
-  }
+  const flaggedIds = computeFlaggedReversalIds(allTrades);
   console.log(`[post_win_reversal] Flagged ${flaggedIds.size} same-family opposite-direction reversals-after-resolution`);
 
   const flaggedTrades = allTrades.filter(t => flaggedIds.has(t.id));
@@ -163,4 +170,9 @@ async function main() {
   console.log(`\n[post_win_reversal] Persisted corrected performance_audit + RESEARCH_CLAIM post_win_opposite_family_reversal`);
 }
 
-main().then(() => process.exit(0)).catch(e => { console.error('[post_win_reversal] ERROR:', e.message, e.stack); process.exit(1); });
+// Guarded (2026-09-02, added alongside the computeFlaggedReversalIds export above) so
+// importing familyOf/dirOf/computeFlaggedReversalIds from another script doesn't trigger a
+// full DB-writing re-run as a side effect of the import.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then(() => process.exit(0)).catch(e => { console.error('[post_win_reversal] ERROR:', e.message, e.stack); process.exit(1); });
+}
