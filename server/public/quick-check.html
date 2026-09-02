@@ -478,6 +478,22 @@ function renderSweepWatch() {
   const resolved = hit.resolution && hit.resolution !== null;
   const pnl = hit.actual_pnl != null ? Number(hit.actual_pnl) : null;
 
+  // Auto-hide once resolved and stale (2026-09-02, user-reported: this card sat showing the
+  // same closed trade for hours since this mechanism fires rarely and there's nothing to
+  // replace it). Compares two timestamps built the SAME way (both derived from a naive
+  // "YYYY-MM-DD HH:MM:SS" ET-wall-clock string parsed via the browser's local Date parser --
+  // matching currentSessionDateET()'s existing nowET pattern above) so the elapsed-minutes
+  // math is correct regardless of the viewing device's own timezone. 120 min is a display-only
+  // cutoff (how long a closed trade stays visible), not a trading threshold, so it's a
+  // documented fixed choice -- same precedent as this file's 15-minute cluster-dedup window.
+  const SWEEP_WATCH_HIDE_AFTER_MIN = 120;
+  if (resolved && hit.resolved_at_str) {
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const resolvedET = new Date(hit.resolved_at_str.replace(' ', 'T'));
+    const staleMins = (nowET - resolvedET) / 60000;
+    if (staleMins > SWEEP_WATCH_HIDE_AFTER_MIN) { el.className = ''; el.textContent = ''; return; }
+  }
+
   el.textContent = '';
   const head = document.createElement('div');
   head.className = 'setup-head';
