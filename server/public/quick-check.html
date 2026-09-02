@@ -405,6 +405,27 @@ function renderSetupCard(setupData) {
 // ("commission in live is still $1... should be $2 round trip").
 const COMMISSION_PER_TRADE = 2;
 
+// Win/loss classification (2026-09-02, user-caught bug): TARGET_HIT/STOP_HIT string equality
+// alone silently missed TRAIL_EXIT (the breakeven-trail mechanism, CLAUDE.md's "Breakeven-
+// then-trail single-position exit mechanism") -- those rows fell through every badge/tally
+// branch to a neutral '—'/uncounted even though actual_pnl was correctly positive. TRAIL_EXIT
+// is a genuinely decisive outcome (T1 was reached, then trailed further -- not an ambiguous
+// time-based cutoff), so it belongs in the win/loss tally; classified by its own P&L sign since
+// a trail can in principle close at breakeven-or-worse. Deliberately NOT extended to
+// TIME_EXPIRED/INVALIDATED/SESSION_CLOSED -- those stay excluded from win/loss by design (see
+// computeRangeStats below and the OPEN_THREADS "decisive outcomes only" convention), this only
+// closes the gap for the one resolution type that should have been decisive all along.
+function isWinRow(s) {
+  if (s.resolution === 'TARGET_HIT') return true;
+  if (s.resolution === 'TRAIL_EXIT') return s.actual_pnl != null && parseFloat(s.actual_pnl) >= 0;
+  return false;
+}
+function isLossRow(s) {
+  if (s.resolution === 'STOP_HIT') return true;
+  if (s.resolution === 'TRAIL_EXIT') return s.actual_pnl != null && parseFloat(s.actual_pnl) < 0;
+  return false;
+}
+
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
 let timelineFilter = localStorage.getItem('timelineFilter') || 'live'; // 'live' | 'all'
@@ -616,10 +637,12 @@ function renderTimeline() {
   }
 
   $('timeline-list').innerHTML = resolved.map(s => {
-    const isWin = s.resolution === 'TARGET_HIT';
-    const isLoss = s.resolution === 'STOP_HIT';
+    const isWin = isWinRow(s);
+    const isLoss = isLossRow(s);
     const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
-    const badgeText = isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
+    const isTrail = s.resolution === 'TRAIL_EXIT';
+    const badgeText = isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
+      isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
       s.resolution === 'INVALIDATED' ? 'inv.' : (s.status === 'ACTIVE' ? 'live' : '—');
     const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
@@ -674,8 +697,8 @@ function mSection(label) { return '<div class="m-section">' + label + '</div>'; 
 function openTradeModal(id) {
   const s = timelineRows.find(r => r.id === id);
   if (!s) return;
-  const isWin = s.resolution === 'TARGET_HIT';
-  const isLoss = s.resolution === 'STOP_HIT';
+  const isWin = isWinRow(s);
+  const isLoss = isLossRow(s);
   const color = isWin ? 'var(--green)' : isLoss ? 'var(--red)' : 'var(--dim)';
   const pnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
 
@@ -767,8 +790,8 @@ function aggregateBySetup(rows) {
     if (!map.has(key)) map.set(key, { type: key, n: 0, wins: 0, losses: 0, pnl: 0 });
     const g = map.get(key);
     g.n++;
-    if (s.resolution === 'TARGET_HIT') g.wins++;
-    else if (s.resolution === 'STOP_HIT') g.losses++;
+    if (isWinRow(s)) g.wins++;
+    else if (isLossRow(s)) g.losses++;
     if (s.actual_pnl != null) g.pnl += parseFloat(s.actual_pnl);
   }
   return [...map.values()].sort((a, b) => b.pnl - a.pnl);
@@ -843,7 +866,7 @@ function computeRangeStats(rows) {
   let wins = 0, losses = 0;
   for (const s of decided) {
     running += parseFloat(s.actual_pnl);
-    if (s.resolution === 'TARGET_HIT') wins++; else if (s.resolution === 'STOP_HIT') losses++;
+    if (isWinRow(s)) wins++; else if (isLossRow(s)) losses++;
     if (running > peak) peak = running;
     const dd = peak - running;
     if (dd > maxDD) maxDD = dd;
