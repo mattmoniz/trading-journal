@@ -122,6 +122,14 @@
   .vb-tag.strong { color: #93c5fd; background: rgba(59,130,246,0.14); }
   .vb-tag.mild { color: #94a3b8; background: rgba(148,163,184,0.08); }
   .wide-tag { color: #c4b5fd; background: rgba(139,92,246,0.14); }
+  /* range_slope/vol_rollover post-entry exit-signal tags (OPEN_DECISION
+     wire_flush_post_entry_exit_signals_globex) -- same restrained, non-green/red palette as
+     the tags above since these are unvalidated too (PROVISIONAL until the weekly promotion
+     script confirms real N>=20). Distinct hues from strong/mild/wide-tag so all 4 tag kinds
+     stay visually distinguishable at a glance. */
+  .rangeslope-tag { color: #fcd34d; background: rgba(217,119,6,0.14); }
+  .volroll-tag { color: #5eead4; background: rgba(20,184,166,0.14); }
+  .sig-tag { cursor: pointer; }
 
   /* Modal */
   #modal-backdrop {
@@ -676,11 +684,20 @@ function renderTimeline() {
     // looks like, not a violation of the 4-bar rule. Tooltip below says this explicitly so a
     // fast-T1/slow-total case doesn't keep reading as a bug.
     const wideTag = /^WIDER_/.test(s.resolution_method || '') ? '<span class="vb-tag wide-tag" title="Wider-target mechanism engaged (1.5x target). Bars-to-resolve includes the extension-riding phase -- the ORIGINAL T1 touch (the actual 4-bar eligibility check) came well before that. SHADOW-tracked, not yet promoted to live.">Tx1.5</span>' : '';
+    // Post-entry exit-signal tags (OPEN_DECISION wire_flush_post_entry_exit_signals_globex,
+    // 2026-09-02): GLOBEX_FLUSH_* only, read directly off post_entry_exit_signals (already
+    // included in /api/setups/today's `s.*`, no separate fetch needed). Tap opens a popup
+    // (touchscreen viewers can't hover a title= tooltip) showing this trade's own hypothetical
+    // $ plus the mechanism's running cumulative -- NOT a hover tooltip like vbTag/wideTag above.
+    // stopPropagation so tapping the tag doesn't also fire the row's own openTradeModal.
+    const pes = s.post_entry_exit_signals || {};
+    const rsTag = pes.range_slope ? '<span class="vb-tag rangeslope-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'range_slope\')">RangeSlope</span>' : '';
+    const vrTag = pes.vol_rollover ? '<span class="vb-tag volroll-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'vol_rollover\')">VolRoll</span>' : '';
     return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      vbTag + wideTag +
+      vbTag + wideTag + rsTag + vrTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -773,6 +790,60 @@ function openTradeModal(id) {
 
 function closeTradeModal() { $('modal-backdrop').classList.remove('open'); }
 $('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeTradeModal(); });
+
+// ---- Post-entry exit-signal popup (OPEN_DECISION wire_flush_post_entry_exit_signals_globex,
+// 2026-09-02) -- tap target for the RangeSlope/VolRoll row tags above. Reuses the same
+// #modal/#modal-backdrop element and mRow/mSection helpers as openTradeModal rather than
+// inventing new modal chrome, per the decision's own instruction. Shows this trade's own
+// hypothetical $ first, then the mechanism's running cumulative (ALL + BIG-MOVE-ONLY, from
+// GET /api/setups/flush-exit-signals-summary -- the SAME aggregate the weekly promotion
+// script and setup-performance.html's ledger read, not a separately computed number) and its
+// current RESEARCH_CLAIM status, so the tag stays honest as the signal matures or retires.
+let flushExitSignalsSummary = null;
+async function loadFlushExitSignalsSummary() {
+  try {
+    const data = await fetch('/api/setups/flush-exit-signals-summary').then(r => r.json());
+    flushExitSignalsSummary = Array.isArray(data?.summary) ? data.summary : null;
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+const MECHANISM_LABELS = { range_slope: 'Range-Expansion Slope', vol_rollover: 'Volume Rollover' };
+function openMechanismPopup(id, mechanism) {
+  const s = timelineRows.find(r => r.id === id);
+  const sig = s?.post_entry_exit_signals?.[mechanism];
+  if (!s || !sig) return;
+
+  const hyp = Number(sig.hypothetical_pnl);
+  const hypColor = hyp >= 0 ? 'var(--green)' : 'var(--red)';
+  let html = '<div class="m-head"><span class="m-title" style="color:' + hypColor + '">' + MECHANISM_LABELS[mechanism] + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + '</div>';
+
+  html += mSection('This trade');
+  html += mRow('Hypothetical P&L if followed', (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2), hypColor);
+  html += mRow('Fired at', sig.fired_at);
+  html += mRow('Fired price', sig.fired_price != null ? Number(sig.fired_price).toFixed(2) : null);
+  html += mRow('Real actual P&L', s.actual_pnl != null ? (Number(s.actual_pnl) >= 0 ? '+' : '') + '$' + Number(s.actual_pnl).toFixed(2) : null,
+    s.actual_pnl != null ? (Number(s.actual_pnl) >= 0 ? 'var(--green)' : 'var(--red)') : null);
+
+  const mode = (s.setup_type || '').includes('REVERSAL') ? 'REVERSAL' : 'CONTINUATION';
+  const row = flushExitSignalsSummary?.find(r => r.mechanism === mechanism && r.mode === mode);
+  html += mSection('Running total across all real fires (' + mode.toLowerCase() + ')');
+  if (row) {
+    html += mRow('Status', row.status, row.status === 'CONFIRMED' ? 'var(--green)' : 'var(--dim)');
+    html += mRow('All fires', row.all.thin ? 'N=' + row.all.n + ' (below N=' + row.minRealN + ', still PROVISIONAL)' :
+      'N=' + row.all.n + ', avg ' + (row.all.avgDelta >= 0 ? '+' : '') + '$' + row.all.avgDelta.toFixed(2) + '/trade vs. real outcome',
+      row.all.thin ? 'var(--dim)' : (row.all.avgDelta >= 0 ? 'var(--green)' : 'var(--red)'));
+    html += mRow('Big-move-only (top tercile MFE)', row.bigMoveOnly.thin ? 'N=' + row.bigMoveOnly.n + ' (too thin yet)' :
+      'N=' + row.bigMoveOnly.n + ', avg ' + (row.bigMoveOnly.avgDelta >= 0 ? '+' : '') + '$' + row.bigMoveOnly.avgDelta.toFixed(2) + '/trade vs. real outcome',
+      row.bigMoveOnly.thin ? 'var(--dim)' : (row.bigMoveOnly.avgDelta >= 0 ? 'var(--green)' : 'var(--red)'));
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
 
 function to12Hour(hhmm) {
   if (!hhmm) return '';
@@ -1087,6 +1158,7 @@ document.addEventListener('click', (e) => {
 loadPulse();
 loadTimeline();
 loadRange('today');
+loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch once, no poll
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
