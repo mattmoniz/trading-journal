@@ -157,6 +157,26 @@ async function analyze(label, startMod) {
   console.log(`  rangeSlope vs atrLevel: ${crossCorr('rangeSlope', 'atrLevel').toFixed(3)}`);
   console.log(`  maxRun vs atrLevel: ${crossCorr('maxRun', 'atrLevel').toFixed(3)}`);
   console.log(`  agreeFrac vs atrLevel: ${crossCorr('agreeFrac', 'atrLevel').toFixed(3)}`);
+
+  // Combined score: does stacking ATR level (strong) with agreeFrac (weak but independent) beat
+  // ATR alone? Z-score both against this sample's own mean/sd (exploratory correlation check --
+  // not a forward-deployable rule yet, that would need out-of-sample z parameters) and sum.
+  function zscore(field) {
+    const n = rows.length;
+    const mean = rows.reduce((s, r) => s + r[field], 0) / n;
+    const sd = Math.sqrt(rows.reduce((s, r) => s + (r[field] - mean) ** 2, 0) / n);
+    return rows.map(r => (r[field] - mean) / sd);
+  }
+  const zAtr = zscore('atrLevel');
+  const zAgree = zscore('agreeFrac');
+  rows.forEach((r, i) => { r.combined = zAtr[i] + zAgree[i]; });
+  console.log(`\n  --- COMBINED (zATR + zAgreeFrac) vs ATR alone ---`);
+  terciles('combined').forEach((t, i) => {
+    const avg = t.reduce((s, r) => s + r.additionalMove, 0) / t.length;
+    console.log(`  T${i + 1} (${['LOW', 'MID', 'HIGH'][i]} combined): N=${t.length}, avgAdditionalMove=${avg.toFixed(1)}pt`);
+  });
+  console.log(`  Pearson correlation (combined vs additionalMove): ${corr('combined').toFixed(3)}`);
+  console.log(`  (for comparison) ATR-alone correlation: ${corr('atrLevel').toFixed(3)}`);
 }
 
 async function main() {

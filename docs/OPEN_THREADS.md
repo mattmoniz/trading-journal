@@ -395,6 +395,20 @@ remaining ~86% of the Aug-H2 ACTIVE-underperforms-SHADOW gap (the "no contest" f
 genuinely unexplained.** No further mechanism is queued to test next; would need a fresh angle if
 resumed.
 
+**Closed loose end, same session**: the SUPPRESS/PROMOTE-overhaul resimulation the superseded
+hypothesis below called "not yet built" actually got written (`scripts/backtest_revert_split_legs.mjs`,
+found sitting run-but-unrecorded) — reran and audited it rather than leaving the output
+unrecorded. Leg A (old p75_mae/p50_mfe stop/target instead of today's EV-swept `OPTIMAL_STOP`,
+real Aug3-Sep1 ACTIVE trades): N=173, +$611.20 total simulated delta (~$3.53/trade) vs. what
+actually happened, but `Top5DayPct=52%` — badly date-concentrated, fails this codebase's own
+rigor bar. Leg B (old rec90 SUPPRESS/PROMOTE thresholds instead of the real historical gate,
+named-formula reconstruction not a literal old-code diff): N=859 (729 newly-eligible from
+SHADOW), +$2146.00 total delta, also fails rigor (`Top5DayPct=44.4%`). Both legs point the same
+direction as the closed-negative headline (tighter formulas cost money in this window) but
+neither clears the stability bar, so this doesn't reopen or change the two-wave root-cause
+conclusion above — recorded as `RESEARCH_CLAIM revert_stop_and_suppress_promote_resim_thin`
+(PROVISIONAL, thin/date-concentrated) so the result isn't lost, not as a decision-grade finding.
+
 <details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
 SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
 but was superseded by the two-wave root cause above)</summary>
