@@ -284,6 +284,37 @@ const REFIRE_COOLDOWN_MINUTES = {
   OR5_HIGH_FADE_LONG: 30, OR5_HIGH_FADE_SHORT: 30,
 };
 
+// Cross-direction fast-flip cooldown (2026-09-01, user-spotted live whipsaw:
+// GLOBEX_VWAP_FADE_LONG hit T1 07:35, GLOBEX_VWAP_FADE_SHORT fired 07:37 -- 2 minutes later,
+// 22 minutes before the LONG even resolved -- and stopped out). REFIRE_COOLDOWN_MINUTES above
+// only ever gates the SAME setup_type re-firing itself; it does nothing for the OPPOSITE
+// direction of the same underlying level firing while the first is still open, which is a
+// structurally different failure mode (holding both sides of the same trade idea at once).
+// Tested directly (scripts/pilot_opposite_direction_post_win_pause.mjs, RESEARCH_CLAIM
+// globex_vwap_fade_fast_flip_underperforms): overlap in general is NOT bad (net positive,
+// roster-wide and for GLOBEX_VWAP_FADE specifically) -- but within it, a clean monotonic
+// gradient by elapsed time since the opposite direction fired: <=5min N=22 WR=50.0%
+// EV=-$7.55/trade; 5-15min N=22 EV=$0.09; >15min N=35 EV=+$13.11 (stable=true). Only the fast
+// bucket is negative -- this constant matches that boundary exactly, not an arbitrary round
+// number. Scoped to GLOBEX_VWAP_FADE only (the levelBase with direct evidence) -- do not
+// extend to other families without the same per-family verification (PD_POC_FADE showed the
+// opposite lean in the same test, thin).
+const CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES = { GLOBEX_VWAP_FADE: 5 };
+
+async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
+  const cooldownMin = CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES[levelBase];
+  if (!cooldownMin) return false;
+  const oppositeType = `${levelBase}_${dir === 'LONG' ? 'SHORT' : 'LONG'}`;
+  const q = await query(`
+    SELECT 1 FROM active_setups
+    WHERE trade_date = $1 AND setup_type = $2
+      AND status IN ('ACTIVE', 'SHADOW')
+      AND fired_at > NOW() - ($3::int * INTERVAL '1 minute')
+    LIMIT 1
+  `, [tradeDate, oppositeType, cooldownMin]).catch(() => ({ rows: [] }));
+  return q.rows.length > 0;
+}
+
 async function isInRefireCooldown(tradeDate, setupType) {
   const cooldownMin = REFIRE_COOLDOWN_MINUTES[setupType];
   if (!cooldownMin) return false;
@@ -1955,6 +1986,11 @@ async function detectGlobexSetup(sessionDate, io) {
       // 2-11 minutes for 2.5hrs on 2026-09-01, 6 of 9 refires losing, none blocked by anything.
       if (await isInRefireCooldown(sessionDate, c.type)) {
         logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'REFIRE_COOLDOWN', gateReason: `same-type resolved within ${REFIRE_COOLDOWN_MINUTES[c.type]}min`, entry: px });
+        continue;
+      }
+
+      if (c.levelBase && await isCrossDirectionFastFlip(sessionDate, c.levelBase, c.dir)) {
+        logGatedCandidate({ tradeDate: sessionDate, setupType: c.type, gateName: 'CROSS_DIRECTION_FAST_FLIP', gateReason: `opposite direction of ${c.levelBase} fired within ${CROSS_DIRECTION_FAST_FLIP_COOLDOWN_MINUTES[c.levelBase]}min and is still open`, entry: px });
         continue;
       }
 

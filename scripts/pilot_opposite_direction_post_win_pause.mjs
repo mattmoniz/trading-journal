@@ -77,10 +77,23 @@ async function main() {
       // (b) CORRECTED, matching what actually happened tonight: was an opposite-direction
       // trade of the SAME family still OPEN (fired_at <= t.fired_at < resolved_at) at the
       // moment this one fired? Live-knowable (you always know your own open positions),
-      // independent of whether that open position is currently winning or losing.
-      t.oppositeStillOpen = list.some((cand, j) =>
-        j !== i && isLong(cand.setup_type) !== isLong(t.setup_type) &&
-        cand.fired_at <= t.fired_at && cand.resolved_at > t.fired_at);
+      // independent of whether that open position is currently winning or losing. Also
+      // records how many minutes had elapsed since THAT opposite trade fired -- tests the
+      // sharper hypothesis (user follow-up): is a very-fast flip (tonight's exact case, 2min)
+      // a genuinely different/worse pattern than a slower overlap, even though "overlap in
+      // general" came back net positive?
+      let openOpposite = null;
+      for (const cand of list) {
+        if (cand === t) continue;
+        if (isLong(cand.setup_type) !== isLong(t.setup_type) && cand.fired_at <= t.fired_at && cand.resolved_at > t.fired_at) {
+          if (!openOpposite || cand.fired_at > openOpposite.fired_at) openOpposite = cand;
+        }
+      }
+      t.oppositeStillOpen = !!openOpposite;
+      if (openOpposite) {
+        t.minsSinceOppositeFired = (new Date(t.fired_at.replace(' ', 'T') + 'Z').getTime() -
+          new Date(openOpposite.fired_at.replace(' ', 'T') + 'Z').getTime()) / 60000;
+      }
     }
   }
 
@@ -156,9 +169,24 @@ async function main() {
     summarize(noOv, '    no opposite open');
   }
 
+  // 5. SHARPER test (user follow-up, after the aggregate "overlap is fine" result): is a
+  // VERY FAST flip specifically (tonight's exact case: 2 minutes) a different, worse pattern
+  // than a slower overlap -- even though overlapping in general came back net positive above?
+  console.log('\n=== Within "opposite still open": fast vs. slow flip (minutes since opposite fired) ===');
+  const withOverlap = trades.filter(t => t.oppositeStillOpen && t.minsSinceOppositeFired != null);
+  const fastFlipR = summarize(withOverlap.filter(t => t.minsSinceOppositeFired <= 5), 'FAST flip (<=5min since opposite fired)');
+  summarize(withOverlap.filter(t => t.minsSinceOppositeFired > 5 && t.minsSinceOppositeFired <= 15), 'MEDIUM flip (5-15min)');
+  summarize(withOverlap.filter(t => t.minsSinceOppositeFired > 15), 'SLOW flip (>15min)');
+
+  console.log('\n--- Same fast-vs-slow split, GLOBEX_VWAP_FADE only (trigger case) ---');
+  const gvfOverlap2 = gvf.filter(t => t.oppositeStillOpen && t.minsSinceOppositeFired != null);
+  const gvfFastR = summarize(gvfOverlap2.filter(t => t.minsSinceOppositeFired <= 5), 'FAST flip (<=5min)');
+  summarize(gvfOverlap2.filter(t => t.minsSinceOppositeFired > 5 && t.minsSinceOppositeFired <= 15), 'MEDIUM flip (5-15min)');
+  summarize(gvfOverlap2.filter(t => t.minsSinceOppositeFired > 15), 'SLOW flip (>15min)');
+
   await recordClaim({
     slug: 'opposite_direction_post_win_pause',
-    claimText: `Weekly auto-refresh (scripts/pilot_opposite_direction_post_win_pause.mjs, wired into run_weekly_backtests.sh). Origin: user-spotted live whipsaw (GLOBEX_VWAP_FADE_LONG fired 07:35, resolved 07:59 TARGET_HIT; GLOBEX_VWAP_FADE_SHORT fired 07:37 -- 22min BEFORE the LONG resolved -- and stopped out). Two tests: (1) ORIGINAL "pause after a win" framing (fire within N min of the opposite direction's already-resolved WIN) -- this specific pair never matched it (the LONG hadn't resolved yet when the SHORT fired), and the pattern is historically RARE regardless: roster-wide 10-min window only N=${closeR?.n} (of ${trades.length} total), too thin to be decisive at any window tested (5/10/15/20min). (2) CORRECTED test matching what actually happened: fired while the opposite direction (same family) was still OPEN (not yet resolved) -- live-knowable via your own open positions, no lookahead. Roster-wide: overlapping N=${overlapR?.n} WR=${overlapR?.wr?.toFixed(1)}% EV=$${overlapR?.ev?.toFixed(2)} vs non-overlapping N=${noOverlapR?.n} WR=${noOverlapR?.wr?.toFixed(1)}% EV=$${noOverlapR?.ev?.toFixed(2)}, rigor clean=${overlapR?.rigor?.clean}. Auto-refreshes weekly across 10 paired-direction fade families (GLOBEX_VWAP_FADE, PD_POC/VAH/VAL_FADE, VWAP_MAGNET, GLOBEX_VWAP_MAGNET, RTH_VWAP_FADE, OR5_HIGH/LOW/MID_FADE) -- check the printed per-family breakdown for current-run detail, not restated here to avoid staleness.`,
+    claimText: `Weekly auto-refresh (scripts/pilot_opposite_direction_post_win_pause.mjs, wired into run_weekly_backtests.sh). Origin: user-spotted live whipsaw (GLOBEX_VWAP_FADE_LONG fired 07:35, resolved 07:59 TARGET_HIT; GLOBEX_VWAP_FADE_SHORT fired 07:37 -- 22min BEFORE the LONG resolved -- and stopped out). Three tests: (1) ORIGINAL "pause after a win" framing -- this specific pair never matched it (LONG hadn't resolved when SHORT fired), and the pattern is historically too rare to test (N=3-12 depending on window). (2) CORRECTED: fired while the opposite direction was still OPEN -- live-knowable, no lookahead. Roster-wide this is net POSITIVE: overlapping N=${overlapR?.n} WR=${overlapR?.wr?.toFixed(1)}% EV=$${overlapR?.ev?.toFixed(2)} vs non-overlapping N=${noOverlapR?.n} WR=${noOverlapR?.wr?.toFixed(1)}% EV=$${noOverlapR?.ev?.toFixed(2)}. (3) SHARPER follow-up (user asked directly whether the whipsaw itself is fixed): within the overlapping population, does a FAST flip (<=5min since the opposite fired, tonight's exact case) behave worse than a slower one? Roster-wide fast-flip: N=${fastFlipR?.n}, WR=${fastFlipR?.wr?.toFixed(1)}%, EV=$${fastFlipR?.ev?.toFixed(2)}/trade. GLOBEX_VWAP_FADE fast-flip specifically: N=${gvfFastR?.n}, WR=${gvfFastR?.wr?.toFixed(1)}%, EV=$${gvfFastR?.ev?.toFixed(2)}/trade. Compare against the medium/slow buckets printed in the current run's console output -- if fast-flip EV is meaningfully worse than medium/slow, that IS a real, narrow, fixable pattern (a short cooldown scoped to fast flips only, not a blanket overlap suppression); if not, tonight's loss was ordinary variance and there is nothing to fix. Auto-refreshes weekly across 10 paired-direction fade families -- check the printed per-family/per-speed breakdown for current-run detail, not restated here to avoid staleness.`,
     sourceFile: 'scripts/pilot_opposite_direction_post_win_pause.mjs',
     sourceDate: today,
     sampleSize: overlapR?.n,
