@@ -1,5 +1,42 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
+
+Full arc, in order: scoped from Audit #11's R2 recommendation (`roster_level_wr_circuit_breaker_scoped`,
+below) → design v1 (pooled roster-wide rolling WR) → killed by a DeepSeek design critique BEFORE
+reaching Gemini (doubly confounded: overlapped with the already-known stop-tightening effect, and
+a textbook regression-to-the-mean/winner's-curse problem) → design v2 (composition-adjusted
+per-type scoring, empirical variance estimation, genuine walk-forward validation, a
+forward-EV-conditional-on-trigger reversion-trap kill test, pre-registered Phase 1→2 graduation
+rules) → dispatched to Gemini, audited, found 2 real gaps (a portfolio-aggregate claim asserted
+with zero backing code; no genuine fit-then-freeze split despite claiming one) → 1 correction round
+→ Gemini's corrected version claimed it now passed every check, including the reversion-trap kill
+criterion.
+
+**Audited the "passed" claim directly rather than trusting it — it doesn't hold up.** The pass
+verdict was an artifact of averaging forward EV across all 6 historical triggers, which hid a real,
+individually-confirmed failure: `IB_BEARISH` triggered 2026-07-29 (the one trigger with an adequate
+forward sample, N=10) and was followed by **+$19.20 forward EV (7/10 wins)** — independently
+re-derived directly from `active_setups`, not just trusted from the script's own number. That's the
+exact reversion-trap failure mode (firing right before a bounce-back) this whole design exists to
+prevent. The other 5 triggers are all far too thin (N=0 to N=7) to outweigh that one real data
+point either way. Separately, the walk-forward fit itself turned out weaker than claimed — its
+parameter-sweep objective hardcodes the 3 known Wave-1 setup_type NAMES directly into the scoring
+function, closer to fitting against ground-truth labels than a genuine blind degradation proxy.
+
+**Per this codebase's own 2-corrections-then-Claude-takes-over convention, this is Claude's
+take-over verdict, not Gemini's**: `RESEARCH_CLAIM rolling_wr_circuit_breaker_v2_not_validated_20260901`
+(CONFIRMED) — this specific design has NOT been validated safe for live use. Do not proceed to
+Phase 2 (live wiring). `OPEN_DECISION roster_level_wr_circuit_breaker_scoped` marked RESOLVED as
+this specific design attempt closing out negative — **the underlying need it was meant to solve is
+still real and unaddressed**: real ACTIVE win rate collapsed 68.7%→30.1% and the existing weekly
+`SETUP_STATUS` gate took ~13-14 days to catch each of 2 real collapse waves this session
+root-caused. If this thread is picked back up, it needs a non-label-leaking fit objective and a
+per-trigger (not averaged) reversion-trap check that fails on any single strong-positive-forward-EV
+trigger regardless of how the rest of the population looks. Also produced, unrelated but tracked
+separately: `OPEN_DECISION circuit_breaker_mute_tag_ha_page_requirement` (design note for a future
+attempt, not actionable now).
+
 ## ✅ 2026-09-01 (RESOLVED): 8-hour server outage overnight, missed a real move — `check_watcher.mjs` had been silently missing
 
 User's own recollection ("I think there was a watcher that crashed last night and it missed a big
