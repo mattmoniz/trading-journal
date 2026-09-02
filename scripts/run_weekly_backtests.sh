@@ -351,4 +351,14 @@ echo "=== Weekly backtest run: $(date) ==="
 # Self-recalibrates weekly as real N grows toward the N>=20 recheck floor.
 /usr/bin/node scripts/backtest_promotion_gate_placebo_control.mjs
 
+# Flush post-entry exit-signal promotion/retirement trigger (2026-09-02) -- part 3 of
+# OPEN_DECISION wire_flush_post_entry_exit_signals_globex. acd.js's resolveSetupsByPrice()
+# persists a real hypothetical_pnl onto every open GLOBEX_FLUSH_* position whenever the
+# range-expansion-slope or volume-rollover exit fires (active_setups.post_entry_exit_signals).
+# Once N>=20 real fires accumulate for a mechanism/mode combination, this re-verifies against
+# real forward data (paired vs the trade's own actual_pnl, segmented ALL vs BIG-MOVE-ONLY) and
+# writes a final CONFIRMED verdict -- positive flags a live-wiring OPEN_DECISION, negative closes
+# the mechanism out. No-op below N=20 (the pilot's own PROVISIONAL claim stands until then).
+/usr/bin/node scripts/backtest_flush_post_entry_exit_signals_promotion.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
