@@ -1780,7 +1780,10 @@ async function main() {
           label: 'STACK_VOL_BREAK_LIVE (acd.js ~4917)',
           start: 'const svSetupType = `STACK_VOL_BREAK_LIVE_',
           end: 'extend_target_level, price_at_detection, confluence_score_at_detection,',
-          baseline: { refireCooldown: false, crossDirectionFlip: false, postWinOpposite: true, newEntryDeadZone: false },
+          // crossDirectionFlip added 2026-09-02 (user-flagged live gap: level-fade candidates
+          // that don't win the single `active` slot fire through shadowCandidates/here, bypassing
+          // this gate entirely regardless of ACTIVE/SHADOW mix on either side).
+          baseline: { refireCooldown: false, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
         },
         {
           label: 'RTH active slot (acd.js ~10092)',
@@ -1792,7 +1795,8 @@ async function main() {
           label: 'shadowCandidates loop (acd.js ~10316)',
           start: 'if (shadowCandidates.length > 0) {',
           end: 'const shadowVbSessionBars = await getSessionBarsSinceOpen(570);',
-          baseline: { refireCooldown: true, crossDirectionFlip: false, postWinOpposite: true, newEntryDeadZone: false },
+          // crossDirectionFlip added 2026-09-02, same fix/reason as STACK_VOL_BREAK_LIVE above.
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
         },
       ];
 

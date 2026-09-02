@@ -341,14 +341,40 @@ async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
   // something like this."
   const cooldownMin = calib[levelBase] ?? calib['_POOLED_ALL'];
   if (!cooldownMin) return false;
-  const oppositeType = `${levelBase}_${dir === 'LONG' ? 'SHORT' : 'LONG'}`;
+  const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
+  // OR-length families (OR5/OR10/OR15/OR30_{HIGH,LOW,MID}_FADE) structurally nest -- OR10's
+  // window always contains OR5's, OR15's always contains OR10's -- so an opposite-direction fire
+  // under a DIFFERENT OR-length label can still be the same real level and the same whipsaw this
+  // gate exists to catch. CORRECTED 2026-09-02 (DeepSeek review): the "frequently the exact same
+  // price" justification is strong for HIGH (69.2% same-price on the full 13-day OR10/15/30
+  // history, since 2026-08-12 -- there is no longer window, this IS all the data for those
+  // lengths), moderate for LOW (38.5%/61.5%), and WEAK for MID (15.4%/30.8%/7.7% -- MID=(HIGH+LOW)/2
+  // needs both extremes unchanged and isn't even monotone across lengths). The nesting/"same
+  // underlying idea" argument carries LOW and MID more than literal price equality does; broadening
+  // is query-only and SHADOW-only regardless (no capital skipped, real outcome data still
+  // accumulates), so this remains a reasonable default even where the same-price rate is weaker.
+  // Broadening is gated on the calibration actually coming from the _POOLED_ALL fallback (not a
+  // per-family row) -- DeepSeek review found the original unconditional-on-orMatch version would
+  // silently misapply a FUTURE per-family GATE row (calibrated by
+  // scripts/backtest_cross_direction_fast_flip.mjs on bare-per-length-only overlaps) to a
+  // broader cross-length query it was never measured against. Calibration lookup above is
+  // otherwise unchanged (still keyed by the bare per-length family) -- a dedicated OR-length-pooled
+  // backtest (2026-09-02) found the pooled EV pattern real-but-too-thin (fast bucket N=4, need
+  // N>=20) to justify its own calibrated row; this fix only broadens which OPEN candidates count
+  // as "the opposite" while on the pooled-fallback path, letting the already GATE-justified
+  // _POOLED_ALL default apply to these cross-length pairs instead of missing them entirely.
+  const orMatch = levelBase.match(/^OR\d+_(HIGH|LOW|MID)_FADE$/);
+  const usingPooledFallback = calib[levelBase] === undefined;
+  const oppositePattern = (orMatch && usingPooledFallback)
+    ? `^OR[0-9]+_${orMatch[1]}_FADE_${oppositeDir}$`
+    : `^${levelBase}_${oppositeDir}$`;
   const q = await query(`
     SELECT 1 FROM active_setups
-    WHERE trade_date = $1 AND setup_type = $2
+    WHERE trade_date = $1 AND setup_type ~ $2
       AND status IN ('ACTIVE', 'SHADOW')
       AND fired_at > NOW() - ($3::int * INTERVAL '1 minute')
     LIMIT 1
-  `, [tradeDate, oppositeType, cooldownMin]).catch(() => ({ rows: [] }));
+  `, [tradeDate, oppositePattern, cooldownMin]).catch(() => ({ rows: [] }));
   return q.rows.length > 0 ? cooldownMin : false;
 }
 
@@ -4905,10 +4931,20 @@ export default function createACDRouter(io) {
               const svExtendTarget = direction === 'LONG' ? svEntry + 150 : svEntry - 150;
               const svExpiresAt = `${todayET} 16:00:00`;
               getStackVolBreakLiveStatus(svSetupType).then(async (live) => {
+                // Cross-direction fast-flip gate (2026-09-02) -- see isCrossDirectionFastFlip()
+                // header (~line 292). This insert site was found missing coverage the same way
+                // the sibling-reversal gate below was (user-spotted live pattern: STACK_VOL_
+                // BREAK_LIVE_LONG/SHORT can whipsaw the same way any other family can, and this
+                // is the one site that's neither Globex nor the RTH active/shadowCandidates
+                // paths, so it needed its own explicit fix, not just a copy-paste).
+                const svCrossDirectionCooldownMin = await isCrossDirectionFastFlip(todayET, svSetupType.replace(/_(LONG|SHORT)$/, ''), direction);
+                if (live.status !== 'SHADOW' && svCrossDirectionCooldownMin) {
+                  live = { status: 'SHADOW', reason: `CROSS_DIRECTION_FAST_FLIP_${svCrossDirectionCooldownMin}min` };
+                }
                 // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked()
                 // header (~line 356). This insert site was found missing coverage by DeepSeek
                 // code review of the initial (RTH-active-slot + Globex only) wiring.
-                if (live.status !== 'SHADOW' && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(svSetupType), direction)) {
+                if (live.status !== 'SHADOW' && !svCrossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(svSetupType), direction)) {
                   live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
                 }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
@@ -10295,13 +10331,20 @@ export default function createACDRouter(io) {
                    dowSuppressToday: liveStats?._dowSuppressToday ?? new Set(),
                    knownTypes: liveStats?._knownSetupTypes ?? new Set(),
                  });
+            // Cross-direction fast-flip gate (2026-09-02) -- see isCrossDirectionFastFlip()
+            // header (~line 292). User-flagged live gap: this loop is where most level-fade
+            // candidates that DON'T win the single `active` slot actually fire from, so a
+            // same-family opposite-direction touch reaching here bypassed this gate entirely --
+            // same structural shape as the sibling-reversal gap just below, fixed the same way.
+            const shadowLevelBase = shadow.type.replace(/_(LONG|SHORT)$/, '');
+            const shadowCrossDirectionCooldownMin = shadow.direction && await isCrossDirectionFastFlip(todayET, shadowLevelBase, shadow.direction);
             // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header
             // (~line 356). This loop (STOP_SWEEP/VWAP_MAGNET/C_PAIRED/C_REVERSAL/TRT/
             // BRACKET_BREAKOUT etc, per the comment at ~10256) was the headline coverage gap
             // DeepSeek's code review found in the initial (RTH-active-slot + Globex only) wiring
             // -- this is the one insert site that can actually fire ACTIVE from this loop.
-            const shadowPostWinBlocked = shadow.direction && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(shadow.type), shadow.direction);
-            const st = (shadowIsLive && !shadowPostWinBlocked) ? 'ACTIVE' : 'SHADOW';
+            const shadowPostWinBlocked = !shadowCrossDirectionCooldownMin && shadow.direction && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(shadow.type), shadow.direction);
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
             // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
