@@ -9857,19 +9857,36 @@ export default function createACDRouter(io) {
         // attempt at this was reverted before shipping: it would have forced ~95% of the live
         // roster to SHADOW).
         const exposureOverride = CAPITAL_EXPOSURE_OVERRIDE.get(active.type);
+        // Cross-direction fast-flip (2026-09-02) -- RTH counterpart to detectGlobexSetup()'s
+        // own check (see isCrossDirectionFastFlip()/getCrossDirectionFlipCalib() at module
+        // scope, and RESEARCH_CLAIM globex_vwap_fade_fast_flip_underperforms for the
+        // methodology). levelBase derived the same way scripts/backtest_cross_direction_fast_
+        // flip.mjs derives its family list (strip a trailing _LONG/_SHORT) -- types without
+        // that suffix (IB_BULLISH/IB_BEARISH etc.) safely never match any calibration row
+        // (the weekly script only ever calibrates true _LONG/_SHORT pairs), so this is a
+        // harmless no-op for them, not a special case to handle here. Resolves OPEN_DECISION
+        // cross_direction_fast_flip_rth_engine_not_wired -- currently a no-op live (zero
+        // RTH-native families have cleared the GATE bar as of 2026-09-02) but wired now so
+        // enforcement is already in place the moment one does, rather than a second gap to
+        // rediscover later.
+        const rthLevelBase = active.type.replace(/_(LONG|SHORT)$/, '');
+        const rthDir = inferDirection(active.type);
+        const crossDirectionCooldownMin = rthDir ? await isCrossDirectionFastFlip(todayET, rthLevelBase, rthDir) : false;
         const forceShadow = isTrailMechanism
           || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
           || inNewEntryDeadZone
           || inRefireCooldown
-          || !!exposureOverride;
+          || !!exposureOverride
+          || !!crossDirectionCooldownMin;
         // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
         if (cascadeBreaker.active) {
-          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride}`);
+          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin}`);
         }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : exposureOverride ? exposureOverride.reason
+          : crossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min`
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const skipRedundantShadowInsert = forceShadow
           && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
