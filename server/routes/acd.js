@@ -299,9 +299,16 @@ const REFIRE_COOLDOWN_MINUTES = {
 // (RESEARCH_CLAIM globex_vwap_fade_fast_flip_underperforms: <=5min N=22 EV=-$7.55 vs 5-15min
 // EV=$0.09 vs >15min EV=+$13.11), and writes a real calibrated cooldown to performance_audit
 // (signal_type='CROSS_DIRECTION_FLIP_CALIB') only when a family's own fast bucket clears N>=20
-// AND shows the same monotonic shape. Read live here, cached per day -- fail-open (no gate) for
-// any family with no GATE-recommended row yet, since a false negative (missing a real pattern)
-// is far lower-risk than a false positive (blocking a good trade on no evidence) for a
+// AND shows the same monotonic shape. EXTENDED same day: a rare/new family can never clear that
+// per-family floor on its own (confirmed live: PM_VAL_FADE whipsawed unprotected at only 4 real
+// SHORT-side trades; "the monthly setups dont happen often" -- user), so the same script also
+// writes one pooled/system-wide default row (signal_name='_POOLED_ALL', every real overlap
+// instance across every base pooled together, N=366/fast N=85 on first run, GATE-justified) --
+// isCrossDirectionFastFlip() below falls back to this pooled default whenever a family has no
+// row of its own, so every family is covered from its first live fire, not just the ones with
+// enough individual history. Read live here, cached per day -- fail-open (no gate at all) only
+// when even the pooled default isn't GATE-justified, since a false negative (missing a real
+// pattern) is far lower-risk than a false positive (blocking a good trade on no evidence) for a
 // mechanism that gates live capital. A gated candidate is NOT skipped outright -- see the call
 // site below, which forces it to SHADOW instead of continuing past insertion entirely, so real
 // outcome data keeps accumulating on exactly the trades this gate holds back (the only way to
@@ -324,7 +331,15 @@ async function getCrossDirectionFlipCalib(tradeDate) {
 
 async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
   const calib = await getCrossDirectionFlipCalib(tradeDate);
-  const cooldownMin = calib[levelBase];
+  // Family-specific GATE row takes precedence; otherwise fall back to the pooled/system-wide
+  // default (signal_name='_POOLED_ALL', scripts/backtest_cross_direction_fast_flip.mjs) so a
+  // rare or brand-new family (never individually clears the N>=5-per-direction floor to even be
+  // assessed on its own -- confirmed live: PM_VAL_FADE whipsawed unprotected, monthly-cadence
+  // setups may never accumulate enough of their own history) is still covered from its first
+  // live fire. Same blended-default-with-specific-override pattern this codebase already uses
+  // for OPTIMAL_STOP. User: "I wanted all setups on there. I can't track 170 setups for
+  // something like this."
+  const cooldownMin = calib[levelBase] ?? calib['_POOLED_ALL'];
   if (!cooldownMin) return false;
   const oppositeType = `${levelBase}_${dir === 'LONG' ? 'SHORT' : 'LONG'}`;
   const q = await query(`

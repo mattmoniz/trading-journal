@@ -4,6 +4,20 @@
 // hardcoded-list-goes-stale anti-pattern this codebase avoids everywhere else, and "anything
 // in live should be in all trades where applicable."
 //
+// EXTENDED 2026-09-02 (user pushback, real live miss): PM_VAL_FADE whipsawed live (SHORT open,
+// opposite LONG fired 9min later) and was completely unprotected -- not THIN_N, not even
+// present in the family list, because PM_VAL_FADE_SHORT had only 4 real trades (needs >=5 in
+// EACH direction just to be assessed). User: "I wanted all setups on there. I can't track 170
+// setups for something like this" + "the monthly setups dont happen often" -- per-family-only
+// calibration structurally can never cover a rare family, not just slowly. Fixed with a second,
+// POOLED verdict (signal_name='_POOLED_ALL') computed across every real overlap instance from
+// EVERY paired base regardless of that base's own N -- the same blended-default-with-per-family-
+// override pattern this codebase already uses for OPTIMAL_STOP (falls back to the blended row
+// when a day-type-specific cell is thin). acd.js's isCrossDirectionFastFlip() now checks the
+// family-specific GATE row first, then falls back to the pooled verdict for ANY family with no
+// row of its own -- so a brand-new or rare setup_type is covered from its very first live fire,
+// not after it individually accumulates N>=20 fast-bucket trades of its own.
+//
 // For every paired-direction family (any setup_type ending _LONG/_SHORT where BOTH directions
 // have real decisive trade history -- derived from live data, not a hardcoded family list),
 // computes the same fast/medium/slow-flip gradient (elapsed minutes since the opposite
@@ -60,9 +74,24 @@ async function main() {
   }
   console.log(`Found ${families.size} genuinely paired-direction families with real history.\n`);
 
+  // For the pooled/system-wide verdict: ANY base with at least 1 real trade in EACH direction
+  // counts, not just ones clearing MIN_REAL_N_PER_DIRECTION -- a rare base (PM_VAL_FADE: 6
+  // LONG/4 SHORT) still contributes its real overlap instances to the pooled sample even though
+  // it can never individually qualify for its own per-family verdict.
+  const allPairedBases = new Set();
+  for (const setupType of byType.keys()) {
+    if (!setupType.endsWith('_LONG') && !setupType.endsWith('_SHORT')) continue;
+    const base = setupType.replace(/_(LONG|SHORT)$/, '');
+    if ((byType.get(`${base}_LONG`) || []).length >= 1 && (byType.get(`${base}_SHORT`) || []).length >= 1) {
+      allPairedBases.add(base);
+    }
+  }
+
   function isLong(setupType) { return setupType.endsWith('_LONG'); }
 
-  for (const family of families) {
+  const pooledOverlap = [];
+
+  for (const family of allPairedBases) {
     const list = [...(byType.get(`${family}_LONG`) || []), ...(byType.get(`${family}_SHORT`) || [])]
       .sort((a, b) => a.fired_at.localeCompare(b.fired_at));
     for (let i = 0; i < list.length; i++) {
@@ -81,6 +110,7 @@ async function main() {
     }
 
     const overlap = list.filter(t => t.minsSinceOppositeFired != null);
+    pooledOverlap.push(...overlap); // contributes to the system-wide pooled verdict regardless of this base's own N
     const fast = overlap.filter(t => t.minsSinceOppositeFired <= 5);
     const medium = overlap.filter(t => t.minsSinceOppositeFired > 5 && t.minsSinceOppositeFired <= 15);
     const slow = overlap.filter(t => t.minsSinceOppositeFired > 15);
@@ -143,6 +173,66 @@ async function main() {
       `, [today, family, fast.length, fastEv, JSON.stringify({ fastN: fast.length, mediumN: medium.length, slowN: slow.length, fastEv, mediumEv, slowEv, monotonic, distinctDates: rigor?.distinctDates ?? null })]);
     }
   }
+
+  // Pooled/system-wide verdict (2026-09-02) -- see file header. Same fast/medium/slow math,
+  // same GATE/NO_GATE/THIN_N thresholds, applied to every real overlap instance pooled across
+  // ALL paired bases regardless of any individual base's own N. This is what makes a rare base
+  // (a monthly setup, PM_VAL_FADE, or any setup_type not yet even in allPairedBases at all)
+  // covered by default from its very first live cross-direction fire -- acd.js falls back to
+  // this row whenever a family has no GATE row of its own.
+  const pFast = pooledOverlap.filter(t => t.minsSinceOppositeFired <= 5);
+  const pMedium = pooledOverlap.filter(t => t.minsSinceOppositeFired > 5 && t.minsSinceOppositeFired <= 15);
+  const pSlow = pooledOverlap.filter(t => t.minsSinceOppositeFired > 15);
+  function pEvOf(bucket) { return bucket.length ? bucket.reduce((s, t) => s + t.actual_pnl, 0) / bucket.length : null; }
+  const pFastEv = pEvOf(pFast), pMediumEv = pEvOf(pMedium), pSlowEv = pEvOf(pSlow);
+  console.log(`\n_POOLED_ALL (every base pooled): overlap N=${pooledOverlap.length} (fast=${pFast.length}, medium=${pMedium.length}, slow=${pSlow.length})`);
+
+  if (pFast.length < MIN_FAST_N) {
+    console.log(`  -> THIN_N (pooled fast bucket N=${pFast.length} < ${MIN_FAST_N}), no default gate available yet.\n`);
+    await query(`
+      INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, ev_per_trade, recommendation, notes)
+      VALUES ($1, 0, 'CROSS_DIRECTION_FLIP_CALIB', '_POOLED_ALL', $2, $3, 'THIN_N', $4)
+      ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
+        SET sample_size = EXCLUDED.sample_size, ev_per_trade = EXCLUDED.ev_per_trade,
+            recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
+    `, [today, pFast.length, pFastEv, JSON.stringify({ fastN: pFast.length, mediumN: pMedium.length, slowN: pSlow.length, fastEv: pFastEv, mediumEv: pMediumEv, slowEv: pSlowEv, basesContributing: allPairedBases.size })]);
+  } else {
+    const MIN_DISTINCT_DATES = 10;
+    // Deliberately NOT the same strict 3-way (fast < medium < slow) test the per-family verdict
+    // uses. First real run (N=366 pooled, fast N=85) showed fastEv=-$19.60 clearly worse than
+    // BOTH medium (-$4.66) and slow (-$12.11), but medium beat slow, failing strict monotonic
+    // ordering. That ordering nuance is irrelevant to what the pooled default is actually
+    // deciding -- "is firing within 5min of the opposite still being open worse than waiting" --
+    // so the pooled test only requires fast to be worse than EACH alternative individually, not
+    // that medium/slow are themselves ordered.
+    const pMonotonic = pFastEv < 0 && pMediumEv != null && pSlowEv != null && pFastEv < pMediumEv && pFastEv < pSlowEv;
+    const pRigor = computeRigor(pFast, { dateField: 'trade_date', pnlFn: t => t.actual_pnl });
+    const pClearsDateFloor = (pRigor?.distinctDates ?? 0) >= MIN_DISTINCT_DATES;
+
+    if (pMonotonic && pClearsDateFloor) {
+      console.log(`  -> GATE justified (pooled default): fastEv=$${pFastEv.toFixed(2)} vs medium=$${pMediumEv?.toFixed(2)} slow=$${pSlowEv?.toFixed(2)}, rigor clean=${pRigor?.clean}. Cooldown=5min, applies to any family with no row of its own.\n`);
+      await query(`
+        INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, ev_per_trade, recommendation, notes)
+        VALUES ($1, 0, 'CROSS_DIRECTION_FLIP_CALIB', '_POOLED_ALL', $2, $3, 'GATE', $4)
+        ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
+          SET sample_size = EXCLUDED.sample_size, ev_per_trade = EXCLUDED.ev_per_trade,
+              recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
+      `, [today, pFast.length, pFastEv, JSON.stringify({ cooldownMinutes: 5, fastN: pFast.length, mediumN: pMedium.length, slowN: pSlow.length, fastEv: pFastEv, mediumEv: pMediumEv, slowEv: pSlowEv, rigorClean: pRigor?.clean ?? null, distinctDates: pRigor?.distinctDates ?? null, basesContributing: allPairedBases.size })]);
+    } else {
+      const reason = !pMonotonic
+        ? `pooled pattern doesn't hold (need fast worse than both medium and slow: fastEv=$${pFastEv.toFixed(2)}, medium=$${pMediumEv?.toFixed(2)}, slow=$${pSlowEv?.toFixed(2)})`
+        : `pooled fast-is-worst but fails the distinct-dates floor (${pRigor?.distinctDates ?? 0} < ${MIN_DISTINCT_DATES})`;
+      console.log(`  -> NO_GATE (pooled default): ${reason}.\n`);
+      await query(`
+        INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, ev_per_trade, recommendation, notes)
+        VALUES ($1, 0, 'CROSS_DIRECTION_FLIP_CALIB', '_POOLED_ALL', $2, $3, 'NO_GATE', $4)
+        ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
+          SET sample_size = EXCLUDED.sample_size, ev_per_trade = EXCLUDED.ev_per_trade,
+              recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
+      `, [today, pFast.length, pFastEv, JSON.stringify({ fastN: pFast.length, mediumN: pMedium.length, slowN: pSlow.length, fastEv: pFastEv, mediumEv: pMediumEv, slowEv: pSlowEv, monotonic: pMonotonic, distinctDates: pRigor?.distinctDates ?? null, basesContributing: allPairedBases.size })]);
+    }
+  }
+
   console.log('Done.');
 }
 
