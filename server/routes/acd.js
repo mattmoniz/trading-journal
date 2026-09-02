@@ -4905,6 +4905,12 @@ export default function createACDRouter(io) {
               const svExtendTarget = direction === 'LONG' ? svEntry + 150 : svEntry - 150;
               const svExpiresAt = `${todayET} 16:00:00`;
               getStackVolBreakLiveStatus(svSetupType).then(async (live) => {
+                // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked()
+                // header (~line 356). This insert site was found missing coverage by DeepSeek
+                // code review of the initial (RTH-active-slot + Globex only) wiring.
+                if (live.status !== 'SHADOW' && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(svSetupType), direction)) {
+                  live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
+                }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const ins = await query(`
@@ -10289,7 +10295,13 @@ export default function createACDRouter(io) {
                    dowSuppressToday: liveStats?._dowSuppressToday ?? new Set(),
                    knownTypes: liveStats?._knownSetupTypes ?? new Set(),
                  });
-            const st = shadowIsLive ? 'ACTIVE' : 'SHADOW';
+            // Sibling-reversal gate (2026-09-02) -- see isPostWinOppositeFamilyBlocked() header
+            // (~line 356). This loop (STOP_SWEEP/VWAP_MAGNET/C_PAIRED/C_REVERSAL/TRT/
+            // BRACKET_BREAKOUT etc, per the comment at ~10256) was the headline coverage gap
+            // DeepSeek's code review found in the initial (RTH-active-slot + Globex only) wiring
+            // -- this is the one insert site that can actually fire ACTIVE from this loop.
+            const shadowPostWinBlocked = shadow.direction && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(shadow.type), shadow.direction);
+            const st = (shadowIsLive && !shadowPostWinBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
             // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
