@@ -161,6 +161,28 @@
  *    re-derivation (WARN on drift -- expected if setupTypes.js's classification changed
  *    since a row was tagged, otherwise a wiring bug); (c) BET_CLASS_STATUS rows exist in
  *    performance_audit and are fresh (weekly cron via backtest_bet_class_status.mjs).
+ *
+ * 24. Live-gate coverage census (added 2026-09-02, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
+ *    sequencing item 1). DeepSeek's design critique of the sibling-reversal gate coverage gap
+ *    (isPostWinOppositeFamilyBlocked, commit ab81fce) found the gap was structural, not a
+ *    one-off: `active_setups` has 7 live-capable INSERT sites (4 in acd.js + 3 hand-rolled
+ *    service pollers), each independently deciding its own force-shadow logic with no shared
+ *    checkpoint, so a new gate can silently miss a site the way this one did. Rather than build
+ *    the full shared-checkpoint refactor immediately (DeepSeek argued that's higher-risk and
+ *    should wait until the base-eligibility divergence is fixed first -- see the spec), this
+ *    check is the cheap, zero-live-risk stopgap: it statically re-derives, from the actual
+ *    source text (anchor-bounded slices, not hardcoded line numbers -- a moved/renamed anchor
+ *    FAILs loudly rather than silently checking the wrong span or nothing at all), whether each
+ *    of the 3 force-shadow gates (isInRefireCooldown, isCrossDirectionFastFlip,
+ *    isPostWinOppositeFamilyBlocked) plus inNewEntryDeadZone is actually referenced at each of
+ *    the 4 acd.js sites, and compares that against DeepSeek's audited baseline matrix. A known,
+ *    already-flagged gap (e.g. STACK_VOL_BREAK_LIVE missing refire/cross-direction/deadzone)
+ *    WARNs every run so it can never be silently forgotten; anything that regresses FROM
+ *    covered TO uncovered FAILs, since that's a real, new coverage loss the way the original
+ *    ab81fce gap was. The 3 service pollers (minuteBarSignalDetector/rthFlushDetector/
+ *    globexFlushDetector) get a standing WARN for having zero exposure to any of these 4 gates
+ *    at all -- a known, larger, separately-scoped gap (spec sequencing items 2-3), not something
+ *    this check can fix, only keep visible.
  */
 
 import pg from 'pg';
@@ -1714,6 +1736,111 @@ async function main() {
         for (const r of flagged) {
           const cb = r.notes.circuitBreaker;
           warn(`${r.signal_name}: accepted a first-ever/post-placeholder calibration at an implausible skew (${cb.attemptedSkew}x vs cutoff ${cb.plausibleSkewCutoff}x, reason=${cb.reason}) because there was no prior value to freeze back to. Re-derive by hand or wait for more real N to produce a saner candidate -- don't let this sit past one recheck.`);
+        }
+      }
+    }
+
+    console.log('\n[24] Live-gate coverage census (docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md sequencing item 1)');
+    {
+      const acdSrc = fs.readFileSync(path.resolve('server/routes/acd.js'), 'utf8');
+
+      // Anchor-bounded slice, not a hardcoded line range -- a moved/renamed anchor FAILs
+      // loudly (below) instead of silently checking the wrong span or an empty one. Each
+      // anchor pair was verified unique (grep -c == 1) against the current file when this
+      // check was built (2026-09-02); if a future edit breaks uniqueness, indexOf just finds
+      // the first occurrence, which is why the "site not found" FAIL path matters more than
+      // a uniqueness check as ongoing protection.
+      function siteWindow(startAnchor, endAnchor, label) {
+        const s = acdSrc.indexOf(startAnchor);
+        if (s === -1) return { missing: true, label };
+        const e = acdSrc.indexOf(endAnchor, s);
+        if (e === -1) return { missing: true, label };
+        return { missing: false, label, text: acdSrc.slice(s, e) };
+      }
+
+      const GATE_PATTERNS = {
+        refireCooldown: /isInRefireCooldown\(/,
+        crossDirectionFlip: /isCrossDirectionFastFlip\(/,
+        postWinOpposite: /isPostWinOppositeFamilyBlocked\(/,
+        newEntryDeadZone: /inNewEntryDeadZone/,
+      };
+
+      // DeepSeek's audited baseline (scratch/deepseek_response.md, 2026-09-02 critique of
+      // docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md). `true` = currently covered, `false` =
+      // known, already-flagged gap (not this check's job to fix -- see docstring above).
+      const SITES = [
+        {
+          label: 'Globex (detectGlobexSetup, acd.js ~2269)',
+          start: 'if (await isInRefireCooldown(sessionDate, c.type)) {',
+          end: 'historical_win_rate, historical_sessions, suppression_reason,',
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
+          naReasons: { newEntryDeadZone: 'structurally N/A -- Globex has no RTH-hours dead zone concept' },
+        },
+        {
+          label: 'STACK_VOL_BREAK_LIVE (acd.js ~4917)',
+          start: 'const svSetupType = `STACK_VOL_BREAK_LIVE_',
+          end: 'extend_target_level, price_at_detection, confluence_score_at_detection,',
+          baseline: { refireCooldown: false, crossDirectionFlip: false, postWinOpposite: true, newEntryDeadZone: false },
+        },
+        {
+          label: 'RTH active slot (acd.js ~10092)',
+          start: 'const isTrailMechanism = trailVariant?.trailSignalName != null;',
+          end: 'const activeVbSessionBars = await getSessionBarsSinceOpen(570);',
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: true },
+        },
+        {
+          label: 'shadowCandidates loop (acd.js ~10316)',
+          start: 'if (shadowCandidates.length > 0) {',
+          end: 'const shadowVbSessionBars = await getSessionBarsSinceOpen(570);',
+          baseline: { refireCooldown: true, crossDirectionFlip: false, postWinOpposite: true, newEntryDeadZone: false },
+        },
+      ];
+
+      for (const site of SITES) {
+        const win = siteWindow(site.start, site.end, site.label);
+        if (win.missing) {
+          fail(`[24] live-gate census: could not locate "${site.label}" -- its start/end anchor text no longer matches server/routes/acd.js. Either the site was refactored (update this check's anchors) or the site was removed (update docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md's site census too, this may be a real reduction in live-capable sites).`);
+          continue;
+        }
+        for (const [gate, pattern] of Object.entries(GATE_PATTERNS)) {
+          const present = pattern.test(win.text);
+          const expected = site.baseline[gate];
+          if (expected && !present) {
+            fail(`[24] live-gate census: "${site.label}" no longer references ${gate} -- DeepSeek's audit (2026-09-02) found this site DID call it; this looks like a real coverage regression, not a known gap.`);
+          } else if (!expected && present) {
+            const naNote = site.naReasons?.[gate];
+            if (!naNote) {
+              ok(`[24] "${site.label}" now references ${gate} -- an improvement over the 2026-09-02 baseline; update this check's SITES table to mark it covered (true) so a future regression here is actually caught.`);
+            }
+          } else if (!expected && !present && !site.naReasons?.[gate]) {
+            warn(`[24] "${site.label}" still does not reference ${gate} -- known gap per docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md (OPEN_DECISION unified_live_gate_checkpoint_scoped), not yet fixed. Not a regression, but don't let this go silently stale either.`);
+          }
+        }
+      }
+
+      // The 3 hand-rolled service pollers -- confirmed 2026-09-02 to have ZERO exposure to
+      // any of the 4 gates above (each does its own N>=20/ev>=-5 getLiveStatus() only). This
+      // is DeepSeek's single biggest finding (the original spec's census missed these
+      // entirely) -- WARN every run so it can never again be silently forgotten, until the
+      // spec's sequencing items 2-3 actually address it.
+      const SERVICE_POLLERS = ['minuteBarSignalDetector.js', 'rthFlushDetector.js', 'globexFlushDetector.js'];
+      for (const svc of SERVICE_POLLERS) {
+        const p = path.resolve('server/services', svc);
+        if (!existsSync(p)) {
+          fail(`[24] live-gate census: server/services/${svc} no longer exists -- update docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md's site census (one fewer live-capable site, or it was renamed).`);
+          continue;
+        }
+        const svcSrc = fs.readFileSync(p, 'utf8');
+        const hasInsert = /INSERT INTO active_setups/.test(svcSrc);
+        if (!hasInsert) {
+          fail(`[24] live-gate census: server/services/${svc} no longer INSERTs into active_setups -- update the spec's site census, this file may no longer be a live-capable site.`);
+          continue;
+        }
+        const anyGate = Object.values(GATE_PATTERNS).some(p => p.test(svcSrc)) || /CAPITAL_EXPOSURE_OVERRIDE/.test(svcSrc);
+        if (anyGate) {
+          ok(`[24] server/services/${svc} now references at least one live gate -- an improvement over the 2026-09-02 baseline (previously zero); this file can graduate out of the standing WARN list once fully covered.`);
+        } else {
+          warn(`[24] server/services/${svc} still has zero exposure to any of the 4 force-shadow gates or CAPITAL_EXPOSURE_OVERRIDE (its own hand-rolled getLiveStatus() is the only eligibility check on this live-capable site) -- known gap, DeepSeek's biggest finding on the original spec's undercounted census. See docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md.`);
         }
       }
     }
