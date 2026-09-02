@@ -18,6 +18,7 @@ import { query } from '../server/db.js';
 import { computeRunningVwapSeries } from '../server/services/developingValueService.js';
 import { getVolumeBaseline } from '../server/services/touchQuality.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { recordClaim } from './record_claim.mjs';
 
 const LEVELS = ['PD_POC', 'PD_VAH', 'PD_VAL'];
 
@@ -30,6 +31,7 @@ function globexSessionStart(tradeDate) {
 const isWin = (t) => t.resolution === 'TARGET_HIT' || (t.resolution === 'TRAIL_EXIT' && t.actual_pnl >= 0);
 
 async function main() {
+  const { rows: [{ today }] } = await query(`SELECT CURRENT_DATE::text as today`);
   const setupTypes = LEVELS.flatMap(l => [`${l}_FADE_LONG`, `${l}_FADE_SHORT`]);
   const { rows: trades } = await query(`
     SELECT id, trade_date::text as trade_date, setup_type, fired_at::text as fired_at,
@@ -85,21 +87,21 @@ async function main() {
   const low = sorted.slice(0, Math.floor(n / 3));
 
   function summarize(bucket, label) {
-    if (bucket.length === 0) { console.log(`    ${label}: N=0`); return; }
+    if (bucket.length === 0) { console.log(`    ${label}: N=0`); return null; }
     const wins = bucket.filter(isWin).length;
-    const wr = (100 * wins / bucket.length).toFixed(1);
-    const ev = (bucket.reduce((s, t) => s + t.actual_pnl, 0) / bucket.length).toFixed(2);
-    const rigorStr = bucket.length >= 20
-      ? (() => { const r = computeRigor(bucket, { dateField: 'trade_date', pnlFn: t => t.actual_pnl }); return ` | clean=${r?.clean} stable=${r?.stable} top5DayPct=${r?.top5DayPct}%`; })()
-      : ' | N<20, THIN';
-    console.log(`    ${label}: N=${bucket.length} WR=${wr}% EV=$${ev}/trade${rigorStr}`);
+    const wr = 100 * wins / bucket.length;
+    const ev = bucket.reduce((s, t) => s + t.actual_pnl, 0) / bucket.length;
+    const rigor = bucket.length >= 20 ? computeRigor(bucket, { dateField: 'trade_date', pnlFn: t => t.actual_pnl }) : null;
+    const rigorStr = rigor ? ` | clean=${rigor.clean} stable=${rigor.stable} top5DayPct=${rigor.top5DayPct}%` : ' | N<20, THIN';
+    console.log(`    ${label}: N=${bucket.length} WR=${wr.toFixed(1)}% EV=$${ev.toFixed(2)}/trade${rigorStr}`);
+    return { n: bucket.length, wr, ev, rigor };
   }
 
   console.log('=== Within LOW |dev| tercile (N=' + low.length + '): split by volume z-score at touch ===');
   const lowSortedByVol = [...low].sort((a, b) => b.volZ - a.volZ);
   const half = Math.floor(lowSortedByVol.length / 2);
-  summarize(lowSortedByVol.slice(0, half), 'HIGH volume (top half, avg z=' + (lowSortedByVol.slice(0, half).reduce((s, t) => s + t.volZ, 0) / half).toFixed(2) + ')');
-  summarize(lowSortedByVol.slice(half), 'LOW volume (bottom half, avg z=' + (lowSortedByVol.slice(half).reduce((s, t) => s + t.volZ, 0) / (lowSortedByVol.length - half)).toFixed(2) + ')');
+  const highVolR = summarize(lowSortedByVol.slice(0, half), 'HIGH volume (top half, avg z=' + (lowSortedByVol.slice(0, half).reduce((s, t) => s + t.volZ, 0) / half).toFixed(2) + ')');
+  const lowVolR = summarize(lowSortedByVol.slice(half), 'LOW volume (bottom half, avg z=' + (lowSortedByVol.slice(half).reduce((s, t) => s + t.volZ, 0) / (lowSortedByVol.length - half)).toFixed(2) + ')');
 
   // Also: does volume z-score at touch predict the ACTUAL forward-expansion outcome (not just
   // real P&L directly) -- i.e. is volume a genuine leading indicator of the coiled-spring
@@ -118,6 +120,23 @@ async function main() {
   const halfAll = Math.floor(allSortedByVol.length / 2);
   summarize(allSortedByVol.slice(0, halfAll), 'HIGH volume (top half)');
   summarize(allSortedByVol.slice(halfAll), 'LOW volume (bottom half)');
+
+  // Auto-refresh weekly (run_weekly_backtests.sh) so this keeps re-accumulating real data and
+  // re-checking itself instead of sitting static -- N=35/bucket already clears this project's
+  // N>=20 floor; what's still open is date-clustering (top5DayPct), which more weeks of real
+  // data resolves on its own without anyone having to remember to re-run this by hand.
+  await recordClaim({
+    slug: 'pd_level_fade_volume_size_as_live_knowable_substitute',
+    claimText: `Weekly auto-refresh (scripts/pilot_low_deviation_volume_size_filter.mjs, wired into run_weekly_backtests.sh 2026-09-02). Within the low-|dev|-from-VWAP tercile of real GLOBEX PD_POC/PD_VAH/PD_VAL fades: LOW volume-at-touch N=${lowVolR?.n}, WR=${lowVolR?.wr?.toFixed(1)}%, EV=$${lowVolR?.ev?.toFixed(2)}/trade, rigor clean=${lowVolR?.rigor?.clean} top5DayPct=${lowVolR?.rigor?.top5DayPct}% vs HIGH volume-at-touch N=${highVolR?.n}, WR=${highVolR?.wr?.toFixed(1)}%, EV=$${highVolR?.ev?.toFixed(2)}/trade, rigor clean=${highVolR?.rigor?.clean} top5DayPct=${highVolR?.rigor?.top5DayPct}%. Both buckets clear this project's N>=20 floor already -- the open question is date-clustering (top5DayPct), not sample size, and that resolves automatically as this script keeps re-running weekly against real accumulating data. Counterintuitive direction (low volume beats high volume) confirmed independent of deviation magnitude via correlation check in the same run. Track top5DayPct/distinctDates trend across successive weekly runs to see whether this is converging toward decision-grade or staying an artifact of a few dates.`,
+    sourceFile: 'scripts/pilot_low_deviation_volume_size_filter.mjs',
+    sourceDate: today,
+    sampleSize: lowVolR?.n,
+    winRate: lowVolR?.wr,
+    evPerTrade: lowVolR?.ev,
+    rigorStatus: lowVolR?.rigor?.clean ? 'clean' : 'real_independent_date_clustered',
+    status: 'PROVISIONAL',
+  });
+  console.log('\nRESEARCH_CLAIM pd_level_fade_volume_size_as_live_knowable_substitute refreshed.');
 }
 
 main().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });

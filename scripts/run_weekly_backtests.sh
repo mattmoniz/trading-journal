@@ -361,4 +361,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # the mechanism out. No-op below N=20 (the pilot's own PROVISIONAL claim stands until then).
 /usr/bin/node scripts/backtest_flush_post_entry_exit_signals_promotion.mjs
 
+# PD-level-fade VWAP-deviation-magnitude filter + volume-size follow-up (2026-09-02) --
+# RESEARCH_CLAIM pd_level_fade_vwap_deviation_magnitude_filter / pd_level_fade_volume_size_as_
+# live_knowable_substitute. Both auto-refresh their own claim on every run (real GLOBEX-only
+# PD_POC/PD_VAH/PD_VAL fade population keeps growing weekly) so this stays a real, monitored
+# thread instead of a one-off scratch result -- user-flagged 2026-09-02: a PROVISIONAL claim
+# with no standing recheck path is a dead end in practice. Not yet decision-grade (design
+# critique flagged several remaining checks, see docs/OPEN_THREADS.md) -- these two scripts are
+# what keeps it moving toward that bar on its own.
+/usr/bin/node scripts/pilot_pd_level_fade_vwap_deviation_filter.mjs
+/usr/bin/node scripts/pilot_low_deviation_volume_size_filter.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
