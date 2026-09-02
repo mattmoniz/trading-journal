@@ -1,5 +1,62 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-02 (RESOLVED, negative): Full-day overnight/RTH momentum grid search — nothing tradeable found
+
+User's real goal, stated directly: "capture a larger overnight move that I can bank on being in
+at a certain time and it will be in profit later by a certain time." Extensive search, closed by
+user request after two ride-pattern candidates both failed verification. Summary so a future
+session doesn't re-derive this from scratch:
+
+**Method established and reused throughout**: `pearson()`/`permutationTest()` (exported from
+`scripts/pilot_globex_overnight_momentum_persistence_grid.mjs`) + a standing verification gauntlet
+— pooled correlation is not enough; a candidate must also show (a) consistent sign across
+per-year isolation (2023/2024/2025/2026) and (b) no real sign flips in a rolling 60-session window
+before being trusted. Two candidates failed this gauntlet, one partially passed.
+
+**Findings, most to least promising:**
+1. **03:30 ET momentum exhaustion (fade)** — the one pattern that reproduces across years
+   (`RESEARCH_CLAIM globex_momentum_0330_exhaustion`, `globex_0330_seasonality_breakdown`,
+   `globex_0330_rolling_seasonality`). Real but thin (r²≈2.8%), seasonal (flips positive in
+   August specifically — a checked, real wrinkle, not a gap). Turned into an actual bar-by-bar
+   trade with data-derived stop/target and real MNQ costs
+   (`scripts/pilot_globex_0330_exhaustion_tradeability.mjs`,
+   `RESEARCH_CLAIM globex_0330_exhaustion_fade_tradeability`): the plain version loses money net
+   of costs on every stop/target combo tested; one filtered top-tercile-momentum cell shows
+   EV=$4.04/trade (N=137) but is an isolated spike in an otherwise noisy grid and ~60%
+   concentrated in 2026 alone — not trustworthy as-is.
+2. **01:00 ET persistence (ride)** — looked real pooled (N=417, p≤0.042 across 4 checkpoints),
+   FAILED verification: 2023 opposite sign, 0/72 rolling windows independently significant.
+   `RESEARCH_CLAIM globex_0100_persistence_verification`
+   (`scripts/pilot_globex_0100_persistence_verification.mjs`).
+3. **22:00 ET persistence (ride)** — the most promising-looking candidate found: a full-day
+   30-min×30-min grid across all ~946 testable pairs (`scripts/pilot_full_day_momentum_grid.mjs`,
+   `scratch/full_day_momentum_grid.json`), Bonferroni-corrected for the ~1,000-pair
+   multiple-comparisons problem, surfaced a smooth 7-checkpoint positive cluster spanning 23:30
+   through 10:30 next day. FAILED verification worse than 01:00 did: per-year signs mixed on all
+   7 checkpoints, and the rolling window shows a genuine **documented sign reversal** — the same
+   22:00→02:00 pair was significantly NEGATIVE in August 2025 (-0.26 to -0.30, 3 windows) and only
+   became significantly POSITIVE from June 2026 onward. `RESEARCH_CLAIM
+   globex_2200_persistence_verification` (`scripts/pilot_globex_2200_persistence_verification.mjs`).
+4. **09:00 ET pre-RTH exhaustion (fade into midday RTH)** — same full-day grid surfaced a smooth
+   negative cluster (09:00→12:00/12:30/13:00, corr -0.15 to -0.17, and a wider raw-significant
+   tail through 15:30), same shape-family as the one pattern that DID hold up (03:30). **Never
+   verified** — the thread was closed by user request before this candidate got the per-year/
+   rolling check. If overnight-momentum research resumes, this is the natural next candidate to
+   test, not a new grid search.
+
+**Real data-quality finding along the way, worth knowing for ANY future 2023-inclusive
+backtest**: bars landing on an exact minute mark (e.g. 22:00, 03:30) are genuinely sparse in
+2023 (~22 sessions/year) vs 2024 (~87) / 2025 (~139) / 2026 (~174), even though 2023 has *more*
+total days with *some* data (256) than later years — a real overnight/specific-minute coverage
+gap in the earlier data, not a market-behavior difference. This made 2023's per-year read
+unreliable on its own, but did NOT rescue the 22:00 finding — the documented Aug 2025→2026 sign
+flip happens entirely within well-covered, recent data.
+
+**Bottom line**: no pattern found in this search is currently trustworthy enough to build a live
+setup on. Closed by user request ("let it go") 2026-09-02. All 5 `RESEARCH_CLAIM`s above are
+`PROVISIONAL` with the standard 30-day recheck — this is a real, recorded negative, not a
+forgotten thread; no `OPEN_DECISION` needed since nothing is pending a build/wire choice.
+
 ## ✅ 2026-09-02 (RESOLVED): `wire_flush_post_entry_exit_signals_globex` built and shipped end-to-end
 
 Follow-up to the 2026-09-01 "catch more of a big move" thread below — its HIGH-priority
