@@ -108,6 +108,23 @@
     <div class="note">Rows with N&lt;20 are dimmed — below this project's own N≥20 floor for a decisive claim, shown for visibility, not to be trusted as a stable edge. Sorted by EV/trade by default, click any column header to re-sort. "Trend" is a chronological 3-way stability check (does the last third of history still show the same sign as the average).</div>
   </div>
 
+  <div class="card">
+    <h2>Flush Post-Entry Exit Signals</h2>
+    <div class="table-scroll">
+      <table id="flush-signals-table">
+        <thead>
+          <tr>
+            <th>Mechanism</th><th>Mode</th><th>Status</th>
+            <th>N (all)</th><th>Avg Δ (all)</th>
+            <th>N (big-move)</th><th>Avg Δ (big-move)</th>
+          </tr>
+        </thead>
+        <tbody id="flush-signals-body"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="note">The cumulative ledger for OPEN_DECISION wire_flush_post_entry_exit_signals_globex's post-entry exit signals (range-expansion-slope, volume-rollover) on open GLOBEX_FLUSH_* positions — "Avg Δ" is hypothetical_pnl minus the trade's own real actual_pnl, i.e. dollars this exit would have added or cost vs. what actually happened, averaged across every real fire so far. <b>Big-move</b> restricts to the top tercile by realized MFE, since catching more of a big move (not marginal average EV) is the point of this thread. Rows below N=20 stay PROVISIONAL; the weekly promotion script (scripts/backtest_flush_post_entry_exit_signals_promotion.mjs) writes a final CONFIRMED verdict once N clears 20. Same aggregate quick-check.html's RangeSlope/VolRoll row-tag popups read — one source of truth, two surfaces.</div>
+  </div>
+
 </div>
 
 <script>
@@ -340,8 +357,44 @@ function renderChart(setupType) {
     '<span>Net <b class="mono" style="color:' + lineColor + '">' + (finalPnl >= 0 ? '+' : '') + '$' + finalPnl.toFixed(0) + '</b></span>';
 }
 
+// Flush post-entry exit-signal ledger (OPEN_DECISION wire_flush_post_entry_exit_signals_
+// globex, monitoring-surface part b) -- reads the same /api/setups/flush-exit-signals-summary
+// endpoint quick-check.html's row-tag tap popups read, so this page and that popup can never
+// silently disagree on the cumulative figure.
+const MECHANISM_LABELS = { range_slope: 'Range-Expansion Slope', vol_rollover: 'Volume Rollover' };
+function fmtDelta(bucket) {
+  if (bucket.thin) return '<span style="color:var(--dim)">n=' + bucket.n + ' (thin)</span>';
+  const color = bucket.avgDelta >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+  return '<span class="mono" style="color:' + color + '">' + (bucket.avgDelta >= 0 ? '+' : '') + '$' + bucket.avgDelta.toFixed(2) + '</span>';
+}
+async function loadFlushSignalsLedger() {
+  try {
+    const data = await fetch('/api/setups/flush-exit-signals-summary').then(r => r.json());
+    const rows = data.summary || [];
+    if (!rows.length) {
+      $('flush-signals-body').innerHTML = '<tr><td colspan="7" class="loading">No data yet</td></tr>';
+      return;
+    }
+    $('flush-signals-body').innerHTML = rows.map(r => {
+      const statusCls = r.status === 'CONFIRMED' ? 'stable' : 'noisy';
+      return '<tr>' +
+        '<td>' + (MECHANISM_LABELS[r.mechanism] || r.mechanism) + '</td>' +
+        '<td>' + r.mode + '</td>' +
+        '<td><span class="badge ' + statusCls + '">' + r.status + '</span></td>' +
+        '<td class="mono">' + r.all.n + '</td>' +
+        '<td>' + fmtDelta(r.all) + '</td>' +
+        '<td class="mono">' + r.bigMoveOnly.n + '</td>' +
+        '<td>' + fmtDelta(r.bigMoveOnly) + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    $('flush-signals-body').innerHTML = '<tr><td colspan="7" class="loading">Failed to load</td></tr>';
+  }
+}
+
 window.addEventListener('resize', () => renderChart($('setup-select').value));
 loadPerformanceSummary();
+loadFlushSignalsLedger();
 </script>
 </body>
 </html>
