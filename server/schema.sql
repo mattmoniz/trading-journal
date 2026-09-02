@@ -404,7 +404,8 @@ CREATE TABLE public.active_setups (
     or_range_at_detection numeric,
     rvol_20d_at_detection numeric,
     slow_deep_exit_speed character varying(10),
-    slow_deep_exit_recommended boolean
+    slow_deep_exit_recommended boolean,
+    post_entry_exit_signals jsonb
 );
 
 

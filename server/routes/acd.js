@@ -11,6 +11,7 @@ import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from '../services/mae
 import { computeDirImbalance } from '../services/entryPressureService.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
 import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding } from '../services/touchQuality.js';
+import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
@@ -782,7 +783,7 @@ export async function resolveSetupsByPrice(io) {
            entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
            stop_level::float as stop_level, t1_level::float as t1_level, status, touch_quality,
            runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level,
-           wider_target_mult::float as wider_target_mult
+           wider_target_mult::float as wider_target_mult, origin_status, post_entry_exit_signals
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
   // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the
@@ -1000,6 +1001,35 @@ export async function resolveSetupsByPrice(io) {
     if (!long && t1 >= entry) continue;
 
     const bars = { rows: sharedBarsRows.filter(b => b.ts > row.fired_at) };
+
+    // Post-entry exit-signal tracking for open GLOBEX_FLUSH_* positions (part 1 of
+    // OPEN_DECISION wire_flush_post_entry_exit_signals_globex, 2026-09-02): persists the
+    // HYPOTHETICAL $ if range-expansion-slope / volume-rollover had been followed instead of
+    // the real target, independent per mechanism, never touching this row's real actual_pnl/
+    // resolution below. Real (ACTIVE/SHADOW) origin only -- BACKFILL/UNKNOWN rows never fire
+    // live so tracking them would just be noise. Reuses detectPostEntryExitSignals()
+    // (scripts/pilot_exits_extended.mjs) unchanged -- the exact function this session's
+    // RESEARCH_CLAIM findings were derived from, not a re-coded copy. `WHERE id=$1 AND
+    // post_entry_exit_signals->'<mechanism>' IS NULL`-equivalent gate (checked in JS below via
+    // `existingSignals`) means each mechanism is recorded at most once per trade.
+    if (row.setup_type.startsWith('GLOBEX_FLUSH') && (row.origin_status === 'ACTIVE' || row.origin_status === 'SHADOW')) {
+      const existingSignals = row.post_entry_exit_signals || {};
+      if (!existingSignals.range_slope || !existingSignals.vol_rollover) {
+        const mode = row.setup_type.includes('REVERSAL') ? 'REVERSAL' : 'CONTINUATION';
+        const postBars = bars.rows.map(b => ({ ...b, volume: (b.bid_volume || 0) + (b.ask_volume || 0) }));
+        const volBaseline = await getTouchQualityBaseline(row.trade_date);
+        const fires = detectPostEntryExitSignals({ postBars, isLong: long, entryPrice: entry, mode }, volBaseline);
+        const toPersist = {};
+        if (fires.range_slope && !existingSignals.range_slope) toPersist.range_slope = fires.range_slope;
+        if (fires.vol_rollover && !existingSignals.vol_rollover) toPersist.vol_rollover = fires.vol_rollover;
+        if (Object.keys(toPersist).length) {
+          await query(
+            `UPDATE active_setups SET post_entry_exit_signals = COALESCE(post_entry_exit_signals, '{}'::jsonb) || $2::jsonb, updated_at=NOW() WHERE id=$1`,
+            [row.id, JSON.stringify(toPersist)]
+          ).catch(() => {});
+        }
+      }
+    }
 
     // Breakeven-then-trail (docs/SCALEOUT_RUNNER_SPEC.md): a non-null runner_trail_width
     // marks this row as using the dynamic path-dependent exit instead of the plain

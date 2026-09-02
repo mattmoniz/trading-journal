@@ -254,6 +254,81 @@ function simulateVolRollover(trade, M, N) {
   return getTradePnl(trade, trade.entryIdx + i + N);
 }
 
+// ---- Live detection for open GLOBEX_FLUSH_* positions (OPEN_DECISION
+// wire_flush_post_entry_exit_signals_globex, 2026-09-02) ----
+//
+// Winning configs from this file's own sweep (scratch/pilot_exits_extended_out.json,
+// re-verified 2026-09-02 after the COMM fix above -- RESEARCH_CLAIM
+// flush_post_entry_range_expansion_slope_exit / flush_post_entry_volume_rollover_exit).
+// CONTINUATION = GLOBEX_FLUSH_LONG/SHORT, REVERSAL = GLOBEX_FLUSH_REVERSAL_LONG/SHORT (the
+// mode is already encoded in the setup_type name, matching processGlobexDay() above).
+// volume-rollover has NO Continuation entry deliberately -- that cell fails rigor
+// (clean=false, stable=false) in every re-run; do not add one without a fresh rigor pass.
+export const RANGE_SLOPE_LIVE_CONFIG = {
+  CONTINUATION: { k: 6, th: -0.5, dur: 3 },
+  REVERSAL: { k: 4, th: -1, dur: 4 },
+};
+export const VOL_ROLLOVER_LIVE_CONFIG = {
+  REVERSAL: { m: 2, n: 2 },
+};
+
+// Builds the same `trade` shape evaluateTrade() builds (fiveMinBars/trueRanges/volZs), scoped
+// to postBars (bars strictly after entry, chronological) -- reused so the detection loop above
+// runs unmodified rather than re-coded against a differently-shaped live object.
+function buildLiveTrade(postBars, volBaseline) {
+  const fiveMinBars = aggregate5Min(postBars);
+  const trueRanges = fiveMinBars.map((b, i) => {
+    const prevClose = i > 0 ? fiveMinBars[i - 1].close : b.open;
+    return Math.max(b.high - b.low, Math.abs(b.high - prevClose), Math.abs(b.low - prevClose));
+  });
+  const volZs = postBars.map(b => {
+    const bl = volBaseline?.get(b.mod);
+    return (bl && bl.std_vol > 0) ? (Number(b.volume) - bl.avg_vol) / bl.std_vol : 0;
+  });
+  return { bars: postBars, entryIdx: 0, fiveMinBars, trueRanges, volZs };
+}
+
+// mode: 'CONTINUATION' | 'REVERSAL' (derived from setup_type by the caller). postBars: bars
+// strictly after fired_at through now, each {ts, open, high, low, close, volume, mod} --
+// acd.js's own bars.rows shape (bid_volume+ask_volume summed into `volume` by the caller,
+// see the comment at acd.js's call site). Returns {} if neither mechanism has fired yet;
+// only includes a key once that mechanism's condition is newly true, so the caller can persist
+// it once and never re-check it again (WHERE post_entry_exit_signals->'range_slope' IS NULL).
+export function detectPostEntryExitSignals({ postBars, isLong, entryPrice, mode }, volBaseline) {
+  const out = {};
+  if (!postBars || postBars.length < 3) return out;
+  const trade = buildLiveTrade(postBars, volBaseline);
+
+  const rsCfg = RANGE_SLOPE_LIVE_CONFIG[mode];
+  if (rsCfg) {
+    const i = findRangeSlopeFireIdx(trade, rsCfg.k, rsCfg.th, rsCfg.dur);
+    if (i != null) {
+      const exit1Min = trade.bars.findIndex(b => b.ts === trade.fiveMinBars[i].ts) + 4;
+      const bar = trade.bars[Math.min(exit1Min, trade.bars.length - 1)];
+      out.range_slope = {
+        mechanism: 'range_slope', fired_at: bar.ts, fired_price: bar.close,
+        hypothetical_pnl: (isLong ? bar.close - entryPrice : entryPrice - bar.close) * PT - COMM,
+        config: rsCfg,
+      };
+    }
+  }
+
+  const vrCfg = VOL_ROLLOVER_LIVE_CONFIG[mode];
+  if (vrCfg) {
+    const i = findVolRolloverFireIdx(trade, vrCfg.m, vrCfg.n);
+    if (i != null) {
+      const idx1Min = Math.min(i + vrCfg.n, trade.bars.length - 1);
+      const bar = trade.bars[idx1Min];
+      out.vol_rollover = {
+        mechanism: 'vol_rollover', fired_at: bar.ts, fired_price: bar.close,
+        hypothetical_pnl: (isLong ? bar.close - entryPrice : entryPrice - bar.close) * PT - COMM,
+        config: vrCfg,
+      };
+    }
+  }
+
+  return out;
+}
 
 const volBaselineCache = new Map();
 async function getCachedVolumeBaseline(query, d) {
@@ -525,4 +600,9 @@ async function processGlobexDay(d, bars, levels, calib, population) {
   }
 }
 
-main().catch(console.error);
+// Guarded (2026-09-02): this file is now also imported as a module (detectPostEntryExitSignals,
+// by acd.js's resolveSetupsByPrice()) -- main() is the multi-year backtest sweep and must only
+// run when this file is executed directly as a CLI script, never as a side effect of import.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(console.error);
+}
