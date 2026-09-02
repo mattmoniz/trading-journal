@@ -1,5 +1,28 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-02 (in progress): Unified live-gate checkpoint spec — FIRST priority for next session
+
+Follow-up to the sibling-reversal gate below: DeepSeek's code review of the initial wiring found
+it only reached 2 of `active_setups`'s 7 INSERT sites, missing the RTH `shadowCandidates` loop
+(the real fire path for `STOP_SWEEP`/`VWAP_MAGNET`/`C_PAIRED`/`C_REVERSAL`/`TRT`/
+`BRACKET_BREAKOUT`) and `STACK_VOL_BREAK_LIVE`. Both gaps fixed directly same session (commit
+`ab81fce`) -- the other 2 flagged sites turned out to already hardcode `status='SHADOW'`
+unconditionally, so there was nothing to gate there. User then asked the structural question
+directly: "shouldn't there be one insert site?" -- pointing at the real cause: 4 live-capable
+INSERT sites each hand-assemble their own `forceShadow` boolean independently, with no single
+place a future gate is guaranteed to reach (this is the SECOND time this exact gap has bitten a
+gate -- `isCrossDirectionFastFlip` hit it first, built Globex-only, needed a separate later fix
+for RTH). Full scope -- why NOT to merge the 4 INSERT statements themselves (genuinely different
+context/columns/applicable-checks per site, confirmed e.g. `isTrailMechanism` is scoped only to
+the RTH active slot), the proposed shared `evaluateLiveGates()` checkpoint function, and the
+required per-site check-applicability audit before implementation: `docs/
+UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`. **User explicitly ranked this spec FIRST priority for the
+next session, ahead of the roster-wide invalidation-boundary whitelist spec below** (which stays
+real and pending, just second in line). Design critique dispatched to DeepSeek same session --
+check `scratch/deepseek_response.md` / this thread for whether it returned before context was
+cleared. Tracked as `OPEN_DECISION unified_live_gate_checkpoint_scoped` (HIGH). Zero
+implementation code written.
+
 ## 🔶 2026-09-02 (in progress): Roster-wide invalidation-boundary bug (beyond IB) + sibling-reversal gate shipped live
 
 **Roster-wide invalidation-boundary audit, spec written, not yet built.** Same session as the
@@ -43,9 +66,32 @@ DeepSeek): both call sites originally passed the pre-existing `rthLevelBase`/
 which only strip a trailing `_LONG`/`_SHORT` and leave `_TRAIL`/`_GAP_*`/`_OVERNIGHT` in place --
 silently exempting every suffixed candidate from this new gate. Fixed to use the (correctly
 suffix-stripping) `postWinFamilyOf()` instead, without touching the existing gate's variables.
-**Code review dispatched to DeepSeek, not yet returned as of this entry** -- verify its findings
-(if any) before trusting this gate further; `scripts/backtest_post_win_opposite_family_reversal.mjs`
-has the full corrected methodology if it needs re-running.
+
+**Code review returned and self-verified.** Confirmed correct: both SQL queries implement the
+settled design exactly (verified against `postWinFamilyOf`/backtest logic line by line), the
+Globex call site's `c.dir` is provably never null (every candidate reaching that point has a
+hardcoded direction or gets filtered out earlier), `postWinDirOf()` is genuinely dead code (safe
+to delete, not yet done), and the fail-open/fail-closed asymmetry on the two queries' error
+catches is intentional and bounded (a `winQ` failure fails open/unblocked, a `resetQ` failure
+fails closed/blocked -- both self-heal on the next poll). **One real, headline finding: the gate
+was wired into only 2 of 7 `active_setups` INSERT sites** -- missing the RTH `shadowCandidates`
+loop (the actual fire path for `STOP_SWEEP`/`VWAP_MAGNET`/`C_PAIRED`/`C_REVERSAL`/`TRT`/
+`BRACKET_BREAKOUT`, confirmed live via `grep`) and `STACK_VOL_BREAK_LIVE`. Directly contradicted
+the commit's own "applies universally" claim. Checked against the 30-trade backtest population:
+29 of 30 historical matches would have been caught by the pre-fix wiring anyway (their families
+route through the 2 sites that WERE gated); only 1 (`STACK_VOL_BREAK_LIVE`) would have slipped
+through -- but the STRUCTURAL gap was real regardless of how few historical instances it happened
+to catch. **Fixed same session** (commit `ab81fce`): both missing sites now wired, using
+`postWinFamilyOf()` correctly. The other 2 sites DeepSeek flagged (suppressed-audit SHADOW rows,
+early-touch backfill SHADOW rows) turned out to already hardcode `status='SHADOW'`
+unconditionally -- nothing for this gate to prevent there, confirmed by reading the code, no fix
+needed.
+
+**This coverage gap is what prompted the user's bigger structural question** ("shouldn't there
+be one insert site?") -- see the entry above this one for the resulting
+`docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`, ranked FIRST priority for next session.
+`scripts/backtest_post_win_opposite_family_reversal.mjs` has the full corrected backtest
+methodology if it needs re-running once real forward data accumulates.
 
 ## 🔶 2026-09-02 (in progress): IB_HIGH/IB_LOW structural-invalidation boundary bug found+fixed live; dtClass Gate B split-by-class comes back negative
 

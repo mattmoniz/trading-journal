@@ -5,6 +5,9 @@ IB_HIGH/IB_LOW invalidation-boundary fix (`docs/OPEN_THREADS.md`'s 2026-09-02 en
 DeepSeek roster-wide audit that found the same bug shape extends well beyond the 8 already-fixed
 IB types. Read this doc fresh before touching `structurallyInvalidateSetups()` again.
 
+**Priority: SECOND — user explicitly ranked `docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md` ahead of
+this one.** Do that one first next session.
+
 ## The bug, restated precisely (already fixed for 8 types, NOT yet fixed for the rest)
 
 `structurallyInvalidateSetups()` (`server/routes/acd.js` ~2364) kills a SHORT setup the instant
