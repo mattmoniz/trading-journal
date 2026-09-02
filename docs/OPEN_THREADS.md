@@ -118,6 +118,14 @@ worth a follow-up validation pass; the earlier structural-exit and VWAP-slope fi
 than first reported once baselines are computed correctly; directional persistence (both pre- and
 post-entry forms) is a clean, closed negative. Nothing here is wired live.
 
+**PRIORITY for next session** (user request): `OPEN_DECISION wire_flush_post_entry_exit_signals_globex`
+(HIGH) — build the range-expansion-slope exit (both Globex modes) and the volume-rollover exit
+(reversal mode only) as informational-only fields on open `GLOBEX_FLUSH_*` positions, mirroring the
+existing `bar6_exit_recommended` pattern exactly (never auto-closes anything, this codebase has no
+execution capability). Full config values, source claims, and a monitoring plan (dashboard badge +
+`quick-check.html`, matching bar6's "EXIT NOW" treatment) are in the decision's own text — read it
+via `node scripts/flag_decision.mjs --list` before starting, don't re-derive from scratch.
+
 ## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
 
 Full arc, in order: scoped from Audit #11's R2 recommendation (`roster_level_wr_circuit_breaker_scoped`,
