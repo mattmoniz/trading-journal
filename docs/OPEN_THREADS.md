@@ -118,13 +118,18 @@ worth a follow-up validation pass; the earlier structural-exit and VWAP-slope fi
 than first reported once baselines are computed correctly; directional persistence (both pre- and
 post-entry forms) is a clean, closed negative. Nothing here is wired live.
 
-**PRIORITY for next session** (user request): `OPEN_DECISION wire_flush_post_entry_exit_signals_globex`
-(HIGH) — build the range-expansion-slope exit (both Globex modes) and the volume-rollover exit
-(reversal mode only) as informational-only fields on open `GLOBEX_FLUSH_*` positions, mirroring the
-existing `bar6_exit_recommended` pattern exactly (never auto-closes anything, this codebase has no
-execution capability). Full config values, source claims, and a monitoring plan (dashboard badge +
-`quick-check.html`, matching bar6's "EXIT NOW" treatment) are in the decision's own text — read it
-via `node scripts/flag_decision.mjs --list` before starting, don't re-derive from scratch.
+**PRIORITY for next session** (user request, then REVISED same day after user rejected a
+display-only badge): `OPEN_DECISION wire_flush_post_entry_exit_signals_globex` (HIGH) — build the
+range-expansion-slope exit (both Globex modes) and the volume-rollover exit (reversal mode only) for
+open `GLOBEX_FLUSH_*` positions as a closed loop, not a decorative card: (1) persist the actual
+hypothetical $ P&L per real fire (not just a boolean flag), (2) segment every comparison by
+ALL-trades vs BIG-MOVE-ONLY (top tercile by realized MFE) since "catch more of a big move" is the
+whole point of this thread, not marginal average EV, (3) a real weekly promotion/retirement
+trigger — once N≥20 real fires accumulate, either promotes the finding to actually change the live
+`globexFlushDetector.js` target logic, or closes it out as a negative — never left sitting at
+PROVISIONAL indefinitely. Full build spec (persistence shape, monitoring surface, exact configs) is
+in the decision's own text — read it via `node scripts/flag_decision.mjs --list` before starting,
+don't re-derive from scratch.
 
 ## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
 
