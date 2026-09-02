@@ -5,8 +5,16 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { computeRunningVwapSeries } from '../server/services/developingValueService.js';
 import { getVolumeBaseline } from '../server/services/touchQuality.js';
 
-const PT = 2; 
-const COMM = 1; 
+const PT = 2; // LIVE_INSTRUMENT.MNQ.dollarsPerPoint
+// FIXED 2026-09-02: was 1, applied ONCE per trade in getTradePnl() below (representing the
+// full round-trip cost, not a per-side charge) -- CLAUDE.md/instruments.js's
+// commissionPerRoundTrip is $2 for MNQ, not $1. Every $/trade figure this file (and its
+// sibling pilot_exits.mjs, same bug, same fix) has reported was $1/trade too generous.
+// Doesn't change which config wins each sweep (a uniform -$1/trade shift preserves relative
+// ranking across configs on the same trade population) -- only the absolute headline numbers,
+// which were corrected in performance_audit and docs/OPEN_THREADS.md in the same session this
+// was caught.
+const COMM = 2;
 
 function computeIntradayATR(bars, currentIdx, window = 60) {
   const start = Math.max(1, currentIdx - window + 1);
@@ -168,7 +176,13 @@ async function evaluateTrade(t, baselinePts) {
   }
 }
 
-function simulateRangeSlope(trade, windowK, thresh, confirmDur) {
+// Shared detection loop (2026-09-02, extracted for wire_flush_post_entry_exit_signals_globex):
+// simulateRangeSlope() below needs a final PnL for the backtest; the live poller
+// (acd.js, via detectPostEntryExitSignals() at the bottom of this file) needs to know
+// WHERE/WHEN it fired so it can persist a real fired_at/fired_price on an open position.
+// Both now call this one loop -- do not let the two diverge into separate copies of the
+// flat-run condition.
+function findRangeSlopeFireIdx(trade, windowK, thresh, confirmDur) {
   let flatRun = 0;
   for (let i = windowK; i < trade.fiveMinBars.length; i++) {
     const slice = trade.trueRanges.slice(i - windowK + 1, i + 1);
@@ -178,12 +192,16 @@ function simulateRangeSlope(trade, windowK, thresh, confirmDur) {
     } else {
       flatRun = 0;
     }
-    if (flatRun >= confirmDur) {
-      const exit1Min = trade.bars.findIndex(b => b.ts === trade.fiveMinBars[i].ts) + 4; 
-      return getTradePnl(trade, exit1Min);
-    }
+    if (flatRun >= confirmDur) return i;
   }
-  return getTradePnl(trade, trade.bars.length - 1);
+  return null;
+}
+
+function simulateRangeSlope(trade, windowK, thresh, confirmDur) {
+  const i = findRangeSlopeFireIdx(trade, windowK, thresh, confirmDur);
+  if (i == null) return getTradePnl(trade, trade.bars.length - 1);
+  const exit1Min = trade.bars.findIndex(b => b.ts === trade.fiveMinBars[i].ts) + 4;
+  return getTradePnl(trade, exit1Min);
 }
 
 function simulateDirectionalPersistence(trade, minRun, maxNotMetDur) {
@@ -209,26 +227,31 @@ function simulateDirectionalPersistence(trade, minRun, maxNotMetDur) {
   return getTradePnl(trade, trade.bars.length - 1);
 }
 
-function simulateVolRollover(trade, M, N) {
-  const volZs = trade.volZs; 
-  if (!volZs || volZs.length < M + N) return getTradePnl(trade, trade.bars.length - 1);
+// Same extraction rationale as findRangeSlopeFireIdx above.
+function findVolRolloverFireIdx(trade, M, N) {
+  const volZs = trade.volZs;
+  if (!volZs || volZs.length < M + N) return null;
   for (let i = M; i < volZs.length - N; i++) {
     let rising = true;
     for (let j = i - M; j < i; j++) {
       if (volZs[j] >= volZs[j+1]) { rising = false; break; }
     }
     if (!rising) continue;
-    
+
     let declining = true;
     for (let j = i; j < i + N; j++) {
       if (volZs[j] <= volZs[j+1]) { declining = false; break; }
     }
-    
-    if (declining) {
-      return getTradePnl(trade, trade.entryIdx + i + N);
-    }
+
+    if (declining) return i;
   }
-  return getTradePnl(trade, trade.bars.length - 1);
+  return null;
+}
+
+function simulateVolRollover(trade, M, N) {
+  const i = findVolRolloverFireIdx(trade, M, N);
+  if (i == null) return getTradePnl(trade, trade.bars.length - 1);
+  return getTradePnl(trade, trade.entryIdx + i + N);
 }
 
 

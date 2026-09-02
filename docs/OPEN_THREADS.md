@@ -118,6 +118,18 @@ worth a follow-up validation pass; the earlier structural-exit and VWAP-slope fi
 than first reported once baselines are computed correctly; directional persistence (both pre- and
 post-entry forms) is a clean, closed negative. Nothing here is wired live.
 
+**CORRECTED 2026-09-02, before live-wiring began**: while building the wiring spec below,
+found `pilot_exits.mjs`/`pilot_exits_extended.mjs`'s `COMM` constant was `1`, applied once per
+trade in `getTradePnl()` (representing the full round-trip commission) — MNQ's
+`commissionPerRoundTrip` is `$2`, not `$1` (`server/config/instruments.js`). Every $/trade figure
+in this thread was $1/trade too generous. Fixed and re-ran; **all directional conclusions are
+unchanged** (a uniform per-trade shift can't change which config wins a sweep or flip a
+rigor-clean/unclean verdict), only the absolute numbers moved: range-expansion-slope Continuation
+$13.02→$32.89 (was $13.49→$33.89), Reversal $30.35→$37.72 (was $30.84→$38.72); volume-rollover
+Reversal $30.35→$58.88 (was $30.84→$59.88, still the strongest number, still Continuation-mode
+FAILS rigor). Corrected in `RESEARCH_CLAIM flush_post_entry_range_expansion_slope_exit` /
+`flush_post_entry_volume_rollover_exit` / `flush_post_entry_directional_persistence_exit`.
+
 **PRIORITY for next session** (user request, then REVISED same day after user rejected a
 display-only badge): `OPEN_DECISION wire_flush_post_entry_exit_signals_globex` (HIGH) — build the
 range-expansion-slope exit (both Globex modes) and the volume-rollover exit (reversal mode only) for

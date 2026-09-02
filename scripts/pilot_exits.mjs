@@ -5,8 +5,10 @@ import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { computeRunningVwapSeries } from '../server/services/developingValueService.js';
 import { getVolumeBaseline } from '../server/services/touchQuality.js';
 
-const PT = 2; 
-const COMM = 1; 
+const PT = 2; // LIVE_INSTRUMENT.MNQ.dollarsPerPoint
+// FIXED 2026-09-02: was 1 -- see pilot_exits_extended.mjs's identical fix/comment. MNQ
+// commissionPerRoundTrip is $2, applied once per trade here.
+const COMM = 2;
 
 function computeIntradayATR(bars, currentIdx, window = 60) {
   const start = Math.max(1, currentIdx - window + 1);
