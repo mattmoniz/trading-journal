@@ -371,5 +371,6 @@ echo "=== Weekly backtest run: $(date) ==="
 # what keeps it moving toward that bar on its own.
 /usr/bin/node scripts/pilot_pd_level_fade_vwap_deviation_filter.mjs
 /usr/bin/node scripts/pilot_low_deviation_volume_size_filter.mjs
+/usr/bin/node scripts/pilot_opposite_direction_post_win_pause.mjs
 
 echo "=== Weekly backtest run complete: $(date) ==="
