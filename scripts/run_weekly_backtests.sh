@@ -373,14 +373,10 @@ echo "=== Weekly backtest run: $(date) ==="
 /usr/bin/node scripts/pilot_low_deviation_volume_size_filter.mjs
 /usr/bin/node scripts/pilot_opposite_direction_post_win_pause.mjs
 
-# Cross-direction fast-flip live calibration (2026-09-02) -- generalizes the GLOBEX_VWAP_FADE-
-# only fix in acd.js (CROSS_DIRECTION_FAST_FLIP gate) to every real paired-direction family,
-# derived from live data (not a hardcoded list). Writes performance_audit signal_type=
-# 'CROSS_DIRECTION_FLIP_CALIB' per family (GATE/NO_GATE/THIN_N) -- acd.js reads this live
-# (cached per day) to decide which families' fast cross-direction flips get routed to SHADOW.
-# Currently only GLOBEX_VWAP_FADE clears the bar; the other 30 real paired families stay
-# visibly THIN_N/NO_GATE until their own data justifies a gate -- this is what makes that
-# self-expand automatically instead of staying a one-off.
-/usr/bin/node scripts/backtest_cross_direction_fast_flip.mjs
+# Cross-direction fast-flip live calibration: MOVED to run_daily_calibration.sh 2026-09-02
+# (user request -- this gates real live/SHADOW trade eligibility, waiting up to 6 days for a
+# weekly recheck is too slow if it's firing too much and costing real trades; same reasoning
+# already established here for backtest_calibrated_wider_target.mjs). See that file for the
+# script invocation -- do not also run it here, the daily cadence already covers weekly.
 
 echo "=== Weekly backtest run complete: $(date) ==="

@@ -71,4 +71,17 @@ echo "=== Daily calibration: $(date) ==="
 # RESEARCH_CLAIM, does not wire anything live.
 /usr/bin/node scripts/backtest_calibrated_wider_target.mjs
 
+# Cross-direction fast-flip live calibration (2026-09-02, moved here from
+# run_weekly_backtests.sh per direct user request: "it should check itself daily if its
+# firing too much and affecting real money"). Tests every real paired-direction family for a
+# fast/medium/slow cross-direction-overlap flip gradient and writes performance_audit
+# signal_type='CROSS_DIRECTION_FLIP_CALIB' per family -- both detectGlobexSetup() and the RTH
+# level-fade engine read this live (cached per day) to decide which families' fast flips get
+# routed to SHADOW instead of ACTIVE. This directly gates real trade eligibility, so -- same
+# reasoning as backtest_calibrated_wider_target.mjs just above -- a week is too long to keep
+# enforcing a gate against stale data if real forward trades start disagreeing with it. The
+# N>=20 floor and the monotonic-pattern check (not just "fast is negative") are what prevent
+# chasing daily noise, not the run cadence.
+/usr/bin/node scripts/backtest_cross_direction_fast_flip.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
