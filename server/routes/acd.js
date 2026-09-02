@@ -2017,8 +2017,20 @@ async function detectGlobexSetup(sessionDate, io) {
       // trades this gate holds back, which is a dead end: nobody could ever check later
       // whether the gate is still justified or is quietly costing good trades. SHADOW-tracking
       // it keeps real outcome data flowing into backtest_cross_direction_fast_flip.mjs's own
-      // weekly re-calibration.
-      const crossDirectionCooldownMin = c.levelBase ? await isCrossDirectionFastFlip(sessionDate, c.levelBase, c.dir) : false;
+      // daily re-calibration.
+      // FIXED 2026-09-02 (DeepSeek code review): was `c.levelBase`, the underlying LEVEL name
+      // (e.g. 'PD_VAH', 'PD_VAL', 'PD_POC') -- NOT the family name the calibration script and
+      // the RTH engine both derive (`c.type.replace(/_(LONG|SHORT)$/, '')`, e.g. 'PD_VAH_FADE').
+      // Only 'GLOBEX_VWAP_FADE' happened to match by coincidence (its levelBase was written to
+      // already include '_FADE'). For every other _LONG/_SHORT family -- including
+      // PD_VAH_FADE_SHORT/PD_VAL_FADE_LONG/PD_POC_FADE_LONG/SHORT, whose setup_type string is
+      // IDENTICAL whether fired from RTH or here -- this looked up a nonexistent calibration
+      // key and silently fail-opened, while the RTH engine (already using the correct
+      // derivation) would enforce the same family correctly. Latent until one of those families
+      // clears the GATE bar; fixed to the same derivation as the other two call sites so the
+      // three can never structurally disagree again.
+      const crossDirectionLevelBase = c.type.replace(/_(LONG|SHORT)$/, '');
+      const crossDirectionCooldownMin = await isCrossDirectionFastFlip(sessionDate, crossDirectionLevelBase, c.dir);
 
       // Every candidate now carries widerStop/widerTarget from the real OPTIMAL_STOP source
       // (see the candidates array above) -- the old widerWindowNew-vs-globexParams() branch

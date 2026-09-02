@@ -22,7 +22,6 @@
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 
-const isWin = (t) => t.resolution === 'TARGET_HIT' || (t.resolution === 'TRAIL_EXIT' && t.actual_pnl >= 0);
 const MIN_REAL_N_PER_DIRECTION = 5; // just enough to confirm the family genuinely fires both ways
 const MIN_FAST_N = 20; // this project's own decisive-claim floor
 
@@ -103,14 +102,25 @@ async function main() {
       continue;
     }
 
-    // Real gate only when the pattern actually matches the validated shape: fast is negative
-    // AND worse than both medium and slow (whichever of those have enough data to compare --
-    // require at least one comparison point, not just "fast is negative in isolation").
-    const comparisonEvs = [mediumEv, slowEv].filter(ev => ev != null);
-    const monotonic = fastEv < 0 && comparisonEvs.length > 0 && comparisonEvs.every(ev => ev > fastEv);
+    // TIGHTENED 2026-09-02 (DeepSeek code review, two real gaps in the original version):
+    // (1) the original check only required fast to beat WHICHEVER of medium/slow had data --
+    // a single comparison point (often just medium, since >15min overlap is rarer) could pass,
+    // and never actually verified medium < slow. Now requires BOTH buckets present and the true
+    // ascending order fast < medium < slow, matching what the commit narrative always claimed.
+    // (2) rigor.clean/distinctDates were computed but never consulted -- a fast bucket of N>=20
+    // all from one trading day could have cleared the old gate. Added an explicit distinct-dates
+    // floor (MIN_DISTINCT_DATES, borrowing this codebase's PAIR_MIN_DISTINCT_DAYS convention)
+    // as a hard requirement -- NOT full rigor.clean (that also requires 3-way chronological sign
+    // stability, a stricter property likely to fail for any young family regardless of real
+    // effect size, and this codebase's own convention treats rigor as informational except in
+    // one deliberate, narrow exception -- see CLAUDE.md's rigor-diagnostics rule). distinctDates
+    // is still recorded in notes either way for visibility.
+    const MIN_DISTINCT_DATES = 10;
+    const monotonic = fastEv < 0 && mediumEv != null && slowEv != null && fastEv < mediumEv && mediumEv < slowEv;
     const rigor = fast.length >= 20 ? computeRigor(fast, { dateField: 'trade_date', pnlFn: t => t.actual_pnl }) : null;
+    const clearsDateFloor = (rigor?.distinctDates ?? 0) >= MIN_DISTINCT_DATES;
 
-    if (monotonic) {
+    if (monotonic && clearsDateFloor) {
       console.log(`  -> GATE justified: fastEv=$${fastEv.toFixed(2)} vs medium=$${mediumEv?.toFixed(2)} slow=$${slowEv?.toFixed(2)}, rigor clean=${rigor?.clean}. Cooldown=5min.\n`);
       await query(`
         INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, ev_per_trade, recommendation, notes)
@@ -120,14 +130,17 @@ async function main() {
               recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
       `, [today, family, fast.length, fastEv, JSON.stringify({ cooldownMinutes: 5, fastN: fast.length, mediumN: medium.length, slowN: slow.length, fastEv, mediumEv, slowEv, rigorClean: rigor?.clean ?? null, distinctDates: rigor?.distinctDates ?? null })]);
     } else {
-      console.log(`  -> NO_GATE: pattern doesn't hold (fastEv=$${fastEv.toFixed(2)}, medium=$${mediumEv?.toFixed(2)}, slow=$${slowEv?.toFixed(2)}).\n`);
+      const reason = !monotonic
+        ? `pattern doesn't hold (need fast < medium < slow: fastEv=$${fastEv.toFixed(2)}, medium=$${mediumEv?.toFixed(2)}, slow=$${slowEv?.toFixed(2)})`
+        : `monotonic but fails the distinct-dates floor (${rigor?.distinctDates ?? 0} < ${MIN_DISTINCT_DATES})`;
+      console.log(`  -> NO_GATE: ${reason}.\n`);
       await query(`
         INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, ev_per_trade, recommendation, notes)
         VALUES ($1, 0, 'CROSS_DIRECTION_FLIP_CALIB', $2, $3, $4, 'NO_GATE', $5)
         ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE
           SET sample_size = EXCLUDED.sample_size, ev_per_trade = EXCLUDED.ev_per_trade,
               recommendation = EXCLUDED.recommendation, notes = EXCLUDED.notes
-      `, [today, family, fast.length, fastEv, JSON.stringify({ fastN: fast.length, mediumN: medium.length, slowN: slow.length, fastEv, mediumEv, slowEv })]);
+      `, [today, family, fast.length, fastEv, JSON.stringify({ fastN: fast.length, mediumN: medium.length, slowN: slow.length, fastEv, mediumEv, slowEv, monotonic, distinctDates: rigor?.distinctDates ?? null })]);
     }
   }
   console.log('Done.');
