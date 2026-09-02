@@ -1,5 +1,73 @@
 # Open Threads / Pending Work
 
+## ✅ 2026-09-01 (RESOLVED): "catch more of a big move" thread — ATR precursor validated, flush exit mechanisms tested, a real Gemini-dispatch bug found+fixed
+
+User asked (after the bad-R:R `RTH_FLUSH_LONG` thread) whether anything in the data can help catch
+more of a big move once one starts, and explicitly asked to look beyond their own VWAP-slope idea
+for other candidate signals. Three sub-threads:
+
+**1. Precursor signals (does something in the first 15 min predict more move is coming), tested
+directly by Claude (`scripts/pilot_atr_expansion_big_move_precursor.mjs`), no lookahead
+(outcome measured only from minute 15 onward):**
+- **ATR level** (already validated earlier this session): RTH r=0.621 (N=414), Globex r=0.572
+  (N=413) — the one clear, real, independently-confirmed signal.
+- **Range-expansion slope** (is range *growing* within the window, not just its average level):
+  dropped — it's mechanically almost the same thing as ATR level (cross-corr -0.784 Globex), no
+  independent information.
+- **Directional persistence** (max same-direction run-length / fraction of bars agreeing with net
+  direction): real but weak (r=0.07-0.12), and genuinely independent of ATR (near-zero
+  cross-correlation).
+- **Combined score (zATR + zAgreeFrac)**: tested per user's "go with what worked" instruction —
+  naive equal-weight combination made it WORSE than ATR alone (RTH 0.516 vs 0.621, Globex 0.455 vs
+  0.572). ATR level alone remains the best single precursor found. `RESEARCH_CLAIM
+  early_atr_expansion_predicts_further_move_20260901` / `range_slope_and_directional_persistence_20260901`
+  already recorded earlier in this thread; no live wiring yet (precursor-only, no exit mechanism
+  built from it).
+
+**2. Exit mechanisms for RTH_FLUSH/GLOBEX_FLUSH — VWAP-slope exit and structural next-level exit**,
+dispatched to Gemini (`scripts/pilot_exits.mjs`) per the corrected design spec
+(`scratch/flush_vwap_slope_exit_design.md`). Both use the real live baseline (RTH 2-tier
+volume-building target, Globex mode-aware 3-tier), reuse `computeBalanceAndResolution()`, score via
+paired P&L (not the tautological MFE-capture ratio), and split RTH/Globex-continuation/
+Globex-reversal separately.
+
+**A real bug was found in Gemini's own script and fixed**: `getLiveTargets()`'s SQL query had no
+`ORDER BY run_date`, and the dict-building loop did last-write-wins over duplicate
+`performance_audit` rows per `signal_name` — for `GLOBEX_FLUSH_LONG`/`GLOBEX_FLUSH_SHORT` this let a
+stale 2026-08-27 row (pre-`tierTargets`) silently clobber the correct 2026-08-28/08-30 rows. Since
+the Globex-continuation population push gates on `c.tierTargets`, this zeroed the ENTIRE Globex
+continuation population — not because Globex never continues, but because of the missing
+`ORDER BY`. Gemini's original report showed this as a clean negative (Globex Continuation
+-$5.20/trade, N=68) — that number was wrong. Fixed with `DISTINCT ON (signal_name) ... ORDER BY
+signal_name, run_date DESC` (the same pattern CLAUDE.md already documents for `OPTIMAL_STOP` reads
+elsewhere) and re-ran. RTH's population and Globex-reversal's population were both unaffected by
+this bug (verified directly — RTH doesn't depend on `tierTargets`, and `GLOBEX_FLUSH_REVERSAL_*`
+only ever had 2 consistent calibration rows).
+
+**Corrected results** (structural exit is a single fixed rule, not swept — not subject to the
+overfitting concern below):
+- **RTH Continuation** (N=222): baseline $67.62/trade vs structural exit $51.53/trade — structural
+  exit UNDERPERFORMS, only beats baseline P&L on 32.3% of trades. RTH stays on its current target.
+- **Globex Continuation** (N=119, corrected from the buggy -$5.20): baseline $3.65/trade vs
+  structural exit $16.44/trade — real improvement, rigor-clean but date-concentrated (33 distinct
+  dates, top5DayPct=15.2%).
+- **Globex Reversal** (N=119): baseline $13.24/trade vs structural exit $18.59/trade — real
+  improvement, rigor-clean and well-distributed (114 distinct dates, top5DayPct=4.4%).
+
+Recorded as `RESEARCH_CLAIM globex_flush_structural_next_level_exit` (PROVISIONAL — real and
+rigor-clean, but not yet independently re-verified and Globex-continuation's date concentration is
+thinner than ideal). **Not wired live** — this is a paired-comparison research result, not a shipped
+exit mechanism.
+
+**VWAP-slope exit remains unvalidated** — its "best" numbers in `pilot_exits_out.json`
+(`bestVwapEv`/`bestVwapConf`) are the best-of-27 parameter-sweep result on the same data with no
+held-out split, the same overfitting pattern already flagged in the circuit-breaker dispatch. Do not
+trust the VWAP-slope numbers as reported; would need a genuine train/test split before promotion.
+
+**Debug/cleanup**: temporary debug logging added while diagnosing the bug was removed from
+`scripts/pilot_exits.mjs` before this was recorded; the fixed query is the only surviving change to
+the script.
+
 ## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
 
 Full arc, in order: scoped from Audit #11's R2 recommendation (`roster_level_wr_circuit_breaker_scoped`,
