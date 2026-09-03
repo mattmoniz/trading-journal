@@ -1,14 +1,15 @@
 # Extreme cumulative-delta "point of no return" — scope (2026-09-03)
 
-**Status: SHADOW-only live build shipped 2026-09-03.** `IB_LOW_PNR_SHORT` -- a new,
+**Status: SHORT side SHADOW-only live build shipped 2026-09-03 ("Point of No Return -
+Short"); LONG side tested and CLOSED NEGATIVE the same day.** `IB_LOW_PNR_SHORT` -- a new,
 standalone-poller setup type -- is wired live (`server/services/ibLowPnrDetector.js`,
 polled every 60s from `server/index.js`), always fires SHADOW (real live N=0, this
 codebase's own N>=20 floor applies), and its own custom hold-to-close/mark-to-market
 resolution lives in `resolveSetupsByPrice()` (`server/routes/acd.js`). Upside (IB High
-break, LONG) version is NOT built -- it shows the same effect SIZE but FAILS rigor (not
-chronologically stable); revisit only if re-checked with more history. Read this doc
-fresh before touching `ibLowPnrDetector.js`, `getCumulativeDeltaBaseline()`
-(`touchQuality.js`), `isCrossDirectionFastFlip`, or extending this to the LONG side.
+break, LONG) version is NOT built and should not be -- see the resolved section below,
+this is a real tested negative, not an unfinished thread. Read this doc fresh before
+touching `ibLowPnrDetector.js`, `getCumulativeDeltaBaseline()` (`touchQuality.js`),
+`isCrossDirectionFastFlip`, or reopening the LONG side.
 
 ## Origin
 
@@ -120,12 +121,30 @@ unconfirmed until real forward N firms up the shape of the edge, not just its si
    initial break moment. Not required to ship IB_LOW_PNR_SHORT (it's a standalone
    momentum entry, not a filter on IB_LOW_FADE_SHORT — see mechanization decision below),
    but still open if option (B) below is ever revisited.
-2. **Upside version's instability is unresolved**, not just noted. Don't build anything
-   symmetric until re-checked with more history or a different cut.
-3. **DeepSeek design review done (2026-09-03, scratch/deepseek_response.md); no Gemini
-   mine-and-run pass yet.** DeepSeek's critique is incorporated into the build (see below);
-   a heavier independent Gemini pass (re-verify the baseline construction and the N=15
-   trade sim from scratch, blind to this session's methodology) has not been run.
+2. **Upside version's instability RESOLVED (2026-09-03) — was a thin-sample artifact,
+   not a real regime split, but the side is closed negative anyway for a different
+   reason.** Re-checked with a coarser 2-way split (halves, not thirds — the original
+   3-way split created one bucket with only N=8 events, an exact 4-4 tie that failed the
+   strict sign-match check by construction). Under halves: first half 38.5% never-recover
+   (5/13), second half 23.1% (3/13) — both meaningfully above the 0.3% baseline, same
+   direction, no reversal. So the earlier "may be a regime effect" framing was wrong; it
+   was a boundary-tie artifact from a too-fine split on N=26.
+   **However, this doesn't mean the upside should be built.** The actual bar-by-bar trade
+   simulation (LONG entry at the z-cross bar close, price already above IB High, same
+   construction as the SHORT side) is a clean, decisive NEGATIVE: N=12 real candidates
+   (population shrinks the same way the SHORT side's did once the entry-timing gate is
+   applied), WR=33.3%, EV negative across every single stop/target config tested (best
+   case: no stop/no target, EV=-$10.50; every stop tested makes it worse). The day-level
+   "never recovers" statistic and the trade-level P&L measure genuinely different things
+   here — a plausible mechanism: exhaustion buying can produce a sharp stop-out pullback
+   without ever fully round-tripping back below IB High by session close, unlike the
+   downside where the two measures agreed. Recorded as
+   `RESEARCH_CLAIM ib_high_pnr_long_trade_sim_negative` (CONFIRMED). **Closed, not
+   revisit-pending** — this is a real, well-tested negative, not an open thread.
+3. **DeepSeek design review + code review both done** (2026-09-03,
+   scratch/deepseek_response.md, two separate passes) for the SHORT side build; both came
+   back clean, no blockers. No Gemini mine-and-run pass yet on either side — a heavier
+   independent re-verification (blind to this session's methodology) has not been run.
 
 ## How this is mechanized
 
