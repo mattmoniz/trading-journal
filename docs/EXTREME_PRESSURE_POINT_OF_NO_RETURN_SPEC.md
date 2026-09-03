@@ -1,15 +1,20 @@
 # Extreme cumulative-delta "point of no return" — scope (2026-09-03)
 
-**Status: SHORT side SHADOW-only live build shipped 2026-09-03 ("Point of No Return -
-Short"); LONG side tested and CLOSED NEGATIVE the same day.** `IB_LOW_PNR_SHORT` -- a new,
-standalone-poller setup type -- is wired live (`server/services/ibLowPnrDetector.js`,
-polled every 60s from `server/index.js`), always fires SHADOW (real live N=0, this
-codebase's own N>=20 floor applies), and its own custom hold-to-close/mark-to-market
-resolution lives in `resolveSetupsByPrice()` (`server/routes/acd.js`). Upside (IB High
-break, LONG) version is NOT built and should not be -- see the resolved section below,
-this is a real tested negative, not an unfinished thread. Read this doc fresh before
-touching `ibLowPnrDetector.js`, `getCumulativeDeltaBaseline()` (`touchQuality.js`),
-`isCrossDirectionFastFlip`, or reopening the LONG side.
+**Status: SHORT side SHADOW-only live build shipped 2026-09-03 ("Short of No Return");
+LONG side tested and CLOSED NEGATIVE the same day (three separate ways); a genuinely NEW,
+untested follow-on idea ("early commitment") was opened the same day and is the live
+thread to pick up next.** `IB_LOW_PNR_SHORT` -- a new, standalone-poller setup type -- is
+wired live (`server/services/ibLowPnrDetector.js`, polled every 60s from
+`server/index.js`), always fires SHADOW (real live N=0, this codebase's own N>=20 floor
+applies), and its own custom hold-to-close/mark-to-market resolution lives in
+`resolveSetupsByPrice()` (`server/routes/acd.js`). Upside (IB High break, LONG) version is
+NOT built and should not be under the original construction -- see the resolved section
+below, this is a real tested negative, not an unfinished thread. A fresh, DIFFERENT idea
+("early commitment" — see the new section at the end) grew out of the LONG closure and is
+untested, `OPEN_DECISION early_commitment_angle_untested_pending`. Read this doc fresh
+before touching `ibLowPnrDetector.js`, `getCumulativeDeltaBaseline()` (`touchQuality.js`),
+`isCrossDirectionFastFlip`, reopening the LONG side under its original construction, or
+starting work on the early-commitment idea.
 
 ## Origin
 
@@ -237,10 +242,74 @@ treatment before being built; B/C/D would need the same discipline before any of
 ## Scripts used this session (scratch, not yet promoted to `scripts/`)
 
 The exploratory/backtest work (day-level base rate scan, the N=15 trade sim, the stop
-sweep, the dynamic-exit test, the placebo control) still lives in the session's
-scratchpad, not `scripts/` — only the LIVE poller (`server/services/ibLowPnrDetector.js`)
-and the shared baseline function (`touchQuality.js`'s `getCumulativeDeltaBaseline()`) are
-real, committed code. Before the next session extends this further, the trade-sim/backtest
-logic should be promoted into `scripts/backtest_ib_low_pnr_short.mjs` and wired through
-`record_claim.mjs`, per this codebase's own "every tested claim gets recorded" rule — not
-yet done as of this build.
+sweep, the dynamic-exit test, the placebo control, and everything in the "early
+commitment" section below) still lives in the session's scratchpad, not `scripts/` —
+only the LIVE poller (`server/services/ibLowPnrDetector.js`) and the shared baseline
+function (`touchQuality.js`'s `getCumulativeDeltaBaseline()`) are real, committed code.
+Before the next session extends this further, the trade-sim/backtest logic should be
+promoted into `scripts/backtest_ib_low_pnr_short.mjs` and wired through `record_claim.mjs`,
+per this codebase's own "every tested claim gets recorded" rule — not yet done as of this
+build.
+
+## NEW (2026-09-03): the "early commitment" angle — untested, `OPEN_DECISION
+early_commitment_angle_untested_pending`
+
+**Origin.** After closing the LONG side three ways (immediate entry, multi-day hold,
+pullback-resume — all negative, see above), asked a different question at the user's
+prompting: forget the z-score signal entirely, just look at how days that actually BECAME
+big up-days behaved, bar-level-first (per this codebase's own "market behavior hypotheses
+go through bar history first" rule).
+
+**Finding (recorded as `RESEARCH_CLAIM big_trend_day_early_commitment_symmetric_timing`,
+PROVISIONAL, purely descriptive — not trade-tested).** Scanned RTH days 2023-2026 with a
+net session move (close - open) of >=400pt in either direction:
+
+- **Big DOWN days (N=22):** 21/22 (95%) set the session HIGH at/before 11am — almost
+  always right at the open (9:30-9:50) — then ground steadily lower into the close; 18/22
+  (82%) made a fresh LOW into the final hour (many literally 15:44-15:59).
+- **Big UP days (N=10):** the mirror image — 0/10 had a late low (every low was set early,
+  at/near the open); highs were mostly made late (2-4pm).
+- **This DISPROVES the working "longs grind, shorts snap" framing** as an explanation —
+  both directions commit early and grind steadily the same way on their biggest days. The
+  asymmetry that IS real: big DOWN days (N=22) are more than 2x as common as big UP days
+  (N=10) at this magnitude — sharp declines happen more often as single-session events
+  than equally large rallies, even in an overall-uptrending market (gains accumulate
+  gradually across many days; losses concentrate into fewer, sharper ones).
+- This also explains, after the fact, why `IB_LOW_PNR_SHORT`'s construction (confirm via
+  hours of accumulated order flow) can't work symmetrically for longs the same way it
+  works for shorts in this specific instance — a day that's going to be a big up-day has
+  usually already committed within the first 20-30 minutes, well before an hours-later
+  confirmation signal could ever fire. Consistent with the multi-day test's own finding
+  that a plain 10:30am entry beat waiting for the z-score.
+
+**The idea this suggests:** an EARLY entry keyed on "has the day revisited its
+early-session extreme by some checkpoint time" (e.g., has price stayed above the first
+20-30min's low by 10:00-10:30am) — timing-based, not pressure-based, so it could fire
+close to when a day actually commits rather than hours after.
+
+**User's own framing to build any test around**, and the reason this isn't just "flag
+every day that's up in the morning": *"a day usually has drift unless it shoots up"* —
+most days will NOT be big trend days at all, they'll just drift. Any real test of this
+idea has to show that "hasn't revisited the early extreme by checkpoint time" actually
+separates the rare early-committing days from the much larger population of ordinary
+drift/noise days — not just correlate with "price happened to be up that morning."
+
+**Two honest gates before building anything, not yet done:**
+1. **Check for overlap with existing live setups first**, per this codebase's own
+   "check before building" rule — `IB_BULLISH`/`IB_BEARISH` and `OPEN_DRIVE_LONG`/`SHORT`
+   are existing attempts at a similar "day commits early" thesis. Current status (checked
+   2026-09-03): `IB_BULLISH` SUPPRESS (N=216, EV=-$6.82), `IB_BEARISH` SUPPRESS (N=445,
+   EV=+$1.80 but suppressed), `OPEN_DRIVE_LONG` THIN_N (N=61, EV=-$9.20), `OPEN_DRIVE_SHORT`
+   THIN_N (N=64, EV=+$2.27) — none of these are currently strong, which leaves room for a
+   genuinely different construction, but `IB_BULLISH`/`IB_BEARISH` already has its own
+   open, scoped redesign spec (`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`) that
+   found the LIVE code doesn't actually implement a real break-and-retest-then-drive check
+   — this new idea might just BE what that redesign should already do, rather than a
+   separate thing. Read that spec before starting a parallel effort.
+2. **Nothing beyond the descriptive timing scan has been tested.** No hypothesis test of
+   "early-non-revisit predicts a big day" exists yet, no checkpoint time has been chosen,
+   no trade construction, no code. This is a fresh idea at the very start of its own
+   research arc, not a validated finding — treat it with the same rigor discipline (bar-
+   level pretest → confound checks → trade simulation → placebo control → DeepSeek review)
+   that the SHORT side went through, not a shortcut just because the timing pattern looked
+   clean.
