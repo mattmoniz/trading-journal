@@ -482,6 +482,18 @@ async function run() {
         betClassOverride = { bet_class: betClass, pooled_real_clean_n: pooled.n, pooled_real_clean_ev: +pooled.ev.toFixed(2) };
         const tag = wasSuppressed ? '(already suppressed)' : '← NEW';
         console.log(`  SUPPRESS ${type.padEnd(38)} bet_class override: ${betClass} pooled real clean N=${pooled.n} EV=$${pooled.ev.toFixed(2)} (own real N=${realN} EV=$${realEv != null ? realEv.toFixed(2) : 'n/a'}, not independently positive) ${tag}`);
+      } else if (wasSuppressed) {
+        // Dead-zone fallthrough fix (2026-09-03, active_selection_edge_lost_deadzone_bug_20260903,
+        // DeepSeek-reviewed + independently re-verified): a previously-SUPPRESSed type that fails
+        // to clear the full PROMOTE bar must NOT silently fall through to the unreassigned default
+        // 'ACTIVE' — that let real EV merely recovering into (-5, 0) (still negative), or a
+        // recent-90d real WR/N miss, un-suppress a setup without ever meeting the stricter recovery
+        // bar. Retain SUPPRESS explicitly instead. No purgatory risk: real_n/rec90RealN pool
+        // ACTIVE+SHADOW origin (REAL_TRADE_FILTER), so a retained-SUPPRESS type keeps accumulating
+        // real trades toward PROMOTE from its SHADOW fires alone.
+        recommendation = 'SUPPRESS';
+        suppressed++;
+        console.log(`  SUPPRESS ${type.padEnd(38)} retained (failed PROMOTE recovery bar): real EV=$${realEv != null ? realEv.toFixed(2) : 'n/a'}  recent90 real N=${rec90RealN} WR=${rec90RealWr != null ? (rec90RealWr * 100).toFixed(1) : 'n/a'}% EV=$${rec90RealEv != null ? rec90RealEv.toFixed(2) : 'n/a'}`);
       } else {
         unchanged++;
       }

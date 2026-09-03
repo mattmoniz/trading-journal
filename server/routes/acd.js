@@ -68,20 +68,6 @@ async function getTrailingORWidths(date, days = 90) {
 // In-memory backtest job state
 let acdJob = { status: 'idle', progress: null, result: null, error: null };
 
-// TEMPORARY DIAGNOSTIC (2026-08-12) — persists the cascade-breaker investigation's
-// [cascade-diag] lines to a scratch file, since plain console.error only reaches
-// nodemon's own stdout (not reliably tail-able from outside the running process, and
-// not captured by server/index.js's recordError()/server_errors.jsonl, which only
-// fires at explicit SERVER_ERROR/CLIENT_ERROR call sites). Remove alongside the
-// diagnostic call sites once the real mechanism is found — see OPEN_DECISION
-// cascade_breaker_reenable_redesign_scope.
-function cascadeDiagLog(line) {
-  console.error(line);
-  try {
-    fs.appendFileSync(path.join(__dirname, '../../scratch/cascade_diag.log'), `${new Date().toISOString()} ${line}\n`);
-  } catch (_) {}
-}
-
 // FIXED 2026-08-31 (OPEN_DECISION confluence_levels_naming_canonicalization_4_sites): the
 // RTH candidate array's VWAP level object is named 'RTH_VWAP_FADE' (so a bare `_FADE` strip
 // yields 'RTH_VWAP'), but backtest_confluence.js's availableLevels.VWAP key and the Globex
@@ -439,6 +425,46 @@ export async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
     LIMIT 1
   `, [tradeDate, winResolvedAt, family]).catch(() => ({ rows: [] }));
   return resetQ.rows.length === 0; // still blocked if nothing else real has fired since the win
+}
+
+// Directional-conflict gate (2026-09-03, docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md).
+// Rule (user-confirmed): multiple concurrent REAL positions in the SAME direction are fine (they
+// just stack), but a NEW real fire whose direction is OPPOSITE any currently-open REAL position
+// should force SHADOW instead -- a real single account can't hold a long and a short on the same
+// instrument without them netting against each other. Scoped to origin_status='ACTIVE' only (real
+// capital) -- a SHADOW-origin position carries no capital, so it can't structurally conflict with
+// anything. No trade_date scoping: a real position can stay open past midnight (verified: a real
+// C_PAIRED_LONG held >24hrs, TIME_EXPIRED at $1958), so "currently open" means globally unresolved
+// right now, not "opened today." Direction is read via the canonical resolveDirection() (price-
+// derived from the row's own stop_level/t1_level, cross-checked against the name) rather than
+// inferDirection(setup_type) alone, since a handful of setup_types are name-directionless
+// (CONTEXTUAL_DIRECTION_TYPES) and only resolveDirection() handles those correctly.
+//
+// Tested (RESEARCH_CLAIM opposite_direction_hold_vs_switch_20260903, CONFIRMED, N=1316): when a
+// conflict occurs, holding the already-open position beats exiting it to take the new signal, by
+// $3.09/case -- this is what justifies "force SHADOW" (hold what's open) over "close the open
+// position and let the new one through." Account-level impact of the gate itself is negligible
+// (RESEARCH_CLAIM directional_conflict_gate_account_impact_20260903, PROVISIONAL, N=20 real
+// conflicts historically, -$41 total) -- this is risk-discipline, not a return-improving change.
+//
+// WIRED TO ALL 4 REAL (ACTIVE-capable) INSERT SITES as of 2026-09-03 (Globex, STACK_VOL_BREAK_LIVE,
+// the RTH main active-slot path, and the shadowCandidates loop) -- added one site at a time per
+// explicit user request to test on a single firing mechanism before extending further, starting
+// with the RTH main path (this codebase's highest-volume live insert site). The other 3 raw
+// `INSERT INTO active_setups` sites in this file (cascade-breaker audit, suppressed-audit, early-
+// touch backfill) are hardcoded always-SHADOW/EXPIRED and structurally can never produce a real
+// ACTIVE row, so they correctly don't need this gate. See
+// docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md and OPEN_DECISION
+// single_firing_directional_conflict_gate_not_built (now just tracking the design/code-review pass
+// the full rollout should still get, already reviewed once by DeepSeek 2026-09-03).
+export async function isOppositeDirectionOpen(direction) {
+  if (!direction) return false; // candidate itself has no resolvable direction -- can't conflict
+  const oppositeDir = direction === 'LONG' ? 'SHORT' : 'LONG';
+  const { rows } = await query(`
+    SELECT setup_type, stop_level, t1_level FROM active_setups
+    WHERE origin_status = 'ACTIVE' AND resolved_at IS NULL
+  `).catch(() => ({ rows: [] }));
+  return rows.some(r => resolveDirection(r) === oppositeDir);
 }
 
 async function isInRefireCooldown(tradeDate, setupType) {
@@ -2222,6 +2248,15 @@ async function detectGlobexSetup(sessionDate, io) {
       // 'CAM_S2_FADE_LONG_TRAIL' stays as-is), which would silently never match any real win.
       if (!crossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(sessionDate, postWinFamilyOf(c.type), c.dir)) {
         live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
+      }
+      // Directional-conflict gate (2026-09-03) -- see isOppositeDirectionOpen() header
+      // (~line 443). Second insert site wired (docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md);
+      // the RTH main path got it first. Short-circuits on `live.status !== 'SHADOW'` rather than
+      // just `!crossDirectionCooldownMin` (unlike the sibling-reversal check just above) -- this
+      // also skips the query when getOvernightLevelLiveStatus() or the sibling-reversal check
+      // already forced SHADOW, not just when cross-direction did.
+      if (live.status !== 'SHADOW' && await isOppositeDirectionOpen(c.dir)) {
+        live = { status: 'SHADOW', reason: 'OPPOSITE_DIRECTION_OPEN' };
       }
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
@@ -4982,6 +5017,12 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && !svCrossDirectionCooldownMin && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(svSetupType), direction)) {
                   live = { status: 'SHADOW', reason: 'POST_WIN_OPP_FAMILY_REV' };
                 }
+                // Directional-conflict gate (2026-09-03) -- see isOppositeDirectionOpen() header
+                // (~line 443). Third insert site wired (docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_
+                // SPEC.md) -- same short-circuit pattern as the two checks just above.
+                if (live.status !== 'SHADOW' && await isOppositeDirectionOpen(direction)) {
+                  live = { status: 'SHADOW', reason: 'OPPOSITE_DIRECTION_OPEN' };
+                }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const ins = await query(`
@@ -6972,27 +7013,6 @@ export default function createACDRouter(io) {
       }
       const _pulseLowRots = _pulseRots <= 1;
 
-      // Cascade breaker: detect trend-running-over-fades regime (Opus audit 2026-07-07).
-      // Worst 5 days each had 17–18 STOP_HITs across 20–29 setups — all different levels cascading.
-      // Distribution (N=1564 stop-out events): normal avg=1.84 prior same-day stops in 60min, std=2.16.
-      // Worst days: avg=5.89. Threshold = mean + σ = 4 total distinct stops → trigger at ≥3 to catch early.
-      // Window = 45 min (tighter than 60 to detect cascades sooner). Never fires on best days (max 6 stops total).
-      const _cascadeQ = await query(`
-        SELECT COUNT(DISTINCT setup_type)::int AS stop_count
-        FROM active_setups
-        WHERE trade_date = $1
-          AND resolution = 'STOP_HIT'
-          AND resolved_at >= NOW() - INTERVAL '45 minutes'
-      `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] }));
-      const _cascadeStopCount = _cascadeQ.rows[0]?.stop_count ?? 0;
-      const _cascadeThreshold = 3; // data-derived: normal p75 = 3 "prior" stops ≈ 4 total; -1 for early trigger
-      const cascadeBreaker = {
-        active: _cascadeStopCount >= _cascadeThreshold,
-        stopCount: _cascadeStopCount,
-        threshold: _cascadeThreshold,
-        windowMins: 45,
-      };
-
       // ── Level Scalp detection ────────────────────────────────────────────
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
       let levelScalpSetup = null;
@@ -7630,6 +7650,14 @@ export default function createACDRouter(io) {
             liveStats._suppressedSetups = suppressedSetups;
             liveStats._dowSuppressToday = dowSuppressToday;
             liveStats._knownSetupTypes = knownTypes;
+            // True SUPPRESS only (excludes THIN_N) -- computeSuppressionSets() merges both into
+            // one Set for the live ACTIVE-vs-SHADOW gate (correct there, both cause SHADOW), but
+            // the early-touch backfill loop below needs to tell them apart: THIN_N types are
+            // exactly the population that backfill exists to help (see the 2026-09-03 comment at
+            // that loop's skip check), so only true SUPPRESS should still be excluded there.
+            liveStats._trueSuppressedSetups = new Set(
+              setupStatusQ.rows.filter(r => r.recommendation === 'SUPPRESS').map(r => r.signal_name)
+            );
             // Real, live per-setup_type WR/EV/N — the single source every "EDGE: ... WR (N=...)"
             // description string in this file must read from instead of hand-typing a literal.
             // See the setupStatusQ comment above for the incident this fixed.
@@ -7896,65 +7924,30 @@ export default function createACDRouter(io) {
           // as the primary setup; annotate description with confluence when 2+ stack.
           const nearLevels = keepLevels.filter(lv => Math.abs(currentPrice - lv.level) <= 15);
 
-          // Cascade breaker: skip new fade setup detection when trend regime detected.
-          // FIXED 2026-07-27 (comprehensive dead-end audit, same session as the
-          // SUPPRESSED_FADE fix): this used to insert setup_type=lv.name directly (a bare
-          // level name with no direction suffix, inconsistent with every other insert's
-          // convention) and no entry/stop/target/expires_at at all -- structurally
-          // identical dead end (0 rows ever recorded, so no historical damage, but
-          // guaranteed to fail the same way whenever the cascade breaker next fires).
-          // Now mirrors the suppressed-near-level-audit fix exactly: resolves a real
-          // direction+type per level and computes the same entry/stop/target a live
-          // candidate at that level would have gotten.
-          // DISABLED 2026-08-05 as an ACTING gate -- kept as a logging-only audit trail.
-          // Full-history validation the same night (RESEARCH_CLAIM
-          // cascade_breaker_validation_single_day_artifact) found its entire apparent value
-          // rested on a single outlier day (1 of 7); on 5 of the other 6 days it demonstrably
-          // blocked trades that outperformed the normal population that was let through,
-          // including the day this was checked. A live layer between signal and execution
-          // with a negative case behind it doesn't get to keep acting while under review --
-          // see OPEN_DECISION cascade_breaker_validate_or_remove. The audit-row insert below
-          // (suppression_reason='CASCADE_BREAKER') still runs whenever the trigger condition
-          // is met, so the data keeps accumulating for a future re-decision -- only the
-          // downstream gating (the `!cascadeBreaker.active` check further below) was removed.
-          //
-          // FIXED 2026-08-16 (live-firing audit, F1+F2 -- scratch/deepseek_response.md,
-          // independently verified against the live DB before applying: 1,072 CASCADE_BREAKER
-          // rows existed, 1,012 resolved via real price-walk with genuine P&L (avg +$81.54
-          // wins / -$95.88 losses)). The old version inserted a full, OPEN SHADOW row per near
-          // level (entry/stop/target/expiry all populated) which (1) got picked up by
-          // resolveSetupsByPrice() and counted toward SETUP_STATUS's real_n/real_ev --
-          // contaminating the SUPPRESS/THIN_N/ACTIVE decision for every affected setup_type
-          // with phantom trades -- and (2) was eligible to be reused by the `existingSetup`
-          // check further below (status IN ('ACTIVE','SHADOW'), no suppression_reason
-          // exclusion), silently hijacking a genuinely new live-quality touch into this
-          // audit row instead of firing its own ACTIVE row. Now a terminal, level-less audit
-          // marker: status='EXPIRED' (not IN ('ACTIVE','SHADOW'), so existingSetup can't match
-          // it and resolveSetupsByPrice() never touches it), resolution/resolved_at set at
-          // insert time (never enters the resolution pipeline, never counts toward real_n,
-          // which requires resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')), no
-          // entry/stop/target/expires_at (nothing to walk against). Deduped one row per
-          // (trade_date, setup_type) per cascade window rather than once per ~15s poll.
-          if (cascadeBreaker.active && nearLevels.length > 0) {
-            const cbIsLong = approachDir === 'FROM_ABOVE';
-            const cbDir = cbIsLong ? 'LONG' : 'SHORT';
-            for (const lv of nearLevels) {
-              const cbType = resolveSetupType(`${lv.name}_${cbDir}`, lv);
-              await query(`
-                INSERT INTO active_setups (
-                  trade_date, setup_type, fired_at, price_at_detection,
-                  status, origin_status, suppression_reason, resolution, resolved_at
-                )
-                SELECT $1, $2, NOW(), $3, 'EXPIRED', 'SHADOW', 'CASCADE_BREAKER', 'NO_EXPIRY_SET', NOW()
-                WHERE NOT EXISTS (
-                  SELECT 1 FROM active_setups
-                  WHERE trade_date = $1 AND setup_type = $2 AND suppression_reason = 'CASCADE_BREAKER'
-                )
-              `, [todayET, cbType, currentPrice]).catch(() => {});
-            }
-          }
-          // Was `if (!cascadeBreaker.active && nearLevels.length > 0)` -- the cascadeBreaker
-          // condition no longer gates this. See the disable note above the audit-log block.
+          // Cascade breaker REMOVED entirely 2026-09-03 (resolved OPEN_DECISION
+          // cascade_breaker_query_missing_origin_status_filter, option b). Had already been
+          // DISABLED as an acting gate since 2026-08-05 (RESEARCH_CLAIM
+          // cascade_breaker_validation_single_day_artifact found its apparent value rested on a
+          // single outlier day, and on 5 of the other 6 days it demonstrably blocked trades that
+          // outperformed the population let through) -- only a logging-only audit-row insert
+          // (suppression_reason='CASCADE_BREAKER') remained, kept for a possible future
+          // re-decision. Opus Audit #11 (2026-09-01) found the decisive fact making that
+          // re-decision moot: the trigger query had no origin_status filter, so it counted
+          // SHADOW/BACKFILL stop-outs alongside real ones -- correctly scoped to real
+          // (origin_status='ACTIVE') trades, the trigger condition would have fired on only 6 of
+          // 444 real trades (1.4%) ever, structurally too thin to validate as a mechanism no
+          // matter how the query is fixed. Deleted rather than fixed: the computation block, this
+          // audit-row insert, the 3 `cascadeDiagLog()` diagnostic call sites (labeled TEMPORARY
+          // 2026-08-12, never removed), `cascadeDiagLog()` itself, the `cascadeBreaker` field on
+          // both `/acd/setup-detection` response shapes, antigravityEdges.js's separate duplicate
+          // computation of the same concept, and the frontend banners in ACDView.jsx/App.jsx that
+          // displayed it. The originally-cited 1,072 historical CASCADE_BREAKER audit rows were
+          // actually already deleted 2026-08-16 by scripts/repair_cascade_breaker_contamination_
+          // 20260816.mjs (0 survivors, confirmed live) -- CORRECTED 2026-09-03 (DeepSeek code
+          // review caught this file's own comment overclaiming "untouched"). Any residual marker
+          // rows written between 08-16 and today remain correctly excluded from other queries via
+          // `suppression_reason != 'CASCADE_BREAKER'` checks elsewhere in this file -- only new
+          // inserts stopped, nothing downstream assumed fresh rows would keep arriving.
           if (nearLevels.length > 0) {
             const isLong = approachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
@@ -8107,15 +8100,6 @@ export default function createACDRouter(io) {
               lv = pooledPrimary;
               type = resolveSetupType(`${lv.name}_${dir}`, lv);
               sameTypeRecentlyFired = recentlyFiredTypes.has(type);
-            }
-
-            // TEMPORARY DIAGNOSTIC (2026-08-12) — kept through the fallback fix's first live
-            // cascade window per DeepSeek's review, since it's the only real-time visibility
-            // into the rescue path outside cascadeBreaker.active windows. Now logs the WINNER
-            // (or would-have-picked candidate), not the single pre-fallback pick. Remove once
-            // the fallback's selection quality is confirmed over a few real occurrences.
-            if (cascadeBreaker.active) {
-              cascadeDiagLog(`[cascade-diag] type=${type} dir=${dir} cascadeActive=${cascadeBreaker.active} stopCount=${cascadeBreaker.stopCount} clusterAlreadyFired=${!!clusterAlreadyFired} sameTypeRecentlyFired=${sameTypeRecentlyFired} suppressedSetup=${!!liveStats._suppressedSetups?.has(type)} dowSuppressed=${!!liveStats._dowSuppressToday?.has(type)} s2Double=${s2Double} trendCounter=${trendCounterFadeFlag} nearLevelsN=${nearLevels.length}`);
             }
 
             if (winnerFound) {
@@ -8813,11 +8797,30 @@ export default function createACDRouter(io) {
             const isLong = touchApproachDir === 'FROM_ABOVE';
             const dir = isLong ? 'LONG' : 'SHORT';
             const btType = resolveSetupType(`${lv.name}_${dir}`, lv);
-            if (liveStats._suppressedSetups?.has(btType) || liveStats._dowSuppressToday?.has(btType) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
+            // THIN_N types deliberately NOT skipped here (2026-09-03) -- _suppressedSetups
+            // contains both SUPPRESS and THIN_N, but this backfill exists precisely to let a
+            // level that keeps losing the live cluster pick still accumulate real touches (the
+            // FLOOR_R2 stuck-at-N=3 case docs/CLUSTER_TOUCH_CREDIT_SPEC.md was built from).
+            // Skipping THIN_N here defeats that purpose for exactly the population that needs
+            // it most -- confirmed live: OR10/15/30_HIGH/LOW/MID (all THIN_N since 2026-08-12)
+            // kept losing every cluster pick to co-located ACTIVE levels (e.g. IB_LOW_FADE_LONG,
+            // EV=$45) and this skip meant they got no backfill credit either, so real N never
+            // grew past 2-7 touches in 3+ weeks. True SUPPRESS (a type already concluded not to
+            // work) is still correctly skipped -- no reason to keep logging more of those.
+            if (liveStats._trueSuppressedSetups?.has(btType) || liveStats._dowSuppressToday?.has(btType) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
             {
             const btOpt  = liveStats._opt?.[btType];
             const btStop = btOpt?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
             const btTgt  = btOpt?.target ?? Math.round(lv.mfe     ?? TARGET);
+            // Confluence at the TOUCH's own price (touchBar.close), not currentPrice -- this is
+            // a backfill of a PAST moment, so "what else was nearby" must be evaluated at that
+            // moment too. Mirrors the suppressed-audit insert's identical pattern (~line 8679/
+            // 8692) which this path was previously missing entirely (found 2026-09-03investigating
+            // why a real touch, e.g. OR5_LOW at IB_LOW_FADE_LONG's 9:36am fire, never showed up
+            // as a confluence level on the winning trade's own row).
+            const nearLevelsAtTouch = keepLevels.filter(l2 =>
+              l2.name !== lv.name && Math.abs(touchBar.close - l2.level) <= 15
+            );
             backfilledTouches.push({
               type: btType,
               direction: dir,
@@ -8827,6 +8830,10 @@ export default function createACDRouter(io) {
               targetLabel: `T1: ${btTgt}pt · Stop: ${btStop}pt · EV: $${lv.ev?.toFixed(0) ?? '--'} (backfilled early touch)`,
               etMin: touchBar.et_min,
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
+              confluenceScore: nearLevelsAtTouch.length,
+              confluenceLevels: nearLevelsAtTouch.length
+                ? nearLevelsAtTouch.map(l2 => canonicalConfluenceLevelName(l2.name))
+                : null,
             });
             } // end btType block
           }
@@ -9288,12 +9295,6 @@ export default function createACDRouter(io) {
       // every OTHER candidate that also cleared riskOk this poll (not just the winner) so it
       // can be persisted alongside the winning row and made queryable.
       const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      // TEMPORARY DIAGNOSTIC (2026-08-12) — see the matching comment ~6698. Confirms whether
-      // levelScalpSetup successfully survived the suppression check above but got dropped here
-      // or later (forceShadow ~8399), vs never having been built at all.
-      if (cascadeBreaker.active) {
-        cascadeDiagLog(`[cascade-diag] candidates-stage levelScalpSetup=${levelScalpSetup ? levelScalpSetup.type : 'null'} candidatesNonNull=${candidates.filter(Boolean).map(c => c.type).join(',') || 'none'}`);
-      }
       let active = null;
       const qualifyingThisPoll = [];
       for (const cand of candidates) {
@@ -9762,17 +9763,19 @@ export default function createACDRouter(io) {
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
+                  confluence_score_at_detection, confluence_levels_at_detection,
                   status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
-                  ${REGIME_STAMP_COLS.map((_, i) => `$${15 + i}`).join(', ')},
-                  ${FIRE_TAG_COLS.map((_, i) => `$${15 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                  $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
+                  ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
+                  ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
                 bt.entry, bt.history.winRate, bt.history.occurrences, bt.history.avgPnl, bt.history.t1HitRate,
+                bt.confluenceScore, bt.confluenceLevels,
                 ...regimeStampValues(btRegimeStamp),
                 ...fireTagValues(btFireTags),
                 getBetClass(bt.type),
@@ -9916,7 +9919,7 @@ export default function createACDRouter(io) {
 
       const stackVolSignal = await computeStackVolSignal(todayET);
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, cascadeBreaker, bigMoveSignal, sigmaContinuation, stackVolSignal });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
@@ -10121,6 +10124,18 @@ export default function createACDRouter(io) {
         const postWinOppBlocked = !crossDirectionCooldownMin && rthDir
           ? await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(active.type), rthDir)
           : false;
+        // Directional-conflict gate (2026-09-03) -- see isOppositeDirectionOpen() header. This was
+        // the FIRST of 4 sites wired (explicit user request to test on a single firing mechanism
+        // before extending further); all 4 real insert sites are now covered -- see
+        // docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md. Short-circuited on the two adjacent
+        // directional gates only (crossDirectionCooldownMin/postWinOppBlocked), same as the check
+        // just above -- NOT on isTrailMechanism/baseIneligible/inNewEntryDeadZone/inRefireCooldown/
+        // exposureOverride, so this can still run one extra query on those paths (harmless: the
+        // reason chain below already prioritizes those over OPPOSITE_DIRECTION_OPEN, so the stored
+        // reason is never misattributed -- DeepSeek code review, 2026-09-03).
+        const oppositeDirectionOpen = !crossDirectionCooldownMin && !postWinOppBlocked && rthDir
+          ? await isOppositeDirectionOpen(rthDir)
+          : false;
         // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
         // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
         // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
@@ -10146,17 +10161,15 @@ export default function createACDRouter(io) {
           || inRefireCooldown
           || !!exposureOverride
           || !!crossDirectionCooldownMin
-          || postWinOppBlocked;
-        // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
-        if (cascadeBreaker.active) {
-          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} baseIneligible=${baseIneligible} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin} postWinOppBlocked=${postWinOppBlocked}`);
-        }
+          || postWinOppBlocked
+          || oppositeDirectionOpen;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : exposureOverride ? exposureOverride.reason
           : crossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min`
           : postWinOppBlocked ? 'POST_WIN_OPP_FAMILY_REV'
+          : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const skipRedundantShadowInsert = forceShadow
           && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
@@ -10397,7 +10410,15 @@ export default function createACDRouter(io) {
             // DeepSeek's code review found in the initial (RTH-active-slot + Globex only) wiring
             // -- this is the one insert site that can actually fire ACTIVE from this loop.
             const shadowPostWinBlocked = !shadowCrossDirectionCooldownMin && shadow.direction && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(shadow.type), shadow.direction);
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked) ? 'ACTIVE' : 'SHADOW';
+            // Directional-conflict gate (2026-09-03) -- see isOppositeDirectionOpen() header
+            // (~line 443). Fourth and last insert site wired (docs/SINGLE_FIRING_DIRECTIONAL_
+            // CONFLICT_SPEC.md) -- this loop is where most level-fade candidates that don't win
+            // the single `active` slot actually fire ACTIVE from (per the comment above), so it
+            // needs the same coverage the other 3 sites already have. Short-circuited the same
+            // way as the two checks just above.
+            const shadowOppositeDirectionOpen = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
+              && shadow.direction && await isOppositeDirectionOpen(shadow.direction);
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
             // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
@@ -10455,12 +10476,11 @@ export default function createACDRouter(io) {
           sizeMultiplier: active.sizeMultiplier ?? 1.0,
         },
         noNewEntries: !!noNewEntries,
-        cascadeBreaker,
         bigMoveSignal,
         sigmaContinuation,
         stackVolSignal,
       });
-    } catch(e) { console.error('setup-detection error:', e); cascadeDiagLog(`[setup-detection-error] ${e.stack}`); res.status(500).json({ error: e.message }); }
+    } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };
 
   // Short-lived (20s) full-response cache, on top of the in-flight coalescing lock

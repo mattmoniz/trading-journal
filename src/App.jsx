@@ -1889,8 +1889,6 @@ function SidebarVerdictChip() {
           {pulse?.setupCount != null && (
             <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
               <span style={{ color: '#94a3b8', fontSize: 11 }}>Active setups: <strong style={{ color: '#e2e8f0' }}>{pulse.setupCount}</strong></span>
-              {/* Informational only since 2026-08-05 -- does not block entries, see ACDView.jsx's matching banner comment */}
-              {pulse.cascadeBreaker?.active && <span style={{ color: '#f87171', fontSize: 11, fontWeight: 700 }}>⚠ Rapid stop cascade</span>}
             </div>
           )}
           <div style={{ fontSize: 11, color: '#64748b', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 6, marginTop: 4, lineHeight: 1.5 }}>{ctx.note}</div>

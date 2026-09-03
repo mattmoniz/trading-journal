@@ -183,6 +183,14 @@
  *    globexFlushDetector) get a standing WARN for having zero exposure to any of these 4 gates
  *    at all -- a known, larger, separately-scoped gap (spec sequencing items 2-3), not something
  *    this check can fix, only keep visible.
+ *
+ *    UPDATED 2026-09-03: a 5th gate, oppositeDirectionOpen (isOppositeDirectionOpen(), docs/
+ *    SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md), was added to GATE_PATTERNS and wired into all
+ *    4 acd.js sites in the same session it shipped -- its baseline is `true` everywhere from day
+ *    one, unlike the other 4 gates which accumulated coverage incrementally over several
+ *    sessions. The SERVICE_POLLERS check's `anyGate` logic iterates GATE_PATTERNS generically, so
+ *    it already checked for all 5 without a code change; its WARN text below was updated the same
+ *    session (DeepSeek code review) to say 5, not 4.
  */
 
 import pg from 'pg';
@@ -1763,6 +1771,10 @@ async function main() {
         crossDirectionFlip: /isCrossDirectionFastFlip\(/,
         postWinOpposite: /isPostWinOppositeFamilyBlocked\(/,
         newEntryDeadZone: /inNewEntryDeadZone/,
+        // Directional-conflict gate (2026-09-03, docs/SINGLE_FIRING_DIRECTIONAL_CONFLICT_SPEC.md)
+        // -- added to all 4 sites in the same session it shipped, so its baseline below is
+        // `true` everywhere from day one, unlike the other gates which were added incrementally.
+        oppositeDirectionOpen: /isOppositeDirectionOpen\(/,
       };
 
       // DeepSeek's audited baseline (scratch/deepseek_response.md, 2026-09-02 critique of
@@ -1773,7 +1785,7 @@ async function main() {
           label: 'Globex (detectGlobexSetup, acd.js ~2269)',
           start: 'if (await isInRefireCooldown(sessionDate, c.type)) {',
           end: 'historical_win_rate, historical_sessions, suppression_reason,',
-          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false, oppositeDirectionOpen: true },
           naReasons: { newEntryDeadZone: 'structurally N/A -- Globex has no RTH-hours dead zone concept' },
         },
         {
@@ -1783,20 +1795,20 @@ async function main() {
           // crossDirectionFlip added 2026-09-02 (user-flagged live gap: level-fade candidates
           // that don't win the single `active` slot fire through shadowCandidates/here, bypassing
           // this gate entirely regardless of ACTIVE/SHADOW mix on either side).
-          baseline: { refireCooldown: false, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
+          baseline: { refireCooldown: false, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false, oppositeDirectionOpen: true },
         },
         {
           label: 'RTH active slot (acd.js ~10092)',
           start: 'const isTrailMechanism = trailVariant?.trailSignalName != null;',
           end: 'const activeVbSessionBars = await getSessionBarsSinceOpen(570);',
-          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: true },
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: true, oppositeDirectionOpen: true },
         },
         {
           label: 'shadowCandidates loop (acd.js ~10316)',
           start: 'if (shadowCandidates.length > 0) {',
           end: 'const shadowVbSessionBars = await getSessionBarsSinceOpen(570);',
           // crossDirectionFlip added 2026-09-02, same fix/reason as STACK_VOL_BREAK_LIVE above.
-          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false },
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false, oppositeDirectionOpen: true },
         },
       ];
 
@@ -1823,7 +1835,7 @@ async function main() {
       }
 
       // The 3 hand-rolled service pollers -- confirmed 2026-09-02 to have ZERO exposure to
-      // any of the 4 gates above (each does its own N>=20/ev>=-5 getLiveStatus() only). This
+      // any of the 5 gates above (each does its own N>=20/ev>=-5 getLiveStatus() only). This
       // is DeepSeek's single biggest finding (the original spec's census missed these
       // entirely) -- WARN every run so it can never again be silently forgotten, until the
       // spec's sequencing items 2-3 actually address it.
@@ -1844,7 +1856,7 @@ async function main() {
         if (anyGate) {
           ok(`[24] server/services/${svc} now references at least one live gate -- an improvement over the 2026-09-02 baseline (previously zero); this file can graduate out of the standing WARN list once fully covered.`);
         } else {
-          warn(`[24] server/services/${svc} still has zero exposure to any of the 4 force-shadow gates or CAPITAL_EXPOSURE_OVERRIDE (its own hand-rolled getLiveStatus() is the only eligibility check on this live-capable site) -- known gap, DeepSeek's biggest finding on the original spec's undercounted census. See docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md.`);
+          warn(`[24] server/services/${svc} still has zero exposure to any of the 5 force-shadow gates or CAPITAL_EXPOSURE_OVERRIDE (its own hand-rolled getLiveStatus() is the only eligibility check on this live-capable site) -- known gap, DeepSeek's biggest finding on the original spec's undercounted census. See docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md.`);
         }
       }
     }

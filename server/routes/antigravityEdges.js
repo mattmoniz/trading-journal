@@ -374,13 +374,12 @@ async function getLiveEdgesContext() {
     minedEdgesQ,       // 10
     confLevelsQ,       // 11
     pwQ,               // 12
-    cascadeQ,          // 13
-    nl30Q,             // 14
-    todayOpenQ,        // 15 — always fresh (today's 9:30 open, ~2ms)
-    sbQ,               // 16
-    todQ,              // 17
-    tradeBacktest,     // 18
-    vwapThresholdResult, // 19
+    nl30Q,             // 13
+    todayOpenQ,        // 14 — always fresh (today's 9:30 open, ~2ms)
+    sbQ,               // 15
+    todQ,              // 16
+    tradeBacktest,     // 17
+    vwapThresholdResult, // 18
   ] = await Promise.all([
     // 170-day RTH bars — skip on cache hit
     isCached ? Promise.resolve(null) : query(`
@@ -504,14 +503,6 @@ async function getLiveEdgesContext() {
       SELECT MAX(session_high)::float as pwh, MIN(session_low)::float as pwl
       FROM (SELECT session_high, session_low FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 5) x
     `, [targetDate]).catch(() => ({ rows: [] })),
-    // Cascade breaker
-    query(`
-      SELECT COUNT(DISTINCT setup_type)::int AS stop_count
-      FROM active_setups
-      WHERE trade_date = $1
-        AND resolution = 'STOP_HIT'
-        AND resolved_at >= NOW() - INTERVAL '45 minutes'
-    `, [todayET]).catch(() => ({ rows: [{ stop_count: 0 }] })),
     // NL30 regime
     query(`
       SELECT COALESCE(SUM(daily_score), 0)::float AS nl30
@@ -1589,9 +1580,6 @@ async function getLiveEdgesContext() {
 
   const overnightContext = arReadsQ.rows[0] || {};
 
-  const _cascadeCount = cascadeQ.rows[0]?.stop_count ?? 0;
-  const cascadeBreaker = { active: _cascadeCount >= 3, stopCount: _cascadeCount, threshold: 3, windowMins: 45 };
-
   // Real-time big-move-day signal — informational only. Deliberately a standalone query, NOT
   // added to the Promise.all wave above, to avoid this file's own documented positional-index
   // footgun (see CLAUDE.md's "Promise.all ordering footgun" entry). Just reads back today's
@@ -1642,7 +1630,6 @@ async function getLiveEdgesContext() {
     overnightContext,
     sessionPermissions,
     sessionBias,
-    cascadeBreaker,
     bigMoveSignal,
     sigmaContinuation,
   };
