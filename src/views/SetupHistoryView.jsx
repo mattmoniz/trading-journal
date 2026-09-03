@@ -61,8 +61,17 @@ export default function SetupHistoryView() {
     return order.map(k => SETUP_LOG_COLS.find(c => c.key === k)).filter(Boolean);
   }, [colOrder]);
 
-  const load = React.useCallback(() => {
-    setLoading(true);
+  // The backend has always accepted `offset` (server/routes/acd.js's /setups/history), but this
+  // view never sent one and had no way to page past its 2000-row LIMIT — a real display bug, not
+  // just rarity: with the default shadow='both'/origin='all' filters ordering by trade_date DESC
+  // across the WHOLE active_setups table (backfill included), any real SHADOW row old enough to
+  // fall past global rank 2000 silently vanished from the view with no indication beyond the "N
+  // of total" count. Found 2026-09-03 chasing why OR10/15/30-min OR-length setups (real, correctly
+  // SHADOW, just infrequent) weren't showing up. `fetchPage(offset, append)` + the Load More
+  // button below make every row reachable instead of only the newest ~2000.
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const fetchPage = React.useCallback((offsetVal, append) => {
+    (append ? setLoadingMore : setLoading)(true);
     const p = new URLSearchParams();
     if (filters.type) p.set('type', filters.type);
     if (filters.resolution) p.set('resolution', filters.resolution);
@@ -73,13 +82,21 @@ export default function SetupHistoryView() {
     if (filters.origin !== 'all') p.set('origin', filters.origin);
     if (filters.hourFrom !== '') p.set('hourFrom', filters.hourFrom);
     if (filters.hourTo !== '') p.set('hourTo', filters.hourTo);
+    if (offsetVal) p.set('offset', offsetVal);
     fetch(`${API_URL}/setups/history?${p}`)
       .then(r => r.json())
-      .then(d => { setSetups(d.setups || []); setTotal(d.total || d.count || 0); setOriginBreakdown(d.originBreakdown || null); setLoading(false); })
-      .catch(() => setLoading(false));
+      .then(d => {
+        setSetups(prev => append ? [...prev, ...(d.setups || [])] : (d.setups || []));
+        setTotal(d.total || d.count || 0);
+        setOriginBreakdown(d.originBreakdown || null);
+        setLoading(false);
+        setLoadingMore(false);
+      })
+      .catch(() => { setLoading(false); setLoadingMore(false); });
   }, [filters]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { fetchPage(0, false); }, [fetchPage]);
+  const loadMore = () => fetchPage(setups.length, true);
 
   const sorted = React.useMemo(() => {
     const arr = [...setups];
@@ -313,6 +330,14 @@ export default function SetupHistoryView() {
               )}
             </tbody>
           </table>
+          {setups.length < total && (
+            <div style={{ textAlign: 'center', padding: '16px 0' }}>
+              <button onClick={loadMore} disabled={loadingMore}
+                style={{ ...inputStyle, cursor: loadingMore ? 'default' : 'pointer', padding: '8px 20px', color: '#e2e8f0' }}>
+                {loadingMore ? 'Loading…' : `Load more (${(total - setups.length).toLocaleString()} remaining)`}
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
