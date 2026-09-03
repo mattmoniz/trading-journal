@@ -279,11 +279,24 @@ const GLOBEX_LEVEL_TYPES = new Set([
   'MPP_FADE_SHORT_OVERNIGHT', 'MONTHLY_OPEN_FADE_LONG_OVERNIGHT',
   '10D_IB_MID_FADE_SHORT_OVERNIGHT', 'WR1_FADE_SHORT_OVERNIGHT',
 ]);
-export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'OPENING_DRIVE_15MIN', 'GLOBEX_LEVEL', 'UNCLASSIFIED'];
+// IB_LOW_PNR_SHORT (2026-09-03, docs/EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md): a
+// genuinely new, freshly-validated continuation bet -- cumulative sell-side-delta
+// z-score (90-day trailing, same-bar-index baseline, server/services/touchQuality.js's
+// getCumulativeDeltaBaseline) crosses an extreme threshold while price is already below
+// IB Low. NOT a fade (it bets AGAINST a reclaim, not for one) and NOT folded into
+// CONTINUATION_LEGACY (reserved for pre-existing, already-live continuation bets,
+// same reasoning as FAILED_SWEEP_REVERSAL/OPENING_DRIVE_15MIN above) -- own bet_class,
+// own Set, matching that exact precedent. Deliberately does NOT use `_FADE` in its name
+// (would silently misclassify via inferStrategyFamily as MEAN_REVERSION/VALUE_FADE, per
+// DeepSeek design review). Upside (IB_HIGH, LONG) version failed rigor -- not built,
+// this Set intentionally has only the SHORT side.
+const IB_LOW_PNR_TYPES = new Set(['IB_LOW_PNR_SHORT']);
+export const BET_CLASSES = ['VALUE_FADE', 'CONTINUATION_LEGACY', 'FAILED_SWEEP_REVERSAL', 'OPENING_DRIVE_15MIN', 'GLOBEX_LEVEL', 'IB_LOW_PNR', 'UNCLASSIFIED'];
 export const getBetClass = (setupType) => {
   if (FAILED_SWEEP_REVERSAL_TYPES.has(setupType)) return 'FAILED_SWEEP_REVERSAL';
   if (OPENING_DRIVE_15MIN_TYPES.has(setupType)) return 'OPENING_DRIVE_15MIN';
   if (GLOBEX_LEVEL_TYPES.has(setupType)) return 'GLOBEX_LEVEL';
+  if (IB_LOW_PNR_TYPES.has(setupType)) return 'IB_LOW_PNR';
   const family = inferStrategyFamily(setupType);
   if (family === 'MEAN_REVERSION') return 'VALUE_FADE';
   if (family === 'CONTINUATION') return 'CONTINUATION_LEGACY';
@@ -356,6 +369,7 @@ export const BET_CLASS_STAGE = {
   GLOBEX_LEVEL: 'LEGACY_LIVE',
   FAILED_SWEEP_REVERSAL: 'SHADOW',
   OPENING_DRIVE_15MIN: 'SHADOW',
+  IB_LOW_PNR: 'SHADOW',
 };
 
 const LIVE_STAGES = new Set(['LEGACY_LIVE', 'STAGE_4_ACTIVE']);

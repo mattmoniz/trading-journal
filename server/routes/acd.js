@@ -329,7 +329,7 @@ async function getCrossDirectionFlipCalib(tradeDate) {
   return setCached(tradeDate, 'crossDirectionFlipCalib', map);
 }
 
-async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
+export async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
   const calib = await getCrossDirectionFlipCalib(tradeDate);
   // Family-specific GATE row takes precedence; otherwise fall back to the pooled/system-wide
   // default (signal_name='_POOLED_ALL', scripts/backtest_cross_direction_fast_flip.mjs) so a
@@ -415,7 +415,7 @@ function postWinDirOf(setupType) {
   if (stripped.endsWith('_SHORT')) return 'SHORT';
   return null; // non-directional (IB_BULLISH, ZONE_EDGE_FADE, etc) -- no paired sibling
 }
-async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
+export async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
   const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
   // Most recent real win (ACTIVE or SHADOW) in the OPPOSITE direction of this family --
   // suffix-stripped setup_type must equal exactly `${family}_${oppositeDir}`.
@@ -963,7 +963,7 @@ export async function resolveSetupsByPrice(io) {
   // where this function reads fired_at, since string comparison here needs to match
   // Postgres's own timestamp-text ordering, not JS's local-timezone Date parsing.
   const needsBars = active.rows.filter(row => {
-    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN')) return false;
+    if (row.setup_type === 'ABSORPTION_LONG' || row.setup_type.startsWith('COIL_SURGE') || row.setup_type.startsWith('POC_ROTATION_JOIN') || row.setup_type.startsWith('IB_LOW_PNR')) return false;
     const entry = row.entry_zone_high ?? row.entry_zone_low;
     const { stop_level: stop, t1_level: t1 } = row;
     if (entry == null || stop == null || t1 == null) return false;
@@ -1062,6 +1062,41 @@ export async function resolveSetupsByPrice(io) {
       const stop = row.stop_level;
       if (entry == null || stop == null) continue;
       const long = row.setup_type.endsWith('_LONG');
+      const barsSinceFired = await query(`
+        SELECT ts::text as ts, high::float, low::float, close::float
+        FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
+      `, [row.fired_at, nowEt]);
+      let resolution = null, priceAtRes = null, resolvedAt = null, method = null;
+      for (const bar of barsSinceFired.rows) {
+        const stopHit = long ? bar.low <= stop : bar.high >= stop;
+        if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
+      }
+      if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
+        const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
+        resolution = 'TIME_EXPIRED'; method = 'MARK_TO_MARKET'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+      }
+      if (resolution) {
+        const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW() WHERE id=$1 AND status=$7`,
+          [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution });
+        count++;
+      }
+      continue;
+    }
+
+  // Custom resolution for IB_LOW_PNR_SHORT -- see server/services/ibLowPnrDetector.js
+  // header. Real bar-walk stop check (150pt, same reasoning as POC_ROTATION_JOIN above --
+  // a snapshot-only check could miss an intrabar stop touch), then hold-to-close
+  // mark-to-market at expires_at (the session's own close, early-close-aware -- NOT a
+  // fixed time limit like POC_ROTATION_JOIN's 60min, since this setup's validated exit
+  // is "hold the position for the rest of the session," per the trade-simulation
+  // finding that no-target/hold-to-close beat every tested fixed target). t1_level is
+  // an unreachable informational placeholder, never checked.
+    if (row.setup_type.startsWith('IB_LOW_PNR')) {
+      const stop = row.stop_level;
+      if (entry == null || stop == null) continue;
+      const long = row.setup_type.endsWith('_LONG'); // always false today -- SHORT only, see spec
       const barsSinceFired = await query(`
         SELECT ts::text as ts, high::float, low::float, close::float
         FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
@@ -10086,8 +10121,27 @@ export default function createACDRouter(io) {
         const postWinOppBlocked = !crossDirectionCooldownMin && rthDir
           ? await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(active.type), rthDir)
           : false;
+        // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
+        // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
+        // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
+        // the ONLY one of the 3 competing eligibility checks in this codebase with that posture
+        // (getCanonicalLiveStatus and isLiveEligible are both fail-closed on an unknown type).
+        // Swapped to isLiveEligible() -- the same canonical check shadowCandidates already uses --
+        // which fail-closes on an unknown type AND additionally applies DOW suppression (never
+        // checked at this site before), bringing this, this codebase's single highest-volume live
+        // insert site, into parity with the "unified suppression pipeline (the only suppression
+        // source)" convention rather than being the one site with its own bespoke, more permissive
+        // rule. Redundant with the separately-computed `exposureOverride` below (isLiveEligible()
+        // also checks CAPITAL_EXPOSURE_OVERRIDE internally) -- harmless: the reason-string chain
+        // below already attributes an override hit to `exposureOverride.reason` before ever
+        // reaching the generic fallback, so the redundancy doesn't change which reason gets stored.
+        const baseIneligible = !isLiveEligible(active.type, {
+          suppressedSetups: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups ?? new Set(),
+          dowSuppressToday: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._dowSuppressToday ?? new Set(),
+          knownTypes: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._knownSetupTypes ?? new Set(),
+        });
         const forceShadow = isTrailMechanism
-          || getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)
+          || baseIneligible
           || inNewEntryDeadZone
           || inRefireCooldown
           || !!exposureOverride
@@ -10095,7 +10149,7 @@ export default function createACDRouter(io) {
           || postWinOppBlocked;
         // TEMPORARY DIAGNOSTIC (2026-08-12) — see matching comments ~6698/~7660.
         if (cascadeBreaker.active) {
-          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} cachedSuppressed=${!!getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._suppressedSetups?.has(active.type)} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin} postWinOppBlocked=${postWinOppBlocked}`);
+          cascadeDiagLog(`[cascade-diag] insert-stage active.type=${active.type} forceShadow=${forceShadow} isTrailMechanism=${!!isTrailMechanism} baseIneligible=${baseIneligible} inNewEntryDeadZone=${!!inNewEntryDeadZone} inRefireCooldown=${!!inRefireCooldown} exposureOverride=${!!exposureOverride} crossDirectionCooldownMin=${crossDirectionCooldownMin} postWinOppBlocked=${postWinOppBlocked}`);
         }
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
@@ -10312,14 +10366,13 @@ export default function createACDRouter(io) {
             // SETUP_STATUS row at all -- isLiveEligible defaults to ineligible for an unknown
             // type, per the fail-open hole DeepSeek's QA caught same session) now fires live via
             // the same suppression sets (liveStats._suppressedSetups/_dowSuppressToday) the main
-            // candidates path reads directly -- but via isLiveEligible(), which ALSO requires a
-            // known SETUP_STATUS row (fail-closed on an unknown type). CORRECTED 2026-08-16
-            // (DeepSeek 2nd-pass QA): this comment previously claimed the main candidates path
-            // (the `forceShadow` check ~line 8483) also calls isLiveEligible() -- false, it still
-            // reads `_suppressedSetups?.has(active.type)` directly and is fail-OPEN on an unknown
-            // type (pre-existing, not a regression from this fix, low practical exposure since
-            // that path's own roster is curated). The two gates share the same underlying data,
-            // not (yet) the same function. STOP_SWEEP_LONG/SHORT
+            // candidates path reads directly -- and, as of 2026-09-02 (base-eligibility divergence
+            // fix, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md sequencing item 2), the main
+            // candidates path ALSO calls isLiveEligible() now (was fail-open on an unknown type
+            // via a raw `_suppressedSetups?.has()` read for over 2 weeks after this comment was
+            // first corrected to say otherwise -- see that fix's own comment, ~line 10089, for the
+            // full writeup). Both sites now share the same function, not just the same underlying
+            // data. STOP_SWEEP_LONG/SHORT
             // stay SHADOW-only regardless (OPEN_DECISION stop_sweep_long_calibrated_target_pause_or_keep,
             // resolved to PAUSED 2026-08-05 pending target re-calibration; remove this exclusion
             // once unpaused). `?.` matches every other liveStats._suppressedSetups consumer in

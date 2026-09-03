@@ -138,4 +138,70 @@ function classifyVolumeBuilding(measures, calib) {
   return { ...measures, agreesMedian: timeOfDayMedian && dayMedian, agreesP60: timeOfDayP60 && dayP60 };
 }
 
-export { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding };
+// Cumulative-delta "point of no return" baseline (2026-09-03, docs/
+// EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md) -- a DIFFERENT baseline shape from
+// getVolumeBaseline() above. getVolumeBaseline answers "what does THIS bar usually look
+// like" (per-bar instantaneous stats); this answers "what does the RUNNING SUM usually
+// look like by this point since IB close" (per-bar-index cumulative-sum stats). Nobody
+// computed that distribution anywhere else in this codebase before this.
+//
+// DeepSeek design review (scratch/deepseek_response.md, 2026-09-03) found the original
+// plan's "key by a running bar-index counter" was unsafe -- a single mid-session data
+// gap on a historical day silently time-shifts every later index on that day. Fixed by
+// keying on `mod - IB_CLOSE_MOD` (minute-of-day minus IB close, same `mod` convention
+// getVolumeBaseline itself uses) so a missing minute just leaves a gap in the index
+// space rather than shifting everything after it. Early-close days are excluded from the
+// trailing window (via marketCalendar.js's getMarketStatus) since they'd otherwise
+// contribute truncated cumulative series that can never reach the live poller's own
+// afternoon evaluation window.
+//
+// Returns a Map: idx (minutes since IB close) -> { mean, std, n } across the trailing
+// window. dir: 'SHORT' baseline tracks cumulative (bid_volume - ask_volume) [sell-side
+// pressure]; 'LONG' tracks the mirror (ask_volume - bid_volume) [buy-side pressure] --
+// see docs/EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md, downside(SHORT)-only validated
+// so far, LONG kept symmetric but UNUSED/unvalidated (upside failed rigor).
+const IB_CLOSE_MOD = 630; // 10:30 AM ET -- IB is always 9:30-10:30
+async function getCumulativeDeltaBaseline(queryFn, date, dir, marketStatusFn) {
+  const res = await queryFn(`
+    SELECT ts::date::text as d, (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod,
+           COALESCE(bid_volume,0)::float AS bid_volume, COALESCE(ask_volume,0)::float AS ask_volume
+    FROM price_bars_primary
+    WHERE symbol='NQ' AND ts::date >= $1::date - INTERVAL '90 days' AND ts::date < $1::date
+      AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int >= ${IB_CLOSE_MOD}
+    ORDER BY ts
+  `, [date]);
+  const byDate = new Map();
+  for (const r of res.rows) {
+    if (marketStatusFn && marketStatusFn(r.d)?.type === 'EARLY_CLOSE') continue;
+    if (!byDate.has(r.d)) byDate.set(r.d, []);
+    byDate.get(r.d).push(r);
+  }
+  // Per historical day: running cumulative signed delta, keyed by idx = mod - IB_CLOSE_MOD
+  // (gap-safe -- a missing minute just means that idx has no entry for this day, not a
+  // shift in every later idx).
+  const cumByIdx = new Map(); // idx -> array of cumulative values across days
+  for (const bars of byDate.values()) {
+    let cum = 0;
+    for (const b of bars) {
+      const signed = dir === 'LONG' ? (b.ask_volume - b.bid_volume) : (b.bid_volume - b.ask_volume);
+      cum += signed;
+      const idx = b.mod - IB_CLOSE_MOD;
+      if (!cumByIdx.has(idx)) cumByIdx.set(idx, []);
+      cumByIdx.get(idx).push(cum);
+    }
+  }
+  const baseline = new Map();
+  for (const [idx, vals] of cumByIdx) {
+    if (vals.length < 15) continue; // matches getVolumeBaseline-adjacent convention elsewhere -- too few days to trust
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+    const std = Math.sqrt(variance);
+    if (std > 0) baseline.set(idx, { mean, std, n: vals.length });
+  }
+  return baseline;
+}
+
+export {
+  getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding,
+  getCumulativeDeltaBaseline, IB_CLOSE_MOD,
+};

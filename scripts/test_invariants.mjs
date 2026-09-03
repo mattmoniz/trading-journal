@@ -1827,7 +1827,7 @@ async function main() {
       // is DeepSeek's single biggest finding (the original spec's census missed these
       // entirely) -- WARN every run so it can never again be silently forgotten, until the
       // spec's sequencing items 2-3 actually address it.
-      const SERVICE_POLLERS = ['minuteBarSignalDetector.js', 'rthFlushDetector.js', 'globexFlushDetector.js'];
+      const SERVICE_POLLERS = ['minuteBarSignalDetector.js', 'rthFlushDetector.js', 'globexFlushDetector.js', 'ibLowPnrDetector.js'];
       for (const svc of SERVICE_POLLERS) {
         const p = path.resolve('server/services', svc);
         if (!existsSync(p)) {

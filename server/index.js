@@ -62,6 +62,7 @@ import { detectMomentum60Trend } from './services/minuteBarSignalDetector.js';
 import { detectRthFlush } from './services/rthFlushDetector.js';
 import { detectGlobexFlush } from './services/globexFlushDetector.js';
 import { detectPocRotationJoin } from './services/pocRotationJoinDetector.js';
+import { detectIbLowPnr } from './services/ibLowPnrDetector.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
@@ -1537,6 +1538,10 @@ httpServer.listen(PORT, () => {
       // (2026-09-01). Own poller for the same reason as the flush detectors above: a
       // whole-session leg/pivot-tracking pattern, not a price touching a fixed level.
       detectPocRotationJoin(io).catch(() => {});
+      // IB_LOW_PNR_SHORT -- docs/EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md. Own poller
+      // for the same reason as the pollers above: a market-wide cumulative-delta
+      // condition, not a price touching a fixed level.
+      detectIbLowPnr().catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 
