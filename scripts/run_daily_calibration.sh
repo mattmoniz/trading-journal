@@ -84,4 +84,16 @@ echo "=== Daily calibration: $(date) ==="
 # chasing daily noise, not the run cadence.
 /usr/bin/node scripts/backtest_cross_direction_fast_flip.mjs
 
+# Same-setup-type "refire gate" calibration (2026-09-03, user-designed rule mirroring the
+# already-live sibling-reversal gate's event-based reset -- "blocked until a DIFFERENT setup
+# fires", never a timer). Writes signal_type='SAME_TYPE_REFIRE_GATE_CALIB' per (setup_type,
+# session). Daily per direct user request: same reasoning as the cross-direction-flip gate right
+# above it -- this directly informs live trade-eligibility once wired, and per-type day-clustering
+# here is severe enough (many rows at distinctDates=1-2) that it needs to react to new real data
+# quickly, not wait a week. First real run (2026-09-03): 0 of 52 (type,session) rows + both pooled
+# fallbacks cleared GATE -- every candidate is either THIN_N or fails computeRigor()'s clustered
+# check, so nothing fires live from this yet. That's the correct, disciplined outcome of the rigor
+# bar working as intended, not a bug -- self-recalibrates nightly as real N and distinct-days grow.
+/usr/bin/node scripts/backtest_same_setup_refire_gate.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
