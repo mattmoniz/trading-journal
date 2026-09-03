@@ -287,6 +287,12 @@ early-session extreme by some checkpoint time" (e.g., has price stayed above the
 20-30min's low by 10:00-10:30am) — timing-based, not pressure-based, so it could fire
 close to when a day actually commits rather than hours after.
 
+**Nickname reserved: "Up Up and Away"** — for whenever/if a LONG-side setup actually
+survives testing (most likely to come from this early-commitment angle, since the
+original z-score-mirror constructions are dead, see above). Not earned yet — nothing here
+is built or validated. Matches the naming convention started with the SHORT side ("Short
+of No Return" / `IB_LOW_PNR_SHORT`).
+
 **User's own framing to build any test around**, and the reason this isn't just "flag
 every day that's up in the morning": *"a day usually has drift unless it shoots up"* —
 most days will NOT be big trend days at all, they'll just drift. Any real test of this
