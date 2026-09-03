@@ -138,9 +138,26 @@ unconfirmed until real forward N firms up the shape of the edge, not just its si
    "never recovers" statistic and the trade-level P&L measure genuinely different things
    here — a plausible mechanism: exhaustion buying can produce a sharp stop-out pullback
    without ever fully round-tripping back below IB High by session close, unlike the
-   downside where the two measures agreed. Recorded as
-   `RESEARCH_CLAIM ib_high_pnr_long_trade_sim_negative` (CONFIRMED). **Closed, not
-   revisit-pending** — this is a real, well-tested negative, not an open thread.
+   downside where the two measures agreed.
+
+   **2026-09-03 follow-up: tested whether a multi-day hold rescues this** (the intuition
+   being longs grind rather than snap, so a same-session exit may be the wrong horizon).
+   Extending the hold to 1-5 trading days DID turn positive (5-day EV=$481.17) — but this
+   is almost entirely NQ's own multi-year drift, not signal. An UNCONDITIONAL
+   buy-every-day-at-10:30am-hold-5-days baseline over the same window already returns
+   EV=$286.97/trade with no filter at all. A bootstrap of 5000 random 12-date draws
+   (same entry convention, hold 5 days) found 30.8% did as well or better than the actual
+   z-filtered result — indistinguishable from noise at this N. Worse: entering at a plain
+   10:30am on the SAME 12 z-filtered dates *beats* waiting for the z-score to confirm
+   (generic-entry EV=$768.75 vs z-timed EV=$481.17 at 5-day hold) — the signal doesn't
+   front-run the move, it chases it, actively costing money relative to a naive
+   fixed-time entry on the same days.
+
+   Recorded as `RESEARCH_CLAIM ib_high_pnr_long_trade_sim_negative` (CONFIRMED, updated
+   2026-09-03 with the multi-day result). **Closed on all fronts — same-day AND
+   multi-day both fail, and the multi-day version fails for a well-understood reason
+   (drift dominance + late/chasing entry timing), not just thin-sample noise. Not
+   revisit-pending.**
 3. **DeepSeek design review + code review both done** (2026-09-03,
    scratch/deepseek_response.md, two separate passes) for the SHORT side build; both came
    back clean, no blockers. No Gemini mine-and-run pass yet on either side — a heavier
