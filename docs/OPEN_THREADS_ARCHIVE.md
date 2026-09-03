@@ -3813,3 +3813,215 @@ dominate it.
 `poc_rotation_` prefix). Full scope doc, still accurate for the mechanics:
 [docs/POC_ROTATION_VBP_SPEC.md](POC_ROTATION_VBP_SPEC.md).
 
+
+---
+## Archive batch: 2026-09-02 (moved 3 sections older than 2026-08-26)
+
+## ✅ 2026-08-25: Kelly-criterion position sizing — RESOLVED NEGATIVE, not viable at current $400 DLL
+
+Explored as the fix for "no great days, no consistency" after the standing stop/target R:R
+asymmetry (118/122 setups stop>target) was confirmed to have no further viable re-optimization
+technique. Went through 3 build/review rounds before landing on a trustworthy answer, each round
+catching a real bug — worth reading in full before anyone tries a 4th attempt at Kelly sizing here:
+
+1. **Design critique** (Gemini + DeepSeek): recommended continuous-outcome Kelly (`f*=mean/
+   variance`) over the textbook binomial form (this system's `b<1` for most setups amplifies
+   estimation error ~2.67x), fractional/N-scaled shrinkage, and flagged that a near-identical
+   prior attempt (`scratch/backtest_1yr_prop_challenge_improved_strategy.mjs`, 2026-08-02) was
+   silently void — a field-name bug (`t.st` vs `t.setup_type`) meant 100% of its "Kelly" P&L
+   actually came from unfiltered Globex trades never touched by Kelly at all.
+2. **Build round 1**: pooled SHADOW (suppressed, never-alerted) trades into the simulated P&L as
+   if they were real opportunities, and fabricated an "Actual Historical" column assuming
+   `size_multiplier` controlled real contract counts (it only ever drove a qualitative UI label).
+   Both caught by Claude reading the code directly, not by running it.
+3. **Build round 2** (corrected): fixed both of the above. Produced a result that looked like a
+   real Kelly win (Calmar 4.04 vs 1.59, drawdown $606 vs $1612) — but DeepSeek's code-review-only
+   pass (verified independently via a separate read-only replica reproducing the exact same
+   numbers) found the "Kelly" branch never fired a single Kelly-sized trade across all 355 real
+   trades: a dimensional bug (dividing by `riskPerContract` an extra, unjustified time after
+   computing `f_star` on raw-dollar mean/variance) crushed every real Kelly-eligible contract
+   count to ~0.003-0.02, always flooring to 0. The reported "improvement" was 100% an artifact of
+   the N<20 warm-up fallback (trade 1 contract for a setup's first 20 observations, nothing to do
+   with Kelly) firing on 46% fewer trades than the flat-1-contract control.
+4. **Build round 4** (Claude implemented DeepSeek's corrected R-multiple formula directly, per the
+   standing 2-strikes-then-Claude-takes-over convention): re-ran with the dimensionally-correct
+   formula. Result: **near-identical output to the buggy version** ($2450.11 both times) — not
+   because the fix failed, but because it confirms the real, honest answer. Even the single
+   strongest-edge real setup_type in this system's entire history produces a pre-floor Kelly
+   contract value of 0.874 — still under 1.0. **At this account's real $400 daily loss limit,
+   properly-shrunk Kelly sizing floors to zero contracts for every real, N≥20 setup, uniformly**
+   — not a selective go/no-go gate as originally hoped, just uniformly inert. The bankroll is too
+   small relative to real per-contract risk ($45-280) for the math to ever clear 1 contract.
+
+`RESEARCH_CLAIM kelly_sizing_not_actionable_at_current_dll` (CONFIRMED negative, 30-day recheck).
+**Not wired, nothing changed live.** Revisit only if the real DLL increases materially or if
+per-setup real N grows enough to meaningfully weaken the `N/(N+50)` shrinkage term — not by
+retrying the same technique with different knobs. Script: `scratch/
+backtest_kelly_sizing_simulation.mjs` (kept, all 4 rounds' reasoning is in its comments).
+
+## 🔶 2026-08-25: Cluster touch credit — Phase 0+1 shipped, Phase 2/3 (schema + sibling insert) still NOT built
+
+Traced from a chart question ("did this pivot point fire today?") through real-N visibility gaps
+(fixed same session — see the SetupReferenceView/AlphaEngineOverview/BacktestView entries) into a
+much bigger structural finding: the level-fade engine fires exactly ONE real `active_setups` row
+per confluence touch — `FLOOR_R2` (29392.50) and `WEEKLY_OPEN` (29392.25), 0.25pt apart, both got
+touched 3 times on 2026-08-25 alone, but only `WEEKLY_OPEN`/`OR5_HIGH` fired real rows;
+`FLOOR_R2_FADE_SHORT`/`LONG` real N (stuck at 3/1 for months) didn't move at all. Not a rare-level
+problem — a structural one: any level that chronically co-locates with a level that wins the
+cluster's directional-EV sort can go its entire life real-N-starved regardless of real touch
+frequency.
+
+User's explicit decision, after being shown the tradeoff (naive "give everyone a real row" would
+inflate N with correlated, non-independent outcomes — literally the same trade counted under
+multiple names): fire real credit for every cluster member, but keep the N used for SUPPRESS/
+PROMOTE gating statistically honest. Sent to BOTH Gemini and DeepSeek independently for design
+critique (not code) before writing anything, per this codebase's standing rule for changes that
+touch what gates a live trade. **Genuinely valuable to run both**: Gemini's critique was solid
+(caught the Death-Sequence/stacking-count risk correctly) but asserted `backtest_setup_status.mjs`
+needed no change — DeepSeek's much deeper, code-grounded critique found and Claude independently
+verified this was wrong: the actual THIN_N→ACTIVE promotion gate has ZERO distinct-day/
+independence protection (rigor diagnostics are explicitly commented "informational only," ~line
+277), so cluster siblings could flip a level live on real trades spanning as few as 6-9 distinct
+calendar days — the exact bug class the `origin_status` hard rule exists to catch, reintroduced
+through a different door. DeepSeek also found 3 LIVE pooled consumers (not future work) that would
+silently corrupt without a fix — including the `bet_class` SUPPRESS override that can suppress the
+entire level-fade family at once — and a structural correction to the naive plan (`levelScalpSetup`
+is a single-slot object with no loop to "un-break"; the correct build reuses the existing
+suppressed-audit insert row shape instead). Full 4-phase build plan (verify → cheap independent
+fixes → schema+gating safety net → the actual sibling insert → real-data review before flipping
+gating inclusion), both critiques in full, and every risk found along the way:
+`docs/CLUSTER_TOUCH_CREDIT_SPEC.md`.
+
+**Phase 0 (verify) + Phase 1 (3 cheap fixes) shipped later the same session (2026-08-25).** Real
+numbers replaced every assumption Phase 0 set out to check: RTH co-location is common (61% of 917
+real confluence-tagged touches have 2+ levels in-radius); the overnight/Globex "natural
+experiment" population (no cluster dedup there) produced 127 real near-simultaneous cross-type
+pairs all-time with inter-sibling P&L correlation r=-0.14 (reassuring — not the redundant-bet
+correlation the Phase 2 safety net worries about); the early-touch-backfill 1PM-expiry bug turned
+out to have caused little realized damage so far (2 of 77 real backfill rows actually hit it, both
+still resolved cleanly). Phase 1 shipped all 3 cheap fixes in `acd.js` (real rollover-safe backfill
+expiry instead of hardcoded 13:00 ET; removed the wrong "near price → skip" backfill condition;
+made `cluster_attributed_setups` symmetric so a same-poll cluster loser like `FLOOR_R2` gets tagged
+onto its cluster's actual winner row, not just onto a different poll's already-open anchor). Server
+restarted onto the new code clean (no new `scratch/server_errors.jsonl` entries), lint/syntax
+clean, `test_invariants.mjs`'s 4 failures confirmed pre-existing and unrelated (OPTIMAL_STOP
+circuit-breaker trips). **Phase 2 (schema: `cluster_touch_id`/`is_cluster_primary`, the
+independence floor on the promotion gate, `POOLED_TRADE_FILTER`) and Phase 3 (the actual
+sibling-row insert) remain NOT built** — both are live-wiring changes to production
+gating/suppression logic and need the full 3-phase Gemini workflow (design critique → mine-and-run
+→ code review) before shipping, not just the design-only critique both models already gave before
+Phase 0's real numbers existed. `OPEN_DECISION cluster_touch_credit_phased_build` (updated, still
+PENDING — Phase 2 is the next pickup point).
+
+## 🔶 2026-08-25: Touch-quality signal ideas (DeepSeek brainstorm) — 6 candidate ideas, NOT tested, full writeup parked
+
+A long session chasing "we're picking good spots but keep getting stopped out" tested 3 quality-
+filter hypotheses for level touches (entry proximity — null; next-bar confirmation — real signal
+but the wait costs more than it captures; breakout decisiveness — retracted, a real multi-contract
+timestamp-collision bug in raw `price_bars` was found and fixed mid-thread, live code repointed to
+`price_bars_primary`, but the underlying hypothesis was not re-tested against corrected data).
+Asked DeepSeek to brainstorm genuinely new, adjacent ideas from the same frame (a quality signal
+computable only from information available at/before the touch bar's own close, no lookahead).
+DeepSeek did real codebase exploration first (verified against live `acd.js`: the revisit-latency
+sizing factor's exact cited numbers, +$71 EV first-visit / -$35 EV 3hr+-stale, are real) and
+returned 6 ideas: (1) volatility-normalized touch proximity — a re-test of today's null result in
+the right units (bar-range-normalized, not raw points); (2) level liquidity depletion — the
+volume-based mechanism behind the already-confirmed revisit-latency effect; (3) signed structural
+runway — distance to the nearest opposing/favorable level, revives
+`docs/STOP_PLACEMENT_LEVEL_CLUSTERING_SPEC.md`'s idea without its selection-ambiguity problem;
+(4) approach path geometry — net-displacement/path-length efficiency over the k bars before the
+touch; (5) tonight's fade-friendliness — hold-rate of every level touch so far tonight (fired or
+not), not just the already-live but selection-biased win/loss streak factor; (6) touch-in-expansion
+vs. touch-in-rotation — new-session-extreme context, with a real self-flagged crux confound
+(several level families are definitionally at extremes) needing a within-`setup_type` control.
+Full context, DeepSeek's exact request framing, all 6 ideas verbatim with sanity-check plans and
+kill criteria, cross-cutting notes, deliberately-excluded ideas, and Claude's fact-check table:
+`docs/TOUCH_QUALITY_SIGNAL_IDEAS_SPEC.md`. **Nothing here has been built or tested — this is a
+parked idea set, not a finding.** ~~`OPEN_DECISION touch_quality_ideas_pending_test`~~ Resolved 2026-08-25 — see below.
+
+- **RESOLVED 2026-08-25 — 5 of 6 ideas tested, 5 dead, 1 provisional, 1 deferred.** Built a
+  shared feature-extraction pass (`scripts/pilot_touch_quality_features_deepseek.mjs`, real N=959,
+  `origin_status IN ('ACTIVE','SHADOW')`, `price_bars_primary` only) per DeepSeek's own
+  "one pass, not six scripts" recommendation, via the standard Gemini design-critique-then-mine
+  workflow. The critique caught two real bugs before any run: idea 6 as originally specified would
+  have used the still-forming touch bar's own high/low (lookahead), and ideas 1-3 can't be computed
+  from `active_setups` columns alone (`structural_level_touched` confirmed 0% populated on live
+  rows) — fixed by parsing `setup_type` back to a `level_prices` lookup, with `GLOBEX_VWAP_FADE_*`/
+  `PD2_VAH_FADE_*`/`PD2_VAL_FADE_*`/`ZONE_EDGE_FADE` (117 trades) excluded from those 3 ideas since
+  they have no static level anchor at all. **A second bug found by auditing Gemini's own output,
+  not caught by the critique pass**: the mine-and-run script's verdict function computed
+  `evSpread = max(bucketEV) - min(bucketEV)` and called anything ≥$4 "genuinely promising" without
+  checking the monotonicity flag the script itself already computed a few lines above — this would
+  have labeled all 7 numeric features "promising" purely from an 8-features×4-buckets multiple-
+  comparisons artifact. Corrected via a follow-up dispatch (1 of the standard 2 correction
+  attempts) rather than accepted as-is. **Real, corrected result**: ideas 1 (`d_norm`), 2
+  (`depletion_frac`), 3 (`adverseRunway`/`favorableRunway`), 4 (`efficiency`/`overlapRatio`), and
+  idea 6's `rangeVelocity` sub-feature — 7 numeric features total — show ZERO monotone EV trend
+  across quartiles on N=840-960 each, the exact kill criterion the spec itself pre-registered.
+  `RESEARCH_CLAIM touch_quality_ideas_1_2_3_4_negative`. Idea 6's boolean (`isNewSessionExtreme`,
+  pooled N=35 True/+$24.54 EV vs N=875 False/-$0.99 EV) is genuinely **provisional, not dead** —
+  Gemini's crux-control re-run (conditioning on level-family) called it fully dead, but a direct
+  read of its own output table shows the effect only reverses for non-extreme-prone families;
+  WITHIN the extreme-prone families (`MORNING_EDGES`/`PRIOR_DAY_EXTREMES`) themselves, True EV
+  ($48.85, N=20) still far exceeds False EV ($4.20, N=284) — a residual that doesn't vanish, just
+  too thin at N=20 to call either way. Caught and corrected before recording — see
+  `RESEARCH_CLAIM touch_quality_idea6_expansion_touch_provisional` (`unblockCondition`: recheck
+  once combined real N for the 12 constituent OR/IB/PD/ON fade setup_types roughly doubles from
+  284). Idea 5 (tonight's fade-friendliness, a full per-session touch scan) remains fully untested
+  — deliberately deferred as a structurally heavier build, own decision:
+  `OPEN_DECISION touch_quality_idea5_fade_friendliness_deferred`. Nothing wired live from this
+  thread — every numeric idea is a confirmed negative, and the one open candidate needs more real
+  data before either promoting or killing it.
+
+- **DeepSeek independent code review, same day — confirmed Claude's idea-6 read, found a new real
+  lookahead bug Claude and Gemini both missed, narrowed the idea-6 scope further.** User explicitly
+  asked for genuine critique, not agreement. DeepSeek ran its own direct DB queries (not just
+  reasoning over the write-up) and: (1) independently re-verified the `MORNING_EDGES &
+  PRIOR_DAY_EXTREMES` within-family gap ($48.85 vs $4.20, N=20 vs 284) is real and not an artifact
+  of idea 6's own lookahead handling (confirmed it only reads bars strictly before `fired_at`, no
+  `level_prices` lookup — clean); (2) found the "combined family group" framing overstates
+  breadth — **19 of the 20 True cases are `MORNING_EDGES` specifically, only 1 is
+  `PRIOR_DAY_EXTREMES`** (a single $82 trade) — `touch_quality_idea6_expansion_touch_provisional`
+  narrowed accordingly, unblock condition now scoped to the 8 MORNING_EDGES setup_types only; (3)
+  recommended a positive-control precondition before trusting the residual further — re-run this
+  same pipeline against the already-confirmed revisit-latency effect (a KNOWN real signal) to prove
+  it can detect a true effect before leaning on a thin N=20 cell, not yet done; (4) found and
+  quantified a genuine lookahead bug in idea 3 that neither Gemini's design critique nor Claude's
+  code read caught: `adverseRunway`/`favorableRunway` scan ALL `level_prices` rows for the
+  trade_date, including same-day-forming levels (OR5/OR10/OR30/IB) not yet formed at touch time —
+  54 trades fired before their OWN anchor level finished forming, ~30% of all touches have a
+  contaminated `otherPrices` set; separately verified ONH/ONL are NOT affected (checked directly,
+  all fire after their 09:29 formation); (5) found `rangeVelocity` defaults to exactly 1.0 (not
+  null) for early-session trades with <30 prior bars, a session-timing artifact inflating ~25% of
+  its Q4 bucket; (6) found `depletion_frac` returns 0 (not null) when there's no volume data,
+  conflating "no data" with "genuine zero"; (7) checked and DEBUNKED its own hypothesis of a
+  bigint-string-concatenation bug on volume sums by querying the actual column types directly —
+  confirmed plain integers, no bug. None of these change the DEAD verdict on ideas 1-4 (a leaky
+  feature failing to show even a false positive is, if anything, a more confident negative) — all
+  recorded as caveats on `touch_quality_ideas_1_2_3_4_negative` for anyone reusing this script.
+
+- **Bugs from the DeepSeek review actually fixed and re-verified, same day.** User asked to
+  implement the critiqued results. Nothing from the trading-signal findings was ready to wire
+  live (6 confirmed dead, the 7th thin/gated) — but the real bugs DeepSeek found in the script
+  itself were fixable now: same-day-forming levels (`SAME_DAY_FORMING_MINUTE` map, OR5/OR10/
+  OR30/IB) are now excluded from a trade's own anchor AND from the `adverseRunway`/
+  `favorableRunway` "other levels" scan whenever the trade fired before that level's formation
+  time (54 anchor trades, ~30% of touches broadly); `rangeVelocity` now returns `null` instead
+  of a fake `1.0` for early-session trades with <30 prior bars; `depletion_frac` now returns
+  `null` instead of `0` when there's no volume data. **Fixing the anchor-formation gate exposed
+  a 4th real bug**: idea 6's family classification was wrongly coupled to the same `hasAnchor`
+  flag ideas 1-3 use for price availability, so excluding lookahead-leaky trades silently
+  reclassified early-firing OR5/IB trades out of `MORNING_EDGES` into an `OTHER` grab-bag,
+  collapsing the True bucket from N=19 to N=1 — caught by comparing the re-run's numbers
+  against DeepSeek's independently-verified ones before trusting them, not assumed correct.
+  Fixed (family now derives from which level the setup_type names, independent of price
+  availability) and re-verified: ideas 1-4 remain confirmed dead on the cleaner population —
+  more trustworthy now, not just unchanged, since the confounds that could have masked or
+  manufactured an effect are gone and the negative still holds. The MORNING_EDGES idea-6
+  finding reproduces almost exactly (N=19, 78.9% WR, $47.11 EV) — reassuring that it isn't an
+  artifact of the fixed bugs, but still PROVISIONAL: N=19 stays below the N≥20 floor, and
+  DeepSeek's positive-control precondition (reproduce the known revisit-latency effect on this
+  same pipeline before trusting this residual) still hasn't been run — would need a per-session
+  touch-history scan similar in scope to the still-deferred idea 5. Both `RESEARCH_CLAIM` rows
+  updated to reflect the fixed, re-verified state.
+

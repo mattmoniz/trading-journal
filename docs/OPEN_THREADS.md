@@ -2,6 +2,70 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## 🔶 2026-09-03 "Chasing home runs" thread — 3 real cluster/backfill bugs fixed, 3 exit-mechanism ideas tested (mostly negative), a real new evaluation gap opened
+
+Started from the user watching two big real moves fire live in Sierra Chart (an IB Low fade to
+~29370, an IB Mid fade to ~29540) and not seeing them reflected cleanly in the app. Chased down
+to root cause, not a hunch:
+
+**3 real bugs found and fixed in the live cluster/backfill pipeline** (all verified: `node
+--check` + eslint clean, server restarted, `/api/acd/setup-detection` returns 200,
+`test_invariants.mjs` unchanged):
+1. `SetupHistoryView.jsx`'s Setup Log had no pagination — hard-capped at 2000 rows ordered
+   globally by recency, silently dropping older real rows once enough same-day activity filled
+   the window. Added a real "Load more" control using the `offset` param the backend already
+   accepted but the frontend never sent.
+2. The "early-touch backfill" mechanism (`acd.js` ~8792, exists specifically to credit a level
+   that loses the live cluster-priority pick — see `cluster_touch_credit_phased_build`) was
+   skipping THIN_N types via the merged `_suppressedSetups` set, defeating its own purpose for
+   exactly the population that needs it most. Confirmed live: OR10/15/30-min OR levels stuck at
+   2-7 real touches in 3+ weeks specifically because of this. Fixed with a new
+   `_trueSuppressedSetups` (SUPPRESS-only) set for this one check.
+3. The same backfill INSERT never populated `confluence_score_at_detection`/
+   `confluence_levels_at_detection` at all — fixed, computed at the touch's own price (not
+   current price, since this credits a past moment).
+
+**3 exit-mechanism ideas tested for "why didn't a winner run further," 2 real Gemini
+round-trips audited (one had a genuine survivorship-bias flaw, caught before running; a
+follow-up had a real WR-computation bug, caught and corrected directly by Claude — see the
+`RESEARCH_CLAIM`s below):**
+- `wider_target_second_rearm_volbuilding_signal` (PROVISIONAL) — volume-building signal needs
+  21 bars of history; most fast `WIDER_TARGET_HIT` trades resolve before that, so 87% evaluated
+  to null. Wrong signal for this decision point, not a real test either way.
+- `wider_target_second_rearm_pressure_signal` (PROVISIONAL) — order-flow pressure at the
+  1.5x-target-hit bar shows a real *inversion* (strong pressure predicts LESS continuation, weak
+  predicts MORE) consistent across two bucketing methods, but the best bucket is 55% from just 2
+  calendar days — can't yet separate a real bar-level effect from a day-level trend-day
+  confound. Not actionable yet.
+- `breakeven_trail_ib_low_fade_runner_negative_20260903` (CONFIRMED) — refreshed
+  `scripts/backtest_breakeven_trail.mjs` (had gone 9 days stale vs its weekly schedule) and
+  tested a real bar-by-bar trailing exit directly against `IB_LOW_FADE_LONG`: **genuinely tested
+  negative** out-of-sample over 25 real trades, not just untried. `OR5_MID_FADE_LONG` failed a
+  different way (no stable trail width found — overfitting signature, unresolved not disproven).
+
+**`promote_wr_floor_40pct_band_rigor_comparison_20260903` (PROVISIONAL)** — tested whether
+PROMOTE's WR floor should drop from 52% to 40%. Gemini's mine-and-run had a real WR-computation
+bug (wrong source, N/EV matched but WR didn't for 4/7 rows) — corrected directly. Real result:
+neither band shows any "clean" (non-clustered + stable) types at all (day-clustering is
+near-universal roster-wide at this N), so that metric doesn't distinguish them; on stability
+alone, the 52%+ band has a thin real edge (2/11 vs 0/9) over the 40-52% band. Doesn't decisively
+support or reject the idea — only 1 type (`OR5_MID_FADE_LONG`) is actually blocked by this
+today.
+
+**Real new gap opened, not yet scoped**: `tail_skew_aware_setup_evaluation_needed`
+(`OPEN_DECISION`) — the user's own framing ("I want base hits and a few home runs") pointed out
+that plain mean-EV/WR evaluation can't distinguish "consistently mediocre" from "usually a
+small capped loss, rarely enormous" — both can show the same negative/marginal mean and get the
+same SUPPRESS verdict. `IB_MID_SCALP_FADE_LONG` (SUPPRESS, -$26.48 avg) catching the exact
+inflection of today's ~250pt rally is the concrete example. Needs a design-critique-first
+Gemini pass before touching any live SETUP_STATUS logic — connects directly to
+`promote_wr_floor_vs_ev_only_suppress_asymmetry`, resolve/scope together.
+
+User ended the session explicit that 2 months of SHADOW types not graduating to live has felt
+like "spinning wheels" — worth reading this whole entry back at the start of next session before
+assuming more investigation is the right next move; the user may want to see the *effect* of
+today's fixes (does real N actually grow faster now) before doing more design work.
+
 ## 🔶 2026-09-03 "Point of No Return" thread — SHORT shipped live SHADOW-only, LONG closed 3 ways, new "early commitment" idea opened
 
 Full detail: `docs/EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md` (read this first, it's the
@@ -863,19 +927,21 @@ continuation move needs either repairing the already-built-but-mostly-broken
 existing `OPEN_DECISION breakeven_trail_4_more_variants_lost_calibration_row`) or the longer-horizon
 IB break/retest/drive redesign (`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`).
 
-**Finding 5 (new decisive info on an old, already-resolved thread): the disabled `cascadeBreaker`
-mechanism's trigger query has no `origin_status` filter**, so its historical counterfactual
-analysis (`cascade_breaker_validation_single_day_artifact`,
-`cascade_breaker_suppressed_ev_unstable_recent_reversal`, both `PROVISIONAL`) was measuring
-SHADOW/BACKFILL noise, not real trade behavior — the identical bug class already fixed once in
-`hasLossToday`. Correctly scoped to real ACTIVE trades, the old trigger (≥3 distinct-type stops in
-45min) would have fired on only 6 of 444 real trades (1.4%) — structurally unvalidatable either
-way. `OPEN_DECISION cascade_breaker_query_missing_origin_status_filter` (MEDIUM) — either fold the
-fixed mechanism into the new WR circuit breaker design above, or delete `cascadeBreaker` and its
-audit-row insert rather than leave a disabled mechanism + two now-explained stale claims + a live
-SHADOW audit-write sitting in the tree. Independent, still-open from the prior thread: the
-frontend "FADE REGIME OFF" banner still displays based on `cascadeBreaker.active` even though
-nothing has been blocked by it since 2026-08-05.
+**Finding 5 — Resolved 2026-09-03: `cascadeBreaker` deleted entirely.** ~~the disabled
+`cascadeBreaker` mechanism's trigger query has no `origin_status` filter~~, so its historical
+counterfactual analysis (`cascade_breaker_validation_single_day_artifact`,
+`cascade_breaker_suppressed_ev_unstable_recent_reversal`, both now closed as `CONFIRMED`/moot) was
+measuring SHADOW/BACKFILL noise, not real trade behavior — the identical bug class already fixed
+once in `hasLossToday`. Correctly scoped to real ACTIVE trades, the old trigger (≥3 distinct-type
+stops in 45min) would have fired on only 6 of 444 real trades (1.4%) — structurally unvalidatable
+either way, confirming option (b) rather than (a). `OPEN_DECISION
+cascade_breaker_query_missing_origin_status_filter` resolved via full deletion: the computation,
+the audit-row insert, a separate duplicate computation in `antigravityEdges.js`, and the frontend
+"FADE REGIME OFF" banner (`ACDView.jsx`/`App.jsx`) are all gone. **New follow-on found during the
+deletion, not yet resolved**: `cluster_attributed_setups` was deliberately scoped narrow in 2026-07-29
+because `cascadeBreaker` was, at the time, handling the more extreme trending-cascade case — that
+coverage has had nothing behind it since 2026-08-05, over a month before anyone noticed. See
+`OPEN_DECISION trending_stop_cascade_no_suppression_since_20260805`.
 
 **Also found, not yet fixed**: the RTH refire cooldown (`isInRefireCooldown()`/
 `REFIRE_COOLDOWN_MINUTES`, real and wired at `acd.js:9747`/`9968`, contrary to what the audit brief
@@ -1353,8 +1419,6 @@ matching the same precedent used for the OR-range/RVol tagging earlier this sess
   `docs/OPEN_THREADS.md` was 404KB against its own 250KB cap; moved 1 old section out, still over
   cap but that's expected given how active the last 7 days have been, not a new problem.
 
-Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
-
 ## ✅ 2026-09-01 (RESOLVED): 4 more backlog items closed — exit-mechanism family, VWAP_RECLAIM_SHORT, 18-script cron audit
 
 Continuation of the same-session backlog-clearing pattern, same "check for newer superseding work
@@ -1480,8 +1544,6 @@ design choice without having seen this codebase's code, genuine convergent valid
 not robust across the T1 neighborhood to justify live/SHADOW execution plumbing. `docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`
 updated with a "Third-pass result — CLOSED" section; `OPEN_DECISION twolot_scaleout_generalize_to_other_setups`
 (the deferred "apply this elsewhere" question) is now moot for this specific mechanism.
-
-Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
 ## ✅ 2026-09-01 (RESOLVED): breakeven-trail 5-of-6-uncalibrated decision closed; contaminated `B_FLOOR_S1_FADE_LONG` row nulled
 
@@ -1894,8 +1956,6 @@ wider-target mechanism — $30 left on the table, invisible until this fix. Adde
 regression tests (5 wider-target, 4 breakeven-trail) proving both RTH behavior is unchanged and the
 new Globex behavior is correct; no `test_invariants.mjs` regressions (verified via `git stash`).
 `RESEARCH_CLAIM globex_session_end_bug_fixed_three_mechanisms`.
-
-Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
 ## 🔶 2026-08-30 (correction): DeepSeek full-audit found a real classifier bug — fixed, finding survived and got stronger
 
