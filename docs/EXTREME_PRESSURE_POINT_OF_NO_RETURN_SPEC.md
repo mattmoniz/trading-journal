@@ -153,11 +153,21 @@ unconfirmed until real forward N firms up the shape of the edge, not just its si
    front-run the move, it chases it, actively costing money relative to a naive
    fixed-time entry on the same days.
 
+   **2026-09-03, second follow-up: tested a genuinely different entry mechanic**, not
+   just a sign-flip of the SHORT side's immediate-momentum entry — a pullback-then-resume
+   construction (wait for the initial thrust to pause, then enter once price reclaims the
+   pre-pause high), matching the intuition that an upside grind needs patience rather than
+   an immediate breakout entry. This was WORSE, not better: N=10, WR=0.0% with a
+   structural stop (below the actual pullback low), WR=10.0% even with no stop at all.
+   Mechanism: this entry buys right as price reclaims a fresh local high after a pause —
+   close to the worst possible timing for a genuinely choppy/grinding move, since that's
+   near where the *next* pullback tends to start, not the next leg up.
+
    Recorded as `RESEARCH_CLAIM ib_high_pnr_long_trade_sim_negative` (CONFIRMED, updated
-   2026-09-03 with the multi-day result). **Closed on all fronts — same-day AND
-   multi-day both fail, and the multi-day version fails for a well-understood reason
-   (drift dominance + late/chasing entry timing), not just thin-sample noise. Not
-   revisit-pending.**
+   2026-09-03 twice — multi-day result, then the pullback-resume result). **Closed
+   structurally, not as a thin-sample or parameter-tuning gap — three genuinely different
+   entry/exit constructions (immediate same-day, multi-day hold, pullback-resume) all
+   failed.** Not revisit-pending.
 3. **DeepSeek design review + code review both done** (2026-09-03,
    scratch/deepseek_response.md, two separate passes) for the SHORT side build; both came
    back clean, no blockers. No Gemini mine-and-run pass yet on either side — a heavier
