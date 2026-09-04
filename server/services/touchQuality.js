@@ -60,14 +60,28 @@ function classifyTouch({ windowBars, direction, baseline, highVolZCutoff, gaveFu
 // Volume-building signal (2026-08-28, docs/OPEN_THREADS.md's roster-wide volume-building
 // thread): does trading interest rise into a touch by TWO reference frames -- the existing
 // time-of-day-relative baseline above (is this loud for this historical clock-time) AND a
-// day-relative baseline (is this loud for how today itself has traded so far). Pooled
-// roster-wide across all real FADE fires, neither measure alone moved the hit rate, but
-// requiring BOTH to agree did (baseline WR=49.5%/EV=-$1.24 -> both-agree WR=51.7%/EV=$2.40,
-// tightened to a p60-both-agree cutoff: WR=54.3%/EV=$7.11 at N=105) -- see RESEARCH_CLAIMs
-// fade_roster_volume_building_pooled_vs_pertype, volz_day_relative_vs_timeofday_reference_frame,
-// fade_roster_volume_building_dose_response_cutoff. Wired live INFORMATIONAL ONLY via
-// active_setups.vol_building_signal -- does not gate/size anything yet, self-recalibrates
-// weekly via scripts/backtest_volume_building_signal.mjs.
+// day-relative baseline (is this loud for how today itself has traded so far).
+//
+// RETRACTED, DO NOT CITE AS VALIDATED (corrected 2026-09-03, DeepSeek code+efficacy review):
+// this comment used to describe a "both-agree-at-p60" WR lift to 54.3%/EV=$7.11 (N=105) as
+// the real, validated version of this idea -- that number was itself an artifact of 2 bugs
+// (a guard-mismatch letting bar-10-13 touches through with structurally-null day-relative
+// values, and a session-boundary bug pulling in prior-session bars). Re-running the IDENTICAL
+// full-sample backtest with both bugs fixed FLIPPED THE SIGN (p60-agree EV=-$8.57/trade N=92,
+// worse than the -$2.00 do-nothing baseline), and a separate walk-forward split (TRAIN
+// EV=$15.52 -> TEST EV=-$18.06) failed out-of-sample before the bugfix even landed. See
+// RESEARCH_CLAIMs fade_roster_volume_building_pooled_vs_pertype (the bugfix reversal) and
+// fade_roster_volume_building_walkforward_negative (the walk-forward failure) -- both STALE.
+// A separate, independent bar-level test the same day (scratch/test_order_flow_signals.mjs,
+// unrelated signal) found the LIVE `compositeStrength` sum below (not the AND-gate) also has
+// no real forward-continuation edge. Treat "rising volume predicts a bigger directional move"
+// as a refuted hypothesis, not an open question, until someone produces a genuine held-out
+// replication on bugfixed code. The one fragment that DOES still hold (see
+// volume_building_no_level_initiative_test) is weaker and non-directional: elevated composite
+// strength predicts a bigger move in EITHER direction (more volatility), not continuation.
+//
+// Wired live INFORMATIONAL ONLY via active_setups.vol_building_signal -- does not gate/size
+// anything, self-recalibrates weekly via scripts/backtest_volume_building_signal.mjs.
 const VOL_BUILD_APPROACH_BARS = 10;
 
 function pearsonCorr(xs, ys) {

@@ -1148,4 +1148,81 @@ router.get('/setups/flush-exit-signals-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/step-trail-shadow-summary — monitoring surface for the step-trail runner
+// extension's Phase 1 SHADOW-parallel logging (Opus Audit #12, 2026-09-04,
+// server/services/stepTrailWalker.js). No dedicated promotion script exists yet (Phase 2 is
+// tracked separately, OPEN_DECISION step_trail_phase2_promotion_pending) -- this endpoint is
+// a live, read-only aggregate over active_setups.step_trail_shadow, the same field
+// quick-check.html's per-trade tap popup reads directly, so the summary and the per-trade
+// number can never silently disagree.
+router.get('/setups/step-trail-shadow-summary', async (req, res) => {
+  try {
+    const MIN_REAL_N_STEP_TRAIL = 20; // this codebase's own standing N>=20-before-decisive floor
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, origin_status, step_trail_shadow
+      FROM active_setups
+      WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+    `);
+    function summarize(rows) {
+      const n = rows.length;
+      if (!n) return { n: 0, avgDelta: null, avgRealPnl: null, avgHypotheticalPnl: null, bigWins100pt: 0, thin: true };
+      const deltas = rows.map(r => Number(r.step_trail_shadow.delta));
+      const avgDelta = deltas.reduce((s, d) => s + d, 0) / n;
+      const avgRealPnl = rows.reduce((s, r) => s + Number(r.actual_pnl), 0) / n;
+      const avgHypotheticalPnl = rows.reduce((s, r) => s + Number(r.step_trail_shadow.hypothetical_pnl), 0) / n;
+      // >100pt outcome bar, matching Opus Audit #12's own tail-effect bar exactly (not a
+      // fresh threshold) -- $2/pt round-trip, matches server/config/instruments.js.
+      const bigWins100pt = rows.filter(r => Number(r.step_trail_shadow.hypothetical_pnl) > 198).length;
+      return {
+        n, avgDelta: +avgDelta.toFixed(2), avgRealPnl: +avgRealPnl.toFixed(2),
+        avgHypotheticalPnl: +avgHypotheticalPnl.toFixed(2), bigWins100pt, thin: n < MIN_REAL_N_STEP_TRAIL,
+      };
+    }
+    const real = rowsQ.rows.filter(r => r.origin_status === 'ACTIVE');
+    const shadow = rowsQ.rows.filter(r => r.origin_status === 'SHADOW');
+    res.json({
+      minRealN: MIN_REAL_N_STEP_TRAIL,
+      real: summarize(real),
+      shadow: summarize(shadow),
+      combined: summarize(rowsQ.rows),
+    });
+  } catch (err) {
+    console.error('[setups/step-trail-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/setups/pitch-catch-shadow-summary — monitoring surface for the Pitch and Catch
+// forward-tracking (user idea, 2026-09-04, UNVALIDATED -- see server/services/
+// pitchCatchWalker.js's header for the full negative evidence trail). Tracked at the user's
+// explicit request specifically because it's unproven: "if it's not good then the N will
+// stay low." Same live, read-only aggregate-over-the-field pattern as step-trail's summary,
+// split LONG/SHORT since the two directions are being evaluated separately (Pitch and Catch
+// Long vs. Pitch and Catch Short).
+router.get('/setups/pitch-catch-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, pitch_catch_shadow
+      FROM active_setups
+      WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+    `);
+    function summarize(rows) {
+      const confirmedN = rows.length;
+      const qualifiedRows = rows.filter(r => r.pitch_catch_shadow.qualified === true);
+      const n = qualifiedRows.length;
+      const qualifiedRate = confirmedN > 0 ? +(100 * n / confirmedN).toFixed(1) : 0;
+      if (!n) return { n: 0, confirmedN, qualifiedRate, avgDelta: null, thin: true };
+      const deltas = qualifiedRows.map(r => Number(r.pitch_catch_shadow.delta)).filter(d => !Number.isNaN(d));
+      const avgDelta = deltas.length ? deltas.reduce((s, d) => s + d, 0) / deltas.length : null;
+      return { n, confirmedN, qualifiedRate, avgDelta: avgDelta != null ? +avgDelta.toFixed(2) : null, thin: n < 20 };
+    }
+    const long = rowsQ.rows.filter(r => r.pitch_catch_shadow.direction === 'LONG');
+    const short = rowsQ.rows.filter(r => r.pitch_catch_shadow.direction === 'SHORT');
+    res.json({ long: summarize(long), short: summarize(short), combined: summarize(rowsQ.rows) });
+  } catch (err) {
+    console.error('[setups/pitch-catch-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

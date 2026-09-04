@@ -150,6 +150,20 @@ echo "=== Weekly backtest run: $(date) ==="
 # 2026-08-24, per the standing "RESEARCH_CLAIM recheck is a flag, not an auto-rerun" rule.
 /usr/bin/node scripts/calibrate_wider_target_pressure_gate.mjs
 
+# Step-trail runner extension shadow calibration (Opus Audit #12, 2026-09-04) -- derives the
+# ratchet step fraction + base-distance floor from the real, growing armed-trade population.
+# server/routes/acd.js reads this back live (24h cache) to drive the SHADOW-only step_trail_shadow
+# logger (never gates/sizes a real trade). Must stay scheduled -- a stale calibration here means
+# the shadow logger silently keeps using an old fraction instead of the current best one, same
+# risk this codebase has already been burned by with other calibrated gates.
+/usr/bin/node scripts/calibrate_step_trail_fraction.mjs
+
+# Pitch and Catch filter calibration (user idea, 2026-09-04, UNVALIDATED -- see
+# server/services/pitchCatchWalker.js's header). Must stay scheduled so the shadow logger's
+# qualification filter (RVol band, settle-bars, ADX threshold) tracks the current real
+# population rather than freezing at whatever it was on 2026-09-04.
+/usr/bin/node scripts/calibrate_pitch_catch_filter.mjs
+
 # SHORT entry-time selling-pressure sizeMultiplier boost (2026-08-24, RESEARCH_CLAIM
 # pressure_entry_sizing_direction_asymmetric) -- same convention as the pressure gate just
 # above: must stay scheduled so the live boost tracks the real, growing population and

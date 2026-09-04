@@ -405,7 +405,9 @@ CREATE TABLE public.active_setups (
     rvol_20d_at_detection numeric,
     slow_deep_exit_speed character varying(10),
     slow_deep_exit_recommended boolean,
-    post_entry_exit_signals jsonb
+    post_entry_exit_signals jsonb,
+    step_trail_shadow jsonb,
+    pitch_catch_shadow jsonb
 );
 
 

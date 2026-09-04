@@ -29,12 +29,15 @@ import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
-import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant } from '../config/setupTypes.js';
+import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant, resolveSetupType as resolveSetupTypePure } from '../config/setupTypes.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
 import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
+import { stepStepTrail } from '../services/stepTrailWalker.js';
+import { stepPitchCatch } from '../services/pitchCatchWalker.js';
+import { computeADXSeries } from '../services/adxService.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
@@ -1062,6 +1065,91 @@ export async function resolveSetupsByPrice(io) {
       return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
     })();
 
+  // Step-trail runner extension shadow calibration (Opus Audit #12, 2026-09-04,
+  // scratch/opus_audit_12_results.md) — same read-once-per-poll-then-cache convention as
+  // widerTargetPressureThreshold just above. Recomputed weekly by
+  // scripts/calibrate_step_trail_fraction.mjs; null (shadow logging disabled entirely,
+  // fail-closed) if no calibration row exists yet or the last one didn't pass its own
+  // rigor+subgroup-symmetry bar — never a hardcoded fallback fraction, per CLAUDE.md's
+  // no-static-thresholds rule. Observation-only: never gates/sizes a real trade, only
+  // populates active_setups.step_trail_shadow (see the widerTargetMult branch below and
+  // completeStepTrailShadows()).
+  const stepTrailCalibCached = getCached('_global', 'stepTrailCalib', DAY_CACHE_TTL);
+  const stepTrailCalib = stepTrailCalibCached !== undefined
+    ? stepTrailCalibCached
+    : await (async () => {
+      const r = await query(`
+        SELECT notes FROM performance_audit
+        WHERE signal_type='STEP_TRAIL_FRACTION' AND signal_name='FRACTION'
+        ORDER BY run_date DESC LIMIT 1
+      `);
+      let val = null;
+      try {
+        if (r.rows[0]) {
+          const notes = JSON.parse(r.rows[0].notes);
+          if (notes.frac != null && notes.p10BaseFloor != null) val = { frac: notes.frac, p10BaseFloor: notes.p10BaseFloor };
+        }
+      } catch (_) {}
+      return setCached('_global', 'stepTrailCalib', val, DAY_CACHE_TTL);
+    })();
+
+  // Pitch and Catch shadow calibration (user idea, 2026-09-04, UNVALIDATED -- see
+  // server/services/pitchCatchWalker.js's header for the full negative evidence trail;
+  // tracked at the user's explicit request, observation-only, never gates/sizes a real
+  // trade). Same read-once-per-poll-then-cache convention as stepTrailCalib just above.
+  const pitchCatchCalibCached = getCached('_global', 'pitchCatchCalib', DAY_CACHE_TTL);
+  const pitchCatchCalib = pitchCatchCalibCached !== undefined
+    ? pitchCatchCalibCached
+    : await (async () => {
+      const r = await query(`
+        SELECT notes FROM performance_audit
+        WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER'
+        ORDER BY run_date DESC LIMIT 1
+      `);
+      let val = null;
+      try {
+        if (r.rows[0]) {
+          const n = JSON.parse(r.rows[0].notes);
+          if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
+            val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
+          }
+        }
+      } catch (_) {}
+      return setCached('_global', 'pitchCatchCalib', val, DAY_CACHE_TTL);
+    })();
+
+  // Daily ADX-by-date map (Sierra-Chart-verified formula, server/services/adxService.js) --
+  // computed once and cached with a day-long TTL, not recomputed per-row/per-poll (a fresh
+  // 14+14-bar daily-ADX series needs a real historical daily-bars query, too expensive to
+  // repeat every 15s). Indexed by trade_date -> PRIOR day's close-of-day ADX (the [i-1] shift
+  // below), matching every other daily-ADX use in this codebase's no-lookahead convention.
+  const dailyAdxByDateCached = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL);
+  const dailyAdxByDate = dailyAdxByDateCached !== undefined
+    ? dailyAdxByDateCached
+    : await (async () => {
+      const map = {};
+      if (pitchCatchCalib != null) {
+        try {
+          const r = await query(`
+            SELECT ts::date::text as d, high::float as high, low::float as low, close::float as close
+            FROM price_bars_primary WHERE symbol='NQ'
+              AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int BETWEEN 570 AND 959
+            ORDER BY ts ASC
+          `);
+          const byDate = new Map();
+          for (const b of r.rows) {
+            if (!byDate.has(b.d)) byDate.set(b.d, { high: b.high, low: b.low, close: b.close });
+            else { const c = byDate.get(b.d); c.high = Math.max(c.high, b.high); c.low = Math.min(c.low, b.low); c.close = b.close; }
+          }
+          const dates = [...byDate.keys()].sort();
+          const dBars = dates.map(d => ({ d, ...byDate.get(d) }));
+          const series = computeADXSeries(dBars, 14, 14);
+          for (let i = 1; i < dBars.length; i++) map[dBars[i].d] = series[i - 1];
+        } catch (e) { console.error('dailyAdxByDate computation error (non-critical):', e.message); }
+      }
+      return setCached('_global', 'dailyAdxByDate', map, DAY_CACHE_TTL);
+    })();
+
   let count = 0;
   for (const row of active.rows) {
     const entry = row.entry_zone_high ?? row.entry_zone_low;
@@ -1312,6 +1400,25 @@ export async function resolveSetupsByPrice(io) {
     // population exactly, see server/services/widerTargetWalker.js's own header); false the
     // whole way through for a slower arrival, which just takes t1 normally.
     let widerTargetState = { widening: false };
+    // Step-trail shadow state — same re-derive-from-scratch-every-poll convention as every
+    // other state above. Independent of widerTargetState (its own composed inner copy, see
+    // server/services/stepTrailWalker.js) so tracking it can NEVER influence the REAL
+    // resolution/method/priceAtRes this loop computes — purely observational. Only ever
+    // updated inside the widerTargetMult branch below.
+    let stepTrailShadowState = { inner: { widening: false }, ratcheting: false, currentStop: null, highestMfe: null };
+    let stepTrailShadowResolution = null;
+    let stepTrailShadowArmedAt = null;
+    let stepTrailShadowDisabled = false;
+    // Pitch and Catch shadow state — same independence/observational guarantees as
+    // stepTrailShadowState above (server/services/pitchCatchWalker.js). UNVALIDATED
+    // mechanism, tracked at the user's explicit request specifically because it's
+    // unproven — never gates/sizes a real trade.
+    let pitchCatchShadowState = {
+      inner: { widening: false }, phase: 'ARMING', firstLegVolSum: 0, firstLegVolCount: 0,
+      runningPeak: null, belowCount: 0, pullbackExtreme: null, settleBarVols: [], firstLegAvgVol: null, reentry: null,
+    };
+    let pitchCatchShadowResolution = null;
+    let pitchCatchShadowDisabled = false;
     // FIXED 2026-08-30 (user-flagged, real Overnight/Globex PD_POC_FADE_SHORT fire): computed
     // once per row (not per bar) and fed into every session-end check below. row.fired_at is
     // already ::text-cast (this file's standard convention). See
@@ -1472,6 +1579,68 @@ export async function resolveSetupsByPrice(io) {
           resolvedAt = bar.ts;
           priceAtRes = step.resolution.priceAtRes;
         }
+
+        // Step-trail shadow (Opus Audit #12, 2026-09-04) — observation-only, computed on
+        // the SAME bar this real branch already fetched, using a fully independent state
+        // object (never feeds back into resolution/method/priceAtRes above). Deliberately
+        // NOT gated on `if (resolution) break` below — this call must still run on the
+        // exact bar the real path resolves, since that's the bar the ratchet crossing (if
+        // any) actually happens on. Fails closed: if no calibration exists yet, stepSize is
+        // never computed and this whole block is skipped, matching stepWiderTarget()'s own
+        // null-pressureThreshold no-op convention.
+        // Wrapped defensively (matches the touch-quality side-effect block's own convention
+        // elsewhere in this function) -- this is non-critical, observation-only, and must
+        // NEVER be able to throw its way into blocking the REAL resolution logic below for
+        // this row or any other row in this same poll.
+        if (stepTrailCalib != null && !stepTrailShadowResolution && !stepTrailShadowDisabled) {
+          try {
+            const riskDist = Math.abs(widerTarget - entry);
+            const effectiveBase = Math.max(riskDist, stepTrailCalib.p10BaseFloor);
+            const stepSize = stepTrailCalib.frac * effectiveBase;
+            const shadowStep = stepStepTrail(
+              stepTrailShadowState,
+              bar,
+              {
+                entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+                pressureReading, pressureThreshold: widerTargetPressureThreshold, stepSize,
+              }
+            );
+            stepTrailShadowState = shadowStep.state;
+            if (stepTrailShadowState.ratcheting && stepTrailShadowArmedAt == null) stepTrailShadowArmedAt = bar.ts;
+            if (shadowStep.resolution) stepTrailShadowResolution = { ...shadowStep.resolution, resolvedAt: bar.ts };
+          } catch (e) {
+            // Leave stepTrailShadowResolution null (never written inline) and stop retrying
+            // for THIS row only -- the follow-up completeStepTrailShadows() pass re-derives
+            // the whole shadow from scratch independently anyway, so nothing is lost by
+            // giving up here rather than risking a state-corrupted retry on the next bar.
+            console.error('step-trail shadow computation error (non-critical, skipping shadow for this row):', e.message);
+            stepTrailShadowDisabled = true;
+          }
+        }
+
+        // Pitch and Catch shadow (user idea, 2026-09-04, UNVALIDATED -- see
+        // server/services/pitchCatchWalker.js's header). Same non-critical, try/catch-
+        // isolated, observation-only convention as the step-trail shadow block just above --
+        // must never be able to block the REAL resolution logic below.
+        if (pitchCatchCalib != null && !pitchCatchShadowResolution && !pitchCatchShadowDisabled) {
+          try {
+            const pcStep = stepPitchCatch(
+              pitchCatchShadowState,
+              bar,
+              {
+                entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+                pressureReading, pressureThreshold: widerTargetPressureThreshold,
+                filterCalib: pitchCatchCalib, dailyAdx: dailyAdxByDate[row.trade_date] ?? null, origStop: stop,
+              }
+            );
+            pitchCatchShadowState = pcStep.state;
+            if (pcStep.resolution) pitchCatchShadowResolution = { ...pcStep.resolution, resolvedAt: bar.ts };
+          } catch (e) {
+            console.error('pitch-catch shadow computation error (non-critical, skipping shadow for this row):', e.message);
+            pitchCatchShadowDisabled = true;
+          }
+        }
+
         if (resolution) break;
         continue;
       }
@@ -1692,6 +1861,60 @@ export async function resolveSetupsByPrice(io) {
     // just a generalization to also cover the new trail-mechanism outcomes.
     const pnl = (long ? (priceAtRes - entry) : (entry - priceAtRes)) * PNL_PER_POINT - COMMISSION;
 
+    // Step-trail shadow payload — only ever set when the real wider-target mechanism
+    // actually armed (widerTargetState.widening===true at some point) AND the shadow ALSO
+    // resolved within the same bars this poll already fetched. The far more common case
+    // (armed but shadow still open when the real trade resolves) is deliberately left NULL
+    // here and picked up by completeStepTrailShadows()'s follow-up pass on a later poll —
+    // this row is about to leave the `active` WHERE status IN ('ACTIVE','SHADOW') query the
+    // moment status flips to RESOLVED below, so there is no other chance to keep walking it
+    // inline. Never touches resolution/method/actual_pnl/stop_level — observation-only.
+    let stepTrailShadowPayload = null;
+    try {
+    if (widerTargetState.widening === true && stepTrailShadowResolution) {
+      const shadowPts = long ? stepTrailShadowResolution.priceAtRes - entry : entry - stepTrailShadowResolution.priceAtRes;
+      const shadowPnl = shadowPts * PNL_PER_POINT - COMMISSION;
+      stepTrailShadowPayload = JSON.stringify({
+        frac: stepTrailCalib.frac, armed_at: stepTrailShadowArmedAt,
+        hypothetical_resolution: stepTrailShadowResolution.resolution, hypothetical_method: stepTrailShadowResolution.method,
+        hypothetical_exit_price: stepTrailShadowResolution.priceAtRes, hypothetical_pnl: Math.round(shadowPnl * 100) / 100,
+        real_pnl: Math.round(pnl * 100) / 100, delta: Math.round((shadowPnl - pnl) * 100) / 100,
+        resolved_at: stepTrailShadowResolution.resolvedAt, completed_inline: true,
+      });
+    }
+    } catch (e) {
+      console.error('step-trail shadow payload error (non-critical, writing without it):', e.message);
+      stepTrailShadowPayload = null;
+    }
+
+    // Pitch and Catch shadow payload -- same widening-armed gate as step-trail (never write
+    // for a trade that never even reached the wider target). Written for BOTH a real
+    // re-entry (qualified=true, real hypothetical_pnl) and a confirmed-but-filtered-out
+    // pullback (qualified=false, hypothetical_pnl null) -- the unqualified case is still
+    // useful monitoring signal (how often does a confirmed pullback pass the filter at all).
+    let pitchCatchShadowPayload = null;
+    try {
+      if (widerTargetState.widening === true && pitchCatchShadowResolution) {
+        let hypotheticalPnl = null;
+        if (pitchCatchShadowResolution.qualified) {
+          const pcPts = long ? pitchCatchShadowResolution.priceAtRes - pitchCatchShadowResolution.entryPrice
+            : pitchCatchShadowResolution.entryPrice - pitchCatchShadowResolution.priceAtRes;
+          hypotheticalPnl = Math.round((pcPts * PNL_PER_POINT - COMMISSION) * 100) / 100;
+        }
+        pitchCatchShadowPayload = JSON.stringify({
+          qualified: pitchCatchShadowResolution.qualified,
+          hypothetical_resolution: pitchCatchShadowResolution.resolution, hypothetical_method: pitchCatchShadowResolution.method,
+          hypothetical_exit_price: pitchCatchShadowResolution.priceAtRes, hypothetical_entry_price: pitchCatchShadowResolution.entryPrice ?? null,
+          hypothetical_pnl: hypotheticalPnl, real_pnl: Math.round(pnl * 100) / 100,
+          delta: hypotheticalPnl != null ? Math.round((hypotheticalPnl - pnl) * 100) / 100 : null,
+          resolved_at: pitchCatchShadowResolution.resolvedAt, direction: long ? 'LONG' : 'SHORT', completed_inline: true,
+        });
+      }
+    } catch (e) {
+      console.error('pitch-catch shadow payload error (non-critical, writing without it):', e.message);
+      pitchCatchShadowPayload = null;
+    }
+
     const updated = await query(`
       UPDATE active_setups
       SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_outcome=$2,
@@ -1700,13 +1923,16 @@ export async function resolveSetupsByPrice(io) {
           resolution_bar_time=$6, replay_resolution=$2,
           breakeven_armed_at=COALESCE($11, breakeven_armed_at),
           runner_peak_price=COALESCE($12, runner_peak_price),
-          runner_trail_price=COALESCE($13, runner_trail_price)
+          runner_trail_price=COALESCE($13, runner_trail_price),
+          step_trail_shadow=COALESCE($14::jsonb, step_trail_shadow),
+          pitch_catch_shadow=COALESCE($15::jsonb, pitch_catch_shadow)
       WHERE id=$1 AND status=$7
       RETURNING *
     `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch,
         Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount,
         armedAt, peakPrice != null ? Math.round(peakPrice * 100) / 100 : null,
-        trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null]);
+        trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null,
+        stepTrailShadowPayload, pitchCatchShadowPayload]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}
@@ -1718,6 +1944,239 @@ export async function resolveSetupsByPrice(io) {
     }
   }
   return count;
+}
+
+// Step-trail shadow follow-up pass (Opus Audit #12, 2026-09-04). resolveSetupsByPrice()'s
+// inline step-trail computation (the widerTargetMult branch above) can only ever see bars
+// through "now" at the moment the REAL wider-target mechanism resolves — and the instant it
+// does, this row's `status` flips to 'RESOLVED' and it drops out of resolveSetupsByPrice()'s
+// own `active` query forever, so there is no way for that same function to keep walking it on
+// a later poll. This is the deliberate second half of that design: a small, separate query
+// scoped only to rows whose real path already went all the way through the widerTarget branch
+// (proven by resolution_method) but whose shadow never got the chance to finish, re-deriving
+// the ENTIRE shadow walk from scratch (fired_at -> now, same stateless-every-poll convention as
+// resolveSetupsByPrice() itself) with a NOW that keeps growing on each call — exactly mirroring
+// how the real mechanism itself gets re-walked from scratch every poll while still open. Never
+// touches status/resolution/actual_pnl/stop_level — the real trade is already finished and
+// stays untouched; this only ever writes step_trail_shadow once it resolves.
+export async function completeStepTrailShadows() {
+  const pending = await query(`
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at,
+           entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
+           stop_level::float as stop_level, t1_level::float as t1_level,
+           wider_target_mult::float as wider_target_mult, actual_pnl::float as actual_pnl
+    FROM active_setups
+    WHERE status='RESOLVED' AND wider_target_mult IS NOT NULL
+      AND resolution_method IN ('WIDER_TARGET_HIT', 'WIDER_STOP_HIT', 'WIDER_TIME_EXPIRED')
+      AND step_trail_shadow IS NULL
+  `);
+  if (!pending.rows.length) return 0;
+
+  const stepTrailCalibCached = getCached('_global', 'stepTrailCalib', DAY_CACHE_TTL);
+  const stepTrailCalib = stepTrailCalibCached !== undefined ? stepTrailCalibCached : await (async () => {
+    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='STEP_TRAIL_FRACTION' AND signal_name='FRACTION' ORDER BY run_date DESC LIMIT 1`);
+    let val = null;
+    try { if (r.rows[0]) { const n = JSON.parse(r.rows[0].notes); if (n.frac != null && n.p10BaseFloor != null) val = { frac: n.frac, p10BaseFloor: n.p10BaseFloor }; } } catch (_) {}
+    return setCached('_global', 'stepTrailCalib', val, DAY_CACHE_TTL);
+  })();
+  if (stepTrailCalib == null) return 0; // no calibration -- nothing to complete, fail closed
+
+  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
+  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined ? widerTargetPressureThresholdCached : await (async () => {
+    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD' ORDER BY run_date DESC LIMIT 1`);
+    let val = null;
+    try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
+    return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
+  })();
+
+  let completed = 0;
+  for (const row of pending.rows) {
+   try {
+    const dir = resolveDirection(row);
+    if (dir === null) continue;
+    const long = dir === 'LONG';
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const stop = row.stop_level, t1 = row.t1_level;
+    if (entry == null || stop == null || t1 == null) continue;
+    const firedMod = firedAtToMod(row.fired_at);
+
+    const barsRes = await query(`
+      SELECT ts::text as ts, high::float, low::float, close::float, bid_volume, ask_volume,
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
+      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts ASC
+    `, [row.fired_at]);
+    if (!barsRes.rows.length) continue;
+
+    const widerTarget = long ? entry + Math.abs(t1 - entry) * row.wider_target_mult : entry - Math.abs(t1 - entry) * row.wider_target_mult;
+    const riskDist = Math.abs(widerTarget - entry);
+    const effectiveBase = Math.max(riskDist, stepTrailCalib.p10BaseFloor);
+    const stepSize = stepTrailCalib.frac * effectiveBase;
+
+    let widerTargetState = { widening: false };
+    let shadowState = { inner: { widening: false }, ratcheting: false, currentStop: null, highestMfe: null };
+    let shadowResolution = null, shadowArmedAt = null;
+    let barCount = 0;
+    for (const bar of barsRes.rows) {
+      barCount++;
+      const barTotalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
+      const pressureReading = barTotalVol > 0
+        ? ((long ? bar.ask_volume : bar.bid_volume) - (long ? bar.bid_volume : bar.ask_volume)) / barTotalVol
+        : null;
+      const step = stepWiderTarget(widerTargetState, bar, {
+        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+        pressureReading, pressureThreshold: widerTargetPressureThreshold,
+      });
+      widerTargetState = step.state;
+
+      const shadowStep = stepStepTrail(shadowState, bar, {
+        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+        pressureReading, pressureThreshold: widerTargetPressureThreshold, stepSize,
+      });
+      shadowState = shadowStep.state;
+      if (shadowState.ratcheting && shadowArmedAt == null) shadowArmedAt = bar.ts;
+      if (shadowStep.resolution) { shadowResolution = { ...shadowStep.resolution, resolvedAt: bar.ts }; break; }
+    }
+    if (!shadowResolution) continue; // still not resolved -- retry again next poll
+
+    const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+    const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+    const shadowPts = long ? shadowResolution.priceAtRes - entry : entry - shadowResolution.priceAtRes;
+    const shadowPnl = shadowPts * PNL_PER_POINT - COMMISSION;
+    const payload = JSON.stringify({
+      frac: stepTrailCalib.frac, armed_at: shadowArmedAt,
+      hypothetical_resolution: shadowResolution.resolution, hypothetical_method: shadowResolution.method,
+      hypothetical_exit_price: shadowResolution.priceAtRes, hypothetical_pnl: Math.round(shadowPnl * 100) / 100,
+      real_pnl: row.actual_pnl, delta: Math.round((shadowPnl - row.actual_pnl) * 100) / 100,
+      resolved_at: shadowResolution.resolvedAt, completed_inline: false,
+    });
+    await query(`UPDATE active_setups SET step_trail_shadow=$2::jsonb, updated_at=NOW() WHERE id=$1 AND step_trail_shadow IS NULL`, [row.id, payload]);
+    completed++;
+   } catch (e) {
+     // Per-row isolation -- this whole function is already isolated from the real trade
+     // path (separate function, separate .catch(() => {}) at its call site), but one bad
+     // row's error must not stop the rest of this poll's batch from being attempted too.
+     console.error(`completeStepTrailShadows row id=${row.id} error (non-critical, retrying next poll):`, e.message);
+   }
+  }
+  return completed;
+}
+
+// Pitch and Catch shadow follow-up pass -- exact same structural need and design as
+// completeStepTrailShadows() just above (see its own header for the full explanation of why
+// this second half is necessary given resolveSetupsByPrice()'s stateless-every-poll,
+// drops-out-of-the-query-on-resolve architecture). UNVALIDATED mechanism (server/services/
+// pitchCatchWalker.js), tracked at the user's explicit request, observation-only.
+export async function completePitchCatchShadows() {
+  const pending = await query(`
+    SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at,
+           entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
+           stop_level::float as stop_level, t1_level::float as t1_level,
+           wider_target_mult::float as wider_target_mult, actual_pnl::float as actual_pnl
+    FROM active_setups
+    WHERE status='RESOLVED' AND wider_target_mult IS NOT NULL
+      AND resolution_method IN ('WIDER_TARGET_HIT', 'WIDER_STOP_HIT', 'WIDER_TIME_EXPIRED')
+      AND pitch_catch_shadow IS NULL
+  `);
+  if (!pending.rows.length) return 0;
+
+  const pitchCatchCalibCached = getCached('_global', 'pitchCatchCalib', DAY_CACHE_TTL);
+  const pitchCatchCalib = pitchCatchCalibCached !== undefined ? pitchCatchCalibCached : await (async () => {
+    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER' ORDER BY run_date DESC LIMIT 1`);
+    let val = null;
+    try {
+      if (r.rows[0]) {
+        const n = JSON.parse(r.rows[0].notes);
+        if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
+          val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
+        }
+      }
+    } catch (_) {}
+    return setCached('_global', 'pitchCatchCalib', val, DAY_CACHE_TTL);
+  })();
+  if (pitchCatchCalib == null) return 0; // no calibration -- nothing to complete, fail closed
+
+  const dailyAdxByDateCached = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL);
+  const dailyAdxByDate = dailyAdxByDateCached !== undefined ? dailyAdxByDateCached : {};
+
+  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
+  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined ? widerTargetPressureThresholdCached : await (async () => {
+    const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD' ORDER BY run_date DESC LIMIT 1`);
+    let val = null;
+    try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
+    return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
+  })();
+
+  let completed = 0;
+  for (const row of pending.rows) {
+   try {
+    const dir = resolveDirection(row);
+    if (dir === null) continue;
+    const long = dir === 'LONG';
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const stop = row.stop_level, t1 = row.t1_level;
+    if (entry == null || stop == null || t1 == null) continue;
+    const firedMod = firedAtToMod(row.fired_at);
+    const dailyAdx = dailyAdxByDate[row.trade_date] ?? null;
+
+    const barsRes = await query(`
+      SELECT ts::text as ts, high::float, low::float, close::float, bid_volume, ask_volume,
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
+      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts ASC
+    `, [row.fired_at]);
+    if (!barsRes.rows.length) continue;
+
+    const widerTarget = long ? entry + Math.abs(t1 - entry) * row.wider_target_mult : entry - Math.abs(t1 - entry) * row.wider_target_mult;
+
+    let widerTargetState = { widening: false };
+    let shadowState = {
+      inner: { widening: false }, phase: 'ARMING', firstLegVolSum: 0, firstLegVolCount: 0,
+      runningPeak: null, belowCount: 0, pullbackExtreme: null, settleBarVols: [], firstLegAvgVol: null, reentry: null,
+    };
+    let shadowResolution = null;
+    let barCount = 0;
+    for (const bar of barsRes.rows) {
+      barCount++;
+      const barTotalVol = (bar.bid_volume || 0) + (bar.ask_volume || 0);
+      const pressureReading = barTotalVol > 0
+        ? ((long ? bar.ask_volume : bar.bid_volume) - (long ? bar.bid_volume : bar.ask_volume)) / barTotalVol
+        : null;
+      const step = stepWiderTarget(widerTargetState, bar, {
+        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+        pressureReading, pressureThreshold: widerTargetPressureThreshold,
+      });
+      widerTargetState = step.state;
+
+      const pcStep = stepPitchCatch(shadowState, bar, {
+        entry, stop, t1, widerTarget, long, barCount, maxBarsToT1: MAX_BARS_TO_T1_FOR_WIDER, firedMod,
+        pressureReading, pressureThreshold: widerTargetPressureThreshold, filterCalib: pitchCatchCalib, dailyAdx, origStop: stop,
+      });
+      shadowState = pcStep.state;
+      if (pcStep.resolution) { shadowResolution = { ...pcStep.resolution, resolvedAt: bar.ts }; break; }
+    }
+    if (!shadowResolution) continue; // still not resolved -- retry again next poll
+
+    const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+    const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+    let hypotheticalPnl = null;
+    if (shadowResolution.qualified) {
+      const pcPts = long ? shadowResolution.priceAtRes - shadowResolution.entryPrice : shadowResolution.entryPrice - shadowResolution.priceAtRes;
+      hypotheticalPnl = Math.round((pcPts * PNL_PER_POINT - COMMISSION) * 100) / 100;
+    }
+    const payload = JSON.stringify({
+      qualified: shadowResolution.qualified,
+      hypothetical_resolution: shadowResolution.resolution, hypothetical_method: shadowResolution.method,
+      hypothetical_exit_price: shadowResolution.priceAtRes, hypothetical_entry_price: shadowResolution.entryPrice ?? null,
+      hypothetical_pnl: hypotheticalPnl, real_pnl: row.actual_pnl,
+      delta: hypotheticalPnl != null ? Math.round((hypotheticalPnl - row.actual_pnl) * 100) / 100 : null,
+      resolved_at: shadowResolution.resolvedAt, direction: long ? 'LONG' : 'SHORT', completed_inline: false,
+    });
+    await query(`UPDATE active_setups SET pitch_catch_shadow=$2::jsonb, updated_at=NOW() WHERE id=$1 AND pitch_catch_shadow IS NULL`, [row.id, payload]);
+    completed++;
+   } catch (e) {
+     console.error(`completePitchCatchShadows row id=${row.id} error (non-critical, retrying next poll):`, e.message);
+   }
+  }
+  return completed;
 }
 
 // ── Globex helpers ────────────────────────────────────────────────────────────
@@ -5078,6 +5537,13 @@ export default function createACDRouter(io) {
 
       // Resolve/expire existing setups on every poll regardless of window
       await resolveSetupsByPrice(io).catch(() => {});
+      // Step-trail shadow follow-up (Opus Audit #12, 2026-09-04) -- picks up rows whose real
+      // wider-target resolution already happened but whose shadow walk didn't get enough bars
+      // to finish in that same poll. Observation-only, never touches a real trade's own fields.
+      await completeStepTrailShadows().catch(() => {});
+      // Pitch and Catch shadow follow-up (user idea, 2026-09-04, UNVALIDATED) -- same
+      // observation-only guarantee as the step-trail line just above.
+      await completePitchCatchShadows().catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 
@@ -7873,51 +8339,18 @@ export default function createACDRouter(io) {
           // variant type when entry conditions change the edge profile enough to warrant
           // separate calibration. Both the live path AND the early-touch backfill path
           // must call this — it is the single source of truth for all type overrides.
-          const resolveSetupType = (rawType, lv) => {
-            if (rawType === 'WPP_FADE_SHORT') {
-              const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
-              if (sessionOpenBar && parseFloat(sessionOpenBar.open) < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
-            }
-            // OR5_LOW_FADE_LONG_GAP_DOWN (docs/OPEN_THREADS.md 2026-08-18): mining found the
-            // 5-min opening-range low fade performs materially better when the session gapped
-            // DOWN into it (real backtest N=147 aligned EV=$7.77 vs N=194 against EV=-$2.08,
-            // rigor CLEAN, replication PASS on scripts/mine_or_conditional_fade.mjs's bar-history
-            // population). "Gap down" = today's 9:30 open below the PRIOR session's RTH close —
-            // same definition the mining script used (its prevRthClose, from price_bars_primary's
-            // last RTH bar of the prior date). lp.PD_CLOSE is that same prior-session RTH close
-            // (developing_value_log.session_close via compute_levels.js) — reusing it here keeps
-            // the live gap classification consistent with the validated backtest population
-            // rather than deriving a second, possibly-diverging value.
-            if (rawType === 'OR5_LOW_FADE_LONG') {
-              const sessionOpenBar = allRthBarsRow.rows.find(b => b.et_min === 570);
-              if (sessionOpenBar && lp.PD_CLOSE != null && parseFloat(sessionOpenBar.open) < lp.PD_CLOSE) {
-                return 'OR5_LOW_FADE_LONG_GAP_DOWN';
-              }
-            }
-            // Unconditional diversion (docs/SCALEOUT_RUNNER_SPEC.md §4/§10) — every
-            // touch of these 6 base types gets the breakeven-then-trail exit mechanism
-            // instead of the fixed single target. Keeps each base type's own live
-            // calibration clean/untouched going forward. FLOOR_R1_FADE_SHORT was the
-            // first wired (2026-07-19); the other 5 added 2026-07-21, same pattern.
-            if (rawType === 'FLOOR_R1_FADE_SHORT') return 'FLOOR_R1_FADE_SHORT_TRAIL';
-            if (rawType === 'PW_HIGH_FADE_LONG') return 'PW_HIGH_FADE_LONG_TRAIL';
-            if (rawType === 'PD_POC_FADE_LONG') return 'PD_POC_FADE_LONG_TRAIL';
-            if (rawType === 'FLOOR_S1_FADE_LONG') return 'FLOOR_S1_FADE_LONG_TRAIL';
-            if (rawType === 'DAILY_OPEN_FADE_LONG') return 'DAILY_OPEN_FADE_LONG_TRAIL';
-            if (rawType === 'CAM_S2_FADE_LONG') return 'CAM_S2_FADE_LONG_TRAIL';
-            // 7th trail variant (2026-08-26): the original 6 were picked by an earlier
-            // backtest but turned out too thin in real live trading to ever pass
-            // backtest_breakeven_trail.mjs's own MIN_N=20 real-T1-reach floor (all 6 sit at
-            // 0-18 real touches, confirmed live -- the mechanism was never "broken," it
-            // correctly refused to guess a trail width with no real evidence). Re-scanned
-            // every currently-eligible setup_type against the real funnel: of 12 candidates
-            // clearing MIN_N, only PD_POC_FADE_SHORT survives (real N=21, Tier B validated
-            // trail=19.3pt, OOS EV +$30.31 vs a -$2.31 OOS fixed-target baseline) --
-            // high-frequency real setups like IB_BEARISH/IB_BULLISH were also tested and
-            // genuinely fail the OOS/plateau guardrails, not wired.
-            if (rawType === 'PD_POC_FADE_SHORT') return 'PD_POC_FADE_SHORT_TRAIL';
-            return rawType;
+          // Exported 2026-09-04 as a pure function (server/config/setupTypes.js's
+          // `resolveSetupType()`, imported above as `resolveSetupTypePure`) — this thin
+          // wrapper just supplies the two closure values (session open price, prior RTH
+          // close) the real function needs, so the historical backfill script can call the
+          // exact same logic instead of reimplementing it (CLAUDE.md's "export the real
+          // function" rule).
+          const sessionOpenBarForResolve = allRthBarsRow.rows.find(b => b.et_min === 570);
+          const resolveSetupTypeCtx = {
+            sessionOpenPrice: sessionOpenBarForResolve ? parseFloat(sessionOpenBarForResolve.open) : null,
+            prevRthClose: lp.PD_CLOSE != null ? lp.PD_CLOSE : null,
           };
+          const resolveSetupType = (rawType, lv) => resolveSetupTypePure(rawType, lv, resolveSetupTypeCtx);
 
           // Collect ALL levels within 15pt — wider than the old 10pt window to catch
           // approaches that reverse before piercing deeply. Pick the highest-EV level
@@ -8085,13 +8518,89 @@ export default function createACDRouter(io) {
                 }
                 // Skipped candidate — logged so the fallback doesn't recreate the exact
                 // "orphaned candidate with zero trace" problem this fix exists to solve.
+                // DeepSeek review (2026-09-04): only log here when the touch-credit insert
+                // below WON'T fire for this candidate -- a candidate that gets a real
+                // active_setups row is no longer "orphaned with zero trace," and logging both
+                // is a documented-decision violation (two audit trails for one event). The
+                // active_setups row is the one that matters for N, so it wins.
                 const skipReason = candRecentlyFired ? 'SAME_TYPE_REFIRE_COOLDOWN'
                   : candSuppressed ? 'SUPPRESSED_FADE'
                   : candDowSuppressed ? 'DOW_SUPPRESSED'
                   : s2Double ? 'S2_DOUBLE_COUNTER'
                   : trendCounterFadeFlag ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
-                logGatedCandidate({ tradeDate: todayET, setupType: candType, gateName: 'LEVEL_FADE_CLUSTER_FALLBACK_SKIP', gateReason: skipReason, entry: currentPrice });
+                const sibTrailVariant = CONDITIONAL_VARIANTS[candType];
+                const willGetTouchCredit = !candRecentlyFired && !sibTrailVariant?.trailSignalName;
+                if (!willGetTouchCredit) {
+                  logGatedCandidate({ tradeDate: todayET, setupType: candType, gateName: 'LEVEL_FADE_CLUSTER_FALLBACK_SKIP', gateReason: skipReason, entry: currentPrice });
+                }
                 clusterSkippedTypes.push(candType);
+
+                // Cluster sibling touch credit (2026-09-04, user-requested, DeepSeek-reviewed
+                // same day -- 2 real bugs found and fixed here): every level in a real
+                // confluence cluster genuinely got touched at this same moment, whether or not
+                // it won the pick -- give it its own real, resolvable SHADOW row so its N (and
+                // SETUP_STATUS calibration) actually reflects that, instead of the touch
+                // vanishing except as a text tag on the winner's row. Gated on the SAME 15-min
+                // recency check the winner path already uses (candRecentlyFired) -- a re-touch
+                // of the same level within 15 min is intentionally not separately credited,
+                // matching the winner's own refire cooldown (keeps the sibling and winner
+                // populations on the same clock, DeepSeek Q1). Deliberately minimal columns (no
+                // regime stamp/fire tags/vol-building/historical-WR enrichment, unlike the main
+                // suppressed-audit insert below) -- scoped to the actual ask (accurate N); this
+                // leaves a real hole in vol_building_signal's weekly recalibration population,
+                // documented not silently accepted (DeepSeek Q2).
+                //
+                // FIX 1 (DeepSeek review, confirmed correctness bug): _TRAIL variant candidates
+                // are explicitly SKIPPED, not credited. A _TRAIL row needs runner_trail_width
+                // set or it silently resolves as an ordinary fixed-target trade under the
+                // _TRAIL label -- the EXACT bug already found and fixed once on the audit-insert
+                // branch below (breakeven_trail_never_engaged_5of6_rows_missing). Recreating it
+                // here would corrupt real_n/real_ev for whichever _TRAIL variant lost the pick.
+                // Skipping (not replicating the trail-width lookup) is the smaller, safer fix --
+                // the _TRAIL population's whole reason to exist is keeping a DIFFERENT exit
+                // mechanism's outcomes separate, so crediting it via this path is actively wrong
+                // by the same logic that makes the credit valuable everywhere else.
+                //
+                // FIX 2 (DeepSeek review, confirmed correctness bug): entry/stop/target are
+                // anchored at cand.level (this candidate's OWN level), not currentPrice (the
+                // winner's touch price) -- nearLevels is a full 15pt radius, so a sibling up to
+                // 14pt from its own level previously got a row implying it was touched at a
+                // price it wasn't. Anchoring at cand.level is what "this level really was
+                // touched" actually means.
+                if (willGetTouchCredit) {
+                  try {
+                    const sibLevel = cand.level;
+                    const sibOptStop = liveStats._opt?.[candType];
+                    const sibStopPts = sibOptStop?.stop ?? Math.round(cand.mae_p75 ?? STOP);
+                    const sibTargetPts = sibOptStop?.target ?? Math.round(cand.mfe ?? TARGET);
+                    const sibStopLevel = isLong ? sibLevel - sibStopPts : sibLevel + sibStopPts;
+                    const sibT1Level = isLong ? sibLevel + sibTargetPts : sibLevel - sibTargetPts;
+                    const sibEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+                    const sibSessionEnd = new Date(sibEtNow);
+                    sibSessionEnd.setHours(16, 0, 0, 0);
+                    if (sibSessionEnd <= sibEtNow) sibSessionEnd.setDate(sibSessionEnd.getDate() + 1);
+                    const sibExpiresAt = `${sibSessionEnd.getFullYear()}-${String(sibSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(sibSessionEnd.getDate()).padStart(2, '0')} ${String(sibSessionEnd.getHours()).padStart(2, '0')}:${String(sibSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+                    const sibWiderTargetMult = (candType !== 'ABSORPTION_LONG' && !candType.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null;
+                    await query(`
+                      INSERT INTO active_setups (
+                        trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
+                        suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
+                        entry_zone_low, entry_zone_high, stop_level, t1_level, expires_at, wider_target_mult, bet_class
+                      )
+                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11)
+                      ON CONFLICT DO NOTHING
+                    `, [
+                      todayET, candType, currentPrice, nearLevels.length,
+                      nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
+                      sibLevel, sibStopLevel, sibT1Level, sibExpiresAt, sibWiderTargetMult, getBetClass(candType),
+                    ]);
+                  } catch (e) {
+                    // Non-critical, observation-only (gives a level real N credit, never trades
+                    // real capital) -- must never be able to block the winner-selection logic
+                    // this loop is otherwise doing.
+                    console.error('cluster sibling touch-credit insert error (non-critical):', e.message);
+                  }
+                }
               }
             }
             // No candidate cleared (or clusterAlreadyFired blocked the whole cluster) -- fall

@@ -1,0 +1,176 @@
+
+=== SMA(5) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.88 EV($)=-3.76 WR=37.4%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.55 EV($)=-3.10 WR=34.2%
+    DELTA($):  -0.66
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.35 EV($)=-1.30 WR=40.0% AvgBarsHeld=4.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.64 EV($)=-3.29 WR=35.4%
+    DELTA($):  1.99 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(5) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.44 EV($)=-4.87 WR=36.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.60 EV($)=-3.20 WR=33.9%
+    DELTA($):  -1.67
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.56 EV($)=-0.89 WR=39.4% AvgBarsHeld=4.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.54 EV($)=-3.07 WR=35.0%
+    DELTA($):  2.19 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(5) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.77 EV($)=-3.54 WR=37.4%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.60 EV($)=-3.21 WR=34.2%
+    DELTA($):  -0.33
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.45 EV($)=-1.11 WR=40.0% AvgBarsHeld=4.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.67 EV($)=-3.34 WR=35.4%
+    DELTA($):  2.24 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(5) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.90 EV($)=-3.80 WR=37.4%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.55 EV($)=-3.10 WR=34.2%
+    DELTA($):  -0.70
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.33 EV($)=-1.33 WR=40.0% AvgBarsHeld=4.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.61 EV($)=-3.22 WR=35.4%
+    DELTA($):  1.89 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(10) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.50 EV($)=-5.00 WR=36.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.68 EV($)=-3.36 WR=34.8%
+    DELTA($):  -1.63
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.09 EV($)=-1.83 WR=38.9% AvgBarsHeld=8.2
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.93 EV($)=-3.87 WR=35.5%
+    DELTA($):  2.04 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(10) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.65 EV($)=-5.30 WR=34.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.52 EV($)=-3.03 WR=34.3%
+    DELTA($):  -2.27
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.85 EV($)=-0.30 WR=38.0% AvgBarsHeld=8.0
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.49 EV($)=-2.98 WR=34.5%
+    DELTA($):  2.68 | clean=true clustered=false stable=true top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(10) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.14 EV($)=-4.27 WR=36.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.69 EV($)=-3.39 WR=34.8%
+    DELTA($):  -0.88
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.34 EV($)=-1.32 WR=38.9% AvgBarsHeld=8.2
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.74 EV($)=-3.49 WR=35.5%
+    DELTA($):  2.17 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(10) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.31 EV($)=-4.62 WR=36.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-0.68 EV($)=-3.36 WR=34.8%
+    DELTA($):  -1.26
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.12 EV($)=-1.75 WR=38.9% AvgBarsHeld=8.2
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.87 EV($)=-3.74 WR=35.5%
+    DELTA($):  1.98 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(14) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.13 EV($)=-2.27 WR=38.5%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.29 EV($)=-6.57 WR=33.5%
+    DELTA($):  4.30
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.51 EV($)=-0.97 WR=38.0% AvgBarsHeld=10.7
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.52 EV($)=-3.04 WR=36.0%
+    DELTA($):  2.07 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(14) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.92 EV($)=-5.83 WR=34.9%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.01 EV($)=-6.01 WR=32.7%
+    DELTA($):  0.18
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=1.68 EV($)=1.35 WR=36.9% AvgBarsHeld=10.3
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.16 EV($)=-2.32 WR=34.7%
+    DELTA($):  3.68 | clean=true clustered=false stable=true top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(14) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=0.25 EV($)=-1.51 WR=38.5%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.32 EV($)=-6.64 WR=33.5%
+    DELTA($):  5.13
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=1.08 EV($)=0.17 WR=38.0% AvgBarsHeld=10.7
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.48 EV($)=-2.97 WR=35.9%
+    DELTA($):  3.14 | clean=true clustered=false stable=true top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(14) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=0.05 EV($)=-1.89 WR=38.5%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.33 EV($)=-6.67 WR=33.5%
+    DELTA($):  4.78
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=0.45 EV($)=-1.10 WR=38.0% AvgBarsHeld=10.7
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.46 EV($)=-2.91 WR=36.0%
+    DELTA($):  1.81 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(20) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-1.09 EV($)=-4.18 WR=34.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.63 EV($)=-7.27 WR=34.5%
+    DELTA($):  3.09
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=2.99 EV($)=3.99 WR=36.6% AvgBarsHeld=14.8
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.66 EV($)=-3.32 WR=36.2%
+    DELTA($):  7.31 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(20) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-2.47 EV($)=-6.94 WR=31.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.64 EV($)=-7.28 WR=33.1%
+    DELTA($):  0.34
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=2.63 EV($)=3.26 WR=34.0% AvgBarsHeld=13.6
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.45 EV($)=-2.90 WR=34.4%
+    DELTA($):  6.16 | clean=true clustered=false stable=true top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(20) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.75 EV($)=-3.49 WR=34.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.84 EV($)=-7.67 WR=34.3%
+    DELTA($):  4.18
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=3.51 EV($)=5.03 WR=36.6% AvgBarsHeld=14.7
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.68 EV($)=-3.35 WR=36.0%
+    DELTA($):  8.38 | clean=true clustered=false stable=true top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== SMA(20) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.90 EV($)=-3.80 WR=34.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.69 EV($)=-7.38 WR=34.5%
+    DELTA($):  3.58
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=2.80 EV($)=3.59 WR=36.6% AvgBarsHeld=14.8
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.61 EV($)=-3.23 WR=36.2%
+    DELTA($):  6.82 | clean=false clustered=false stable=false top5Day=13.7%
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)

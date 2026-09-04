@@ -115,10 +115,18 @@ async function getCalibration() {
 }
 
 async function getLiveStatus(setupType) {
+  // origin_status filter added 2026-09-04 (found while verifying an unrelated SETUP_STATUS
+  // promotion this same session): this is the REAL live gate for GLOBEX_FLUSH_LONG/SHORT (per
+  // this file's own design, decoupled from backtest_flush_patterns.mjs's informational
+  // SETUP_STATUS row), so it needs the same origin_status IN ('ACTIVE','SHADOW') scoping every
+  // other real-N gate in this codebase uses -- without it, any future BACKFILL/UNKNOWN-origin
+  // reconstruction for this setup_type would silently count toward live eligibility. Currently a
+  // latent gap, not an active bug: real n for both flush types is 1-3 today, all SHADOW-origin.
   const { rows } = await query(`
     SELECT COUNT(*) as n, AVG(actual_pnl)::float as ev
     FROM active_setups
-    WHERE setup_type = $1 AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
+    WHERE setup_type = $1 AND origin_status IN ('ACTIVE','SHADOW')
+      AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL
   `, [setupType]);
   const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
   if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };

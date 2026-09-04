@@ -652,3 +652,32 @@ const UNCONDITIONAL_VARIANT_BY_BASE_TYPE = (() => {
 export function resolveUnconditionalTrailVariant(rawType) {
   return UNCONDITIONAL_VARIANT_BY_BASE_TYPE[rawType] ?? rawType;
 }
+
+/**
+ * Exported 2026-09-04 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md Phase 3b Step 0, prerequisite for the
+ * historical cluster-touch-credit backfill) — was previously a local closure inside
+ * server/routes/acd.js's live handler (`const resolveSetupType = (rawType, lv) => {...}`),
+ * closing over `allRthBarsRow`/`lp.PD_CLOSE` and therefore not reusable by a standalone script.
+ * The single source of truth for all type overrides — the live path (RTH engine only; Globex has
+ * no analog for the two CONDITIONAL entries below, see resolveUnconditionalTrailVariant()'s own
+ * comment) and any historical-reconstruction script must both call this, never re-derive the
+ * override logic by hand.
+ *
+ * `ctx.sessionOpenPrice` / `ctx.prevRthClose` replace the closure's free variables — pass the
+ * session's 9:30 ET open price and the prior RTH session's close explicitly (both already
+ * computed at the live call site; a backfill script derives them per historical trade_date from
+ * price_bars_primary / developing_value_log the same way compute_levels.js does).
+ */
+export function resolveSetupType(rawType, lv, { sessionOpenPrice, prevRthClose } = {}) {
+  if (rawType === 'WPP_FADE_SHORT') {
+    if (sessionOpenPrice != null && sessionOpenPrice < lv.level) return 'WPP_FADE_SHORT_GAP_UP';
+  }
+  if (rawType === 'OR5_LOW_FADE_LONG') {
+    if (sessionOpenPrice != null && prevRthClose != null && sessionOpenPrice < prevRthClose) {
+      return 'OR5_LOW_FADE_LONG_GAP_DOWN';
+    }
+  }
+  // The 7 unconditional _TRAIL diversions live in one place (CONDITIONAL_VARIANTS, derived into
+  // UNCONDITIONAL_VARIANT_BY_BASE_TYPE above) — reuse rather than re-list them here.
+  return resolveUnconditionalTrailVariant(rawType);
+}

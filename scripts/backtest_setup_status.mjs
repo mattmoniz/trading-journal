@@ -333,6 +333,38 @@ async function run() {
     return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, stable: rigor.stable, thirds: rigor.thirds, boundaryStraddle: rigor.boundaryStraddle, zScores: rigor.zScores, zTrend: rigor.zTrend };
   }
 
+  // Distinct-day floor for NEW promotions (2026-09-04, user-requested general fix — not
+  // specific to the cluster-sibling-touch-credit mechanism, applies to every setup_type's
+  // promotion decision equally). Reuses computeRigor()'s existing clustered flag
+  // (top5DayPct>50) rather than inventing a new threshold — the SAME definition already used
+  // to gate SETUP_STATUS_DOW's SUPPRESS decision (rigor.clean, which itself requires
+  // !clustered). Root problem: real_n alone can't distinguish "20 trades across 20 different
+  // days" from "20 trades from 5 days that each happened to generate several" -- confirmed
+  // live today on GLOBEX_VWAP_MAGNET_LONG (real_n=98, only 4 distinct days) with ZERO
+  // cluster-sibling involvement, so this is a pre-existing gap the promotion gate has for
+  // every data source, not something unique to the new sibling-credit rows.
+  //
+  // Computed on the REAL-only population (REAL_TRADE_FILTER-scoped) specifically, matching
+  // realN/realEv being what actually drives the promotion decision — the blended
+  // rigorDiagnostics() above (all origins pooled) is a different, less relevant population for
+  // this specific check.
+  const perTradeRealQ = await query(`
+    SELECT setup_type, trade_date::text AS trade_date, actual_pnl::float AS pnl, fired_at
+    FROM active_setups
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED') AND actual_pnl IS NOT NULL AND ${REAL_TRADE_FILTER}
+    ORDER BY setup_type, fired_at ASC
+  `);
+  const realTradesByType = new Map();
+  for (const r of perTradeRealQ.rows) {
+    if (!realTradesByType.has(r.setup_type)) realTradesByType.set(r.setup_type, []);
+    realTradesByType.get(r.setup_type).push(r);
+  }
+  function realRigorDiagnostics(type) {
+    const trades = realTradesByType.get(type) || [];
+    const rigor = computeRigor(trades, { dateField: 'trade_date', pnlFn: t => t.pnl });
+    return { distinctDates: rigor.distinctDates, top5DayPct: rigor.top5DayPct, clustered: rigor.clustered };
+  }
+
   // Automated version of the classification Gemini did by hand 2026-07-14 for the 26 unstable
   // setups (scratch/unstable_active_setups_20260714.json / docs/OPEN_THREADS.md) — the logic
   // itself was simple rule-based comparison, not real judgment, so it's encoded here to run
@@ -380,6 +412,10 @@ async function run() {
     const ev     = +r.ev;
     const rec90  = recent[type];
     const wasSuppressed = currentStatus[type] === 'SUPPRESS';
+    // Distinct-day floor scope: only gates a NEW promotion (wasn't already live-eligible),
+    // never demotes something already ACTIVE/PROMOTE off this check alone -- matches the
+    // agreed scope (cheaper, safer, mirrors the SETUP_STATUS_DOW precedent's own scope).
+    const wasLiveEligible = ['ACTIVE', 'PROMOTE'].includes(currentStatus[type]);
 
     // Manual suppress override (see MANUAL_SUPPRESS_OVERRIDE above) — a deliberate,
     // human-reviewed kill that bypasses this file's own automatic recommendation logic
@@ -438,7 +474,17 @@ async function run() {
     const rec90RealWr = rec90 && rec90.real_wr != null ? +rec90.real_wr : null;
     const rec90RealEv = rec90 && rec90.real_ev != null ? +rec90.real_ev : null;
 
-    if (wasSuppressed && rec90RealN >= PROMOTE_MIN_N && rec90RealWr != null && rec90RealWr >= PROMOTE_MIN_WR && rec90RealEv != null && rec90RealEv > PROMOTE_MIN_EV) {
+    const promoteRecoveryQualifies = wasSuppressed && rec90RealN >= PROMOTE_MIN_N && rec90RealWr != null && rec90RealWr >= PROMOTE_MIN_WR && rec90RealEv != null && rec90RealEv > PROMOTE_MIN_EV;
+    const newPromotionRealRigor = (!wasLiveEligible && promoteRecoveryQualifies) ? realRigorDiagnostics(type) : null;
+    if (promoteRecoveryQualifies && newPromotionRealRigor?.clustered) {
+      // Distinct-day floor (2026-09-04): clears every existing PROMOTE bar but the real
+      // trades behind it are concentrated in too few distinct days (top5DayPct>50) to trust
+      // as broad evidence yet -- stays SUPPRESS, not a silent block (logged plainly), and
+      // will promote normally once genuinely new days accumulate and this clears on its own.
+      recommendation = 'SUPPRESS';
+      suppressed++;
+      console.log(`  SUPPRESS ${type.padEnd(38)} PROMOTE bar cleared but DAY_CLUSTERED (real top5DayPct=${newPromotionRealRigor.top5DayPct}%, distinctDates=${newPromotionRealRigor.distinctDates}) — held back pending broader evidence`);
+    } else if (promoteRecoveryQualifies) {
       // Recovery detected — promote back to live
       recommendation = 'PROMOTE';
       promoted++;
@@ -494,6 +540,15 @@ async function run() {
         recommendation = 'SUPPRESS';
         suppressed++;
         console.log(`  SUPPRESS ${type.padEnd(38)} retained (failed PROMOTE recovery bar): real EV=$${realEv != null ? realEv.toFixed(2) : 'n/a'}  recent90 real N=${rec90RealN} WR=${rec90RealWr != null ? (rec90RealWr * 100).toFixed(1) : 'n/a'}% EV=$${rec90RealEv != null ? rec90RealEv.toFixed(2) : 'n/a'}`);
+      } else if (!wasLiveEligible && realRigorDiagnostics(type).clustered) {
+        // Distinct-day floor (2026-09-04): clears real_n/real_ev bars for the FIRST time but
+        // the real trades are concentrated in too few distinct days (top5DayPct>50) -- same
+        // check and same reasoning as the PROMOTE-recovery gate above, applied to the more
+        // common THIN_N -> ACTIVE path. Stays THIN_N (not a new status), self-clears once
+        // genuinely new days accumulate. Never applies to a type already ACTIVE/PROMOTE.
+        const rr = realRigorDiagnostics(type);
+        recommendation = 'THIN_N';
+        console.log(`  THIN_N   ${type.padEnd(38)} real N/EV bars cleared but DAY_CLUSTERED (real top5DayPct=${rr.top5DayPct}%, distinctDates=${rr.distinctDates}) — held back pending broader evidence`);
       } else {
         unchanged++;
       }

@@ -1,0 +1,110 @@
+
+=== EMA(9,21) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-2.40 EV($)=-6.79 WR=35.7%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-1.03 EV($)=-4.06 WR=35.9%
+    DELTA($):  -2.73
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=3.92 EV($)=5.85 WR=40.6% AvgBarsHeld=28.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-3.24 EV($)=-8.48 WR=37.8%
+    DELTA($):  14.33 | clean=true clustered=false stable=true top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $27.65
+      Second half delta: $-1.15
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(9,21) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-5.05 EV($)=-12.10 WR=30.5%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-1.55 EV($)=-5.10 WR=32.2%
+    DELTA($):  -7.00
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=2.73 EV($)=3.45 WR=35.1% AvgBarsHeld=24.2
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-1.82 EV($)=-5.65 WR=33.4%
+    DELTA($):  9.10 | clean=true clustered=false stable=true top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $18.79
+      Second half delta: $-3.01
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(9,21) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-3.38 EV($)=-8.77 WR=34.9%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-1.45 EV($)=-4.90 WR=35.2%
+    DELTA($):  -3.87
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=3.16 EV($)=4.32 WR=39.1% AvgBarsHeld=27.3
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-2.79 EV($)=-7.59 WR=36.7%
+    DELTA($):  11.91 | clean=true clustered=false stable=true top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $23.51
+      Second half delta: $-1.56
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(9,21) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-2.26 EV($)=-6.53 WR=35.7%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-1.13 EV($)=-4.25 WR=35.7%
+    DELTA($):  -2.27
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=3.90 EV($)=5.79 WR=40.6% AvgBarsHeld=28.4
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-3.11 EV($)=-8.21 WR=37.6%
+    DELTA($):  14.00 | clean=true clustered=false stable=true top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $27.72
+      Second half delta: $-2.25
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(21,50) no-stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=0.31 EV($)=-1.38 WR=44.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.05 EV($)=-6.10 WR=41.3%
+    DELTA($):  4.73
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=4.62 EV($)=7.23 WR=47.1% AvgBarsHeld=47.2
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-3.10 EV($)=-8.20 WR=41.6%
+    DELTA($):  15.43 | clean=false clustered=false stable=false top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $22.89
+      Second half delta: $5.94
+
+=== EMA(21,50) + 32.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-2.75 EV($)=-7.50 WR=36.6%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.93 EV($)=-7.85 WR=34.4%
+    DELTA($):  0.35
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=2.26 EV($)=2.53 WR=40.3% AvgBarsHeld=32.6
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=0.12 EV($)=-1.77 WR=35.3%
+    DELTA($):  4.29 | clean=false clustered=false stable=false top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $10.97
+      Second half delta: $-4.48
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(21,50) + 60.75pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.46 EV($)=-2.93 WR=42.7%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.79 EV($)=-7.58 WR=39.9%
+    DELTA($):  4.65
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=3.29 EV($)=4.58 WR=45.1% AvgBarsHeld=42.1
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-0.27 EV($)=-2.55 WR=40.0%
+    DELTA($):  7.13 | clean=false clustered=false stable=false top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $12.74
+      Second half delta: $-0.34
+    FLAGS:     WITHIN-TEST DECAY (first-half positive, second-half negative)
+
+=== EMA(21,50) + 100.5pt stop ===
+  TRAIN:
+    SIGNAL:    N=361 (Days=83) EV(pts)=-0.50 EV($)=-3.00 WR=44.3%
+    NO_SIGNAL: N=1548 (Days=85) EV(pts)=-2.61 EV($)=-7.22 WR=41.2%
+    DELTA($):  4.23
+  TEST:
+    SIGNAL:    N=350 (Days=87) EV(pts)=4.62 EV($)=7.24 WR=47.1% AvgBarsHeld=46.5
+    NO_SIGNAL: N=1690 (Days=89) EV(pts)=-1.69 EV($)=-5.38 WR=41.4%
+    DELTA($):  12.62 | clean=false clustered=false stable=false top5Day=13.7%
+    WITHIN-TEST DECAY CHECK (midpoint 2026-07-03):
+      First half delta:  $20.20
+      Second half delta: $2.45

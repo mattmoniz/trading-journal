@@ -129,6 +129,13 @@
      stay visually distinguishable at a glance. */
   .rangeslope-tag { color: #fcd34d; background: rgba(217,119,6,0.14); }
   .volroll-tag { color: #5eead4; background: rgba(20,184,166,0.14); }
+  /* step-trail runner extension shadow tag (Opus Audit #12, 2026-09-04) -- distinct hue from
+     the 4 tag kinds above so all 5 stay visually distinguishable at a glance. Also unvalidated
+     (SHADOW-tracked only, OPEN_DECISION step_trail_phase2_promotion_pending). */
+  .steptrail-tag { color: #f9a8d4; background: rgba(219,39,119,0.14); }
+  /* Pitch and Catch shadow tag (2026-09-04) -- distinct hue from the 5 tag kinds above so
+     all 6 stay visually distinguishable. UNVALIDATED (tracked at explicit user request). */
+  .pitchcatch-tag { color: #86efac; background: rgba(22,163,74,0.14); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -709,11 +716,25 @@ function renderTimeline() {
     const pes = s.post_entry_exit_signals || {};
     const rsTag = pes.range_slope ? '<span class="vb-tag rangeslope-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'range_slope\')">RangeSlope</span>' : '';
     const vrTag = pes.vol_rollover ? '<span class="vb-tag volroll-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'vol_rollover\')">VolRoll</span>' : '';
+    // Step-trail shadow tag (Opus Audit #12, 2026-09-04, OPEN_DECISION
+    // step_trail_phase2_promotion_pending) -- same tap-not-hover convention as rsTag/vrTag
+    // above (touchscreen viewers can't hover a title= tooltip). Only ever present when the
+    // real wider-target mechanism armed AND the shadow walk resolved -- see
+    // server/routes/acd.js's resolveSetupsByPrice()/completeStepTrailShadows(). Purely
+    // observational: this trade's real resolution/stop/actual_pnl are completely unaffected.
+    const stTag = s.step_trail_shadow ? '<span class="vb-tag steptrail-tag sig-tag" onclick="event.stopPropagation(); openStepTrailPopup(' + s.id + ')">StepTrail</span>' : '';
+    // Pitch and Catch shadow tag (user idea, 2026-09-04, UNVALIDATED -- tracked at explicit
+    // user request specifically because it's unproven; see server/services/
+    // pitchCatchWalker.js's header for the full negative evidence trail). Shown whenever a
+    // confirmed pullback was observed, whether or not it passed the calibrated filter --
+    // qualified=false rows still tap-open to show why it was skipped, useful monitoring
+    // signal on its own.
+    const pcTag = s.pitch_catch_shadow ? '<span class="vb-tag pitchcatch-tag sig-tag" onclick="event.stopPropagation(); openPitchCatchPopup(' + s.id + ')">PnC</span>' : '';
     return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      vbTag + wideTag + rsTag + vrTag +
+      vbTag + wideTag + rsTag + vrTag + stTag + pcTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -853,6 +874,117 @@ function openMechanismPopup(id, mechanism) {
     html += mRow('Big-move-only (top tercile MFE)', row.bigMoveOnly.thin ? 'N=' + row.bigMoveOnly.n + ' (too thin yet)' :
       'N=' + row.bigMoveOnly.n + ', avg ' + (row.bigMoveOnly.avgDelta >= 0 ? '+' : '') + '$' + row.bigMoveOnly.avgDelta.toFixed(2) + '/trade vs. real outcome',
       row.bigMoveOnly.thin ? 'var(--dim)' : (row.bigMoveOnly.avgDelta >= 0 ? 'var(--green)' : 'var(--red)'));
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Step-trail shadow popup (Opus Audit #12, 2026-09-04, OPEN_DECISION
+// step_trail_phase2_promotion_pending) -- tap target for the StepTrail row tag above. Same
+// #modal/#modal-backdrop + mRow/mSection convention as openMechanismPopup just above. Shows
+// this trade's own hypothetical outcome first, then the running real/shadow-origin totals
+// from GET /api/setups/step-trail-shadow-summary (the same aggregate a future promotion
+// decision would read, not a separately hand-computed number).
+let stepTrailShadowSummary = null;
+async function loadStepTrailShadowSummary() {
+  try {
+    stepTrailShadowSummary = await fetch('/api/setups/step-trail-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function stBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const deltaColor = b.avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + deltaColor + '">' +
+    'N=' + b.n + (b.thin ? ' (thin, N<' + (stepTrailShadowSummary?.minRealN ?? 20) + ')' : '') +
+    ', avg delta ' + (b.avgDelta >= 0 ? '+' : '') + '$' + b.avgDelta.toFixed(2) +
+    (b.bigWins100pt ? ', ' + b.bigWins100pt + ' big win(s) >100pt' : '') + '</span></div>';
+}
+
+function openStepTrailPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.step_trail_shadow;
+  if (!s || !shadow) return;
+
+  const hyp = Number(shadow.hypothetical_pnl);
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  const delta = Number(shadow.delta);
+  const hypColor = hyp >= 0 ? 'var(--green)' : 'var(--red)';
+  let html = '<div class="m-head"><span class="m-title" style="color:' + hypColor + '">Step-Trail Runner Extension</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · SHADOW-tracked, not yet promoted to live</div>';
+
+  html += mSection('This trade');
+  html += mRow('Real outcome (what actually happened)', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Hypothetical if step-trailed instead', (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2), hypColor);
+  html += mRow('Delta (hypothetical − real)', (delta >= 0 ? '+' : '') + '$' + delta.toFixed(2), delta >= 0 ? 'var(--green)' : 'var(--red)');
+  html += mRow('Exit', shadow.hypothetical_resolution + ' / ' + shadow.hypothetical_method);
+  html += mRow('Armed at', shadow.armed_at);
+  html += mRow('Step fraction used', shadow.frac != null ? (shadow.frac * 100).toFixed(0) + '%' : null);
+
+  html += mSection('Running total across all real + shadow fires');
+  if (stepTrailShadowSummary) {
+    html += stBucketRow('Real (ACTIVE-origin)', stepTrailShadowSummary.real);
+    html += stBucketRow('Shadow (SHADOW-origin)', stepTrailShadowSummary.shadow);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Pitch and Catch shadow popup (user idea, 2026-09-04, UNVALIDATED) -- tap target for
+// the PnC row tag above. Same #modal/#modal-backdrop + mRow/mSection convention as the other
+// popups. Explicitly tracked because it's unproven, per the user's own framing ("if it's not
+// good then the N will stay low") -- the popup says so plainly, not just "SHADOW-tracked."
+let pitchCatchShadowSummary = null;
+async function loadPitchCatchShadowSummary() {
+  try {
+    pitchCatchShadowSummary = await fetch('/api/setups/pitch-catch-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function pcBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const deltaColor = b.avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + deltaColor + '">' +
+    'N=' + b.n + ' qualified (' + b.qualifiedRate + '% of confirmed pullbacks)' +
+    (b.n > 0 ? ', avg ' + (b.avgDelta >= 0 ? '+' : '') + '$' + b.avgDelta.toFixed(2) : '') + '</span></div>';
+}
+
+function openPitchCatchPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.pitch_catch_shadow;
+  if (!s || !shadow) return;
+
+  let html = '<div class="m-head"><span class="m-title" style="color:#86efac">Pitch and Catch — ' + (shadow.direction || '') + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · UNVALIDATED, tracked for real data only — not a proven edge</div>';
+
+  html += mSection('This confirmed pullback');
+  if (!shadow.qualified) {
+    html += mRow('Outcome', 'Confirmed pullback, but did NOT pass the calibrated filter (' + shadow.hypothetical_method + ')', 'var(--dim)');
+  } else {
+    const hyp = shadow.hypothetical_pnl != null ? Number(shadow.hypothetical_pnl) : null;
+    const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+    const hypColor = hyp != null ? (hyp >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text)';
+    html += mRow('Real outcome (what actually happened)', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+      real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+    html += mRow('Hypothetical if re-entered', hyp != null ? (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2) : null, hypColor);
+    if (shadow.delta != null) html += mRow('Delta (hypothetical − real)', (shadow.delta >= 0 ? '+' : '') + '$' + Number(shadow.delta).toFixed(2), shadow.delta >= 0 ? 'var(--green)' : 'var(--red)');
+    html += mRow('Re-entry', shadow.hypothetical_resolution + ' / ' + shadow.hypothetical_method);
+    html += mRow('Re-entry price', shadow.hypothetical_entry_price != null ? Number(shadow.hypothetical_entry_price).toFixed(2) : null);
+  }
+
+  html += mSection('Running total across all real + shadow fires');
+  if (pitchCatchShadowSummary) {
+    html += pcBucketRow('Pitch and Catch LONG', pitchCatchShadowSummary.long);
+    html += pcBucketRow('Pitch and Catch SHORT', pitchCatchShadowSummary.short);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -1175,6 +1307,8 @@ loadPulse();
 loadTimeline();
 loadRange('today');
 loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch once, no poll
+loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac calib) -- fetch once, no poll
+loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);

@@ -1,10 +1,53 @@
 # Cluster Touch Credit — Phased Build Spec
 
-**Status: Phase 0 (verify) + Phase 1 (3 cheap independent fixes) SHIPPED 2026-08-25 — see
-"Phase 0 results" below. Phase 2/3 NOT built, design-critiqued only (Gemini + DeepSeek, both
-independent, 2026-08-25).** Read `docs/OPEN_THREADS.md`'s 2026-08-25 "Cluster touch credit"
-entry for the full narrative (how this was found, both critiques in full) before touching
-anything here — this doc is the buildable plan, that entry is the reasoning trail.
+**Status as of 2026-09-04: Phase 0/1 shipped 2026-08-25. Phase 3's live-forward core (the actual
+sibling-row insert) SHIPPED 2026-09-04, DeepSeek-reviewed same day (2 real bugs found and fixed).
+A simplified Phase 2 (distinct-day promotion floor, general — not sibling-specific) also SHIPPED
+2026-09-04. Phase 3b (the historical backfill, RTH-only) also SHIPPED 2026-09-04 — see the "Phase
+3b — shipped" section below for the full outcome (1,279 rows inserted, 27 SETUP_STATUS changes
+including 3 real ACTIVE→SUPPRESS demotions). Globex-origin siblings remain unbackfilled — a
+second pass, not yet scoped.** Read `docs/OPEN_THREADS.md`'s 2026-08-25 AND 2026-09-04 "Cluster
+touch credit" entries for the full narrative before touching anything here — this doc is the
+buildable plan, those entries are the reasoning trail.
+
+## What's actually live right now (2026-09-04) — read this before assuming Phase 2/3 below is still all-future
+
+**Phase 3 core, shipped:** `server/routes/acd.js`, inside the `sortedCandidates` loop that picks
+a cluster's winner (search `CLUSTER_SIBLING_TOUCH_CREDIT`). Every candidate the loop skips on the
+way to picking a winner now ALSO gets its own real, resolvable `active_setups` SHADOW row (own
+level as entry, own calibrated stop/target via `liveStats._opt`), gated on the same 15-min
+`candRecentlyFired` cooldown the winner path already uses. Two real bugs DeepSeek's review found
+and that got fixed the same day:
+1. `_TRAIL` variant siblings (7 types: `FLOOR_R1_FADE_SHORT`, `PW_HIGH_FADE_LONG`,
+   `PD_POC_FADE_LONG`, `FLOOR_S1_FADE_LONG`, `DAILY_OPEN_FADE_LONG`, `CAM_S2_FADE_LONG`,
+   `PD_POC_FADE_SHORT`) are now **explicitly skipped**, not credited — crediting them without
+   `runner_trail_width` silently corrupted them into fixed-target trades under the `_TRAIL`
+   label (the exact bug this codebase already fixed once on a different insert path). This
+   matters for the backfill below too — same exclusion applies.
+2. Sibling entry/stop/target are anchored at `cand.level` (its own level), not the winner's
+   touch price.
+
+Also fixed same day: the `gated_candidates`/`active_setups` double-audit-trail this doc's own
+"Known adjacent findings" section (below) already flagged — a skipped candidate now logs to
+`gated_candidates` ONLY when it does NOT also get a real touch-credit row.
+
+**Simplified Phase 2, shipped:** rather than the full `cluster_touch_id`/`is_cluster_primary`/
+`POOLED_TRADE_FILTER` schema build originally scoped below, a cheaper equivalent went live
+instead — `scripts/backtest_setup_status.mjs` now blocks any **NEW** promotion (THIN_N/SUPPRESS
+→ ACTIVE/PROMOTE, never demotes an already-live type) when the real trade population behind it
+is `computeRigor().clustered` (top5DayPct>50%), reusing the exact clustering definition already
+proven on the `SETUP_STATUS_DOW` gate rather than building new schema. Deliberately general —
+protects every setup_type's promotion, not just sibling-touch-credit-sourced ones, since the
+underlying gap (real_n with no distinct-day floor) already existed for other data sources too
+(confirmed live: `GLOBEX_VWAP_MAGNET_LONG`, real_n=98 across only 4 distinct days, zero sibling
+involvement). This is NOT the same as the original Phase 2 plan (no `is_cluster_primary` column,
+no `POOLED_TRADE_FILTER`, the 3 named pooled consumers — `bet_class` override,
+`monitor_bet_correlation.mjs`, `backtest_bet_class_status.mjs` — are still NOT cluster-aware) —
+re-evaluate whether that fuller Phase 2 is still worth building once real sibling volume
+accumulates and those 3 consumers' pooled numbers are checked for contamination.
+
+**Not built: the historical backfill.** Everything below this point (Phase 3b) is the scope for
+that, unstarted.
 
 ## Phase 0 results (2026-08-25, read-only verification, real numbers)
 
@@ -192,6 +235,161 @@ Review real sibling-count/correlation/resolution data, then decide whether to fl
 per-type gating N (now that the independence floor from Phase 2 exists to guard it). This is the
 step that actually resolves `FLOOR_R2`'s starvation for real — everything before this point fixes
 the surrounding safety mechanisms first.
+
+## Phase 3b — shipped 2026-09-04 (RTH-only; Globex deferred)
+
+**Outcome:** `scripts/backfill_cluster_touch_credit_20260904.mjs` ran for real 2026-09-04,
+inserting 1,279 real, resolved `active_setups` SHADOW rows (1,299 candidates identified, 20 hit
+`ON CONFLICT DO NOTHING` against real-time activity), `suppression_reason=
+'CLUSTER_SIBLING_TOUCH_CREDIT_BACKFILL'`. Getting there took 3 Gemini dry-run rounds (the first
+had a real bug — no normalization of 3+ historical naming conventions in
+`confluence_levels_at_detection`, canonical/`_FADE`-suffixed/human-readable-display-string
+variants mixed across time), then a Claude direct rewrite once the naming table was fully
+verified, then 3 DeepSeek code-review rounds that found and fixed 3 more real bugs before
+anything was written for real: wrong `resolution` schema vocabulary (would have silently
+excluded or miscounted rows from every real-N/WR/EV query), a flat multi-day bar-walk cap that
+contradicted the live session-end-expiry convention and inflated WR/EV, ~93 spurious raw sibling
+instances from `STACK_VOL_BREAK_LIVE_*` winners (a structurally different engine wrongly treated
+as a fade-cluster winner), and — found only on DeepSeek's 2nd confirmation pass, after the 1st
+fix attempt reused the wrong row's `expires_at` — a per-setup_type expiry window bug (8 fade
+types expire in 30 minutes, not the 16:00 ET session-end default most others use). Every dry-run
+count was independently cross-checked against separately-written SQL before trusting it, not
+just re-running the dispatched script.
+
+Post-write: re-ran `update_optimal_stops.mjs` + `backtest_setup_status.mjs`. **27 SETUP_STATUS
+changes**, all reviewed: 24 `THIN_N`→`SUPPRESS` (real N newly cleared 20, real EV negative — an
+honest resolution of previously-thin data, not a demotion of anything live) and **3 real
+`ACTIVE`→`SUPPRESS` demotions** — `ONL_FADE_LONG` (N=254, EV=-$8.04), `OR5_HIGH_FADE_LONG`
+(N=67, EV=-$0.30), `OR5_LOW_FADE_SHORT` (real_n=59, real_ev=-$4.64, DEGRADING trend — its blended
+EV of +$1.55 was propped up by non-real data, exactly the survivorship-bias risk this whole
+project was built to catch). These 3 had been trading live capital on a winner-only-biased
+sample; the previously-invisible losing sibling touches this backfill added flipped their true
+EV negative. Tracked via `OPEN_DECISION cluster_touch_credit_phase3b_historical_backfill_scoped`
+(RESOLVED).
+
+**Not done: Globex-origin siblings.** The Globex engine (`detectGlobexSetup()`) uses a
+structurally different naming convention (`levelBase`, `_OVERNIGHT`-suffixed types, 4 types that
+share bare names with RTH siblings — see CLAUDE.md's "setup_type name-only classification is
+structurally ambiguous" entry) and was deliberately out of scope for this pass, same as the
+original plan's deferral of the 2 gap-conditioned RTH types (still also deferred). A second pass
+would need its own naming-reconstruction table built the same rigorous way this one was — not
+yet scoped.
+
+The original goal and scoping notes below are kept as the historical record of what was planned
+and executed, not a still-open TODO.
+
+**Goal:** every historical touch where a level lost a confluence pick (2026-07-23 onward, when
+`confluence_levels_at_detection` started being populated) gets the same real, resolvable
+`active_setups` SHADOW row the live-forward fix now writes going forward — closing the ~3x
+undercount confirmed directly from real data (1,863 real trades with confluence data recorded,
+average 2.99 levels present per touch, only 1 ever got a row).
+
+### Step 0 — prerequisite, do this regardless of whether the backfill ships
+
+**Export `resolveSetupType()` as a real, standalone function.** It's currently a local closure in
+`server/routes/acd.js` (search `const resolveSetupType = (rawType, lv) =>`, ~line 8342+), closing
+over `allRthBarsRow` and `lp.PD_CLOSE` — not reusable by a standalone script. Move it to
+`server/config/setupTypes.js` (already home to `inferDirection`, `resolveDirection`,
+`getBetClass`, `CONDITIONAL_VARIANTS` as real exports) as a pure function taking
+`(rawType, { level, sessionOpenBar, prevRthClose })` instead of reading from closure variables.
+Update the live call site in `acd.js` to pass those two values explicitly (both already computed
+nearby — `allRthBarsRow.rows.find(b => b.et_min === 570)` for the open bar, `lp.PD_CLOSE` for the
+prior close). This satisfies the codebase's own "export the real function, never reimplement"
+rule and is required for Step 2 below to be correct rather than a second, drifting copy.
+
+### Step 1 — define the eligible population (the "safe subset")
+
+`resolveSetupType()` applies conditional overrides for exactly 9 raw types — reconstructing the
+real historical `setup_type` for any OTHER canonical level name is unambiguous regardless of
+date. **Exclude these 9, backfill everything else:**
+
+- 2 gap-conditioned (need that day's own 9:30 open bar / prior RTH close, real but not cheap):
+  `WPP_FADE_SHORT` (→`_GAP_UP` variant), `OR5_LOW_FADE_LONG` (→`_GAP_DOWN` variant)
+- 7 unconditional `_TRAIL` diversions, each with a real `addedDate` in `CONDITIONAL_VARIANTS`
+  (touches before that date map to the BASE type, not `_TRAIL` — "unconditional" describes
+  today's code, not the code live at each historical touch): `FLOOR_R1_FADE_SHORT` (2026-07-19),
+  `PW_HIGH_FADE_LONG`/`PD_POC_FADE_LONG`/`FLOOR_S1_FADE_LONG`/`DAILY_OPEN_FADE_LONG`/
+  `CAM_S2_FADE_LONG` (all 2026-07-21), `PD_POC_FADE_SHORT` (2026-08-26)
+
+For the eligible (non-override) population, direction is NOT ambiguous: `dir` is cluster-global
+(computed once per touch in the live code), so a sibling's direction = the winner's own
+direction, recoverable from the winner's own `setup_type` suffix (`_LONG`/`_SHORT`) on the
+already-stored row.
+
+### Step 2 — reverse `canonicalConfluenceLevelName()`
+
+`confluence_levels_at_detection` stores names through this exact stripping function
+(`acd.js` ~line 83):
+
+```js
+function canonicalConfluenceLevelName(name) {
+  const stripped = (name || '').replace(/_FADE$/, '');
+  return stripped === 'RTH_VWAP' ? 'VWAP' : stripped;
+}
+```
+
+Reverse it: `canonical === 'VWAP' ? 'RTH_VWAP_FADE' : `${canonical}_FADE``, then apply the
+direction suffix and (for the eligible/non-override subset only) the now-exported
+`resolveSetupType()` — which for this subset just returns the raw string unchanged, so this step
+is mostly a formality confirming no override applies.
+
+### Step 3 — for each eligible historical sibling, reconstruct and resolve as a real trade
+
+For every real (`origin_status IN ('ACTIVE','SHADOW')`) winner row with `confluence_levels_at_detection`
+containing 2+ canonical names, for each OTHER name in that array (not the winner's own type):
+
+1. Reconstruct `candType` (Steps 1-2).
+2. **Dedup check**: skip if `candType` already has ANY row within, say, ±20 minutes of the
+   winner's `fired_at` on the same `trade_date` (avoid crediting a touch that's already covered
+   by a real winner-fire, an early-touch-backfill row, or a prior backfill run of this same
+   script) — reuse the exact style of dedup check the live suppressed-audit insert already does,
+   don't invent a new one.
+3. **Entry**: the sibling's own level (`cand.level` — the winner row doesn't store this directly
+   for its siblings, so this needs the historical LEVEL PRICE at that moment, which for most
+   level types is derivable the same way `keepLevelsAll` derives it live — check whether this is
+   cheaply reconstructable per historical date via `developing_value_log`/`price_bars_primary`
+   for each level family, or whether some level types' historical price simply isn't
+   reconstructable from stored data and must be skipped. **This is the one open sub-question the
+   live-forward fix didn't have to solve** (it has `cand.level` live, for free) — resolve it
+   before writing the real backfill script, don't guess.
+4. **Stop/target**: current `OPTIMAL_STOP` calibration for `candType` (same `liveStats._opt`-style
+   lookup, applied retroactively — matches how every other historical-reconstruction insert in
+   this codebase already works, e.g. the suppressed-audit insert, early-touch-backfill).
+5. **Resolve as a REAL bar-by-bar walk**: fetch `price_bars_primary` from that historical
+   `fired_at` moment forward, walk for stop-hit vs target-hit vs session-end mark-to-market —
+   same logic `resolveSetupsByPrice()` runs live, don't reimplement a simplified version.
+6. **Insert** with `suppression_reason='CLUSTER_SIBLING_TOUCH_CREDIT_BACKFILL'` (distinct from the
+   live-forward `'CLUSTER_SIBLING_TOUCH_CREDIT'` — makes the backfilled population identifiable/
+   removable on its own if something's wrong with it later), `origin_status='SHADOW'`,
+   `status='RESOLVED'` (already resolved, unlike the live-forward version which inserts open).
+
+### Step 4 — migration protocol (non-negotiable given the stakes)
+
+Per `docs/DB_MIGRATION_PROTOCOL.md`, this is a bulk reconstruction touching potentially thousands
+of rows across the live SUPPRESS/PROMOTE gate:
+1. **Dry run first, in its own pass** — report counts per `setup_type` (how many backfilled rows
+   each would get, and by how much real_n would move), zero writes. Show this to the user before
+   anything executes.
+2. **Gemini builds the dry-run script** (this is real DB-mining/reconstruction work, matches
+   CLAUDE.md's Gemini-for-mining convention exactly) — Claude independently re-verifies the
+   dry-run numbers via a separately-written query before trusting them (never just re-run
+   Gemini's own script and call that verification).
+3. **Claude — never Gemini — executes the actual write**, only after the dry-run numbers have
+   been reviewed and the user has said go.
+4. **DeepSeek code-reviews the backfill script before it runs for real** — same discipline as the
+   live-forward fix, which caught 2 real bugs. Given the backfill's blast radius (potentially
+   thousands of rows, many setup_types at once) is bigger than the live-forward fix's (one row at
+   a time, growing slowly), this review matters more here, not less.
+5. **After the real write**: re-run `scripts/update_optimal_stops.mjs` then
+   `scripts/backtest_setup_status.mjs` (the same two-script daily-calibration cron) to refresh
+   SETUP_STATUS off the new N. The distinct-day floor (shipped today, see above) will
+   automatically protect any resulting promotion attempts — watch its log output
+   (`DAY_CLUSTERED` lines) as much as the `PROMOTE`/`ACTIVE` lines. **Report every status change
+   explicitly** (the user asked for this specifically) — diff `SETUP_STATUS` recommendations
+   before vs. after using the DB's own history (see the query pattern used earlier the same
+   session — rank by `run_date DESC`, compare `rn=1` vs `rn=2` per `signal_name`), not a
+   snapshot file (one was tried same-session and silently wrote empty due to a `require()`-in-ESM
+   bug — query the DB directly instead).
 
 ## Known adjacent findings (fix opportunistically, not blocking)
 

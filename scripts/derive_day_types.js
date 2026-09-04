@@ -12,9 +12,12 @@
  *   TURBULENT: range_ratio >= 1.25 AND NOT TREND
  *   BALANCE:   everything else
  *
- * Only updates existing acd_daily_log rows. Today's session is included when
- * the session is complete (HAVING COUNT(*) >= 200 bars acts as the completeness gate).
- * Never modifies classifyDayType or any live classifier.
+ * Only updates existing acd_daily_log rows. Today's session is included ONLY once RTH has
+ * actually closed (real ET wall-clock time >= 16:00, checked explicitly — found 2026-09-04
+ * that the bar-count-only gate this used to rely on, >= 200 bars, is reached ~12:50pm ET and
+ * does NOT mean the session is over; a manual/early invocation before the normal 20:20 ET
+ * schedule could otherwise write a genuinely lookahead-tainted day_type for a still-open
+ * session). Never modifies classifyDayType or any live classifier.
  */
 
 import { query } from '../server/db.js';
@@ -62,7 +65,18 @@ async function main() {
       -- Verified: near-identical query time (489ms vs 465ms), no regression.
       WHERE symbol = 'NQ'
         AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-        AND ts::date <= CURRENT_DATE
+        -- Found 2026-09-04 (test_invariants.mjs's day_type_at_fire lookahead check): a manual
+        -- mid-afternoon run of this script (via run_daily_calibration.sh, itself invoked ahead
+        -- of its normal 20:20 ET schedule) hit today's date while RTH was still open. The old
+        -- ts::date <= CURRENT_DATE bound plus HAVING COUNT(*) >= 200 was NOT actually the
+        -- "session is complete" gate the file's own docstring claims -- 200 bars is reached
+        -- ~12:50pm ET, hours before the real 4pm close, so any manual/early invocation on a
+        -- day whose classification hadn't yet settled could have written a genuinely wrong,
+        -- lookahead-tainted day_type (this specific incident got lucky: the mid-session and
+        -- post-close classifications happened to agree). Excluding today's date entirely
+        -- unless RTH has actually closed makes "safe to re-run anytime" true by construction
+        -- rather than by the bar-count heuristic's coincidence.
+        AND (ts::date < CURRENT_DATE OR (ts::date = CURRENT_DATE AND (NOW() AT TIME ZONE 'America/New_York')::time >= TIME '16:00:00'))
       GROUP BY ts::date
       HAVING COUNT(*) >= 200
     ),
