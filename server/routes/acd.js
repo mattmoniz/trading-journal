@@ -801,6 +801,61 @@ async function getMomentumAgainstFade(dir, lookbackBars = 15) {
   return dir === 'SHORT' ? signed : -signed;
 }
 
+// Cached (per-day) read of the calibrated "against momentum" cutoff -- same
+// getCached/setCached('_global', ...) convention as getCrossDirectionFlipCalib() further up
+// this file. Self-recalibrates weekly via scripts/calibrate_momentum_against_fade.mjs; null
+// (tagging disabled entirely, fail-closed) if no calibration row exists yet, never a
+// hardcoded point value, per CLAUDE.md's no-static-thresholds rule.
+async function getMomentumAgainstFadeCalib() {
+  const cached = getCached('_global', 'momentumAgainstFadeCalib', DAY_CACHE_TTL);
+  if (cached !== undefined) return cached;
+  const r = await query(`
+    SELECT notes FROM performance_audit
+    WHERE signal_type='MOMENTUM_AGAINST_FADE_CALIB' AND signal_name='ALL_ROSTER'
+    ORDER BY run_date DESC LIMIT 1
+  `);
+  let val = null;
+  try {
+    if (r.rows[0]) {
+      const notes = JSON.parse(r.rows[0].notes);
+      if (notes.p75 != null && notes.lookbackBars != null) val = { p75: notes.p75, lookbackBars: notes.lookbackBars };
+    }
+  } catch (_) {}
+  return setCached('_global', 'momentumAgainstFadeCalib', val, DAY_CACHE_TTL);
+}
+
+// Tags a real (ACTIVE/SHADOW) row, right after insert, with this candidate's own
+// momentum-against-fade reading -- SHADOW-ONLY / OBSERVATION-ONLY, exact same posture and
+// same reasoning as tagDirectionGateShadow() above (never changes a real candidate's
+// ACTIVE/SHADOW eligibility or touches a real trade's resolution/actual_pnl; keyed by the
+// row's own `id` via a follow-up UPDATE rather than threaded through the INSERT's own
+// positional params, to avoid the manually-counting-$N-params failure mode). RESUMED
+// 2026-09-05 (originally paused mid-build the same day pending the loss-cluster
+// investigation -- see the direction-loss-alternation gate above, which is what that
+// investigation actually produced) -- getMomentumAgainstFade() and its calibration were
+// already built and tested (RESEARCH_CLAIM momentum_against_fade_filter_20260905, held up
+// across three lookback windows and a chronological split). This wires the SHADOW tag only
+// -- it does NOT wire a live sizeMultiplier penalty; that remains a separate, not-yet-made
+// decision (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending) to be
+// revisited once real momentum_against_fade_shadow data accumulates.
+async function tagMomentumAgainstFadeShadow(insertedId, direction) {
+  if (!insertedId || !direction) return;
+  try {
+    const calib = await getMomentumAgainstFadeCalib();
+    if (!calib) return; // no calibration row yet -- fail closed, tag nothing
+    const value = await getMomentumAgainstFade(direction, calib.lookbackBars);
+    if (value == null) return; // too little session history yet -- don't guess
+    const against = value > calib.p75;
+    await query(
+      `UPDATE active_setups SET momentum_against_fade_shadow = $1 WHERE id = $2`,
+      [JSON.stringify({
+        value: +value.toFixed(2), p75Cutoff: calib.p75, lookbackBars: calib.lookbackBars,
+        against, direction, checkedAt: new Date().toISOString(),
+      }), insertedId]
+    );
+  } catch (_) { /* observation-only -- never let a tagging failure surface anywhere */ }
+}
+
 // sessionBars: chronological bars since THIS candidate's session open through now/the touch
 // bar, each needs { mod, volume } at minimum (extra fields are ignored).
 // Returns the classifyVolumeBuilding() shape, or a fully-null shape if too little session
@@ -2955,6 +3010,7 @@ async function detectGlobexSetup(sessionDate, io) {
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
+      await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
 
       // Every other insert path in this file drops a copy into trade_timeline_events —
       // detectGlobexSetup was the one exception (pre-existing gap, not introduced here,
@@ -5594,6 +5650,7 @@ export default function createACDRouter(io) {
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
+                  await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
                   }
@@ -7347,15 +7404,14 @@ export default function createACDRouter(io) {
       const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
       const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
         _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
-      // Momentum-against-fade: PAUSED mid-build 2026-09-05 -- user redirected to investigate
-      // actual loss-CLUSTER days (a 10+-loss SHADOW day, a Globex cluster day) before wiring a
-      // per-trade sizing factor. getMomentumAgainstFade() (top of file) and
-      // scripts/calibrate_momentum_against_fade.mjs are built and tested (real, held up across
-      // windows and a chronological split -- RESEARCH_CLAIM momentum_against_fade_filter_20260905)
-      // but NOT wired live yet. Re-add the calibration cache-read (mirroring stepTrailCalib's
-      // pattern, scoped to the router.get('/acd/live', ...) handler starting ~line 4618 -- NOT
-      // the earlier, wrong scope this was first added to and reverted) once the cluster
-      // investigation is done and wiring resumes.
+      // Momentum-against-fade: was PAUSED mid-build 2026-09-05 pending the loss-cluster
+      // investigation the user redirected to (which produced the direction-loss-alternation
+      // gate above, not this). RESUMED same day as SHADOW-ONLY observational logging, not a
+      // sizeMultiplier factor -- see getMomentumAgainstFade()/getMomentumAgainstFadeCalib()/
+      // tagMomentumAgainstFadeShadow() near the top of this file for the actual wiring (all 4
+      // real insert sites, same tag-after-insert pattern as tagDirectionGateShadow). A live
+      // sizeMultiplier penalty is a separate, not-yet-made decision (OPEN_DECISION
+      // momentum_against_fade_sizemultiplier_wiring_pending) -- deliberately not added here.
       // VWAP at detection time — computed from today's RTH bars (ask_vol+bid_vol ≈ total volume).
       // Rolling σ of VWAP distances over last 20 sessions gives the dynamic threshold.
       // Verified 2026-07-06: far extended (>mean+σ) = 76.2% WR +$59.7 EV z=+2.95 N=600.
@@ -10920,7 +10976,10 @@ export default function createACDRouter(io) {
         setupId    = row?.id;
         // Only tag a row THIS poll actually inserted (ins.rows[0], not the concurrent-poll-won
         // fallback re-select above) -- avoids re-tagging a row a different poll already tagged.
-        if (ins.rows[0]) await tagDirectionGateShadow(ins.rows[0].id, rthDir);
+        if (ins.rows[0]) {
+          await tagDirectionGateShadow(ins.rows[0].id, rthDir);
+          await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
+        }
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
         // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
         // on the way to picking it this poll (the FLOOR_R2-loses-to-WEEKLY_OPEN case) --
@@ -11119,7 +11178,10 @@ export default function createACDRouter(io) {
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
               JSON.stringify(shadowVolBuildingSignal),
             ]).catch(() => ({ rows: [] }));
-            if (shadowIns.rows[0]) await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
+            if (shadowIns.rows[0]) {
+              await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
+              await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
+            }
           }
         })();
       }

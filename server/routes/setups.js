@@ -1279,4 +1279,37 @@ router.get('/setups/direction-gate-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/momentum-against-fade-shadow-summary — monitoring surface for the
+// momentum-against-fade tag (see acd.js's getMomentumAgainstFade()/tagMomentumAgainstFadeShadow()
+// header for the full mechanism). Observation-only -- reports, for real trades tagged
+// "against" (top-quartile recent momentum running against the fade's own direction), what
+// they actually did, vs. everything else.
+router.get('/setups/momentum-against-fade-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, momentum_against_fade_shadow
+      FROM active_setups
+      WHERE momentum_against_fade_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+        AND resolution IS NOT NULL AND actual_pnl IS NOT NULL
+    `);
+    const against = rowsQ.rows.filter(r => r.momentum_against_fade_shadow.against === true);
+    const withOrNeutral = rowsQ.rows.filter(r => r.momentum_against_fade_shadow.against === false);
+    const stat = rows => {
+      const n = rows.length;
+      if (!n) return { n: 0, wr: null, ev: null, total: 0 };
+      const total = rows.reduce((s, r) => s + r.actual_pnl, 0);
+      const wins = rows.filter(r => r.actual_pnl > 0).length;
+      return { n, wr: +(100 * wins / n).toFixed(1), ev: +(total / n).toFixed(2), total: +total.toFixed(2) };
+    };
+    res.json({
+      against: stat(against),
+      withOrNeutral: stat(withOrNeutral),
+      note: 'Observation-only -- these numbers reflect what actually happened, not a live sizeMultiplier penalty. "against" trades fired at full size for real.',
+    });
+  } catch (err) {
+    console.error('[setups/momentum-against-fade-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

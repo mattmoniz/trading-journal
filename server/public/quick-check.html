@@ -140,6 +140,10 @@
      above. Observation-only (OPEN_DECISION direction_alternation_after_loss_gate_pending) --
      only shown on trades that WOULD have been blocked, not every tagged row. */
   .dirgate-tag { color: #fca5a5; background: rgba(220,38,38,0.16); }
+  /* Momentum-against-fade shadow tag (2026-09-05) -- observation-only
+     (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending). Only shown when
+     this trade's own reading cleared the calibrated top-quartile "against" cutoff. */
+  .momfade-tag { color: #fdba74; background: rgba(234,88,12,0.16); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -741,11 +745,16 @@ function renderTimeline() {
     // been blocked (the informative case) -- every real trade gets tagged internally, but
     // showing that on every row would just be noise; this is the one worth a human looking at.
     const dgTag = s.direction_gate_shadow?.wouldBeBlocked ? '<span class="vb-tag dirgate-tag sig-tag" onclick="event.stopPropagation(); openDirectionGatePopup(' + s.id + ')">DirGate</span>' : '';
+    // Momentum-against-fade shadow tag (user idea, 2026-09-05 -- see acd.js's
+    // getMomentumAgainstFade()/tagMomentumAgainstFadeShadow() header). Only shown when this
+    // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
+    // informative case, same convention as dgTag above.
+    const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MomFade</span>' : '';
     return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag +
+      vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -1062,6 +1071,55 @@ function openDirectionGatePopup(id) {
   if (directionGateSummary) {
     html += dgBucketRow('Would have been BLOCKED', directionGateSummary.wouldBeBlocked);
     html += dgBucketRow('Would have been kept', directionGateSummary.wouldBeKept);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Momentum-against-fade shadow popup (user idea, 2026-09-05 -- see acd.js's
+// getMomentumAgainstFade()/tagMomentumAgainstFadeShadow() header). Tap target for the
+// MomFade row tag above. Observation-only: this trade fired at full real size regardless of
+// its momentum reading -- OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending
+// tracks whether/when this ever becomes a real sizeMultiplier penalty.
+let momentumFadeShadowSummary = null;
+async function loadMomentumFadeShadowSummary() {
+  try {
+    momentumFadeShadowSummary = await fetch('/api/setups/momentum-against-fade-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function mfBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const evColor = b.ev >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + evColor + '">' +
+    'N=' + b.n + ', WR ' + b.wr + '%, avg ' + (b.ev >= 0 ? '+' : '') + '$' + b.ev.toFixed(2) +
+    ', total ' + (b.total >= 0 ? '+' : '') + '$' + b.total.toFixed(2) + '</span></div>';
+}
+
+function openMomentumFadePopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.momentum_against_fade_shadow;
+  if (!s || !shadow) return;
+
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  let html = '<div class="m-head"><span class="m-title" style="color:#fdba74">Momentum-Against-Fade — recent price ran against this ' + (shadow.direction || '') + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · OBSERVATION-ONLY, not a real sizing penalty — this trade fired at full size</div>';
+
+  html += mSection('This trade');
+  html += mRow('Against-momentum reading (' + shadow.lookbackBars + '-bar lookback)', shadow.value + 'pt');
+  html += mRow('Calibrated top-quartile cutoff', shadow.p75Cutoff + 'pt');
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Checked at', shadow.checkedAt);
+
+  html += mSection('Running total (all real trades tagged "against" vs. everything else)');
+  if (momentumFadeShadowSummary) {
+    html += mfBucketRow('Against momentum (top quartile)', momentumFadeShadowSummary.against);
+    html += mfBucketRow('With/neutral momentum', momentumFadeShadowSummary.withOrNeutral);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -1387,6 +1445,7 @@ loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch
 loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac calib) -- fetch once, no poll
 loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
+loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);

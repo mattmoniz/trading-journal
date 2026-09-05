@@ -164,6 +164,15 @@ echo "=== Weekly backtest run: $(date) ==="
 # population rather than freezing at whatever it was on 2026-09-04.
 /usr/bin/node scripts/calibrate_pitch_catch_filter.mjs
 
+# Momentum-against-fade filter calibration (user idea, 2026-09-05, RESEARCH_CLAIM
+# momentum_against_fade_filter_20260905) -- derives the top-quartile "against momentum"
+# cutoff from the real, growing fade population. server/routes/acd.js reads this back live
+# (getMomentumAgainstFadeCalib(), 12h cache) to drive the SHADOW-only
+# momentum_against_fade_shadow logger (never gates/sizes a real trade -- OPEN_DECISION
+# momentum_against_fade_sizemultiplier_wiring_pending tracks that separate decision). Must
+# stay scheduled -- same staleness risk as the two calibrations just above.
+/usr/bin/node scripts/calibrate_momentum_against_fade.mjs
+
 # SHORT entry-time selling-pressure sizeMultiplier boost (2026-08-24, RESEARCH_CLAIM
 # pressure_entry_sizing_direction_asymmetric) -- same convention as the pressure gate just
 # above: must stay scheduled so the live boost tracks the real, growing population and

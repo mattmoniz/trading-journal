@@ -407,7 +407,9 @@ CREATE TABLE public.active_setups (
     slow_deep_exit_recommended boolean,
     post_entry_exit_signals jsonb,
     step_trail_shadow jsonb,
-    pitch_catch_shadow jsonb
+    pitch_catch_shadow jsonb,
+    direction_gate_shadow jsonb,
+    momentum_against_fade_shadow jsonb
 );
 
 

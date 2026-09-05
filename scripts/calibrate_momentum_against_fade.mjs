@@ -87,8 +87,10 @@ async function main() {
       `Current calibration (N=${withMomentum.length}): p75 cutoff=${p75.toFixed(2)}pts, above which EV=$${stat(q4)?.ev}/trade ` +
       `(N=${stat(q4)?.n}) vs middle-quartiles EV=$${stat(rest)?.ev}/trade. Held up across 5/15/30-bar windows and a ` +
       `chronological half-split (did not reverse sign) when first tested 2026-09-05 -- one of the more durable findings ` +
-      `from that session. Wired live 2026-09-05 as a bounded sizeMultiplier penalty (RTH and Globex both) reading this ` +
-      `calibration row, not a hardcoded point value. Self-recalibrates weekly.`,
+      `from that session. Wired 2026-09-05 as SHADOW-ONLY observational logging (active_setups.momentum_against_fade_shadow, ` +
+      `all 4 real insert sites, RTH and Globex both) reading this calibration row, not a hardcoded point value -- NOT a ` +
+      `live sizeMultiplier penalty yet (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending tracks that ` +
+      `separate, not-yet-made decision). Self-recalibrates weekly.`,
     sourceFile: 'scripts/calibrate_momentum_against_fade.mjs',
     sourceDate: today,
     sampleSize: withMomentum.length,
