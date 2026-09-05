@@ -2250,8 +2250,15 @@ export async function completePitchCatchShadows() {
   // the SAME poll (server/index.js's poll ordering: resolveSetupsByPrice ->
   // completeStepTrailShadows -> completePitchCatchShadows), so re-fetching here would
   // duplicate that work every poll. `?? {}` is the correct null-check fix (was `!==
-  // undefined ... : {}`, the same finding #0 bug, but harmless here since it already fell
-  // back to `{}` either way -- fixed for consistency, not because it was silently wrong).
+  // undefined ? cached : {}`, the same finding #0 bug -- but since `!== undefined` was
+  // always true, it actually returned `null` on every miss, NEVER the `{}` fallback;
+  // caught and corrected by an independent DeepSeek review pass 2026-09-05 after this
+  // comment first shipped with the wrong claim). It was harmless anyway, but for a
+  // DIFFERENT reason than "fell back to {} either way": `pitchCatchCalib == null) return
+  // 0;` just above always fired too (same bug, its own reader), so line 2274's
+  // `dailyAdxByDate[row.trade_date]` -- which WOULD throw on a null `dailyAdxByDate` --
+  // was never reached. Two independent instances of the same bug happened to cancel out;
+  // `?? {}` here removes the reliance on that coincidence going forward.
   const dailyAdxByDate = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL) ?? {};
 
   const widerTargetPressureThreshold = await getGlobalCalib('widerTargetPressureThreshold', async () => {
