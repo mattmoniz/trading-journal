@@ -136,6 +136,10 @@
   /* Pitch and Catch shadow tag (2026-09-04) -- distinct hue from the 5 tag kinds above so
      all 6 stay visually distinguishable. UNVALIDATED (tracked at explicit user request). */
   .pitchcatch-tag { color: #86efac; background: rgba(22,163,74,0.14); }
+  /* Direction-loss-alternation gate tag (2026-09-05) -- distinct hue from the 6 tag kinds
+     above. Observation-only (OPEN_DECISION direction_alternation_after_loss_gate_pending) --
+     only shown on trades that WOULD have been blocked, not every tagged row. */
+  .dirgate-tag { color: #fca5a5; background: rgba(220,38,38,0.16); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -732,11 +736,16 @@ function renderTimeline() {
     // qualified=false rows still tap-open to show why it was skipped, useful monitoring
     // signal on its own.
     const pcTag = s.pitch_catch_shadow ? '<span class="vb-tag pitchcatch-tag sig-tag" onclick="event.stopPropagation(); openPitchCatchPopup(' + s.id + ')">PnC</span>' : '';
+    // Direction-loss-alternation gate tag (user idea + user-provided live example, 2026-09-05
+    // -- see acd.js's isDirectionLossBlocked() header). Only shown when this trade WOULD have
+    // been blocked (the informative case) -- every real trade gets tagged internally, but
+    // showing that on every row would just be noise; this is the one worth a human looking at.
+    const dgTag = s.direction_gate_shadow?.wouldBeBlocked ? '<span class="vb-tag dirgate-tag sig-tag" onclick="event.stopPropagation(); openDirectionGatePopup(' + s.id + ')">DirGate</span>' : '';
     return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      vbTag + wideTag + rsTag + vrTag + stTag + pcTag +
+      vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -987,6 +996,54 @@ function openPitchCatchPopup(id) {
   if (pitchCatchShadowSummary) {
     html += pcBucketRow('Pitch and Catch LONG', pitchCatchShadowSummary.long);
     html += pcBucketRow('Pitch and Catch SHORT', pitchCatchShadowSummary.short);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Direction-loss-alternation gate popup (user idea + user-provided live example,
+// 2026-09-05 -- see acd.js's isDirectionLossBlocked()/tagDirectionGateShadow() header). Tap
+// target for the DirGate row tag above. Observation-only: this trade's real resolution/stop/
+// actual_pnl are completely unaffected -- the tag just marks "this direction had just lost
+// right before this trade fired."
+let directionGateSummary = null;
+async function loadDirectionGateSummary() {
+  try {
+    directionGateSummary = await fetch('/api/setups/direction-gate-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function dgBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const evColor = b.ev >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + evColor + '">' +
+    'N=' + b.n + ', WR ' + b.wr + '%, avg ' + (b.ev >= 0 ? '+' : '') + '$' + b.ev.toFixed(2) +
+    ', total ' + (b.total >= 0 ? '+' : '') + '$' + b.total.toFixed(2) + '</span></div>';
+}
+
+function openDirectionGatePopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.direction_gate_shadow;
+  if (!s || !shadow) return;
+
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  let html = '<div class="m-head"><span class="m-title" style="color:#fca5a5">Direction-Loss Gate — would have blocked this ' + (shadow.direction || '') + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · OBSERVATION-ONLY, not a real gate — this trade fired for real</div>';
+
+  html += mSection('This trade');
+  html += mRow('Direction that had just lost', shadow.direction);
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Checked at', shadow.checkedAt);
+
+  html += mSection('Running total (all real trades this gate has seen)');
+  if (directionGateSummary) {
+    html += dgBucketRow('Would have been BLOCKED', directionGateSummary.wouldBeBlocked);
+    html += dgBucketRow('Would have been kept', directionGateSummary.wouldBeKept);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -1311,6 +1368,7 @@ loadRange('today');
 loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch once, no poll
 loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac calib) -- fetch once, no poll
 loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
+loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);

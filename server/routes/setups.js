@@ -1225,4 +1225,38 @@ router.get('/setups/pitch-catch-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/direction-gate-shadow-summary — monitoring surface for the direction-loss-
+// alternation gate (user idea + user-directed live example, 2026-09-05, see acd.js's
+// isDirectionLossBlocked()/tagDirectionGateShadow() header for the full mechanism and honest
+// caveat). Observation-only -- reports, for real trades this gate WOULD have blocked, what they
+// actually did, vs. what everything else did in the same period. User explicitly wants this
+// visible on quick-check.html, not buried in an OPEN_DECISION they don't check often.
+router.get('/setups/direction-gate-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, direction_gate_shadow, resolved_at
+      FROM active_setups
+      WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+        AND resolution IS NOT NULL AND actual_pnl IS NOT NULL
+    `);
+    const blocked = rowsQ.rows.filter(r => r.direction_gate_shadow.wouldBeBlocked === true);
+    const kept = rowsQ.rows.filter(r => r.direction_gate_shadow.wouldBeBlocked === false);
+    const stat = rows => {
+      const n = rows.length;
+      if (!n) return { n: 0, wr: null, ev: null, total: 0 };
+      const total = rows.reduce((s, r) => s + r.actual_pnl, 0);
+      const wins = rows.filter(r => r.actual_pnl > 0).length;
+      return { n, wr: +(100 * wins / n).toFixed(1), ev: +(total / n).toFixed(2), total: +total.toFixed(2) };
+    };
+    res.json({
+      wouldBeBlocked: stat(blocked),
+      wouldBeKept: stat(kept),
+      note: 'Observation-only -- these numbers reflect what actually happened, not a real gate. wouldBeBlocked trades still fired for real.',
+    });
+  } catch (err) {
+    console.error('[setups/direction-gate-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

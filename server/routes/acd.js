@@ -470,6 +470,66 @@ export async function isOppositeDirectionOpen(direction) {
   return rows.some(r => resolveDirection(r) === oppositeDir);
 }
 
+// Direction-loss-alternation gate (2026-09-05, user-requested and tested before wiring --
+// RESEARCH_CLAIM direction_alternation_after_loss_gate_20260905, OPEN_DECISION
+// direction_alternation_after_loss_gate_pending). Roster-wide, event-based (no timer): whichever
+// direction's most recent real resolution was a LOSS is blocked; a WIN blocks the OPPOSITE
+// direction instead. Stays engaged for however long it takes the other side to lose -- minutes
+// or, per the real 2026-09-03/04 overnight session this was validated against (13 real SHORT
+// losses across 6 different setup_types while every real LONG won, net -$657.50 -- replaying
+// that exact sequence through this rule turns it into +$194.50), several hours.
+//
+// SHADOW-ONLY / OBSERVATION-ONLY (user's explicit final call 2026-09-05, after an initial
+// "wire it live" request was walked back once the honest caveat below was in front of them):
+// this function and tagDirectionGateShadow() below NEVER change a real candidate's ACTIVE/SHADOW
+// eligibility or touch a real trade's resolution/actual_pnl. They only annotate each real row,
+// after it's already been inserted, with what this rule WOULD have done -- same risk posture as
+// step_trail_shadow/pitch_catch_shadow. Live enforcement is a separate, not-yet-made decision
+// (OPEN_DECISION direction_alternation_after_loss_gate_pending).
+//
+// HONEST CAVEAT this decision was made with in view: full account history is NOT uniformly
+// supportive. Excluding the 6 already-suppressed setup_types, the effect is real and stable on a
+// 3-way chronological split (N=103, not day-clustered), but a stricter 2-way walk-forward split
+// showed it was flat (EV~$0) in the FIRST half of history and only strongly negative (EV-$17.52)
+// in the SECOND half -- i.e. this has been true recently, not provably forever. Self-recalibrates
+// via scripts/backtest_direction_alternation_after_loss.mjs (daily) -- if the recent effect
+// itself decays, that script's next run will show it, which is also the evidence a future
+// decision to actually enforce this live should be checked against first.
+export async function isDirectionLossBlocked(direction) {
+  if (!direction) return false;
+  const { rows } = await query(`
+    SELECT stop_level, t1_level, actual_pnl::float AS actual_pnl
+    FROM active_setups
+    WHERE origin_status IN ('ACTIVE','SHADOW') AND resolved_at IS NOT NULL AND actual_pnl IS NOT NULL
+    ORDER BY resolved_at DESC LIMIT 1
+  `).catch(() => ({ rows: [] }));
+  const last = rows[0];
+  if (!last) return false;
+  const lastDir = resolveDirection(last);
+  if (!lastDir || last.actual_pnl === 0) return false; // unclassifiable or breakeven -- no state change
+  const blockedDirection = last.actual_pnl < 0 ? lastDir : (lastDir === 'LONG' ? 'SHORT' : 'LONG');
+  return direction === blockedDirection;
+}
+
+// Tags a real (ACTIVE/SHADOW) row, right after insert, with whether the direction-loss gate
+// above would have blocked it -- observation-only, see isDirectionLossBlocked()'s header. Called
+// with the row's own `id` (from each real INSERT's RETURNING id) rather than threaded through
+// the INSERT's own column/parameter list, deliberately -- this codebase's own convention flags
+// manually counting positional $N params across a 4-site change as exactly the kind of edit that
+// silently miscounts (feedback_sql_param_dryrun_verification). A follow-up UPDATE keyed by id is
+// slower by one round-trip but categorically safer, and this never needs to be low-latency since
+// nothing live reads it. Wrapped so a failure here can never affect the real row it's tagging.
+async function tagDirectionGateShadow(insertedId, direction) {
+  if (!insertedId || !direction) return;
+  try {
+    const wouldBeBlocked = await isDirectionLossBlocked(direction);
+    await query(
+      `UPDATE active_setups SET direction_gate_shadow = $1 WHERE id = $2`,
+      [JSON.stringify({ wouldBeBlocked, direction, checkedAt: new Date().toISOString() }), insertedId]
+    );
+  } catch (_) { /* observation-only -- never let a tagging failure surface anywhere */ }
+}
+
 async function isInRefireCooldown(tradeDate, setupType) {
   const cooldownMin = REFIRE_COOLDOWN_MINUTES[setupType];
   if (!cooldownMin) return false;
@@ -712,6 +772,33 @@ async function getSessionBarsSinceOpen(boundaryMod) {
     ORDER BY ts ASC
   `, [boundaryMod]);
   return res.rows.map(b => ({ mod: b.mod, volume: Number(b.volume) }));
+}
+
+// Momentum-against-fade factor (2026-09-05, user-requested, tested against real fade history
+// both RTH and Globex before wiring): computes the signed price move over the last `lookbackBars`
+// 1-min bars, oriented relative to a fade's OWN direction -- positive means recent price action
+// has been moving AGAINST the fade (e.g. price rising sharply right before a SHORT fade), negative
+// means it's been moving WITH it. Bounded query (last 2 hours only), no lookahead (ts < NOW() at
+// call time, which is always "now" relative to the candidate being evaluated -- never a stored
+// historical timestamp). Real-data finding (RESEARCH_CLAIM momentum_against_fade_filter_20260905,
+// N~4150 real ACTIVE+SHADOW fades, already-suppressed types excluded): top-quartile "against"
+// trades ran ~$7-12/trade worse than bottom-quartile across three independent lookback windows
+// (5/15/30 bars), held up (same sign, not reversed) across a chronological half-split. Shared by
+// both the RTH sizeMultiplier IIFE and detectGlobexSetup() -- computed once here, not
+// reimplemented per session, per this codebase's "export the real function" convention.
+async function getMomentumAgainstFade(dir, lookbackBars = 15) {
+  if (dir !== 'LONG' && dir !== 'SHORT') return null;
+  const res = await query(`
+    SELECT close FROM price_bars_primary
+    WHERE symbol='NQ' AND ts < NOW() AND ts > NOW() - INTERVAL '2 hours'
+    ORDER BY ts DESC LIMIT $1
+  `, [lookbackBars + 1]);
+  const bars = res.rows;
+  if (bars.length < lookbackBars + 1) return null; // too little session history yet -- don't guess
+  const nowClose = Number(bars[0].close);
+  const pastClose = Number(bars[lookbackBars].close);
+  const signed = nowClose - pastClose;
+  return dir === 'SHORT' ? signed : -signed;
 }
 
 // sessionBars: chronological bars since THIS candidate's session open through now/the touch
@@ -2866,6 +2953,8 @@ async function detectGlobexSetup(sessionDate, io) {
           'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
+
+      await tagDirectionGateShadow(ins.rows[0].id, c.dir);
 
       // Every other insert path in this file drops a copy into trade_timeline_events —
       // detectGlobexSetup was the one exception (pre-existing gap, not introduced here,
@@ -5504,6 +5593,7 @@ export default function createACDRouter(io) {
                     getBetClass(svSetupType)]);
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
+                  await tagDirectionGateShadow(ins.rows[0].id, direction);
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
                   }
@@ -7257,6 +7347,15 @@ export default function createACDRouter(io) {
       const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
       const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
         _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
+      // Momentum-against-fade: PAUSED mid-build 2026-09-05 -- user redirected to investigate
+      // actual loss-CLUSTER days (a 10+-loss SHADOW day, a Globex cluster day) before wiring a
+      // per-trade sizing factor. getMomentumAgainstFade() (top of file) and
+      // scripts/calibrate_momentum_against_fade.mjs are built and tested (real, held up across
+      // windows and a chronological split -- RESEARCH_CLAIM momentum_against_fade_filter_20260905)
+      // but NOT wired live yet. Re-add the calibration cache-read (mirroring stepTrailCalib's
+      // pattern, scoped to the router.get('/acd/live', ...) handler starting ~line 4618 -- NOT
+      // the earlier, wrong scope this was first added to and reverted) once the cluster
+      // investigation is done and wiring resumes.
       // VWAP at detection time — computed from today's RTH bars (ask_vol+bid_vol ≈ total volume).
       // Rolling σ of VWAP distances over last 20 sessions gives the dynamic threshold.
       // Verified 2026-07-06: far extended (>mean+σ) = 76.2% WR +$59.7 EV z=+2.95 N=600.
@@ -10819,6 +10918,9 @@ export default function createACDRouter(io) {
           if (row) detectedAt = row.fired_at.slice(11, 16);
         }
         setupId    = row?.id;
+        // Only tag a row THIS poll actually inserted (ins.rows[0], not the concurrent-poll-won
+        // fallback re-select above) -- avoids re-tagging a row a different poll already tagged.
+        if (ins.rows[0]) await tagDirectionGateShadow(ins.rows[0].id, rthDir);
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
         // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
         // on the way to picking it this poll (the FLOOR_R2-loses-to-WEEKLY_OPEN case) --
@@ -10987,7 +11089,7 @@ export default function createACDRouter(io) {
             // IB_BEARISH, C_PAIRED_SHORT, etc.), not just STOP_SWEEP specifically.
             const shadowVbSessionBars = await getSessionBarsSinceOpen(570);
             const shadowVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, shadowVbSessionBars);
-            await query(`
+            const shadowIns = await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                 status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal)
@@ -10996,6 +11098,7 @@ export default function createACDRouter(io) {
                 $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
                 $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
               ON CONFLICT DO NOTHING
+              RETURNING id
             `, [
               todayET, shadow.type, firedAtTs, computeExpiry(shadow.type),
               shadow.entry, shadow.entry, shadow.stop, sT1, shadow.targetLabel || null,
@@ -11015,7 +11118,8 @@ export default function createACDRouter(io) {
               (shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
               JSON.stringify(shadowVolBuildingSignal),
-            ]).catch(() => {});
+            ]).catch(() => ({ rows: [] }));
+            if (shadowIns.rows[0]) await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
           }
         })();
       }
