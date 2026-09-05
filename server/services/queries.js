@@ -268,6 +268,44 @@ export async function getGlobex24hrBars(date) {
 }
 
 /**
+ * Rolling population mean/std (σ-based, no static thresholds). Moved here 2026-09-05
+ * (DeepSeek dead-code/shrink audit of acd.js) — was independently, identically
+ * hand-copied in both server/routes/acd.js and server/routes/morningBrief.js. Verified
+ * byte-for-byte identical (`diff`) before consolidating, despite the audit's own caveat
+ * that the two might use a different std denominator convention — they don't, both divide
+ * by `arr.length` (population std, not sample std). Both files now import this instead.
+ */
+export function rollingStats(arr) {
+  if (!arr.length) return { mean: 0, std: 0 };
+  const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
+  const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
+  return { mean, std };
+}
+
+/**
+ * Trailing OR (Opening Range) widths from acd_daily_log. Moved here 2026-09-05 (same
+ * audit as rollingStats above) — acd.js's copy queried directly with no caching;
+ * morningBrief.js's copy was otherwise identical but wrapped in this file's standard
+ * cacheGet/cacheSet convention (matching every other trailing-window helper here). Kept
+ * the caching version as canonical (acd.js's own call site gains a real, harmless cache
+ * it didn't have before, not a behavior change to anything it depends on) rather than
+ * dropping caching to match the leaner copy.
+ */
+export async function getTrailingORWidths(date, days = 90) {
+  const ck = `mb:orWidths:${date}:${days}`;
+  const cached = cacheGet(ck);
+  if (cached) return cached;
+  const DAY_CACHE_TTL = 12 * 60 * 60 * 1000;
+  const res = await query(
+    `SELECT or_high::float - or_low::float as or_width
+     FROM acd_daily_log
+     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
+     AND or_high IS NOT NULL AND or_low IS NOT NULL
+     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
+  return cacheSet(ck, res.rows.map(r => r.or_width).filter(w => w > 0), DAY_CACHE_TTL);
+}
+
+/**
  * Trailing 24hr-VWAP (Globex-spanning) distances — moved here from
  * server/routes/morningBrief.js 2026-07-28 (was a private, unexported helper) so the new
  * GLOBEX_VWAP_MAGNET live setup and its historical backfill script (scripts/

@@ -1,7 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
-import { getTrailingVwapStd, getTrailing24hrVwapDists } from '../services/queries.js';
+import { getTrailingVwapStd, getTrailing24hrVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const router = express.Router();
@@ -19,13 +19,8 @@ const router = express.Router();
 // script retroactively corrects the underlying price_bars data.
 const MB_DAY_CACHE_TTL = 12 * 60 * 60 * 1000;
 
-// ── Rolling distribution helpers (σ-based, no static thresholds) ──────────
-function rollingStats(arr) {
-  if (!arr.length) return { mean: 0, std: 0 };
-  const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
-  const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
-  return { mean, std };
-}
+// rollingStats moved to server/services/queries.js 2026-09-05 (was independently,
+// identically hand-copied here and in acd.js) -- imported above.
 function zScore(val, arr) {
   const { mean, std } = rollingStats(arr);
   return std > 0 ? (val - mean) / std : 0;
@@ -130,19 +125,8 @@ async function getTrailingRotations(date, days = 90) {
   return cacheSet(ck, res.rows.map(r => r.rotations_65pt), MB_DAY_CACHE_TTL);
 }
 
-// Fetch trailing OR widths from acd_daily_log (90-day window)
-async function getTrailingORWidths(date, days = 90) {
-  const ck = `mb:orWidths:${date}:${days}`;
-  const cached = cacheGet(ck);
-  if (cached) return cached;
-  const res = await query(
-    `SELECT or_high::float - or_low::float as or_width
-     FROM acd_daily_log
-     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
-     AND or_high IS NOT NULL AND or_low IS NOT NULL
-     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  return cacheSet(ck, res.rows.map(r => r.or_width).filter(w => w > 0), MB_DAY_CACHE_TTL);
-}
+// getTrailingORWidths moved to server/services/queries.js 2026-09-05 (was independently,
+// identically hand-copied here and in acd.js) -- imported above.
 
 // Fetch rolling p50 of 30-bar net-delta magnitude (same formula as divergence alert).
 // p10 of |delta30| ≈ 500 (old hardcoded value — fired 90% of the time, useless).

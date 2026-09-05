@@ -14,7 +14,7 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
+import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -42,25 +42,9 @@ import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ── Rolling distribution helpers (σ-based, no static thresholds) ──────────
-function rollingStats(arr) {
-  if (!arr.length) return { mean: 0, std: 0 };
-  const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
-  const std = Math.sqrt(arr.reduce((s, v) => s + (v - mean) ** 2, 0) / arr.length);
-  return { mean, std };
-}
+// rollingStats/getTrailingORWidths moved to server/services/queries.js 2026-09-05 (were
+// independently, identically hand-copied here and in morningBrief.js) -- imported above.
 const MIN_SAMPLES = 20;
-
-// Fetch trailing OR widths from acd_daily_log (90-day window)
-async function getTrailingORWidths(date, days = 90) {
-  const res = await query(
-    `SELECT or_high::float - or_low::float as or_width
-     FROM acd_daily_log
-     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
-     AND or_high IS NOT NULL AND or_low IS NOT NULL
-     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  return res.rows.map(r => r.or_width).filter(w => w > 0);
-}
 
 // Fetch trailing RTH close-vs-VWAP distances from session_analysis (30-day window)
 // Used for σ-based VWAP Magnet threshold — same data as trade-alerts dailyVwapSigma
