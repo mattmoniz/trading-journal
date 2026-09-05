@@ -14,17 +14,14 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getGLine, getGLineDaysHeld, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
+import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
   saveSetupEvents,
-  scanAndSaveSetupEvents,
-  scanStructuralEvents,
-  getStructuralLevels,
 } from '../services/acdService.js';
 import { runParameterSearch } from '../services/acdBacktest.js';
-import { getLevelTouchLookup, getComboLookup, formatLevelTouchRate, formatComboRate } from '../services/engineReadHitRates.js';
+import { getLevelTouchLookup, getComboLookup } from '../services/engineReadHitRates.js';
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
@@ -420,12 +417,6 @@ export async function isCrossDirectionFastFlip(tradeDate, levelBase, dir) {
 // skip" convention as every other gate in this file.
 function postWinFamilyOf(setupType) {
   return setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '').replace(/_(LONG|SHORT)$/, '');
-}
-function postWinDirOf(setupType) {
-  const stripped = setupType.replace(/_(TRAIL|GAP_UP|GAP_DOWN|OVERNIGHT)$/, '');
-  if (stripped.endsWith('_LONG')) return 'LONG';
-  if (stripped.endsWith('_SHORT')) return 'SHORT';
-  return null; // non-directional (IB_BULLISH, ZONE_EDGE_FADE, etc) -- no paired sibling
 }
 export async function isPostWinOppositeFamilyBlocked(tradeDate, family, dir) {
   const oppositeDir = dir === 'LONG' ? 'SHORT' : 'LONG';
