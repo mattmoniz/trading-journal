@@ -73,6 +73,7 @@ cumulative_pl
 # Claude local settings
 .claude/settings.local.json
 .claude/logs/
+.claude/hooks/.filesize_baselines.json
 
 # Scratch / temp diagnostic scripts
 scratch/

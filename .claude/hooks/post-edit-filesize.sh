@@ -15,18 +15,25 @@
 # blow out a mean/stdev-based threshold for every OTHER file in the same directory.
 # MAD stays robust to that one legitimate, already-known outlier.
 #
-# Fires only when BOTH:
-#   1. The file is currently a statistical outlier for its cohort (modified z-score
-#      > 3.5 -- Iglewicz & Hoaglin's standard robust-outlier cutoff, not invented here).
-#   2. This edit's growth since the last commit is itself >= the cohort's own median
+# Fires when the file is a statistical outlier for its cohort (modified z-score > 3.5 --
+# Iglewicz & Hoaglin's standard robust-outlier cutoff, not invented here) AND EITHER:
+#   1. This edit's growth since the last commit is itself >= the cohort's own median
 #      file size -- i.e., you just added roughly a whole typical file's worth of new
-#      content. This is what keeps it quiet on small incremental edits to an
-#      already-known-huge, already-accepted file like acd.js (a 50-line addition to a
-#      7980-line file is still an "outlier," but isn't NEW sprawl worth a nudge every
-#      single time it's touched).
+#      content in one go, OR
+#   2. CUMULATIVE growth since this file was last flagged (tracked in
+#      .claude/hooks/.filesize_baselines.json, a small persisted JSON map) has crossed
+#      CUMULATIVE_GROWTH_THRESHOLD lines. Added 2026-09-05 after acd.js grew from ~13990
+#      to ~14030+ lines across an entire session's worth of small, well-scoped commits
+#      (each individually far below the cohort median, so check #1 above never once
+#      fired) -- the exact "grows a little every session, forever, unnoticed" pattern
+#      this hook was originally built to catch, but couldn't, because per-edit growth
+#      and cumulative growth are different questions and only the first was checked.
+#      Baseline resets to the current line count every time this fires, so it's a
+#      recurring "another chunk has accumulated" nudge, not a one-time alarm.
 # Advisory only (additionalContext, not a block) -- "unless they need to be" means this
 # is a judgment call, not a hard rule; acd.js is already a known, deliberate exception
-# (see ARCHITECTURE.md's own "largest route file" note).
+# for its EXISTING size (see ARCHITECTURE.md's own "largest route file" note) -- this
+# hook's job is only to keep further growth a deliberate choice, not silent creep.
 
 INPUT="$(cat)"
 FILE="$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
@@ -94,9 +101,38 @@ HEAD_LINES="$(git show "HEAD:$REL" 2>/dev/null | wc -l)"
 GROWTH=$((CUR_LINES - HEAD_LINES))
 
 GROWTH_ENOUGH="$(awk -v g="$GROWTH" -v med="$MEDIAN" 'BEGIN { print (g >= med) ? 1 : 0 }')"
-[ "$GROWTH_ENOUGH" != "1" ] && exit 0
 
-MSG="$REL just grew to $CUR_LINES lines (+$GROWTH since the last commit), a statistical outlier against its $SIBLING_N sibling files in $DIR (cohort median $MEDIAN lines). Worth a moment: is this genuinely one cohesive thing, or does it want to be split? If it deliberately belongs together (like acd.js's Level Fade Engine), that's fine -- just a real decision, not size creep nobody chose."
+# Cumulative-growth fallback (see header comment #2) -- only consulted when the
+# single-edit check above didn't already fire, so a genuinely big single addition
+# still gets the richer "cohort median" message rather than this one.
+CUMULATIVE_FIRED=0
+if [ "$GROWTH_ENOUGH" != "1" ]; then
+  CUMULATIVE_GROWTH_THRESHOLD=150
+  BASELINE_FILE="$REPO/.claude/hooks/.filesize_baselines.json"
+  [ -f "$BASELINE_FILE" ] || echo '{}' > "$BASELINE_FILE"
+  BASELINE_LINES="$(jq -r --arg f "$REL" '.[$f] // empty' "$BASELINE_FILE" 2>/dev/null)"
+  if [ -z "$BASELINE_LINES" ]; then
+    # First time this file's been seen by this check -- seed the baseline rather than
+    # firing immediately (would otherwise spuriously fire for every existing outlier
+    # the very first time this feature runs, regardless of any real recent growth).
+    jq --arg f "$REL" --argjson n "$CUR_LINES" '.[$f] = $n' "$BASELINE_FILE" > "$BASELINE_FILE.tmp" && mv "$BASELINE_FILE.tmp" "$BASELINE_FILE"
+  else
+    CUM_GROWTH=$((CUR_LINES - BASELINE_LINES))
+    if [ "$CUM_GROWTH" -ge "$CUMULATIVE_GROWTH_THRESHOLD" ]; then
+      CUMULATIVE_FIRED=1
+      jq --arg f "$REL" --argjson n "$CUR_LINES" '.[$f] = $n' "$BASELINE_FILE" > "$BASELINE_FILE.tmp" && mv "$BASELINE_FILE.tmp" "$BASELINE_FILE"
+      MSG="$REL has grown by $CUM_GROWTH lines (now $CUR_LINES) since it was last flagged -- no single edit was big enough to trip the per-edit check, but the slow accumulation crossed $CUMULATIVE_GROWTH_THRESHOLD lines. A statistical outlier against its $SIBLING_N sibling files in $DIR (cohort median $MEDIAN lines). Per CLAUDE.md's 'default new acd.js logic to server/services/' convention: was any of what you just added genuinely self-contained (a new setup detector, calibration reader, shadow-tagger) that could have gone in server/services/ instead? If it deliberately belongs together, that's fine -- just a real decision, not creep nobody chose."
+    fi
+  fi
+fi
+
+if [ "$GROWTH_ENOUGH" != "1" ] && [ "$CUMULATIVE_FIRED" != "1" ]; then
+  exit 0
+fi
+
+if [ -z "$MSG" ]; then
+  MSG="$REL just grew to $CUR_LINES lines (+$GROWTH since the last commit), a statistical outlier against its $SIBLING_N sibling files in $DIR (cohort median $MEDIAN lines). Worth a moment: is this genuinely one cohesive thing, or does it want to be split? If it deliberately belongs together (like acd.js's Level Fade Engine), that's fine -- just a real decision, not size creep nobody chose."
+fi
 
 jq -n --arg ctx "$MSG" '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext: $ctx}}'
 exit 0
