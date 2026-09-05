@@ -112,6 +112,29 @@ function setCached(tradeDate, key, val) {
   return val;
 }
 
+// Fixed 2026-09-05 (found by a DeepSeek-dispatched audit, independently verified against
+// git blame and live performance_audit rows before trusting it): `getCached()` above returns
+// `null` on a genuine miss, NEVER `undefined` -- but at least 7 distinct `_global`-scoped
+// calibration readers across this file (in ~12 hand-copied inline blocks, 4 of them exact
+// duplicates) checked `cached !== undefined` instead of checking for `null`. Since
+// `null !== undefined` is always true, every one of them treated a real miss as a hit and
+// returned the stored `null` forever -- the real `await query(...)` fallback was
+// unreachable dead code. Confirmed real live impact, not theoretical: ENTRY_PRESSURE_SHORT
+// (a validated, positive-EV live sizeMultiplier boost, real calibration data in
+// performance_audit since 2026-08-24) and WIDER_TARGET_PRESSURE_GATE (same) had never
+// actually read their own calibration since being wired -- both silently ran in their
+// null/fail-safe state the entire time. This session's own momentum_against_fade_shadow
+// tagging (shipped hours earlier, same bug, copied from the same broken pattern) was
+// dead on arrival too. Consolidated into one correct, shared helper so the null-vs-undefined
+// contract only has to be gotten right once. Do NOT use `cached !== undefined` against
+// getCached's return value anywhere in this file -- always `cached != null` (or `??`).
+async function getGlobalCalib(key, fetchFn) {
+  const cached = getCached('_global', key, DAY_CACHE_TTL);
+  if (cached != null) return cached;
+  const val = await fetchFn();
+  return setCached('_global', key, val);
+}
+
 // Trailing 20-day average OR-window (9:30-9:45am ET) volume, STRICTLY PRIOR days only
 // (ts::date < tradeDate, no lookahead) -- the RVol baseline for Setup D's
 // orRangeAtDetection/rvol20dAtDetection tagging (RESEARCH_CLAIM
@@ -801,27 +824,27 @@ async function getMomentumAgainstFade(dir, lookbackBars = 15) {
   return dir === 'SHORT' ? signed : -signed;
 }
 
-// Cached (per-day) read of the calibrated "against momentum" cutoff -- same
-// getCached/setCached('_global', ...) convention as getCrossDirectionFlipCalib() further up
-// this file. Self-recalibrates weekly via scripts/calibrate_momentum_against_fade.mjs; null
-// (tagging disabled entirely, fail-closed) if no calibration row exists yet, never a
-// hardcoded point value, per CLAUDE.md's no-static-thresholds rule.
+// Cached (per-day) read of the calibrated "against momentum" cutoff -- uses the shared
+// getGlobalCalib() helper (fixed 2026-09-05, see that function's own header). Self-
+// recalibrates weekly via scripts/calibrate_momentum_against_fade.mjs; null (tagging
+// disabled entirely, fail-closed) if no calibration row exists yet, never a hardcoded
+// point value, per CLAUDE.md's no-static-thresholds rule.
 async function getMomentumAgainstFadeCalib() {
-  const cached = getCached('_global', 'momentumAgainstFadeCalib', DAY_CACHE_TTL);
-  if (cached !== undefined) return cached;
-  const r = await query(`
-    SELECT notes FROM performance_audit
-    WHERE signal_type='MOMENTUM_AGAINST_FADE_CALIB' AND signal_name='ALL_ROSTER'
-    ORDER BY run_date DESC LIMIT 1
-  `);
-  let val = null;
-  try {
-    if (r.rows[0]) {
-      const notes = JSON.parse(r.rows[0].notes);
-      if (notes.p75 != null && notes.lookbackBars != null) val = { p75: notes.p75, lookbackBars: notes.lookbackBars };
-    }
-  } catch (_) {}
-  return setCached('_global', 'momentumAgainstFadeCalib', val, DAY_CACHE_TTL);
+  return getGlobalCalib('momentumAgainstFadeCalib', async () => {
+    const r = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='MOMENTUM_AGAINST_FADE_CALIB' AND signal_name='ALL_ROSTER'
+      ORDER BY run_date DESC LIMIT 1
+    `);
+    let val = null;
+    try {
+      if (r.rows[0]) {
+        const notes = JSON.parse(r.rows[0].notes);
+        if (notes.p75 != null && notes.lookbackBars != null) val = { p75: notes.p75, lookbackBars: notes.lookbackBars };
+      }
+    } catch (_) {}
+    return val;
+  });
 }
 
 // Tags a real (ACTIVE/SHADOW) row, right after insert, with this candidate's own
@@ -1193,19 +1216,16 @@ export async function resolveSetupsByPrice(io) {
   // convention as deltaCalib just above. Recomputed weekly by
   // scripts/calibrate_wider_target_pressure_gate.mjs; null (gate disabled, always-extend
   // behavior) if the calibration row is somehow missing, never a hardcoded fallback number.
-  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
-  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined
-    ? widerTargetPressureThresholdCached
-    : await (async () => {
-      const r = await query(`
-        SELECT notes FROM performance_audit
-        WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD'
-        ORDER BY run_date DESC LIMIT 1
-      `);
-      let val = null;
-      try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
-      return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
-    })();
+  const widerTargetPressureThreshold = await getGlobalCalib('widerTargetPressureThreshold', async () => {
+    const r = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD'
+      ORDER BY run_date DESC LIMIT 1
+    `);
+    let val = null;
+    try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
+    return val;
+  });
 
   // Step-trail runner extension shadow calibration (Opus Audit #12, 2026-09-04,
   // scratch/opus_audit_12_results.md) — same read-once-per-poll-then-cache convention as
@@ -1216,81 +1236,72 @@ export async function resolveSetupsByPrice(io) {
   // no-static-thresholds rule. Observation-only: never gates/sizes a real trade, only
   // populates active_setups.step_trail_shadow (see the widerTargetMult branch below and
   // completeStepTrailShadows()).
-  const stepTrailCalibCached = getCached('_global', 'stepTrailCalib', DAY_CACHE_TTL);
-  const stepTrailCalib = stepTrailCalibCached !== undefined
-    ? stepTrailCalibCached
-    : await (async () => {
-      const r = await query(`
-        SELECT notes FROM performance_audit
-        WHERE signal_type='STEP_TRAIL_FRACTION' AND signal_name='FRACTION'
-        ORDER BY run_date DESC LIMIT 1
-      `);
-      let val = null;
-      try {
-        if (r.rows[0]) {
-          const notes = JSON.parse(r.rows[0].notes);
-          if (notes.frac != null && notes.p10BaseFloor != null) val = { frac: notes.frac, p10BaseFloor: notes.p10BaseFloor };
-        }
-      } catch (_) {}
-      return setCached('_global', 'stepTrailCalib', val, DAY_CACHE_TTL);
-    })();
+  const stepTrailCalib = await getGlobalCalib('stepTrailCalib', async () => {
+    const r = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='STEP_TRAIL_FRACTION' AND signal_name='FRACTION'
+      ORDER BY run_date DESC LIMIT 1
+    `);
+    let val = null;
+    try {
+      if (r.rows[0]) {
+        const notes = JSON.parse(r.rows[0].notes);
+        if (notes.frac != null && notes.p10BaseFloor != null) val = { frac: notes.frac, p10BaseFloor: notes.p10BaseFloor };
+      }
+    } catch (_) {}
+    return val;
+  });
 
   // Pitch and Catch shadow calibration (user idea, 2026-09-04, UNVALIDATED -- see
   // server/services/pitchCatchWalker.js's header for the full negative evidence trail;
   // tracked at the user's explicit request, observation-only, never gates/sizes a real
   // trade). Same read-once-per-poll-then-cache convention as stepTrailCalib just above.
-  const pitchCatchCalibCached = getCached('_global', 'pitchCatchCalib', DAY_CACHE_TTL);
-  const pitchCatchCalib = pitchCatchCalibCached !== undefined
-    ? pitchCatchCalibCached
-    : await (async () => {
-      const r = await query(`
-        SELECT notes FROM performance_audit
-        WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER'
-        ORDER BY run_date DESC LIMIT 1
-      `);
-      let val = null;
-      try {
-        if (r.rows[0]) {
-          const n = JSON.parse(r.rows[0].notes);
-          if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
-            val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
-          }
+  const pitchCatchCalib = await getGlobalCalib('pitchCatchCalib', async () => {
+    const r = await query(`
+      SELECT notes FROM performance_audit
+      WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER'
+      ORDER BY run_date DESC LIMIT 1
+    `);
+    let val = null;
+    try {
+      if (r.rows[0]) {
+        const n = JSON.parse(r.rows[0].notes);
+        if (n.rvolLo != null && n.rvolHi != null && n.minBarsToConfirm != null && n.adxThreshold != null) {
+          val = { rvolLo: n.rvolLo, rvolHi: n.rvolHi, minBarsToConfirm: n.minBarsToConfirm, adxThreshold: n.adxThreshold };
         }
-      } catch (_) {}
-      return setCached('_global', 'pitchCatchCalib', val, DAY_CACHE_TTL);
-    })();
+      }
+    } catch (_) {}
+    return val;
+  });
 
   // Daily ADX-by-date map (Sierra-Chart-verified formula, server/services/adxService.js) --
   // computed once and cached with a day-long TTL, not recomputed per-row/per-poll (a fresh
   // 14+14-bar daily-ADX series needs a real historical daily-bars query, too expensive to
   // repeat every 15s). Indexed by trade_date -> PRIOR day's close-of-day ADX (the [i-1] shift
   // below), matching every other daily-ADX use in this codebase's no-lookahead convention.
-  const dailyAdxByDateCached = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL);
-  const dailyAdxByDate = dailyAdxByDateCached !== undefined
-    ? dailyAdxByDateCached
-    : await (async () => {
-      const map = {};
-      if (pitchCatchCalib != null) {
-        try {
-          const r = await query(`
-            SELECT ts::date::text as d, high::float as high, low::float as low, close::float as close
-            FROM price_bars_primary WHERE symbol='NQ'
-              AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int BETWEEN 570 AND 959
-            ORDER BY ts ASC
-          `);
-          const byDate = new Map();
-          for (const b of r.rows) {
-            if (!byDate.has(b.d)) byDate.set(b.d, { high: b.high, low: b.low, close: b.close });
-            else { const c = byDate.get(b.d); c.high = Math.max(c.high, b.high); c.low = Math.min(c.low, b.low); c.close = b.close; }
-          }
-          const dates = [...byDate.keys()].sort();
-          const dBars = dates.map(d => ({ d, ...byDate.get(d) }));
-          const series = computeADXSeries(dBars, 14, 14);
-          for (let i = 1; i < dBars.length; i++) map[dBars[i].d] = series[i - 1];
-        } catch (e) { console.error('dailyAdxByDate computation error (non-critical):', e.message); }
-      }
-      return setCached('_global', 'dailyAdxByDate', map, DAY_CACHE_TTL);
-    })();
+  const dailyAdxByDate = await getGlobalCalib('dailyAdxByDate', async () => {
+    const map = {};
+    if (pitchCatchCalib != null) {
+      try {
+        const r = await query(`
+          SELECT ts::date::text as d, high::float as high, low::float as low, close::float as close
+          FROM price_bars_primary WHERE symbol='NQ'
+            AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int BETWEEN 570 AND 959
+          ORDER BY ts ASC
+        `);
+        const byDate = new Map();
+        for (const b of r.rows) {
+          if (!byDate.has(b.d)) byDate.set(b.d, { high: b.high, low: b.low, close: b.close });
+          else { const c = byDate.get(b.d); c.high = Math.max(c.high, b.high); c.low = Math.min(c.low, b.low); c.close = b.close; }
+        }
+        const dates = [...byDate.keys()].sort();
+        const dBars = dates.map(d => ({ d, ...byDate.get(d) }));
+        const series = computeADXSeries(dBars, 14, 14);
+        for (let i = 1; i < dBars.length; i++) map[dBars[i].d] = series[i - 1];
+      } catch (e) { console.error('dailyAdxByDate computation error (non-critical):', e.message); }
+    }
+    return map;
+  });
 
   let count = 0;
   for (const row of active.rows) {
@@ -2114,22 +2125,20 @@ export async function completeStepTrailShadows() {
   `);
   if (!pending.rows.length) return 0;
 
-  const stepTrailCalibCached = getCached('_global', 'stepTrailCalib', DAY_CACHE_TTL);
-  const stepTrailCalib = stepTrailCalibCached !== undefined ? stepTrailCalibCached : await (async () => {
+  const stepTrailCalib = await getGlobalCalib('stepTrailCalib', async () => {
     const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='STEP_TRAIL_FRACTION' AND signal_name='FRACTION' ORDER BY run_date DESC LIMIT 1`);
     let val = null;
     try { if (r.rows[0]) { const n = JSON.parse(r.rows[0].notes); if (n.frac != null && n.p10BaseFloor != null) val = { frac: n.frac, p10BaseFloor: n.p10BaseFloor }; } } catch (_) {}
-    return setCached('_global', 'stepTrailCalib', val, DAY_CACHE_TTL);
-  })();
+    return val;
+  });
   if (stepTrailCalib == null) return 0; // no calibration -- nothing to complete, fail closed
 
-  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
-  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined ? widerTargetPressureThresholdCached : await (async () => {
+  const widerTargetPressureThreshold = await getGlobalCalib('widerTargetPressureThreshold', async () => {
     const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD' ORDER BY run_date DESC LIMIT 1`);
     let val = null;
     try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
-    return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
-  })();
+    return val;
+  });
 
   let completed = 0;
   for (const row of pending.rows) {
@@ -2221,8 +2230,7 @@ export async function completePitchCatchShadows() {
   `);
   if (!pending.rows.length) return 0;
 
-  const pitchCatchCalibCached = getCached('_global', 'pitchCatchCalib', DAY_CACHE_TTL);
-  const pitchCatchCalib = pitchCatchCalibCached !== undefined ? pitchCatchCalibCached : await (async () => {
+  const pitchCatchCalib = await getGlobalCalib('pitchCatchCalib', async () => {
     const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='PITCH_CATCH_FILTER' AND signal_name='FILTER' ORDER BY run_date DESC LIMIT 1`);
     let val = null;
     try {
@@ -2233,20 +2241,25 @@ export async function completePitchCatchShadows() {
         }
       }
     } catch (_) {}
-    return setCached('_global', 'pitchCatchCalib', val, DAY_CACHE_TTL);
-  })();
+    return val;
+  });
   if (pitchCatchCalib == null) return 0; // no calibration -- nothing to complete, fail closed
 
-  const dailyAdxByDateCached = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL);
-  const dailyAdxByDate = dailyAdxByDateCached !== undefined ? dailyAdxByDateCached : {};
+  // Deliberately just a cache PEEK, not getGlobalCalib -- dailyAdxByDate is an expensive
+  // full-history daily-bars query, already computed by resolveSetupsByPrice() earlier in
+  // the SAME poll (server/index.js's poll ordering: resolveSetupsByPrice ->
+  // completeStepTrailShadows -> completePitchCatchShadows), so re-fetching here would
+  // duplicate that work every poll. `?? {}` is the correct null-check fix (was `!==
+  // undefined ... : {}`, the same finding #0 bug, but harmless here since it already fell
+  // back to `{}` either way -- fixed for consistency, not because it was silently wrong).
+  const dailyAdxByDate = getCached('_global', 'dailyAdxByDate', DAY_CACHE_TTL) ?? {};
 
-  const widerTargetPressureThresholdCached = getCached('_global', 'widerTargetPressureThreshold', DAY_CACHE_TTL);
-  const widerTargetPressureThreshold = widerTargetPressureThresholdCached !== undefined ? widerTargetPressureThresholdCached : await (async () => {
+  const widerTargetPressureThreshold = await getGlobalCalib('widerTargetPressureThreshold', async () => {
     const r = await query(`SELECT notes FROM performance_audit WHERE signal_type='WIDER_TARGET_PRESSURE_GATE' AND signal_name='THRESHOLD' ORDER BY run_date DESC LIMIT 1`);
     let val = null;
     try { val = r.rows[0] ? JSON.parse(r.rows[0].notes).threshold : null; } catch (_) {}
-    return setCached('_global', 'widerTargetPressureThreshold', val, DAY_CACHE_TTL);
-  })();
+    return val;
+  });
 
   let completed = 0;
   for (const row of pending.rows) {
@@ -5426,7 +5439,10 @@ export default function createACDRouter(io) {
           if (pd2.pd2VAH != null) map.PD2_VAH = pd2.pd2VAH;
           if (pd2.pd2VAL != null) map.PD2_VAL = pd2.pd2VAL;
           const cached2DPOC = getCached(todayET, '2dPOC');
-          const twoDayPOC = cached2DPOC !== undefined ? cached2DPOC : await (async () => {
+          // Fixed 2026-09-05 (finding #0, see getGlobalCalib's header) -- getCached returns
+          // null on a miss, never undefined, so `!== undefined` always took this branch and
+          // never ran the real query. `!= null` correctly treats a miss as a miss.
+          const twoDayPOC = cached2DPOC != null ? cached2DPOC : await (async () => {
             const last2Q = await query(`
               SELECT DISTINCT ts::date::text as d FROM price_bars_primary
               WHERE symbol='NQ' AND ts::date < $1
@@ -7559,22 +7575,19 @@ export default function createACDRouter(io) {
       // hardcoded literal) if real forward EV isn't clearly positive — per explicit user
       // instruction to track this for real degradation rather than freeze it at ship time.
       // null threshold = factor disabled, never a hardcoded fallback number.
-      const _entryPressureShortCalibCached = getCached('_global', 'entryPressureShortCalib', DAY_CACHE_TTL);
-      const entryPressureShortCalib = _entryPressureShortCalibCached !== undefined
-        ? _entryPressureShortCalibCached
-        : await (async () => {
-          const r = await query(`
-            SELECT notes FROM performance_audit
-            WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
-            ORDER BY run_date DESC LIMIT 1
-          `);
-          let val = { threshold: null, bump: 0 };
-          try {
-            const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
-            if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
-          } catch (_) {}
-          return setCached('_global', 'entryPressureShortCalib', val, DAY_CACHE_TTL);
-        })();
+      const entryPressureShortCalib = await getGlobalCalib('entryPressureShortCalib', async () => {
+        const r = await query(`
+          SELECT notes FROM performance_audit
+          WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
+          ORDER BY run_date DESC LIMIT 1
+        `);
+        let val = { threshold: null, bump: 0 };
+        try {
+          const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
+          if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
+        } catch (_) {}
+        return val;
+      });
 
       // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
       // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
@@ -7956,7 +7969,12 @@ export default function createACDRouter(io) {
               [todayET]
             ).catch(() => ({ rows: [] })),
             // 2-day composite POC (POC of combined last-2-session RTH volume profile)
-            cached2DPOC !== undefined ? Promise.resolve(null) : (async () => {
+            // Fixed 2026-09-05 (finding #0, see getGlobalCalib's header near line 113) --
+            // getCached returns null on a miss, never undefined, so `!== undefined` always
+            // skipped this query. `!= null` here AND at the reconciliation below (~line
+            // 8033) correctly treats a miss as a miss -- both must agree since they read
+            // the same `cached2DPOC` value at two points around the same Promise.all.
+            cached2DPOC != null ? Promise.resolve(null) : (async () => {
               const last2Q = await query(`
                 SELECT DISTINCT ts::date::text as d FROM price_bars_primary
                 WHERE symbol='NQ' AND ts::date < $1
@@ -8017,7 +8035,7 @@ export default function createACDRouter(io) {
           const pwLow  = lp.PW_LOW  ?? null;
 
           let twoDayPOC = null;
-          if (cached2DPOC !== undefined) {
+          if (cached2DPOC != null) {
             twoDayPOC = cached2DPOC;
           } else {
             if (poc2Q.rows[0]) twoDayPOC = poc2Q.rows[0].poc;
@@ -10083,9 +10101,14 @@ export default function createACDRouter(io) {
           }
 
           // Day type for triple stack
+          // Fixed 2026-09-05 (finding #0, see getGlobalCalib's header near line 113) --
+          // getCached returns null on a miss, never undefined, so `!== undefined` always
+          // took the cached branch and never queried -- dayTypeForStack was permanently
+          // undefined, and dayTypeLabel (below) was permanently null, so triple-stack
+          // day-type gating never actually fired. `!= null` correctly treats a miss as a miss.
           const cachedDT = getCached(todayET, 'dayTypeStack');
           let dayTypeForStack;
-          if (cachedDT !== undefined) { dayTypeForStack = cachedDT; }
+          if (cachedDT != null) { dayTypeForStack = cachedDT; }
           else {
             const dtRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
             dayTypeForStack = dtRow.rows[0]?.day_type || dtClass || null;
