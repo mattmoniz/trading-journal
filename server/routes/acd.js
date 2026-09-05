@@ -8897,7 +8897,7 @@ export default function createACDRouter(io) {
               // model is buildable without reimplementing this whole context-gathering
               // pipeline. Deliberately raw categorical/boolean inputs, NOT per-factor dollar
               // contribution -- the IIFE below is order-dependent with absolute sets (SUPPRESS
-              // -> mult=0.25, stacking>=7 -> mult=0.10, loss-streak ceilings), so a
+              // -> mult=0.25, loss-streak ceilings), so a
               // before/after delta per factor would be non-monotonic and misleading; a
               // regression should learn the interaction/ordering effects itself from clean
               // inputs. Read-only snapshot of already-computed variables -- does not touch the
@@ -8971,9 +8971,44 @@ export default function createACDRouter(io) {
                 }
                 // Open vs prior value: INSIDE_VALUE = 68.28% WR (z=-2.43) vs OUTSIDE = 72.74% (2026-07-05)
                 if (_lfOvOpen === 'INSIDE_VALUE') mult = Math.max(mult - 0.15, 0.25);
-                // Stacking: 7+ same-dir setups = 62.4% WR -$15.7 EV (N=1922) — trend day, fades dead.
-                const _lfSameDirN = _lfSameDirCounts[dir] ?? 0;
-                if (_lfSameDirN >= 7) mult = 0.10;
+                // Stacking override REMOVED 2026-09-04 (was: "7+ same-dir setups = 62.4% WR
+                // -$15.7 EV (N=1922), trend day, fades dead" -> hard-reset mult=0.10,
+                // overwriting every other factor's contribution, not just capping it).
+                // Re-checked against current data before removing, not just assumed stale:
+                // the live roster grew ~5x (28->146 distinct real-firing setup_types) and daily
+                // real fire volume ~27x (36/week->970/week) between the 2026-07-05 calibration
+                // and now, so the raw count "7" now sits at the ~2nd percentile of real daily
+                // activity (median same-direction count is 65) -- it fires on 98% of trading
+                // days, not the rare "everything piling one way" event it was calibrated to
+                // catch. Recalibrating to a new count (rather than removing) was considered and
+                // rejected: bucketing real Jul20-Sep4 trades by same-direction count-at-fire-time
+                // showed a NON-monotonic relationship (0-6: WR 54.1%/EV-$2.27; 7-19: WR 51.8%/
+                // EV-$7.35; 20-49: WR 64.0%/EV+$19.64 -- but computeRigor() on that "best" bucket
+                // showed top5DayPct=81.3%/clustered=true, and 3 individual days (07-29 to 07-31)
+                // accounted for 94% of its total profit; every day since Aug 19 in that same
+                // bucket is a roughly-breakeven scatter of small wins/losses, not a real edge).
+                // Splitting cleanly at the original 7 also failed: BOTH sides show the same
+                // "DECAYING" chronological trend (positive early-window thirds, negative recent
+                // thirds) via computeRigor(), meaning the apparent stacking effect is confounded
+                // with calendar time (the same account-wide edge decay affecting the whole
+                // roster), not a real, independent, currently-predictive signal about crowding.
+                // _lfSameDirCounts is kept (still feeds the informational `stackCount` field
+                // below, directly -- not via a local var) -- only the hard sizing override is
+                // removed. See OPEN_DECISION
+                // stacking_sizemultiplier_override_removed_needs_revalidation for the path back
+                // to a real, re-derived version of this factor if one exists. DeepSeek review
+                // (2026-09-04) caught that the removal left a dead `_lfSameDirN` local (it was
+                // only ever read by the deleted line) with a comment wrongly claiming it fed
+                // `stackCount` -- `stackCount` reads `_lfSameDirCounts[dir]` directly. Removed.
+                // DeepSeek review (2026-09-04) also flagged: two OTHER hard ceilings remain after
+                // this removal and independently explain most of the "92% of trades run at
+                // 0.10-0.25x" observation cited above -- the loss-streak cap a few lines below
+                // (mult<=0.25 after 1 same-type loss, <=0.10 after 2+) and the post-IIFE
+                // "Death Sequence" hasLossToday cap (<=0.5x on ANY prior loss today, any setup
+                // type). Do not conclude "removal did nothing" from a future re-check showing the
+                // global distribution still clustered low -- measure the delta specifically in the
+                // lfConsecLosses===0 && !hasLossToday subset (this override's only real point of
+                // leverage), not the full population, when revalidating.
                 // NL30 regime conditioning (verified 2026-07-05, N=229-429 per bucket):
                 if      (_lfNl30Bucket === 'MILD_BULL'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 62.6% WR -$16.8 EV z=-2.48
                 else if (_lfNl30Bucket === 'MILD_BEAR'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 61.6% WR -$19.1 EV z=-2.69
@@ -9059,8 +9094,21 @@ export default function createACDRouter(io) {
               // Same field shape/threshold as ibSetup.sessionConflict (~line 3598) -- backtest
               // and full writeup at the sizeMultiplier factor above (~line 5085).
               sessionConflict: sessionConflictFor(dir),
-              // STAND DOWN: filter out (don't just size down) when conditions are clearly -EV.
-              // Opus audit 2026-07-07: after-loss 31.6% WR, TREND day 58.6% WR, TREND+loss compounding.
+              // STAND DOWN: drives MarketPulseBar.jsx's "SKIP" dashboard badge (a real, visible
+              // consumer — confirmed 2026-09-04 after an initial removal attempt missed it by
+              // only grepping src/*.jsx, not src/components/**). This does NOT auto-block the
+              // trade (this system has no broker/execution integration to do that with) — it's
+              // a visual warning for the human trader. The underlying premise (loss-streak
+              // trades are reliably worse, Opus audit 2026-07-07) was rigorously re-tested this
+              // session on real data with a within-period control and did NOT hold up: split
+              // chronologically, after-2+-loss trades were BETTER than normal in the first half
+              // (EV $19.97 vs $15.32) and LESS BAD than normal in the second half (EV -$6.87 vs
+              // -$9.68) — the original pooled-negative finding was a calendar-time confound
+              // (loss streaks cluster during the account's bad stretches, which drag down
+              // everything, not just streak-trades), not a real predictive effect. Left wired
+              // as-is pending a decision on whether to remove the now-unsupported dashboard
+              // warning or find a real replacement condition — see OPEN_DECISION
+              // standdown_loss_streak_premise_refuted_needs_ui_decision.
               standDown: lfConsecLosses >= 2 || (dtClass === 'TREND' && lfConsecLosses >= 1),
               smallGapDay: _lfSmallGap,
               sessionDeltaNeutral: _lfDeltaNeutral,
