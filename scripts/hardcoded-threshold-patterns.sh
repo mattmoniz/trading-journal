@@ -6,7 +6,19 @@
 
 # Pattern A: hardcoded suppression set literal (e.g. new Set(['OR_HIGH_FADE', ...]))
 PATTERN_A='new Set\(\['
-PATTERN_A_EXCLUDE='_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES'
+# Widened 2026-09-05 after 3 confirmed false positives firing every single Stop hook run
+# (whole-file scan, not diff-only, so pre-existing hits never stop re-alerting): (1)
+# STOP_SWEEP_PAUSED (acd.js) is a deliberate, already-tracked temporary pause set, not a
+# suppression anti-pattern — its own comment says as much and points at OPEN_DECISION
+# stop_sweep_long_calibrated_target_pause_or_keep. (2) UNCALIBRATED_SHADOW_TYPES (acd.js's
+# `shadowTypes = [...new Set([...liveShadowTypes, ...UNCALIBRATED_SHADOW_TYPES])]`) is the
+# exact live-query-plus-short-reviewed-fallback pattern CLAUDE.md's own
+# shadowsetuptypes-hardcoded-list-anti-pattern convention documents as the correct fix, not
+# the bug it replaced — the fallback constant itself lives in server/config/setupTypes.js,
+# reviewed by test_invariants.mjs check [6]. (3) caseEngine.js's `tfs = [...new
+# Set([...lv.timeframes, ...])]` dedupes timeframe labels for level-stacking display, not a
+# setup-type suppression list at all.
+PATTERN_A_EXCLUDE='_suppressedSetups\|_dowSuppressToday\|DAY_TYPE_CONDITIONAL\|SHADOW_SETUP\|displayPrimary\|SHADOW_SETUP_TYPES\|IB_SWEEP_TYPES\|STOP_SWEEP_PAUSED\|UNCALIBRATED_SHADOW_TYPES\|lv\.timeframes'
 PATTERN_A_LABEL='hardcoded Set literal (suppression list?)'
 
 # Pattern B: hardcoded array of setup-type strings (e.g. mondaySkip = ['OR_HIGH_FADE',...])
@@ -18,7 +30,12 @@ PATTERN_A_LABEL='hardcoded Set literal (suppression list?)'
 # 'IB_BEARISH']`; no longer matches spread/computed arrays like `[...new Set(...)]`.
 PATTERN_B='=\s*\[\s*['"'"'"]'
 PATTERN_B_FILTER='fade|suppress|skip|monday|setup'
-PATTERN_B_EXCLUDE='IB_SWEEP_TYPES\|STOP_RANGE\|DOW_NAMES'
+# shadowRef excluded 2026-09-05: `/setups/history`'s `conditions = ["status != 'SHADOW'",
+# \`setup_type != ALL(${shadowRef})\`]` is dynamic SQL WHERE-clause fragment building keyed
+# off a bound parameter placeholder, not a hardcoded list of setup_type string literals —
+# matched only because PATTERN_B_FILTER's `setup` substring appears inside the unrelated
+# text "setup_type", same false-positive shape as the 2026-07-15 firedDates fix above.
+PATTERN_B_EXCLUDE='IB_SWEEP_TYPES\|STOP_RANGE\|DOW_NAMES\|shadowRef'
 PATTERN_B_LABEL='hardcoded setup-type array'
 
 # Pattern C: bare numeric STOP/TARGET assignment without _opt reference or Fallback annotation
@@ -46,7 +63,15 @@ PATTERN_E='([Pp]ts?|[Pp]oints?)\s*\*\s*(5|10|20)\b|\$(5|10|20)/pt'
 # deliberate exclusion, not a bug: it's a purely observational/non-tradeable stat (its
 # own text says so explicitly) intentionally described at NQ's real scale, since
 # price_bars_primary only stores symbol='NQ' bars (MNQ isn't separately tracked there).
-PATTERN_E_EXCLUDE='MNQ_DOLLARS_PER_POINT\|PNL_PER_POINT\|NQ session open'
+# 3 more excludes added 2026-09-05, same false-positive shape: comment PROSE describing an
+# ALREADY-FIXED historical wrong-$/pt bug (the real code right below each comment now
+# correctly reads LIVE_INSTRUMENT/real price-level math), not a currently-wrong constant —
+# setupBacktestService.js's SSOT-audit comment ("even real NQ") and monteCarloService.js's
+# 2026-07-17-fixed writeup ("matches neither" / "constant matches" describe the bug that
+# WAS there; "an internal points" describes the synthetic generators' deliberate,
+# self-consistent points*5 placeholder unit, never real dollars — see that file's own
+# comment for why it's excluded from the fix, not a live instance of it).
+PATTERN_E_EXCLUDE='MNQ_DOLLARS_PER_POINT\|PNL_PER_POINT\|NQ session open\|even real NQ\|matches neither\|constant matches\|an internal points'
 PATTERN_E_LABEL='wrong $/pt constant (MNQ is $2/pt — see CLAUDE.md hard rule, src/constants/contract.js, or PNL_PER_POINT in acd.js)'
 
 # Pattern F: SUM(pnl)/SUM(t.pnl)/SUM(...FlatToFlat...) — the CumPL-diff hard rule's exact
