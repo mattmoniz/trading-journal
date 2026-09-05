@@ -14,6 +14,8 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from '../services/acdShared.js';
+export { dropToTimeline } from '../services/acdShared.js';
 import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import {
   computeACDFromBars,
@@ -67,54 +69,17 @@ function canonicalConfluenceLevelName(name) {
 }
 
 // ── Setup-detection level cache (structural data that changes at most daily) ──
-// Keyed by trade date + cache key. Default TTL = 60 seconds for intraday stability;
-// callers with a naturally-daily-scoped value (already keyed by date, so a stale-day
-// read is impossible) can pass a longer ttl instead of reinventing a second cache —
-// see getTouchQualityCalib/getTouchQualityBaseline below, which used to hand-roll
-// their own module-level date-compare cache next to this one. Found in code review
-// 2026-07-15, consolidated onto this existing helper instead.
-const _levelCache = {};
-const LEVEL_CACHE_TTL = 60000;
+// getCached/setCached/getGlobalCalib/DAY_CACHE_TTL moved to server/services/acdShared.js
+// 2026-09-05 (DeepSeek-planned extraction, Phase 0 — see docs/OPEN_THREADS.md) so the
+// resolveSetupsByPrice/setupExpiry/shadowCompletion extractions can share them without a
+// circular import back into this route file. Imported above. See acdShared.js's own header
+// for the getCached() null-vs-undefined bug history this cache system was the site of.
 // Dedup for the dtaRow real-N-floor gate's console.error (see ~line 6800) — a
 // persistently-thin SIZE_UP cell would otherwise log an identical line every 15s poll
 // for the whole week between recalibrations, drowning scratch/server_errors.jsonl.
 // Keyed by trade date so it naturally resets daily without extra cleanup logic; bounded
 // size (setup_types × day_types × reasons, low hundreds at most).
 const _dtaGateLogged = new Set();
-const DAY_CACHE_TTL = 12 * 60 * 60 * 1000; // half a trading day+ — safe since the cache key already includes the date
-function cacheKey(tradeDate, key) { return `${tradeDate}:${key}`; }
-function getCached(tradeDate, key, ttl = LEVEL_CACHE_TTL) {
-  const e = _levelCache[cacheKey(tradeDate, key)];
-  if (e && Date.now() - e.ts < ttl) return e.val;
-  return null;
-}
-function setCached(tradeDate, key, val) {
-  _levelCache[cacheKey(tradeDate, key)] = { val, ts: Date.now() };
-  return val;
-}
-
-// Fixed 2026-09-05 (found by a DeepSeek-dispatched audit, independently verified against
-// git blame and live performance_audit rows before trusting it): `getCached()` above returns
-// `null` on a genuine miss, NEVER `undefined` -- but at least 7 distinct `_global`-scoped
-// calibration readers across this file (in ~12 hand-copied inline blocks, 4 of them exact
-// duplicates) checked `cached !== undefined` instead of checking for `null`. Since
-// `null !== undefined` is always true, every one of them treated a real miss as a hit and
-// returned the stored `null` forever -- the real `await query(...)` fallback was
-// unreachable dead code. Confirmed real live impact, not theoretical: ENTRY_PRESSURE_SHORT
-// (a validated, positive-EV live sizeMultiplier boost, real calibration data in
-// performance_audit since 2026-08-24) and WIDER_TARGET_PRESSURE_GATE (same) had never
-// actually read their own calibration since being wired -- both silently ran in their
-// null/fail-safe state the entire time. This session's own momentum_against_fade_shadow
-// tagging (shipped hours earlier, same bug, copied from the same broken pattern) was
-// dead on arrival too. Consolidated into one correct, shared helper so the null-vs-undefined
-// contract only has to be gotten right once. Do NOT use `cached !== undefined` against
-// getCached's return value anywhere in this file -- always `cached != null` (or `??`).
-async function getGlobalCalib(key, fetchFn) {
-  const cached = getCached('_global', key, DAY_CACHE_TTL);
-  if (cached != null) return cached;
-  const val = await fetchFn();
-  return setCached('_global', key, val);
-}
 
 // Trailing 20-day average OR-window (9:30-9:45am ET) volume, STRICTLY PRIOR days only
 // (ts::date < tradeDate, no lookahead) -- the RVol baseline for Setup D's
@@ -691,38 +656,8 @@ async function logGatedCandidate({ tradeDate, setupType, gateName, gateReason, e
   } catch (_) { /* informational only, never block detection */ }
 }
 
-// Touch-quality (order-flow) calibration + volume-baseline lookups — informational
-// only; see server/services/touchQuality.js and scripts/calibrate_touch_quality.mjs.
-async function getTouchQualityCalib() {
-  const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-  const cached = getCached(todayET, 'touchQualityCalib', DAY_CACHE_TTL);
-  if (cached) return cached;
-  const res = await query(`
-    SELECT signal_name, notes FROM performance_audit
-    WHERE signal_type='TOUCH_QUALITY' AND run_date=(SELECT MAX(run_date) FROM performance_audit WHERE signal_type='TOUCH_QUALITY')
-  `).catch(() => ({ rows: [] }));
-  const map = {};
-  for (const row of res.rows) {
-    try {
-      const n = JSON.parse(row.notes);
-      map[row.signal_name] = { windowBars: n.window_bars, highVolZCutoff: n.high_vol_z_cutoff };
-    } catch (_) {}
-  }
-  return setCached(todayET, 'touchQualityCalib', map);
-}
-
-// tradeDate: the SETUP's own trade_date (not "today") — a SHADOW/overnight setup
-// classified after midnight ET must exclude its own trade date from the 90-day
-// trailing baseline the same way scripts/calibrate_touch_quality.mjs does, not
-// silently fold that date's own volume into its baseline average. Previously this
-// always used wall-clock "today", which only happened to be correct for the common
-// same-day case. Found in code review 2026-07-15.
-async function getTouchQualityBaseline(tradeDate) {
-  const cached = getCached(tradeDate, 'touchQualityBaseline', DAY_CACHE_TTL);
-  if (cached) return cached;
-  const baseline = await getVolumeBaseline(query, tradeDate);
-  return setCached(tradeDate, 'touchQualityBaseline', baseline);
-}
+// getTouchQualityCalib/getTouchQualityBaseline moved to server/services/acdShared.js
+// 2026-09-05 (Phase 0 of the DeepSeek-planned extraction) -- imported above.
 
 // Latest VOLUME_BUILDING_CALIBRATION/ROSTER_WIDE_FADE row (scripts/backtest_volume_building_
 // signal.mjs, weekly). Cached per day -- recalibration only runs weekly, no reason to hit the
@@ -967,35 +902,10 @@ const csvUpload = multer({
 // alongside a same-named local declaration is a collision either way (parse error or silent
 // shadowing), and either would have silently defeated this whole fix.
 
-// Drops an active_setups row into trade_timeline_events (idempotent via ON CONFLICT).
-// event_time = fired_at (never current timestamp — per spec).
-export async function dropToTimeline(setup) {
-  await query(`
-    INSERT INTO trade_timeline_events (
-      trade_date, event_time, event_type, setup_type, setup_id,
-      direction, entry_zone, stop_level, t1_level, t1_label,
-      resolution, historical_win_rate, historical_sessions,
-      window_duration_minutes
-    ) VALUES ($1,$2,'SETUP',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-    ON CONFLICT (setup_id) DO NOTHING
-  `, [
-    setup.trade_date,
-    setup.fired_at,
-    setup.setup_type,
-    setup.id,
-    inferDirection(setup.setup_type),
-    setup.entry_zone_low,
-    setup.stop_level,
-    setup.t1_level,
-    setup.t1_label,
-    setup.resolution || null,
-    setup.historical_win_rate,
-    setup.historical_sessions,
-    setup.expires_at
-      ? Math.round((new Date(setup.expires_at) - new Date(setup.fired_at)) / 60000)
-      : null,
-  ]);
-}
+// dropToTimeline moved to server/services/acdShared.js 2026-09-05 (Phase 0 of the
+// DeepSeek-planned extraction) -- imported and re-exported above so the 5 existing
+// external consumers (rthFlushDetector.js, pocRotationJoinDetector.js,
+// globexFlushDetector.js, ibLowPnrDetector.js, minuteBarSignalDetector.js) keep working.
 
 // resolveDirection() moved to server/config/setupTypes.js 2026-08-17 (OPEN_DECISION
 // islongsetup_bug_survives_in_3_other_files) so setupBacktestService.js/maeMfeReplay.js/
