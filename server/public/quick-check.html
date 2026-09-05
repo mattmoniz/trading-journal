@@ -323,12 +323,14 @@ function renderPulseBar(pulse, setupData, ctx, build) {
   }
 
   // Size chip
+  // standDown (loss-streak SKIP trigger) removed server-side 2026-09-05 -- refuted premise, see
+  // acd.js's sizeFactorsAtDetection comment. SKIP now only reflects a genuine sizeMultiplier===0.
   const setup = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
-  const mult = setup?.standDown ? 0 : (setup?.sizeMultiplier ?? null);
+  const mult = setup?.sizeMultiplier ?? null;
   if (setup != null && mult !== null) {
     const base = parseInt(localStorage.getItem('baseContracts') || '2');
     const rec = mult === 0 ? 0 : Math.max(1, Math.round(base * mult));
-    const vColor = setup.standDown || mult === 0 ? 'var(--red)' : mult >= 1.1 ? 'var(--green)' : mult >= 0.85 ? '#60a5fa' : mult >= 0.5 ? 'var(--amber)' : '#f97316';
+    const vColor = mult === 0 ? 'var(--red)' : mult >= 1.1 ? 'var(--green)' : mult >= 0.85 ? '#60a5fa' : mult >= 0.5 ? 'var(--amber)' : '#f97316';
     chips.push(chip('Size', base + ' → ' + (rec === 0 ? 'SKIP' : rec + ' ct'), '(' + mult.toFixed(2) + '×)', vColor, vColor));
   }
 

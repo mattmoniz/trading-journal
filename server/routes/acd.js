@@ -9094,22 +9094,23 @@ export default function createACDRouter(io) {
               // Same field shape/threshold as ibSetup.sessionConflict (~line 3598) -- backtest
               // and full writeup at the sizeMultiplier factor above (~line 5085).
               sessionConflict: sessionConflictFor(dir),
-              // STAND DOWN: drives MarketPulseBar.jsx's "SKIP" dashboard badge (a real, visible
-              // consumer — confirmed 2026-09-04 after an initial removal attempt missed it by
-              // only grepping src/*.jsx, not src/components/**). This does NOT auto-block the
-              // trade (this system has no broker/execution integration to do that with) — it's
-              // a visual warning for the human trader. The underlying premise (loss-streak
-              // trades are reliably worse, Opus audit 2026-07-07) was rigorously re-tested this
-              // session on real data with a within-period control and did NOT hold up: split
-              // chronologically, after-2+-loss trades were BETTER than normal in the first half
-              // (EV $19.97 vs $15.32) and LESS BAD than normal in the second half (EV -$6.87 vs
-              // -$9.68) — the original pooled-negative finding was a calendar-time confound
+              // STAND DOWN removed 2026-09-05 (was: drove MarketPulseBar.jsx's "SKIP" dashboard
+              // badge on lfConsecLosses>=2 || (dtClass==='TREND' && lfConsecLosses>=1)). The
+              // premise (loss-streak trades are reliably worse, Opus audit 2026-07-07) was
+              // rigorously re-tested 2026-09-04 with a within-period chronological control and
+              // did NOT hold up -- split in half, after-2+-loss trades were BETTER than normal in
+              // the first half (EV $19.97 vs $15.32) and LESS BAD than normal in the second half
+              // (EV -$6.87 vs -$9.68); the pooled-negative reading was a calendar-time confound
               // (loss streaks cluster during the account's bad stretches, which drag down
-              // everything, not just streak-trades), not a real predictive effect. Left wired
-              // as-is pending a decision on whether to remove the now-unsupported dashboard
-              // warning or find a real replacement condition — see OPEN_DECISION
-              // standdown_loss_streak_premise_refuted_needs_ui_decision.
-              standDown: lfConsecLosses >= 2 || (dtClass === 'TREND' && lfConsecLosses >= 1),
+              // everything, not just streak-trades), not a real predictive effect. Half the
+              // trigger (the TREND-day clause) was also already structurally dead (dtClass is
+              // null on 100% of real trades, a separately tracked bug). A verdict-style "SKIP"
+              // badge built on a refuted premise actively works against this project's stated
+              // purpose (unemotional, data-driven discipline) -- worse than no badge, not
+              // neutral. Resolved OPEN_DECISION standdown_loss_streak_premise_refuted_needs_ui_decision
+              // as (a): removed rather than patched with an unvalidated replacement condition.
+              // MarketPulseBar.jsx's SKIP badge now triggers only on a real sizeMultiplier===0
+              // (a genuine floor from another factor), not this refuted heuristic.
               smallGapDay: _lfSmallGap,
               sessionDeltaNeutral: _lfDeltaNeutral,
               sessionDeltaHigh: _lfDeltaHigh,

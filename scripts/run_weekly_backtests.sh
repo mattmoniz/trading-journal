@@ -393,4 +393,13 @@ echo "=== Weekly backtest run: $(date) ==="
 # already established here for backtest_calibrated_wider_target.mjs). See that file for the
 # script invocation -- do not also run it here, the daily cadence already covers weekly.
 
+# Per-setup-type daily loss cap recheck (2026-09-05) -- RESEARCH_CLAIM
+# perSetup_daily_loss_cap_reversion_trap_20260904. Full history says this cap would be net
+# harmful (a reversion-trap, see feedback_reactive_exposure_cutting_reversion_trap in Claude's
+# memory); the recent-regime subset (trade_date>=2026-08-01) currently reverses that but is thin
+# (single-digit distinct days). Self-recalibrates weekly so the finding firms up or fades as real
+# data accumulates instead of sitting as a dead one-off analysis. Not wired live -- see
+# OPEN_DECISION per_setup_daily_loss_cap_recent_regime_reversal for the ship/shadow/shelve call.
+/usr/bin/node scripts/backtest_per_setup_daily_loss_cap.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

@@ -138,11 +138,14 @@ function SizeChip() {
     setEditing(false);
   };
 
-  const mult    = setup?.standDown ? 0 : (setup?.sizeMultiplier ?? null);
+  // standDown (loss-streak-based SKIP trigger) removed server-side 2026-09-05 -- its premise
+  // was rigorously re-tested and refuted (see acd.js's sizeFactorsAtDetection comment). SKIP now
+  // only reflects a genuine sizeMultiplier===0 floor from another, still-valid factor.
+  const mult    = setup?.sizeMultiplier ?? null;
   const hasSetup = setup != null && mult !== null;
   const rec     = hasSetup ? (mult === 0 ? 0 : Math.max(1, Math.round(base * mult))) : null;
   const verdict = !hasSetup ? null
-    : setup?.standDown || mult === 0 ? { label: 'SKIP',    color: C.red,    icon: '⛔' }
+    : mult === 0                     ? { label: 'SKIP',    color: C.red,    icon: '⛔' }
     : mult >= 1.1               ? { label: 'TAKE IT', color: C.green,  icon: '✅' }
     : mult >= 0.85              ? { label: 'STD',     color: '#60a5fa', icon: '▶' }
     : mult >= 0.5               ? { label: 'CUT',     color: C.amber,  icon: '⚠' }

@@ -296,7 +296,13 @@ router.post('/assess', async (req, res) => {
       : etMin < 720  ? 'POST-IB (10:30–12:00 — C confirmation window)'
       :                'PM (12:00–16:00 — re-entries at named levels only)';
 
-    // Consecutive loss streak → STAND DOWN flag (mirrors acd.js sizeMultiplier logic)
+    // Consecutive loss streak counter -- the STAND DOWN "hard rule" verdict this used to compute
+    // (consecLosses>=2 || TREND-day+1) was removed 2026-09-05: rigorously re-tested on real data
+    // with a within-period chronological control and refuted (loss streaks correlate with the
+    // account's own bad calendar-time stretches, not with the NEXT trade being worse -- see
+    // acd.js's sizeFactorsAtDetection comment for the full numbers). Telling an LLM "this is a
+    // system rule, not discretionary" based on a refuted premise was worse than not flagging it.
+    // consecLosses itself is kept as a factual count for the neutral SESSION STATE line below.
     const dtClass = acd.day_type || 'UNKNOWN';
     const resolvedSorted = [...setups]
       .filter(s => s.resolution === 'STOP_HIT' || s.resolution === 'TARGET_HIT')
@@ -306,7 +312,6 @@ router.post('/assess', async (req, res) => {
       if (s.resolution === 'STOP_HIT') consecLosses++;
       else break;
     }
-    const standDown = consecLosses >= 2 || (dtClass === 'TREND' && consecLosses >= 1);
 
     // Stall signals from expired setups (last 2 hours)
     const twoHoursAgo  = new Date(Date.now() - 2 * 60 * 60 * 1000);
@@ -396,12 +401,12 @@ OR Condition: ${auction.or_condition || 'N/A'}
 Opening Call Type: ${auction.opening_call_type || 'N/A'}
 
 === SESSION STATE ===
-${standDown
-  ? `⛔ STAND DOWN — ${consecLosses} consecutive stop-hit${consecLosses !== 1 ? 's' : ''}${dtClass === 'TREND' ? ' on a TREND day (fades historically -$9,802 total, 58.6% WR)' : ''}. Do NOT recommend new fades. This is a system rule, not discretionary.`
+${consecLosses >= 2
+  ? `${consecLosses} consecutive stop-hits today. Note only, not a rule: a rigorous re-test of "loss streaks predict a worse next trade" (2026-09-04, real data, chronological control) found this does NOT hold up as an independent effect -- treat as informational context, not a reason to avoid otherwise-qualified setups.`
   : dtClass === 'TREND'
-  ? `⚠️ TREND DAY — All fade setups underperform on TREND days (-$9,802 total P&L, 58.6% WR). Size is auto-reduced 0.25×. Only highest-probability levels with structural confluence.`
+  ? `⚠️ TREND DAY — fade setups are auto-sized down (0.25x floor) by the live DAY_TYPE_ALPHA calibration where it applies per setup_type; no reliable pooled "-$/WR for all fades on TREND days" figure is currently derived here to quote. Defer to each setup's own live sizeMultiplier rather than this text for a specific number.`
   : consecLosses === 1
-  ? `⚠️ 1 consecutive loss — one more stop-hit triggers STAND DOWN. High caution on next entry.`
+  ? `1 consecutive loss — informational only, not a threshold for anything else.`
   : 'Normal session — no loss streak, no structural suppression.'}
 
 === SETUPS FIRED TODAY ===
