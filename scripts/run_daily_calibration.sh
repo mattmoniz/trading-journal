@@ -96,4 +96,15 @@ echo "=== Daily calibration: $(date) ==="
 # bar working as intended, not a bug -- self-recalibrates nightly as real N and distinct-days grow.
 /usr/bin/node scripts/backtest_same_setup_refire_gate.mjs
 
+# Direction-alternation-after-loss gate calibration (2026-09-05, user proposal, a variation of
+# the sibling rule framed as "prevent sequential losses"). Daily for the same reason as the
+# refire-gate/cross-direction-flip calibrations above: this is a candidate for gating real trade
+# eligibility, and the recent-regime effect found so far is large enough (real 2026-08-01+ money)
+# to want fresh data fast, not wait a week. Writes/updates RESEARCH_CLAIM
+# direction_alternation_after_loss_gate_20260905. First run: recent-regime effect (-$2601.50
+# avoided since 2026-08-01) is real and large but full-history reverses it (same account-wide
+# edge-decay pattern as everything else tested this week) -- not wired live, see OPEN_DECISION
+# direction_alternation_after_loss_gate_pending for the ship/shadow/shelve call.
+/usr/bin/node scripts/backtest_direction_alternation_after_loss.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
