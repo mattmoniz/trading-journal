@@ -200,7 +200,7 @@ import { config } from 'dotenv';
 import { inferDirection, CONDITIONAL_VARIANTS, CONTEXTUAL_DIRECTION_TYPES, UNCALIBRATED_SHADOW_TYPES, getBetClass, BET_CLASSES, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded } from '../server/config/setupTypes.js';
 import { sweepOptimalStopAndTarget, DEFAULT_DPP, computeStopTargetForType, computeVolatilityDefaultRatios } from './update_optimal_stops.mjs';
 import { computeCorrectedTarget, makeBarIndex } from '../server/services/targetCalibrationService.js';
-import { getVolBucketAtFire } from '../server/routes/acd.js';
+import { getVolBucketAtFire } from '../server/services/fireTags.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { listClaims } from './record_claim.mjs';
 import { CAPITAL_EXPOSURE_OVERRIDE } from '../server/services/setupEligibility.js';
@@ -1376,10 +1376,12 @@ async function main() {
       // upper time bound -- the exact guard I1's own spec item calls for ("fails if any
       // regime field's source query lacks an upper time bound"). Static, not a live
       // query, so it can't be fooled by a code path that happens not to have fired yet.
-      const acdSrc = fs.readFileSync(path.resolve('server/routes/acd.js'), 'utf8');
-      const volBucketFnMatch = acdSrc.match(/export async function getVolBucketAtFire[\s\S]*?\n}\n/);
+      // Moved 2026-09-05 from server/routes/acd.js to server/services/fireTags.js
+      // (acd.js-shrink cleanup) -- read from the new location, not the old re-export site.
+      const fireTagsSrc = fs.readFileSync(path.resolve('server/services/fireTags.js'), 'utf8');
+      const volBucketFnMatch = fireTagsSrc.match(/export async function getVolBucketAtFire[\s\S]*?\n}\n/);
       if (!volBucketFnMatch) {
-        fail('getVolBucketAtFire() not found in server/routes/acd.js -- I1 regime tagging may have been removed or renamed without updating this check');
+        fail('getVolBucketAtFire() not found in server/services/fireTags.js -- I1 regime tagging may have been removed or renamed without updating this check');
       } else if (!/ts::date\s*<\s*\$1/.test(volBucketFnMatch[0])) {
         fail('getVolBucketAtFire() no longer has a strict upper time bound (ts::date < $1) on its price_bars_primary query -- this is the exact no-lookahead guard I1 was built to enforce; a query missing this could let a fire-time tag see data from AFTER the trade_date it is tagging');
       } else {
