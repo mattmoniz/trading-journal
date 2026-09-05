@@ -1181,37 +1181,30 @@ router.get('/setups/step-trail-shadow-summary', async (req, res) => {
     const real = rowsQ.rows.filter(r => r.origin_status === 'ACTIVE');
     const shadow = rowsQ.rows.filter(r => r.origin_status === 'SHADOW');
 
-    // Watchlist (2026-09-05, user follow-up to the morning/setup backtest thread): a few
-    // setup_type x time-of-day leads showed real, broad-across-many-days signal in the backtest
-    // (IB_HIGH_FADE_SHORT/IB_LOW_FADE_LONG/OR5_LOW_FADE_LONG at market open) but were too thin
-    // (N<20) to trust. Rather than let that finding sit as a one-off report, track it here going
-    // forward -- same live data this endpoint already reads, just re-sliced, so a future check
-    // is "look at this JSON" not "re-run a backtest script." Generic by design: any setup_type's
-    // morning-window rows are surfaced, not just the 3 originally flagged, so a NEW lead shows up
-    // here too without a code change.
-    const MORNING_START_MIN = 570, MORNING_END_MIN = 630; // 09:30-10:30 ET
-    function etMinutesOf(tsStr) {
-      const d = new Date(tsStr);
-      const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(d);
-      const h = Number(parts.find(p => p.type === 'hour').value), m = Number(parts.find(p => p.type === 'minute').value);
-      return h * 60 + m;
-    }
-    const morningRows = rowsQ.rows.filter(r => {
-      const mod = etMinutesOf(r.fired_at);
-      return mod >= MORNING_START_MIN && mod < MORNING_END_MIN;
-    });
-    const byType = {};
-    for (const r of morningRows) (byType[r.setup_type] ??= []).push(r);
-    const watchlist = Object.entries(byType)
-      .map(([setup_type, g]) => ({ setup_type, ...summarize(g), thin: g.length < 20 }))
-      .sort((a, b) => b.avgDelta - a.avgDelta);
+    // Per-(setup_type x time-of-day) calibration (2026-09-05, user request: monitor+calibrate
+    // this for every setup automatically). Reads the REAL calibration table
+    // (scripts/calibrate_step_trail_per_setup_time.mjs, weekly) rather than recomputing a
+    // cruder live version here -- that script's methodology includes a real-vs-SHADOW
+    // subgroup-reversal check this endpoint's own first version lacked (it originally GATEd a
+    // pooled market-open result that had already been manually retracted the same session).
+    // Only surfaces GATE cells (the ones that actually cleared the bar) -- NO_GATE/THIN_N cells
+    // exist in the table for anyone auditing it directly, but aren't worth a dashboard row.
+    const cellsQ = await query(`
+      SELECT DISTINCT ON (signal_name) signal_name, notes
+      FROM performance_audit WHERE signal_type='STEP_TRAIL_PER_CELL_CALIB'
+      ORDER BY signal_name, run_date DESC
+    `);
+    const gatedCells = cellsQ.rows
+      .map(r => { try { return JSON.parse(r.notes); } catch (_) { return null; } })
+      .filter(c => c && c.recommendation === 'GATE')
+      .sort((a, b) => b.meanDelta - a.meanDelta);
 
     res.json({
       minRealN: MIN_REAL_N_STEP_TRAIL,
       real: summarize(real),
       shadow: summarize(shadow),
       combined: summarize(rowsQ.rows),
-      morningBySetupType: watchlist,
+      gatedCells,
     });
   } catch (err) {
     console.error('[setups/step-trail-shadow-summary]', err.message);

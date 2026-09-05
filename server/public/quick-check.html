@@ -945,19 +945,22 @@ function openStepTrailPopup(id) {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
 
-  // Morning (9:30-10:30 ET) watchlist by setup_type (2026-09-05, user follow-up) -- surfaces
-  // leads found in the one-off backtest (IB_HIGH_FADE_SHORT/IB_LOW_FADE_LONG/OR5_LOW_FADE_LONG)
-  // as LIVE, self-updating data instead of letting the finding sit as a report that gets
-  // forgotten. Deliberately shows ALL setup_types with any morning data, not just the 3
-  // originally flagged, so a new lead surfaces here on its own too.
-  if (stepTrailShadowSummary?.morningBySetupType?.length) {
-    html += mSection('Morning (9:30-10:30 ET) watchlist, by setup type');
-    for (const s of stepTrailShadowSummary.morningBySetupType) {
-      const color = s.avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
-      html += '<div class="m-row"><span class="m-k">' + s.setup_type.replace(/_/g, ' ') + '</span><span class="m-v mono" style="color:' + color + '">' +
-        'N=' + s.n + (s.thin ? ' (thin)' : '') + ', avg ' + (s.avgDelta >= 0 ? '+' : '') + '$' + s.avgDelta.toFixed(2) +
-        (s.bigWins100pt ? ', ' + s.bigWins100pt + ' big win(s)' : '') + '</span></div>';
+  // Per-(setup_type x time-of-day) calibration (2026-09-05, user request: monitor+calibrate
+  // this for every setup automatically). Reads scripts/calibrate_step_trail_per_setup_time.mjs's
+  // real weekly GATE verdicts (N>=20, positive, not day-clustered, rigor-clean or big-win-
+  // excluded fallback, AND real-vs-SHADOW subgroup-reversal checked) -- only shows cells that
+  // actually cleared the bar, self-expanding as new ones do, no code change needed for a new lead.
+  if (stepTrailShadowSummary?.gatedCells?.length) {
+    html += mSection('Calibrated setup x time-of-day cells (cleared the bar)');
+    for (const c of stepTrailShadowSummary.gatedCells) {
+      const color = c.meanDelta >= 0 ? 'var(--green)' : 'var(--red)';
+      const label = c.key.replace(/__/g, ' — ').replace(/_/g, ' ');
+      html += '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + color + '">' +
+        'N=' + c.n + (c.activeN ? ' (real N=' + c.activeN + ')' : '') + ', avg ' + (c.meanDelta >= 0 ? '+' : '') + '$' + c.meanDelta.toFixed(2) + '</span></div>';
     }
+  } else if (stepTrailShadowSummary) {
+    html += mSection('Calibrated setup x time-of-day cells');
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">No cell has cleared the bar yet (still early -- checked weekly)</span></div>';
   }
 
   $('modal').innerHTML = html;

@@ -402,4 +402,14 @@ echo "=== Weekly backtest run: $(date) ==="
 # OPEN_DECISION per_setup_daily_loss_cap_recent_regime_reversal for the ship/shadow/shelve call.
 /usr/bin/node scripts/backtest_per_setup_daily_loss_cap.mjs
 
+# Per-(setup_type x time-of-day) step-trail calibration (2026-09-05, user request: monitor and
+# calibrate the step-trail runner extension for every setup automatically, not just the 3 leads
+# a one-off backtest happened to find). Writes STEP_TRAIL_PER_CELL_CALIB rows -- a real
+# GATE/NO_GATE/THIN_N verdict per cell, including a real-vs-SHADOW subgroup-reversal check (added
+# after this script's own first run GATEd an already-retracted pooled finding). Monitoring/
+# calibration only -- see OPEN_DECISION step_trail_per_cell_live_wiring_pending for whether/how
+# this ever feeds live wiring once the overall step-trail mechanism itself clears its own
+# Phase 2 bar (still at zero real armed data as of 2026-09-05).
+/usr/bin/node scripts/calibrate_step_trail_per_setup_time.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
