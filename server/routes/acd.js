@@ -1436,6 +1436,328 @@ async function detectGlobexSetup(sessionDate, io) {
 // 2026-09-05 (DeepSeek-planned extraction, Candidate D) -- imported/re-exported near the top
 // of this file alongside the other acdShared.js-family relocations.
 
+// ── runSetupDetection decomposition, Pass 1 (2026-09-06, DeepSeek-planned) ─────────────
+// runSetupDetection (below, ~5000+ lines) is the core RTH level-fade detection engine --
+// internal decomposition into named, explicit-parameter functions, done in verified passes
+// rather than one mechanical move, per docs/OPEN_THREADS.md's 2026-09-06 entry. Pass 1
+// covers the two purely one-directional "fetch inputs" / "extract session state" phases --
+// zero mutation, nothing touching liveStats/allRthBarsRow.rows (this file's own documented
+// block-scoping footgun) or the write path. Pure relocation of existing logic,
+// behavior-identical -- verified line-for-line via diff before removing the originals.
+
+// Fetches the 10 parallel data-source queries plus the 5 day-cached derived values
+// (prior-day VA, floor pivots, PD-2 VA, prior-month VA + month-open, NL30 state) that
+// runSetupDetection needs before it can do anything else. One-directional: reads inputs,
+// returns a bundle, mutates nothing (the getCached/setCached calls inside are the existing
+// day-cache convention, not a mutation of anything the caller owns).
+async function fetchDetectionInputs(todayET) {
+  const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
+    // Today's OR levels + ACD/C state
+    query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
+    // Auction reads for today
+    query(`SELECT opening_call_type, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]),
+    // Prior 5 bracket states using actual session High/Low (9:30–16:00)
+    query(`
+      WITH dates AS (
+        SELECT DISTINCT ts::date as dt FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date < $1
+        ORDER BY dt DESC LIMIT 5
+      )
+      SELECT ts::date::text as trade_date,
+             MAX(high)::float as or_high,
+             MIN(low)::float as or_low
+      FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date IN (SELECT dt FROM dates)
+        AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+      GROUP BY ts::date
+      ORDER BY trade_date DESC
+    `, [todayET]),
+    // IB bars (9:30–10:30, the real 60-min Initial Balance, matching ibHighToday/
+    // ibLowToday's own BETWEEN 570 AND 629 elsewhere in this file) with bid/ask
+    // volume, fed to computeIbBullBear() for the IB_BULLISH/IB_BEARISH read.
+    // FIXED 2026-08-12: this previously queried BETWEEN 570 AND 599 (only the
+    // first 30 min) with a comment mislabeling it "30-min OR period" — conflating
+    // IB with the separate, genuinely-30-min Opening Range concept (acd_daily_log.
+    // or_high/or_low). A direct test (scratch/backtest_ib_window_30v60.mjs,
+    // RESEARCH_CLAIM ib_bullbear_30min_vs_60min_window_test) found the 30-min vs
+    // 60-min window disagrees on bullish/bearish/neither 51% of the time (12% is an
+    // outright opposite call), and the correct 60-min window produces more signals
+    // at a better raw EV. See docs/OPEN_THREADS.md for the recalibration follow-up
+    // this fix requires (existing SETUP_STATUS/OPTIMAL_STOP rows for IB_BULLISH/
+    // IB_BEARISH were calibrated under the old, buggy 30-min classification).
+    query(`
+      SELECT high::float, low::float, close::float, open::float,
+             COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
+      ORDER BY ts
+    `, [todayET]),
+    // Current price + volume + bar timestamp
+    query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+    // 20-bar average volume (last 20 RTH bars)
+    query(`
+      SELECT AVG(volume)::float as avg_vol
+      FROM (SELECT volume FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 575 ORDER BY ts DESC LIMIT 20) v
+    `, [todayET]),
+    // Live timeline events
+    query(`SELECT setup_type, fired_time FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time`, [todayET]),
+    // Session high/low so far today (for TRT stop calculation)
+    query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
+    // First 15 min of bars (9:30-9:45) for live opening-type classification
+    query(`
+      SELECT high::float, low::float, close::float, open::float
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
+      ORDER BY ts
+    `, [todayET]),
+    query(`
+      SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+             high::float, low::float, close::float, open::float, COALESCE(volume,0)::int as volume,
+             COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol
+      FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+      ORDER BY ts
+    `, [todayET]),
+  ]);
+
+  // Prior day value area — cached (changes only between days)
+  let pdVAH = null, pdVAL = null, pdPOC = null;
+  const cachedPdVA = getCached(todayET, 'pdVA');
+  if (cachedPdVA) {
+    ({ pdVAH, pdVAL, pdPOC } = cachedPdVA);
+  } else {
+    const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
+    const priorDay = priorDayQ.rows[0]?.d;
+    if (priorDay) {
+      const vaQ = await query(`
+        SELECT poc::float as poc, vah::float as vah, val::float as val
+        FROM developing_value_log
+        WHERE trade_date = $1
+      `, [priorDay]);
+      if (vaQ.rows[0]) {
+        pdVAH = vaQ.rows[0].vah;
+        pdVAL = vaQ.rows[0].val;
+        pdPOC = vaQ.rows[0].poc;
+      } else {
+        // fallback
+        const fallbackProfile = await computeVolumeProfileForRange(query, { startDate: priorDay, endDate: priorDay });
+        if (fallbackProfile) {
+          pdVAH = fallbackProfile.vah;
+          pdVAL = fallbackProfile.val;
+          pdPOC = fallbackProfile.poc;
+        }
+      }
+    }
+    setCached(todayET, 'pdVA', { pdVAH, pdVAL, pdPOC });
+  }
+
+  // Floor pivots from prior day VA — cached
+  let floorP = null, floorR1 = null, floorS1 = null;
+  const cachedFloor = getCached(todayET, 'floorPivots');
+  if (cachedFloor) {
+    ({ floorP, floorR1, floorS1 } = cachedFloor);
+  } else if (pdVAH && pdVAL && pdPOC) {
+    const pdDvRes = await query(`SELECT session_high::float as hi, session_low::float as lo, session_close::float as cl FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
+    const pdDv = pdDvRes.rows[0];
+    if (pdDv) {
+      floorP = (pdDv.hi + pdDv.lo + pdDv.cl) / 3;
+      floorR1 = 2 * floorP - pdDv.lo;
+      floorS1 = 2 * floorP - pdDv.hi;
+    }
+    setCached(todayET, 'floorPivots', { floorP, floorR1, floorS1 });
+  }
+
+  // PD-2 VA levels (2-day-prior value area) — strong confluence filter
+  let pd2VAH = null, pd2VAL = null;
+  const cachedPD2 = getCached(todayET, 'pd2VA');
+  if (cachedPD2) {
+    ({ pd2VAH, pd2VAL } = cachedPD2);
+  } else {
+    const pd2Q = await query(`
+      SELECT vah::float, val::float FROM developing_value_log
+      WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
+      ORDER BY trade_date DESC LIMIT 1
+    `, [todayET]);
+    if (pd2Q.rows[0]) { pd2VAH = pd2Q.rows[0].vah; pd2VAL = pd2Q.rows[0].val; }
+    setCached(todayET, 'pd2VA', { pd2VAH, pd2VAL });
+  }
+
+  // Prior-month VA + month open — cached (changes only between months)
+  let pmVAH = null, pmVAL = null, pmPOC = null, monthOpen = null;
+  const cachedPmVA = getCached(todayET, 'pmVA');
+  if (cachedPmVA) {
+    ({ pmVAH, pmVAL, pmPOC, monthOpen } = cachedPmVA);
+  } else {
+    try {
+      const pmMonthBoundsQ = await query(`SELECT (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date::text as s, (date_trunc('month', CURRENT_DATE) - INTERVAL '1 day')::date::text as e`);
+      const pmProfile = await computeVolumeProfileForRange(query, { startDate: pmMonthBoundsQ.rows[0].s, endDate: pmMonthBoundsQ.rows[0].e });
+      if (pmProfile) { pmVAH = pmProfile.vah; pmVAL = pmProfile.val; pmPOC = pmProfile.poc; }
+      const moQ = await query(`
+        SELECT open::float as mo FROM price_bars_primary
+        WHERE symbol='NQ' AND ts::date = (
+          SELECT MIN(ts::date) FROM price_bars_primary
+          WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
+            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
+        ) ORDER BY ts LIMIT 1
+      `);
+      monthOpen = moQ.rows[0]?.mo || null;
+    } catch (_) {}
+    setCached(todayET, 'pmVA', { pmVAH, pmVAL, pmPOC, monthOpen });
+  }
+
+  // NL30 state — cached
+  let nl30, nl30State, isMahBull, isMahBear;
+  const cachedNL = getCached(todayET, 'nl30');
+  if (cachedNL) {
+    ({ nl30, nl30State, isMahBull, isMahBear } = cachedNL);
+  } else {
+    const nlQ = await query(`SELECT SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30 FROM acd_daily_log WHERE daily_score IS NOT NULL ORDER BY trade_date DESC LIMIT 1`);
+    nl30 = parseInt(nlQ.rows[0]?.nl30) || 0;
+    nl30State = nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
+    const mahQ = await query(`
+      WITH nl AS (
+        SELECT trade_date,
+               SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30_val,
+               ROW_NUMBER() OVER (ORDER BY trade_date DESC) as rn
+        FROM acd_daily_log WHERE daily_score IS NOT NULL AND trade_date <= $1
+      )
+      SELECT
+        SUM(CASE WHEN nl30_val > 9  THEN 1 ELSE 0 END) as bull_sessions,
+        SUM(CASE WHEN nl30_val < -9 THEN 1 ELSE 0 END) as bear_sessions
+      FROM nl WHERE rn <= 10
+    `, [todayET]);
+    isMahBull = nl30 > 15 && parseInt(mahQ.rows[0]?.bull_sessions || 0) >= 10;
+    isMahBear = nl30 < -15 && parseInt(mahQ.rows[0]?.bear_sessions || 0) >= 10;
+    setCached(todayET, 'nl30', { nl30, nl30State, isMahBull, isMahBear });
+  }
+
+  return {
+    acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow,
+    pdVAH, pdVAL, pdPOC, floorP, floorR1, floorS1, pd2VAH, pd2VAL,
+    pmVAH, pmVAL, pmPOC, monthOpen, nl30, nl30State, isMahBull, isMahBear,
+  };
+}
+
+// Pure extraction from fetchDetectionInputs()'s bundle -- no queries, no mutation.
+function extractSessionState(inputs) {
+  const { acdRow, arRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, pd2VAH, pd2VAL, pdVAH, pdVAL } = inputs;
+
+  const orH = acdRow.rows[0]?.or_high, orL = acdRow.rows[0]?.or_low;
+  const orRange = orH && orL ? orH - orL : null;
+  const openingCall = arRow.rows[0]?.opening_call_type;
+  const currentPrice = latestBarRow.rows[0]?.close || 0;
+  const nearPD2VA = currentPrice && (
+    (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
+    (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
+  );
+  const avgVol = parseFloat(volumeCtxRow.rows[0]?.avg_vol) || 0;
+  const ibBars = ibBarsRow.rows;
+  const ibHigh = ibBars.length >= 3 ? Math.max(...ibBars.map(b => b.high)) : null;
+  const ibLow = ibBars.length >= 3 ? Math.min(...ibBars.map(b => b.low)) : null;
+  const timelineEvents = timelineRow.rows.map(r => r.setup_type);
+
+  // Live opening-type classification (first 15 min of bars, 9:30-9:45) — replaces
+  // the empty auction_reads.opening_call_type for OPEN_DRIVE/VALUE_AREA_RESPONSIVE
+  // gating below. Mirrors /acd/live's classifier (~line 1895) without persisting.
+  const first15 = first15Row.rows;
+  let liveOpeningCallType = null;
+  if (first15.length >= 5 && orH && orL) {
+    const h15 = Math.max(...first15.map(b => b.high));
+    const l15 = Math.min(...first15.map(b => b.low));
+    const lastPx = first15[first15.length - 1].close;
+    const orRng = orH - orL;
+    const ext = orRng * 0.3;
+    const ext50 = orRng * 0.5;
+    const aboveOR = h15 - orH;
+    const belowOR = orL - l15;
+
+    if (aboveOR > ext && belowOR > ext) {
+      liveOpeningCallType = 'OPEN_TEST_DRIVE';
+    } else if (aboveOR > ext50 && belowOR < ext * 0.3) {
+      liveOpeningCallType = 'OPEN_DRIVE';
+    } else if (belowOR > ext50 && aboveOR < ext * 0.3) {
+      liveOpeningCallType = 'OPEN_DRIVE';
+    } else if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH + orL) / 2) < orRng * 0.4) {
+      liveOpeningCallType = 'OPEN_REJECTION_REVERSE';
+    } else {
+      liveOpeningCallType = 'OPEN_AUCTION';
+    }
+  }
+
+  // Live open-vs-prior-value classification — replaces empty auction_reads.open_vs_prior_value
+  const orMid = (orH != null && orL != null) ? (orH + orL) / 2 : null;
+  const liveOpenVsPrior = (orMid != null && pdVAH != null && pdVAL != null)
+    ? (orMid > pdVAH ? 'ABOVE_VALUE' : orMid < pdVAL ? 'BELOW_VALUE' : 'INSIDE_VALUE')
+    : null;
+
+  // ACD/C state for TRT and C detection
+  const aUpFired   = !!acdRow.rows[0]?.a_up_fired;
+  const aUpLevel   = acdRow.rows[0]?.a_up_level;
+  const cUpConf    = !!acdRow.rows[0]?.c_up_confirmed;
+  const aDownFired = !!acdRow.rows[0]?.a_down_fired;
+  const aDownLevel = acdRow.rows[0]?.a_down_level;
+  const cDownConf  = !!acdRow.rows[0]?.c_down_confirmed;
+  const sessionHigh = sessionHiLoRow.rows[0]?.h;
+  const sessionLow  = sessionHiLoRow.rows[0]?.l;
+
+  return {
+    orH, orL, orRange, openingCall, currentPrice, nearPD2VA, avgVol, ibBars, ibHigh, ibLow,
+    timelineEvents, first15, liveOpeningCallType, orMid, liveOpenVsPrior,
+    aUpFired, aUpLevel, cUpConf, aDownFired, aDownLevel, cDownConf, sessionHigh, sessionLow,
+  };
+}
+
+// getHistory closes over nl30/openingCall (both computed in P1) -- promoted to an explicit
+// factory instead of a closure defined inline in runSetupDetection, per the same
+// explicit-parameter decomposition principle as the rest of this pass.
+function makeGetHistory(nl30, openingCall) {
+  return async (structState) => {
+    const nlBucket = nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
+    const oc = openingCall || 'NO_SIGNAL';
+    const r = await query(`
+      SELECT occurrences, win_rate, avg_pnl, t1_hit_rate
+      FROM condition_memory WHERE structural_state=$1 AND nl30_bucket=$2
+        AND opening_call=$3 AND sufficient_data=true
+      LIMIT 1
+    `, [structState, nlBucket, oc]).catch(() => ({ rows: [] }));
+    return r.rows[0] ? {
+      occurrences: r.rows[0].occurrences,
+      winRate: r.rows[0].win_rate != null ? parseFloat(r.rows[0].win_rate) : null,
+      avgPnl: r.rows[0].avg_pnl != null ? parseFloat(r.rows[0].avg_pnl) : null,
+      t1HitRate: r.rows[0].t1_hit_rate != null ? parseFloat(r.rows[0].t1_hit_rate) : null,
+    } : null;
+  };
+}
+
+// Already pure (no closure dependency) -- hoisted out of runSetupDetection unchanged rather
+// than redefined fresh on every single poll call. Returns the nearest valid T1 candidate in
+// the correct direction vs entry. Candidates are checked in priority order; first valid one
+// wins. Returns null if no candidate is on the right side — prevents wrong-direction targets.
+function t1Guard(direction, entry, ...candidates) {
+  const isLong = direction === 'LONG';
+  for (const c of candidates) {
+    if (c != null && isFinite(c) && (isLong ? c > entry : c < entry)) return Math.round(c);
+  }
+  return null;
+}
+
+// Same direction-guard as t1Guard, but candidates are { value, label } pairs
+// and the matching label travels with the chosen value — so the displayed
+// target and its label can never disagree about which structural level was used.
+// Used by the TRT family, where every candidate must be a REAL structural level
+// (no arbitrary price+multiple fallbacks) — falls through to NO_VIABLE_TARGET
+// rather than inventing an unanchored number.
+function t1GuardLabeled(direction, entry, ...candidates) {
+  const isLong = direction === 'LONG';
+  for (const cand of candidates) {
+    const c = cand?.value;
+    if (c != null && isFinite(c) && (isLong ? c > entry : c < entry)) {
+      return { value: Math.round(c), label: cand.label };
+    }
+  }
+  return { value: null, label: 'NO_VIABLE_TARGET' };
+}
 
 // Factory: needs io for socket events
 export default function createACDRouter(io) {
@@ -3878,246 +4200,21 @@ export default function createACDRouter(io) {
       // RTH detection — same as before (8:30 AM–5 PM ET)
       const isRTH = true; // already gated above
 
-      // ── Fetch all data sources in parallel ────────────────────────────────────
-      const [acdRow, arRow, ltRow, ibBarsRow, latestBarRow, volumeCtxRow, timelineRow, sessionHiLoRow, first15Row, allRthBarsRow] = await Promise.all([
-        // Today's OR levels + ACD/C state
-        query(`SELECT or_high::float, or_low::float, a_up_fired, a_up_level::float, c_up_confirmed, a_down_fired, a_down_level::float, c_down_confirmed FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
-        // Auction reads for today
-        query(`SELECT opening_call_type, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]),
-        // Prior 5 bracket states using actual session High/Low (9:30–16:00)
-        query(`
-          WITH dates AS (
-            SELECT DISTINCT ts::date as dt FROM price_bars_primary
-            WHERE symbol='NQ' AND ts::date < $1
-            ORDER BY dt DESC LIMIT 5
-          )
-          SELECT ts::date::text as trade_date, 
-                 MAX(high)::float as or_high, 
-                 MIN(low)::float as or_low
-          FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date IN (SELECT dt FROM dates)
-            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-          GROUP BY ts::date
-          ORDER BY trade_date DESC
-        `, [todayET]),
-        // IB bars (9:30–10:30, the real 60-min Initial Balance, matching ibHighToday/
-        // ibLowToday's own BETWEEN 570 AND 629 elsewhere in this file) with bid/ask
-        // volume, fed to computeIbBullBear() for the IB_BULLISH/IB_BEARISH read.
-        // FIXED 2026-08-12: this previously queried BETWEEN 570 AND 599 (only the
-        // first 30 min) with a comment mislabeling it "30-min OR period" — conflating
-        // IB with the separate, genuinely-30-min Opening Range concept (acd_daily_log.
-        // or_high/or_low). A direct test (scratch/backtest_ib_window_30v60.mjs,
-        // RESEARCH_CLAIM ib_bullbear_30min_vs_60min_window_test) found the 30-min vs
-        // 60-min window disagrees on bullish/bearish/neither 51% of the time (12% is an
-        // outright opposite call), and the correct 60-min window produces more signals
-        // at a better raw EV. See docs/OPEN_THREADS.md for the recalibration follow-up
-        // this fix requires (existing SETUP_STATUS/OPTIMAL_STOP rows for IB_BULLISH/
-        // IB_BEARISH were calibrated under the old, buggy 30-min classification).
-        query(`
-          SELECT high::float, low::float, close::float, open::float,
-                 COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol, volume::int
-          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 629
-          ORDER BY ts
-        `, [todayET]),
-        // Current price + volume + bar timestamp
-        query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
-        // 20-bar average volume (last 20 RTH bars)
-        query(`
-          SELECT AVG(volume)::float as avg_vol
-          FROM (SELECT volume FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 575 ORDER BY ts DESC LIMIT 20) v
-        `, [todayET]),
-        // Live timeline events
-        query(`SELECT setup_type, fired_time FROM acd_setup_events WHERE trade_date=$1 ORDER BY fired_time`, [todayET]),
-        // Session high/low so far today (for TRT stop calculation)
-        query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),
-        // First 15 min of bars (9:30-9:45) for live opening-type classification
-        query(`
-          SELECT high::float, low::float, close::float, open::float
-          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
-          ORDER BY ts
-        `, [todayET]),
-        query(`
-          SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-                 high::float, low::float, close::float, open::float, COALESCE(volume,0)::int as volume,
-                 COALESCE(ask_volume,0)::int as ask_vol, COALESCE(bid_volume,0)::int as bid_vol
-          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-          ORDER BY ts
-        `, [todayET]),
-      ]);
+      // ── Fetch all data sources in parallel + day-cached derived values ────────
+      // (fetchDetectionInputs/extractSessionState -- runSetupDetection decomposition Pass 1,
+      // 2026-09-06, see docs/OPEN_THREADS.md)
+      const inputs = await fetchDetectionInputs(todayET);
+      const {
+        ltRow, ibBarsRow, latestBarRow, allRthBarsRow,
+        pdVAH, pdVAL, pdPOC, floorP, floorR1, floorS1, pd2VAH, pd2VAL,
+        pmVAH, pmVAL, pmPOC, monthOpen, nl30, nl30State, isMahBull, isMahBear,
+      } = inputs;
 
-      // Prior day value area — cached (changes only between days)
-      let pdVAH = null, pdVAL = null, pdPOC = null;
-      const cachedPdVA = getCached(todayET, 'pdVA');
-      if (cachedPdVA) {
-        ({ pdVAH, pdVAL, pdPOC } = cachedPdVA);
-      } else {
-        const priorDayQ = await query(`SELECT MAX(ts::date)::text as d FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16`, [todayET]);
-        const priorDay = priorDayQ.rows[0]?.d;
-        if (priorDay) {
-          const vaQ = await query(`
-            SELECT poc::float as poc, vah::float as vah, val::float as val
-            FROM developing_value_log
-            WHERE trade_date = $1
-          `, [priorDay]);
-          if (vaQ.rows[0]) {
-            pdVAH = vaQ.rows[0].vah;
-            pdVAL = vaQ.rows[0].val;
-            pdPOC = vaQ.rows[0].poc;
-          } else {
-            // fallback
-            const fallbackProfile = await computeVolumeProfileForRange(query, { startDate: priorDay, endDate: priorDay });
-            if (fallbackProfile) {
-              pdVAH = fallbackProfile.vah;
-              pdVAL = fallbackProfile.val;
-              pdPOC = fallbackProfile.poc;
-            }
-          }
-        }
-        setCached(todayET, 'pdVA', { pdVAH, pdVAL, pdPOC });
-      }
-
-      // Floor pivots from prior day VA — cached
-      let floorP = null, floorR1 = null, floorS1 = null;
-      const cachedFloor = getCached(todayET, 'floorPivots');
-      if (cachedFloor) {
-        ({ floorP, floorR1, floorS1 } = cachedFloor);
-      } else if (pdVAH && pdVAL && pdPOC) {
-        const pdDvRes = await query(`SELECT session_high::float as hi, session_low::float as lo, session_close::float as cl FROM developing_value_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 1`, [todayET]);
-        const pdDv = pdDvRes.rows[0];
-        if (pdDv) {
-          floorP = (pdDv.hi + pdDv.lo + pdDv.cl) / 3;
-          floorR1 = 2 * floorP - pdDv.lo;
-          floorS1 = 2 * floorP - pdDv.hi;
-        }
-        setCached(todayET, 'floorPivots', { floorP, floorR1, floorS1 });
-      }
-
-      // PD-2 VA levels (2-day-prior value area) — strong confluence filter
-      let pd2VAH = null, pd2VAL = null;
-      const cachedPD2 = getCached(todayET, 'pd2VA');
-      if (cachedPD2) {
-        ({ pd2VAH, pd2VAL } = cachedPD2);
-      } else {
-        const pd2Q = await query(`
-          SELECT vah::float, val::float FROM developing_value_log
-          WHERE trade_date < (SELECT MAX(trade_date) FROM developing_value_log WHERE trade_date < $1)
-          ORDER BY trade_date DESC LIMIT 1
-        `, [todayET]);
-        if (pd2Q.rows[0]) { pd2VAH = pd2Q.rows[0].vah; pd2VAL = pd2Q.rows[0].val; }
-        setCached(todayET, 'pd2VA', { pd2VAH, pd2VAL });
-      }
-
-      // Prior-month VA + month open — cached (changes only between months)
-      let pmVAH = null, pmVAL = null, pmPOC = null, monthOpen = null;
-      const cachedPmVA = getCached(todayET, 'pmVA');
-      if (cachedPmVA) {
-        ({ pmVAH, pmVAL, pmPOC, monthOpen } = cachedPmVA);
-      } else {
-        try {
-          const pmMonthBoundsQ = await query(`SELECT (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date::text as s, (date_trunc('month', CURRENT_DATE) - INTERVAL '1 day')::date::text as e`);
-          const pmProfile = await computeVolumeProfileForRange(query, { startDate: pmMonthBoundsQ.rows[0].s, endDate: pmMonthBoundsQ.rows[0].e });
-          if (pmProfile) { pmVAH = pmProfile.vah; pmVAL = pmProfile.val; pmPOC = pmProfile.poc; }
-          const moQ = await query(`
-            SELECT open::float as mo FROM price_bars_primary
-            WHERE symbol='NQ' AND ts::date = (
-              SELECT MIN(ts::date) FROM price_bars_primary
-              WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
-                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-            ) ORDER BY ts LIMIT 1
-          `);
-          monthOpen = moQ.rows[0]?.mo || null;
-        } catch (_) {}
-        setCached(todayET, 'pmVA', { pmVAH, pmVAL, pmPOC, monthOpen });
-      }
-
-      // NL30 state — cached
-      let nl30, nl30State, isMahBull, isMahBear;
-      const cachedNL = getCached(todayET, 'nl30');
-      if (cachedNL) {
-        ({ nl30, nl30State, isMahBull, isMahBear } = cachedNL);
-      } else {
-        const nlQ = await query(`SELECT SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30 FROM acd_daily_log WHERE daily_score IS NOT NULL ORDER BY trade_date DESC LIMIT 1`);
-        nl30 = parseInt(nlQ.rows[0]?.nl30) || 0;
-        nl30State = nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
-        const mahQ = await query(`
-          WITH nl AS (
-            SELECT trade_date,
-                   SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30_val,
-                   ROW_NUMBER() OVER (ORDER BY trade_date DESC) as rn
-            FROM acd_daily_log WHERE daily_score IS NOT NULL AND trade_date <= $1
-          )
-          SELECT
-            SUM(CASE WHEN nl30_val > 9  THEN 1 ELSE 0 END) as bull_sessions,
-            SUM(CASE WHEN nl30_val < -9 THEN 1 ELSE 0 END) as bear_sessions
-          FROM nl WHERE rn <= 10
-        `, [todayET]);
-        isMahBull = nl30 > 15 && parseInt(mahQ.rows[0]?.bull_sessions || 0) >= 10;
-        isMahBear = nl30 < -15 && parseInt(mahQ.rows[0]?.bear_sessions || 0) >= 10;
-        setCached(todayET, 'nl30', { nl30, nl30State, isMahBull, isMahBear });
-      }
-
-      // Extract data
-      const orH = acdRow.rows[0]?.or_high, orL = acdRow.rows[0]?.or_low;
-      const orRange = orH && orL ? orH - orL : null;
-      const openingCall = arRow.rows[0]?.opening_call_type;
-      const currentPrice = latestBarRow.rows[0]?.close || 0;
-      const nearPD2VA = currentPrice && (
-        (pd2VAH && Math.abs(currentPrice - pd2VAH) <= 25) ||
-        (pd2VAL && Math.abs(currentPrice - pd2VAL) <= 25)
-      );
-      const avgVol = parseFloat(volumeCtxRow.rows[0]?.avg_vol) || 0;
-      const ibBars = ibBarsRow.rows;
-      const ibHigh = ibBars.length >= 3 ? Math.max(...ibBars.map(b => b.high)) : null;
-      const ibLow = ibBars.length >= 3 ? Math.min(...ibBars.map(b => b.low)) : null;
-      const timelineEvents = timelineRow.rows.map(r => r.setup_type);
-
-      // Live opening-type classification (first 15 min of bars, 9:30-9:45) — replaces
-      // the empty auction_reads.opening_call_type for OPEN_DRIVE/VALUE_AREA_RESPONSIVE
-      // gating below. Mirrors /acd/live's classifier (~line 1895) without persisting.
-      const first15 = first15Row.rows;
-      let liveOpeningCallType = null;
-      if (first15.length >= 5 && orH && orL) {
-        const h15 = Math.max(...first15.map(b => b.high));
-        const l15 = Math.min(...first15.map(b => b.low));
-        const lastPx = first15[first15.length - 1].close;
-        const orRng = orH - orL;
-        const ext = orRng * 0.3;
-        const ext50 = orRng * 0.5;
-        const aboveOR = h15 - orH;
-        const belowOR = orL - l15;
-
-        if (aboveOR > ext && belowOR > ext) {
-          liveOpeningCallType = 'OPEN_TEST_DRIVE';
-        } else if (aboveOR > ext50 && belowOR < ext * 0.3) {
-          liveOpeningCallType = 'OPEN_DRIVE';
-        } else if (belowOR > ext50 && aboveOR < ext * 0.3) {
-          liveOpeningCallType = 'OPEN_DRIVE';
-        } else if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH + orL) / 2) < orRng * 0.4) {
-          liveOpeningCallType = 'OPEN_REJECTION_REVERSE';
-        } else {
-          liveOpeningCallType = 'OPEN_AUCTION';
-        }
-      }
-
-      // Live open-vs-prior-value classification — replaces empty auction_reads.open_vs_prior_value
-      const orMid = (orH != null && orL != null) ? (orH + orL) / 2 : null;
-      const liveOpenVsPrior = (orMid != null && pdVAH != null && pdVAL != null)
-        ? (orMid > pdVAH ? 'ABOVE_VALUE' : orMid < pdVAL ? 'BELOW_VALUE' : 'INSIDE_VALUE')
-        : null;
-
-      // ACD/C state for TRT and C detection
-      const aUpFired   = !!acdRow.rows[0]?.a_up_fired;
-      const aUpLevel   = acdRow.rows[0]?.a_up_level;
-      const cUpConf    = !!acdRow.rows[0]?.c_up_confirmed;
-      const aDownFired = !!acdRow.rows[0]?.a_down_fired;
-      const aDownLevel = acdRow.rows[0]?.a_down_level;
-      const cDownConf  = !!acdRow.rows[0]?.c_down_confirmed;
-      const sessionHigh = sessionHiLoRow.rows[0]?.h;
-      const sessionLow  = sessionHiLoRow.rows[0]?.l;
+      const {
+        orH, orL, orRange, openingCall, currentPrice, nearPD2VA, avgVol, ibBars, ibHigh, ibLow,
+        timelineEvents, first15, liveOpeningCallType, orMid, liveOpenVsPrior,
+        aUpFired, aUpLevel, cUpConf, aDownFired, aDownLevel, cDownConf, sessionHigh, sessionLow,
+      } = extractSessionState(inputs);
 
       // C already fired today? (prevents duplicate C_STANDALONE per day)
       const cFiredRow = await query(
@@ -4127,50 +4224,10 @@ export default function createACDRouter(io) {
       const hasCFiredToday = cFiredRow.rows.length > 0 || timelineEvents.some(e => e.startsWith('C '));
 
       // Helper: look up condition_memory win rate for current conditions
-      const getHistory = async (structState) => {
-        const nlBucket = nl30 > 9 ? 'BULLISH' : nl30 < -9 ? 'BEARISH' : 'RANGING';
-        const oc = openingCall || 'NO_SIGNAL';
-        const r = await query(`
-          SELECT occurrences, win_rate, avg_pnl, t1_hit_rate
-          FROM condition_memory WHERE structural_state=$1 AND nl30_bucket=$2
-            AND opening_call=$3 AND sufficient_data=true
-          LIMIT 1
-        `, [structState, nlBucket, oc]).catch(() => ({ rows: [] }));
-        return r.rows[0] ? {
-          occurrences: r.rows[0].occurrences,
-          winRate: r.rows[0].win_rate != null ? parseFloat(r.rows[0].win_rate) : null,
-          avgPnl: r.rows[0].avg_pnl != null ? parseFloat(r.rows[0].avg_pnl) : null,
-          t1HitRate: r.rows[0].t1_hit_rate != null ? parseFloat(r.rows[0].t1_hit_rate) : null,
-        } : null;
-      };
+      const getHistory = makeGetHistory(nl30, openingCall);
+      // t1Guard/t1GuardLabeled are now module-level functions (hoisted above
+      // createACDRouter) -- no local definition needed, calls below resolve there.
 
-      // Returns the nearest valid T1 candidate in the correct direction vs entry.
-      // Candidates are checked in priority order; first valid one wins.
-      // Returns null if no candidate is on the right side — prevents wrong-direction targets.
-      const t1Guard = (direction, entry, ...candidates) => {
-        const isLong = direction === 'LONG';
-        for (const c of candidates) {
-          if (c != null && isFinite(c) && (isLong ? c > entry : c < entry)) return Math.round(c);
-        }
-        return null;
-      };
-
-      // Same direction-guard as t1Guard, but candidates are { value, label } pairs
-      // and the matching label travels with the chosen value — so the displayed
-      // target and its label can never disagree about which structural level was used.
-      // Used by the TRT family, where every candidate must be a REAL structural level
-      // (no arbitrary price+multiple fallbacks) — falls through to NO_VIABLE_TARGET
-      // rather than inventing an unanchored number.
-      const t1GuardLabeled = (direction, entry, ...candidates) => {
-        const isLong = direction === 'LONG';
-        for (const cand of candidates) {
-          const c = cand?.value;
-          if (c != null && isFinite(c) && (isLong ? c > entry : c < entry)) {
-            return { value: Math.round(c), label: cand.label };
-          }
-        }
-        return { value: null, label: 'NO_VIABLE_TARGET' };
-      };
 
       // ── SETUP 0a: TRT V2 (LONG) ──────────────────────────────────────────────
       // Early trigger: A Down fired, NO C confirmation in either direction, price crosses
