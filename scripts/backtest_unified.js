@@ -849,6 +849,14 @@ function detectVwapMagnetScaleOut(bars, vwapStd, vwapStdFallback = 130, calib = 
 }
 
 // 9. STOP_SWEEP (sweep key level within session range, close back inside + reversal)
+// NOTE 2026-09-07: this function's raw fires are reused unchanged by
+// backtest_setup_b_failed_sweep_reversal_stage1.mjs/backtest_setup_b_correlation_check.mjs
+// for the real FAILED_SWEEP_REVERSAL setup — do not change this function's signature or its
+// own `type` values without checking those two consumers first. The main detection loop
+// below remaps `type` at its own call site (not here) before writing to UNIFIED_BACKTEST,
+// since this generic/unconfluenced level-sweep strategy is NOT the same as live's actual
+// confluence-gated STOP_SWEEP_LONG/SHORT mechanism (acd.js ~7790) — see that call site's
+// comment for the full explanation.
 function detectStopSweep(bars, levels) {
   const keyLevels = Object.values(levels).filter(v => v != null);
   const fires = [];
@@ -1200,7 +1208,28 @@ async function main() {
       ...detectTRT(bars, orH, orL, acd.a_up, acd.a_down, acd.c_up, acd.c_down, pdVAH, pdVAL, acd.a_up_level, acd.a_down_level),
       ...detectBracketBreakout(bars, bracketByDate.get(date), orH, orL, nl30, pdVAH, pdVAL),
       ...detectVwapMagnet(bars, vwapStdByDate.get(date), vwapStdFallback, vwapMagnetCalib),
-      ...detectStopSweep(bars, { pdPOC, pdVAH, pdVAL, orH, orL, ...fpLevels }),
+      // RENAMED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_
+      // 20260907): detectStopSweep()'s own emitted type is left untouched (STOP_SWEEP_LONG/
+      // SHORT) since backtest_setup_b_failed_sweep_reversal_stage1.mjs/backtest_setup_b_
+      // correlation_check.mjs both import and reuse this exact function unchanged for the
+      // real, already-shipped FAILED_SWEEP_REVERSAL setup (confirmed: neither reads .type,
+      // only .direction/.entry/.stop/.target/.entryIdx, so remapping here is fully safe for
+      // them). Remapped ONLY at this call site, because this function tests a fundamentally
+      // different strategy than live's actual STOP_SWEEP_LONG/SHORT (acd.js ~7790): a raw
+      // sweep-and-reverse of ANY key level in `levels` (10+ floor pivots/PD-VA/OR levels,
+      // no confluence gate, fixed 15/30pt stop/target) vs. live's confluence-gated sweep of
+      // only ONL/ONH/PDL/PDH/IB_LOW/IB_HIGH (requires proximity to a SEPARATE set of
+      // secondary levels within 30pt, variable stop, paused calibrated target). Writing both
+      // under the identical 'STOP_SWEEP_LONG'/'STOP_SWEEP_SHORT' UNIFIED_BACKTEST signal_name
+      // silently misrepresented backtest_unified.js's own row as backtesting live's actual
+      // mechanism when it never did — confirmed via grep that no live/display consumer reads
+      // UNIFIED_BACKTEST's STOP_SWEEP_LONG/SHORT specifically (live's displayed edge text
+      // comes from real SETUP_STATUS via _setupStats, not this row), so this is a pure
+      // labeling-hygiene fix with zero live consequence, not something that was ever actually
+      // read as ground truth for the live mechanism.
+      ...detectStopSweep(bars, { pdPOC, pdVAH, pdVAL, orH, orL, ...fpLevels }).map(f => ({
+        ...f, type: f.type === 'STOP_SWEEP_LONG' ? 'STOP_SWEEP_RAW_LONG' : 'STOP_SWEEP_RAW_SHORT',
+      })),
       ...detectCoilSurge(bars),
       ...detectRsiDiv(bars),
     ];
