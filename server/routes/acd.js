@@ -2583,7 +2583,12 @@ async function buildAllCandidates(ctx) {
             entry: +currentPrice.toFixed(0),
             stop: +(orL - 4).toFixed(0),
             target: t1Guard('LONG', currentPrice, pdVAH, currentPrice + (orRange || 80)),
-            targetLabel: 'T1: PD VAH (half off) · Runner: 45pt',
+            // FIXED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907):
+            // this used to advertise "half off at T1 / runner 45pt" -- C_STANDALONE has no
+            // runner_trail_width/extend_target_level/CONDITIONAL_VARIANTS entry anywhere, so
+            // every real trade resolves flat against this single target, same bug already
+            // fixed for VWAP_MAGNET this session. Describe the real flat-exit behavior.
+            targetLabel: 'T1: PD VAH (flat)',
             keyLevel: +orH.toFixed(0), keyLevelLabel: 'OR High',
             description: `No A signal today. C Up — price closing above OR High (${orH?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('C_STANDALONE_UP') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
             history: await getHistory('BALANCE'),
@@ -2595,7 +2600,9 @@ async function buildAllCandidates(ctx) {
             entry: +currentPrice.toFixed(0),
             stop: +(orH + 4).toFixed(0),
             target: t1Guard('SHORT', currentPrice, pdVAL, currentPrice - (orRange || 80)),
-            targetLabel: 'T1: PD VAL (half off) · Runner: 45pt',
+            // FIXED 2026-09-07 (same bug as the LONG branch above): no scale-out is
+            // mechanically enforced for this setup -- describe the real flat exit.
+            targetLabel: 'T1: PD VAL (flat)',
             keyLevel: +orL.toFixed(0), keyLevelLabel: 'OR Low',
             description: `No A signal today. C Down — price closing below OR Low (${orL?.toFixed(0)}).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.('C_STANDALONE_DOWN') ?? 'not yet calibrated'} overall — this setup is currently suppressed (confirmed negative EV).`,
             history: await getHistory('BALANCE'),

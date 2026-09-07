@@ -602,20 +602,33 @@ function detectIB(bars, orH, orL, pdVAH, pdVAL) {
 }
 
 // 3. C_STANDALONE (no A fired, first OR break)
-function detectCStandalone(bars, orH, orL, aUp, aDown, pdVAH, pdVAL) {
-  if (aUp || aDown) return [];
-  const orRange = orH - orL || 60;
+// FIXED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907):
+// 3 divergences from live (acd.js ~2578-2591) closed. (1) live also gates on
+// !hasCFiredToday, passed in here -- numerically a no-op given this function's own
+// single-fire-per-session loop already prevents a second fire, and given ACD's C
+// confirmation structurally requires A to have fired first (so hasCFiredToday can only be
+// true here if aUp/aDown is also true, already excluded by the line below) -- kept as an
+// explicit parameter for exact parity rather than relying on that being obvious to a future
+// reader. (2) DOWN branch now requires nearPD2VA (proximity to a 2-days-prior value area
+// level) exactly like live -- a REAL population-narrowing gate, computed per-bar since
+// currentPrice is per-bar here (live evaluates it fresh each poll). (3) orRange fallback
+// aligned to live's real 80 (was 60) -- both are dead code in practice since orH>orL is
+// never falsy for a real OR, but aligned exactly per this reconciliation's own standard.
+function detectCStandalone(bars, orH, orL, aUp, aDown, pdVAH, pdVAL, hasCFiredToday, pd2VAH, pd2VAL) {
+  if (aUp || aDown || hasCFiredToday) return [];
+  const orRange = orH - orL || 80;
   const fires = [];
   let cFired = false;
   for (let i = 0; i < bars.length; i++) {
     if (cFired) break;
     const b = bars[i];
+    const nearPD2VA = (pd2VAH && Math.abs(b.close - pd2VAH) <= 25) || (pd2VAL && Math.abs(b.close - pd2VAL) <= 25);
     if (b.close > orH) {
       const target = pdVAH && pdVAH > b.close ? pdVAH : b.close + orRange;
       fires.push({ type: 'C_STANDALONE_UP', direction: 'LONG', entryIdx: i, entry: b.close,
         stop: orL - 4, target });
       cFired = true;
-    } else if (b.close < orL) {
+    } else if (b.close < orL && nearPD2VA) {
       const target = pdVAL && pdVAL < b.close ? pdVAL : b.close - orRange;
       fires.push({ type: 'C_STANDALONE_DOWN', direction: 'SHORT', entryIdx: i, entry: b.close,
         stop: orH + 4, target });
@@ -1181,7 +1194,8 @@ async function main() {
     const fires = [
       ...detectLevelFades(bars, fadeLevels, isMonday),
       ...detectIB(bars, orH, orL, pdVAH, pdVAL),
-      ...detectCStandalone(bars, orH, orL, acd.a_up, acd.a_down, pdVAH, pdVAL),
+      ...detectCStandalone(bars, orH, orL, acd.a_up, acd.a_down, pdVAH, pdVAL,
+        acd.c_up || acd.c_down, fadeLevels.PD2_VAH, fadeLevels.PD2_VAL),
       ...detectVAResp(bars, pdVAH, pdVAL, orH, orL, vaRespCalib),
       ...detectTRT(bars, orH, orL, acd.a_up, acd.a_down, acd.c_up, acd.c_down, pdVAH, pdVAL, acd.a_up_level, acd.a_down_level),
       ...detectBracketBreakout(bars, bracketByDate.get(date), orH, orL, nl30, pdVAH, pdVAL),
