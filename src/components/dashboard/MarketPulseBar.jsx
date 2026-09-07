@@ -139,19 +139,31 @@ function SizeChip() {
   };
 
   // standDown (loss-streak-based SKIP trigger) removed server-side 2026-09-05 -- its premise
-  // was rigorously re-tested and refuted (see acd.js's sizeFactorsAtDetection comment). SKIP now
-  // only reflects a genuine sizeMultiplier===0 floor from another, still-valid factor.
+  // was rigorously re-tested and refuted (see acd.js's sizeFactorsAtDetection comment).
+  //
+  // FIXED 2026-09-07 (user-flagged: trading base=1 contract made this chip always show "1 ct"
+  // regardless of conviction): the old `Math.max(1, Math.round(base * mult))` floor forced
+  // EVERY non-zero multiplier up to at least 1 contract -- meaning at base=1 (or any base
+  // where round(base*mult) could legitimately hit 0), a 0.10x near-suppressed setup and a
+  // 1.1x high-conviction setup both rendered as "1 ct", throwing away exactly the information
+  // the multiplier exists to carry. SKIP previously only fired on a literal mult===0, which
+  // the sizeMultiplier IIFE's own documented range (0.10-1.5, CLAUDE.md) never actually
+  // reaches -- SKIP was effectively dead code. Removed the floor: `rec` is now real rounding
+  // (can genuinely be 0), and SKIP is derived from `rec === 0`, not `mult === 0`. This is a
+  // real behavior change, not just a base=1 fix -- a low-conviction setup at any base size can
+  // now genuinely recommend SKIP instead of a token minimum-size trade, which is a more honest
+  // translation of a real suppression signal regardless of base.
   const mult    = setup?.sizeMultiplier ?? null;
   const hasSetup = setup != null && mult !== null;
-  const rec     = hasSetup ? (mult === 0 ? 0 : Math.max(1, Math.round(base * mult))) : null;
+  const rec     = hasSetup ? Math.round(base * mult) : null;
   const verdict = !hasSetup ? null
-    : mult === 0                     ? { label: 'SKIP',    color: C.red,    icon: '⛔' }
+    : rec === 0                 ? { label: 'SKIP',    color: C.red,    icon: '⛔' }
     : mult >= 1.1               ? { label: 'TAKE IT', color: C.green,  icon: '✅' }
     : mult >= 0.85              ? { label: 'STD',     color: '#60a5fa', icon: '▶' }
     : mult >= 0.5               ? { label: 'CUT',     color: C.amber,  icon: '⚠' }
     :                             { label: 'TINY',    color: '#f97316', icon: '⬇' };
 
-  const flash = hasSetup && (mult >= 1.1 || mult === 0);
+  const flash = hasSetup && (mult >= 1.1 || rec === 0);
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 5, flexShrink: 0,

@@ -33,8 +33,8 @@
  * reconstructed are SKIPPED and counted.
  */
 
-import { query } from '../server/db.js';
-import { classifyOpeningType } from '../server/services/caseEngine.js';
+import { query } from '../../server/db.js';
+import { classifyOpeningType } from '../../server/services/caseEngine.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';

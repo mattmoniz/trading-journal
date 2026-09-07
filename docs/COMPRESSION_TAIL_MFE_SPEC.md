@@ -1,5 +1,20 @@
 # Compression → Tail-MFE Spec (does pre-trade compression predict outsized moves?)
 
+**2026-09-06 update: the underpowered `va_overlap_streak` / CONTINUATION question below is now
+RESOLVED POSITIVE at the bar level.** The trade-gated population (186 real CONTINUATION trades)
+was always going to be too thin to settle this — retested directly against all 453 real NQ RTH
+trading days (no setup-gating), per this project's own "market behavior hypotheses go through
+bar-history first" convention. Real, monotonic, chronologically-stable result: a longer
+`va_overlap_streak` (extended value-area overlap across several prior sessions — entrenched
+balance) predicts a real lift in tomorrow's odds of a TREND day (22.1% → 22.6% → 33.3% across
+NONE/SHORT/LONG streak buckets) AND a bigger raw session range (301.76 → 329.16 → 355.57 pts,
+independent confirmation via a totally different measure). The LONG bucket (N=36, streak≥3)
+clears this project's N≥20 floor, spans 16 distinct months with no single month dominating, and
+is chronologically stable (TREND=33.3% in all 3 chronological thirds, exactly). See `RESEARCH_CLAIM
+va_overlap_streak_predicts_breakout_bar_level_20260906` (CONFIRMED) and `docs/OPEN_THREADS.md`'s
+2026-09-06 entry for the full writeup. Not yet tested against real setup EV — that's the natural
+next step, mirroring every other confirmed signal from that session.
+
 **Status: RESOLVED 2026-08-05, MIXED — real statistical effects were found at both the cross-day and
 same-day level, but a day-type conditioning check found the same-day signal likely predicts the
 WRONG behavior (turbulence, not trend) for a naive hold-longer rule. NOT ready to design or wire —

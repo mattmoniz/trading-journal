@@ -10,6 +10,7 @@
 import { query } from '../db.js';
 import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding } from './touchQuality.js';
+import { computeProfile } from './developingValueService.js';
 import { getCached, setCached, DAY_CACHE_TTL, getTouchQualityBaseline } from './acdShared.js';
 
 // Trailing 20-day average OR-window (9:30-9:45am ET) volume, STRICTLY PRIOR days only
@@ -113,6 +114,75 @@ export function computeRegimeStamp(price, vaMap) {
 export const REGIME_STAMP_COLS = REGIME_LOOKBACKS.flatMap(L => [`regime_pos_${L}d`, `regime_label_${L}d`]);
 export function regimeStampValues(stamp) { return REGIME_STAMP_COLS.map(c => stamp[c] ?? null); }
 
+// ── va_overlap_streak (live tagging, 2026-09-06) ────────────────────────────────────
+// Count of consecutive PRIOR sessions (strictly before tradeDate) whose final value areas
+// overlap, walked backward from the day before tradeDate. Column already existed on
+// active_setups (scripts/backfill_compression_metrics.mjs, docs/COMPRESSION_TAIL_MFE_SPEC.md)
+// but was backfill-only -- that spec's own text flagged live tagging as "a natural follow-up
+// once Part 2 shows whether this is worth tracking at all." Part 2 now has a real answer
+// (RESEARCH_CLAIM va_overlap_streak_predicts_breakout_bar_level_20260906, CONFIRMED,
+// bar-level, chronologically stable): an extended overlap streak (3+) predicts a real lift
+// toward tomorrow being a TREND day. NOT yet validated against real setup EV -- zero real
+// trades have occurred on a qualifying LONG-streak day since live tracking began
+// (RESEARCH_CLAIM updated 2026-09-06 with this exact gap) -- so this is deliberately
+// informational-only, same posture as regime_pos_Nd above: tag every real setup now so the
+// next time the market enters an extended streak, real trades are already tagged and this
+// can be tested immediately instead of needing another backfill-and-wait cycle. Do not use
+// this column to gate or size anything until a real forward sample exists.
+//
+// Entirely built from FINAL, fully-known prior-day profiles (never today's own developing
+// profile) -- no lookahead concern, and genuinely day-stable, so cached like every other
+// day-stable value in this file rather than recomputed per poll.
+const VA_OVERLAP_TRAILING_WINDOW = 60;
+function vaOverlap(a, b) { return a.val <= b.vah && a.vah >= b.val; }
+export async function getVaOverlapStreak(tradeDate) {
+  const cached = getCached(tradeDate, 'vaOverlapStreak', DAY_CACHE_TTL);
+  if (cached != null) return cached;
+  try {
+    const res = await query(`
+      SELECT ts::date::text as d,
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as et_min,
+        high::float as high, low::float as low, volume::float as volume
+      FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date < $1
+        AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+        AND ts::date >= (
+          SELECT dt FROM (
+            SELECT DISTINCT ts::date as dt FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date < $1
+              AND (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts)) BETWEEN 570 AND 959
+            ORDER BY dt DESC LIMIT ${VA_OVERLAP_TRAILING_WINDOW + 1}
+          ) sub ORDER BY dt ASC LIMIT 1
+        )
+      ORDER BY ts ASC
+    `, [tradeDate]);
+    const barsByDay = new Map();
+    for (const b of res.rows) {
+      if (!barsByDay.has(b.d)) barsByDay.set(b.d, []);
+      barsByDay.get(b.d).push(b);
+    }
+    const priorDays = [...barsByDay.keys()].sort(); // ascending, all strictly < tradeDate
+    let streak = 0;
+    if (priorDays.length >= 2) {
+      const profileOf = (d) => {
+        const bars = barsByDay.get(d);
+        return bars && bars.length >= 10 ? computeProfile(bars) : null;
+      };
+      let prev = profileOf(priorDays[priorDays.length - 1]); // day before tradeDate
+      for (let i = priorDays.length - 2; i >= 0 && prev; i--) {
+        const cur = profileOf(priorDays[i]);
+        if (!cur || !vaOverlap(prev, cur)) break;
+        streak++;
+        prev = cur;
+      }
+    }
+    return setCached(tradeDate, 'vaOverlapStreak', streak);
+  } catch (e) {
+    console.error('[getVaOverlapStreak] failed, callers get null:', e.message);
+    return setCached(tradeDate, 'vaOverlapStreak', null);
+  }
+}
+
 // Latest VOLUME_BUILDING_CALIBRATION/ROSTER_WIDE_FADE row (scripts/backtest_volume_building_
 // signal.mjs, weekly). Cached per day -- recalibration only runs weekly, no reason to hit the
 // DB on every 15s poll. Returns null if never calibrated yet (classifyVolumeBuilding() handles
@@ -210,4 +280,42 @@ export async function getPaceBaseline(tradeDate, lag = 5) {
   `, [tradeDate, lag]);
   const baseline = new Map(res.rows.map(r => [r.mod, r]));
   return setCached(tradeDate, cacheKey, baseline);
+}
+
+// ── prior_day_profile live read (2026-09-06) ────────────────────────────────────────
+// auction_reads.prior_day_profile for tradeDate -- ALREADY a look-back field stored on the
+// CURRENT day's own row (confirmed earlier this session, no date-shifting needed). Feeds a
+// real, confirmed regime-risk finding into live sizing: RESEARCH_CLAIM
+// prior_day_trend_profile_anticipates_rotation_day (market-level, chi2~=10.01, p~=0.0016,
+// N=436) AND, more directly relevant to sizing, the real-setup replication check that found
+// the broad fade roster (19 setup_types, N=1027) nets WORSE on TREND-preceded days
+// (avg EV diff -$10.86/trade, only 37% of types individually favorable) -- see
+// docs/OPEN_THREADS.md's 2026-09-06 entries and DeepSeek's design critique
+// (scratch/deepseek_response.md as of that date) for the full reasoning behind shipping a
+// POOLED gate here rather than a per-(setup_type, profile) DAY_TYPE_ALPHA-style mirror: the
+// per-cell version would decompose the real N=1027 pooled effect into cells mostly below
+// this codebase's own N>=20 floor and fail to act on a real, already-confirmed finding.
+//
+// DELIBERATE CACHING NOTE: unlike every other day-cached value in this file, a genuinely
+// null prior_day_profile (no pre-market ACD read done yet) is indistinguishable from a cache
+// miss when read back via `getCached() != null` -- both return null. This means a null-profile
+// day re-queries auction_reads every call instead of caching the null, which is a minor
+// performance cost (one cheap indexed single-row lookup per call), NOT a correctness bug --
+// the function still returns the correct value (null) every time regardless. Not worth a
+// sentinel-value workaround for this low a stakes/frequency tradeoff.
+export async function getPriorDayProfile(tradeDate) {
+  const cached = getCached(tradeDate, 'priorDayProfile', DAY_CACHE_TTL);
+  if (cached != null) return cached;
+  try {
+    const res = await query(
+      `SELECT prior_day_profile FROM auction_reads WHERE trade_date=$1`,
+      [tradeDate]
+    );
+    const val = res.rows[0]?.prior_day_profile ?? null;
+    if (val != null) setCached(tradeDate, 'priorDayProfile', val);
+    return val;
+  } catch (e) {
+    console.error('[getPriorDayProfile] failed:', e.message);
+    return null;
+  }
 }

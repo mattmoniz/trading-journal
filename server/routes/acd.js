@@ -24,7 +24,7 @@ import { resolveSetupsByPrice } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
 export { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues };
-import { getOrVolBaseline20d, getVolatilityScaledDefault, getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVolumeBuildingCalibration, computeLiveVolumeBuildingSignal, getPaceBaseline } from '../services/acdLiveCalibration.js';
+import { getOrVolBaseline20d, getVolatilityScaledDefault, getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVolumeBuildingCalibration, computeLiveVolumeBuildingSignal, getPaceBaseline, getVaOverlapStreak, getPriorDayProfile } from '../services/acdLiveCalibration.js';
 export { getPaceBaseline };
 import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import {
@@ -90,6 +90,10 @@ function canonicalConfluenceLevelName(name) {
 // Keyed by trade date so it naturally resets daily without extra cleanup logic; bounded
 // size (setup_types × day_types × reasons, low hundreds at most).
 const _dtaGateLogged = new Set();
+// Dedup for the priorDayProfile-missing warning (~line 5545) — same reasoning as
+// _dtaGateLogged just above: without this, a day with no pre-market ACD read done yet would
+// log the same "mechanism is silently inert" warning every 15s poll all day.
+const _pdpMissingLogged = new Set();
 
 // getOrVolBaseline20d/getVolatilityScaledDefault/getValueAreaRegimeMap/computeRegimeStamp/
 // REGIME_STAMP_COLS/regimeStampValues/getVolumeBuildingCalibration/
@@ -1295,6 +1299,7 @@ async function detectGlobexSetup(sessionDate, io) {
       // only, same as RTH, since this app has no broker execution capability.
       const regimeStamp = computeRegimeStamp(entry, await getValueAreaRegimeMap(sessionDate));
       const fireTags = await computeFireTags(sessionDate, 'GLOBEX', etNow.getHours() * 60 + etNow.getMinutes());
+      const vaOverlapStreak = await getVaOverlapStreak(sessionDate);
       // Volume-building signal (2026-08-28, informational only -- see touchQuality.js's
       // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Bars since Globex
       // open (18:00 ET) through now, correctly spans midnight (getSessionBarsSinceOpen above).
@@ -1359,11 +1364,11 @@ async function detectGlobexSetup(sessionDate, io) {
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
           runner_trail_width, wider_target_mult,
-          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal
+          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak
         ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,$15,$16,
           ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
           ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-          $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+          $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
@@ -1395,7 +1400,7 @@ async function detectGlobexSetup(sessionDate, io) {
           // globex_ambiguous_names_need_session_backfill for the
           // still-open historical-data side of this (existing rows' bet_class not yet
           // corrected retroactively -- this fix only affects future fires).
-          'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal)]);
+          'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal), vaOverlapStreak]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
@@ -5384,16 +5389,17 @@ export default function createACDRouter(io) {
                 }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
+                const svVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
                 const ins = await query(`
                   INSERT INTO active_setups (
                     trade_date, setup_type, fired_at, expires_at, status, origin_status,
                     entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                     extend_target_level, price_at_detection, confluence_score_at_detection,
-                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class
+                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, va_overlap_streak
                   ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
                     ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')},
                     ${FIRE_TAG_COLS.map((_, i) => `$${13 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                    $${13 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                    $${13 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${14 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                   ON CONFLICT DO NOTHING
                   RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
                 `, [todayET, svSetupType, svExpiresAt, live.status, svEntry, svStop, svT1,
@@ -5401,7 +5407,7 @@ export default function createACDRouter(io) {
                     svExtendTarget, levelDensity, stackVolSignal.levels, live.reason,
                     ...regimeStampValues(svRegimeStamp),
                     ...fireTagValues(svFireTags),
-                    getBetClass(svSetupType)]);
+                    getBetClass(svSetupType), svVaOverlapStreak]);
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
@@ -5539,6 +5545,17 @@ export default function createACDRouter(io) {
         sessionHigh, sessionLow, ltRow, ibBarsRow, latestBarRow, allRthBarsRow,
         pdVAH, pdVAL, pdPOC, nl30, nl30State, isMahBull, isMahBear,
       });
+
+      // Prior-day TREND risk gate (2026-09-06) — fetched once here, referenced as a plain
+      // closure variable inside the (synchronous) sizeMultiplier IIFE below, same pattern as
+      // dtClass just above. See getPriorDayProfile()'s own header (acdLiveCalibration.js) for
+      // the full finding this feeds and why a pooled gate was chosen over a per-cell mirror
+      // of DAY_TYPE_ALPHA (DeepSeek design critique, 2026-09-06).
+      const priorDayProfile = await getPriorDayProfile(todayET);
+      if (priorDayProfile == null && !_pdpMissingLogged.has(todayET)) {
+        _pdpMissingLogged.add(todayET);
+        console.error(`[priorDayProfile-gate] No auction_reads.prior_day_profile for ${todayET} — TREND-day risk gate is silently inert until today's pre-market ACD read is entered.`);
+      }
 
       // ── Pre-fetch: overnight reads + prior setups (needed BEFORE level fade section) ─────
       // isS2DoubleCounter, isOvernightAligned, sizeMultiplier all reference these.
@@ -7477,6 +7494,27 @@ export default function createACDRouter(io) {
                 // decision — SHADOW/informational findings here don't need full rigor-clean
                 // proof before being tried, unlike a change to a live SUPPRESS/ACTIVE gate.
                 if (touchQualityTest && !liveStats._suppressedSetups?.has(type)) mult = Math.min(mult + 0.15, 1.5);
+                // Prior-day TREND risk gate (2026-09-06, RESEARCH_CLAIM
+                // prior_day_trend_profile_anticipates_rotation_day + the real-setup replication
+                // check on the same date): the broad real fade roster (19 setup_types, N=1027)
+                // nets WORSE on days preceded by a TREND day (-$10.86/trade avg diff, only 37%
+                // of types individually favorable) -- a pooled effect, not per-type, so this is
+                // a direct pooled gate (mirrors the existing dtClass==='TREND' line above) rather
+                // than a per-(setup_type, prior_day_profile) DAY_TYPE_ALPHA-style mirror, which
+                // would decompose N=1027 into cells mostly below this codebase's own N>=20 floor
+                // and fail to act on the confirmed finding (DeepSeek design critique, 2026-09-06,
+                // see docs/OPEN_THREADS.md for the full reasoning). Deliberately placed HERE,
+                // immediately before the loss-streak cap rather than mid-stack alongside dtClass
+                // -- DeepSeek's review found the mid-stack dtClass/sessionConflictFor SUPPRESS-
+                // shaped adjustments are NOT actually terminal (later additive boosts like
+                // touchQualityTest above can silently erode them back up), which defeats the
+                // purpose of a risk-reduction gate. This slot sits after every remaining additive
+                // boost, so the reduction actually sticks, while the loss-streak cap (Math.min,
+                // next) can still only reduce further, never undoing this. Additive/independent
+                // from the existing dtClass==='TREND' line (7445) rather than a replacement --
+                // they measure different temporal referents (today's day-type vs yesterday's
+                // profile) and can legitimately both apply the same day.
+                if (priorDayProfile === 'TREND') mult = Math.max(mult - 0.25, 0.25);
                 // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
                 // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
                 if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
@@ -7584,6 +7622,7 @@ export default function createACDRouter(io) {
               const auditStats = liveStats._setupStats?.[type];
               const auditRegimeStamp = computeRegimeStamp(currentPrice, await getValueAreaRegimeMap(todayET).catch(() => ({})));
               const auditFireTags = await computeFireTags(todayET, 'RTH', etMin);
+              const auditVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
               // breakeven_trail_never_engaged_5of6_rows_missing (found 2026-08-16): every
               // one of the 6 _TRAIL setup_types is THIN_N in SETUP_STATUS by construction
               // (resolveSetupType() unconditionally diverts their touches here, and
@@ -7635,12 +7674,12 @@ export default function createACDRouter(io) {
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   historical_win_rate, historical_sessions, runner_trail_width, wider_target_mult,
-                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal
+                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -7668,6 +7707,7 @@ export default function createACDRouter(io) {
                 ...fireTagValues(auditFireTags),
                 getBetClass(type),
                 JSON.stringify(auditVolBuildingSignal),
+                auditVaOverlapStreak,
               ]).catch(() => {});
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -8084,10 +8124,11 @@ export default function createACDRouter(io) {
       // Overnight structural reads — data variables for trade brief + conviction section below.
       // isOvernightAligned, isOvernightCounter, isS2DoubleCounter are defined ABOVE (before the
       // level fade section at ~line 3786) to fix TDZ bug. Only the data bindings follow here.
-      const arRow2 = await query(`SELECT overnight_inventory, open_vs_prior_value, prior_day_profile FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
+      const arRow2 = await query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
       const overnightInv = arRow2.rows[0]?.overnight_inventory;
       const openVsValue = arRow2.rows[0]?.open_vs_prior_value;
-      const priorDayProfile = arRow2.rows[0]?.prior_day_profile;
+      // priorDayProfile already fetched earlier (~line 5545, via getPriorDayProfile) for the
+      // sizeMultiplier TREND-day gate -- reused here rather than re-querying the same field.
 
       // Suppress only on DOUBLE headwind: NL30 counter AND overnight counter (20% WR).
       // NL30 counter alone = 33% WR but IB_BEARISH is 52% and TURBULENT days are 67%.
@@ -8491,8 +8532,17 @@ export default function createACDRouter(io) {
           else if (openVsValue === 'INSIDE_VALUE')
             whyParts.push('Open inside value — balanced, no strong structural tilt. Context-dependent');
 
+          // FIXED 2026-09-07 (user-flagged hardcoded-WR-literal cleanup pass): was "...61% WR
+          // (N=23)" -- a hand-typed statistic with no query behind it anywhere in this
+          // codebase, a direct "never hand-type a WR%/N literal" violation. No real,
+          // operationalized backtest of "first sustained directional move after a NONTREND
+          // day" exists yet to derive a live number from (this session's real prior_day_profile
+          // work tested TREND specifically, not NONTREND's own claim) -- removed the fabricated
+          // figure rather than invent a new unverified one under time pressure. If this pattern
+          // is ever properly backtested, re-add the real number via a live query/RESEARCH_CLAIM,
+          // not a literal.
           if (priorDayProfile === 'NONTREND')
-            whyParts.push('Prior day was NONTREND (extreme balance). Today resolves — first sustained directional move has 61% WR (N=23). This is a high-conviction break');
+            whyParts.push('Prior day was NONTREND (extreme balance). Today often resolves with the first sustained directional move — a potential high-conviction break, not independently backtested yet');
           else if (priorDayProfile === 'TREND')
             whyParts.push('Prior day was a TREND day. Continuation bias — look for pullback entries, not fade entries');
           else if (priorDayProfile === 'NEUTRAL')
@@ -8694,6 +8744,7 @@ export default function createACDRouter(io) {
               const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
               const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
               const btRegimeStamp = computeRegimeStamp(bt.entry, btVaMap);
+              const btVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
               // bt.etMin is the touch's OWN time-of-day (earlier than "now", since this is a
               // same-poll backfill of an earlier-in-the-session touch) -- use it, not the
               // outer etMin, so minutes_from_open reflects when the touch actually happened.
@@ -8737,12 +8788,12 @@ export default function createACDRouter(io) {
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
                   confluence_score_at_detection, confluence_levels_at_detection,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width)
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width, va_overlap_streak)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
@@ -8758,6 +8809,7 @@ export default function createACDRouter(io) {
                 btTrailVariant?.trailSignalName != null ? null : WIDER_TARGET_MULT,
                 JSON.stringify(btVolBuildingSignal),
                 btRunnerTrailWidth,
+                btVaOverlapStreak,
               ]);
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
@@ -9158,6 +9210,7 @@ export default function createACDRouter(io) {
         } else {
         const regimeStamp = computeRegimeStamp(active.entry, await getValueAreaRegimeMap(todayET));
         const fireTags = await computeFireTags(todayET, 'RTH', etMin);
+        const activeVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
         // Volume-building signal (2026-08-28, informational only -- see touchQuality.js's
         // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Bars since RTH
         // open through now, not the frozen allRthBarsRow.rows (see auditVbSessionBars comment
@@ -9175,13 +9228,14 @@ export default function createACDRouter(io) {
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
             ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult,
-            size_factors_at_detection, vol_building_signal, or_range_at_detection, rvol_20d_at_detection
+            size_factors_at_detection, vol_building_signal, or_range_at_detection, rvol_20d_at_detection, va_overlap_streak
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5},
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -9220,6 +9274,7 @@ export default function createACDRouter(io) {
           // setup_type, which never sets these properties on their candidate object.
           active.orRangeAtDetection ?? null,
           active.rvol20dAtDetection ?? null,
+          activeVaOverlapStreak,
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -9399,6 +9454,7 @@ export default function createACDRouter(io) {
               && shadow.direction && await isOppositeDirectionOpen(shadow.direction);
             const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
+            const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
             // computeVolumeBuildingMeasures/classifyVolumeBuilding header comment). Found missing
             // from this insert site entirely (a 5th active_setups INSERT this file has, distinct
@@ -9411,11 +9467,11 @@ export default function createACDRouter(io) {
             const shadowIns = await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal)
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, va_overlap_streak)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
                 ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                 $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2})
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
               ON CONFLICT DO NOTHING
               RETURNING id
             `, [
@@ -9437,6 +9493,7 @@ export default function createACDRouter(io) {
               (shadow.type !== 'ABSORPTION_LONG' && !shadow.type.startsWith('COIL_SURGE')
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
               JSON.stringify(shadowVolBuildingSignal),
+              shadowVaOverlapStreak,
             ]).catch(() => ({ rows: [] }));
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
