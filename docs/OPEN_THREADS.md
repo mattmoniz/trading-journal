@@ -1,5 +1,13 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-07 — Two quick OPEN_DECISION wins, 4 larger ones scanned and left flagged
+
+Asked "what else can we deal with quickly" — scanned all 55 PENDING `OPEN_DECISION`s and split by whether they're actually mechanical/small vs. requiring real new engineering. Resolved 2 quick ones same session (`setup_status_dow_clear_skips_globally_suppressed_types`, `move_watcher_scripts_to_tracked_dir` — both full detail in their resolution text). Deliberately NOT attempted (confirmed genuinely larger scope, left PENDING as-is):
+- `setup_status_excludes_trail_exit_resolution` — touches live SUPPRESS/PROMOTE gating, needs the full 3-phase Gemini/DeepSeek workflow first (already stated in its own text).
+- `globex_same_direction_stacking_no_sizedown` — needs a real new same-direction-stacking/trend-awareness mechanism built for `detectGlobexSetup()`, not a patch.
+- `nq_bar_gaps_2024_2025_unflagged` — root-causing 3 historical data gaps + auditing ~20 scripts for unbounded-scan exposure.
+- `claude_md_needs_recondensation_20260901` / `circuit_breaker_mute_tag_ha_page_requirement` — both already explicitly scoped by a prior session as "don't rush this."
+
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 ## 🔶 2026-09-07 — acd.js duplication/dead-code audit: 3 dedup fixes, 5 orphaned detectors resolved
 

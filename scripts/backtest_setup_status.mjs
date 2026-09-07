@@ -819,6 +819,17 @@ async function run() {
   `, [DOW_SIGNAL_TYPE]);
 
   for (const row of currentDowQ.rows) {
+    // Fixed 2026-09-07 (setup_status_dow_clear_skips_globally_suppressed_types): a type
+    // currently in globalSuppress was never even considered by the loop above (skipped at
+    // line ~738, so it can never appear in newDowSuppress) — without this check, this clear
+    // loop was silently wiping its own DOW-specific suppression history to ACTIVE for the
+    // entire time it's globally suppressed, so if the type is later globally un-suppressed
+    // (e.g. via PROMOTE recovery), it would incorrectly start with a clean per-DOW slate
+    // instead of its real prior DOW-level history. No live consequence while still globally
+    // suppressed (global SUPPRESS already blocks firing regardless of the DOW value) — this
+    // only protects against a bad re-entry state later.
+    const rowType = row.signal_name.replace(/_DOW_\d+$/, '');
+    if (globalSuppress.has(rowType)) continue;
     if (row.recommendation === 'SUPPRESS' && !newDowSuppress.has(row.signal_name)) {
       // Was suppressed, no longer qualifies — write ACTIVE to clear it
       await query(`
