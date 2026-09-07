@@ -1919,47 +1919,14 @@ async function buildAllCandidates(ctx) {
         };
       }
 
-      // ── SETUP 0e: A DOWN STRONG (SHORT) ──────────────────────────────────────
-      let aDownStrong = null;
-      if (aDownFired && nl30 <= 9 &&
-          !timelineEvents.some(e => e === 'A_DOWN_STRONG' || e === 'A_DOWN_WEAK' || e === 'TRT_SHORT' || e === 'TRT_SHORT_V2')) {
-        const aDownStrongT1 = t1GuardLabeled('SHORT', currentPrice,
-          { value: pdVAL, label: 'Prior Day VAL' },
-          { value: (orL != null && orRange != null) ? orL - orRange : null, label: 'OR Measured Move' }
-        );
-        aDownStrong = {
-          type: 'A_DOWN_STRONG', label: 'A DOWN STRONG (SHORT)',
-          direction: 'SHORT',
-          entry: +currentPrice.toFixed(0),
-          stop: orH ? +orH.toFixed(0) : null,
-          target: aDownStrongT1.value,
-          targetLabel: aDownStrongT1.label,
-          keyLevel: orL ? +orL.toFixed(0) : null, keyLevelLabel: 'OR Low',
-          description: `A Down fired at ${aDownLevel?.toFixed(0)} under a supportive trend (NL30 is at ${nl30}). Bearish momentum holds below OR Low. Stop above OR High (${orH?.toFixed(0)}).`,
-          history: await getHistory('TRENDING_DOWN'),
-        };
-      }
-
-      // ── SETUP 0f: A UP WEAK (LONG) ───────────────────────────────────────────
-      let aUpWeak = null;
-      if (aUpFired && nl30 < -9 &&
-          !timelineEvents.some(e => e === 'A_UP_STRONG' || e === 'A_UP_WEAK' || e === 'TRT_LONG' || e === 'TRT_LONG_V2')) {
-        const aUpWeakT1 = t1GuardLabeled('LONG', currentPrice,
-          { value: pdVAH, label: 'Prior Day VAH' },
-          { value: (orH != null && orRange != null) ? orH + orRange * 0.5 : null, label: 'OR Half Measured Move' }
-        );
-        aUpWeak = {
-          type: 'A_UP_WEAK', label: 'A UP WEAK (LONG)',
-          direction: 'LONG',
-          entry: +currentPrice.toFixed(0),
-          stop: orL ? +orL.toFixed(0) : null,
-          target: aUpWeakT1.value,
-          targetLabel: aUpWeakT1.label,
-          keyLevel: orH ? +orH.toFixed(0) : null, keyLevelLabel: 'OR High',
-          description: `A Up fired at ${aUpLevel?.toFixed(0)} but against a bearish trend (NL30 is at ${nl30}). High failure/reversal risk. Stop below OR Low (${orL?.toFixed(0)}).`,
-          history: await getHistory('TRANSITIONAL'),
-        };
-      }
+      // A_DOWN_STRONG and A_UP_WEAK were removed here 2026-09-07 (dead-code audit) --
+      // confirmed by commit 63b4168 (2026-06-24, "Remove dead code setups") to have zero real
+      // fires across 389 trading days: both require the A-signal to fire against its own NL30
+      // context (A Down while NL30 is non-bearish; A Up while NL30 is bearish), which the A
+      // multiplier that produces aUpFired/aDownFired structurally prevents. That commit already
+      // un-wired both from shadowCandidates; this removes the still-computing-every-poll-for-
+      // nothing detector code itself. Their sibling A_UP_STRONG/A_DOWN_WEAK were NOT part of
+      // that finding (both have real historical fires) and remain live below.
 
       // ── SETUP 0g: A DOWN WEAK (SHORT) ────────────────────────────────────────
       let aDownWeak = null;
@@ -3010,7 +2977,7 @@ async function buildAllCandidates(ctx) {
 
 
   return {
-    trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownStrong, aUpWeak, aDownWeak, trtMah, trt,
+    trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownWeak, trtMah, trt,
     dtClass, sessionBiasMatch, sessionConflictFor, ibSetup,
     openDrive, openingDrive15Min, cPairedLong, cPairedShort, cReversalLong, cReversalShort,
     failedAuction, bracketBreakout, valueAreaResp, cStandalone, gapFill,
@@ -5494,7 +5461,7 @@ export default function createACDRouter(io) {
       // -- called below with an explicit ctx, results destructured back into these exact
       // local names so every downstream phase keeps working unchanged via closure.
       const {
-        trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownStrong, aUpWeak, aDownWeak, trtMah, trt,
+        trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownWeak, trtMah, trt,
         dtClass, sessionBiasMatch, sessionConflictFor, ibSetup,
         openDrive, openingDrive15Min, cPairedLong, cPairedShort, cReversalLong, cReversalShort,
         failedAuction, bracketBreakout, valueAreaResp, cStandalone, gapFill,
@@ -8221,6 +8188,20 @@ export default function createACDRouter(io) {
         // the standard new-setup-type pattern, no new gating logic needed.
         trtLongV2, trtShortV2, cReversalLong, cReversalShort,
         aDownWeak,
+        // aUpStrong/gapFill(SHORT only)/rsiDivSetup wired in 2026-09-07 (dead-code audit):
+        // aUpStrong is aDownWeak's sibling from the same 2026-06-19 batch, dropped from this
+        // array by the 2026-06-24 dead-code cleanup as an unintended side effect of removing
+        // the confirmed-dead A_DOWN_STRONG/A_UP_WEAK (aUpStrong itself was never named in that
+        // commit's "never fired in 389 days" finding, and has real historical fires). gapFill
+        // is wired SHORT-only for the same reason -- that commit named GAP_FILL_LONG (not
+        // SHORT) as rare; only GAP_FILL_SHORT has real historical fires. rsiDivSetup was never
+        // wired into any array from its introduction (same commit) -- untested either way, so
+        // this is a first real SHADOW look, not a resurrection of a confirmed negative. All 3
+        // have zero/thin SETUP_STATUS coverage, so isLiveEligible()'s knownTypes.has() check
+        // keeps them SHADOW-only until real N clears the standard N>=20 bar.
+        aUpStrong,
+        gapFill?.type === 'GAP_FILL_SHORT' ? gapFill : null,
+        rsiDivSetup,
         // ibSetup moved to candidates 2026-07-01 — BALANCE suppressed, TREND/TURBULENT promoted
         openDrive,
         openingDrive15Min,
@@ -8902,8 +8883,7 @@ export default function createACDRouter(io) {
         FAILED_AUCTION_SHORT: 30, FAILED_AUCTION_LONG: 30,
         VALUE_AREA_RESPONSIVE_SHORT: null, VALUE_AREA_RESPONSIVE_LONG: null,
         BRACKET_BREAKOUT_LONG: 960, BRACKET_BREAKOUT_SHORT: 960, // full session
-        A_UP_STRONG: null, A_DOWN_STRONG: null,
-        A_UP_WEAK: null, A_DOWN_WEAK: null,
+        A_UP_STRONG: null, A_DOWN_WEAK: null,
         C_PAIRED_LONG: null, C_PAIRED_SHORT: null,
         C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
         GAP_FILL_LONG: null, GAP_FILL_SHORT: null,

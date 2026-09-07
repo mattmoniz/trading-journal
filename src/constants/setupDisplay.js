@@ -41,6 +41,10 @@ export const SETUP_DISPLAY_LABELS = {
   VWAP_RECLAIM_SHORT:         'VWAP Reclaim ↓',
   POC_ROTATION_JOIN_LONG:     'POC Rotation Join ↑',
   POC_ROTATION_JOIN_SHORT:    'POC Rotation Join ↓',
+  A_UP_STRONG:                'A Up Strong ↑',
+  A_DOWN_WEAK:                'A Down Weak ↓',
+  RSI_DIV_BULLISH:            'RSI Bull Div ↑',
+  RSI_DIV_BEARISH:            'RSI Bear Div ↓',
 };
 
 // Outcome display for a resolved/expired active_setups row (or a live price-vs-level

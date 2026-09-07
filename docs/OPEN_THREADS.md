@@ -1,6 +1,23 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## 🔶 2026-09-07 — acd.js duplication/dead-code audit: 3 dedup fixes, 5 orphaned detectors resolved
+
+User-prompted duplication audit of `acd.js` (asking "how much more copy and paste is in the acd file" after catching Claude about to copy-paste a ~180-line analysis block into a new script). Found and fixed 3 real duplication clusters, each verified byte-identical against real bar data before replacing, then `test_invariants.mjs`/lint/live-restart smoke test:
+- Runner-trail-width lookup (4 near-identical inline copies) → `acdShared.js`'s `lookupRunnerTrailWidth()`. Fixed a real bug in the process: the 4th, undocumented copy was missing the `.catch(() => ({rows: []}))` safety net the other 3 had, on the highest-traffic of the 4 sites.
+- RSI(14) + bar-resample (2 copies: `absorptionSetup` on 2-min bars, `rsiDivSetup` on 15-min bars) → `server/services/technicalIndicators.js`'s `resampleBars()`/`computeRSI14()`.
+- Session-end/expiry-cap string (3 copies) → `acdShared.js`'s `computeSessionEndCapStr()`.
+
+Separately, checking whether RSI is even used live (user asked "Do we use rsi??") surfaced a bigger finding: **5 detectors were computing real setups every 15s poll but never inserted anywhere** — `aUpStrong`, `aDownStrong`, `aUpWeak`, `gapFill`, `rsiDivSetup`. Already flagged as "dead-weight, pre-existing" during the 2026-09-05 `buildAllCandidates()` extraction (this file's own 2026-09-05 P2 entry), but never root-caused or acted on. Traced via `git log -S`/`git blame`:
+- `aUpStrong`/`aDownStrong`/`aUpWeak`/`gapFill` were live for ~5 days after introduction (2026-06-19), then deliberately un-wired 2026-06-24 (`63b4168`, "Remove dead code setups") — a genuine, data-backed finding that `A_UP_WEAK`/`A_DOWN_STRONG`/`GAP_FILL_LONG` never fired in 389 trading days (they require the A-signal to fire against its own NL30 context, which the A-multiplier structurally prevents). **But the fix was coarser than the finding**: it dropped the whole `aUpStrong`/`gapFill` variables, which also silently swept out `A_UP_STRONG` and `GAP_FILL_SHORT` — two variants never named in the "never fired" list and with real historical fires (1 and 2 respectively, pre-2026-07-09 `origin_status='UNKNOWN'`). The detector code itself was never deleted, so it kept computing for nothing for ~2.5 months.
+- `rsiDivSetup` was introduced the same day but never wired into any array at all — untested either way, not a resurrection of a confirmed negative.
+
+**Resolved 2026-09-07**: deleted the `A_DOWN_STRONG`/`A_UP_WEAK` computation blocks outright (confirmed 0/389-day dead, not worth resurrecting) including their `ctx` return references and `EXPIRY_WINDOW` entries. Wired `aUpStrong`, `gapFill` (SHORT-only, matching the same historical finding), and `rsiDivSetup` into `shadowCandidates` — all 3 have zero/thin `SETUP_STATUS` coverage, so `isLiveEligible()`'s `knownTypes.has()` check keeps them SHADOW-only until real N clears the standard N≥20 bar. Added missing `SETUP_DISPLAY_LABELS` entries for `A_UP_STRONG`/`A_DOWN_WEAK`/`RSI_DIV_BULLISH`/`RSI_DIV_BEARISH` (per the new-setup-type checklist item 6). Verified: `node --check`, lint clean, module load, `test_invariants.mjs` (unchanged 19 FAILURE/85 WARNING baseline), live restart + `/api/acd/setup-detection` 200 + no new server errors.
+
+Also added a standing CLAUDE.md convention codifying proactive dedup/extraction as expected practice ("Self improvement should be a rule," user's words), not something to wait to be asked for.
+
+**Open**: a dispatched read-only Explore-agent audit of `quick-check.html` vs `MarketPulseBar.jsx` for any OTHER duplicated client-side formula beyond the already-fixed sizeMultiplier one — result not yet back at time of writing, check for its findings before considering this thread fully closed.
+
 ## 🔶 2026-09-03 "Chasing home runs" thread — 3 real cluster/backfill bugs fixed, 3 exit-mechanism ideas tested (mostly negative), a real new evaluation gap opened
 
 Started from the user watching two big real moves fire live in Sierra Chart (an IB Low fade to
