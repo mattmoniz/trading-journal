@@ -14,7 +14,7 @@
 
 import { query } from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
-import { findTradingDayGaps } from '../server/services/queries.js';
+import { findTradingDayGaps, classifyOpeningCallType } from '../server/services/queries.js';
 
 const PT     = 2;   // $2/pt NQ micro
 const COMM   = 2;   // $2 round-trip commission ($1/side x2, corrected 2026-08-11 — matches server/config/instruments.js MNQ.commissionPerRoundTrip)
@@ -242,29 +242,40 @@ async function loadData() {
 
   console.log(`  Total qualifying dates: ${dates.length} (${dates[0]} → ${dates[dates.length-1]})`);
 
-  // Live-matching stop/target calibration for VWAP_MAGNET (2026-09-07, OPEN_DECISION
-  // backtest_unified_detectors_systemic_divergence_20260907): acd.js's live INSERT has read
-  // OPTIMAL_STOP-calibrated stop/target for this setup since 2026-08-02 (its own comment:
-  // "T1/stop are data-derived ... since 2026-08-02"), but this backtest still hardcoded
-  // stop=30/target=20. Mirrors acd.js's own getCached(...)?._opt?.[type] contract -- keyed
-  // by full setup_type, latest run_date -- so the backtest now describes the SAME entry
-  // geometry as live, not just the same trigger. Falls back to the pre-calibration 30/20
-  // only when no OPTIMAL_STOP row exists yet, same as acd.js's own fallback.
-  const vwapCalibRes = await query(`
-    SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
-    FROM performance_audit
-    WHERE signal_type = 'OPTIMAL_STOP' AND signal_name IN ('VWAP_MAGNET_LONG','VWAP_MAGNET_SHORT')
-    ORDER BY signal_name, run_date DESC
-  `);
-  const vwapMagnetCalib = { LONG: {}, SHORT: {} };
-  for (const r of vwapCalibRes.rows) {
-    if (r.stop == null || r.target == null) continue;
-    const dir = r.signal_name.endsWith('_LONG') ? 'LONG' : 'SHORT';
-    vwapMagnetCalib[dir] = { stop: r.stop, target: r.target };
+  // Live-matching stop/target calibration for any LONG/SHORT-direction setup pair, keyed by
+  // full setup_type (BASE_LONG/BASE_SHORT), latest run_date -- mirrors acd.js's own
+  // getCached(...)?._opt?.[type] contract (2026-09-07, OPEN_DECISION
+  // backtest_unified_detectors_systemic_divergence_20260907, first written for VWAP_MAGNET's
+  // reconciliation, reused here rather than copy-pasting the same query again for
+  // VALUE_AREA_RESPONSIVE). Returns {} for a direction with no OPTIMAL_STOP row yet -- callers
+  // fall back to their own pre-calibration literal, same as acd.js's own fallback.
+  async function loadDirectionalCalib(baseType) {
+    const res = await query(`
+      SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
+      FROM performance_audit
+      WHERE signal_type = 'OPTIMAL_STOP' AND signal_name IN ($1, $2)
+      ORDER BY signal_name, run_date DESC
+    `, [`${baseType}_LONG`, `${baseType}_SHORT`]);
+    const calib = { LONG: {}, SHORT: {} };
+    for (const r of res.rows) {
+      if (r.stop == null || r.target == null) continue;
+      const dir = r.signal_name.endsWith('_LONG') ? 'LONG' : 'SHORT';
+      calib[dir] = { stop: r.stop, target: r.target };
+    }
+    return calib;
   }
+
+  const vwapMagnetCalib = await loadDirectionalCalib('VWAP_MAGNET');
   console.log(`  VWAP Magnet calib: LONG stop=${vwapMagnetCalib.LONG.stop ?? 'fallback-30'}/target=${vwapMagnetCalib.LONG.target ?? 'fallback-20'}, SHORT stop=${vwapMagnetCalib.SHORT.stop ?? 'fallback-30'}/target=${vwapMagnetCalib.SHORT.target ?? 'fallback-20'}`);
 
-  return { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib };
+  // FIXED 2026-09-07 (same OPEN_DECISION): detectVAResp's stop was a hardcoded literal
+  // distance from the LEVEL (pdVAH+18/pdVAL-8, itself a "no static thresholds" violation
+  // independent of anything else) and its target was the structural PD POC/VAH/VAL level --
+  // live moved to a calibrated FLAT distance from ENTRY for both (acd.js ~2553-2562).
+  const vaRespCalib = await loadDirectionalCalib('VALUE_AREA_RESPONSIVE');
+  console.log(`  Value Area Responsive calib: LONG stop=${vaRespCalib.LONG.stop ?? 'fallback-30'}/target=${vaRespCalib.LONG.target ?? 'fallback-28'}, SHORT stop=${vaRespCalib.SHORT.stop ?? 'fallback-30'}/target=${vaRespCalib.SHORT.target ?? 'fallback-28'}`);
+
+  return { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib, vaRespCalib };
 }
 
 // ── 5-day bracket levels ──────────────────────────────────────────────────────
@@ -624,35 +635,54 @@ function detectCStandalone(bars, orH, orL, aUp, aDown, pdVAH, pdVAL) {
 // called this function or read its UNIFIED_BACKTEST row -- nothing else referenced it.
 
 // 5. VALUE_AREA_RESPONSIVE (open inside prior value, price tests VA edge)
-function detectVAResp(bars, pdVAH, pdVAL, pdPOC, orH, orL) {
-  if (!pdVAH || !pdVAL) return [];
-  const openBar = bars[0];
-  const insideValue = openBar && openBar.close >= pdVAL && openBar.close <= pdVAH;
+// FIXED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907):
+// this used to fire unconditionally (no OPEN_DRIVE exclusion, unlike live), use a stop that
+// was a hardcoded literal distance from the LEVEL (pdVAH+18/pdVAL-8 -- itself a "no static
+// thresholds" violation independent of the reconciliation), and target the structural PD
+// POC/VAH/VAL level. Live (acd.js ~2543-2562) gates on the opening call type NOT being
+// OPEN_DRIVE and uses a calibrated FLAT distance from ENTRY for both stop and target -- now
+// matches exactly: same gate (classifyOpeningCallType(), shared with acd.js via queries.js,
+// not reimplemented a third time), same calibrated stop/target source (calib =
+// {LONG:{stop,target}, SHORT:{stop,target}} from loadData()'s vaRespCalib).
+function detectVAResp(bars, pdVAH, pdVAL, orH, orL, calib = {}) {
+  if (!pdVAH || !pdVAL || !orH || !orL) return [];
+  // FIXED 2026-09-07 (found while re-verifying this reconciliation against real SETUP_STATUS
+  // data -- the two disagreed in SIGN, not just magnitude, which is what caught this): this
+  // used to gate on bars[0].close (the very first 1-min bar's close) being inside PD value.
+  // Live's actual gate (acd.js ~1666-1667, liveOpenVsPrior === 'INSIDE_VALUE') uses the
+  // Opening Range MIDPOINT ((orH+orL)/2), a materially different quantity computed only once
+  // the OR period completes, not the instant-of-open price. Using the wrong variable here
+  // silently selected a different (and differently-profitable) population of days.
+  const orMid = (orH + orL) / 2;
+  const insideValue = orMid >= pdVAL && orMid <= pdVAH;
   if (!insideValue) return [];
-  const orRange = orH - orL || 60;
+  const first15Bars = bars.filter(b => b.tod >= 570 && b.tod <= 585);
+  if (classifyOpeningCallType(first15Bars, orH, orL) === 'OPEN_DRIVE') return [];
+
+  const shortC = calib.SHORT || {}, longC = calib.LONG || {};
+  const shortStopPts = shortC.stop ?? 30, shortTargetPts = shortC.target ?? 28;
+  const longStopPts = longC.stop ?? 30, longTargetPts = longC.target ?? 28;
   const fires = [];
 
+  // FIXED 2026-09-07 (same pass, found the same way -- checking against real SETUP_STATUS
+  // numbers after the INSIDE_VALUE fix still showed a WR mismatch too large to be explained
+  // by calibration drift alone): these loops used to break at tod>=720 (noon), but live
+  // re-evaluates currentPrice vs pdVAH/pdVAL on every poll all session long (acd.js ~2543 has
+  // no time-of-day gate beyond the outer etMinNow<960 RTH block) -- an afternoon first-touch
+  // was structurally unreachable here. Now scans the full RTH session bars actually cover.
   // SHORT: price approaches pdVAH from below
   for (let i = 0; i < bars.length; i++) {
-    if (bars[i].tod >= 720) break;
     if (Math.abs(bars[i].close - pdVAH) <= 20 && bars[i].close <= pdVAH + 20) {
-      const target = (pdPOC && pdPOC < bars[i].close) ? pdPOC
-                   : (pdVAL && pdVAL < bars[i].close) ? pdVAL
-                   : bars[i].close - orRange * 0.5;
       fires.push({ type: 'VALUE_AREA_RESPONSIVE_SHORT', direction: 'SHORT', entryIdx: i,
-        entry: bars[i].close, stop: pdVAH + 18, target });
+        entry: bars[i].close, stop: bars[i].close + shortStopPts, target: bars[i].close - shortTargetPts });
       break;
     }
   }
   // LONG: price approaches pdVAL from above
   for (let i = 0; i < bars.length; i++) {
-    if (bars[i].tod >= 720) break;
     if (Math.abs(bars[i].close - pdVAL) <= 20 && bars[i].close >= pdVAL - 20) {
-      const target = (pdPOC && pdPOC > bars[i].close) ? pdPOC
-                   : (pdVAH && pdVAH > bars[i].close) ? pdVAH
-                   : bars[i].close + orRange * 0.5;
       fires.push({ type: 'VALUE_AREA_RESPONSIVE_LONG', direction: 'LONG', entryIdx: i,
-        entry: bars[i].close, stop: pdVAL - 8, target });
+        entry: bars[i].close, stop: bars[i].close - longStopPts, target: bars[i].close + longTargetPts });
       break;
     }
   }
@@ -980,7 +1010,7 @@ async function writeResults(setupName, stats, windowDays, signalType = 'UNIFIED_
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
-  const { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib } = await loadData();
+  const { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib, vaRespCalib } = await loadData();
   const bracketByDate   = buildBracketLevels(dates, barsByDate);
   const or5MidByDate    = buildOrMids(dates, acdByDate);
   const ib10MidByDate   = buildIbMids(dates, barsByDate);
@@ -1152,7 +1182,7 @@ async function main() {
       ...detectLevelFades(bars, fadeLevels, isMonday),
       ...detectIB(bars, orH, orL, pdVAH, pdVAL),
       ...detectCStandalone(bars, orH, orL, acd.a_up, acd.a_down, pdVAH, pdVAL),
-      ...detectVAResp(bars, pdVAH, pdVAL, pdPOC, orH, orL),
+      ...detectVAResp(bars, pdVAH, pdVAL, orH, orL, vaRespCalib),
       ...detectTRT(bars, orH, orL, acd.a_up, acd.a_down, acd.c_up, acd.c_down, pdVAH, pdVAL, acd.a_up_level, acd.a_down_level),
       ...detectBracketBreakout(bars, bracketByDate.get(date), orH, orL, nl30, pdVAH, pdVAL),
       ...detectVwapMagnet(bars, vwapStdByDate.get(date), vwapStdFallback, vwapMagnetCalib),

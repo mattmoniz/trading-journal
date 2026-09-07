@@ -27,7 +27,7 @@ import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFi
 export { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues };
 import { getOrVolBaseline20d, getVolatilityScaledDefault, getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVolumeBuildingCalibration, computeLiveVolumeBuildingSignal, getPaceBaseline, getVaOverlapStreak, getPriorDayProfile } from '../services/acdLiveCalibration.js';
 export { getPaceBaseline };
-import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths } from '../services/queries.js';
+import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths, classifyOpeningCallType } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -1655,30 +1655,12 @@ function extractSessionState(inputs) {
   // Live opening-type classification (first 15 min of bars, 9:30-9:45) — replaces
   // the empty auction_reads.opening_call_type for OPEN_DRIVE/VALUE_AREA_RESPONSIVE
   // gating below. Mirrors /acd/live's classifier (~line 1895) without persisting.
+  // FIXED 2026-09-07: was hand-written inline here AND at ~line 4853, byte-identical
+  // modulo variable names -- extracted to queries.js's classifyOpeningCallType() so the
+  // two call sites (and scripts/backtest_unified.js's reconciled detectVAResp) can never
+  // silently diverge from each other again.
   const first15 = first15Row.rows;
-  let liveOpeningCallType = null;
-  if (first15.length >= 5 && orH && orL) {
-    const h15 = Math.max(...first15.map(b => b.high));
-    const l15 = Math.min(...first15.map(b => b.low));
-    const lastPx = first15[first15.length - 1].close;
-    const orRng = orH - orL;
-    const ext = orRng * 0.3;
-    const ext50 = orRng * 0.5;
-    const aboveOR = h15 - orH;
-    const belowOR = orL - l15;
-
-    if (aboveOR > ext && belowOR > ext) {
-      liveOpeningCallType = 'OPEN_TEST_DRIVE';
-    } else if (aboveOR > ext50 && belowOR < ext * 0.3) {
-      liveOpeningCallType = 'OPEN_DRIVE';
-    } else if (belowOR > ext50 && aboveOR < ext * 0.3) {
-      liveOpeningCallType = 'OPEN_DRIVE';
-    } else if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH + orL) / 2) < orRng * 0.4) {
-      liveOpeningCallType = 'OPEN_REJECTION_REVERSE';
-    } else {
-      liveOpeningCallType = 'OPEN_AUCTION';
-    }
-  }
+  const liveOpeningCallType = classifyOpeningCallType(first15, orH, orL);
 
   // Live open-vs-prior-value classification — replaces empty auction_reads.open_vs_prior_value
   const orMid = (orH != null && orL != null) ? (orH + orL) / 2 : null;
@@ -4850,35 +4832,10 @@ export default function createACDRouter(io) {
         ORDER BY ts
       `, [todayET]);
       const first15 = allBarsQ.rows;
-      let opening_call_type = null;
-      if (first15.length >= 5 && orH && orL) {
-        const h15    = Math.max(...first15.map(b => b.high));
-        const l15    = Math.min(...first15.map(b => b.low));
-        const openPx = first15[0].open;
-        const lastPx = first15[first15.length-1].close;
-        const orRng  = orH - orL;
-        const ext    = orRng * 0.3;   // 30% extension = meaningful push
-        const ext50  = orRng * 0.5;   // 50% extension = drive territory
-        const aboveOR = h15 - orH;    // how far above OR High
-        const belowOR = orL - l15;    // how far below OR Low
-
-        if (aboveOR > ext && belowOR > ext) {
-          // Tested both sides — Open Test Drive
-          opening_call_type = 'OPEN_TEST_DRIVE';
-        } else if (aboveOR > ext50 && belowOR < ext * 0.3) {
-          // Strong upside extension, no downside test — Open Drive
-          opening_call_type = 'OPEN_DRIVE';
-        } else if (belowOR > ext50 && aboveOR < ext * 0.3) {
-          // Strong downside extension, no upside test — Open Drive
-          opening_call_type = 'OPEN_DRIVE';
-        } else if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH+orL)/2) < orRng * 0.4) {
-          // Extended one side but price came back toward midpoint — ORR
-          opening_call_type = 'OPEN_REJECTION_REVERSE';
-        } else {
-          // Stayed within or near OR — Open Auction
-          opening_call_type = 'OPEN_AUCTION';
-        }
-      }
+      // FIXED 2026-09-07: was hand-written inline here AND at ~line 1660, byte-identical
+      // modulo variable names -- see classifyOpeningCallType()'s own header comment in
+      // queries.js for the full extraction rationale.
+      const opening_call_type = classifyOpeningCallType(first15, orH, orL);
 
       // Derive setup and signal flags from live bar analysis (timeline), not stale DB values
       let liveSetup = setup, liveColor = color, liveDescription = description;

@@ -559,3 +559,33 @@ export const THIN_VOLUME_WINDOWS = [
 export function overlapsThinVolumeWindow(fromDate, toDate) {
   return THIN_VOLUME_WINDOWS.some(w => fromDate <= w.to && toDate >= w.from);
 }
+
+// ── Opening call type (OPEN_DRIVE / OPEN_TEST_DRIVE / OPEN_REJECTION_REVERSE / OPEN_AUCTION) ──
+// Extracted 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907,
+// detectVAResp reconciliation) -- acd.js had this exact classifier hand-written inline TWICE
+// (the read-only audit endpoint ~line 1660 and the live /acd/live-style handler ~line 4853),
+// byte-identical modulo variable names and both fed by the identical `BETWEEN 570 AND 585`
+// first-15-min bar query. Neither call site had ever imported from the other, so a future edit
+// to one could silently diverge from the other -- the exact "share modules instead of
+// reimplementing" failure mode this codebase's own convention warns about. Pure function: takes
+// the already-queried first-15-min bars (high/low/close, at least 5 of them) plus today's OR
+// high/low, returns the classification string or null if there isn't enough data yet.
+// Also used by scripts/backtest_unified.js's detectVAResp so the backtest's OPEN_DRIVE exclusion
+// gate can match live exactly instead of reimplementing this a third time.
+export function classifyOpeningCallType(first15Bars, orH, orL) {
+  if (!first15Bars || first15Bars.length < 5 || !orH || !orL) return null;
+  const h15 = Math.max(...first15Bars.map(b => b.high));
+  const l15 = Math.min(...first15Bars.map(b => b.low));
+  const lastPx = first15Bars[first15Bars.length - 1].close;
+  const orRng = orH - orL;
+  const ext = orRng * 0.3;   // 30% extension = meaningful push
+  const ext50 = orRng * 0.5; // 50% extension = drive territory
+  const aboveOR = h15 - orH;
+  const belowOR = orL - l15;
+
+  if (aboveOR > ext && belowOR > ext) return 'OPEN_TEST_DRIVE';
+  if (aboveOR > ext50 && belowOR < ext * 0.3) return 'OPEN_DRIVE';
+  if (belowOR > ext50 && aboveOR < ext * 0.3) return 'OPEN_DRIVE';
+  if ((aboveOR > ext || belowOR > ext) && Math.abs(lastPx - (orH + orL) / 2) < orRng * 0.4) return 'OPEN_REJECTION_REVERSE';
+  return 'OPEN_AUCTION';
+}
