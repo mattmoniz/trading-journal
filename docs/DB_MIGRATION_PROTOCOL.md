@@ -56,6 +56,21 @@ silently corrupted trade times for over a month before being caught).
 1. **Write and verify a dry-run version first** — report counts per bucket/category,
    never execute the write in the same pass. Verify the buckets sum to the total row
    count with zero overlap and zero rows left unclassified before trusting the logic.
+1a. **`ADD COLUMN ... DEFAULT <value>` is not a substitute for a real backfill when the
+   new column's meaning should differ across EXISTING rows, not just be uniform.** Found
+   2026-09-07 (cluster touch credit Phase 2, DeepSeek design critique caught this before
+   it shipped): a plan to add `active_setups.is_cluster_primary BOOLEAN DEFAULT true`
+   assumed the default alone was sufficient — it backfills every existing row to the
+   SAME value, which is correct for ~21,077 ordinary rows but wrong for the 1,296
+   already-inserted `CLUSTER_SIBLING_TOUCH_CREDIT`/`_BACKFILL` rows, which needed `false`.
+   `DEFAULT` is the right, cheap choice when a new column's value only needs to
+   distinguish rows going forward (every future INSERT sets it explicitly, existing rows
+   are legitimately uniform) — but the moment a new column is meant to retroactively
+   re-classify a subset of EXISTING rows based on something already true about them (a
+   different `suppression_reason`, a different origin, any other pre-existing
+   distinguishing fact), that subset needs its own explicit, dry-run-counted `UPDATE` in
+   the same migration — the `DEFAULT` clause covers the rows that don't need it, not the
+   ones that do.
 2. **Backup before any destructive change** (`UPDATE` that overwrites existing non-null
    data, any `DELETE`): `CREATE TABLE x_backup_YYYYMMDD AS SELECT ... FROM x WHERE
    <affected rows>;` — matches the existing convention (`dead_tables_backup_20260630`,
