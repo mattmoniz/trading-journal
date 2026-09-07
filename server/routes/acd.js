@@ -2975,6 +2975,403 @@ async function buildAllCandidates(ctx) {
   };
 }
 
+
+// ── runSetupDetection decomposition, Pass 2 continued: P3 factor pre-fetch (2026-09-07) ──
+// Extracted verbatim from runSetupDetection's body per the 2026-09-06 DeepSeek review's
+// revised P3 assessment (already found this phase reads a P2 output -- dtClass -- via
+// _lfRegimePersistQ, so it's not fully independent of buildAllCandidates()'s result; kept
+// as ONE coarse wrapper, not split further, matching the same conservative call made for P2).
+// Free-variable check (2026-09-07): only todayET, dtClass, allRthBarsRow, aUpFired, aDownFired
+// are read from outside this block -- everything else (query/getCached/setCached/
+// getGlobalCalib/getPriorDayProfile/DAY_CACHE_TTL/_pdpMissingLogged) is a module-level
+// import/const already in scope for any top-level function in this file, same as
+// buildAllCandidates(). Return-completeness check: every name below was independently grepped
+// against the entire remainder of runSetupDetection (the P4 level-fade block through the final
+// persist step) -- lfPriorStop/lfPriorWin have ZERO downstream references anywhere in the file
+// (pre-existing dead code, not introduced by this move) and are still returned unchanged rather
+// than pruned, matching this codebase's own precedent of carrying dead-but-harmless values
+// through a structural move rather than making a cleanup judgment call in the same commit.
+async function computeLevelFadeFactors(ctx) {
+  const { todayET, dtClass, allRthBarsRow, aUpFired, aDownFired } = ctx;
+        // Prior-day TREND risk gate (2026-09-06) — fetched once here, referenced as a plain
+        // closure variable inside the (synchronous) sizeMultiplier IIFE below, same pattern as
+        // dtClass just above. See getPriorDayProfile()'s own header (acdLiveCalibration.js) for
+        // the full finding this feeds and why a pooled gate was chosen over a per-cell mirror
+        // of DAY_TYPE_ALPHA (DeepSeek design critique, 2026-09-06).
+        const priorDayProfile = await getPriorDayProfile(todayET);
+        if (priorDayProfile == null && !_pdpMissingLogged.has(todayET)) {
+          _pdpMissingLogged.add(todayET);
+          console.error(`[priorDayProfile-gate] No auction_reads.prior_day_profile for ${todayET} — TREND-day risk gate is silently inert until today's pre-market ACD read is entered.`);
+        }
+  
+        // ── Pre-fetch: overnight reads + prior setups (needed BEFORE level fade section) ─────
+        // isS2DoubleCounter, isOvernightAligned, sizeMultiplier all reference these.
+        // Previously defined at line ~4392 — caused silent TDZ ReferenceError on every level
+        // fade call. Outer try{} at line 2545 caught it; fades appeared to work but sizeMultiplier
+        // and isS2DoubleCounter suppression were both non-functional. Fixed 2026-07-05.
+        // Batched 2026-07-15 — these 7 queries only depend on todayET (or nothing at
+        // all, for the two bar-derived ones below), none on each other's results, but
+        // were awaited one at a time. Profiling confirmed this exact section
+        // ("Pre-fetch: overnight reads + prior setups") as the single dominant
+        // contributor to /api/acd/setup-detection's remaining latency (1.8-6.7s of a
+        // ~9-15s total, see docs/OPEN_THREADS.md) — collapsed into one Promise.all,
+        // same pattern already applied to the Unified Level Fade Setups section above.
+        const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
+        const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ, _lfTurbRangeQ] = await Promise.all([
+          query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
+          // origin_status='ACTIVE' added 2026-07-27 (unify_sizemultiplier_into_validated_score) --
+          // this drives lfConsecWins/lfConsecLosses, the win/loss-streak sizing factor (the largest
+          // magnitude adjustments in the whole IIFE, up to +0.50/capped at 0.10). Predates the
+          // origin_status column (written 2026-06-22, column added 2026-07-17) and was never
+          // revisited. This is specifically about the TRADER'S OWN recent real trades (a
+          // psychological/risk concept), so scoped to ACTIVE only -- SHADOW setups were never
+          // shown to the user, so a SHADOW "loss" isn't something the user experienced either.
+          query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND origin_status='ACTIVE' AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] })),
+          // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- unlike the streak query above,
+          // "stacking" (how many same-direction fade attempts have occurred today) is a MARKET
+          // STRUCTURE signal, not a personal-day one -- a SHADOW-origin touch is still a real,
+          // live-price-triggered event (just suppressed from a full alert), so it legitimately
+          // counts toward "how many real fades has this direction seen today." BACKFILL/UNKNOWN
+          // (synthetic/historical) do not represent today's real market activity and are excluded.
+          // TOUCH-AWARE 2026-09-07 (cluster touch credit Phase 2, DeepSeek design-critiqued): a
+          // cluster's winner and its CLUSTER_SIBLING_TOUCH_CREDIT siblings all share one
+          // cluster_touch_id (set to their own row id when there's no cluster), so
+          // COUNT(DISTINCT COALESCE(cluster_touch_id, id)) counts one real market touch once,
+          // not once per level that happened to sit in the same 15pt confluence zone. This is a
+          // deliberate behavior CHANGE to a live sizing input (feeds the >=7-same-direction ->
+          // 0.10x sizeMultiplier cap below), not a silent bugfix -- a clustered touch now counts
+          // for LESS toward that de-risking cap than it did before this date. Siblings only ever
+          // enter this count once they resolve to status='RESOLVED' (they insert as SHADOW/
+          // status='ACTIVE' like anything else, so the count was never inflated at INSERT time,
+          // only as resolved siblings accumulated over the session).
+          query(
+            `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
+                    COUNT(DISTINCT COALESCE(cluster_touch_id, id)) as cnt
+             FROM active_setups WHERE trade_date=$1 AND origin_status IN ('ACTIVE','SHADOW') AND status IN ('ACTIVE','RESOLVED')
+             GROUP BY 1`,
+            [todayET]
+          ).catch(() => ({ rows: [] })),
+          query(`
+            SELECT COALESCE(SUM(COALESCE(daily_score, 0)), 0)::int AS nl30
+            FROM (SELECT daily_score FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 30) sub
+          `, [todayET]).catch(() => ({ rows: [{ nl30: 0 }] })),
+          _cachedVwapSigmaPre ? Promise.resolve(null) : query(`
+            WITH svwap AS (
+              SELECT close::float as c,
+                SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float * close::float) OVER (PARTITION BY ts::date ORDER BY ts) /
+                NULLIF(SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) OVER (PARTITION BY ts::date ORDER BY ts), 0) AS vwap
+              FROM price_bars_primary
+              WHERE symbol='NQ'
+                AND ts::date IN (SELECT DISTINCT ts::date FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 ORDER BY ts::date DESC LIMIT 20)
+                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+            )
+            SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
+            FROM svwap WHERE vwap IS NOT NULL
+          `, [todayET]).catch(() => ({ rows: [{}] })),
+          // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- "level recency" (was this level
+          // tested recently = proven defender, vs untested = risky) is about REAL market touches,
+          // same reasoning as the stacking-count fix above. Without this, a level with dense
+          // BACKFILL/UNKNOWN historical coverage would almost always show as "recently tested"
+          // regardless of genuine recent activity.
+          query(`
+            SELECT
+              REGEXP_REPLACE(setup_type, '_(LONG|SHORT)$', '') AS level_base,
+              MAX(trade_date)::text AS last_date
+            FROM active_setups
+            WHERE trade_date >= $1::date - INTERVAL '21 days' AND trade_date < $1
+              AND origin_status IN ('ACTIVE','SHADOW')
+              AND status = 'RESOLVED'
+            GROUP BY level_base
+          `, [todayET]).catch(() => ({ rows: [] })),
+          query(`
+            SELECT AVG(daily_range)::float AS avg_first15_range
+            FROM (
+              SELECT ts::date AS dt, MAX(high) - MIN(low) AS daily_range
+              FROM price_bars_primary
+              WHERE symbol = 'NQ'
+                AND ts::date IN (
+                  SELECT DISTINCT ts::date FROM price_bars_primary
+                  WHERE symbol = 'NQ' AND ts::date < $1
+                  ORDER BY ts::date DESC LIMIT 20
+                )
+                AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
+              GROUP BY ts::date
+            ) sub
+          `, [todayET]).catch(() => ({ rows: [] })),
+        ]);
+        const _lfOvInv  = _lfArRow.rows[0]?.overnight_inventory;
+        const _lfOvOpen = _lfArRow.rows[0]?.open_vs_prior_value;
+        const isOvernightAligned = (dir) =>
+          (dir === 'LONG'  && (_lfOvInv === 'SHORT_TRAPPED' || _lfOvOpen === 'ABOVE_VALUE')) ||
+          (dir === 'SHORT' && (_lfOvInv === 'LONG_TRAPPED'  || _lfOvOpen === 'BELOW_VALUE'));
+        const isOvernightCounter = (dir) =>
+          (dir === 'LONG'  && (_lfOvInv === 'LONG_TRAPPED'  || _lfOvOpen === 'BELOW_VALUE')) ||
+          (dir === 'SHORT' && (_lfOvInv === 'SHORT_TRAPPED' || _lfOvOpen === 'ABOVE_VALUE'));
+        // S2 double-counter: BOTH overnight inventory AND open-vs-value disagree with fade direction.
+        // Backtest: baseline 72.2% WR → S2 filter $8,225 (+$833). Only suppress when both agree.
+        const isS2DoubleCounter = (dir) =>
+          (dir === 'LONG'  && _lfOvInv === 'LONG_TRAPPED'  && _lfOvOpen === 'BELOW_VALUE') ||
+          (dir === 'SHORT' && _lfOvInv === 'SHORT_TRAPPED' && _lfOvOpen === 'ABOVE_VALUE');
+        // Prior completed setups — streak depth sizing.
+        // Research 2026-07-05: 1×loss=47% WR, 2×loss=31.6%, 3+×loss=28.4%; 1×win=76.6%, 2×win=79.7%, 3+×win=87.8%
+        const lfFirstOfDay = !_lfPriorQ.rows[0];
+        let lfConsecLosses = 0, lfConsecWins = 0;
+        for (const r of _lfPriorQ.rows) {
+          if (r.resolution === 'STOP_HIT')   { if (lfConsecWins   === 0) lfConsecLosses++; else break; }
+          else if (r.resolution === 'TARGET_HIT') { if (lfConsecLosses === 0) lfConsecWins++;  else break; }
+          else break;
+        }
+        const lfPriorStop = lfConsecLosses >= 1;
+        const lfPriorWin  = lfConsecWins  >= 1;
+        // Stacking count: same-direction setups fired today (ACTIVE or RESOLVED).
+        // Verified 2026-07-05: 1-6 setups = 80-86% WR solid; 7+ = 62.4% WR -$15.7 EV (N=1922) suppress.
+        const _lfSameDirCounts = Object.fromEntries(_lfSameDirCountQ.rows.map(r => [r.direction, parseInt(r.cnt)]));
+        // NL30: rolling 30-day sum of daily ACD scores — conditions fade edge by market regime.
+        // Verified 2026-07-05 (N=229-429 per bucket): MILD trend = SHORT fades penalized (-$17 to -$19 EV);
+        // STRONG regime boosts both extremes; prior-day only (< today) to avoid lookahead.
+        const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
+        const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
+          _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
+        // Momentum-against-fade: was PAUSED mid-build 2026-09-05 pending the loss-cluster
+        // investigation the user redirected to (which produced the direction-loss-alternation
+        // gate above, not this). RESUMED same day as SHADOW-ONLY observational logging, not a
+        // sizeMultiplier factor -- see getMomentumAgainstFade()/getMomentumAgainstFadeCalib()/
+        // tagMomentumAgainstFadeShadow() near the top of this file for the actual wiring (all 4
+        // real insert sites, same tag-after-insert pattern as tagDirectionGateShadow). A live
+        // sizeMultiplier penalty is a separate, not-yet-made decision (OPEN_DECISION
+        // momentum_against_fade_sizemultiplier_wiring_pending) -- deliberately not added here.
+        // VWAP at detection time — computed from today's RTH bars (ask_vol+bid_vol ≈ total volume).
+        // Rolling σ of VWAP distances over last 20 sessions gives the dynamic threshold.
+        // Verified 2026-07-06: far extended (>mean+σ) = 76.2% WR +$59.7 EV z=+2.95 N=600.
+        const _lfVwapData = allRthBarsRow.rows.reduce((acc, b) => {
+          const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
+          acc.pv += b.close * vol; acc.vol += vol; return acc;
+        }, { pv: 0, vol: 0 });
+        const _lfVwap = _lfVwapData.vol > 0 ? _lfVwapData.pv / _lfVwapData.vol : null;
+        let _lfVwapMean = _cachedVwapSigmaPre?.mean ?? null;
+        let _lfVwapStd  = _cachedVwapSigmaPre?.std  ?? null;
+        if (_lfVwapMean == null && _lfVwapSigmaQ) {
+          _lfVwapMean = _lfVwapSigmaQ.rows[0]?.mean_dist ?? null;
+          _lfVwapStd  = _lfVwapSigmaQ.rows[0]?.std_dist  ?? null;
+          if (_lfVwapMean != null) setCached(todayET, 'lfVwapSigma', { mean: _lfVwapMean, std: _lfVwapStd });
+        }
+        // Level recency: last test date per level base name (past 21 days).
+        // Research 2026-07-05: 1-2d ago = 65.9% WR $22 EV, 21d+ fresh = 60.5% WR -$5 EV.
+        const lfRecencyMap = Object.fromEntries(_lfRecencyQ.rows.map(r => [r.level_base, r.last_date]));
+  
+        // TURBULENT intraday range confirmation: first-15-min range vs rolling 20-day average.
+        // Research 2026-07-05: range >= avg → 79.99% WR N=39 (56% of TURBULENT days pass);
+        //                       range < avg → 67.67% WR N=21 (44% false calls).
+        // Threshold is the rolling mean itself — no hardcoded number.
+        const _lfAvgFirst15Range = _lfTurbRangeQ.rows[0]?.avg_first15_range ?? null;
+        const _lfFirst15Bars = allRthBarsRow.rows.filter(b => b.et_min >= 570 && b.et_min <= 584);
+        const _lfFirst15Range = _lfFirst15Bars.length >= 3
+          ? Math.max(..._lfFirst15Bars.map(b => b.high)) - Math.min(..._lfFirst15Bars.map(b => b.low))
+          : null;
+        // turbConfirmed = true once 9:45 has passed and range >= rolling mean
+        const turbConfirmed = _lfFirst15Range != null && _lfAvgFirst15Range != null && _lfFirst15Range >= _lfAvgFirst15Range;
+  
+        // OR Expansion Bias: no A Up/A Down breach yet = untouched liquidity reinforces fade.
+        // BALANCE: 78.88% WR N=161 (+5.77pp lift, z=2.03). TURBULENT: 96.15% WR N=26 (+20.97pp, z=2.77).
+        // aUpFired/aDownFired are written to DB progressively each poll — real-time, not lookahead.
+        const _lfOrExpanded = aUpFired || aDownFired;
+  
+        // Regime Persistence: prior 2 days same day_type = 3-day streak. Only meaningful on TURBULENT.
+        // TURBULENT × streak: 84.08% WR N=157 (+8.89pp, z=3.45). BALANCE: flat (+0.20pp, skip).
+        // NL30 nuance: streak negative in NEUTRAL (-3.13pp) — skip when NL30 is ranging.
+        const _lfRegimePersistQ = dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL'
+          ? await query(`
+              SELECT COUNT(*) AS streak_days
+              FROM (SELECT day_type FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 2) sub
+              WHERE day_type = $2
+            `, [todayET, dtClass]).catch(() => ({ rows: [{ streak_days: '0' }] }))
+          : { rows: [{ streak_days: '0' }] };
+        const _lfRegimePersist = parseInt(_lfRegimePersistQ.rows[0]?.streak_days ?? '0') >= 2;
+  
+        // Overnight gap: pre-9:30 range vs rolling 60-session p33.
+        // Opus audit 2026-07-07: small gaps (< p33) = 60.8% WR, -$27 EV (N=332) — quiet consolidation kills fades.
+        // Threshold is rolling p33 (no hardcoded number per CLAUDE.md hard rule).
+        const _lfOnGapQ = await query(`
+          WITH today_on AS (
+            SELECT MAX(high)::float - MIN(low)::float AS on_range
+            FROM price_bars_primary
+            WHERE symbol='NQ' AND ts::date=$1
+              AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
+                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+          ),
+          prior_on AS (
+            SELECT MAX(high) - MIN(low) AS on_range
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND ts::date IN (
+                SELECT DISTINCT ts::date FROM price_bars_primary
+                WHERE symbol='NQ' AND ts::date < $1
+                ORDER BY ts::date DESC LIMIT 60
+              )
+              AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
+                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+            GROUP BY ts::date
+          )
+          SELECT
+            (SELECT on_range FROM today_on) AS today_on_range,
+            PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY on_range) AS p33_60d
+          FROM prior_on
+        `, [todayET]).catch(() => ({ rows: [{}] }));
+        const _lfTodayOnRange = _lfOnGapQ.rows[0]?.today_on_range ?? null;
+        const _lfOnRangeP33   = _lfOnGapQ.rows[0]?.p33_60d ?? null;
+        const _lfSmallGap = _lfTodayOnRange != null && _lfOnRangeP33 != null && _lfTodayOnRange < _lfOnRangeP33;
+  
+        // Session delta: cumulative (ask_vol - bid_vol) from RTH open to now.
+        // Backtest 2026-07-08 (N=4,354 fades): neutral |Δ|<p25 = 57.9% WR -$3 EV; high |Δ|>p75 = 69.3% WR +$28 EV.
+        // Against-flow is slightly better than with-flow overall (overextension reversal logic) — only magnitude matters.
+        const _lfSessionDelta = allRthBarsRow.rows.reduce((sum, b) => sum + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
+        const _lfAbsDelta = Math.abs(_lfSessionDelta);
+        const _cachedDeltaPerc = getCached(todayET, 'lfDeltaPerc');
+        let _lfDeltaP25 = _cachedDeltaPerc?.p25 ?? null;
+        let _lfDeltaP75 = _cachedDeltaPerc?.p75 ?? null;
+        if (_lfDeltaP25 == null) {
+          // FIXED 2026-08-31 (OPEN_DECISION lf_session_delta_partial_vs_fullday_percentile_mismatch,
+          // user-confirmed): this used to be a flat FULL-DAY sum percentile (one number per day,
+          // GROUP BY ts::date, no time cutoff), compared live against _lfSessionDelta -- a
+          // PARTIAL-day running sum as of fire time. Re-read the original 2026-07-08 validating
+          // backtest (scripts/archive/backtest_session_delta.mjs) to resolve which convention it
+          // actually used: it computed cumulative delta from 9:30 up through EACH HISTORICAL
+          // SETUP'S OWN fire time, then took percentiles across all of those -- i.e. a percentile
+          // of PARTIAL-day cumulative delta sampled at whatever time each trade happened to fire,
+          // never a full-day total. The live code's threshold was a different, unvalidated
+          // simplification, not what was actually proven (this is why _lfDeltaHigh fired on only
+          // 1/704 real trades and _lfDeltaNeutral fired on 609/704 -- a full-day bar is much
+          // harder to clear early in the session). Rebuilt below to sample the RUNNING cumulative
+          // delta at every minute of every historical session (not just at setup-fire moments,
+          // which aren't cheaply queryable here) and pool percentiles across all of those
+          // (day, minute) readings -- the same underlying statistic (partial-day cumulative delta
+          // at an arbitrary point in the session), just a denser, unbiased sample of it.
+          const _lfDeltaPercQ = await query(`
+            WITH minute_deltas AS (
+              SELECT ts::date AS bar_date,
+                (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
+                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York'))::int AS et_min,
+                COALESCE(ask_volume,0) - COALESCE(bid_volume,0) AS bar_delta
+              FROM price_bars_primary
+              WHERE symbol='NQ'
+                AND ts::date IN (
+                  SELECT DISTINCT ts::date FROM price_bars_primary
+                  WHERE symbol='NQ' AND ts::date < $1
+                  ORDER BY ts::date DESC LIMIT 60
+                )
+                AND EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
+                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') BETWEEN 570 AND 959
+            ), running AS (
+              SELECT bar_date, et_min,
+                SUM(bar_delta) OVER (PARTITION BY bar_date ORDER BY et_min) AS cum_delta
+              FROM minute_deltas
+            )
+            SELECT
+              PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p25,
+              PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p75
+            FROM running
+          `, [todayET]).catch(() => ({ rows: [{}] }));
+          _lfDeltaP25 = _lfDeltaPercQ.rows[0]?.p25 ?? null;
+          _lfDeltaP75 = _lfDeltaPercQ.rows[0]?.p75 ?? null;
+          if (_lfDeltaP25 != null) setCached(todayET, 'lfDeltaPerc', { p25: _lfDeltaP25, p75: _lfDeltaP75 });
+        }
+        const _lfDeltaNeutral = _lfDeltaP25 != null && _lfAbsDelta < _lfDeltaP25;
+        const _lfDeltaHigh    = _lfDeltaP75 != null && _lfAbsDelta > _lfDeltaP75;
+  
+        // SHORT entry-time selling-pressure calibration (2026-08-24, RESEARCH_CLAIM
+        // pressure_entry_sizing_direction_asymmetric) — same read-once-per-poll-then-cache
+        // convention as deltaCalib/widerTargetPressureThreshold in resolveSetupsByPrice()
+        // above, just scoped here since this factor is consumed by the sizeMultiplier IIFE
+        // below, not the resolution walker. Recomputed weekly by
+        // scripts/calibrate_pressure_entry_sizing_short.mjs, which floors bump to 0 (not a
+        // hardcoded literal) if real forward EV isn't clearly positive — per explicit user
+        // instruction to track this for real degradation rather than freeze it at ship time.
+        // null threshold = factor disabled, never a hardcoded fallback number.
+        const entryPressureShortCalib = await getGlobalCalib('entryPressureShortCalib', async () => {
+          const r = await query(`
+            SELECT notes FROM performance_audit
+            WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
+            ORDER BY run_date DESC LIMIT 1
+          `);
+          let val = { threshold: null, bump: 0 };
+          try {
+            const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
+            if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
+          } catch (_) {}
+          return val;
+        });
+  
+        // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
+        // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
+        // Score distribution: 0→58.8% WR, 1→65.4%, 2→71.8%, 3→78.8% (N=80 CI=[73.8%,85%])
+        const _pulseBars = allRthBarsRow.rows;
+  
+        // Per-minute vol baseline (90-day, cached per day)
+        let _pulseVolBaseline = getCached(todayET, 'pulseVolBaseline');
+        if (!_pulseVolBaseline) {
+          const _pvbQ = await query(`
+            SELECT (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                    EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York'))::int AS et_min,
+                   AVG((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS avg_vol,
+                   STDDEV((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS std_vol
+            FROM price_bars_primary
+            WHERE symbol='NQ'
+              AND ts::date >= $1::date - 90 AND ts::date < $1
+              AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
+                   EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 959
+            GROUP BY 1
+          `, [todayET]).catch(() => ({ rows: [] }));
+          _pulseVolBaseline = {};
+          for (const r of _pvbQ.rows) _pulseVolBaseline[r.et_min] = { avg: +r.avg_vol, std: +(r.std_vol || 1) };
+          if (Object.keys(_pulseVolBaseline).length > 0) setCached(todayET, 'pulseVolBaseline', _pulseVolBaseline);
+        }
+  
+        // Vol sigma: max sigma across last 3 bars
+        const _pulseLast3 = _pulseBars.slice(-3);
+        let _pulseVolSigma = null;
+        for (const b of _pulseLast3) {
+          const bl = _pulseVolBaseline?.[b.et_min];
+          if (!bl || bl.avg <= 0) continue;
+          const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
+          const sig = (vol - bl.avg) / bl.std;
+          if (_pulseVolSigma == null || sig > _pulseVolSigma) _pulseVolSigma = sig;
+        }
+        const _pulseHighVol = _pulseVolSigma != null && _pulseVolSigma >= 2.5;
+  
+        // Delta 15-bar (direction computed per-setup inside IIFE)
+        const _pulseDelta15 = _pulseBars.slice(-15).reduce((s, b) => s + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
+  
+        // Micro structure: last 8 bars strict higher-lows OR lower-highs
+        const _pulseStruct = (() => {
+          const last8 = _pulseBars.slice(-8);
+          if (last8.length < 2) return false;
+          const hl = last8.every((b, i) => i === 0 || b.low  >= last8[i - 1].low);
+          const lh = last8.every((b, i) => i === 0 || b.high <= last8[i - 1].high);
+          return hl || lh;
+        })();
+  
+        // Rotations ≤1: full session close sign-changes (rarely fires — tiebreaker)
+        let _pulseRots = 0;
+        for (let i = 2; i < _pulseBars.length; i++) {
+          const d1 = Math.sign(_pulseBars[i].close   - _pulseBars[i - 1].close);
+          const d0 = Math.sign(_pulseBars[i - 1].close - _pulseBars[i - 2].close);
+          if (d1 !== 0 && d0 !== 0 && d1 !== d0) _pulseRots++;
+        }
+        const _pulseLowRots = _pulseRots <= 1;
+  
+
+  return {
+    priorDayProfile,
+    isOvernightAligned, isOvernightCounter, isS2DoubleCounter,
+    lfFirstOfDay, lfConsecLosses, lfConsecWins, lfPriorStop, lfPriorWin,
+    _lfSameDirCounts, _lfNl30Bucket,
+    _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
+    turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
+    _lfDeltaNeutral, _lfDeltaHigh,
+    entryPressureShortCalib,
+    _pulseHighVol, _pulseDelta15, _pulseStruct, _pulseLowRots, _pulseVolSigma,
+  };
+}
 // Factory: needs io for socket events
 export default function createACDRouter(io) {
   const router = express.Router();
@@ -5439,372 +5836,21 @@ export default function createACDRouter(io) {
         pdVAH, pdVAL, pdPOC, nl30, nl30State, isMahBull, isMahBear,
       });
 
-      // Prior-day TREND risk gate (2026-09-06) — fetched once here, referenced as a plain
-      // closure variable inside the (synchronous) sizeMultiplier IIFE below, same pattern as
-      // dtClass just above. See getPriorDayProfile()'s own header (acdLiveCalibration.js) for
-      // the full finding this feeds and why a pooled gate was chosen over a per-cell mirror
-      // of DAY_TYPE_ALPHA (DeepSeek design critique, 2026-09-06).
-      const priorDayProfile = await getPriorDayProfile(todayET);
-      if (priorDayProfile == null && !_pdpMissingLogged.has(todayET)) {
-        _pdpMissingLogged.add(todayET);
-        console.error(`[priorDayProfile-gate] No auction_reads.prior_day_profile for ${todayET} — TREND-day risk gate is silently inert until today's pre-market ACD read is entered.`);
-      }
-
-      // ── Pre-fetch: overnight reads + prior setups (needed BEFORE level fade section) ─────
-      // isS2DoubleCounter, isOvernightAligned, sizeMultiplier all reference these.
-      // Previously defined at line ~4392 — caused silent TDZ ReferenceError on every level
-      // fade call. Outer try{} at line 2545 caught it; fades appeared to work but sizeMultiplier
-      // and isS2DoubleCounter suppression were both non-functional. Fixed 2026-07-05.
-      // Batched 2026-07-15 — these 7 queries only depend on todayET (or nothing at
-      // all, for the two bar-derived ones below), none on each other's results, but
-      // were awaited one at a time. Profiling confirmed this exact section
-      // ("Pre-fetch: overnight reads + prior setups") as the single dominant
-      // contributor to /api/acd/setup-detection's remaining latency (1.8-6.7s of a
-      // ~9-15s total, see docs/OPEN_THREADS.md) — collapsed into one Promise.all,
-      // same pattern already applied to the Unified Level Fade Setups section above.
-      const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
-      const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ, _lfTurbRangeQ] = await Promise.all([
-        query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
-        // origin_status='ACTIVE' added 2026-07-27 (unify_sizemultiplier_into_validated_score) --
-        // this drives lfConsecWins/lfConsecLosses, the win/loss-streak sizing factor (the largest
-        // magnitude adjustments in the whole IIFE, up to +0.50/capped at 0.10). Predates the
-        // origin_status column (written 2026-06-22, column added 2026-07-17) and was never
-        // revisited. This is specifically about the TRADER'S OWN recent real trades (a
-        // psychological/risk concept), so scoped to ACTIVE only -- SHADOW setups were never
-        // shown to the user, so a SHADOW "loss" isn't something the user experienced either.
-        query(`SELECT resolution FROM active_setups WHERE trade_date=$1 AND origin_status='ACTIVE' AND status='RESOLVED' ORDER BY fired_at DESC LIMIT 3`, [todayET]).catch(() => ({ rows: [] })),
-        // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- unlike the streak query above,
-        // "stacking" (how many same-direction fade attempts have occurred today) is a MARKET
-        // STRUCTURE signal, not a personal-day one -- a SHADOW-origin touch is still a real,
-        // live-price-triggered event (just suppressed from a full alert), so it legitimately
-        // counts toward "how many real fades has this direction seen today." BACKFILL/UNKNOWN
-        // (synthetic/historical) do not represent today's real market activity and are excluded.
-        // TOUCH-AWARE 2026-09-07 (cluster touch credit Phase 2, DeepSeek design-critiqued): a
-        // cluster's winner and its CLUSTER_SIBLING_TOUCH_CREDIT siblings all share one
-        // cluster_touch_id (set to their own row id when there's no cluster), so
-        // COUNT(DISTINCT COALESCE(cluster_touch_id, id)) counts one real market touch once,
-        // not once per level that happened to sit in the same 15pt confluence zone. This is a
-        // deliberate behavior CHANGE to a live sizing input (feeds the >=7-same-direction ->
-        // 0.10x sizeMultiplier cap below), not a silent bugfix -- a clustered touch now counts
-        // for LESS toward that de-risking cap than it did before this date. Siblings only ever
-        // enter this count once they resolve to status='RESOLVED' (they insert as SHADOW/
-        // status='ACTIVE' like anything else, so the count was never inflated at INSERT time,
-        // only as resolved siblings accumulated over the session).
-        query(
-          `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
-                  COUNT(DISTINCT COALESCE(cluster_touch_id, id)) as cnt
-           FROM active_setups WHERE trade_date=$1 AND origin_status IN ('ACTIVE','SHADOW') AND status IN ('ACTIVE','RESOLVED')
-           GROUP BY 1`,
-          [todayET]
-        ).catch(() => ({ rows: [] })),
-        query(`
-          SELECT COALESCE(SUM(COALESCE(daily_score, 0)), 0)::int AS nl30
-          FROM (SELECT daily_score FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 30) sub
-        `, [todayET]).catch(() => ({ rows: [{ nl30: 0 }] })),
-        _cachedVwapSigmaPre ? Promise.resolve(null) : query(`
-          WITH svwap AS (
-            SELECT close::float as c,
-              SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float * close::float) OVER (PARTITION BY ts::date ORDER BY ts) /
-              NULLIF(SUM((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) OVER (PARTITION BY ts::date ORDER BY ts), 0) AS vwap
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND ts::date IN (SELECT DISTINCT ts::date FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1 ORDER BY ts::date DESC LIMIT 20)
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-          )
-          SELECT AVG(ABS(c - vwap))::float as mean_dist, STDDEV(ABS(c - vwap))::float as std_dist
-          FROM svwap WHERE vwap IS NOT NULL
-        `, [todayET]).catch(() => ({ rows: [{}] })),
-        // origin_status IN ('ACTIVE','SHADOW') added 2026-07-27 -- "level recency" (was this level
-        // tested recently = proven defender, vs untested = risky) is about REAL market touches,
-        // same reasoning as the stacking-count fix above. Without this, a level with dense
-        // BACKFILL/UNKNOWN historical coverage would almost always show as "recently tested"
-        // regardless of genuine recent activity.
-        query(`
-          SELECT
-            REGEXP_REPLACE(setup_type, '_(LONG|SHORT)$', '') AS level_base,
-            MAX(trade_date)::text AS last_date
-          FROM active_setups
-          WHERE trade_date >= $1::date - INTERVAL '21 days' AND trade_date < $1
-            AND origin_status IN ('ACTIVE','SHADOW')
-            AND status = 'RESOLVED'
-          GROUP BY level_base
-        `, [todayET]).catch(() => ({ rows: [] })),
-        query(`
-          SELECT AVG(daily_range)::float AS avg_first15_range
-          FROM (
-            SELECT ts::date AS dt, MAX(high) - MIN(low) AS daily_range
-            FROM price_bars_primary
-            WHERE symbol = 'NQ'
-              AND ts::date IN (
-                SELECT DISTINCT ts::date FROM price_bars_primary
-                WHERE symbol = 'NQ' AND ts::date < $1
-                ORDER BY ts::date DESC LIMIT 20
-              )
-              AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
-            GROUP BY ts::date
-          ) sub
-        `, [todayET]).catch(() => ({ rows: [] })),
-      ]);
-      const _lfOvInv  = _lfArRow.rows[0]?.overnight_inventory;
-      const _lfOvOpen = _lfArRow.rows[0]?.open_vs_prior_value;
-      const isOvernightAligned = (dir) =>
-        (dir === 'LONG'  && (_lfOvInv === 'SHORT_TRAPPED' || _lfOvOpen === 'ABOVE_VALUE')) ||
-        (dir === 'SHORT' && (_lfOvInv === 'LONG_TRAPPED'  || _lfOvOpen === 'BELOW_VALUE'));
-      const isOvernightCounter = (dir) =>
-        (dir === 'LONG'  && (_lfOvInv === 'LONG_TRAPPED'  || _lfOvOpen === 'BELOW_VALUE')) ||
-        (dir === 'SHORT' && (_lfOvInv === 'SHORT_TRAPPED' || _lfOvOpen === 'ABOVE_VALUE'));
-      // S2 double-counter: BOTH overnight inventory AND open-vs-value disagree with fade direction.
-      // Backtest: baseline 72.2% WR → S2 filter $8,225 (+$833). Only suppress when both agree.
-      const isS2DoubleCounter = (dir) =>
-        (dir === 'LONG'  && _lfOvInv === 'LONG_TRAPPED'  && _lfOvOpen === 'BELOW_VALUE') ||
-        (dir === 'SHORT' && _lfOvInv === 'SHORT_TRAPPED' && _lfOvOpen === 'ABOVE_VALUE');
-      // Prior completed setups — streak depth sizing.
-      // Research 2026-07-05: 1×loss=47% WR, 2×loss=31.6%, 3+×loss=28.4%; 1×win=76.6%, 2×win=79.7%, 3+×win=87.8%
-      const lfFirstOfDay = !_lfPriorQ.rows[0];
-      let lfConsecLosses = 0, lfConsecWins = 0;
-      for (const r of _lfPriorQ.rows) {
-        if (r.resolution === 'STOP_HIT')   { if (lfConsecWins   === 0) lfConsecLosses++; else break; }
-        else if (r.resolution === 'TARGET_HIT') { if (lfConsecLosses === 0) lfConsecWins++;  else break; }
-        else break;
-      }
-      const lfPriorStop = lfConsecLosses >= 1;
-      const lfPriorWin  = lfConsecWins  >= 1;
-      // Stacking count: same-direction setups fired today (ACTIVE or RESOLVED).
-      // Verified 2026-07-05: 1-6 setups = 80-86% WR solid; 7+ = 62.4% WR -$15.7 EV (N=1922) suppress.
-      const _lfSameDirCounts = Object.fromEntries(_lfSameDirCountQ.rows.map(r => [r.direction, parseInt(r.cnt)]));
-      // NL30: rolling 30-day sum of daily ACD scores — conditions fade edge by market regime.
-      // Verified 2026-07-05 (N=229-429 per bucket): MILD trend = SHORT fades penalized (-$17 to -$19 EV);
-      // STRONG regime boosts both extremes; prior-day only (< today) to avoid lookahead.
-      const _lfNl30 = _lfNl30Q.rows[0]?.nl30 ?? 0;
-      const _lfNl30Bucket = _lfNl30 > 15 ? 'STRONG_BULL' : _lfNl30 >= 6 ? 'MILD_BULL' :
-        _lfNl30 < -15 ? 'STRONG_BEAR' : _lfNl30 <= -6 ? 'MILD_BEAR' : 'NEUTRAL';
-      // Momentum-against-fade: was PAUSED mid-build 2026-09-05 pending the loss-cluster
-      // investigation the user redirected to (which produced the direction-loss-alternation
-      // gate above, not this). RESUMED same day as SHADOW-ONLY observational logging, not a
-      // sizeMultiplier factor -- see getMomentumAgainstFade()/getMomentumAgainstFadeCalib()/
-      // tagMomentumAgainstFadeShadow() near the top of this file for the actual wiring (all 4
-      // real insert sites, same tag-after-insert pattern as tagDirectionGateShadow). A live
-      // sizeMultiplier penalty is a separate, not-yet-made decision (OPEN_DECISION
-      // momentum_against_fade_sizemultiplier_wiring_pending) -- deliberately not added here.
-      // VWAP at detection time — computed from today's RTH bars (ask_vol+bid_vol ≈ total volume).
-      // Rolling σ of VWAP distances over last 20 sessions gives the dynamic threshold.
-      // Verified 2026-07-06: far extended (>mean+σ) = 76.2% WR +$59.7 EV z=+2.95 N=600.
-      const _lfVwapData = allRthBarsRow.rows.reduce((acc, b) => {
-        const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
-        acc.pv += b.close * vol; acc.vol += vol; return acc;
-      }, { pv: 0, vol: 0 });
-      const _lfVwap = _lfVwapData.vol > 0 ? _lfVwapData.pv / _lfVwapData.vol : null;
-      let _lfVwapMean = _cachedVwapSigmaPre?.mean ?? null;
-      let _lfVwapStd  = _cachedVwapSigmaPre?.std  ?? null;
-      if (_lfVwapMean == null && _lfVwapSigmaQ) {
-        _lfVwapMean = _lfVwapSigmaQ.rows[0]?.mean_dist ?? null;
-        _lfVwapStd  = _lfVwapSigmaQ.rows[0]?.std_dist  ?? null;
-        if (_lfVwapMean != null) setCached(todayET, 'lfVwapSigma', { mean: _lfVwapMean, std: _lfVwapStd });
-      }
-      // Level recency: last test date per level base name (past 21 days).
-      // Research 2026-07-05: 1-2d ago = 65.9% WR $22 EV, 21d+ fresh = 60.5% WR -$5 EV.
-      const lfRecencyMap = Object.fromEntries(_lfRecencyQ.rows.map(r => [r.level_base, r.last_date]));
-
-      // TURBULENT intraday range confirmation: first-15-min range vs rolling 20-day average.
-      // Research 2026-07-05: range >= avg → 79.99% WR N=39 (56% of TURBULENT days pass);
-      //                       range < avg → 67.67% WR N=21 (44% false calls).
-      // Threshold is the rolling mean itself — no hardcoded number.
-      const _lfAvgFirst15Range = _lfTurbRangeQ.rows[0]?.avg_first15_range ?? null;
-      const _lfFirst15Bars = allRthBarsRow.rows.filter(b => b.et_min >= 570 && b.et_min <= 584);
-      const _lfFirst15Range = _lfFirst15Bars.length >= 3
-        ? Math.max(..._lfFirst15Bars.map(b => b.high)) - Math.min(..._lfFirst15Bars.map(b => b.low))
-        : null;
-      // turbConfirmed = true once 9:45 has passed and range >= rolling mean
-      const turbConfirmed = _lfFirst15Range != null && _lfAvgFirst15Range != null && _lfFirst15Range >= _lfAvgFirst15Range;
-
-      // OR Expansion Bias: no A Up/A Down breach yet = untouched liquidity reinforces fade.
-      // BALANCE: 78.88% WR N=161 (+5.77pp lift, z=2.03). TURBULENT: 96.15% WR N=26 (+20.97pp, z=2.77).
-      // aUpFired/aDownFired are written to DB progressively each poll — real-time, not lookahead.
-      const _lfOrExpanded = aUpFired || aDownFired;
-
-      // Regime Persistence: prior 2 days same day_type = 3-day streak. Only meaningful on TURBULENT.
-      // TURBULENT × streak: 84.08% WR N=157 (+8.89pp, z=3.45). BALANCE: flat (+0.20pp, skip).
-      // NL30 nuance: streak negative in NEUTRAL (-3.13pp) — skip when NL30 is ranging.
-      const _lfRegimePersistQ = dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL'
-        ? await query(`
-            SELECT COUNT(*) AS streak_days
-            FROM (SELECT day_type FROM acd_daily_log WHERE trade_date < $1 ORDER BY trade_date DESC LIMIT 2) sub
-            WHERE day_type = $2
-          `, [todayET, dtClass]).catch(() => ({ rows: [{ streak_days: '0' }] }))
-        : { rows: [{ streak_days: '0' }] };
-      const _lfRegimePersist = parseInt(_lfRegimePersistQ.rows[0]?.streak_days ?? '0') >= 2;
-
-      // Overnight gap: pre-9:30 range vs rolling 60-session p33.
-      // Opus audit 2026-07-07: small gaps (< p33) = 60.8% WR, -$27 EV (N=332) — quiet consolidation kills fades.
-      // Threshold is rolling p33 (no hardcoded number per CLAUDE.md hard rule).
-      const _lfOnGapQ = await query(`
-        WITH today_on AS (
-          SELECT MAX(high)::float - MIN(low)::float AS on_range
-          FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date=$1
-            AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
-                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
-        ),
-        prior_on AS (
-          SELECT MAX(high) - MIN(low) AS on_range
-          FROM price_bars_primary
-          WHERE symbol='NQ'
-            AND ts::date IN (
-              SELECT DISTINCT ts::date FROM price_bars_primary
-              WHERE symbol='NQ' AND ts::date < $1
-              ORDER BY ts::date DESC LIMIT 60
-            )
-            AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
-                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
-          GROUP BY ts::date
-        )
-        SELECT
-          (SELECT on_range FROM today_on) AS today_on_range,
-          PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY on_range) AS p33_60d
-        FROM prior_on
-      `, [todayET]).catch(() => ({ rows: [{}] }));
-      const _lfTodayOnRange = _lfOnGapQ.rows[0]?.today_on_range ?? null;
-      const _lfOnRangeP33   = _lfOnGapQ.rows[0]?.p33_60d ?? null;
-      const _lfSmallGap = _lfTodayOnRange != null && _lfOnRangeP33 != null && _lfTodayOnRange < _lfOnRangeP33;
-
-      // Session delta: cumulative (ask_vol - bid_vol) from RTH open to now.
-      // Backtest 2026-07-08 (N=4,354 fades): neutral |Δ|<p25 = 57.9% WR -$3 EV; high |Δ|>p75 = 69.3% WR +$28 EV.
-      // Against-flow is slightly better than with-flow overall (overextension reversal logic) — only magnitude matters.
-      const _lfSessionDelta = allRthBarsRow.rows.reduce((sum, b) => sum + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
-      const _lfAbsDelta = Math.abs(_lfSessionDelta);
-      const _cachedDeltaPerc = getCached(todayET, 'lfDeltaPerc');
-      let _lfDeltaP25 = _cachedDeltaPerc?.p25 ?? null;
-      let _lfDeltaP75 = _cachedDeltaPerc?.p75 ?? null;
-      if (_lfDeltaP25 == null) {
-        // FIXED 2026-08-31 (OPEN_DECISION lf_session_delta_partial_vs_fullday_percentile_mismatch,
-        // user-confirmed): this used to be a flat FULL-DAY sum percentile (one number per day,
-        // GROUP BY ts::date, no time cutoff), compared live against _lfSessionDelta -- a
-        // PARTIAL-day running sum as of fire time. Re-read the original 2026-07-08 validating
-        // backtest (scripts/archive/backtest_session_delta.mjs) to resolve which convention it
-        // actually used: it computed cumulative delta from 9:30 up through EACH HISTORICAL
-        // SETUP'S OWN fire time, then took percentiles across all of those -- i.e. a percentile
-        // of PARTIAL-day cumulative delta sampled at whatever time each trade happened to fire,
-        // never a full-day total. The live code's threshold was a different, unvalidated
-        // simplification, not what was actually proven (this is why _lfDeltaHigh fired on only
-        // 1/704 real trades and _lfDeltaNeutral fired on 609/704 -- a full-day bar is much
-        // harder to clear early in the session). Rebuilt below to sample the RUNNING cumulative
-        // delta at every minute of every historical session (not just at setup-fire moments,
-        // which aren't cheaply queryable here) and pool percentiles across all of those
-        // (day, minute) readings -- the same underlying statistic (partial-day cumulative delta
-        // at an arbitrary point in the session), just a denser, unbiased sample of it.
-        const _lfDeltaPercQ = await query(`
-          WITH minute_deltas AS (
-            SELECT ts::date AS bar_date,
-              (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
-                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York'))::int AS et_min,
-              COALESCE(ask_volume,0) - COALESCE(bid_volume,0) AS bar_delta
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND ts::date IN (
-                SELECT DISTINCT ts::date FROM price_bars_primary
-                WHERE symbol='NQ' AND ts::date < $1
-                ORDER BY ts::date DESC LIMIT 60
-              )
-              AND EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
-                + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') BETWEEN 570 AND 959
-          ), running AS (
-            SELECT bar_date, et_min,
-              SUM(bar_delta) OVER (PARTITION BY bar_date ORDER BY et_min) AS cum_delta
-            FROM minute_deltas
-          )
-          SELECT
-            PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p25,
-            PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY ABS(cum_delta)) AS p75
-          FROM running
-        `, [todayET]).catch(() => ({ rows: [{}] }));
-        _lfDeltaP25 = _lfDeltaPercQ.rows[0]?.p25 ?? null;
-        _lfDeltaP75 = _lfDeltaPercQ.rows[0]?.p75 ?? null;
-        if (_lfDeltaP25 != null) setCached(todayET, 'lfDeltaPerc', { p25: _lfDeltaP25, p75: _lfDeltaP75 });
-      }
-      const _lfDeltaNeutral = _lfDeltaP25 != null && _lfAbsDelta < _lfDeltaP25;
-      const _lfDeltaHigh    = _lfDeltaP75 != null && _lfAbsDelta > _lfDeltaP75;
-
-      // SHORT entry-time selling-pressure calibration (2026-08-24, RESEARCH_CLAIM
-      // pressure_entry_sizing_direction_asymmetric) — same read-once-per-poll-then-cache
-      // convention as deltaCalib/widerTargetPressureThreshold in resolveSetupsByPrice()
-      // above, just scoped here since this factor is consumed by the sizeMultiplier IIFE
-      // below, not the resolution walker. Recomputed weekly by
-      // scripts/calibrate_pressure_entry_sizing_short.mjs, which floors bump to 0 (not a
-      // hardcoded literal) if real forward EV isn't clearly positive — per explicit user
-      // instruction to track this for real degradation rather than freeze it at ship time.
-      // null threshold = factor disabled, never a hardcoded fallback number.
-      const entryPressureShortCalib = await getGlobalCalib('entryPressureShortCalib', async () => {
-        const r = await query(`
-          SELECT notes FROM performance_audit
-          WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
-          ORDER BY run_date DESC LIMIT 1
-        `);
-        let val = { threshold: null, bump: 0 };
-        try {
-          const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
-          if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
-        } catch (_) {}
-        return val;
-      });
-
-      // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
-      // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
-      // Score distribution: 0→58.8% WR, 1→65.4%, 2→71.8%, 3→78.8% (N=80 CI=[73.8%,85%])
-      const _pulseBars = allRthBarsRow.rows;
-
-      // Per-minute vol baseline (90-day, cached per day)
-      let _pulseVolBaseline = getCached(todayET, 'pulseVolBaseline');
-      if (!_pulseVolBaseline) {
-        const _pvbQ = await query(`
-          SELECT (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
-                  EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York'))::int AS et_min,
-                 AVG((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS avg_vol,
-                 STDDEV((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS std_vol
-          FROM price_bars_primary
-          WHERE symbol='NQ'
-            AND ts::date >= $1::date - 90 AND ts::date < $1
-            AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
-                 EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 959
-          GROUP BY 1
-        `, [todayET]).catch(() => ({ rows: [] }));
-        _pulseVolBaseline = {};
-        for (const r of _pvbQ.rows) _pulseVolBaseline[r.et_min] = { avg: +r.avg_vol, std: +(r.std_vol || 1) };
-        if (Object.keys(_pulseVolBaseline).length > 0) setCached(todayET, 'pulseVolBaseline', _pulseVolBaseline);
-      }
-
-      // Vol sigma: max sigma across last 3 bars
-      const _pulseLast3 = _pulseBars.slice(-3);
-      let _pulseVolSigma = null;
-      for (const b of _pulseLast3) {
-        const bl = _pulseVolBaseline?.[b.et_min];
-        if (!bl || bl.avg <= 0) continue;
-        const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
-        const sig = (vol - bl.avg) / bl.std;
-        if (_pulseVolSigma == null || sig > _pulseVolSigma) _pulseVolSigma = sig;
-      }
-      const _pulseHighVol = _pulseVolSigma != null && _pulseVolSigma >= 2.5;
-
-      // Delta 15-bar (direction computed per-setup inside IIFE)
-      const _pulseDelta15 = _pulseBars.slice(-15).reduce((s, b) => s + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
-
-      // Micro structure: last 8 bars strict higher-lows OR lower-highs
-      const _pulseStruct = (() => {
-        const last8 = _pulseBars.slice(-8);
-        if (last8.length < 2) return false;
-        const hl = last8.every((b, i) => i === 0 || b.low  >= last8[i - 1].low);
-        const lh = last8.every((b, i) => i === 0 || b.high <= last8[i - 1].high);
-        return hl || lh;
-      })();
-
-      // Rotations ≤1: full session close sign-changes (rarely fires — tiebreaker)
-      let _pulseRots = 0;
-      for (let i = 2; i < _pulseBars.length; i++) {
-        const d1 = Math.sign(_pulseBars[i].close   - _pulseBars[i - 1].close);
-        const d0 = Math.sign(_pulseBars[i - 1].close - _pulseBars[i - 2].close);
-        if (d1 !== 0 && d0 !== 0 && d1 !== d0) _pulseRots++;
-      }
-      const _pulseLowRots = _pulseRots <= 1;
-
+      // computeLevelFadeFactors() 2026-09-07 (runSetupDetection decomposition Pass 2
+      // continued) -- P3 factor pre-fetch, extracted verbatim; results destructured back
+      // into these exact local names so every downstream phase (P4+) keeps working
+      // unchanged via closure, same pattern as buildAllCandidates() above.
+      const {
+        priorDayProfile,
+        isOvernightAligned, isOvernightCounter, isS2DoubleCounter,
+        lfFirstOfDay, lfConsecLosses, lfConsecWins, lfPriorStop, lfPriorWin,
+        _lfSameDirCounts, _lfNl30Bucket,
+        _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
+        turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
+        _lfDeltaNeutral, _lfDeltaHigh,
+        entryPressureShortCalib,
+        _pulseHighVol, _pulseDelta15, _pulseStruct, _pulseLowRots, _pulseVolSigma,
+      } = await computeLevelFadeFactors({ todayET, dtClass, allRthBarsRow, aUpFired, aDownFired });
       // ── Level Scalp detection ────────────────────────────────────────────
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
       let levelScalpSetup = null;
