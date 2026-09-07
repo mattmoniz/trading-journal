@@ -5865,7 +5865,6 @@ export default function createACDRouter(io) {
           const vwapSigma = vwapStdData.std > 0 ? vwapDist / vwapStdData.std : 0;
           if (Math.abs(vwapDist) >= vwapThreshold) {
             const isLong = vwapDist < 0;
-            const t2Dist = Math.min(Math.round(Math.abs(vwapDist) * 0.5), 100);
             // FIXED 2026-07-17: hand-typed history{winRate:0.62, occurrences:460, avgPnl:24} — real
             // SETUP_STATUS data is THIN_N with N=2-3, nowhere close to 460. Same "never fabricate a
             // stat" violation as the other setups fixed this session (docs/OPEN_THREADS.md).
@@ -5885,8 +5884,14 @@ export default function createACDRouter(io) {
               entry: currentPrice,
               stop: isLong ? currentPrice - _vwapStopPts : currentPrice + _vwapStopPts,
               target: isLong ? currentPrice + _vwapT1Pts : currentPrice - _vwapT1Pts,
-              targetLabel: `T1: ${_vwapT1Pts}pt (half off) · Runner: ${t2Dist}pt toward VWAP`,
-              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Scale out: half at ${_vwapT1Pts}pt, runner to ${t2Dist}pt (50% of dist, max 100pt). Breakeven stop after T1.\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
+              // FIXED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907):
+              // this used to advertise "half off at T1 / runner toward VWAP / breakeven after T1" --
+              // the live INSERT below never sets runner_trail_width/extend_target_level, so every
+              // real trade resolves flat against this single target via the standard
+              // resolveSetupsByPrice() path. The scale-out framing was never mechanically enforced;
+              // describe what actually happens instead of a plan that was never wired.
+              targetLabel: `T1/exit: ${_vwapT1Pts}pt (flat)`,
+              description: `Price ${Math.round(Math.abs(vwapDist))}pt (${vwapSigma > 0 ? '+' : ''}${vwapSigma.toFixed(1)}σ) from VWAP (${Math.round(earlyVwap)}). Threshold: ${vwapThreshold}pt (1.5σ = ${Math.round(vwapStdData.std)}pt std). Stop ${_vwapStopPts}pt / target ${_vwapT1Pts}pt, resolved flat (no scale-out or runner is currently live for this setup).\n\nEDGE: ${getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._edgeText?.(_vwapMagType) ?? 'not yet calibrated'} overall.`,
               history: (_vwapMagStats && _vwapMagStats.n >= 20)
                 ? { winRate: _vwapMagStats.wr, occurrences: _vwapMagStats.n, avgPnl: _vwapMagStats.ev, t1HitRate: _vwapMagStats.wr }
                 : { winRate: null, occurrences: null, avgPnl: null, t1HitRate: null },

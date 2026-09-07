@@ -241,7 +241,30 @@ async function loadData() {
     .sort();
 
   console.log(`  Total qualifying dates: ${dates.length} (${dates[0]} → ${dates[dates.length-1]})`);
-  return { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback };
+
+  // Live-matching stop/target calibration for VWAP_MAGNET (2026-09-07, OPEN_DECISION
+  // backtest_unified_detectors_systemic_divergence_20260907): acd.js's live INSERT has read
+  // OPTIMAL_STOP-calibrated stop/target for this setup since 2026-08-02 (its own comment:
+  // "T1/stop are data-derived ... since 2026-08-02"), but this backtest still hardcoded
+  // stop=30/target=20. Mirrors acd.js's own getCached(...)?._opt?.[type] contract -- keyed
+  // by full setup_type, latest run_date -- so the backtest now describes the SAME entry
+  // geometry as live, not just the same trigger. Falls back to the pre-calibration 30/20
+  // only when no OPTIMAL_STOP row exists yet, same as acd.js's own fallback.
+  const vwapCalibRes = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, optimal_stop::float as stop, optimal_target::float as target
+    FROM performance_audit
+    WHERE signal_type = 'OPTIMAL_STOP' AND signal_name IN ('VWAP_MAGNET_LONG','VWAP_MAGNET_SHORT')
+    ORDER BY signal_name, run_date DESC
+  `);
+  const vwapMagnetCalib = { LONG: {}, SHORT: {} };
+  for (const r of vwapCalibRes.rows) {
+    if (r.stop == null || r.target == null) continue;
+    const dir = r.signal_name.endsWith('_LONG') ? 'LONG' : 'SHORT';
+    vwapMagnetCalib[dir] = { stop: r.stop, target: r.target };
+  }
+  console.log(`  VWAP Magnet calib: LONG stop=${vwapMagnetCalib.LONG.stop ?? 'fallback-30'}/target=${vwapMagnetCalib.LONG.target ?? 'fallback-20'}, SHORT stop=${vwapMagnetCalib.SHORT.stop ?? 'fallback-30'}/target=${vwapMagnetCalib.SHORT.target ?? 'fallback-20'}`);
+
+  return { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib };
 }
 
 // ── 5-day bracket levels ──────────────────────────────────────────────────────
@@ -706,14 +729,19 @@ function detectBracketBreakout(bars, bracket, orH, orL, nl30, pdVAH, pdVAL) {
 // 8. VWAP_MAGNET — σ-based trigger: fires when price is ≥1.5σ from VWAP.
 // σ = rolling 30-session std of (session_close - RTH_VWAP), precomputed from bar data.
 // Matches live acd.js which uses session_analysis.close_vs_vwap rolling std.
-// T1 = 20pt, runner = min(vwapDist*0.5, 100pt) toward VWAP. Stop = 30pt.
-function detectVwapMagnet(bars, vwapStd, vwapStdFallback = 130) {
+//
+// Trigger detection is factored out into findVwapMagnetTriggers() so the two exit-
+// mechanism variants below (detectVwapMagnet = flat T1, matches live; the
+// scale-out research variant) always share the exact same entry population — the
+// confound checklist's item 1 ("do the two compared arms differ ONLY in the
+// hypothesis variable") for any future flat-vs-scale-out comparison.
+function findVwapMagnetTriggers(bars, vwapStd, vwapStdFallback = 130) {
   const SIGMA_TRIGGER = 1.5;
   const effectiveStd = (vwapStd && vwapStd > 10) ? vwapStd : vwapStdFallback;
   const thresh = Math.round(effectiveStd * SIGMA_TRIGGER);
 
   let pv = 0, tv = 0;
-  const fires = [];
+  const events = [];
   let fired = false;
   for (let i = 0; i < bars.length; i++) {
     const b = bars[i];
@@ -724,17 +752,57 @@ function detectVwapMagnet(bars, vwapStd, vwapStdFallback = 130) {
     const dist = b.close - vwap;
     if (Math.abs(dist) >= thresh) {
       const isLong = dist < 0;
-      const runnerDist = Math.min(Math.round(Math.abs(dist) * 0.5), 100);
-      fires.push({ type: isLong ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT',
-        direction: isLong ? 'LONG' : 'SHORT', entryIdx: i, entry: b.close,
-        stop: isLong ? b.close - 30 : b.close + 30,
-        t1Target: isLong ? b.close + 20 : b.close - 20,
-        target: isLong ? b.close + runnerDist : b.close - runnerDist,
-        isScaleOut: true });
+      events.push({ entryIdx: i, entry: b.close, direction: isLong ? 'LONG' : 'SHORT', dist: Math.abs(dist) });
       fired = true;
     }
   }
-  return fires;
+  return events;
+}
+
+// FIXED 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907):
+// this used to hardcode stop=30/target=20 and always resolve via resolveScaleOut() (bank
+// half at T1, run the rest toward VWAP) -- but live's INSERT (acd.js ~5861) never sets
+// runner_trail_width/extend_target_level for this setup, so every real trade resolves flat
+// against a single target, AND live has read OPTIMAL_STOP-calibrated stop/target (not
+// hardcoded 30/20) since 2026-08-02. This now matches live exactly: flat exit (no
+// isScaleOut, resolved via the plain resolve()), same calib source as acd.js's
+// getCached(...)?._opt?.[type] lookup. `calib` = { LONG: {stop,target}, SHORT: {stop,target} }
+// from loadData()'s vwapMagnetCalib -- falls back to the pre-calibration 30/20 only when
+// genuinely uncalibrated, same as acd.js's own fallback.
+function detectVwapMagnet(bars, vwapStd, vwapStdFallback = 130, calib = {}) {
+  return findVwapMagnetTriggers(bars, vwapStd, vwapStdFallback).map(e => {
+    const c = calib[e.direction] || {};
+    const stopPts = c.stop ?? 30, targetPts = c.target ?? 20;
+    return {
+      type: e.direction === 'LONG' ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT',
+      direction: e.direction, entryIdx: e.entryIdx, entry: e.entry,
+      stop: e.direction === 'LONG' ? e.entry - stopPts : e.entry + stopPts,
+      target: e.direction === 'LONG' ? e.entry + targetPts : e.entry - targetPts,
+    };
+  });
+}
+
+// RESEARCH-ONLY, not called from main()'s production run and not wired into anything
+// live: tests whether a 2-leg scale-out (bank half at the calibrated T1, run the other
+// half toward VWAP with a breakeven stop) beats the flat mechanism live actually uses.
+// Reuses findVwapMagnetTriggers() so the comparison against detectVwapMagnet() above
+// shares the identical trigger population, entry price, and stop/T1 distance — the ONLY
+// difference is the exit mechanism. See scripts/backtest_vwap_magnet_scaleout_test.mjs,
+// the actual comparison script that calls both variants on the same bars.
+function detectVwapMagnetScaleOut(bars, vwapStd, vwapStdFallback = 130, calib = {}) {
+  return findVwapMagnetTriggers(bars, vwapStd, vwapStdFallback).map(e => {
+    const c = calib[e.direction] || {};
+    const stopPts = c.stop ?? 30, t1Pts = c.target ?? 20;
+    const runnerDist = Math.min(Math.round(e.dist * 0.5), 100);
+    return {
+      type: e.direction === 'LONG' ? 'VWAP_MAGNET_LONG' : 'VWAP_MAGNET_SHORT',
+      direction: e.direction, entryIdx: e.entryIdx, entry: e.entry,
+      stop: e.direction === 'LONG' ? e.entry - stopPts : e.entry + stopPts,
+      t1Target: e.direction === 'LONG' ? e.entry + t1Pts : e.entry - t1Pts,
+      target: e.direction === 'LONG' ? e.entry + runnerDist : e.entry - runnerDist,
+      isScaleOut: true,
+    };
+  });
 }
 
 // 9. STOP_SWEEP (sweep key level within session range, close back inside + reversal)
@@ -912,7 +980,7 @@ async function writeResults(setupName, stats, windowDays, signalType = 'UNIFIED_
 
 // ── MAIN ──────────────────────────────────────────────────────────────────────
 async function main() {
-  const { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback } = await loadData();
+  const { barsByDate, acdByDate, dvlByDate, dates, vwapStdByDate, vwapStdFallback, vwapMagnetCalib } = await loadData();
   const bracketByDate   = buildBracketLevels(dates, barsByDate);
   const or5MidByDate    = buildOrMids(dates, acdByDate);
   const ib10MidByDate   = buildIbMids(dates, barsByDate);
@@ -1087,7 +1155,7 @@ async function main() {
       ...detectVAResp(bars, pdVAH, pdVAL, pdPOC, orH, orL),
       ...detectTRT(bars, orH, orL, acd.a_up, acd.a_down, acd.c_up, acd.c_down, pdVAH, pdVAL, acd.a_up_level, acd.a_down_level),
       ...detectBracketBreakout(bars, bracketByDate.get(date), orH, orL, nl30, pdVAH, pdVAL),
-      ...detectVwapMagnet(bars, vwapStdByDate.get(date), vwapStdFallback),
+      ...detectVwapMagnet(bars, vwapStdByDate.get(date), vwapStdFallback, vwapMagnetCalib),
       ...detectStopSweep(bars, { pdPOC, pdVAH, pdVAL, orH, orL, ...fpLevels }),
       ...detectCoilSurge(bars),
       ...detectRsiDiv(bars),
@@ -1336,7 +1404,7 @@ async function main() {
 
 // Export necessary components for external testing
 export {
-  resolve, aggregate, loadData, detectLevelFades, LEVEL_GATES,
+  resolve, resolveScaleOut, aggregate, loadData, detectLevelFades, LEVEL_GATES,
   buildBracketLevels, buildOrMids, buildIbMids, buildMonthlyOpens,
   buildPriorMonthVAs, buildRollingVAs, buildPriorWeekLevels, buildTwoDayPOC, pdIbMid,
   floorPivots,
@@ -1346,6 +1414,10 @@ export {
   // same "export the real function" convention as detectLevelFades above.
   detectIB, detectCStandalone, detectVAResp, detectTRT,
   detectBracketBreakout, detectVwapMagnet, detectStopSweep,
+  // Added 2026-09-07 (OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907)
+  // so scripts/backtest_vwap_magnet_scaleout_test.mjs can reuse the real, canonical trigger/
+  // exit logic instead of reimplementing it.
+  detectVwapMagnetScaleOut,
 };
 
 import { fileURLToPath } from 'url';

@@ -1,5 +1,17 @@
 # Open Threads / Pending Work
 
+## 🔶 2026-09-07 — `backtest_unified_detectors_systemic_divergence_20260907`: VwapMagnet resolved, 4 remain
+
+Continued the `backtest_unified.js` vs. live-`acd.js` divergence audit (see the entry below) starting with `detectVwapMagnet`, per the decision's own instruction to ask the user delete-vs-build rather than default to "reconcile." Asked; user chose "properly test scale-out first, then decide."
+
+Found the divergence was worse than originally scoped: the backtest's 2-leg scale-out simulation (bank half at T1, run the rest toward VWAP) was ALSO still using a stale, pre-2026-08-02 hardcoded stop=30/target=20 — so its negative EV number was confounded with an outdated entry geometry, not a clean read on the exit mechanism alone. Fixed properly:
+1. `backtest_unified.js`'s `detectVwapMagnet` now reads the SAME `OPTIMAL_STOP` calibration `acd.js`'s live INSERT reads (new `loadData()` field `vwapMagnetCalib`) and resolves flat (no scale-out) — matches live exactly. Trigger detection factored into a shared `findVwapMagnetTriggers()` so any future exit-mechanism comparison can never differ in trigger population.
+2. Built `scripts/backtest_vwap_magnet_scaleout_test.mjs` — a confound-controlled A/B (same trigger population, same calibrated stop/T1, differing ONLY in exit mechanism) via a new exported `detectVwapMagnetScaleOut()` research variant. **Result: scale-out is worse than flat in both directions**, on a real, non-clustered, rigor-clean sample — LONG N=135, flat EV=-$10.31 vs. scale-out EV=-$11.86 (Δ-$1.55/trade); SHORT N=83, flat EV=-$13.88 vs. scale-out EV=-$14.66 (Δ-$0.78/trade). Recorded as `RESEARCH_CLAIM vwap_magnet_long_scaleout_vs_flat_20260907` / `..._short_...` (both `REJECTED`). **Decision: do not build the 2-leg scale-out live.**
+3. Independent, orthogonal bug fixed in the same pass: `acd.js`'s live VWAP Magnet trade-brief text (`targetLabel`/`description`) told users "Scale out: half at Xpt, runner to Ypt... Breakeven stop after T1" — never mechanically enforced (the live INSERT resolves flat). Corrected to describe the real behavior.
+4. Full production `backtest_unified.js` re-run immediately (780 UNIFIED_BACKTEST + 321 SYSTEM_BACKTEST rows, same count as before) rather than waiting for Sunday's cron. `test_invariants.mjs` shows the identical 19 pre-existing failures with this change stashed vs. applied — zero regressions.
+
+`OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907` updated with this progress; still PENDING for the 4 remaining candidates (`detectCStandalone`, `detectVAResp`, `detectCoilSurge` — trigger/population drift; `detectStopSweep` — entirely different level set, re-scope not reconcile).
+
 ## 🔶 2026-09-07 — Two quick OPEN_DECISION wins, 4 larger ones scoped (not built)
 
 Asked "what else can we deal with quickly" — scanned all 55 PENDING `OPEN_DECISION`s and split by whether they're actually mechanical/small vs. requiring real new engineering. Resolved 2 quick ones same session (`setup_status_dow_clear_skips_globally_suppressed_types`, `move_watcher_scripts_to_tracked_dir` — both full detail in their resolution text).
