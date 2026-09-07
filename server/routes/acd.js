@@ -7325,6 +7325,13 @@ export default function createACDRouter(io) {
                 vwapExtended: !!(_lfVwap != null && _lfVwapMean != null && _lfVwapStd != null && Math.abs(currentPrice - _lfVwap) > _lfVwapMean + _lfVwapStd),
                 orExpanded: !!_lfOrExpanded,
                 dtClass: dtClass ?? null,
+                // Added 2026-09-07 (sizemultiplier_factor_hygiene_census_20260907): this factor
+                // shipped 2026-09-06 but was never added to this snapshot -- a real tooling gap
+                // that would have let it go stale unnoticed the same way dtaRowRecommendation/
+                // dtClass did. Raw string value, matching the dtClass convention above, not a
+                // boolean -- the IIFE only checks === 'TREND' but the snapshot should carry
+                // whatever real value came back for future analysis.
+                priorDayProfile: priorDayProfile ?? null,
                 regimePersist: !!_lfRegimePersist,
                 smallGapDay: !!_lfSmallGap,
                 deltaNeutral: !!_lfDeltaNeutral,
