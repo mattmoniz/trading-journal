@@ -17,6 +17,38 @@ import { query } from '../db.js';
 import { getVolumeBaseline } from './touchQuality.js';
 import { inferDirection } from '../config/setupTypes.js';
 
+// ── Runner-trail-width lookup (shared, 2026-09-07) ──────────────────────────────────
+// Extracted from 4 near-identical inline copies in acd.js (Globex level insert, suppressed-
+// audit insert, early-touch-backfill insert, main RTH active-slot insert) -- each queried
+// performance_audit's BREAKEVEN_TRAIL_TEST rows and parsed `.trail` out of the JSON notes with
+// byte-for-byte identical logic, only variable-name prefixes differing. Found while
+// investigating the file's overall duplication (user-prompted, 2026-09-07): the code's own
+// comments self-described one copy as "the third copy" without realizing a genuine 4th copy
+// existed at the main RTH insert site -- and that 4th copy was MISSING the `.catch(() =>
+// ({rows: []}))` safety net the other 3 have, meaning a transient DB hiccup on this specific
+// query could throw uncaught on the highest-traffic of the 4 sites (the real active-slot
+// insert path) instead of gracefully falling back to null like the other 3. This extraction
+// both deduplicates AND fixes that inconsistency -- every call site now gets the same safe
+// fallback behavior.
+//
+// Deliberately takes the ALREADY-RESOLVED CONDITIONAL_VARIANTS[...] entry as its argument,
+// not a setup_type string -- the 4 original sites don't all resolve the same key (the Globex
+// site pre-resolves via resolveUnconditionalTrailVariant() first; the other 3 look up the raw
+// setup_type directly), so this helper only extracts the shared TAIL (query + parse), leaving
+// each call site's own "which variant to look up" logic untouched and exactly as before.
+export async function lookupRunnerTrailWidth(trailVariant) {
+  if (!trailVariant?.trailSignalName) return null;
+  const row = await query(
+    `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
+     WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
+     ORDER BY signal_name, run_date DESC`,
+    [trailVariant.trailSignalName]
+  ).catch(() => ({ rows: [] }));
+  const notes = row.rows[0]?.notes;
+  const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
+  return parsed?.trail ?? null;
+}
+
 // ── Setup-detection level cache (structural data that changes at most daily) ──
 // Keyed by trade date + cache key. Default TTL = 60 seconds for intraday stability;
 // callers with a naturally-daily-scoped value (already keyed by date, so a stale-day
@@ -88,6 +120,34 @@ export async function getTouchQualityBaseline(tradeDate) {
   if (cached) return cached;
   const baseline = await getVolumeBaseline(query, tradeDate);
   return setCached(tradeDate, 'touchQualityBaseline', baseline);
+}
+
+// ── ET expiry-string formatting (shared, 2026-09-07) ────────────────────────────────
+// Formats a Date as "YYYY-MM-DD HH:MM:00" using its LOCAL time fields -- callers must
+// have already computed `d` in ET wall-clock terms (this file's/acd.js's standing
+// convention), NOT UTC, so PostgreSQL interprets the stored TIMESTAMP WITHOUT TZ
+// column correctly in its own session timezone.
+export function fmtETStr(d) {
+  const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'),
+        day = String(d.getDate()).padStart(2, '0'),
+        h = String(d.getHours()).padStart(2, '0'), m = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${mo}-${day} ${h}:${m}:00`;
+}
+
+// The hard RTH-close (4:00 PM ET) expiry cap, rolled forward a day if already past.
+// Extracted from 3 near-identical inline copies in acd.js (cluster-sibling-touch-credit
+// insert, suppressed-audit insert, early-touch-backfill insert) -- each built this via its
+// own `const`-scoped copy because the real fmtETStr/computeExpiry closure in the main RTH
+// insert path is defined too late in runSetupDetection() (temporal dead zone) for these
+// earlier sites to reach. The main RTH path's own computeExpiry() still needs its
+// `sessionEndET` as a live Date (for a `<` comparison against a per-type expiry window), so
+// it keeps its own local copy of that comparison logic -- this helper covers only the
+// callers that need the final formatted cap string directly, not a Date to compare against.
+export function computeSessionEndCapStr(etNow) {
+  const sessionEndET = new Date(etNow);
+  sessionEndET.setHours(16, 0, 0, 0);
+  if (sessionEndET <= etNow) sessionEndET.setDate(sessionEndET.getDate() + 1);
+  return fmtETStr(sessionEndET);
 }
 
 // Drops an active_setups row into trade_timeline_events (idempotent via ON CONFLICT).

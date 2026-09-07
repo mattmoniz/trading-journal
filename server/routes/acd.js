@@ -14,7 +14,8 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr } from '../services/acdShared.js';
+import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
@@ -1344,18 +1345,7 @@ async function detectGlobexSetup(sessionDate, io) {
       // follow-up if ever wanted, not resolved here.
       const globexResolvedType = resolveUnconditionalTrailVariant(c.type);
       const globexTrailVariant = CONDITIONAL_VARIANTS[globexResolvedType];
-      let globexRunnerTrailWidth = null;
-      if (globexTrailVariant?.trailSignalName) {
-        const globexTrailRow = await query(
-          `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
-           WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
-           ORDER BY signal_name, run_date DESC`,
-          [globexTrailVariant.trailSignalName]
-        ).catch(() => ({ rows: [] }));
-        const globexTrailNotes = globexTrailRow.rows[0]?.notes;
-        const globexTrailParsed = typeof globexTrailNotes === 'string' ? JSON.parse(globexTrailNotes) : globexTrailNotes;
-        globexRunnerTrailWidth = globexTrailParsed?.trail ?? null;
-      }
+      const globexRunnerTrailWidth = await lookupRunnerTrailWidth(globexTrailVariant);
       const globexWiderTargetMult = !globexTrailVariant?.trailSignalName ? WIDER_TARGET_MULT : null;
       const ins = await query(`
         INSERT INTO active_setups (
@@ -2821,24 +2811,10 @@ async function buildAllCandidates(ctx) {
       // fires ~83/yr with 32 morning detections on BALANCE days.
       let absorptionSetup = null;
       if (allRthBarsRow.rows.length >= 30) {
-        const absTwoBk = {};
-        for (const b of allRthBarsRow.rows) {
-          const bk = Math.floor(b.et_min / 2) * 2;
-          if (!absTwoBk[bk]) absTwoBk[bk] = { high: b.high, low: b.low, close: b.close, open: b.open };
-          else { absTwoBk[bk].high = Math.max(absTwoBk[bk].high, b.high); absTwoBk[bk].low = Math.min(absTwoBk[bk].low, b.low); absTwoBk[bk].close = b.close; }
-        }
-        const absFb = Object.values(absTwoBk);
+        const absFb = resampleBars(allRthBarsRow.rows, 2);
         if (absFb.length >= 25) {
           const absC = absFb.map(b => b.close);
-          const absRsi = new Array(absC.length).fill(null);
-          let aag = 0, aal = 0;
-          for (let i = 1; i <= 14; i++) { const d = absC[i] - absC[i-1]; aag += d > 0 ? d : 0; aal += d < 0 ? -d : 0; }
-          aag /= 14; aal /= 14;
-          absRsi[14] = aal === 0 ? 100 : 100 - 100 / (1 + aag / aal);
-          for (let i = 15; i < absC.length; i++) {
-            const d = absC[i] - absC[i-1]; aag = (aag * 13 + (d > 0 ? d : 0)) / 14; aal = (aal * 13 + (d < 0 ? -d : 0)) / 14;
-            absRsi[i] = aal === 0 ? 100 : 100 - 100 / (1 + aag / aal);
-          }
+          const absRsi = computeRSI14(absC);
 
           const AW = 20;
           const last = absC.length - 1;
@@ -2953,25 +2929,10 @@ async function buildAllCandidates(ctx) {
       let rsiDivSetup = null;
       if (allRthBarsRow.rows.length >= 20) {
         // Resample to 15min
-        const fifteenBk = {};
-        for (const b of allRthBarsRow.rows) {
-          const bk = Math.floor(b.et_min / 15) * 15;
-          if (!fifteenBk[bk]) fifteenBk[bk] = { open: b.open, high: b.high, low: b.low, close: b.close };
-          else { fifteenBk[bk].high = Math.max(fifteenBk[bk].high, b.high); fifteenBk[bk].low = Math.min(fifteenBk[bk].low, b.low); fifteenBk[bk].close = b.close; }
-        }
-        const fb15 = Object.values(fifteenBk);
+        const fb15 = resampleBars(allRthBarsRow.rows, 15);
         if (fb15.length >= 17) {
           const fc = fb15.map(b => b.close), fh = fb15.map(b => b.high), fl = fb15.map(b => b.low);
-          // RSI(14)
-          const rsiArr = new Array(fc.length).fill(null);
-          let ag = 0, al = 0;
-          for (let i = 1; i <= 14; i++) { const d = fc[i] - fc[i-1]; ag += d > 0 ? d : 0; al += d < 0 ? -d : 0; }
-          ag /= 14; al /= 14;
-          rsiArr[14] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
-          for (let i = 15; i < fc.length; i++) {
-            const d = fc[i] - fc[i-1]; ag = (ag * 13 + (d > 0 ? d : 0)) / 14; al = (al * 13 + (d < 0 ? -d : 0)) / 14;
-            rsiArr[i] = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
-          }
+          const rsiArr = computeRSI14(fc);
           // Swing detection (N=2 for 15min — smaller window, faster detection)
           const SW = 2;
           const sHighs = [], sLows = [];
@@ -7003,10 +6964,7 @@ export default function createACDRouter(io) {
                     const sibStopLevel = isLong ? sibLevel - sibStopPts : sibLevel + sibStopPts;
                     const sibT1Level = isLong ? sibLevel + sibTargetPts : sibLevel - sibTargetPts;
                     const sibEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-                    const sibSessionEnd = new Date(sibEtNow);
-                    sibSessionEnd.setHours(16, 0, 0, 0);
-                    if (sibSessionEnd <= sibEtNow) sibSessionEnd.setDate(sibSessionEnd.getDate() + 1);
-                    const sibExpiresAt = `${sibSessionEnd.getFullYear()}-${String(sibSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(sibSessionEnd.getDate()).padStart(2, '0')} ${String(sibSessionEnd.getHours()).padStart(2, '0')}:${String(sibSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+                    const sibExpiresAt = computeSessionEndCapStr(sibEtNow);
                     const sibWiderTargetMult = (candType !== 'ABSORPTION_LONG' && !candType.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null;
                     await query(`
                       INSERT INTO active_setups (
@@ -7603,16 +7561,11 @@ export default function createACDRouter(io) {
               const auditTargetPts = auditOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
               const auditStopLevel = isLong ? currentPrice - auditStopPts : currentPrice + auditStopPts;
               const auditT1Level = isLong ? currentPrice + auditTargetPts : currentPrice - auditTargetPts;
-              // Self-contained expiry calc (4PM ET RTH close, rolled to next day if already past) --
-              // deliberately NOT calling the shared computeExpiry()/fmtETStr() helpers further down
-              // in this same function: both are `const` closures defined later in this handler's
-              // execution order, so they're not yet in scope at this earlier point (would throw a
-              // temporal-dead-zone ReferenceError). Mirrors their exact non-special-cased logic.
+              // 4PM ET RTH close, rolled to next day if already past -- shared computeExpiry()
+              // further down in this same function is a `const` closure not yet in scope at this
+              // earlier point (temporal dead zone), so this uses the shared cap helper directly.
               const auditEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-              const auditSessionEnd = new Date(auditEtNow);
-              auditSessionEnd.setHours(16, 0, 0, 0);
-              if (auditSessionEnd <= auditEtNow) auditSessionEnd.setDate(auditSessionEnd.getDate() + 1);
-              const auditExpiresAt = `${auditSessionEnd.getFullYear()}-${String(auditSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(auditSessionEnd.getDate()).padStart(2, '0')} ${String(auditSessionEnd.getHours()).padStart(2, '0')}:${String(auditSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+              const auditExpiresAt = computeSessionEndCapStr(auditEtNow);
               // historical_win_rate/historical_sessions were never populated on this INSERT path
               // (only the live-candidate ACTIVE/non-suppressed path set them) -- found 2026-07-28
               // directly from a user report of "WR at Fire" showing empty on real, today-fired
@@ -7634,18 +7587,7 @@ export default function createACDRouter(io) {
               // ordinary fixed-target trade under a _TRAIL label. Mirror the main path's
               // lookup here so this branch stops being a second, forgotten dead end.
               const auditTrailVariant = CONDITIONAL_VARIANTS[type];
-              let auditRunnerTrailWidth = null;
-              if (auditTrailVariant?.trailSignalName) {
-                const auditTrailRow = await query(
-                  `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
-                   WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
-                   ORDER BY signal_name, run_date DESC`,
-                  [auditTrailVariant.trailSignalName]
-                ).catch(() => ({ rows: [] }));
-                const auditNotes = auditTrailRow.rows[0]?.notes;
-                const auditParsed = typeof auditNotes === 'string' ? JSON.parse(auditNotes) : auditNotes;
-                auditRunnerTrailWidth = auditParsed?.trail ?? null;
-              }
+              const auditRunnerTrailWidth = await lookupRunnerTrailWidth(auditTrailVariant);
               // wider_target_mult was entirely missing from this INSERT's column list (found
               // 2026-08-18, docs/OPEN_THREADS.md 2026-08-18 "Separately found, not yet fixed")
               // -- this is the majority source of SHADOW rows (most setup_types are suppressed
@@ -8722,16 +8664,9 @@ export default function createACDRouter(io) {
         // 1PM ET got an already-past expires_at -> resolveSetupsByPrice/expireStaleSetups
         // treat it as instantly expired (MARK_TO_MARKET/TIME_EXPIRED) rather than walking
         // real subsequent bars, silently starving exactly the levels this mechanism exists
-        // to credit. Self-contained calc (not the computeExpiry()/fmtETStr() helpers further
-        // down -- both are const closures defined later in this handler's execution order,
-        // same temporal-dead-zone constraint as the suppressed-audit insert's auditSessionEnd
-        // a few hundred lines up, whose exact rollover-safe pattern this mirrors) -- real RTH
-        // close (4PM ET), rolled to next day if already past.
+        // to credit. Real RTH close (4PM ET), rolled to next day if already past.
         const btNowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-        const btSessionEnd = new Date(btNowEt);
-        btSessionEnd.setHours(16, 0, 0, 0);
-        if (btSessionEnd <= btNowEt) btSessionEnd.setDate(btSessionEnd.getDate() + 1);
-        const sessionEndStr = `${btSessionEnd.getFullYear()}-${String(btSessionEnd.getMonth() + 1).padStart(2, '0')}-${String(btSessionEnd.getDate()).padStart(2, '0')} ${String(btSessionEnd.getHours()).padStart(2, '0')}:${String(btSessionEnd.getMinutes()).padStart(2, '0')}:00`;
+        const sessionEndStr = computeSessionEndCapStr(btNowEt);
         (async () => {
           const btVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           for (const bt of backfilledTouches) {
@@ -8771,18 +8706,7 @@ export default function createACDRouter(io) {
               // stops this path from reproducing the bug the moment any _TRAIL type is ever
               // promoted out of THIN_N.
               const btTrailVariant = CONDITIONAL_VARIANTS[bt.type];
-              let btRunnerTrailWidth = null;
-              if (btTrailVariant?.trailSignalName) {
-                const btTrailRow = await query(
-                  `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
-                   WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
-                   ORDER BY signal_name, run_date DESC`,
-                  [btTrailVariant.trailSignalName]
-                ).catch(() => ({ rows: [] }));
-                const btTrailNotes = btTrailRow.rows[0]?.notes;
-                const btTrailParsed = typeof btTrailNotes === 'string' ? JSON.parse(btTrailNotes) : btTrailNotes;
-                btRunnerTrailWidth = btTrailParsed?.trail ?? null;
-              }
+              const btRunnerTrailWidth = await lookupRunnerTrailWidth(btTrailVariant);
               await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
@@ -8984,14 +8908,9 @@ export default function createACDRouter(io) {
         C_REVERSAL_LONG: null, C_REVERSAL_SHORT: null,
         GAP_FILL_LONG: null, GAP_FILL_SHORT: null,
       };
-      // Hard cap: 4:00 PM ET (RTH close). Use local (ET) time formatting so PostgreSQL
-      // interprets the stored TIMESTAMP WITHOUT TZ correctly in its session timezone.
-      const fmtETStr = (d) => {
-        const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'),
-              day = String(d.getDate()).padStart(2,'0'),
-              h = String(d.getHours()).padStart(2,'0'), m = String(d.getMinutes()).padStart(2,'0');
-        return `${y}-${mo}-${day} ${h}:${m}:00`;
-      };
+      // Hard cap: 4:00 PM ET (RTH close). fmtETStr (imported from acdShared.js) uses local
+      // (ET) time formatting so PostgreSQL interprets the stored TIMESTAMP WITHOUT TZ
+      // correctly in its session timezone.
       // FIXED 2026-07-17 (Setup Log duplicate-firing bug): this was hardcoded to 1:00 PM ET
       // since the file's original commit (2026-06-01), from back when the app apparently only
       // detected setups until 1 PM -- never updated as detection extended to full RTH (4 PM)
@@ -9097,18 +9016,15 @@ export default function createACDRouter(io) {
         // manual step (spec §7/§10), not automatic, same as every other new setup type.
         const trailVariant = CONDITIONAL_VARIANTS[active.type];
         const isTrailMechanism = trailVariant?.trailSignalName != null;
-        let runnerTrailWidth = null;
-        if (isTrailMechanism) {
-          const trailRow = await query(
-            `SELECT DISTINCT ON (signal_name) notes FROM performance_audit
-             WHERE signal_type='BREAKEVEN_TRAIL_TEST' AND signal_name=$1
-             ORDER BY signal_name, run_date DESC`,
-            [trailVariant.trailSignalName]
-          );
-          const notes = trailRow.rows[0]?.notes;
-          const parsed = typeof notes === 'string' ? JSON.parse(notes) : notes;
-          runnerTrailWidth = parsed?.trail ?? null;
-        }
+        // FIXED 2026-09-07 (found via a duplication audit, user-prompted): this was the 4th
+        // near-identical copy of the runner-trail-width lookup in this file, and the ONLY one
+        // missing the `.catch(() => ({rows: []}))` safety net the other 3 copies had -- a
+        // transient DB hiccup on this specific query could throw uncaught on THIS site
+        // specifically, the highest-traffic of the 4 (the real active-slot insert path), unlike
+        // the other 3 (audit/backfill-only) sites which already degraded gracefully to null.
+        // Extracted into the shared lookupRunnerTrailWidth() (acdShared.js) so all 4 sites now
+        // share one implementation and one (safe) failure behavior.
+        const runnerTrailWidth = await lookupRunnerTrailWidth(trailVariant);
         // Re-fire cooldown -- see REFIRE_COOLDOWN_MINUTES/isInRefireCooldown() at module
         // scope (~line 192) for the full history/reasoning. `resolved_at` (not
         // resolution_bar_time) matches the cascadeBreaker precedent 130 lines above.

@@ -107,4 +107,20 @@ echo "=== Daily calibration: $(date) ==="
 # direction_alternation_after_loss_gate_pending for the ship/shadow/shelve call.
 /usr/bin/node scripts/backtest_direction_alternation_after_loss.mjs
 
+# Self-checking live-execution confirmation for the prior-day-TREND sizeMultiplier gate
+# (2026-09-07, OPEN_DECISION prior_day_trend_gate_pending_rth_confirmation_20260906). The gate
+# itself was shipped fully statically/functionally verified but never observed firing against a
+# real trade during real RTH hours (built and verified outside market hours). No-ops quietly
+# until a real fire occurs on a real TREND-preceded day, then auto-resolves the OPEN_DECISION --
+# no human or future Claude session needs to remember to check this by hand. Cheap (~1s), safe
+# to run daily indefinitely.
+/usr/bin/node scripts/verify_prior_day_trend_gate_live.mjs
+
+# Two more self-checking rechecks (2026-09-07, same pattern/shared scaffold as the gate check
+# just above -- scripts/lib/selfCheckingClaim.mjs) for findings from the same regime-filter
+# session that were real but too thin to trust: no-op quietly until their own explicit
+# recheck condition is met, then auto-update the RESEARCH_CLAIM with fresh real numbers.
+/usr/bin/node scripts/verify_va_overlap_streak_real_coverage.mjs
+/usr/bin/node scripts/verify_wide_ib_turbulent_exit_timing_recheck.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
