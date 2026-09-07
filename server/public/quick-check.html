@@ -6,10 +6,19 @@
 <title>Quick Check</title>
 <style>
   :root {
-    --green: #22c55e; --green-soft: #4ade80;
+    /* KEEP IN SYNC with src/components/dashboard/MarketPulseBar.jsx's `C` object (2026-09-07
+       duplication audit) -- these are the same semantic colors independently duplicated in
+       a standalone static page vs. the bundled React app, which can't literally share one JS
+       module. Found disagreeing here before this fix: --green was #22c55e vs. MarketPulseBar's
+       #10b981 (a genuinely different bullish hue), and --muted/--dim were swapped relative to
+       MarketPulseBar's C.muted/C.dim -- every shared threshold-color function below only agreed
+       with MarketPulseBar's output by coincidence (each file picked the oppositely-named token
+       that happened to resolve to the same hex). Canonicalized on MarketPulseBar's values since
+       the in-app dashboard is the primary surface (quick-check is the secondary/mobile view). */
+    --green: #10b981; --green-soft: #4ade80;
     --red: #ef4444; --red-soft: #f87171;
     --amber: #f59e0b; --amber-soft: #fbbf24;
-    --muted: #94a3b8; --dim: #64748b;
+    --muted: #64748b; --dim: #94a3b8;
     --text: #e2e8f0;
     --bg: #0b1120; --card: rgba(15,23,42,0.7);
     --border: rgba(51,65,85,0.5);
@@ -261,10 +270,14 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-function fmtPct(n) { return (n > 0 ? '+' : '') + n; }
+// Sign at exactly 0 matches MarketPulseBar.jsx's `ptsFromOpen >= 0 ? '+' : ''` (>= not >) --
+// found disagreeing (no '+' at exactly 0pt here vs. '+0pt' there) in the 2026-09-07 audit.
+function fmtPct(n) { return (n >= 0 ? '+' : '') + n; }
+// KEEP IN SYNC with MarketPulseBar.jsx's sigmaColor() -- same 1.5σ/1σ thresholds, duplicated
+// because this is a standalone page that can't import that module.
 function sigmaColor(s) {
   const abs = Math.abs(s || 0);
-  return abs >= 1.5 ? 'var(--amber)' : abs >= 1 ? '#fb923c' : 'var(--dim)';
+  return abs >= 1.5 ? 'var(--amber)' : abs >= 1 ? '#fb923c' : 'var(--muted)';
 }
 
 // ---- Top market pulse bar ----
@@ -313,19 +326,24 @@ function renderPulseBar(pulse, setupData, ctx, build) {
   const chips = [];
 
   const fromOpenStr = pulse.ptsFromOpen != null ? fmtPct(pulse.ptsFromOpen.toFixed(0)) + 'pt' : '—';
-  const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--dim)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--dim)';
+  // KEEP IN SYNC with MarketPulseBar.jsx's fromOpenClr/moveColor/deltaColor/rvolColor -- same
+  // rangeClass/deltaClass/rvolSigma -> color mappings, duplicated because this is a standalone
+  // page that can't import that module. Token names below deliberately match C.muted/C.dim
+  // usage there, NOT this file's own --muted/--dim naming intuition -- verify against
+  // MarketPulseBar.jsx directly before changing either.
+  const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--muted)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--muted)';
   chips.push(chip('NQ', pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—', fromOpenStr, fromOpenClr, 'var(--text)'));
 
-  const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--dim)' : 'var(--amber)';
+  const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--muted)' : 'var(--amber)';
   const rangeLabel = pulse.rangeClass === 'EXTENDED' ? 'BIG' : pulse.rangeClass === 'QUIET' ? 'QUIET' : 'NORMAL';
   chips.push(chip('Range', pulse.sessionRange ? pulse.sessionRange.toFixed(0) + 'pt' : '—', rangeLabel, moveColor, moveColor));
 
-  const deltaColor = pulse.deltaClass === 'HIGH' ? (pulse.deltaSign === 'BUYING' ? 'var(--green)' : 'var(--red)') : 'var(--muted)';
+  const deltaColor = pulse.deltaClass === 'HIGH' ? (pulse.deltaSign === 'BUYING' ? 'var(--green)' : 'var(--red)') : 'var(--dim)';
   const deltaArrow = pulse.deltaSign === 'BUYING' ? '▲' : pulse.deltaSign === 'SELLING' ? '▼' : '—';
   chips.push(chip('CumΔ', pulse.sessionDelta != null ? deltaArrow + ' ' + Math.abs(pulse.sessionDelta).toLocaleString() : '—', pulse.deltaClass !== 'NORMAL' ? pulse.deltaClass : '', deltaColor, deltaColor));
 
   if (pulse.rvol != null) {
-    const rvolColor = pulse.rvolSigma >= 2 ? 'var(--red)' : pulse.rvolSigma >= 1 ? 'var(--amber)' : pulse.rvolSigma < -0.5 ? 'var(--dim)' : 'var(--muted)';
+    const rvolColor = pulse.rvolSigma >= 2 ? 'var(--red)' : pulse.rvolSigma >= 1 ? 'var(--amber)' : pulse.rvolSigma < -0.5 ? 'var(--muted)' : 'var(--dim)';
     const rvolLabel = pulse.rvolSigma >= 2 ? 'EXTREME' : pulse.rvolSigma >= 1 ? 'SPIKE' : '';
     chips.push(chip('RVol', pulse.rvol.toFixed(1) + '×', rvolLabel, rvolColor, rvolColor));
   }

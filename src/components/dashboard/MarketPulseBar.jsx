@@ -6,6 +6,11 @@ import { useSharedPollData } from '../../utils/useSharedPollData.js';
 import { API_URL } from '../../constants/api.js';
 const POLL_MS = 30000;
 
+// KEEP IN SYNC with server/public/quick-check.html's `:root` CSS variables (2026-09-07
+// duplication audit) -- quick-check.html is a standalone static page that can't import this
+// module, so its color tokens are a hand-kept mirror of these values, not a shared import.
+// This is the canonical copy (in-app dashboard is the primary surface) -- if you change a
+// value here, update quick-check.html's `:root` block to match.
 const C = {
   green:  '#10b981',
   amber:  '#f59e0b',
@@ -24,6 +29,7 @@ function verdictColor(v) {
   return C.amber;
 }
 
+// KEEP IN SYNC with server/public/quick-check.html's sigmaColor() -- same 1.5σ/1σ thresholds.
 function sigmaColor(s) {
   const abs = Math.abs(s || 0);
   return abs >= 1.5 ? C.amber : abs >= 1 ? '#fb923c' : C.muted;
@@ -578,6 +584,9 @@ export default function MarketPulseBar() {
   const { currentPrice, ptsFromOpen, sessionRange, sessionDelta, deltaSign, deltaClass,
           rangeP25, rangeP50, rangeP75, rangeClass, rvol, rvolSigma, verdict, verdictDir } = pulse;
 
+  // moveColor/deltaColor/rvolColor below: KEEP IN SYNC with quick-check.html's matching
+  // moveColor/deltaColor/rvolColor lines -- same rangeClass/deltaClass/rvolSigma mappings,
+  // duplicated because quick-check.html is a standalone page that can't import this module.
   const moveColor    = rangeClass === 'EXTENDED' ? C.red : rangeClass === 'QUIET' ? C.muted : C.amber;
   const deltaColor   = deltaClass === 'HIGH' ? (deltaSign === 'BUYING' ? C.green : C.red) : C.dim;
   const deltaArrow   = deltaSign === 'BUYING' ? '▲' : deltaSign === 'SELLING' ? '▼' : '—';
