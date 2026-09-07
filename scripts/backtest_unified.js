@@ -591,46 +591,14 @@ function detectCStandalone(bars, orH, orL, aUp, aDown, pdVAH, pdVAL) {
   return fires;
 }
 
-// 4. OPEN_TEST_DRIVE — probe AND reversal must both complete within the first 15 bars.
-// Matches live acd.js: otdBars.some(b => b.close < orL) is checked against the same 15-bar window.
-function detectOTD(bars, orH, orL, pdVAH, pdVAL) {
-  const first15 = bars.filter(b => b.tod >= 570 && b.tod < 585);
-  if (first15.length < 3) return [];
-  const openPx   = first15[0].open;
-  const probeHi  = Math.max(...first15.map(b=>b.high));
-  const probeLo  = Math.min(...first15.map(b=>b.low));
-  const upProbe  = probeHi - openPx;
-  const dnProbe  = openPx - probeLo;
-  const orRange  = orH - orL || 60;
-
-  // Both the probe AND the reversal-through-OR must happen within the first 15 bars
-  const shortSignaled = upProbe >= 10 && first15.some(b => b.close < orL);
-  const longSignaled  = dnProbe >= 10 && first15.some(b => b.close > orH);
-
-  const fires = [];
-  if (shortSignaled) {
-    // Entry: first bar after the signal bar where current price is still below orL
-    const sigBar = first15.findIndex(b => b.close < orL);
-    if (sigBar >= 0) {
-      const eb = first15[sigBar];
-      const tgtShort = pdVAL && pdVAL < eb.close ? pdVAL : eb.close - orRange * 1.5;
-      fires.push({ type: 'OPEN_TEST_DRIVE_SHORT', direction: 'SHORT',
-        entryIdx: bars.indexOf(eb),
-        entry: eb.close, stop: probeHi + orRange * 0.35, target: tgtShort });
-    }
-  }
-  if (longSignaled) {
-    const sigBar = first15.findIndex(b => b.close > orH);
-    if (sigBar >= 0) {
-      const eb = first15[sigBar];
-      const tgtLong = pdVAH && pdVAH > eb.close ? pdVAH : eb.close + orRange * 1.5;
-      fires.push({ type: 'OPEN_TEST_DRIVE_LONG', direction: 'LONG',
-        entryIdx: bars.indexOf(eb),
-        entry: eb.close, stop: probeLo, target: tgtLong });
-    }
-  }
-  return fires;
-}
+// detectOTD() (OPEN_TEST_DRIVE) removed 2026-09-07 (backtest_unified_detectors_systemic_
+// divergence_20260907): OPEN_TEST_DRIVE_LONG/SHORT is unconditionally, permanently killed
+// live (acd.js ~1890-1899, hardcoded OTD_HARDCODED_KILL gate, confirmed negative both
+// directions: LONG -$100 EV N=44, SHORT -$74 EV N=45, suppressed 2026-07-05) -- not a
+// suppress-pending-recovery state, so continuing to backtest it here produced zero-value
+// output every weekly run. Checked for consumers before removing: BacktestView.jsx's "Open
+// Test Drive" dropdown filters a different field (auction_reads.opening_call_type) and never
+// called this function or read its UNIFIED_BACKTEST row -- nothing else referenced it.
 
 // 5. VALUE_AREA_RESPONSIVE (open inside prior value, price tests VA edge)
 function detectVAResp(bars, pdVAH, pdVAL, pdPOC, orH, orL) {
@@ -1116,7 +1084,6 @@ async function main() {
       ...detectLevelFades(bars, fadeLevels, isMonday),
       ...detectIB(bars, orH, orL, pdVAH, pdVAL),
       ...detectCStandalone(bars, orH, orL, acd.a_up, acd.a_down, pdVAH, pdVAL),
-      ...detectOTD(bars, orH, orL, pdVAH, pdVAL),
       ...detectVAResp(bars, pdVAH, pdVAL, pdPOC, orH, orL),
       ...detectTRT(bars, orH, orL, acd.a_up, acd.a_down, acd.c_up, acd.c_down, pdVAH, pdVAL, acd.a_up_level, acd.a_down_level),
       ...detectBracketBreakout(bars, bracketByDate.get(date), orH, orL, nl30, pdVAH, pdVAL),
@@ -1377,7 +1344,7 @@ export {
   // Added 2026-07-28 so the "OTHER" (non-level-fade) setup family's real detection
   // functions can be reused by external test scripts instead of reimplemented --
   // same "export the real function" convention as detectLevelFades above.
-  detectIB, detectCStandalone, detectOTD, detectVAResp, detectTRT,
+  detectIB, detectCStandalone, detectVAResp, detectTRT,
   detectBracketBreakout, detectVwapMagnet, detectStopSweep,
 };
 
