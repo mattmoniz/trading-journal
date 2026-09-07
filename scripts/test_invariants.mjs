@@ -1863,6 +1863,58 @@ async function main() {
       }
     }
 
+    console.log('\n[25] Cross-setup_type pooled consumers use POOLED_TRADE_FILTER, not a hand-rolled/drifted copy');
+    {
+      // Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
+      // cluster_touch_credit_phase3_sibling_rows_shipped, DeepSeek design-critiqued): a
+      // cross-setup_type pooled consumer (one that groups by bet_class, not by an individual
+      // setup_type) must exclude cluster-sibling rows (is_cluster_primary=false) via
+      // POOLED_TRADE_FILTER, or a cluster winner + its siblings silently double/triple-count
+      // one real market touch as several independent samples. This exact "each consumer
+      // hand-rolls its own real-trade filter, and they silently drift apart" bug already
+      // happened once BEFORE this fix (monitor_bet_correlation.mjs's inline copy and
+      // backtest_bet_class_status.mjs's CLEAN_FILTER were both missing the
+      // ib_window_stale_basis exclusion backtest_setup_status.mjs's canonical REAL_TRADE_FILTER
+      // already had) -- this check exists so it can't silently recur a 3rd time. Positive check
+      // (imports the shared symbol) AND negative check (no local hand-rolled redefinition) --
+      // the negative half is the one that actually catches a drifted copy, per DeepSeek's own
+      // critique of an earlier draft of this check that only had the positive half.
+      const betClassStatusSrc = fs.readFileSync(path.resolve('scripts/backtest_setup_status.mjs'), 'utf8');
+      const correlationSrc = fs.readFileSync(path.resolve('scripts/monitor_bet_correlation.mjs'), 'utf8');
+      const betClassPooledSrc = fs.readFileSync(path.resolve('scripts/backtest_bet_class_status.mjs'), 'utf8');
+
+      if (!/export const POOLED_TRADE_FILTER\s*=/.test(betClassStatusSrc)) {
+        fail('[25] scripts/backtest_setup_status.mjs no longer exports POOLED_TRADE_FILTER -- update this check (or restore the export) before trusting any pooled consumer below.');
+      } else if (!/betClassPooledQ[\s\S]{0,400}?POOLED_TRADE_FILTER/.test(betClassStatusSrc)) {
+        fail('[25] backtest_setup_status.mjs\'s own betClassPooledQ no longer appears to use POOLED_TRADE_FILTER (its own bet_class-level pooled query) -- check it still excludes cluster siblings.');
+      } else {
+        ok('[25] backtest_setup_status.mjs exports POOLED_TRADE_FILTER and its own betClassPooledQ uses it');
+      }
+
+      // monitor_bet_correlation.mjs: needs BOTH filters (bet_class matrix -> pooled-only,
+      // setup_type matrix -> sibling-inclusive is correct, NOT a bug -- see the file's own
+      // 2026-09-07 comment). So the check can't just assert "uses POOLED_TRADE_FILTER" --
+      // it must confirm the import AND the absence of a local hand-rolled redefinition.
+      const correlationImportsShared = /import\s*\{[^}]*\bREAL_TRADE_FILTER\b[^}]*\bPOOLED_TRADE_FILTER\b[^}]*\}\s*from\s*['"]\.\/backtest_setup_status\.mjs['"]/.test(correlationSrc)
+        || /import\s*\{[^}]*\bPOOLED_TRADE_FILTER\b[^}]*\bREAL_TRADE_FILTER\b[^}]*\}\s*from\s*['"]\.\/backtest_setup_status\.mjs['"]/.test(correlationSrc);
+      const correlationHasLocalCopy = /const\s+REAL_TRADE_FILTER\s*=/.test(correlationSrc) || /const\s+POOLED_TRADE_FILTER\s*=/.test(correlationSrc);
+      if (!correlationImportsShared) {
+        fail('[25] scripts/monitor_bet_correlation.mjs no longer imports both REAL_TRADE_FILTER and POOLED_TRADE_FILTER from backtest_setup_status.mjs -- the bet_class matrix needs the pooled filter, the setup_type matrix needs the per-type one; check both call sites are still wired correctly.');
+      } else if (correlationHasLocalCopy) {
+        fail('[25] scripts/monitor_bet_correlation.mjs has re-added a locally hand-rolled REAL_TRADE_FILTER/POOLED_TRADE_FILTER const -- this is exactly the drift class that already happened once (missing ib_window_stale_basis). Import the shared symbol instead.');
+      } else {
+        ok('[25] monitor_bet_correlation.mjs imports the shared filters, no local hand-rolled copy');
+      }
+
+      if (!/import\s*\{[^}]*\bPOOLED_TRADE_FILTER\b[^}]*\}\s*from\s*['"]\.\/backtest_setup_status\.mjs['"]/.test(betClassPooledSrc)) {
+        fail('[25] scripts/backtest_bet_class_status.mjs no longer imports POOLED_TRADE_FILTER -- its headline real_clean_* metrics need this to stay cluster-sibling-safe.');
+      } else if (/const\s+CLEAN_FILTER\s*=/.test(betClassPooledSrc)) {
+        fail('[25] scripts/backtest_bet_class_status.mjs has re-added a locally hand-rolled CLEAN_FILTER const -- this is exactly the drift class that already happened once (missing ib_window_stale_basis AND is_cluster_primary). Use POOLED_TRADE_FILTER instead.');
+      } else {
+        ok('[25] backtest_bet_class_status.mjs imports POOLED_TRADE_FILTER, no local hand-rolled CLEAN_FILTER');
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

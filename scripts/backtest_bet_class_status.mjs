@@ -27,6 +27,7 @@ import pool from '../server/db.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { BET_CLASSES, getBetClass } from '../server/config/setupTypes.js';
 import { recordClaim } from './record_claim.mjs';
+import { POOLED_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const SIGNAL_TYPE = 'BET_CLASS_STATUS';
 
@@ -48,20 +49,30 @@ async function run() {
   // below is now the headline metric persisted to ev_per_trade/win_rate/sample_size --
   // blended and real (MTM-inclusive) are kept alongside for transparency, not as the
   // trusted number.
-  const CLEAN_FILTER = `(resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))`;
+  //
+  // FIXED 2026-09-07 (cluster touch credit Phase 2, DeepSeek design-critiqued): `real_clean_*`
+  // now reads `POOLED_TRADE_FILTER` (this script's own filter previously hand-rolled just the
+  // MTM exclusion, independently of backtest_setup_status.mjs's canonical filter -- also fixes
+  // a pre-existing drift bug, ~31 stale IB_BEARISH rows via the missing ib_window_stale_basis
+  // exclusion). This bundles THREE exclusions now, not one: MTM/RECOVERY_MTM, ib_window_stale
+  // rows, AND cluster siblings (a cluster's winner + its siblings are the SAME real touch --
+  // pooling them as independent bet_class samples would double/triple-count one market event).
+  // The raw, sibling-INCLUSIVE `real_n`/`real_wr`/`real_ev` are deliberately left unchanged --
+  // they're already labeled transparency-only, not the trusted number, and keeping them
+  // sibling-inclusive preserves visibility into real sibling volume over the shadow window.
   const allTimeQ = await query(`
     SELECT
       bet_class,
       COUNT(*) AS n,
       COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW')) AS real_n,
-      COUNT(*) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND ${CLEAN_FILTER}) AS real_clean_n,
+      COUNT(*) FILTER (WHERE ${POOLED_TRADE_FILTER}) AS real_clean_n,
       AVG((resolution='TARGET_HIT')::int)::float AS wr,
       AVG(actual_pnl)::float AS ev,
       AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_wr,
       AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW'))::float AS real_ev,
-      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND ${CLEAN_FILTER})::float AS real_clean_wr,
-      AVG(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND ${CLEAN_FILTER})::float AS real_clean_ev,
-      SUM(actual_pnl) FILTER (WHERE origin_status IN ('ACTIVE','SHADOW') AND ${CLEAN_FILTER})::float AS real_clean_total_pnl,
+      AVG((resolution='TARGET_HIT')::int) FILTER (WHERE ${POOLED_TRADE_FILTER})::float AS real_clean_wr,
+      AVG(actual_pnl) FILTER (WHERE ${POOLED_TRADE_FILTER})::float AS real_clean_ev,
+      SUM(actual_pnl) FILTER (WHERE ${POOLED_TRADE_FILTER})::float AS real_clean_total_pnl,
       SUM(actual_pnl)::float AS total_pnl,
       COUNT(DISTINCT setup_type) AS distinct_types
     FROM active_setups
@@ -73,15 +84,16 @@ async function run() {
   `);
 
   // For computeRigor's chronological-stability check, need per-trade events (real, CLEAN
-  // origin only -- the same population real_clean_ev/real_clean_wr above describe).
+  // origin only -- the same population real_clean_ev/real_clean_wr above describe, now
+  // including the is_cluster_primary exclusion so this doesn't silently describe a DIFFERENT,
+  // sibling-inclusive population than the headline it's supposed to match).
   const eventsQ = await query(`
     SELECT bet_class, trade_date::text as date, actual_pnl::float as pnl
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
       AND bet_class IS NOT NULL
-      AND origin_status IN ('ACTIVE','SHADOW')
-      AND ${CLEAN_FILTER}
+      AND ${POOLED_TRADE_FILTER}
     ORDER BY trade_date
   `);
   const eventsByClass = new Map();

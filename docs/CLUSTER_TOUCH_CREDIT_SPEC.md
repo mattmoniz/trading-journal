@@ -1,14 +1,63 @@
 # Cluster Touch Credit — Phased Build Spec
 
-**Status as of 2026-09-04: Phase 0/1 shipped 2026-08-25. Phase 3's live-forward core (the actual
-sibling-row insert) SHIPPED 2026-09-04, DeepSeek-reviewed same day (2 real bugs found and fixed).
-A simplified Phase 2 (distinct-day promotion floor, general — not sibling-specific) also SHIPPED
-2026-09-04. Phase 3b (the historical backfill, RTH-only) also SHIPPED 2026-09-04 — see the "Phase
-3b — shipped" section below for the full outcome (1,279 rows inserted, 27 SETUP_STATUS changes
-including 3 real ACTIVE→SUPPRESS demotions). Globex-origin siblings remain unbackfilled — a
-second pass, not yet scoped.** Read `docs/OPEN_THREADS.md`'s 2026-08-25 AND 2026-09-04 "Cluster
-touch credit" entries for the full narrative before touching anything here — this doc is the
-buildable plan, those entries are the reasoning trail.
+**Status as of 2026-09-07: FULLY SHIPPED.** Phase 0/1 (2026-08-25), Phase 3's live-forward core
++ Phase 3b historical backfill + a simplified Phase 2 (all 2026-09-04), and now the FULL Phase 2
+safety net (`cluster_touch_id`/`is_cluster_primary`/`POOLED_TRADE_FILTER`, 2026-09-07 — see "Full
+Phase 2, shipped" below, superseding the "simplified Phase 2" this doc used to describe as the
+final word). Read `docs/OPEN_THREADS.md`'s 2026-08-25, 2026-09-04, AND 2026-09-07 "Cluster touch
+credit" entries for the full narrative before touching anything here — this doc is the buildable
+plan, those entries are the reasoning trail. `OPEN_DECISION
+cluster_touch_credit_phase3_sibling_rows_shipped` is RESOLVED.
+
+## Full Phase 2, shipped 2026-09-07 (supersedes "Simplified Phase 2" below)
+
+User explicitly chose the full safety-net build over the cheaper distinct-day patch, after
+DeepSeek's design critique (`scratch/deepseek_response_RAW_cluster_touch_credit_20260907.md`)
+found real bugs in the first draft plan (worth reading before touching this again — the
+`clusterSkippedTypes.length` proxy for "did a sibling get a row" was wrong, the correlation
+monitor needed a SPLIT filter not a blanket swap, and the 1,296 already-shipped sibling rows
+needed an explicit backfill UPDATE, not just a `DEFAULT` on the new column). Shipped:
+1. **Schema**: `active_setups.cluster_touch_id UUID NULL` + `is_cluster_primary BOOLEAN NOT NULL
+   DEFAULT true` (auto-backfills every OTHER insert site's existing rows for free). A follow-up
+   `UPDATE ... SET is_cluster_primary=false WHERE suppression_reason IN
+   ('CLUSTER_SIBLING_TOUCH_CREDIT','CLUSTER_SIBLING_TOUCH_CREDIT_BACKFILL')` retroactively marked
+   the 1,296 already-existing sibling rows (17 live-forward + 1,279 backfill) correctly.
+2. **`acd.js`**: a `clusterTouchId = randomUUID()` generated once per poll's cluster-processing
+   block (unconditionally — a winner with no real siblings just gets a harmless singleton
+   group), passed to every sibling's INSERT directly, and tagged onto the winner via a
+   post-insert `UPDATE` (mirroring the existing `cluster_attributed_setups` pattern) rather than
+   splicing a new column into the ~25-positional-param main INSERT.
+3. **`scripts/backtest_setup_status.mjs`**: new `export const POOLED_TRADE_FILTER =
+   \`${REAL_TRADE_FILTER} AND is_cluster_primary\`` — used by its own `betClassPooledQ`.
+4. **3 pooled consumers wired**: `monitor_bet_correlation.mjs` (bet_class matrix →
+   `POOLED_TRADE_FILTER`, setup_type matrix → `REAL_TRADE_FILTER` unchanged — a setup_type is
+   never both winner and sibling of the same touch, so excluding siblings there would only
+   hide real co-touch volume, per DeepSeek), `backtest_bet_class_status.mjs` (headline
+   `real_clean_*` → pooled; raw `real_n`/transparency numbers deliberately stay
+   sibling-inclusive). Fixed a real, pre-existing drift bug as a byproduct: both files had their
+   own hand-rolled "real trade" filter, both missing the `ib_window_stale_basis` exclusion
+   `backtest_setup_status.mjs`'s canonical `REAL_TRADE_FILTER` already had.
+5. **Touch-aware stacking count** (`acd.js` ~5484): `COUNT(DISTINCT COALESCE(cluster_touch_id,
+   id))` instead of `COUNT(*)` — a deliberate live-sizing behavior CHANGE (a clustered touch now
+   counts for less toward the `>=7 → 0.10x` de-risking cap), not a silent bugfix. The cascade
+   breaker (the spec's other touch-aware-counter target below) was separately deleted entirely
+   2026-09-03 — moot.
+6. **`test_invariants.mjs` check [25]`**: positive+negative check that all 3 consumers import the
+   shared filter and none has re-added a local hand-rolled copy — synthetic-drift-tested (a
+   deliberately reintroduced local const was confirmed to trip the check before being reverted).
+
+**Real, live-consequential finding from doing this properly**: `VALUE_FADE`'s bet_class-level
+pooled EV (the number gating `BET_CLASS_SUPPRESS_ENABLED`'s override, threshold EV<0 at N>=200)
+flips sign once cluster siblings are excluded — sibling-contaminated: N=2733, EV=-$1.33/trade
+(would trigger the override); primary-only (correct): N=1583, EV=+$1.35/trade (does not trigger).
+Verified directly against live data before and after. This is exactly the kind of distortion the
+full safety-net build (over the cheaper patch) exists to catch.
+
+All 4 scripts re-run live after the fix (`backtest_setup_status.mjs`, `backtest_bet_class_status.
+mjs`, `monitor_bet_correlation.mjs`) with sane real output; server restarted (fresh process
+confirmed via PID/start-time, not just a 200 on a stale process) and the live
+`/api/acd/setup-detection` response confirmed a real `clusterTouchId` populated end-to-end.
+`test_invariants.mjs` zero regressions (identical 19 pre-existing failures).
 
 ## What's actually live right now (2026-09-04) — read this before assuming Phase 2/3 below is still all-future
 

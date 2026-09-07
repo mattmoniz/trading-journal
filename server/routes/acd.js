@@ -5,6 +5,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { query } from '../db.js';
 import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from '../services/maeMfeReplay.js';
@@ -5478,9 +5479,20 @@ export default function createACDRouter(io) {
         // live-price-triggered event (just suppressed from a full alert), so it legitimately
         // counts toward "how many real fades has this direction seen today." BACKFILL/UNKNOWN
         // (synthetic/historical) do not represent today's real market activity and are excluded.
+        // TOUCH-AWARE 2026-09-07 (cluster touch credit Phase 2, DeepSeek design-critiqued): a
+        // cluster's winner and its CLUSTER_SIBLING_TOUCH_CREDIT siblings all share one
+        // cluster_touch_id (set to their own row id when there's no cluster), so
+        // COUNT(DISTINCT COALESCE(cluster_touch_id, id)) counts one real market touch once,
+        // not once per level that happened to sit in the same 15pt confluence zone. This is a
+        // deliberate behavior CHANGE to a live sizing input (feeds the >=7-same-direction ->
+        // 0.10x sizeMultiplier cap below), not a silent bugfix -- a clustered touch now counts
+        // for LESS toward that de-risking cap than it did before this date. Siblings only ever
+        // enter this count once they resolve to status='RESOLVED' (they insert as SHADOW/
+        // status='ACTIVE' like anything else, so the count was never inflated at INSERT time,
+        // only as resolved siblings accumulated over the session).
         query(
           `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
-                  COUNT(*) as cnt
+                  COUNT(DISTINCT COALESCE(cluster_touch_id, id)) as cnt
            FROM active_setups WHERE trade_date=$1 AND origin_status IN ('ACTIVE','SHADOW') AND status IN ('ACTIVE','RESOLVED')
            GROUP BY 1`,
           [todayET]
@@ -6815,6 +6827,21 @@ export default function createACDRouter(io) {
             // often/which types this happens to before committing to Phase 3's actual
             // sibling-row build.
             const clusterSkippedTypes = [];
+            // Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
+            // cluster_touch_credit_phase3_sibling_rows_shipped, user chose the full safety-net
+            // build, DeepSeek design-critiqued): a shared id for every real active_setups row
+            // that comes out of THIS poll's cluster resolution (the winner AND every sibling it
+            // credits below), so pooled cross-setup_type consumers (bet_class override,
+            // monitor_bet_correlation.mjs's bet_class matrix) can de-duplicate a single real
+            // touch instead of double/triple-counting it as N independent samples. Generated
+            // unconditionally here (DeepSeek's simplification over an original draft that tried
+            // to gate this on "did a sibling actually get inserted" -- that proxy was wrong,
+            // since clusterSkippedTypes can be non-empty with zero real sibling rows, e.g. a
+            // skipped candidate that was itself on a 15-min refire cooldown). A winner with no
+            // real siblings just gets a singleton touch-id group, which is numerically identical
+            // to null for every current consumer (COUNT(DISTINCT ...) counts it once either
+            // way) -- so there is no correctness cost to always generating it.
+            const clusterTouchId = randomUUID();
             // Explicit flag rather than re-deriving "cleared" from the individual suppression
             // booleans below (2026-08-12 correctness fix, caught before shipping): the side
             // filter (sideOk) excludes a candidate from ever being tried without setting any of
@@ -6902,18 +6929,25 @@ export default function createACDRouter(io) {
                     const sibEtNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
                     const sibExpiresAt = computeSessionEndCapStr(sibEtNow);
                     const sibWiderTargetMult = (candType !== 'ABSORPTION_LONG' && !candType.startsWith('COIL_SURGE')) ? WIDER_TARGET_MULT : null;
+                    // is_cluster_primary=false + cluster_touch_id added 2026-09-07 (Phase 2
+                    // safety net) -- a sibling is by definition NOT the independently-selected
+                    // winner of this touch, so it must never count as a second independent
+                    // sample of the same market event in a cross-setup_type pooled consumer
+                    // (see POOLED_TRADE_FILTER in scripts/backtest_setup_status.mjs).
                     await query(`
                       INSERT INTO active_setups (
                         trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                         suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
-                        entry_zone_low, entry_zone_high, stop_level, t1_level, expires_at, wider_target_mult, bet_class
+                        entry_zone_low, entry_zone_high, stop_level, t1_level, expires_at, wider_target_mult, bet_class,
+                        is_cluster_primary, cluster_touch_id
                       )
-                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11)
+                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12)
                       ON CONFLICT DO NOTHING
                     `, [
                       todayET, candType, currentPrice, nearLevels.length,
                       nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
                       sibLevel, sibStopLevel, sibT1Level, sibExpiresAt, sibWiderTargetMult, getBetClass(candType),
+                      clusterTouchId,
                     ]);
                   } catch (e) {
                     // Non-critical, observation-only (gives a level real N credit, never trades
@@ -7169,6 +7203,7 @@ export default function createACDRouter(io) {
               type,
               direction: dir,
               clusterSkippedTypes: clusterSkippedTypes.length ? clusterSkippedTypes : null,
+              clusterTouchId,
               entry: currentPrice,
               stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
               target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
@@ -9175,6 +9210,20 @@ export default function createACDRouter(io) {
             )
             WHERE id = $1
           `, [setupId, active.clusterSkippedTypes]).catch(() => {});
+        }
+        // Cluster touch credit Phase 2 (2026-09-07): tag the winner's row with the same
+        // cluster_touch_id its siblings (if any) were inserted with this poll, via a post-
+        // insert UPDATE rather than splicing a new column into the main INSERT above (a
+        // ~25-positional-param statement -- DeepSeek design critique flagged appending there
+        // as needlessly fragile when this exact "tag the winner after the fact" pattern
+        // already exists immediately above for cluster_attributed_setups). Only real
+        // levelScalpSetup winners carry `clusterTouchId` (undefined/falsy for ibSetup or any
+        // other candidate type), so the guard below is a no-op for those, matching how
+        // clusterSkippedTypes already behaves.
+        if (setupId && active.clusterTouchId) {
+          await query(`
+            UPDATE active_setups SET cluster_touch_id = $2 WHERE id = $1
+          `, [setupId, active.clusterTouchId]).catch(() => {});
         }
         detectedAt = detectedAt || firedTimeStr.slice(0, 5);
         persistedLevels = row ? {

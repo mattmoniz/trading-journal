@@ -83,17 +83,22 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { BET_CLASSES } from '../server/config/setupTypes.js';
+// FIXED 2026-09-07 (cluster touch credit Phase 2, DeepSeek design-critiqued): this file used
+// to hand-roll its own copy of "real trade" filter, independently from backtest_setup_status.
+// mjs's canonical REAL_TRADE_FILTER -- the two had already drifted (this file's copy was
+// missing the ib_window_stale_basis exclusion, so ~31 stale IB_BEARISH rows were leaking into
+// both matrices below). Now imports both filters instead. POOLED_TRADE_FILTER is used ONLY
+// for the bet_class matrix (a cluster winner + its siblings are the same touch, must not be
+// double-counted as 2 independent samples of the same bet_class's daily P&L) -- the setup_type
+// matrix keeps REAL_TRADE_FILTER (a setup_type is never both winner and sibling of the same
+// touch, so there's no within-type double-count, and excluding siblings there would just
+// under-report that type's true daily P&L and hide the very co-touch redundancy this monitor
+// exists to surface).
+import { REAL_TRADE_FILTER, POOLED_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const OVERLAP_MIN_N = 20;
 const ALERT_THRESHOLD = 0.6;
 const ALERTS_FILE = path.resolve('scratch/gemini_alerts.txt');
-
-const REAL_TRADE_FILTER = `
-  resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
-  AND actual_pnl IS NOT NULL
-  AND origin_status IN ('ACTIVE','SHADOW')
-  AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
-`;
 
 function nowET() {
   return new Date().toLocaleString('en-CA', { timeZone: 'America/New_York' }).replace(',', '');
@@ -150,11 +155,13 @@ function correlateSeries(mapA, mapB) {
   return { overlapN, r: pearson(xs, ys), tooThin: false };
 }
 
-async function buildDailyPnlSeries(groupCol, whereExtra = '', params = []) {
+async function buildDailyPnlSeries(groupCol, filter, whereExtra = '', params = []) {
   const { rows } = await query(`
     SELECT ${groupCol} AS grp, trade_date::text AS date, SUM(actual_pnl)::float AS pnl
     FROM active_setups
-    WHERE ${REAL_TRADE_FILTER} ${whereExtra}
+    WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+      AND actual_pnl IS NOT NULL
+      AND ${filter} ${whereExtra}
     GROUP BY ${groupCol}, trade_date
   `, params);
   const byGroup = new Map();
@@ -214,7 +221,7 @@ async function run() {
 
   // ── bet_class matrix ──────────────────────────────────────────────────────────────
   const betClasses = BET_CLASSES.filter(c => c !== 'UNCLASSIFIED');
-  const betClassSeries = await buildDailyPnlSeries('bet_class', "AND bet_class IS NOT NULL AND bet_class != 'UNCLASSIFIED'");
+  const betClassSeries = await buildDailyPnlSeries('bet_class', POOLED_TRADE_FILTER, "AND bet_class IS NOT NULL AND bet_class != 'UNCLASSIFIED'");
   await runMatrix({
     signalType: 'CORRELATION_MONITOR_BET_CLASS',
     seriesByGroup: betClassSeries,
@@ -239,6 +246,7 @@ async function run() {
   } else {
     const setupTypeSeries = await buildDailyPnlSeries(
       'setup_type',
+      REAL_TRADE_FILTER,
       `AND setup_type = ANY($1)`,
       [liveTypes],
     );

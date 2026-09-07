@@ -62,6 +62,17 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // ones actually tagged.
 export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE`;
 
+// Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
+// cluster_touch_credit_phase3_sibling_rows_shipped, DeepSeek design-critiqued): a cluster's
+// winner and its CLUSTER_SIBLING_TOUCH_CREDIT siblings are all real trades of the SAME market
+// touch, not independent samples of it -- a cross-SETUP_TYPE pooled consumer (one that groups
+// by bet_class, not by an individual setup_type) must exclude siblings (is_cluster_primary=
+// false) or it silently double/triple-counts one touch as several. A PER-setup_type consumer
+// should keep using REAL_TRADE_FILTER as-is -- a setup_type is never both winner and sibling of
+// the same touch, so there is no within-type double-count to guard against, and excluding
+// siblings there would just under-report that type's real N/EV for no reason.
+export const POOLED_TRADE_FILTER = `${REAL_TRADE_FILTER} AND is_cluster_primary`;
+
 // bet_class-level SUPPRESS override — roadmap Phase 8 I6/user-authorized 2026-08-11 action,
 // following the file's own established philosophy (see header: "fix the cron, don't build
 // an override... self-correct again automatically"). This is NOT a bolt-on override applied
@@ -258,12 +269,15 @@ async function run() {
   // its table on a daily run would read up-to-6-day-stale data. An inline query keeps this
   // check fresh on every run this script itself runs, matching the "self-correct every run"
   // convention already established for SUPPRESS/PROMOTE above.
+  // POOLED_TRADE_FILTER (not REAL_TRADE_FILTER) 2026-09-07 -- this pools across ~166
+  // setup_types by bet_class, so a cluster winner + its siblings must not be counted as
+  // multiple independent samples of the same touch (see POOLED_TRADE_FILTER's own comment).
   const betClassPooledQ = BET_CLASS_SUPPRESS_ENABLED.size > 0 ? await query(`
     SELECT bet_class, COUNT(*) AS n, AVG(actual_pnl)::float AS ev
     FROM active_setups
     WHERE resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
-      AND ${REAL_TRADE_FILTER}
+      AND ${POOLED_TRADE_FILTER}
       AND bet_class = ANY($1)
     GROUP BY bet_class
   `, [[...BET_CLASS_SUPPRESS_ENABLED]]) : { rows: [] };
