@@ -1,6 +1,6 @@
 # Open Threads / Pending Work
 
-## 🔶 2026-09-07 — `backtest_unified_detectors_systemic_divergence_20260907`: VwapMagnet resolved, 4 remain
+## 🔶 2026-09-07 — `backtest_unified_detectors_systemic_divergence_20260907`: VwapMagnet + VAResp resolved, detectCStandalone investigated (not fixed), 2 remain
 
 Continued the `backtest_unified.js` vs. live-`acd.js` divergence audit (see the entry below) starting with `detectVwapMagnet`, per the decision's own instruction to ask the user delete-vs-build rather than default to "reconcile." Asked; user chose "properly test scale-out first, then decide."
 
@@ -14,7 +14,14 @@ Continued to `detectVAResp` next (same session). Made 4 real, verified fixes to 
 
 **After all 4 fixes, the backtest still doesn't numerically match real `SETUP_STATUS`** (LONG: backtest EV=-$5.66 vs. real EV=+$6.36, still sign-flipped; SHORT: same sign but WR off by 2x — 60.0% backtest vs. 28.9% real). Root-caused, not left unexplained: `valueAreaResp` is one of ~15 candidates in `acd.js`'s priority-selection array (`candidates.filter(Boolean)`, take the first eligible one per poll) — live only fires a setup when it's *also* the highest-priority eligible candidate that poll, not merely when its own trigger condition is met. A per-setup-type detector script structurally cannot reproduce this without re-simulating the entire candidates array + priority order for every setup simultaneously — a much larger, different project than fixing one detector's trigger/geometry, and a limitation shared by every detector in this file that goes through the same array (not VAResp-specific). Decision: stop chasing an exact match here — the 4 fixes are real, independently-verifiable corrections to what the backtest computes (not calibrated-to-a-target guesses), and `SETUP_STATUS` (built from real fired trades, already reflecting the true priority-filtered population) remains the authoritative live-gating source regardless. Zero regressions (`test_invariants.mjs` identical 19 pre-existing failures stashed vs. applied; production re-run, same 780/321 row count).
 
-`OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907` updated with full detail; still PENDING for 3 remaining candidates (`detectCStandalone`, `detectCoilSurge` — trigger/population drift; `detectStopSweep` — entirely different level set, re-scope not reconcile). Any future work on `detectCStandalone` should check upfront whether it goes through the same priority-selection array before assuming a clean fix will produce a matching number.
+Started `detectCStandalone` next (same session), stopped after investigation-only at the user's request to continue in a fresh context — **no code changed, git status clean.** Confirmed `cStandalone` goes through the same `acd.js` priority-selection candidates array (line ~8172) as `valueAreaResp` did, so the same residual-gap caveat above applies — don't expect an exact `SETUP_STATUS` match even after fixing real divergences. Found 4 concrete, unfixed divergences, all read-only-confirmed against live's actual code:
+1. Backtest's gate (`if (aUp || aDown) return [];`) is missing live's additional `!hasCFiredToday` exclusion (acd.js ~2578) — a genuine, previously-unflagged trigger/population gap.
+2. DOWN branch is missing live's `nearPD2VA` proximity gate (acd.js ~2591) — this one WAS already flagged in the original audit, confirmed still true.
+3. Stop matches exactly (`orL-4`/`orH+4` both sides) — not a divergence.
+4. Target fallback constant differs: live's `t1Guard(...)` call falls back to an 80pt extension; the backtest's own `orRange` default is 60pt — check live's real `orRange` definition before assuming 80 is the only number to fix.
+5. **Third instance of the misleading-scale-out-text bug** (already fixed twice this session for VWAP_MAGNET): live's `targetLabel` says "T1: PD VAH (half off) · Runner: 45pt" for `C_STANDALONE_UP/DOWN`, but grep confirms zero `runner_trail_width`/`extend_target_level`/`CONDITIONAL_VARIANTS` wiring for this setup — the scale-out is never mechanically enforced, same as VWAP_MAGNET's fixed bug.
+
+Full next-session action plan (fix order, verification steps, exact line numbers) is in `OPEN_DECISION backtest_unified_detectors_systemic_divergence_20260907`'s own text — read that first, don't re-derive from scratch. Remaining after `detectCStandalone`: `detectCoilSurge` (trigger/population drift, ZERO real fires either direction — not urgent), `detectStopSweep` (entirely different level set — re-scope not reconcile).
 
 ## 🔶 2026-09-07 — Two quick OPEN_DECISION wins, 4 larger ones scoped (not built)
 
