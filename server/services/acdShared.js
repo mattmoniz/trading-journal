@@ -13,9 +13,65 @@
 // pocRotationJoinDetector.js, globexFlushDetector.js, ibLowPnrDetector.js,
 // minuteBarSignalDetector.js) keep working unchanged.
 
+import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 import { getVolumeBaseline } from './touchQuality.js';
 import { inferDirection, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
+
+// ── Same-poll cluster batch tagging (shared, 2026-09-08) ────────────────────────────
+// Extracted out of 2 near-duplicate inline copies (the early-touch-backfill loop and the
+// shadowCandidates loop, acd.js) found while checking whether tonight's cluster-tagging fixes
+// were done cleanly. The backfill copy had a real bug this extraction also fixes: it generated
+// ONE shared touch id for the ENTIRE backfilledTouches array regardless of whether the entries
+// actually shared a touch moment -- different keepLevels can each have their own earliest-touch
+// bar discovered in the same poll (e.g. Level A's real touch at 9:31am and Level B's at 9:52am,
+// both surfacing in the same backfill scan), which the old inline version would have
+// incorrectly linked as one cluster. `keyFn` makes the grouping explicit per caller: the
+// backfill site groups by each touch's own etMin, shadowCandidates groups by entry price --
+// two different real groupings, same underlying "tag a batch" logic.
+//
+// FIXED same day (code-review self-check, not caught in live data yet -- both loops' own
+// gates are async/DB-backed and only rarely reject a group's first member, so today's real
+// clusters all happened to survive by luck): the original version of this function assigned
+// "primary" by raw ARRAY POSITION before either caller's loop had run its eligibility gates
+// (risk check, refire cooldown, isLiveEligible, the backfill loop's own `existing` dedup
+// check) -- each of those gates can `continue` before reaching the INSERT, so if position 0
+// of a group got gated out, its "primary" designation was never written to any row, and the
+// group's real siblings would all land in the DB as is_cluster_primary=false with no primary
+// at all. tagClusterBatch() now ONLY returns real (2+ member) group membership + a touchId per
+// key -- it deliberately does not decide who's primary, since that can only be known once a
+// row has actually been inserted. Primary/sibling status is now resolved by claimClusterRole()
+// at the moment each row's own INSERT succeeds, mirroring the already-shipped Globex
+// (~line 1482, `globexPrimaryAssigned`) and RTH-winner (~line 9474, `active.clusterTouchId`)
+// post-insert-UPDATE pattern instead of reinventing a pre-gate scheme.
+export function tagClusterBatch(items, keyFn) {
+  const counts = new Map();
+  items.forEach(item => {
+    if (!item) return;
+    const key = keyFn(item);
+    if (key == null) return;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const touchIds = new Map(); // key -> touchId, only for keys with 2+ raw members
+  for (const [key, count] of counts) {
+    if (count >= 2) touchIds.set(key, randomUUID());
+  }
+  return touchIds;
+}
+
+// Call once per successfully-inserted row, after tagClusterBatch() above has already produced
+// its key -> touchId map for the batch. `assignedKeys` is a single `Set` the caller creates
+// once per poll and threads through every iteration of its loop -- the first successful
+// insert for a given key claims { isPrimary: true }; every insert after that for the same key
+// gets { isPrimary: false }. Must only be called AFTER a row's own INSERT has actually
+// succeeded (a real `id` came back) -- calling it earlier (e.g. right after computing a
+// candidate, before its gates run) would reintroduce the exact bug this whole rework exists
+// to fix.
+export function claimClusterRole(assignedKeys, key) {
+  if (assignedKeys.has(key)) return { isPrimary: false };
+  assignedKeys.add(key);
+  return { isPrimary: true };
+}
 
 // ── OPTIMAL_STOP lookup by resolved type (shared, 2026-09-08) ───────────────────────
 // Fix for a real bug found via a user-reported live trade (PD_POC_FADE_LONG_TRAIL, 89pt

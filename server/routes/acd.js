@@ -15,7 +15,7 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole } from '../services/acdShared.js';
 import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -7802,12 +7802,14 @@ export default function createACDRouter(io) {
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   historical_win_rate, historical_sessions, runner_trail_width, wider_target_mult,
-                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak
+                  ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak,
+                  cluster_touch_id
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                  $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
+                  $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
               `, [
                 todayET, type, currentPrice, suppressReason,
@@ -7836,6 +7838,15 @@ export default function createACDRouter(io) {
                 getBetClass(type),
                 JSON.stringify(auditVolBuildingSignal),
                 auditVaOverlapStreak,
+                // FIX (2026-09-08, user-caught): this branch is where the sortedCandidates
+                // loop's own internal winner lands when it ALSO fails eligibility (the
+                // FLOOR_S2_FADE_LONG case) -- clusterTouchId was generated unconditionally
+                // at the top of this poll's cluster-detection block specifically so a lone
+                // winner "just gets a singleton touch-id group, no correctness cost" (see
+                // that comment), but this INSERT never actually wrote it, so the winner's
+                // own row stayed permanently unlinked from the sibling rows it beat (which
+                // DO carry this same clusterTouchId via the touch-credit INSERT above).
+                clusterTouchId,
               ]).catch(() => {});
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -8877,6 +8888,26 @@ export default function createACDRouter(io) {
         // to credit. Real RTH close (4PM ET), rolled to next day if already past.
         const btNowEt = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
         const sessionEndStr = computeSessionEndCapStr(btNowEt);
+        // Cluster tagging (2026-09-08, user-caught live) via the shared tagClusterBatch()
+        // (server/services/acdShared.js) -- this loop can legitimately backfill several
+        // DIFFERENT levels in one poll, but unlike the other real insert paths in this file it
+        // never generated a cluster_touch_id at all. Grouped by each touch's OWN etMin, not the
+        // whole array unconditionally -- a first version of this fix (same day) blindly shared
+        // one id across the entire backfilledTouches batch, which would have wrongly linked
+        // genuinely different touch moments (Level A's real touch at 9:31am and Level B's at
+        // 9:52am can both surface in the same poll's scan) as if they were one event. Caught
+        // during a same-day self-check ("did you make the fix cleanly"), fixed by grouping on
+        // the real shared key instead of the batch as a whole.
+        //
+        // FIXED, same day, second round (code review, no live evidence yet -- see
+        // acdShared.js's claimClusterRole() header): primary/sibling status is now claimed
+        // AFTER the `existing` dedup check below (and the INSERT itself) has actually
+        // succeeded, not decided upfront from raw array position -- the dedup `continue` a few
+        // lines down could otherwise gate out whichever backfilledTouches entry happened to
+        // land at a group's array position 0, orphaning that etMin group's primary the same
+        // way a gated-out shadowCandidates entry could (see that loop's twin fix).
+        const backfillClusterTouchIds = tagClusterBatch(backfilledTouches, bt => bt?.etMin ?? null);
+        const backfillClusterAssigned = new Set();
         (async () => {
           const btVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           for (const bt of backfilledTouches) {
@@ -8917,7 +8948,7 @@ export default function createACDRouter(io) {
               // promoted out of THIN_N.
               const btTrailVariant = CONDITIONAL_VARIANTS[bt.type];
               const btRunnerTrailWidth = await lookupRunnerTrailWidth(btTrailVariant);
-              await query(`
+              const btIns = await query(`
                 INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
@@ -8927,8 +8958,9 @@ export default function createACDRouter(io) {
                   ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4})
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
                 ON CONFLICT DO NOTHING
+                RETURNING id
               `, [
                 todayET, bt.type, firedAtBackfill, sessionEndStr,
                 bt.entry, bt.entry, bt.stop, bt.target, bt.targetLabel,
@@ -8945,6 +8977,23 @@ export default function createACDRouter(io) {
                 btRunnerTrailWidth,
                 btVaOverlapStreak,
               ]);
+              // Cluster role claimed AFTER the insert above actually succeeded -- see
+              // acdShared.js's claimClusterRole() header and this loop's own comment (top of
+              // the backfilledTouches block) for the gated-out-position-0 bug this ordering
+              // fixes, same class of fix as the shadowCandidates loop's twin.
+              if (btIns.rows[0]) {
+                const btClusterKey = bt.etMin ?? null;
+                const btTouchId = btClusterKey != null ? backfillClusterTouchIds.get(btClusterKey) : null;
+                if (btTouchId) {
+                  const { isPrimary } = claimClusterRole(backfillClusterAssigned, btClusterKey);
+                  await query(
+                    isPrimary
+                      ? `UPDATE active_setups SET cluster_touch_id=$2 WHERE id=$1`
+                      : `UPDATE active_setups SET is_cluster_primary=false, cluster_touch_id=$2 WHERE id=$1`,
+                    [btIns.rows[0].id, btTouchId]
+                  ).catch(() => {});
+                }
+              }
             } catch (e) { console.error(`[backfill-touch] ${bt.type} failed:`, e.message); }
           }
         })();
@@ -9519,6 +9568,24 @@ export default function createACDRouter(io) {
       // Persist shadow setups (fire-and-forget, don't block response)
       if (shadowCandidates.length > 0) {
         (async () => {
+          // Cluster tagging (2026-09-08, found via a same-day self-check on cluster-tagging
+          // coverage, not the specific OR15/OR30_MID example that motivated it -- that one
+          // turned out to be the early-touch-backfill path instead, see that fix's own comment).
+          // This loop is the file's own-documented "5th active_setups INSERT" (see the
+          // vol_building_signal comment a few lines below) and, like the other 2 real gaps found
+          // the same day, never had any cluster-tagging at all. Multiple shadowCandidates entries
+          // can legitimately share the exact same entry price within one poll -- most often two
+          // different OR-length windows whose underlying high/low hadn't moved between them, so
+          // their computed MID/HIGH/LOW levels are numerically identical. Uses the shared
+          // tagClusterBatch() (server/services/acdShared.js) grouped by entry price, within THIS
+          // poll's batch only -- same no-EV-ranking-available convention as the backfill loop.
+          // Primary/sibling status is claimed via claimClusterRole() AFTER each row's own INSERT
+          // actually succeeds (see acdShared.js's header comment on both functions for the
+          // gated-out-position-0 bug this ordering fixes) -- not decided upfront from raw array
+          // position, which is why this pre-loop step only produces per-key touchIds now.
+          const shadowClusterTouchIds = tagClusterBatch(shadowCandidates, s => s?.entry ?? null);
+          const shadowClusterAssigned = new Set();
+
           const vaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
           const shadowFireTags = await computeFireTags(todayET, 'RTH', etMin);
           for (const shadow of shadowCandidates) {
@@ -9637,6 +9704,22 @@ export default function createACDRouter(io) {
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
+              // Cluster role claimed HERE, after the insert actually succeeded -- not before
+              // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out
+              // can never consume the primary slot for a group it was never actually written
+              // into. See acdShared.js's claimClusterRole() header for the bug this ordering
+              // fixes (found via code review 2026-09-08, same day as the rest of this fix).
+              const shadowClusterKey = shadow.entry ?? null;
+              const shadowTouchId = shadowClusterKey != null ? shadowClusterTouchIds.get(shadowClusterKey) : null;
+              if (shadowTouchId) {
+                const { isPrimary } = claimClusterRole(shadowClusterAssigned, shadowClusterKey);
+                await query(
+                  isPrimary
+                    ? `UPDATE active_setups SET cluster_touch_id=$2 WHERE id=$1`
+                    : `UPDATE active_setups SET is_cluster_primary=false, cluster_touch_id=$2 WHERE id=$1`,
+                  [shadowIns.rows[0].id, shadowTouchId]
+                ).catch(() => {});
+              }
             }
           }
         })();

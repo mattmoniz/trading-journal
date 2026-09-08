@@ -131,6 +131,20 @@
   .vb-tag.strong { color: #93c5fd; background: rgba(59,130,246,0.14); }
   .vb-tag.mild { color: #94a3b8; background: rgba(148,163,184,0.08); }
   .wide-tag { color: #c4b5fd; background: rgba(139,92,246,0.14); }
+  /* Cluster leader/sibling dropdown (2026-09-08, user request): a confluence touch picks ONE
+     leader (is_cluster_primary=true) via acd.js's EV-ranked sortedCandidates loop; every other
+     level that touched the same instant gets its own real SHADOW row (is_cluster_primary=false,
+     shared cluster_touch_id) purely for that level's own calibration credit -- never a second
+     real trade. This toggle exists so that's visually obvious instead of reading as N independent
+     trades firing together. */
+  .cluster-toggle {
+    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; flex-shrink: 0;
+    color: var(--dim); background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.25);
+    cursor: pointer; user-select: none;
+  }
+  .cluster-toggle:hover { background: rgba(148,163,184,0.18); }
+  .cluster-child { padding-left: 22px; opacity: 0.72; }
+  .cluster-child .rdot { width: 5px; height: 5px; }
   /* range_slope/vol_rollover post-entry exit-signal tags (OPEN_DECISION
      wire_flush_post_entry_exit_signals_globex) -- same restrained, non-green/red palette as
      the tags above since these are unvalidated too (PROVISIONAL until the weekly promotion
@@ -731,7 +745,9 @@ function renderTimeline() {
     return;
   }
 
-  $('timeline-list').innerHTML = resolved.map(s => {
+  // Extracted to a named function (2026-09-08) so both a cluster leader and its collapsed
+  // siblings can reuse the exact same row template -- previously inline in a .map() callback.
+  const rowHtml = (s, rowOpts) => {
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
     const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
@@ -812,15 +828,67 @@ function renderTimeline() {
     // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
     // informative case, same convention as dgTag above.
     const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MomFade</span>' : '';
-    return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
+    // Cluster toggle badge (2026-09-08) -- only ever on the LEADER of a group that has real
+    // siblings. onclick stops propagation so tapping the badge toggles the group instead of
+    // also opening the leader's own trade modal (same convention as every sig-tag above).
+    const siblingCount = clusterSiblingCountFor(s);
+    const clusterBadge = siblingCount > 0
+      ? '<span class="cluster-toggle" title="' + siblingCount + ' other level(s) touched at this same instant -- each gets its own real SHADOW row for its OWN calibration credit, never a second real trade. Tap to show/hide." onclick="event.stopPropagation(); toggleClusterGroup(\'' + s.cluster_touch_id + '\')">' +
+        (expandedClusters.has(s.cluster_touch_id) ? '▾' : '▸') + ' ' + siblingCount + '</span>'
+      : '';
+    return '<div class="row' + (rowOpts.child ? ' cluster-child' : '') + '" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
-  }).join('');
+  };
+
+  // Group rows by cluster_touch_id (2026-09-08, user request) -- a confluence touch's leader
+  // (is_cluster_primary=true) is rendered normally with a toggle badge; its real siblings
+  // (is_cluster_primary=false, same cluster_touch_id) render as indented, collapsed-by-default
+  // child rows instead of reading as N independent trades. Rows with no cluster_touch_id (the
+  // large majority -- most touches have no confluence at all) render exactly as before.
+  const clusterGroups = new Map();
+  for (const s of resolved) {
+    if (!s.cluster_touch_id) continue;
+    if (!clusterGroups.has(s.cluster_touch_id)) clusterGroups.set(s.cluster_touch_id, []);
+    clusterGroups.get(s.cluster_touch_id).push(s);
+  }
+  function clusterSiblingCountFor(s) {
+    if (!s.cluster_touch_id || !s.is_cluster_primary) return 0;
+    const group = clusterGroups.get(s.cluster_touch_id);
+    return group ? group.filter(g => g !== s).length : 0;
+  }
+
+  const renderedClusterIds = new Set();
+  const htmlParts = [];
+  for (const s of resolved) {
+    if (s.cluster_touch_id) {
+      if (renderedClusterIds.has(s.cluster_touch_id)) continue; // already rendered via its leader
+      const group = clusterGroups.get(s.cluster_touch_id);
+      const leader = group.find(g => g.is_cluster_primary) || group[0];
+      const siblings = group.filter(g => g !== leader);
+      renderedClusterIds.add(s.cluster_touch_id);
+      htmlParts.push(rowHtml(leader, {}));
+      if (siblings.length && expandedClusters.has(s.cluster_touch_id)) {
+        for (const sib of siblings) htmlParts.push(rowHtml(sib, { child: true }));
+      }
+    } else {
+      htmlParts.push(rowHtml(s, {}));
+    }
+  }
+  $('timeline-list').innerHTML = htmlParts.join('');
+}
+
+// Expand/collapse state for cluster dropdowns -- module-level so it survives the 20s
+// loadTimeline() poll re-render (renderTimeline() fully rebuilds innerHTML every call).
+const expandedClusters = new Set();
+function toggleClusterGroup(id) {
+  if (expandedClusters.has(id)) expandedClusters.delete(id); else expandedClusters.add(id);
+  renderTimeline();
 }
 
 // ---- Trade detail modal ----
@@ -1297,16 +1365,35 @@ function fmtAxisTime(firedAtStr, useTime) {
 // stay self-consistent -- computing this from a differently-filtered/ordered set would
 // silently disagree with what the chart shows (this exact drift, both from the narrower
 // TARGET_HIT/STOP_HIT/TIME_EXPIRED/SESSION_CLOSED filter, is what got fixed 2026-08-13).
-function computeRangeStats(rows) {
-  // Any row with a real, settled actual_pnl counts as "decided" -- matches Session Timeline's
-  // definition exactly (renderTimeline() above), not just 4 hardcoded resolution types. Was
-  // previously narrower here (TARGET_HIT/STOP_HIT/TIME_EXPIRED/SESSION_CLOSED only), silently
-  // excluding INVALIDATED rows that carry a real mark-to-market actual_pnl (per the
-  // resolveSetupsByPrice() fix documented in CLAUDE.md) -- Session Timeline and Performance
-  // would disagree on net P&L/commission for the same day whenever one of those existed.
-  const decided = rows
-    .filter(s => s.actual_pnl != null)
+// Any row with a real, settled actual_pnl counts as "decided" -- matches Session Timeline's
+// definition exactly (renderTimeline() above), not just 4 hardcoded resolution types. Was
+// previously narrower (TARGET_HIT/STOP_HIT/TIME_EXPIRED/SESSION_CLOSED only), silently
+// excluding INVALIDATED rows that carry a real mark-to-market actual_pnl (per the
+// resolveSetupsByPrice() fix documented in CLAUDE.md).
+//
+// Extracted (2026-09-08) out of computeRangeStats() into its own function -- renderEquityCurve()
+// below used to independently re-implement this exact same filter+sort inline, with its own
+// comment acknowledging "must stay in sync or the chart and the stats line above it would
+// silently disagree." That's exactly the duplication risk this codebase's own "share modules
+// instead of reimplementing" convention exists to prevent, and it nearly bit here: fixing the
+// cluster-dedup bug below in only one of the two copies would have left the equity curve
+// showing a different (still-inflated) number than the stats line sitting right above it.
+//
+// FIXED same day (user caught live: Net P&L swung from a real -$54.50 to a displayed +$737.90
+// on the same day, purely from this gap): a confluence touch writes ONE real decision
+// (is_cluster_primary=true) plus is_cluster_primary=false sibling rows for every other level
+// that touched the same instant -- each sibling gets its own real, resolvable P&L for ITS OWN
+// setup-type calibration credit, but it is NOT a second independent trade. Summing every row
+// without this filter counts the same real market event once per cluster member, exactly the
+// overcounting CLAUDE.md's is_cluster_primary hard rule warns about for any aggregation.
+function getDecidedRows(rows) {
+  return rows
+    .filter(s => s.actual_pnl != null && s.is_cluster_primary !== false)
     .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+}
+
+function computeRangeStats(rows) {
+  const decided = getDecidedRows(rows);
 
   let running = 0, peak = 0, maxDD = 0;
   let wins = 0, losses = 0;
@@ -1336,11 +1423,9 @@ function renderRangeStats(containerId, rows) {
 
 function renderEquityCurve(canvasId, rows, range) {
   const canvas = $(canvasId);
-  // Same "decided" definition as computeRangeStats() above -- must stay in sync or the
-  // chart and the stats line above it would silently disagree on which trades count.
-  const decided = rows
-    .filter(s => s.actual_pnl != null)
-    .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+  // Shared with computeRangeStats() via getDecidedRows() (2026-09-08 -- previously a separate
+  // inline copy that could silently drift, see that function's header for the incident).
+  const decided = getDecidedRows(rows);
 
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || canvas.parentElement.clientWidth;
