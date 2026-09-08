@@ -7345,13 +7345,28 @@ export default function createACDRouter(io) {
                 // MARGINAL-tier starting discount: EV < $30 with no confluence → -0.25 base
                 // (PRIME/SOLID tiers or confluent setups start at full size)
                 if (lv.ev < 30 && confluenceCount < 2) mult = Math.max(mult - 0.25, 0.25);
-                // First-of-day / win-streak boost (only when no loss streak — applied first so cap can override)
-                if      (lfConsecWins >= 3)  mult = Math.min(mult + 0.50, 1.5);     // 87.8% WR
-                else if (lfConsecWins === 2)  mult = Math.min(mult + 0.35, 1.5);    // 79.7% WR
-                else if (lfConsecWins === 1)  mult = Math.min(mult + 0.25, 1.5);    // 76.6% WR
-                else if (lfFirstOfDay)        mult = Math.min(mult + 0.10, 1.5);    // 79.4% WR — best group (2026-07-05)
-                // Overnight NEUTRAL worst (68.2% WR vs 72-73% aligned/counter) — floor 0.25 not 0.5
-                if (!isOvernightAligned(dir) && !isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.25);
+                // First-of-day / win-streak boost — RECALIBRATED 2026-09-07 (RESEARCH_CLAIM
+                // sizemultiplier_loss_win_streak_overnight_stale_20260907): the 2026-07-05
+                // magnitudes (0.50/0.35/0.25/0.10 for claimed 87.8%/79.7%/76.6%/79.4% WR) were
+                // never rechecked. Real full-history data: 3+wins N=297 WR=57.6% EV=+$2.29,
+                // 2wins N=205 WR=51.2% EV=+$0.69, firstOfDay N=168 WR=53.0% EV=+$1.34 -- still
+                // directionally positive but far smaller than claimed, magnitudes cut to match.
+                // 1win N=601 WR=47.9% EV=-$6.39 -- now net NEGATIVE, branch removed outright
+                // rather than just shrunk. These are a conservative interim cut, not a fresh
+                // precise calibration -- see OPEN_DECISION
+                // nl30_regime_conditioning_needs_recalibration_20260907 for the real fix (a
+                // scheduled recalibration mechanism for this whole factor class).
+                if      (lfConsecWins >= 3)  mult = Math.min(mult + 0.10, 1.5);     // was 0.50, real EV +$2.29
+                else if (lfConsecWins === 2)  mult = Math.min(mult + 0.05, 1.5);    // was 0.35, real EV +$0.69
+                else if (lfFirstOfDay)        mult = Math.min(mult + 0.05, 1.5);    // was 0.10, real EV +$1.34
+                // Overnight alignment — FLIPPED 2026-09-07 (RESEARCH_CLAIM
+                // sizemultiplier_loss_win_streak_overnight_stale_20260907): the 2026-07-05 claim
+                // (NEUTRAL 68.2% WR vs 72-73% aligned/counter, penalize NEUTRAL) does not hold on
+                // real full-history data -- NEUTRAL N=1613 EV=-$1.78 and ALIGNED N=349 EV=-$0.66
+                // are similar; COUNTER N=257 EV=-$13.22 is by far the worst bucket and was
+                // getting NO penalty. Same -0.1 magnitude, now applied to the bucket real data
+                // actually supports penalizing.
+                if (isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.25);
                 // Approach delta: buyers/sellers confirming level (research 2026-07-05: +6% WR)
                 if (buyersAtLevel || sellersAtLevel) mult = Math.min(mult + 0.15, 1.5);
                 // Entry-time selling-pressure boost (SHORT only, RESEARCH_CLAIM
@@ -7365,9 +7380,14 @@ export default function createACDRouter(io) {
                 if (confluencePairPartner) mult = Math.min(mult + 0.15, 1.5);
                 // Elite zone: TURBULENT + with IB direction = 78-82% WR (best segment)
                 if (eliteZone) mult = Math.min(mult + 0.15, 1.5);
-                // Level recency: 1-2d ago = $22 EV proven defender; 21d+ fresh = -$5 EV unproven — floor 0.25 not 0.5
-                if (daysSinceTest != null && daysSinceTest <= 2) mult = Math.min(mult + 0.15, 1.5);
-                else if (daysSinceTest == null) mult = Math.max(mult - 0.1, 0.25);
+                // Level recency — the "<=2 days ago = proven defender" BOOST removed 2026-09-07
+                // (RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907): the
+                // 2026-07-05 claim was +$22 EV; real ground-truth data (ground-truth JSONB
+                // snapshot, N=30, clears this codebase's N>=20 floor) shows -$3.87 EV, now
+                // negative. The "21d+/never-tested = unproven" PENALTY below is UNCHANGED --
+                // its own real sample (N=0 in the same ground-truth window) is too thin to
+                // evaluate either way, left as-is pending more data, not part of this fix.
+                if (daysSinceTest == null) mult = Math.max(mult - 0.1, 0.25);
                 // Day-type significance: data-driven from performance_audit DAY_TYPE_ALPHA rows.
                 // size_delta scales with z_score (no fixed amount). Currently: only WEEKLY_VWAP_FADE_LONG
                 // BALANCE reaches z≥1.5 (z=1.9). All other day_type divergences are within noise.
@@ -7418,12 +7438,19 @@ export default function createACDRouter(io) {
                 // global distribution still clustered low -- measure the delta specifically in the
                 // lfConsecLosses===0 && !hasLossToday subset (this override's only real point of
                 // leverage), not the full population, when revalidating.
-                // NL30 regime conditioning (verified 2026-07-05, N=229-429 per bucket):
-                if      (_lfNl30Bucket === 'MILD_BULL'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 62.6% WR -$16.8 EV z=-2.48
-                else if (_lfNl30Bucket === 'MILD_BEAR'   && dir === 'SHORT') mult = Math.max(mult - 0.20, 0.25); // 61.6% WR -$19.1 EV z=-2.69
-                else if (_lfNl30Bucket === 'STRONG_BEAR' && dir === 'SHORT') mult = Math.min(mult + 0.10, 1.5);  // 77.7% WR +$68.1 EV z=+3.34
-                else if (_lfNl30Bucket === 'STRONG_BULL' && dir === 'LONG')  mult = Math.min(mult + 0.10, 1.5);  // 77.6% WR +$62.0 EV z=+2.63
-                else if (_lfNl30Bucket === 'MILD_BULL'   && dir === 'LONG')  mult = Math.min(mult + 0.10, 1.5);  // 77.3% WR +$63.7 EV z=+2.06
+                // NL30 regime conditioning REMOVED 2026-09-07 (RESEARCH_CLAIM
+                // nl30_regime_conditioning_stale_boost_inverted_20260907, user-directed removal,
+                // not a partial fix): the 2026-07-05 calibration (verified N=229-429 per bucket
+                // at the time) never had a scheduled recalibration path. Real full-history data
+                // found 2 of the 5 branches actively INVERTED (SHORT+STRONG_BEAR boost: claimed
+                // +$68.10 EV, real -$10.94 EV N=413 across 8 distinct dates, negative in all 3
+                // chronological thirds; LONG+MILD_BULL boost: claimed +$63.70 EV, real -$15.96 EV
+                // N=61, worsening trend) and the other 3 too weak/thin to trust as still-current.
+                // NL30 itself (`_lfNl30Bucket`) is still computed and still feeds the
+                // `nl30Bucket` field in `sizeFactorsAtDetection` for future monitoring -- only
+                // this live sizing effect is removed. See OPEN_DECISION
+                // nl30_regime_conditioning_needs_recalibration_20260907 for the path back to a
+                // real, scheduled version of this factor if one is ever built.
                 // Revisit latency: untouched liquidity on first visit; picked-off zone on 3hr+ return.
                 if (minutesSinceVisit === null)    mult = Math.min(mult + 0.15, 1.5);  // 78% WR +$71 EV z=+2.74 N=283
                 else if (minutesSinceVisit >= 180) mult = Math.max(mult - 0.25, 0.25); // 60% WR -$35 EV z=-2.74 N=129
@@ -7497,11 +7524,19 @@ export default function createACDRouter(io) {
                 // they measure different temporal referents (today's day-type vs yesterday's
                 // profile) and can legitimately both apply the same day.
                 if (priorDayProfile === 'TREND') mult = Math.max(mult - 0.25, 0.25);
-                // LOSS STREAK CAP: applied LAST — hard ceiling nothing else can override.
-                // After-loss WR: 1×=47%, 2×=31.6%, 3+×=28.4%. Wins/conditions above inform upside, not downside.
-                if      (lfConsecLosses >= 3) mult = Math.min(mult, 0.10); // near-skip
-                else if (lfConsecLosses >= 2) mult = Math.min(mult, 0.10); // 31.6% WR
-                else if (lfConsecLosses >= 1) mult = Math.min(mult, 0.25); // 47.0% WR
+                // LOSS STREAK CAP REMOVED 2026-09-07 (RESEARCH_CLAIM
+                // sizemultiplier_loss_win_streak_overnight_stale_20260907, user-directed
+                // removal): the 2026-07-05 claim (1x=47% WR, 2x=31.6% WR, 3+x=28.4% WR, a
+                // monotonic decay used to justify an increasingly severe cap up to mult<=0.10)
+                // does not hold on real full-history data, split by origin_status to isolate
+                // real user-facing trades: 1_loss__ACTIVE N=96 EV=-$0.82, 2_losses__ACTIVE N=45
+                // EV=-$4.63, 3+_losses__ACTIVE N=41 EV=+$9.85 -- the bucket getting the HARSHEST
+                // cap is now the BEST-performing one, not the worst. This is the same premise
+                // ("revenge trading after losses is reliably worse") already tested and found
+                // not to hold for the related STAND DOWN badge (removed 2026-09-05) -- failing
+                // the same way twice is the premise being wrong, not a stale number. lfConsecLosses
+                // is still computed and still feeds `streakWarn`/`sizeFactorsAtDetection` for
+                // monitoring -- only this live sizing cap is removed.
                 return mult;
               })(),
               overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
