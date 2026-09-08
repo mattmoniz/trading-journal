@@ -1836,11 +1836,21 @@ async function main() {
         }
       }
 
-      // The 3 hand-rolled service pollers -- confirmed 2026-09-02 to have ZERO exposure to
-      // any of the 5 gates above (each does its own N>=20/ev>=-5 getLiveStatus() only). This
-      // is DeepSeek's single biggest finding (the original spec's census missed these
-      // entirely) -- WARN every run so it can never again be silently forgotten, until the
-      // spec's sequencing items 2-3 actually address it.
+      // The service pollers were confirmed 2026-09-02 to have ZERO exposure to any of the 5
+      // gates above (each did its own N>=20/ev>=-5 getLiveStatus() only) -- DeepSeek's single
+      // biggest finding on the original spec's undercounted census. FIXED 2026-09-07 (commit
+      // 3fa28cd, server/services/detectorLiveGates.js) for minuteBarSignalDetector.js/
+      // rthFlushDetector.js/globexFlushDetector.js via a shared checkStandardLiveGates()
+      // checkpoint -- deliberately only 2 of the 5 gates (exposureOverride,
+      // oppositeDirectionOpen), NOT an incomplete fix: DeepSeek's design critique proved the
+      // other 3 (refireCooldown/crossDirectionFlip/postWinOpposite) are structurally
+      // unreachable for these callers' own fire-once-per-trade_date design (see
+      // detectorLiveGates.js's own header for the full reasoning) -- don't re-flag those 3 as
+      // missing here. Because the checkpoint lives in a separate shared file, the gate-name
+      // regexes above (which match acd.js's direct in-line calls) don't match these 3 files'
+      // source text directly -- check for the checkStandardLiveGates( call site instead.
+      // ibLowPnrDetector.js is unaffected (calls isCrossDirectionFastFlip/
+      // isPostWinOppositeFamilyBlocked directly, matched by GATE_PATTERNS already).
       const SERVICE_POLLERS = ['minuteBarSignalDetector.js', 'rthFlushDetector.js', 'globexFlushDetector.js', 'ibLowPnrDetector.js'];
       for (const svc of SERVICE_POLLERS) {
         const p = path.resolve('server/services', svc);
@@ -1854,7 +1864,7 @@ async function main() {
           fail(`[24] live-gate census: server/services/${svc} no longer INSERTs into active_setups -- update the spec's site census, this file may no longer be a live-capable site.`);
           continue;
         }
-        const anyGate = Object.values(GATE_PATTERNS).some(p => p.test(svcSrc)) || /CAPITAL_EXPOSURE_OVERRIDE/.test(svcSrc);
+        const anyGate = Object.values(GATE_PATTERNS).some(p => p.test(svcSrc)) || /CAPITAL_EXPOSURE_OVERRIDE/.test(svcSrc) || /checkStandardLiveGates\(/.test(svcSrc);
         if (anyGate) {
           ok(`[24] server/services/${svc} now references at least one live gate -- an improvement over the 2026-09-02 baseline (previously zero); this file can graduate out of the standing WARN list once fully covered.`);
         } else {

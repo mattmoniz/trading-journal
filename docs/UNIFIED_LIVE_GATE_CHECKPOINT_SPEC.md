@@ -1,5 +1,21 @@
 # Unified live-gate checkpoint — sequencing items 1+2 SHIPPED, item 3 PAUSED (2026-09-02)
 
+**UPDATE 2026-09-07:** the 3 hand-rolled service pollers (`minuteBarSignalDetector.js`,
+`rthFlushDetector.js`, `globexFlushDetector.js`) — described everywhere below as "the single
+biggest un-closed gap" — are now wired, via `server/services/detectorLiveGates.js`'s shared
+`checkStandardLiveGates()` checkpoint (commit `3fa28cd`). This is a **deliberately partial** fix:
+only `CAPITAL_EXPOSURE_OVERRIDE` and `isOppositeDirectionOpen()` are wired, not all 5 gates — a
+DeepSeek design critique the same day proved `isInRefireCooldown`/`isCrossDirectionFastFlip`/
+`isPostWinOppositeFamilyBlocked` are structurally unreachable for these 3 callers' own
+fire-once-per-`trade_date` design (each already returns before ever reaching a second candidate
+in the same day), so wiring them would be dead code, not real protection. See
+`detectorLiveGates.js`'s own header for the full per-gate reasoning before assuming this needs
+"finishing." `test_invariants.mjs` check `[24]`'s `SERVICE_POLLERS` loop was itself a stale
+false-positive after this shipped (its regex matched the gates' own names, which no longer appear
+directly in these 3 files' source once routed through the shared checkpoint) — fixed the same
+session this update was written, verified via git-stash A/B. `ibLowPnrDetector.js` was never part
+of this gap (calls the raw gate functions directly, unaffected).
+
 **Status: items 1 and 2 of the 3-step sequencing below are done and live. Item 3 (the full shared
 `runLiveGates` runtime refactor) is deliberately PAUSED, not forgotten — see "Item 3: why paused"
 near the end of this doc before ever picking it back up.** Follow-up to the sibling-reversal gate
