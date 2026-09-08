@@ -503,6 +503,12 @@ async function loadTimeline() {
 // clear the unrelated live-eligibility bar. Built via textContent, not innerHTML -- setup_type
 // ultimately comes from a config array, not free user input, but no reason to be the one
 // place on this page that breaks the pattern.
+// Manual dismiss (2026-09-07, user request: a resolved trade sitting here mislabeled
+// "WATCHING" for up to 2 hours was confusing) -- keyed by active_setups.id so a genuinely
+// NEW fire (different id) always overrides a dismissal of the previous one. Persisted so a
+// page reload doesn't un-dismiss it.
+let sweepWatchDismissedId = localStorage.getItem('sweepWatchDismissedId');
+
 function renderSweepWatch() {
   const el = $('sweep-watch');
   // Exact suffix match, not a bare .includes('SWEEP_REVERSAL') -- FAILED_SWEEP_REVERSAL_
@@ -512,7 +518,7 @@ function renderSweepWatch() {
   // SWEEP_REVERSAL fires mislabeled as the brand-new mechanism.
   const SWEEP_REVERSAL_RE = /_SWEEP_REVERSAL_(LONG|SHORT)_OVERNIGHT$/;
   const hit = [...allTimelineRows].reverse().find(s => SWEEP_REVERSAL_RE.test(s.setup_type || ''));
-  if (!hit) { el.className = ''; el.textContent = ''; return; }
+  if (!hit || String(hit.id) === sweepWatchDismissedId) { el.className = ''; el.textContent = ''; return; }
 
   const isLong = (hit.setup_type || '').includes('_LONG_');
   const levelName = (hit.setup_type || '').replace(/_SWEEP_REVERSAL_(LONG|SHORT)_OVERNIGHT$/, '').replace(/_/g, ' ');
@@ -540,7 +546,10 @@ function renderSweepWatch() {
   head.className = 'setup-head';
   const tag = document.createElement('span');
   tag.className = 'sweep-watch-tag';
-  tag.textContent = 'SWEEP REVERSAL · WATCHING';
+  // Resolution-aware label -- previously always said "WATCHING" even once a trade had
+  // already closed (the exact confusion a user screenshot flagged 2026-09-07: a card
+  // showing "Result: STOP HIT ($-92)" still tagged as if still being tracked).
+  tag.textContent = 'SWEEP REVERSAL · ' + (resolved ? 'CLOSED' : 'WATCHING');
   const typeSpan = document.createElement('span');
   typeSpan.className = 'setup-type';
   typeSpan.style.color = isLong ? 'var(--green)' : 'var(--red)';
@@ -548,6 +557,20 @@ function renderSweepWatch() {
   typeSpan.textContent = levelName + ' ' + (isLong ? 'LONG' : 'SHORT');
   head.appendChild(tag);
   head.appendChild(typeSpan);
+  // Manual dismiss -- only offered once resolved (an open/watching trade shouldn't be
+  // hideable, there's nothing yet to replace it with). Same 2026-09-07 request.
+  if (resolved) {
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '×';
+    closeBtn.setAttribute('aria-label', 'Dismiss');
+    closeBtn.style.cssText = 'background:none;border:none;color:var(--dim);font-size:18px;line-height:1;padding:0 2px;cursor:pointer;flex-shrink:0;';
+    closeBtn.onclick = () => {
+      sweepWatchDismissedId = String(hit.id);
+      localStorage.setItem('sweepWatchDismissedId', sweepWatchDismissedId);
+      renderSweepWatch();
+    };
+    head.appendChild(closeBtn);
+  }
   el.appendChild(head);
 
   const grid = document.createElement('div');
