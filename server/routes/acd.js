@@ -41,6 +41,7 @@ import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant, resolveSetupType as resolveSetupTypePure } from '../config/setupTypes.js';
+import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
@@ -7922,10 +7923,20 @@ export default function createACDRouter(io) {
           // check a few lines below (existing = SELECT 1 ... WHERE setup_type=$2) already
           // makes this idempotent against a level that DID get its own row via the live path.
           for (const lv of keepLevels) {
-            const touchIdx = allRthBarsRow.rows.findIndex(b => b.low <= lv.level + 15 && b.high >= lv.level - 15);
+            // Formation-gate fix (2026-09-08, user-caught live bug): this scan started from
+            // 9:30am with no lower bound, so the bar that SETS a SAME_DAY_FORMING level's own
+            // high/low trivially "touched" it at 0pt -- confirmed live for all 30 OR5/10/15/30
+            // + IB_HIGH/LOW/MID_SCALP types. Same check backtest_rth_calibration_genuine_
+            // holdout.mjs already has (`if (bar.mod < formationGate) continue`); lv.name carries
+            // a _FADE suffix getLevelFadeDefinition() doesn't expect, hence the strip below.
+            const formationGate = getLevelFadeDefinition(lv.name.replace(/_FADE$/, ''))?.formationGate ?? null;
+            const eligibleBars = formationGate != null
+              ? allRthBarsRow.rows.filter(b => b.et_min >= formationGate)
+              : allRthBarsRow.rows;
+            const touchIdx = eligibleBars.findIndex(b => b.low <= lv.level + 15 && b.high >= lv.level - 15);
             if (touchIdx === -1) continue;
-            const touchBar = allRthBarsRow.rows[touchIdx];
-            const priorBar = touchIdx > 0 ? allRthBarsRow.rows[touchIdx - 1] : null;
+            const touchBar = eligibleBars[touchIdx];
+            const priorBar = touchIdx > 0 ? eligibleBars[touchIdx - 1] : null;
             const touchApproachDir = priorBar
               ? (priorBar.close < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE')
               : (touchBar.open < lv.level ? 'FROM_BELOW' : 'FROM_ABOVE');
