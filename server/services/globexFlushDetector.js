@@ -32,6 +32,7 @@ import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '.
 import { getBetClass } from '../config/setupTypes.js';
 import { computeBalanceAndResolution, computeEntryPace } from './flushMechanics.js';
 import { getVolumeBaseline } from './touchQuality.js';
+import { checkStandardLiveGates } from './detectorLiveGates.js';
 
 const DEPARTURE_CHECK_START_MOD = 959; // 4:00 PM ET, RTH close -- departure watch begins here
 const WATCH_END_ET_MIN = 570;          // 9:30 AM ET, next RTH open -- stop watching past this
@@ -227,6 +228,18 @@ export async function detectGlobexFlush(io) {
     const firedAt = resolutionBar.ts.toISOString().slice(0, 16).replace('T', ' ') + ':00';
 
     const live = await getLiveStatus(setupType);
+    // Live-safety-gate checkpoint added 2026-09-07 -- see server/services/detectorLiveGates.js's
+    // own header for exactly which gates are included/excluded and why (this file was one of
+    // the "single biggest un-closed gap" pollers, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md).
+    // NOT scoped to CONTINUATION/REVERSAL mode -- isOppositeDirectionOpen() is roster-wide and
+    // direction-only, it doesn't need or use a family/level string at all (DeepSeek review,
+    // 2026-09-07, confirmed the mode-vs-family question is moot for the 2 gates this checkpoint
+    // actually calls).
+    const gateResult = await checkStandardLiveGates({ direction: long ? 'LONG' : 'SHORT', setupType });
+    if (gateResult.forceShadow && live.status !== 'SHADOW') {
+      live.status = 'SHADOW';
+      live.reason = gateResult.reason;
+    }
     // trade_date is the DEPARTURE day, not "today" -- the setup is about the value area that
     // day's RTH close broke, even though the resolution may land after midnight. Expiry caps at
     // that departure day's own following RTH open.

@@ -21,6 +21,7 @@
 import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
+import { checkStandardLiveGates } from './detectorLiveGates.js';
 
 const SETUP_FAMILY = 'MOMENTUM_60m_60m_TREND';
 const LOOKBACK_MIN = 60;
@@ -156,6 +157,16 @@ export async function detectMomentum60Trend(io) {
       // bar backtest_setup_status.mjs applies everywhere else. Shadow rows still resolve
       // (TARGET_HIT/STOP_HIT) via the same generic resolver, so live data accumulates either way.
       const live = await getLiveStatus();
+      // Live-safety-gate checkpoint added 2026-09-07 (docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
+      // -- this file was one of the "single biggest un-closed gap" pollers with zero exposure
+      // to any of acd.js's live gates). See server/services/detectorLiveGates.js's own header
+      // for exactly which gates are included/excluded and why. Force-SHADOW only -- never
+      // overrides an already-SHADOW status, never skips the insert.
+      const gateResult = await checkStandardLiveGates({ direction: long ? 'LONG' : 'SHORT', setupType });
+      if (gateResult.forceShadow && live.status !== 'SHADOW') {
+        live.status = 'SHADOW';
+        live.reason = gateResult.reason;
+      }
       // Found 2026-07-27 (comprehensive dead-end audit, dispatched after the SUPPRESSED_FADE
       // fix): this INSERT populated entry/stop/target correctly but omitted expires_at
       // entirely. If the trade runs to end-of-day without hitting stop/target, it has no
