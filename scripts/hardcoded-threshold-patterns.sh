@@ -106,3 +106,23 @@ PATTERN_G='new Date\(\)\.toISOString\(\)\.slice\(0,\s*10\)'
 # (an empty string would match everything, excluding all hits).
 PATTERN_G_EXCLUDE='§NOMATCH§'
 PATTERN_G_LABEL='new Date().toISOString().slice(0,10) for a trading-day date — use SQL CURRENT_DATE instead (JS UTC vs DB America/New_York mismatch, see CLAUDE.md)'
+
+# Pattern H: `ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York'` double-cast. Added
+# 2026-09-07 after this exact bug was found independently REINTRODUCED a second time: the
+# big 2026-08-19 timezone correction (server/db.js's own documented fix, confirmed
+# price_bars_primary.ts/active_setups.fired_at etc. already store naive ET wall-clock
+# digits directly, not UTC) should have ended this — instead, acd.js's _lfDeltaPercQ query
+# was REWRITTEN on 2026-08-31 (for an unrelated bug) and silently reintroduced this exact
+# double-cast, alongside a second live instance (_lfOnGapQ) neither catch had found. Both
+# were only caught 2026-09-07 via a Gemini reconstruction-accuracy audit, empirically
+# confirmed (a real 09:30:00 bar returns hour=5 through this cast). Periodic re-discovery
+# is not an acceptable substitute for prevention — this pattern exists so a THIRD instance
+# never lands silently again. NOTE: this cast is genuinely CORRECT for trades.entry_time/
+# exit_time, which really is stored in UTC (independently verified against the raw Sierra
+# Chart import string) — those 2 files are excluded by path in the two consumers below,
+# the same mechanism pattern E uses for instruments.js/contract.js. Any NEW file that
+# legitimately needs this cast for a genuinely-UTC column must be added to that exclusion
+# list explicitly, not have this pattern loosened.
+PATTERN_H='AT TIME ZONE .UTC. AT TIME ZONE .America/New_York.'
+PATTERN_H_EXCLUDE='§NOMATCH§'
+PATTERN_H_LABEL="AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York' double-cast — wrong for price_bars_primary.ts/most naive ET columns (already stores ET digits directly, see server/db.js's documented finding); only correct for trades.entry_time/exit_time (genuinely UTC)"

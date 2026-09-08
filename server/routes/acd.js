@@ -3190,13 +3190,20 @@ async function computeLevelFadeFactors(ctx) {
         // Overnight gap: pre-9:30 range vs rolling 60-session p33.
         // Opus audit 2026-07-07: small gaps (< p33) = 60.8% WR, -$27 EV (N=332) — quiet consolidation kills fades.
         // Threshold is rolling p33 (no hardcoded number per CLAUDE.md hard rule).
+        // TIMEZONE BUG FIXED 2026-09-07 (found via Gemini's smallGapDay reconstruction audit,
+        // independently confirmed live: a real 09:30:00 bar returned hour=5 through this query's
+        // old UTC-then-America/New_York double timezone cast). price_bars_primary.ts
+        // already stores naive ET wall-clock digits (server/db.js's own documented finding) --
+        // treating it as UTC first shifts it back 4-5 hours before converting again. Real RTH
+        // bars were silently misclassified as pre-9:30 "overnight" bars, contaminating both the
+        // today_on and prior_on ranges. Fixed to EXTRACT directly, matching every other correct
+        // et_min computation in this file (e.g. the _lfVwapSigmaQ query above).
         const _lfOnGapQ = await query(`
           WITH today_on AS (
             SELECT MAX(high)::float - MIN(low)::float AS on_range
             FROM price_bars_primary
             WHERE symbol='NQ' AND ts::date=$1
-              AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
-                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+              AND (EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts)) < 570
           ),
           prior_on AS (
             SELECT MAX(high) - MIN(low) AS on_range
@@ -3207,8 +3214,7 @@ async function computeLevelFadeFactors(ctx) {
                 WHERE symbol='NQ' AND ts::date < $1
                 ORDER BY ts::date DESC LIMIT 60
               )
-              AND (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') * 60
-                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')) < 570
+              AND (EXTRACT(hour FROM ts) * 60 + EXTRACT(minute FROM ts)) < 570
             GROUP BY ts::date
           )
           SELECT
@@ -3245,11 +3251,18 @@ async function computeLevelFadeFactors(ctx) {
           // which aren't cheaply queryable here) and pool percentiles across all of those
           // (day, minute) readings -- the same underlying statistic (partial-day cumulative delta
           // at an arbitrary point in the session), just a denser, unbiased sample of it.
+          // TIMEZONE BUG FIXED 2026-09-07 (same root cause as _lfOnGapQ above, found via
+          // Gemini's deltaNeutral/deltaHigh reconstruction audit): this query's own 2026-08-31
+          // rewrite carried over the same UTC-then-America/New_York double timezone cast on
+          // price_bars_primary.ts, which already stores naive ET digits directly -- shifting
+          // every et_min back 4-5 hours. The BETWEEN 570 AND 959 RTH filter below was silently
+          // excluding real RTH bars and admitting wrong ones, corrupting the p25/p75 percentile
+          // population that deltaNeutral/deltaHigh are thresholded against. Fixed to EXTRACT
+          // directly, matching every other correct et_min computation in this file.
           const _lfDeltaPercQ = await query(`
             WITH minute_deltas AS (
               SELECT ts::date AS bar_date,
-                (EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
-                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York'))::int AS et_min,
+                (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS et_min,
                 COALESCE(ask_volume,0) - COALESCE(bid_volume,0) AS bar_delta
               FROM price_bars_primary
               WHERE symbol='NQ'
@@ -3258,8 +3271,7 @@ async function computeLevelFadeFactors(ctx) {
                   WHERE symbol='NQ' AND ts::date < $1
                   ORDER BY ts::date DESC LIMIT 60
                 )
-                AND EXTRACT(hour FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York')*60
-                  + EXTRACT(minute FROM ts AT TIME ZONE 'UTC' AT TIME ZONE 'America/New_York') BETWEEN 570 AND 959
+                AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 959
             ), running AS (
               SELECT bar_date, et_min,
                 SUM(bar_delta) OVER (PARTITION BY bar_date ORDER BY et_min) AS cum_delta

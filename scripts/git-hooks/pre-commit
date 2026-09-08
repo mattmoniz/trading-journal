@@ -83,6 +83,16 @@ for f in $g_targets; do
   [ -n "$m" ] && hits+=("$f — new $PATTERN_G_LABEL:"$'\n'"$m")
 done
 
+# Pattern H: correct only for trades.entry_time/exit_time (genuinely UTC) — excluded here.
+h_targets="$(git diff --cached --name-only -- ':(glob)server/**/*.js' ':(glob)scripts/**/*.js' ':(glob)scripts/**/*.mjs' \
+  ':(exclude)scripts/archive/**' ':(exclude)server/routes/backtest.js' ':(exclude)scripts/daily_coaching.js')"
+for f in $h_targets; do
+  added="$(git diff --cached -- "$f" | grep -E '^\+[^+]')"
+  [ -z "$added" ] && continue
+  m=$(echo "$added" | grep -E "$PATTERN_H" | grep -v "$PATTERN_H_EXCLUDE")
+  [ -n "$m" ] && hits+=("$f — new $PATTERN_H_LABEL:"$'\n'"$m")
+done
+
 [ ${#hits[@]} -eq 0 ] && exit 0
 
 if [ ${#hits[@]} -gt 0 ]; then

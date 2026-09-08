@@ -165,6 +165,15 @@ for f in $fg_targets; do
       [ -n "$m" ] && hardcoded_hits2+=("$f — new $PATTERN_G_LABEL: $m")
       ;;
   esac
+
+  # Pattern H: correct only for trades.entry_time/exit_time (genuinely UTC) — excluded here.
+  case "$f" in
+    scripts/archive/*|server/routes/backtest.js|scripts/daily_coaching.js) ;;
+    *)
+      m=$(echo "$diff_added" | grep -E "$PATTERN_H" | grep -v "$PATTERN_H_EXCLUDE")
+      [ -n "$m" ] && hardcoded_hits2+=("$f — new $PATTERN_H_LABEL: $m")
+      ;;
+  esac
 done
 
 if [ ${#hardcoded_hits2[@]} -gt 0 ]; then
