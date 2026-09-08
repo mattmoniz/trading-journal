@@ -745,8 +745,16 @@ function renderTimeline() {
     const timeLabel = to12Hour(time);
     const price = s.entry_zone_low != null ? '@ ' + Number(s.entry_zone_low).toLocaleString(undefined, {maximumFractionDigits: 0}) : '';
     const vb = s.vol_building_signal;
-    const vbTag = vb?.agreesP60 ? '<span class="vb-tag strong" title="Both volume measures agree, above the tighter p60 cutoff -- tracking only, not yet validated">Vol++</span>' :
-      vb?.agreesMedian ? '<span class="vb-tag mild" title="Both volume measures agree, above median -- tracking only, not yet validated">Vol+</span>' : '';
+    // Tap-to-popup added 2026-09-08 (user request: every tag should show this trade's P&L,
+    // not just a hover tooltip) -- matches the sig-tag convention below (stopPropagation so
+    // tapping doesn't also open the full trade modal). Deliberately does NOT show an aggregate
+    // EV-by-volume-building-bucket number the way DirGate/MomFade's popups do: CLAUDE.md's own
+    // volume-building research found a blanket EV split against the fade roster doesn't hold
+    // (opposite-signed within-family results, "rejected as a blanket rule") -- fabricating one
+    // here would be worse than showing nothing. Real per-trade P&L + the raw signal reading
+    // only, same honesty bar as every other popup.
+    const vbTag = vb?.agreesP60 ? '<span class="vb-tag strong sig-tag" title="Both volume measures agree, above the tighter p60 cutoff -- tracking only, not yet validated" onclick="event.stopPropagation(); openVolBuildingPopup(' + s.id + ')">Vol++</span>' :
+      vb?.agreesMedian ? '<span class="vb-tag mild sig-tag" title="Both volume measures agree, above median -- tracking only, not yet validated" onclick="event.stopPropagation(); openVolBuildingPopup(' + s.id + ')">Vol+</span>' : '';
     // WIDE tag (2026-08-31, replaces the old per-trade counterfactual note + aggregate
     // research banner per user request). FIXED same day, caught live by user: originally
     // gated on wider_target_mult != null, which only means the mechanism was ARMED at
@@ -1176,6 +1184,36 @@ function openMomentumFadePopup(id) {
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Volume-building popup (2026-09-08, user request: every tag should show this trade's
+// P&L, not just a hover tooltip) -- tap target for the Vol+/Vol++ row tag above. No aggregate
+// EV-by-bucket claim here (see the vbTag comment above for why) -- just this trade's real
+// outcome next to the raw signal reading, same as every other popup's "This trade" section.
+function openVolBuildingPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const vb = s?.vol_building_signal;
+  if (!s || !vb) return;
+
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  const strength = vb.agreesP60 ? 'Strong (Vol++)' : vb.agreesMedian ? 'Building (Vol+)' : 'Neither';
+  let html = '<div class="m-head"><span class="m-title" style="color:#93c5fd">Volume Building — ' + strength + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · TRACKING ONLY, not yet validated as a fade filter — this trade fired at full size regardless</div>';
+
+  html += mSection('This trade');
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Composite strength (at touch)', vb.compositeStrength != null ? Number(vb.compositeStrength).toFixed(2) : null);
+  html += mRow('Prior-average composite strength', vb.compositeStrengthPriorAvg != null ? Number(vb.compositeStrengthPriorAvg).toFixed(2) : null);
+  html += mRow('Time-of-day volZ (agrees median / p60)', (vb.agreesMedian ? 'yes' : 'no') + ' / ' + (vb.agreesP60 ? 'yes' : 'no'));
+  html += mRow('Day-relative volZ', vb.avgDayVolZ != null ? Number(vb.avgDayVolZ).toFixed(2) : null);
+
+  html += mSection('Why no running total is shown here');
+  html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">This signal predicts a BIGGER swing coming, in either direction — not that the fade itself does better or worse. A blanket EV split against the fade roster was tested and found opposite-signed by setup family, so no single aggregate number would be honest here (see docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md).</span></div>';
 
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
