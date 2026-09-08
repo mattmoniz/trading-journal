@@ -1136,6 +1136,34 @@ async function detectGlobexSetup(sessionDate, io) {
      .concat(globexVwapCandidate ? [globexVwapCandidate] : [])
      .concat(sweepReversalCandidates);
 
+    // Cluster touch credit for Globex (2026-09-07, user-spotted live: 4 real SHADOW rows
+    // fired within 0.4s of each other at the identical price, none linked -- OPEN_DECISION
+    // globex_cluster_sibling_touch_credit_not_built_20260907). Unlike RTH (which selects ONE
+    // EV-ranked winner and separately credits siblings, ~line 6910), this loop already fires
+    // every eligible candidate in `candidates` as its own independent row -- there is no
+    // winner-selection to port, only pooled-dedup TAGGING to add so
+    // POOLED_TRADE_FILTER-style consumers (backtest_setup_status.mjs) count this one real
+    // touch once, not once per co-located level. `candidates`' array order is a FIXED
+    // enumeration (PD fades, then wider-window levels, then VWAP fade/magnet, then sweep
+    // reversals) -- NOT EV-sorted like RTH's `sortedCandidates` -- so "primary" here means
+    // "first candidate in the array to successfully insert this poll," not "the EV-best
+    // candidate," unlike RTH. This is intentional (avoids porting RTH's directionalEv
+    // selection machinery) but genuinely different semantics -- do not read
+    // is_cluster_primary=true on a Globex row as "the highest-EV representative" the way
+    // RTH's convention would imply (DeepSeek design critique, 2026-09-07). A singleton touch
+    // (only one candidate in range) still gets a real, non-null clusterTouchId, unlike RTH's
+    // NULL-for-non-clustered convention -- both are numerically identical to every consumer
+    // via COUNT(DISTINCT COALESCE(cluster_touch_id, id)), just a cosmetic difference worth
+    // knowing about, not a bug. Deliberately scoped to THIS function's own candidates only --
+    // does not cover globexFlushDetector.js (a structurally unrelated single-type-per-event
+    // detector with no confluence concept) or a theoretical cross-detector co-fire (e.g. this
+    // function and globexFlushDetector both firing on the same underlying move) -- the latter
+    // would still double-count in the pooled consumer, but fixing it needs a shared
+    // coordination layer that doesn't exist today; out of scope here, same boundary RTH's own
+    // cluster dedup already accepts (RTH `nearLevels` only, not cross-function).
+    const globexClusterTouchId = randomUUID();
+    let globexPrimaryAssigned = false;
+
     for (const c of candidates) {
       // Re-arm-on-resolution (2026-08-25): blocks only a still-open row (ACTIVE/SHADOW), or
       // a resolved one that resolved suspiciously fast (< GLOBEX_REFIRE_MIN_TRADE_DURATION_
@@ -1397,6 +1425,19 @@ async function detectGlobexSetup(sessionDate, io) {
 
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
       await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
+      // Cluster touch credit tagging (2026-09-07) — post-insert UPDATE, not spliced into the
+      // ~37-param INSERT above, mirroring RTH's own winner-tagging (~line 9327) and this
+      // codebase's feedback_sql_param_dryrun_verification convention exactly. First
+      // successful insert this poll becomes primary (is_cluster_primary keeps its schema
+      // default `true`, only cluster_touch_id needs setting); every insert after that is a
+      // sibling (`is_cluster_primary=false`). See the header comment above the candidates
+      // loop for why "primary" means array-order-first here, not EV-best like RTH.
+      if (!globexPrimaryAssigned) {
+        globexPrimaryAssigned = true;
+        await query(`UPDATE active_setups SET cluster_touch_id=$2 WHERE id=$1`, [ins.rows[0].id, globexClusterTouchId]).catch(() => {});
+      } else {
+        await query(`UPDATE active_setups SET is_cluster_primary=false, cluster_touch_id=$2 WHERE id=$1`, [ins.rows[0].id, globexClusterTouchId]).catch(() => {});
+      }
 
       // Every other insert path in this file drops a copy into trade_timeline_events —
       // detectGlobexSetup was the one exception (pre-existing gap, not introduced here,
