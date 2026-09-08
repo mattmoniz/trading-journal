@@ -4585,3 +4585,503 @@ EV is anywhere close to the +$30.31 backtested figure before considering promoti
 trail) until their own real touch counts grow enough to re-enter `backtest_breakeven_trail.mjs`'s
 funnel — nothing further to do there until that happens naturally.
 
+
+---
+## Archive batch: 2026-09-07 (moved 6 sections older than 2026-08-31)
+
+## 🔶 2026-08-30: Real, systemic Globex session-end bug found and fixed in 3 live exit mechanisms
+
+User asked "why didn't the target widen at 3 bars" on a real Overnight/Globex `PD_POC_FADE_SHORT`
+fire (id 109426). Root cause: THREE separate live exit mechanisms — wider-target
+(`widerTargetWalker.js`), breakeven-trail (`breakevenTrailWalker.js`), and bank-vs-extend (acd.js's
+inline `extendTarget` branch) — each independently hand-rolled the identical
+`isSessionEnd = bar.ts.slice(11,13) >= '16'` check, an RTH-only assumption. For a Globex-hour fire
+(e.g. 18:00 ET), this is already true on the very first bar, permanently blocking these mechanisms
+from ever arming on an overnight trade. A fourth, compounding bug in the retroactive
+`/api/setups/:id/wider-target-counterfactual` display endpoint's own bar-fetch SQL made it return
+`no_bar_data` for every single Overnight/Globex trade, always (not a one-off on this specific
+trade). **Verified empirically before fixing**: no real Globex-hour fire has EVER armed
+`wider_target_mult`/`extend_target_level`/`runner_trail_width` — this was a dormant bug for live
+trades, not an active mispricing, but would have silently misfired the moment any Globex-eligible
+setup_type became eligible. Fixed with a new shared `server/services/sessionBoundary.js`
+(`isPastMechanismSessionEnd()`) applied consistently across all 3 mechanisms + the display
+endpoint, whose own bar-fetch was also fixed to bound correctly for a Globex-origin trade (was
+`ts::date=trade_date AND mod<=960`, which mismatches on BOTH axes for a Globex fire). **Verified
+against the real trade**: id 109426 now shows it would have captured $88 instead of $58 under the
+wider-target mechanism — $30 left on the table, invisible until this fix. Added 9 new synthetic
+regression tests (5 wider-target, 4 breakeven-trail) proving both RTH behavior is unchanged and the
+new Globex behavior is correct; no `test_invariants.mjs` regressions (verified via `git stash`).
+`RESEARCH_CLAIM globex_session_end_bug_fixed_three_mechanisms`.
+
+## 🔶 2026-08-30 (correction): DeepSeek full-audit found a real classifier bug — fixed, finding survived and got stronger
+
+A dispatched DeepSeek code review of everything below found that `classifyLevelFormation()` had a
+real bug: it put 13 real PRIOR_PERIOD setup_types (`PD_IB_HIGH/LOW/MID`, `PD_OR_MID`, `5D_OR_MID`,
+`10D_IB_MID` — all literally "PD_" for Prior Day) into `SAME_DAY_FORMING`, contaminating ~15% of
+the headline bucket. Worse: this duplicated an axis that already existed as an authoritative table
+(`setupDefinitions.js`'s `LEVEL_FADE_DEFINITIONS[].rule`) — a "check for an existing source of
+truth first" miss, not just a regex-coverage miss. Fixed by rewriting the classifier as a
+projection over that canonical table. **Re-ran every affected analysis on the correction — the
+finding got stronger, not weaker**: SAME_DAY_FORMING gap $11.95→**$14.40/trade** (N=276),
+walk-forward $12.19→**$13.38/trade** (N=216, still stable across all 3 thirds). Full account:
+`RESEARCH_CLAIM momentum_ctx_sameday_corrected_after_deepseek_audit` (cite this one going forward),
+correction detail in `docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md`'s top section. The same audit
+also caught and fixed 4 smaller issues in the live endpoint (a tradeDate convention gap during
+18:00-23:59 ET, a session label that didn't distinguish the 5-6PM maintenance halt from live RTH,
+a bucket guard checking only 1 of 4 required calibration fields, an inconsistent JSONB key set on
+one early-return path) — all fixed in the same pass. A separate, unrelated real bug it surfaced
+while cross-checking live figures — `/api/setups/performance-summary` showing 3 different ACTIVE
+P&L numbers on the same page — was flagged, then fixed same-day on direct request: both the chart and table queries in
+`GET /api/setups/performance-summary` now use the canonical `REAL_TRADE_FILTER` (imported from
+`scripts/backtest_setup_status.mjs`) instead of their two different ad hoc filters. Verified live:
+both now show $1,422.11 for ACTIVE, matching each other and the canonical figure.
+`OPEN_DECISION setups_performance_summary_three_disagreeing_populations` resolved.
+
+**Also tested a follow-up hypothesis and it failed, honestly**: does a level's "provenance" (real
+observed volume structure vs. pure arithmetic formula) predict fade performance, independent of
+volume-building context? Ranked every non-same-day level into `VOLUME_PROFILE_STRUCTURE`
+(POC/VAH/VAL/VWAP) / `REAL_EXTREME_POINT` (a real high/low/open/close) / `PURE_ARITHMETIC` (floor
+pivots, camarilla, weekly/monthly pivot points) and tested against the real trade population.
+SAME_DAY_REAL confirmed best again (EV=$7.72/trade, independently reconfirming today's headline
+finding from a totally different angle) — but the bottom 3 tiers didn't follow the predicted order:
+`PURE_ARITHMETIC` (EV=$1.76) actually beat `VOLUME_PROFILE_STRUCTURE` (EV=-$8.52, the *worst*
+tier) and `REAL_EXTREME_POINT` (EV=-$3.99). Checked for a single-bad-level confound (ruled out —
+excluding all 4 VWAP variants still leaves POC/VAH/VAL alone at -$6.20/trade). `RESEARCH_CLAIM
+level_provenance_tier_hypothesis_rejected`. A likely uncontrolled confound: each setup_type has its
+own independently-calibrated stop/target, so this test entangles level-provenance with calibration
+quality — **tested and ruled out** (`RESEARCH_CLAIM level_provenance_tier_gap_is_real_not_calibration`):
+MAE/MFE (measured independent of whichever stop/target a setup happens to use) tracks the exact
+same tier ranking — SAME_DAY_REAL has the only favorable MFE/MAE ratio (1.15), VOLUME_PROFILE_STRUCTURE
+the worst (0.91). This is a real, raw difference in how price behaves after these touches, not an
+artifact of some setup_types having better-tuned exits than others.
+
+**Spot-check on stop/target calibration health (user question, "does anything look funny with
+stops and targets"): yes.** Scanned all 146 `OPTIMAL_STOP` rows. Two things: (1) the underlying
+EV-sweep, when unguarded, repeatedly proposes extreme stop:target skew (stop 3-19x the target) for
+several thin/volatile setup_types (`GLOBEX_VWAP_MAGNET_LONG/SHORT`, `VWAP_MAGNET_SHORT`,
+`IB_BEARISH`, `STOP_SWEEP_LONG`) — none of these are live (a separate risk-ceiling guardrail
+rejects them), but the sweep keeps computing them, suggesting a systemic blind spot in how it
+handles thin/noisy samples. (2) `IB_BULLISH` — a currently LIVE, active setup — has real N=60 but
+89.2% of that N comes from just its top 5 calendar dates (8 distinct dates total); its live
+stop/target is stable only because a circuit breaker is blocking the sweep's proposed move, not
+because the calibration is actually trustworthy at this breadth. 3 more setup_types
+(`GLOBEX_VWAP_FADE_SHORT`, `OR5_LOW_FADE_SHORT`, `PD_VAH_FADE_SHORT`) show the same pattern.
+
+**Both resolved same day, on direct request.** (1) `scripts/update_optimal_stops.mjs`'s
+`applyCircuitBreaker()` now has a data-derived plausibility gate — a `PLAUSIBLE_SKEW_CUTOFF`
+recomputed each run from the 95th percentile of currently-live stop:target ratios (146 pairs →
+2.55x this run); any candidate skewed beyond it is rejected (or loudly flagged if it's a
+setup_type's first-ever calibration, since there's no prior to fall back to). Verified via
+`--dry-run`: computes correctly, no crashes, no `test_invariants.mjs` regressions. (2) A new
+"OPTIMAL_STOP CLUSTERING WATCH" section in `.claude/hooks/session-start.sh` surfaces every live
+setup_type whose REAL calibration sample concentrates in a handful of dates — invisible to the
+existing `DAY_TYPE_MANAGED WATCH`, which only sees the blended (real+BACKFILL) population.
+Verified live: surfaces **`GLOBEX_VWAP_MAGNET_LONG`/`SHORT` calibrated from just 3 real distinct
+trading days (100% of their sample)** — worse than the `IB_BULLISH` case that started this thread
+— plus `VWAP_MAGNET_LONG`, `IB_BEARISH`, `STOP_SWEEP_LONG`, `PD_VAH_FADE_SHORT`. Neither change
+silently suppresses anything; the `IB_BULLISH`-style live-status judgment call itself is
+deliberately left to a human, just impossible to miss now. `OPEN_DECISION
+optstop_sweep_implausible_rr_thin_samples` resolved. Found and separately flagged a real,
+unrelated bug while building the watch: `FLOOR_R1_FADE_LONG`'s current `OPTIMAL_STOP` row has two
+JSON objects string-concatenated in its `notes` field (a 2026-08-09 annotation-writer bug), which
+aborts a naive bulk `::jsonb` cast — worked around defensively in the new query, root cause not
+yet fixed (`OPEN_DECISION optstop_notes_malformed_json_concatenation`, LOW).
+
+**DeepSeek review of both changes crashed again at the 900s timeout, but — same as earlier today
+— left a real, substantive, independently-computed critique before it did**, catching two genuine
+issues in the plausibility gate before it ever ran for real: (1) a bug — the new freeze reason was
+missing from the 2026-08-19/20 method-relabeling fix, silently reopening that exact stale-label
+bug for this one new path; (2) a methodology problem — the cutoff was derived from the live
+stop:target population itself, which turned out to be more circular than assessed (73% of that
+population shares one placeholder method, and the gate can only ratchet its own bound down over
+time since it's computed from what it already accepted). Both verified independently before
+fixing, not just trusted. Fix: the cutoff now derives from the real population's own p75-MAE-vs-
+p75-MFE ratio (external ground truth, N≥20 real trades, verified n=28/p95=2.02) instead of the
+sweep's own output, and a new `test_invariants.mjs` check [23] surfaces the one remaining gap
+DeepSeek found (a flagged-but-accepted edge case that was previously only visible in cron logs).
+`RESEARCH_CLAIM optstop_plausibility_gate_corrected_after_deepseek`.
+
+## 🔶 2026-08-30: Same-day-forming vs inherited levels — the fade-filter thread's best, walk-forward-stable finding, plus a fresh-context validation exercise
+
+Continuation of the 2026-08-29 volume-building thread below. The connective test onto the fade
+roster (does building-strength context predict fade outcome) got a real breakthrough today:
+splitting by WHETHER A LEVEL FORMED THIS SESSION (Initial Balance / Opening Range) vs is INHERITED
+FROM A PRIOR PERIOD (prior-day value area, POC, VWAP, floor pivots, camarilla, prior-week/year,
+3-month) explains almost all of the earlier per-family disagreement. SAME_DAY_FORMING levels show
+an $11.95-12.19/trade gap (ACTIVE vs QUIET prior-30-bar backdrop), walk-forward-stable with the
+sign never flipping across 3 chronological thirds (N=324, `RESEARCH_CLAIM
+momentum_ctx_sameday_walkforward_stable`, status CONFIRMED) — the strongest, best-vetted finding
+in the whole thread. Confirmed consistent across its own Initial-Balance vs Opening-Range
+sub-components and across session timing (mid-session vs late/dead-zone). PRIOR_DAY_OR_DEVELOPING
+levels show almost no effect ($2.17/trade) and a follow-up attempt at an alternate predictor there
+(distance from prior-day POC) came back weak/non-monotonic — **that half of the roster's fade
+filter is a genuinely open, unsolved question**, not a dead end papered over. The classifier behind
+all of this (`classifyLevelFormation()`) is now a shared, exported function in
+`server/config/setupTypes.js` — its first draft (regex only in a scratch script) had a real
+coverage gap (missed `OR*_HIGH`/`OR*_LOW`) that diluted the finding for a full research pass before
+being caught; any future script needing this distinction must import it, not re-derive it.
+**Still NOT wired live** — correctly parked as a future size-multiplier-factor candidate (never a
+new setup_type — this is an unconditional 100%-of-touches split, the exact anti-pattern this
+codebase already learned to avoid) pending more real N past the current ~1 month of tracked
+history. Full account, every sub-test, every number: `docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md`.
+Remaining open angles: `OPEN_DECISION volume_building_thread_untouched_angles_for_later` (updated
+today with the current, accurate list — supersedes its own 2026-08-29 version).
+
+**Also ran a deliberate fresh-context validation exercise** — spawned an independent Sonnet
+instance with zero memory of this conversation and had it bootstrap itself the way a real future
+session would (read `CLAUDE.md` → `OPEN_THREADS.md` → the spec doc → memory files → query
+`record_claim.mjs`/`flag_decision.mjs` directly), then answer real questions about this thread's
+status with no answers fed to it. It reconstructed the substance correctly and found one real,
+fixable gap: **this file's dated section headers had gone one day stale relative to the live
+tracked state** — today's `momentum_ctx_sameday_*` chain (arguably the most load-bearing findings
+in the thread) existed only in the spec doc and the database, not as a dated entry here, meaning a
+rushed cold read of this file alone (stopping before checking `flag_decision.mjs --list`) would
+have concluded the fade-filter work was further behind than it actually is. This entry is the fix.
+Secondary, non-blocking observation: `record_claim.mjs --list`/`flag_decision.mjs --list` output
+is long enough that a naive `tail` on it can truncate past the most relevant recent entries —
+grep or redirect-to-file instead of tailing when checking these lists.
+
+## 🔶 2026-08-29: "Initiative" moves tested independent of any level — real non-directional volatility precursor found, no directional edge
+
+User asked whether volume-building/pace ever fires "out of nowhere" (no nearby level) and whether
+there's a pattern in that population. Per the hard rule that a market-behavior hypothesis goes
+through raw bars before `active_setups` (no live setup fires without a level touch, so there was no
+trade-level population to test this on at all), built a fresh bar-level scan over 60 days of NQ
+bars (`scratch/scan_volume_building_no_level_context.mjs`, `scratch/scan_volume_building_magnitude_doseresponse.mjs`),
+reusing the live `computeVolumeBuildingMeasures()` unchanged. Findings, persisted as
+`RESEARCH_CLAIM volume_building_no_level_initiative_test`:
+- **The phenomenon is real**: ~49.5% of all "building" bars sit >8pt (sample median) from every
+  known level — building fires constantly, independent of level proximity.
+- **No directional edge**: forward-move-matches-recent-push-direction rate sits at 48.6-51.3%
+  across every group/horizon tested, indistinguishable from the 49.7% unconditional coin-flip
+  baseline. A user follow-up ("just looking for a move in either direction... any intel") redirected
+  the test from direction to magnitude.
+- **Real, confound-checked magnitude signal**: composite building-strength dose-response (N=58,338)
+  shows a clean monotonic increase in 20min max-excursion, Q1=42.6pt → Q5=57.1pt, top decile 44%
+  larger than bottom decile. Checked against the obvious confound (Q5 just being RTH-open
+  clustering) and it's the opposite — Q5 is *underrepresented* at the open (1.9% vs 4.0% in Q1) —
+  and the same monotonic pattern holds independently within RTH-only (55→78pt) and Globex-only
+  (34→54pt) subsets, clearing the RTH+Globex-both-required bar.
+- **Conclusion**: volume-building strength is a real non-directional expansion precursor — it says
+  a bigger swing is coming, not which way. Not wired anywhere live.
+
+Also closed out a still-outstanding negative from the prior session in the same pass: the vaPos
+(distance-from-prior-POC) structural-discernment idea was recorded as REJECTED via
+`RESEARCH_CLAIM vapos_prior_poc_distance_family_artifact` — the pooled roster-wide positive split
+was shown by within-family control to be a family-composition artifact (INITIAL_BALANCE_MID and
+GLOBEX_VWAP families each reversed sign from the pooled direction).
+
+**Tested same-session, `OPEN_DECISION test_volume_building_strength_as_fade_stop_target_modifier`
+now RESOLVED**: does firing an existing level-fade at high building-strength (predicting a bigger
+incoming swing) predict worse fade outcomes than firing at low building-strength? N=1,080 real
+fade trades matched to bars. **Rejected as a blanket rule** — roster-wide EV by quintile isn't
+monotonic ($3.50 → -$2.38 → -$1.04 → -$6.51 → -$3.55), and the within-family control split
+opposite-signed again: `INITIAL_BALANCE_HIGH_LOW` and `OTHER` get meaningfully worse at high
+building (matches the hypothesis), but `PD_VALUE_AREA_EDGE` and `GLOBEX_VWAP` get *better*
+(reverses it). Per-family N is thin (22-174), so not fully decisive per family, but it rules out
+wiring a single stop/target-width modifier across the whole roster — a 5th recurrence of the
+pooled-verdict mantra inside the same research thread. `RESEARCH_CLAIM building_strength_as_fade_filter_mixed_negative`.
+The underlying volatility-expansion finding itself is untouched by this — only the "use it to
+adjust existing fades" connection failed.
+
+**Two more angles on the same expansion signal, both confound-checked in RTH and Globex
+separately**: (1) **Momentum feeds momentum, not a coiled spring** — a building-strength spike
+riding on top of an already-elevated recent 30-bar backdrop predicts a BIGGER move (RTH: 62.6→88.7pt,
++41%; Globex: 47.9→60.6pt, +27%) than the same spike arriving out of a quiet stretch — the opposite
+of the classic "quiet before the storm" intuition, and consistent with the existing wide-IB-days-
+predict-TURBULENT finding in `docs/COMPRESSION_TAIL_MFE_SPEC.md` from a different instrument.
+`RESEARCH_CLAIM building_strength_momentum_feeds_momentum`. (2) **Lead time is real but partial** —
+of the biggest realized moves, 39% show zero elevated-building warning in the preceding 15 minutes
+(this signal will simply miss them); of the 61% that do get a warning, median lead is 13 minutes,
+though ~40% of those were already elevated at the full 15min scan boundary (right-censored — true
+lead time for that subgroup likely longer, worth re-running with a wider scan window before
+treating 13min as final). `RESEARCH_CLAIM building_strength_leadtime_before_big_moves`. Neither
+wired anywhere live — pure market-behavior findings, both confirmed independently in RTH and
+Globex.
+
+**Self-correction, same thread**: decomposed the lead-time result into flicker count (how many
+distinct elevated episodes precede a big move, not just when the first one started) and the "37min
+early warning" does NOT hold up — flicker frequency before a big move (avg 2.28 in the preceding
+60min) is essentially identical to a random baseline moment (avg 2.19), and gaps between flickers
+don't shrink as a move approaches (17.0min vs 16.7min, flat). The 37min lead was mostly a base-rate
+coincidence, not real anticipatory clustering — retracted via `RESEARCH_CLAIM
+building_strength_leadtime_is_base_rate_artifact`. Does not affect the contemporaneous magnitude
+dose-response or momentum-feeds-momentum findings, which measure the same-moment relationship, not
+lead time.
+
+**Also checked whether the magnitude dose-response holds the same shape across day-types**
+(`acd_daily_log.day_type` — BALANCE/TREND/TURBULENT, an end-of-day RTH classification, distinct
+from the live intraday `dtClass` column already flagged elsewhere as structurally null all day).
+It doesn't: BALANCE days reproduce the clean staircase (38.75→51.39pt across quintiles); TREND and
+TURBULENT days instead go flat across Q1-Q4 and only jump at the extreme Q5 (+27%/+19%) — a
+threshold rather than a dial once the day is already active. `RESEARCH_CLAIM
+building_strength_doseresponse_shape_differs_by_daytype` (day-level N still thin: 8 TREND, 4
+TURBULENT days — recheck as more days classify). Full write-up:
+`docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md`.
+
+**Last thread pulled, then shipped as informational-only wiring (2026-08-29)**: checked whether
+momentum-feeds-momentum also flattens by day-type the way the raw dose-response did — it doesn't;
+it holds across all three and is strongest on TREND (1.43x vs BALANCE's 1.18x and TURBULENT's
+1.24x), making it the single most generally-useful finding in the thread
+(`RESEARCH_CLAIM momentum_feeds_momentum_robust_across_daytype`). Both headline findings were then
+independently replicated by Gemini via a blind dispatch (own from-scratch script, re-run locally to
+confirm — `RESEARCH_CLAIM volume_building_findings_independently_replicated_by_gemini`), and on that
+basis wired live as informational-only: `computeLiveVolumeBuildingSignal()` now stamps
+`compositeStrength`/`momentumContext` on every real fire (all 5 insert sites, one shared function),
+and a new read-only `GET /api/acd/building-strength-live` backs a non-directional "Expand" gauge
+chip on `quick-check.html`'s pulse bar. Neither gates or sizes anything. DeepSeek reviewed the
+actual code changes for correctness (not the statistics, already confirmed) before this was
+considered done. Flagged remaining untouched angles (session-boundary interaction, a narrower
+fade-filter retry, momentum-feeds-momentum's own dose-response) via `OPEN_DECISION
+volume_building_thread_untouched_angles_for_later` (LOW). Full write-up:
+`docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md`.
+
+## 🔶 2026-08-29: DeepSeek design critique on 2 "prior structure as S/R" ideas, then a whole-roster volume-building extension found the pooling-hides-subgroups mantra recurring a 4th time
+
+Dispatched DeepSeek for a phase-0 design critique (read-only, no code/mining) on refining two
+unbuilt ideas the user recalled from prior sessions: `docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md`'s
+Idea E (structural volume-node context — is a level sitting on real historical volume or an air
+pocket) and `docs/RUNNER_OPTIMIZATION_NOTES_20260814.md`'s swing-anchor trailing stop, both aimed
+at RTH_FLUSH/GLOBEX_FLUSH and the roster-wide volume-building signal. Two of DeepSeek's most
+concrete claims independently verified against the live DB: `computeVolumeProfileForRange`
+(`developingValueService.js:104`) uses an uncoalesced `volume` column while every other signal in
+this codebase uses `bid_volume+ask_volume` — confirmed 186 real rows where the two disagree, a
+genuine (if currently null-safe) inconsistency risk. Full critique: identifies Globex VWAP as the
+single most decisive test case for Idea E (not profile-derived by definition, unlike POC/VAH/VAL —
+if it doesn't show real volume structure, the hypothesis is broken at its own pivotal case); for
+the swing-anchor trail, recommends denominating everything in flush's own balance width (zero new
+parameters) and testing via a drop-in second exit simulator on the EXISTING N=336 backtest
+population rather than waiting for live trades or fixing the schema-blocked optimizer — but
+against the ALREADY-LIVE building-widened target (~190pt), not the flat 77pt one, or any "trail
+beats fixed target" result is a guaranteed false positive. Full critique persisted in both spec
+docs; `OPEN_DECISION`s not yet flagged (design-only, no build committed to yet).
+
+**DeepSeek's own cheapest suggested test — re-run the family split with FAMILY-specific cutoffs
+instead of roster-wide ones — was run and came back the OPPOSITE of what it predicted: the IB
+reversal is real, not a cutoff artifact** (family-specific: BUILDING EV=-$23.43 N=21 vs NOT
+EV=$8.88 N=100, an even cleaner split than the roster-wide-cutoff version). This means the
+structural volume-node hypothesis is better motivated, not worse — Globex VWAP is the next
+falsifying test if this thread continues.
+
+**User then asked to tag the WHOLE roster (not just fades) and see what pops up — this both found
+something new AND caught the pooling-hides-subgroups mantra recurring a 4th time, one level
+deeper than before, within the same research thread.** `STOP_SWEEP` (not a fade, a stop-hunt-
+reversal setup) showed a real split (BUILDING WR=75% EV=$33.06 N=8 vs NOT WR=59.6% EV=$2.72 N=57)
+— a genuinely new candidate outside the fade family. But splitting the earlier FAMILY-level
+groupings apart by individual type revealed they were themselves still pooled too coarse:
+`IB_HIGH_FADE` alone is positive (EV $37.25 vs $9.64) while `IB_LOW_FADE` alone is a severe
+negative (EV -$78.67, WR 16.7%, vs $2.26) — pooling the two directions made "Initial Balance" look
+uniformly bad. Symmetrically, `PD_VAH_FADE` alone is mildly negative while `PD_VAL_FADE` alone is
+strongly positive (EV $39.36, WR 85.7%) — pooling made "value-area edge" look uniformly good. Full
+numbers: `RESEARCH_CLAIM volume_building_full_roster_type_level_splits`. Every individual split
+here is N=6-22/bucket, thinner than the family-level splits and not walk-forward tested at this
+granularity — real and worth tracking, not yet actionable. The recursive nature of this finding
+(roster → family → individual type, each level hiding another real split) is now folded into
+`feedback_pooled_verdict_hides_opposite_signed_subgroups` memory as its own update.
+
+**Same-day follow-up: user asked whether STOP_SWEEP's new finding was actually being tracked live
+— it wasn't, and the reason is a real gap.** Found a **5th `active_setups` INSERT site** in
+`acd.js` (the `shadowCandidates` loop, ~line 9645) that the 2026-08-28 volume-building wiring never
+touched — this is the actual path `STOP_SWEEP_LONG/SHORT`, `IB_BEARISH`, and `C_PAIRED_SHORT` fire
+through, distinct from the main RTH/Globex candidates loops. It had no `vol_building_signal` column
+at all. **Fixed**: wired the same `getSessionBarsSinceOpen(570)` + `computeLiveVolumeBuildingSignal()`
+pattern used at the other 4 sites, for every setup_type that fires through this loop (not just
+STOP_SWEEP). Dry-run verified in a rolled-back transaction (param count + column mapping correct,
+`vol_building_signal` round-trips into the right column), lint/syntax clean, clean restart with
+zero new errors. This means every real setup_type in the system now gets tracked live, not just
+the FADE roster — closes the gap the earlier whole-roster retroactive check (which computed
+measures directly from historical bars, independent of live stamping) had exposed.
+
+**Same-day: built a new standalone Home Assistant page per direct user request** —
+`server/public/setup-performance.html` (`GET /setup-performance`, linked from quick-check's nav),
+backed by a new `GET /api/setups/performance-summary` endpoint (`server/routes/setups.js`). Shows
+every real (origin_status ACTIVE/SHADOW only) setup_type with its N/WR/EV/rigor-trend in a
+sortable table (N<20 rows visually dimmed, matching this project's own decisive-N floor), plus a
+day-by-day cumulative $ P&L chart with a per-setup dropdown (default: all real setups combined).
+**Chart is dollars only, not normalized to a % of account size** — first considered a fixed $50k
+account-size denominator, but the user caught a real problem before it was built: a fixed-account
+percentage would make normal week-to-week swings look artificially dramatic (a good week jumping
+5-10% isn't a meaningful "account move" at MNQ's real scale), so plain cumulative dollars was used
+instead. Verified: dry-run-free (this endpoint is read-only), Playwright-checked (table renders
+all 169 real setup types, dropdown/chart interaction works, zero console errors, thin-N dimming
+confirmed via class inspection), reachable both locally and through the Cloudflare Tunnel (a 302
+to Cloudflare Access on the tunnel = working correctly, matching quick-check's own behavior).
+**Any future standalone page under `server/public/` needs the same two-part wiring**: an explicit
+route in `server/index.js`, AND a matching exact-path entry in `~/.cloudflared/config.yml`
+(outside this repo) for both the page itself and any API endpoint it calls — missed the second
+part on the first pass here, caught it before considering the feature done. Restarted
+`cloudflared-trading-journal.service` for the config change to take effect. Full convention now
+recorded in CLAUDE.md's quick-check entry.
+
+## 🔶 2026-08-28: Volume-building vs winners/losers — single-type check, then roster-wide, plus a reference-frame question
+
+User recalled asking earlier to check "market levels and volume builds as potential entries" and
+specifically asked to verify a factual recollection about `PD_VAH_FADE_SHORT` SHADOW misses. Actual
+count checked directly against the DB: **11** SHADOW-origin `STOP_HIT` losses (not 15 as recalled),
+and **not** spread out in time — 7 of 11 landed in the last 2 trading days. Comparing SHADOW winners
+(N=5, `TARGET_HIT`) vs losers (N=11) on touch-bar relative volume and 10-bar approach volume-building
+(both using the existing lookahead-safe convention: bars up to and including the touch bar only)
+showed **no visible separation** — winners were actually slightly quieter at the touch than losers.
+
+User asked to broaden this to the whole fade roster (matching the already-flagged `OPEN_DECISION
+apply_volume_building_signal_to_existing_level_roster`) and separately asked whether the
+volume-building baseline itself should be measured relative to that day's own volume rather than
+(or in addition to) that time-of-day's historical volume. Built
+`scratch/fade_roster_volume_building_daycompare.mjs` against the full real FADE population
+(`origin_status IN ('ACTIVE','SHADOW')`, resolved `STOP_HIT`/`TARGET_HIT`, N=1322 across ~130
+setup_types) and tested both baselines:
+
+- **Existing time-of-day-relative volZ** (90-bar-per-minute-of-day historical z-score —
+  `getVolumeBaseline()` convention, used everywhere else in the codebase): pooled roster-wide,
+  BUILDING is actually *worse* than not (EV -$1.67/trade N=342 vs -$1.10/trade N=980) — a genuine
+  pooled null/inversion, not a rounding artifact.
+- **New day-relative volZ** (z-scored against that same session's own running volume since the
+  last session open — RTH 9:30am or Globex 6pm — min 10-bar sample): pooled, shows a real if modest
+  separation in the expected direction (DAY-BUILDING EV=$0.37/trade N=355 vs -$1.85/trade N=872).
+- **The two measures are not redundant.** They agree ~74% of the time. The 2x2 shows the cleanest
+  cut of the whole test is the AGREEMENT bucket (both say building, N=175, EV=$1.81/trade) — and the
+  worst bucket is where time-of-day says building but day-relative disagrees (N=167, EV=-$5.30/trade),
+  worse than either measure predicts alone.
+- **Per-setup_type breakdown (N≥8 each side) shows the pooled null hides real per-type effects** —
+  same shape as this session's earlier Globex mode-pooling lesson. `IB_HIGH_FADE_SHORT` (BUILDING
+  N=12 WR=92% EV=$74.67 vs NOT N=41 WR=68% EV=$31.85), `OR5_HIGH_FADE_SHORT` (N=11 WR=73% EV=$83.45
+  vs N=21 WR=52% EV=$19.57), `PD_POC_FADE_SHORT` (N=11 WR=73% EV=$29.26 vs N=32 WR=59% EV=-$8.62),
+  and `PD_VAL_FADE_LONG` (N=17 WR=71% EV=$16.41 vs N=20 WR=50% EV=-$0.35) all show building
+  meaningfully *better*. `PD_VAH_FADE_SHORT` (N=14 WR=36% EV=-$12.91 vs N=42 WR=43% EV=-$1.35) and
+  `GLOBEX_VWAP_FADE_LONG` show the opposite — matching the single-type negative found first.
+
+Recorded as two `RESEARCH_CLAIM`s (`fade_roster_volume_building_pooled_vs_pertype`,
+`volz_day_relative_vs_timeofday_reference_frame`), both `PROVISIONAL` (exploratory, single-pass, no
+train/test split, per-type Ns individually thin at 11-17). `apply_volume_building_signal_to_existing_level_roster`
+resolved with this result. **Not wired live** — the honest next step, if pursued, is either a
+per-type SHADOW pilot on the 3-4 highest-N types that show the split, or a bigger combined sample
+using the AND-gated (both-measures-agree) definition before sizing/gating anything on it.
+
+**Same-day follow-up: does firing on the "both-agree" filter beat firing on every touch, and does
+tightening it further keep improving?** Yes to the first — baseline (fire on every touch, no
+filter) is N=1328/WR=49.5%/EV=-$1.24/trade; requiring EITHER measure alone doesn't move the needle
+(N=523/WR=49.5%/EV=-$1.59, no better than baseline); requiring BOTH to agree does (N=174/WR=51.7%/
+EV=$2.40/trade). Tightened the both-agree filter from the median up through the 90th percentile on
+all 4 measures to check whether more selective touches keep getting better — **not a clean
+dose-response**: p60=N105/WR=54.3%/EV=$7.11 (real, still well above the N≥20 floor, roughly 3x the
+median cutoff's EV) is the trustworthy sweet spot; p67=N55/WR=54.5%/EV=$1.00 already weakens; p75
+reverses to EV=-$7.94/N=22; p80 bounces back to EV=$9.71/N=13. Past ~p60 the sample gets too thin to
+trust and the numbers are noise, not a real "more certain = even better" trend — recorded as its own
+`RESEARCH_CLAIM fade_roster_volume_building_dose_response_cutoff` so this exact caveat isn't lost.
+
+**Same-day, wired live SHADOW-style (informational only, self-recalibrating): user asked to wire
+this in across the whole roster and keep recalibrating it, rather than leave it as a one-off
+finding.** Since this isn't a new setup_type (it's a property of every existing fade touch), "wire
+it in" means: stamp the 4 raw measures + median/p60-agreement booleans onto every real fade fire's
+`active_setups.vol_building_signal` (new JSONB column), across BOTH RTH and Globex, without gating
+what fires or how it's sized — the same informational-only pattern already used for
+`exhaustion_signal_at_detection`/`bar6_checkpoint`/`confluence_score_at_detection`. Built:
+- `server/services/touchQuality.js`: `computeVolumeBuildingMeasures()`/`classifyVolumeBuilding()`,
+  the single shared functions both the live code and the calibration script call (no
+  reimplementation) — day-relative z uses only bars strictly BEFORE the one being scored, no
+  lookahead.
+- `scripts/backtest_volume_building_signal.mjs`: recalibrates median + p60-percentile cutoffs for
+  all 4 measures from the real roster-wide FADE population, persists a single
+  `VOLUME_BUILDING_CALIBRATION`/`ROSTER_WIDE_FADE` row. First run: N=1121 matched. Added to
+  `run_weekly_backtests.sh` — self-recalibrates as real forward data accumulates, per this
+  session's own standing "we're experimenting" rule (not gated on rigor/day-clustering).
+- Wired into 4 `active_setups` INSERT sites in `acd.js`: the RTH level-fade candidates loop's
+  SHADOW branch, ACTIVE branch, and early-touch-backfill branch (correctly sliced to bars up to
+  the touch's OWN time, not "now", to avoid lookahead in the backfill case), plus
+  `detectGlobexSetup()`'s Globex path (a freshly bounded since-session-open bars query, `ts<=NOW()`
+  upper bound per the `price_bars_primary` convention). Does **not** touch
+  `RTH_FLUSH`/`GLOBEX_FLUSH` — those fire from their own separate `rthFlushDetector.js`/
+  `globexFlushDetector.js` pollers with their own already-built volume-building logic from the
+  earlier redesign this session; `vol_building_signal` is simply null on those rows.
+- Verified per this session's own new standing rule (never trust manual `$N` counting): dry-ran
+  all 4 modified INSERT statements in a rolled-back transaction with sentinel values, confirmed
+  correct param count and that `vol_building_signal` round-trips into the right column for each.
+  Lint clean, server restarted clean, no new errors in `scratch/server_errors.jsonl` post-restart.
+
+Migration: `ALTER TABLE active_setups ADD COLUMN vol_building_signal JSONB` (informational-only
+addition, no backfill of historical rows — they simply have `vol_building_signal IS NULL`).
+
+**Same-day, user requested a real walk-forward validation of the both-agree-at-p60 filter before
+trusting it further — it FAILED.** Split the real population by date (TRAIN=first 25 of 37
+distinct dates, TEST=last 12), froze cutoffs from TRAIN only: in-sample the filter looked strong
+(EV $2.14→$15.52), but out-of-sample it did WORSE than an already-negative baseline
+(EV -$4.34→-$18.06). `computeRigor()` on the filtered population confirmed it: 56% clustered in 5
+days, EV degrading monotonically across chronological thirds ($15.55→-$9.75→-$17.56). **The earlier
+single-pass $7.11/trade finding was very likely an in-sample artifact of a ~7-week-old dataset, not
+a real edge** — recorded as `RESEARCH_CLAIM fade_roster_volume_building_walkforward_negative`
+(`STALE`). Does not change the live wiring (still informational-only, still self-recalibrates) —
+this specifically means the signal is NOT yet validated for gating/filtering anything.
+
+**Follow-up: grouped by coarser level family** (OR-mid, Initial Balance high/low, Initial Balance
+mid, value-area edge, POC, Globex VWAP, etc., ~19 families) to check the user's specific hypothesis
+("does OR-mid or IB do better with this?"). Only 3 of 19 families have enough N (≥10 each side) to
+say anything — `PD_VALUE_AREA_EDGE`, `PD_POC`, `GLOBEX_VWAP` — all 3 point the same direction
+(building helps) but still thin and not walk-forward tested at this granularity.
+**OR_MID/INITIAL_BALANCE specifically can't be tested yet** — too few of those touches ever clear
+the ROSTER-WIDE p60 cutoff on both measures (OR_MID: 6/76 qualify; IB high/low: 9/124; IB mid:
+3/71), likely because early-session (OR/IB-formation-window) touches have a structurally different
+volume profile than the rest of the roster, which a single roster-wide cutoff penalizes. Recorded
+as `RESEARCH_CLAIM volume_building_by_level_family` (`PROVISIONAL`). Natural next step if pursued:
+family-specific (not roster-wide) percentile cutoffs.
+
+**Real bug found and fixed while verifying the walk-forward** (caught by checking whether the
+signal's own values made sense, not by an error message): `getVolumeBuildingCalibration()` read
+`performance_audit.notes` (a `TEXT` column storing a JSON string, matching every other calibration
+script in this codebase) without `JSON.parse()`ing it — every `agreesMedian`/`agreesP60`
+classification in production was silently comparing real numbers against `undefined` and always
+returning `false`. Fixed with the same `JSON.parse()`/try-catch idiom used at every other `notes`
+read site in `acd.js`. **A second, independent bug surfaced from the same investigation**: the RTH
+candidates loop's `activeVbSessionBars`/`auditVbSessionBars` reused `allRthBarsRow.rows` directly,
+which is scoped to the RTH window and stops growing at 4PM close — any SHADOW candidate firing
+during the routine, daily 4-6PM no-new-entries dead zone read the SAME frozen last bar for the
+entire 2-hour window regardless of its own real fired time. Confirmed live: 17 same-afternoon
+dead-zone fires showed byte-identical volume measures despite firing 37 minutes apart across
+different setup_types. Fixed by adding `getSessionBarsSinceOpen(boundaryMod)` — a bounded
+(`ts<=NOW()`) query from the most recent session-open bar (RTH 9:30am=mod570, Globex 6pm=mod1080)
+through now — and using it for both RTH branches and simplifying the Globex branch (which already
+had the correct pattern, now deduplicated into the shared helper). Backfilled today's 22 affected
+rows via `scratch/backfill_frozen_vol_building_today.mjs` (recomputed correctly per-row, verified
+each now shows genuinely different values). Both fixes verified via a fresh `./stop.sh`+`./start.sh`
+cycle (a mid-restart port race briefly left the systemd-managed instance serving instead of the dev
+nodemon supervisor — cleaned up via the shared lifecycle scripts, not a hand-rolled fix, confirmed
+single supervisor + systemd correctly `inactive` afterward) and a live API check showing the
+backfilled rows' measures now vary correctly touch-to-touch.
+
+**Same-day: added a tracking UI to the quick-check page** (`server/public/quick-check.html`),
+per explicit user request to keep watching this signal across ALL setup types (not just the
+3 promising families) ahead of any future decision to gate live entries on it. A new "Vol Building"
+toggle row (All / Building / Strong, with live counts per option) filters the already-rendered
+Session Timeline client-side — never affects what fires, matches the existing Live/All toggle's
+own display-only pattern. Each row also gets a small neutral-colored "Vol+"/"Vol++" tag (not
+green/red, deliberately — the signal isn't validated yet, styling it as a win/loss signal would
+overstate its current status). Verified via Playwright: toggle renders, filters correctly, no
+console errors, and the observed zero-count on today's actual dead-zone chop population is a real
+reflection of the data (post-close chop genuinely doesn't show volume building), not a bug.
+
+**Same-day, live user report: "I see it but can't click on it."** Root cause: both the new Vol
+Building toggle and the pre-existing Live/All toggle attached click listeners directly to their
+`<button>` elements, which get destroyed and recreated by `innerHTML` on every `loadTimeline()`
+poll (every 20s). If a poll lands between touchstart and click on a real touch gesture, the button
+node the user is mid-tap on gets replaced before the click fires — the tap is silently swallowed,
+with no error, no visual glitch, just "nothing happens." Confirmed via a mobile-emulated Playwright
+test that intentionally fires a re-render mid-tap. **Fixed** with event delegation: one
+`document`-level click listener (added once, at boot, never touched by any re-render) matches
+`e.target.closest('[data-tf]')`/`[data-vf]'` and dispatches to `setTimelineFilter()`/`setVbFilter()`
+— survives every future re-render by construction, since it's never attached to the ephemeral
+button nodes at all. Applied to both toggles, not just the new one, since they shared the exact
+same structural risk. Re-verified the same mid-render-tap race test now succeeds (confirmed via
+`localStorage` state, not `window.<var>` — top-level `let`/`const` in a plain `<script>` never
+attach to `window`, a dead-end my first verification attempt walked into before switching to a
+real external signal).
+
+**Same-day: path-traced (not just win/loss) both new mechanisms per user request, and found a
+real explanatory clue for the walk-forward failure.** RTH_FLUSH's first-ever real trade
+(-$396.50) reached +47.75pt favorable before fully reversing to the stop over 67 minutes — flagged
+as `OPEN_DECISION flush_setups_lack_breakeven_trail_protection` (LOW, N=1, not acted on). More
+substantively: bar-by-bar tracing the walk-forward TEST period's "building" trades found they took
+40% longer to resolve and jostled MORE (not less) than non-building trades — a plausible mechanism
+for the earlier walk-forward failure (rising volume into a touch may mean a contested two-sided
+fight, not one side winning decisively). `RESEARCH_CLAIM volume_building_path_shows_contested_
+fight_not_clean_move`. Full short/long-term watch list: Claude's own memory
+`project_flush_and_volbuild_execution_learning_20260828.md`.
+
