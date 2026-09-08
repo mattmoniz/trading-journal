@@ -1312,4 +1312,108 @@ router.get('/setups/momentum-against-fade-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 6 observation-
+// only shadow tags (DirGate, MomFade, StepTrail, PitchCatch, RangeSlope, VolRollover), 2026-09-08
+// user request: "how much loss has each of these prevented, today and this week, perpetually
+// updated" + wanted on the Home Assistant page. Two mechanism shapes, one unified definition:
+//   - Gate-type (DirGate/MomFade): the hypothetical if honored is "no trade taken" ($0) --
+//     lossPrevented = SUM(GREATEST(0, -actual_pnl)) over flagged rows; netIfHonored =
+//     SUM(-actual_pnl) over flagged rows, UNCLAMPED -- can be negative if the flagged rows were
+//     net profitable, meaning honoring the gate would have cost more in foregone wins than it
+//     saved in avoided losses. Both numbers always shown together, never just the flattering
+//     lossPrevented alone -- same "show the whole picture" convention as every other shadow-
+//     summary endpoint in this file (direction-gate-shadow-summary etc.).
+//   - Alt-exit-type (StepTrail/PitchCatch/RangeSlope/VolRollover): each already carries its own
+//     hypothetical_pnl for a DIFFERENT exit, not "no trade" -- lossPrevented = SUM(GREATEST(0,
+//     hypothetical_pnl - actual_pnl)), netIfHonored = SUM(hypothetical_pnl - actual_pnl)
+//     unclamped. PitchCatch additionally requires qualified===true (unqualified rows carry a
+//     null hypothetical_pnl by design, see pitch-catch-shadow-summary above).
+// "This week" = since the most recent Sunday (matches the Globex trading-week convention used
+// for WEEKLY_OPEN elsewhere in this codebase), not an ISO Monday-start week.
+// summary_text is a pre-formatted multi-line block for Home Assistant's REST sensor
+// (json_attributes can't iterate an array/object -- same reason /setups/today-summary exists
+// in this exact shape, see that endpoint's own header comment).
+router.get('/setups/loss-prevention-summary', async (req, res) => {
+  try {
+    const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const todayET = nowET.toLocaleDateString('en-CA');
+    const dow = nowET.getDay(); // 0=Sun...6=Sat
+    const weekStart = new Date(nowET);
+    weekStart.setDate(weekStart.getDate() - dow);
+    const weekStartET = weekStart.toLocaleDateString('en-CA');
+
+    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ] = await Promise.all([
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
+             FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, momentum_against_fade_shadow
+             FROM active_setups WHERE momentum_against_fade_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
+             FROM active_setups WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
+             FROM active_setups WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
+             FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+    ]);
+
+    function gateStat(rows, flagCheck, period) {
+      const scoped = rows
+        .filter(r => period === 'today' ? r.trade_date === todayET : true)
+        .filter(flagCheck);
+      const n = scoped.length;
+      const netIfHonored = scoped.reduce((s, r) => s - r.actual_pnl, 0); // hypothetical=0 -> delta = -actual
+      const lossPrevented = scoped.reduce((s, r) => s + Math.max(0, -r.actual_pnl), 0);
+      return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
+    }
+    function altExitStat(rows, hypGetter, period, extraFilter) {
+      let scoped = rows.filter(r => period === 'today' ? r.trade_date === todayET : true);
+      if (extraFilter) scoped = scoped.filter(extraFilter);
+      scoped = scoped.filter(r => hypGetter(r) != null);
+      const n = scoped.length;
+      const netIfHonored = scoped.reduce((s, r) => s + (hypGetter(r) - r.actual_pnl), 0);
+      const lossPrevented = scoped.reduce((s, r) => s + Math.max(0, hypGetter(r) - r.actual_pnl), 0);
+      return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
+    }
+
+    const rangeSlopeHyp = r => r.post_entry_exit_signals?.range_slope?.hypothetical_pnl != null
+      ? Number(r.post_entry_exit_signals.range_slope.hypothetical_pnl) : null;
+    const volRolloverHyp = r => r.post_entry_exit_signals?.vol_rollover?.hypothetical_pnl != null
+      ? Number(r.post_entry_exit_signals.vol_rollover.hypothetical_pnl) : null;
+    const stepTrailHyp = r => r.step_trail_shadow?.hypothetical_pnl != null ? Number(r.step_trail_shadow.hypothetical_pnl) : null;
+    const pitchCatchHyp = r => r.pitch_catch_shadow?.hypothetical_pnl != null ? Number(r.pitch_catch_shadow.hypothetical_pnl) : null;
+
+    const mechanisms = {};
+    for (const period of ['today', 'week']) {
+      mechanisms[period] = {
+        dirGate: gateStat(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true, period),
+        momFade: gateStat(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true, period),
+        stepTrail: altExitStat(stepTrailQ.rows, stepTrailHyp, period),
+        pitchCatch: altExitStat(pitchCatchQ.rows, pitchCatchHyp, period, r => r.pitch_catch_shadow?.qualified === true),
+        rangeSlope: altExitStat(postEntryQ.rows, rangeSlopeHyp, period),
+        volRollover: altExitStat(postEntryQ.rows, volRolloverHyp, period),
+      };
+    }
+
+    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll' };
+    function fmtBlock(period, title) {
+      const lines = [title];
+      for (const [key, s] of Object.entries(mechanisms[period])) {
+        if (s.n === 0) { lines.push(`  ${LABELS[key]}: no data`); continue; }
+        lines.push(`  ${LABELS[key]}: $${s.lossPrevented.toFixed(0)} prevented (net ${s.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(s.netIfHonored).toFixed(0)}, N=${s.n})`);
+      }
+      return lines.join('\n');
+    }
+    const summary_text = fmtBlock('today', 'Loss Prevention — Today') + '\n' + fmtBlock('week', 'Loss Prevention — This Week');
+
+    res.json({ asOf: new Date().toISOString(), todayET, weekStartET, mechanisms, labels: LABELS, summary_text });
+  } catch (err) {
+    console.error('[setups/loss-prevention-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

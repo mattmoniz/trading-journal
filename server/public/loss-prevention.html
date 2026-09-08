@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loss Prevention</title>
+<style>
+  :root {
+    /* KEEP IN SYNC with quick-check.html's palette (same "duplicated static page" reasoning
+       as its own header comment -- this page can't literally share a JS module with it either). */
+    --green: #10b981; --green-soft: #4ade80;
+    --red: #ef4444; --red-soft: #f87171;
+    --amber: #f59e0b;
+    --dim: #94a3b8; --text: #e2e8f0;
+    --bg: #0b1120; --card: rgba(15,23,42,0.7);
+    --border: rgba(51,65,85,0.5);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 14px; padding: 14px 14px 40px;
+  }
+  .mono { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .sub { font-size: 11px; color: var(--dim); margin-bottom: 14px; }
+  .sub a { color: var(--dim); }
+  .note {
+    font-size: 11px; color: var(--dim); background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 14px; line-height: 1.5;
+  }
+  .period-head {
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--dim); margin: 18px 0 8px;
+  }
+  .mech-card {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 6px;
+  }
+  .mech-name { font-weight: 600; flex: 1; }
+  .mech-n { font-size: 11px; color: var(--dim); }
+  .mech-nums { text-align: right; }
+  .mech-prevented { font-size: 16px; font-weight: 700; }
+  .mech-net { font-size: 11px; color: var(--dim); }
+  .no-data { color: var(--dim); font-style: italic; }
+  .totals-card {
+    background: var(--card); border: 1px solid var(--amber); border-radius: 8px;
+    padding: 10px 12px; margin: 10px 0 4px;
+  }
+  .totals-card .mech-prevented { color: var(--amber); font-size: 20px; }
+</style>
+</head>
+<body>
+
+<h1>Loss Prevention</h1>
+<div class="sub" id="asof">Loading…</div>
+<div class="note">
+  "$ prevented" = how much of a real realized loss this observation-only signal would have
+  avoided or reduced, had it actually been acted on. "Net" is the honest full picture, including
+  trades where honoring the signal would have cost profit instead — can be negative. None of
+  these currently gate or size a real trade; every trade shown fired at full real size regardless.
+  See <a href="/quick-check">quick-check</a> for individual trade detail.
+</div>
+
+<div id="today-section"></div>
+<div id="week-section"></div>
+
+<script>
+const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll' };
+
+function fmtMoney(n) { return (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(0); }
+
+function renderPeriod(containerId, title, mechs) {
+  const el = document.getElementById(containerId);
+  let totalPrevented = 0, totalNet = 0, totalN = 0;
+  let html = '<div class="period-head">' + title + '</div>';
+  for (const [key, s] of Object.entries(mechs)) {
+    totalPrevented += s.lossPrevented; totalNet += s.netIfHonored; totalN += s.n;
+    if (s.n === 0) {
+      html += '<div class="mech-card"><span class="mech-name">' + LABELS[key] + '</span><span class="no-data">no data yet</span></div>';
+      continue;
+    }
+    const prevColor = s.lossPrevented > 0 ? 'var(--green)' : 'var(--dim)';
+    const netColor = s.netIfHonored >= 0 ? 'var(--green-soft)' : 'var(--red-soft)';
+    html += '<div class="mech-card">' +
+      '<div><div class="mech-name">' + LABELS[key] + '</div><div class="mech-n">N=' + s.n + '</div></div>' +
+      '<div class="mech-nums"><div class="mech-prevented mono" style="color:' + prevColor + '">$' + s.lossPrevented.toFixed(0) + '</div>' +
+      '<div class="mech-net mono" style="color:' + netColor + '">net ' + fmtMoney(s.netIfHonored) + '</div></div>' +
+      '</div>';
+  }
+  html = '<div class="totals-card"><div style="display:flex;justify-content:space-between;align-items:center;">' +
+    '<div><div class="mech-name">All 6 combined</div><div class="mech-n">N=' + totalN + '</div></div>' +
+    '<div class="mech-nums"><div class="mech-prevented mono">$' + totalPrevented.toFixed(0) + '</div>' +
+    '<div class="mech-net mono" style="color:' + (totalNet >= 0 ? 'var(--green-soft)' : 'var(--red-soft)') + '">net ' + fmtMoney(totalNet) + '</div></div>' +
+    '</div></div>' + html;
+  el.innerHTML = html;
+}
+
+async function load() {
+  try {
+    const data = await fetch('/api/setups/loss-prevention-summary').then(r => r.json());
+    document.getElementById('asof').textContent = 'Last updated ' + new Date(data.asOf).toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET · week since ' + data.weekStartET;
+    renderPeriod('today-section', 'Today (' + data.todayET + ')', data.mechanisms.today);
+    renderPeriod('week-section', 'This week', data.mechanisms.week);
+  } catch (e) { /* keep last good render */ }
+}
+
+load();
+setInterval(load, 20000);
+</script>
+
+</body>
+</html>

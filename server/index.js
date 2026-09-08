@@ -172,6 +172,18 @@ app.get('/setup-performance', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'setup-performance.html'));
 });
 
+// Loss-prevention page (2026-09-08, direct user request): Today/This-Week rollup of how much
+// realized loss each observation-only shadow tag (DirGate/MomFade/StepTrail/PitchCatch/
+// RangeSlope/VolRoll) would have prevented, reads GET /api/setups/loss-prevention-summary.
+// Explicitly wanted on the Home Assistant page too -- that endpoint's summary_text field is
+// pre-formatted for HA's REST sensor, same convention as /api/setups/today-summary. Same
+// standalone static-page pattern as quick-check.html/setup-performance.html above -- this path
+// (and the API path) must ALSO be added to ~/.cloudflared/config.yml's ingress rules (outside
+// this repo) or it 404s through the tunnel even though it works locally.
+app.get('/loss-prevention', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'loss-prevention.html'));
+});
+
 // Bare-root redirect — found 2026-07-30: the Cloudflare Tunnel's ingress only
 // allow-lists exact paths (see ~/.cloudflared/config.yml), so hitting the tunnel
 // hostname's root with no path (e.g. a bookmark saved as just the domain) fell
