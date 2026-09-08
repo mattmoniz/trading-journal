@@ -7503,9 +7503,15 @@ export default function createACDRouter(io) {
                 // this live sizing effect is removed. See OPEN_DECISION
                 // nl30_regime_conditioning_needs_recalibration_20260907 for the path back to a
                 // real, scheduled version of this factor if one is ever built.
-                // Revisit latency: untouched liquidity on first visit; picked-off zone on 3hr+ return.
-                if (minutesSinceVisit === null)    mult = Math.min(mult + 0.15, 1.5);  // 78% WR +$71 EV z=+2.74 N=283
-                else if (minutesSinceVisit >= 180) mult = Math.max(mult - 0.25, 0.25); // 60% WR -$35 EV z=-2.74 N=129
+                // Revisit latency boost/penalty REMOVED 2026-09-07 (user-directed removal, same
+                // audit as sizemultiplier_loss_win_streak_overnight_stale_20260907): the
+                // 2026-07-06 calibration (first visit = 78% WR +$71 EV N=283; 3hr+ stale return =
+                // 60% WR -$35 EV N=129) never had a scheduled recalibration path, and Gemini's
+                // full-history reconstruction only matched ground truth 36.4% of the time --
+                // too unreliable to confirm the effect is still real, decayed, or inverted.
+                // `minutesSinceVisit` is still computed and still feeds `sizeFactorsAtDetection`
+                // for future monitoring -- only this live sizing effect is removed. See
+                // OPEN_DECISION sizemultiplier_stale_factor_audit_remaining_scope_20260907.
                 // VWAP Extension BOOST REMOVED 2026-09-07 (part of the same audit as
                 // RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907 --
                 // followed up after fixing the _lfDeltaPercQ/_lfOnGapQ timezone bug found the
@@ -7526,9 +7532,17 @@ export default function createACDRouter(io) {
                 // TREND day: all fades structurally underperform (58.6% WR -$9,802 total, Opus audit 2026-07-07).
                 // Size down — don't block entirely (WITH-trend fades can still be marginal), but penalize.
                 if (dtClass === 'TREND') mult = Math.max(mult - 0.25, 0.25);
-                // Small overnight gap: quiet consolidation days = 60.8% WR -$27 EV (N=332, Opus audit 2026-07-07).
-                // Threshold: rolling p33 of 60-session overnight range (no hardcoded number).
-                if (_lfSmallGap) mult = Math.max(mult - 0.15, 0.25);
+                // Small overnight gap penalty REMOVED 2026-09-07 (user-directed removal, same
+                // audit as sizemultiplier_loss_win_streak_overnight_stale_20260907): the
+                // 2026-07-07 Opus-audit calibration (quiet consolidation days = 60.8% WR -$27 EV
+                // N=332) never had a scheduled recalibration path, and its own input query
+                // (_lfOnGapQ) carried the timezone double-cast bug fixed earlier this session --
+                // every historical bar before that fix was potentially misclassified, so the
+                // ground truth Gemini reconstructed against (72.7% match rate) was itself
+                // contaminated. `_lfSmallGap` is still computed and still feeds
+                // `sizeFactorsAtDetection` for future monitoring -- only this live sizing effect
+                // is removed. See OPEN_DECISION
+                // sizemultiplier_stale_factor_audit_remaining_scope_20260907.
                 // Session delta magnitude (backtest 2026-07-08, N=4354):
                 // Neutral |Δ|<p25 = 57.9% WR -$3 EV — quiet session kills fade resolution.
                 // Thresholds: rolling p25/p75 of 60-session |cumulative delta| (no hardcoded numbers).
