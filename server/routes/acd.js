@@ -7465,10 +7465,17 @@ export default function createACDRouter(io) {
                 // Revisit latency: untouched liquidity on first visit; picked-off zone on 3hr+ return.
                 if (minutesSinceVisit === null)    mult = Math.min(mult + 0.15, 1.5);  // 78% WR +$71 EV z=+2.74 N=283
                 else if (minutesSinceVisit >= 180) mult = Math.max(mult - 0.25, 0.25); // 60% WR -$35 EV z=-2.74 N=129
-                // VWAP Extension: level far from VWAP = reversion force stacks with fade (z=+2.95 N=600)
-                if (_lfVwap != null && _lfVwapMean != null && _lfVwapStd != null &&
-                    Math.abs(currentPrice - _lfVwap) > _lfVwapMean + _lfVwapStd)
-                  mult = Math.min(mult + 0.15, 1.5);
+                // VWAP Extension BOOST REMOVED 2026-09-07 (part of the same audit as
+                // RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907 --
+                // followed up after fixing the _lfDeltaPercQ/_lfOnGapQ timezone bug found the
+                // same session). Original 2026-07-06 claim was z=+2.95 N=600; real full-history
+                // data (95.5% match rate against ground truth, N=505) shows WR=54.5% but
+                // EV=-$2.98 -- negative despite the WR-above-50% look (losses outsized wins on
+                // average), and this condition flips 41.1% of trades across the base=1
+                // SKIP/TRADE threshold, so it's a real, consequential miscalibration, not a
+                // cosmetic one. _lfVwap/_lfVwapMean/_lfVwapStd are still computed and still feed
+                // sizeFactorsAtDetection for monitoring -- only this live sizing effect is
+                // removed.
                 // OR Expansion Bias: no expansion yet = liquidity intact (BALANCE z=2.03 N=161, TURBULENT z=2.77 N=26)
                 if (!_lfOrExpanded && (dtClass === 'BALANCE' || dtClass === 'TURBULENT'))
                   mult = Math.min(mult + 0.10, 1.5);
@@ -7483,10 +7490,17 @@ export default function createACDRouter(io) {
                 if (_lfSmallGap) mult = Math.max(mult - 0.15, 0.25);
                 // Session delta magnitude (backtest 2026-07-08, N=4354):
                 // Neutral |Δ|<p25 = 57.9% WR -$3 EV — quiet session kills fade resolution.
-                // High |Δ|>p75 = 69.3% WR +$28 EV — strong conviction, clean reversals.
                 // Thresholds: rolling p25/p75 of 60-session |cumulative delta| (no hardcoded numbers).
                 if (_lfDeltaNeutral) mult = Math.max(mult - 0.10, 0.25);
-                if (_lfDeltaHigh)    mult = Math.min(mult + 0.10, 1.5);
+                // High |Δ|>p75 BOOST REMOVED 2026-09-07 (same follow-up audit as the VWAP
+                // Extension removal above): original claim was 69.3% WR +$28 EV; real
+                // full-history data (94.3% match rate against ground truth, N=549) shows
+                // WR=51.9% and EV=-$3.32 -- negative, and flips 37.4% of trades across the
+                // base=1 SKIP/TRADE threshold. _lfDeltaHigh is still computed and still feeds
+                // sizeFactorsAtDetection for monitoring -- only this live sizing effect is
+                // removed. deltaNeutral's penalty above is unchanged -- its real EV (-$0.98,
+                // 0% flip rate) still points the same direction as its original claim and has
+                // no practical consequence at base=1 either way.
                 // Pulse score: informational only — not wired to sizeMultiplier.
                 // Backtest shows real lift on aggregate but too many false negatives on strong days.
                 // Weekly backtest_pulse_score.mjs continues to accumulate data; revisit when N is larger.
