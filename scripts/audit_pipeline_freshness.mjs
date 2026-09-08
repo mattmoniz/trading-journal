@@ -20,6 +20,12 @@
 // full analysis -- a signal_type read/written only via a parameterized query
 // (`signal_type = $1`, built elsewhere) won't be caught. Treat "0 found" as "worth a manual
 // look", not automatic proof of dead code.
+// Persisted + scheduled 2026-09-07 (previously manual-only, ironically violating this
+// codebase's own "no dead ends" rule that THIS script exists to catch elsewhere): now writes
+// a signal_type='PIPELINE_FRESHNESS_AUDIT' row to performance_audit every run (queryable,
+// comparable run-over-run) and runs weekly via run_weekly_backtests.sh. Excludes its own
+// signal_type from the report -- it has no "writer script" in the usual sense (this file IS
+// the writer) and would otherwise permanently self-flag as NO_WRITER_SCRIPT_FOUND.
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
@@ -27,6 +33,7 @@ import { fileURLToPath } from 'url';
 import { query } from '../server/db.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SELF_SIGNAL_TYPE = 'PIPELINE_FRESHNESS_AUDIT';
 
 function listFiles(dir, exts) {
   if (!fs.existsSync(dir)) return [];
@@ -106,9 +113,10 @@ async function run() {
     SELECT signal_type, MAX(run_date)::text as last_run,
       COUNT(*) as row_count, (CURRENT_DATE - MAX(run_date)) as days_stale
     FROM performance_audit
+    WHERE signal_type != $1
     GROUP BY signal_type
     ORDER BY signal_type
-  `);
+  `, [SELF_SIGNAL_TYPE]);
 
   const report = rows.map(r => {
     // Find candidate writer scripts: mentions both performance_audit and this signal_type literal.
@@ -160,6 +168,31 @@ async function run() {
     if (r.consumed_live) console.log(`  consumers: ${r.consumer_files.join(', ')}`);
   }
   console.log('');
+
+  // Persist so this is queryable/comparable run-over-run instead of console-only (was the
+  // one script in this codebase's own audit family that didn't follow its own no-dead-ends
+  // rule -- see the header note above).
+  const noConsumer = flagged.filter(r => r.flags.some(f => f.startsWith('NO LIVE CONSUMER')));
+  const notScheduled = flagged.filter(r => r.flags.some(f => f.startsWith('WRITER FOUND BUT NOT SCHEDULED')));
+  const noWriter = flagged.filter(r => r.flags.some(f => f.startsWith('NO WRITER')));
+  const stale = flagged.filter(r => r.flags.some(f => f.startsWith('STALE')));
+  await query(`
+    INSERT INTO performance_audit (run_date, window_days, signal_type, signal_name, sample_size, notes)
+    VALUES (CURRENT_DATE, 0, $1, 'ALL_SIGNAL_TYPES', $2, $3)
+    ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET sample_size = EXCLUDED.sample_size, notes = EXCLUDED.notes
+  `, [
+    SELF_SIGNAL_TYPE,
+    report.length,
+    JSON.stringify({
+      total_signal_types: report.length,
+      flagged_count: flagged.length,
+      no_live_consumer: noConsumer.map(r => r.signal_type),
+      not_scheduled: notScheduled.map(r => r.signal_type),
+      no_writer: noWriter.map(r => r.signal_type),
+      stale: stale.map(r => ({ signal_type: r.signal_type, days_stale: r.days_stale })),
+    }),
+  ]);
+  console.log(`Persisted: performance_audit signal_type='${SELF_SIGNAL_TYPE}' (${flagged.length}/${report.length} flagged)`);
 }
 
 run().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });

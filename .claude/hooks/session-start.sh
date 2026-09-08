@@ -143,6 +143,22 @@ ORDER BY (p.notes::json->>'next_recheck_due')::date;
 SQLEOF
 )
 
+# Pipeline freshness/consumption audit (scripts/audit_pipeline_freshness.mjs, scheduled
+# weekly 2026-09-07) — cross-references every signal_type against whether its writer is
+# still scheduled and whether anything live reads it back. Just the count + staleness here
+# (not the full flagged list — grep-based, ~half the roster flags by design since
+# informational-only RESEARCH_CLAIM signals correctly have no live consumer; dumping the
+# full list every session would be exactly the whole-file-false-positive noise this
+# codebase already fixed once for the Stop hook). Read the notes JSON directly for detail.
+export PIPELINE_FRESHNESS
+PIPELINE_FRESHNESS=$(PGPASSWORD=trader123 psql -h localhost -U trader -d trading_journal -t -A -F'|' 2>/dev/null <<'SQLEOF'
+SELECT (notes::json->>'flagged_count'), (notes::json->>'total_signal_types'), (CURRENT_DATE - run_date)
+FROM performance_audit
+WHERE signal_type = 'PIPELINE_FRESHNESS_AUDIT'
+ORDER BY run_date DESC LIMIT 1;
+SQLEOF
+)
+
 # OPEN_DECISION watch — 2026-07-17, user request: "anything that needs to be reevaluated
 # should [be] flagged with something and actively monitored. Nothing can be buried."
 # Sibling mechanism to RESEARCH_CLAIM above (scripts/flag_decision.mjs), deliberately a
@@ -443,6 +459,7 @@ const last = process.env.LAST_ALERT || '';
 const miningRaw = process.env.MINING_STATUS || '';
 const uncoveredRaw = process.env.UNCOVERED_SETUPS || '';
 const overdueClaimsRaw = process.env.OVERDUE_CLAIMS || '';
+const pipelineFreshnessRaw = process.env.PIPELINE_FRESHNESS || '';
 const openDecisionsRaw = process.env.OPEN_DECISIONS || '';
 const strayWorktreesRaw = process.env.STRAY_WORKTREES || '';
 const dtmRaw = process.env.DTM_WATCH || '';
@@ -478,6 +495,15 @@ const miningStale = miningRaw.split('\n').filter(Boolean).some(line => {
   const days = parseInt(line.split('|')[2], 10);
   return days > 8;
 });
+
+// Pipeline freshness/consumption audit summary (count only — see the script's own header
+// for why the full flagged list isn't dumped here every session).
+const [pfFlagged, pfTotal, pfDaysAgo] = pipelineFreshnessRaw.split('|').map(v => parseInt(v, 10));
+const pipelineFreshnessLine = Number.isFinite(pfTotal)
+  ? (pfDaysAgo > 10
+      ? `⚠️  PIPELINE FRESHNESS AUDIT hasn't run in ${pfDaysAgo}d (expected weekly via run_weekly_backtests.sh) — check scratch/weekly_backtests.log`
+      : `ℹ️  PIPELINE FRESHNESS: ${pfFlagged}/${pfTotal} signal_types flagged (no writer/not scheduled/no live consumer) as of ${pfDaysAgo}d ago — query performance_audit WHERE signal_type='PIPELINE_FRESHNESS_AUDIT' for the list, or run scripts/audit_pipeline_freshness.mjs directly`)
+  : `⚠️  PIPELINE FRESHNESS AUDIT has never run — node scripts/audit_pipeline_freshness.mjs`;
 
 // Pipeline coverage: setup types with no fresh SETUP_STATUS row
 const uncovered = uncoveredRaw.split('\n').filter(Boolean);
@@ -624,6 +650,8 @@ const lines = [
   overdueClaims.length > 0
     ? `🔴 RESEARCH_CLAIM LEDGER — ${overdueClaims.length} claim(s) past their recheck date:\n${overdueClaims.join('\n')}\n  ACTION: re-verify each against its source, then node scripts/record_claim.mjs --add '{...}' with the refreshed numbers`
     : '✅ RESEARCH_CLAIM ledger: no claims currently overdue for recheck',
+  '',
+  pipelineFreshnessLine,
   '',
   openDecisions.length > 0
     ? `🟡 OPEN DECISIONS — ${openDecisions.length} pending (${highDecisions.length} HIGH), oldest first (nothing gets buried until resolved):\n${openDecisionsCapped.join('\n')}\n  ACTION: resolve one via node scripts/flag_decision.mjs --resolve <slug> '<resolution text>', or discuss with the user`

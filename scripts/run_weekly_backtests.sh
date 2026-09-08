@@ -133,6 +133,18 @@ echo "=== Weekly backtest run: $(date) ==="
 # code as a build-breaking signal in this cron; read its output instead.
 /usr/bin/node scripts/data_sanity_audit.mjs
 
+# Pipeline freshness/consumption audit (built 2026-07-17, scheduled 2026-09-07) -- was
+# manual-only until now, ironically the one script in this audit family not following its
+# own no-dead-ends rule. Cross-references every performance_audit signal_type against
+# whether its writer script is still scheduled and whether any live route/service reads it
+# back -- e.g. this is what catches "a calibration script runs every week but nothing ever
+# reads its output live" (see SAME_TYPE_REFIRE_GATE_CALIB, OPEN_DECISION
+# same_type_refire_gate_live_wiring_pending). Persists a PIPELINE_FRESHNESS_AUDIT row so the
+# flagged count is comparable run-over-run; grep-based, so ~half the roster flags by design
+# (informational RESEARCH_CLAIM-only signals correctly have no "live consumer") -- read the
+# notes JSON for the actual list before treating a flag as new/actionable.
+/usr/bin/node scripts/audit_pipeline_freshness.mjs
+
 # Rolling recalibration for the cumulative-delta-confirmation live badge (2026-07-28) --
 # RESEARCH_CLAIM cumulative_delta_confirms_breakout_beyond_price_alone /
 # cumulative_delta_confirms_fades_stronger_than_breakout. Recomputes the trailing-200-day
