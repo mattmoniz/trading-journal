@@ -847,6 +847,24 @@ async function getStackVolBreakLiveStatus(setupType) {
 
 async function detectGlobexSetup(sessionDate, io) {
   try {
+    // No-immediate-trades-at-open gate (2026-09-08, user request, tested first): every real
+    // trading day's Globex candidates are blocked for the first 5 minutes after the 6PM ET
+    // open (18:00:00-18:04:59), every day -- not just Monday/WEEKLY_OPEN's own longer no-trade
+    // window above. Backed by a real check, not just intuition: last 60 days, the 18:00-18:04
+    // window shows N=24 across 12 distinct days, WR=37.5%, EV=-$27.93/trade vs the rest of the
+    // session's EV=-$6.78/trade -- survives excluding the single most-represented setup_type
+    // (PD_POC_FADE_SHORT, EV stays -$18.62), survives excluding 2 outlier legacy-calibration
+    // trades (EV stays -$8.20), and is stable across a chronological half-split (-$30.17 then
+    // -$25.68 -- not a one-off, not degrading). Matches the thin-liquidity/unstable-reference-
+    // levels story for why a fresh session open would behave differently. A full early return
+    // (no candidates evaluated at all), not a per-candidate SHADOW-force -- "no immediate
+    // trades right off the open" was the user's own framing, and this window is short/cheap
+    // enough that losing 5 minutes of SHADOW research data isn't worth the added complexity of
+    // threading a partial gate through every candidate source in this function.
+    {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      if (nowET.getHours() === 18 && nowET.getMinutes() < 5) return null;
+    }
     const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow, recentBarsRow] = await Promise.all([
       query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
