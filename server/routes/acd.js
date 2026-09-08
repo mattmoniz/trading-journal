@@ -2968,7 +2968,7 @@ async function buildAllCandidates(ctx) {
 
   return {
     trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownWeak, trtMah, trt,
-    dtClass, sessionBiasMatch, sessionConflictFor, ibSetup,
+    dtClass, sessionConflictFor, ibSetup,
     openDrive, openingDrive15Min, cPairedLong, cPairedShort, cReversalLong, cReversalShort,
     failedAuction, bracketBreakout, valueAreaResp, cStandalone, gapFill,
     morningRegime, absorptionSetup, coilSurgeSetup, rsiDivSetup,
@@ -2987,10 +2987,11 @@ async function buildAllCandidates(ctx) {
 // import/const already in scope for any top-level function in this file, same as
 // buildAllCandidates(). Return-completeness check: every name below was independently grepped
 // against the entire remainder of runSetupDetection (the P4 level-fade block through the final
-// persist step) -- lfPriorStop/lfPriorWin have ZERO downstream references anywhere in the file
-// (pre-existing dead code, not introduced by this move) and are still returned unchanged rather
-// than pruned, matching this codebase's own precedent of carrying dead-but-harmless values
-// through a structural move rather than making a cleanup judgment call in the same commit.
+// persist step). lfPriorStop/lfPriorWin were found to have ZERO downstream references anywhere
+// in the file at extraction time (pre-existing dead code, not introduced by this move) -- kept
+// unpruned in the original P3 commit per this codebase's precedent of not making cleanup
+// judgment calls during a pure structural move, then deleted outright 2026-09-07 (re-confirmed
+// still dead, no new references, as part of a broader dead-code pass).
 async function computeLevelFadeFactors(ctx) {
   const { todayET, dtClass, allRthBarsRow, aUpFired, aDownFired } = ctx;
         // Prior-day TREND risk gate (2026-09-06) — fetched once here, referenced as a plain
@@ -3121,8 +3122,6 @@ async function computeLevelFadeFactors(ctx) {
           else if (r.resolution === 'TARGET_HIT') { if (lfConsecLosses === 0) lfConsecWins++;  else break; }
           else break;
         }
-        const lfPriorStop = lfConsecLosses >= 1;
-        const lfPriorWin  = lfConsecWins  >= 1;
         // Stacking count: same-direction setups fired today (ACTIVE or RESOLVED).
         // Verified 2026-07-05: 1-6 setups = 80-86% WR solid; 7+ = 62.4% WR -$15.7 EV (N=1922) suppress.
         const _lfSameDirCounts = Object.fromEntries(_lfSameDirCountQ.rows.map(r => [r.direction, parseInt(r.cnt)]));
@@ -3363,7 +3362,7 @@ async function computeLevelFadeFactors(ctx) {
   return {
     priorDayProfile,
     isOvernightAligned, isOvernightCounter, isS2DoubleCounter,
-    lfFirstOfDay, lfConsecLosses, lfConsecWins, lfPriorStop, lfPriorWin,
+    lfFirstOfDay, lfConsecLosses, lfConsecWins,
     _lfSameDirCounts, _lfNl30Bucket,
     _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
     turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
@@ -5824,7 +5823,7 @@ export default function createACDRouter(io) {
       // local names so every downstream phase keeps working unchanged via closure.
       const {
         trtLongV2, trtShortV2, otdSetup, aUpStrong, aDownWeak, trtMah, trt,
-        dtClass, sessionBiasMatch, sessionConflictFor, ibSetup,
+        dtClass, sessionConflictFor, ibSetup,
         openDrive, openingDrive15Min, cPairedLong, cPairedShort, cReversalLong, cReversalShort,
         failedAuction, bracketBreakout, valueAreaResp, cStandalone, gapFill,
         morningRegime, absorptionSetup, coilSurgeSetup, rsiDivSetup,
@@ -5843,7 +5842,7 @@ export default function createACDRouter(io) {
       const {
         priorDayProfile,
         isOvernightAligned, isOvernightCounter, isS2DoubleCounter,
-        lfFirstOfDay, lfConsecLosses, lfConsecWins, lfPriorStop, lfPriorWin,
+        lfFirstOfDay, lfConsecLosses, lfConsecWins,
         _lfSameDirCounts, _lfNl30Bucket,
         _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
         turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
