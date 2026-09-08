@@ -989,6 +989,29 @@ async function detectGlobexSetup(sessionDate, io) {
     for (const r of widerLevelsRow.rows) widerLevelPrices[r.level_name] = r.price;
     const widerOptMap = {};
     for (const r of widerOptRow.rows) widerOptMap[r.signal_name] = r;
+    // WEEKLY_OPEN no-trade window (2026-09-08, user request): the level is set at Sunday 6PM
+    // ET Globex open, and firing a fade against it in the hours right after is "too close to
+    // when the level was set" to be a meaningful touch -- price hasn't had a real session to
+    // establish distance from its own origin point yet. Blocks the whole Sun 6PM -> Mon 9:30
+    // AM ET window (real wall-clock day/time, not sessionDate/sessionIsMonday below -- those
+    // are trade_date-attribution concepts and don't cleanly express "Sunday evening's actual
+    // clock time", which is >18:00 in raw minutes, i.e. NUMERICALLY LARGER than the Monday-
+    // morning cutoff, not smaller). Nulling the price here (rather than a separate per-
+    // candidate check) is the single point of truth for both consumers of
+    // widerLevelPrices.WEEKLY_OPEN: the ordinary fade-touch candidate (`candidates` array
+    // below) and the sweep-reversal breakout-fade loop just below both already skip cleanly on
+    // a null price (`if (P == null) continue`) -- two separate gates here could drift out of
+    // sync the way REFIRE_COOLDOWN_MINUTES' hardcoded list already has elsewhere in this file.
+    // Scoped to WEEKLY_OPEN only, not generalized to every same-period-forming level (MONTHLY_
+    // OPEN/PY_*/etc.) -- not asked for, and each has a different formation cadence that would
+    // need its own reasoning about what "too close" means before applying the same fix blindly.
+    {
+      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+      const nowDow = nowET.getDay(); // 0=Sun...6=Sat
+      const nowMin = nowET.getHours() * 60 + nowET.getMinutes();
+      const weeklyOpenTooEarly = (nowDow === 0 && nowMin >= 1080) || (nowDow === 1 && nowMin < 570);
+      if (weeklyOpenTooEarly) delete widerLevelPrices.WEEKLY_OPEN;
+    }
     // Monday's overnight span (Sun 6PM ET open) is longer than a normal weekday's —
     // same stop/target split used by the wider-window verification backtest that
     // validated these 4 types, reused here rather than picking new numbers.
