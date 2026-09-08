@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from arch import arch_model
 import json
-import datetime
 
 GARCH_WARMUP_DAYS = 100
 
@@ -107,9 +106,18 @@ def main():
     print(f"1st percentile scale: {p01:.4f}")
     print(f"99th percentile scale: {p99:.4f}")
 
-    today_str = datetime.date.today().isoformat()
-
     print("Upserting into performance_audit...")
+    # FIXED 2026-09-08 (DeepSeek design critique, caught before the dual-barrier shadow
+    # work was built on top of this): run_date used to be datetime.date.today() -- the day
+    # the SCRIPT ran, shared by every row in a given run -- rather than `d`, the actual
+    # trading day each row describes. Since the real UNIQUE constraint is
+    # (run_date, window_days, signal_type, signal_name), a later re-run with a new
+    # run_date but the same signal_name (=str(d)) would INSERT a duplicate row instead of
+    # updating the existing one -- the ON CONFLICT target would simply never match. Using
+    # run_date=d makes the key naturally idempotent per trading day regardless of when the
+    # script (or a future incremental daily version of it) actually runs. The 317
+    # pre-existing rows were migrated to this convention in the same session (backup:
+    # performance_audit_garch_rundate_backup_20260908, see docs/DB_BACKUP_CATALOG.md).
     for d, pred_vol, unc_vol, scale, alpha, beta, degenerate in garch_records:
         notes_json = json.dumps({
             'trade_date': str(d),
@@ -126,7 +134,7 @@ def main():
             ) VALUES (%s, 0, 'GARCH_VOL_SCALE', %s, 1, %s)
             ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
                 notes = EXCLUDED.notes
-        """, (today_str, str(d), notes_json))
+        """, (d, str(d), notes_json))
     
     print("Backfill complete.")
 
