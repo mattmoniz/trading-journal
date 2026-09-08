@@ -15,7 +15,24 @@
 
 import { query } from '../db.js';
 import { getVolumeBaseline } from './touchQuality.js';
-import { inferDirection } from '../config/setupTypes.js';
+import { inferDirection, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
+
+// ── OPTIMAL_STOP lookup by resolved type (shared, 2026-09-08) ───────────────────────
+// Fix for a real bug found via a user-reported live trade (PD_POC_FADE_LONG_TRAIL, 89pt
+// stop vs. the base type's correctly-calibrated 24pt): update_optimal_stops.mjs only ever
+// calibrates and stores OPTIMAL_STOP under a setup_type's BASE name (e.g. PD_POC_FADE_LONG)
+// -- it has no concept of the _TRAIL-suffixed name resolveSetupType() diverts a touch to.
+// 4 call sites in acd.js looked up `liveStats._opt[type]` using the POST-resolution type
+// directly, so any candidate diverted to one of the 6 CONDITIONAL_VARIANTS trail types
+// silently missed the real calibration and fell through to the much cruder mae_p75/STOP
+// fallback -- a wildly wider, uncalibrated stop, every single time. This explains why 5 of
+// the 6 trail variants were previously found to have "100% real resolutions via plain
+// fixed-stop/target" (docs/CONVENTIONS_DETAIL.md) -- their real trades were never using a
+// validated stop at all.
+export function getOptStopForType(opt, type) {
+  const baseType = CONDITIONAL_VARIANTS[type]?.baseType ?? type;
+  return opt?.[baseType];
+}
 
 // ── Runner-trail-width lookup (shared, 2026-09-07) ──────────────────────────────────
 // Extracted from 4 near-identical inline copies in acd.js (Globex level insert, suppressed-

@@ -15,7 +15,7 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType } from '../services/acdShared.js';
 import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -7066,7 +7066,7 @@ export default function createACDRouter(io) {
                 if (willGetTouchCredit) {
                   try {
                     const sibLevel = cand.level;
-                    const sibOptStop = liveStats._opt?.[candType];
+                    const sibOptStop = getOptStopForType(liveStats._opt, candType);
                     const sibStopPts = sibOptStop?.stop ?? Math.round(cand.mae_p75 ?? STOP);
                     const sibTargetPts = sibOptStop?.target ?? Math.round(cand.mfe ?? TARGET);
                     const sibStopLevel = isLong ? sibLevel - sibStopPts : sibLevel + sibStopPts;
@@ -7113,7 +7113,7 @@ export default function createACDRouter(io) {
 
             if (winnerFound) {
             // Use directional optimal stop from MAE backfill; fall back to combined mae_p75, then constant
-            const optStop  = liveStats._opt?.[type];
+            const optStop  = getOptStopForType(liveStats._opt, type);
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
             const targetPts = optStop?.target ?? Math.round(lv.mfe    ?? TARGET);
             const confluenceCount = nearLevels.length;
@@ -7742,7 +7742,7 @@ export default function createACDRouter(io) {
                 : liveStats._dowSuppressToday?.has(type) ? 'DOW_SUPPRESSED'
                 : isS2DoubleCounter(dir) ? 'S2_DOUBLE_COUNTER'
                 : isTrendCounterFade(dir) ? 'TREND_COUNTER_FADE' : 'SUPPRESSED_OTHER';
-              const auditOptStop = liveStats._opt?.[type];
+              const auditOptStop = getOptStopForType(liveStats._opt, type);
               const auditStopPts = auditOptStop?.stop ?? Math.round(lv.mae_p75 ?? STOP);
               const auditTargetPts = auditOptStop?.target ?? Math.round(lv.mfe ?? TARGET);
               const auditStopLevel = isLong ? currentPrice - auditStopPts : currentPrice + auditStopPts;
@@ -7955,7 +7955,7 @@ export default function createACDRouter(io) {
             // work) is still correctly skipped -- no reason to keep logging more of those.
             if (liveStats._trueSuppressedSetups?.has(btType) || liveStats._dowSuppressToday?.has(btType) || isS2DoubleCounter(dir) || isTrendCounterFade(dir)) continue;
             {
-            const btOpt  = liveStats._opt?.[btType];
+            const btOpt  = getOptStopForType(liveStats._opt, btType);
             const btStop = btOpt?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
             const btTgt  = btOpt?.target ?? Math.round(lv.mfe     ?? TARGET);
             // Confluence at the TOUCH's own price (touchBar.close), not currentPrice -- this is
