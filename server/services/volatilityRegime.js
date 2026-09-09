@@ -27,12 +27,14 @@
 // Source data: scripts/backfill_garch_vol_scale_history.py, run nightly (run_daily_calibration.sh,
 // 8:20 PM ET) — writes a `performance_audit` row per historical trading day
 // (signal_type='GARCH_VOL_SCALE', signal_name=that day's date) plus one extra row per run under
-// signal_name='LATEST', which is the one this module reads. The LATEST row uses a trailing
-// rolling window (GARCH_ROLLING_WINDOW in the Python script, currently 250 days) through that
-// night's close (today included) to forecast the NEXT session — see that script's own header
-// comment for the full expanding-vs-rolling investigation (flip-flopped twice, landed on
-// rolling with real statistical evidence, not just a design preference) and for why a plain
-// "today" row would already be stale by the next morning.
+// signal_name='LATEST', which is the one this module reads. The LATEST row fits on the FULL
+// EXPANDING return series (all history through that night's close, today included) to forecast
+// the NEXT session — see that script's own header comment for the full expanding-vs-rolling
+// investigation (flip-flopped FOUR times on 2026-09-08: expanding, then rolling-250 on a
+// statistically real-looking p=0.0054 result, then back to expanding once two real data bugs
+// contaminating that comparison were found and fixed — the clean data reverses the finding,
+// p=0.018 favoring expanding) and for why a plain "today" row would already be stale by the
+// next morning.
 
 import { query } from '../db.js';
 

@@ -3,28 +3,59 @@ import pandas as pd
 import numpy as np
 from arch import arch_model
 import json
+import datetime
+import calendar as cal_module
 
-# ROLLING window (trailing GARCH_ROLLING_WINDOW days), not expanding. This was flip-flopped
-# twice on 2026-09-08 before landing here -- read the full history before touching this again:
-#   1. Originally built expanding (all history from day zero). Kept that way at first based on
-#      a QLIKE mean-comparison that seemed to show expanding was more accurate.
-#   2. A DeepSeek review found that comparison was both diluted (rolling-250 is mathematically
-#      identical to expanding for i<=250, since max(0,i-250)==0 there -- ~43% of the compared
-#      days were not actually different) and statistically meaningless (a single day's squared
-#      return is a ~1-df variance proxy with per-day QLIKE noise an order of magnitude bigger
-#      than the observed 0.023 mean gap -- independently re-verified the theoretical
-#      E[QLIKE]~=1.27 constant behind that argument by hand before accepting it).
-#   3. Re-ran the comparison PROPERLY: restricted to the genuinely-differing days (i>250) and
-#      scored with a real paired test (scipy `wilcoxon`, not a hand-rolled one -- the hand-
-#      rolled version had a tie-handling bug that produced a spurious z=12.58 on the diluted
-#      population). Result: rolling-250 has a statistically significant edge on the TYPICAL
-#      day (one-sided Wilcoxon p=0.0054, N=203) -- median delta favors rolling (-0.037) even
-#      though a handful of outlier days made the MEAN look like it favored expanding. That's
-#      real, validated evidence, not noise -- switched to rolling on the strength of it.
-# GARCH_WARMUP_DAYS still controls which day the walk-forward loop starts reporting output;
-# GARCH_ROLLING_WINDOW controls how much trailing history each day's fit actually uses.
+
+def nq_roll_week_dates(year):
+    """NQ's quarterly (Mar/Jun/Sep/Dec) roll week for a given year: the 2nd Thursday of the
+    contract month (where volume typically starts shifting to the next contract, per user
+    guidance 2026-09-08) through the official CME roll date (the Monday before the 3rd Friday
+    -- CME's own methodology, independently confirmed via web search of
+    cmegroup.com/trading/equity-index/rolldates the same day: "The equity products roll date is
+    the Monday prior to the third Friday of the expiration month," applies to ES/NQ/RTY/YM
+    alike on the shared H/M/U/Z quarterly cycle). Returns a set of dates (inclusive) to exclude
+    from return computation for that year's 4 roll weeks."""
+    excluded = set()
+    for month in (3, 6, 9, 12):
+        c = cal_module.monthcalendar(year, month)
+        thursdays = [datetime.date(year, month, week[3]) for week in c if week[3] != 0]
+        fridays = [datetime.date(year, month, week[4]) for week in c if week[4] != 0]
+        second_thursday = thursdays[1]
+        third_friday = fridays[2]
+        monday_before_third_friday = third_friday - datetime.timedelta(days=4)
+        d = second_thursday
+        while d <= monday_before_third_friday:
+            excluded.add(d)
+            d += datetime.timedelta(days=1)
+    return excluded
+
+# EXPANDING window (all history from day zero), NOT rolling. This flip-flopped THREE times on
+# 2026-09-08 before landing here for good -- read the full history before touching this again:
+#   1. Originally built expanding. Kept that way at first based on a QLIKE mean-comparison that
+#      seemed to show expanding was more accurate.
+#   2. A DeepSeek review found that comparison was diluted (rolling-250 is mathematically
+#      identical to expanding for i<=250) and statistically meaningless (per-day QLIKE noise an
+#      order of magnitude bigger than the observed gap -- independently re-verified the
+#      theoretical E[QLIKE]~=1.27 constant behind that argument by hand).
+#   3. A properly-scoped, scipy-validated re-test found rolling-250 SIGNIFICANTLY better
+#      (one-sided Wilcoxon p=0.0054) -- switched to rolling on that evidence.
+#   4. Investigating "how has this forecast the biggest real moves" (a direct user question)
+#      surfaced two real DATA bugs contaminating the returns series the whole comparison in
+#      step 3 was built on: price_bars_primary has 6 multi-month gaps (a quarterly-contract-roll
+#      artifact) AND several roll-week price discontinuities that don't show up as gaps (see
+#      nq_roll_week_dates() below and the exclusion logic further down). Once those are properly
+#      excluded, re-running the SAME comparison REVERSES it: expanding is now significantly
+#      BETTER (one-sided Wilcoxon p=0.018, N=169, median delta flips from -0.037 favoring
+#      rolling on contaminated data to +0.0056 favoring expanding on clean data). Mechanistic
+#      explanation, not just a coincidence: a short rolling window is far more sensitive to a
+#      single extreme fake data point than an expanding window with years of history diluting
+#      it -- the earlier "rolling wins" result was really "rolling is more vulnerable to this
+#      specific contamination," not a genuine finding about window choice on real data.
+# This is the one round of the four that was caused by a real data bug, not a statistical
+# methodology fix -- worth remembering that a clean-looking statistical result is still only as
+# trustworthy as the data it was computed on.
 GARCH_WARMUP_DAYS = 100
-GARCH_ROLLING_WINDOW = 250
 
 def load_env():
     env_vars = {}
@@ -73,7 +104,69 @@ def main():
     # script that reuses this same query, just worth knowing when interpreting a reading.
     daily.set_index('date', inplace=True)
     daily['log_ret'] = np.log(daily['close'] / daily['close'].shift(1)) * 100
-    daily.dropna(inplace=True)
+
+    # REAL BUG, FOUND AND FIXED 2026-09-08 (user question "how has this forecast the biggest
+    # moves" led directly to this): price_bars_primary has 6 gaps of 63-70 CALENDAR days each,
+    # spaced almost exactly once a quarter -- the signature of NQ's quarterly futures contract
+    # roll not being stitched into a continuous series. `close.shift(1)` doesn't know about the
+    # gap -- it silently computes log_ret across whatever two rows happen to be adjacent in the
+    # dataframe, so the row immediately after a gap gets a "1-day return" that's actually 2-3
+    # months of real cumulative price action (verified: the 2023-12-14 -> 2024-02-15 gap alone
+    # produced a fake +1502pt "single day" move, a >5-sigma outlier; a smaller 2025-09-18 ->
+    # 2025-09-29 gap sits INSIDE the current live 250-day rolling window right now, contributing
+    # a real +631pt / +2.55% (~1.9 sigma) fake data point to the model that's actually live).
+    # MAX_NORMAL_GAP_DAYS=4 covers every legitimate weekend/holiday combination in this dataset
+    # (a normal weekend is 3 calendar days, a 3-day weekend for a Mon/Fri holiday is 4) without
+    # false-positiving on real trading gaps -- verified via a direct gap-day-delta scan
+    # (scratch/test_garch_recent_performance.py's investigation) before picking this threshold,
+    # not guessed. The row immediately after a real gap gets its log_ret excluded (NaN'd, then
+    # dropped) -- that day's true single-session return is unknowable from close-to-close data
+    # alone anyway, so it's honest to have no output for it rather than a fabricated one. Every
+    # OTHER day's return, including the one computed FROM that excluded day forward, is
+    # unaffected -- shift(1) already captured the correct prior close before this exclusion runs.
+    MAX_NORMAL_GAP_DAYS = 4
+    calendar_gap = pd.Series(daily.index, index=daily.index).diff().apply(lambda d: d.days if pd.notnull(d) else None)
+    gap_mask = calendar_gap > MAX_NORMAL_GAP_DAYS
+    if gap_mask.sum() > 0:
+        print(f"Excluding {gap_mask.sum()} gap-spanning return(s) (>{MAX_NORMAL_GAP_DAYS} calendar days since the prior trading day):")
+        for d in daily.index[gap_mask]:
+            print(f"  {d}: gap={calendar_gap[d]:.0f} calendar days, would-be log_ret={daily.loc[d,'log_ret']:.2f}% -- EXCLUDED")
+        daily.loc[gap_mask, 'log_ret'] = np.nan
+
+    # SECOND, RELATED BUG found the same night by digging further into the first fix's own
+    # verification (a user question about the biggest real moves led here): even after removing
+    # calendar-gap contamination, several of the remaining largest "moves" clustered exactly in
+    # NQ's quarterly roll week -- e.g. 2026-06-09/10/11/15 (2nd Thursday through the official
+    # Monday roll date) each showed internally-consistent-looking but implausibly wide day
+    # ranges. Unlike the multi-month gap bug, this doesn't show up as a missing-days gap --
+    # price_bars_primary has bars every day through the roll, but very plausibly blends
+    # front-month and next-month contract prices without a continuous-contract back-adjustment,
+    # producing a real intraday-consistent-looking but still-fake price discontinuity. Excludes
+    # the whole roll week (2nd Thursday through the Monday CME roll date, both confirmed per
+    # nq_roll_week_dates()'s own docstring) from the return series the same way as the gap
+    # exclusion above -- same reasoning: that week's true single-session returns aren't reliably
+    # knowable from this data, so no output is more honest than a fabricated one.
+    # HONEST GAP, not fully closed: 2 further large moves (2026-06-23, 2026-06-29) sit just
+    # outside this precise window and remain unexplained -- could be real post-roll volatility,
+    # could be a longer-lingering version of the same issue. Not excluded here since widening
+    # the window further isn't justified by anything beyond this one quarter's own outliers --
+    # flagged via flag_decision.mjs as a genuinely open question, not silently absorbed into a
+    # wider guess.
+    roll_years = range(daily.index.min().year, daily.index.max().year + 2)
+    roll_dates = set()
+    for y in roll_years:
+        roll_dates |= nq_roll_week_dates(y)
+    roll_mask = pd.Series(daily.index, index=daily.index).isin(roll_dates)
+    # A date already excluded by the calendar-gap check above has log_ret already NaN --
+    # avoid double-counting it in this print.
+    newly_excluded = roll_mask & daily['log_ret'].notna()
+    if newly_excluded.sum() > 0:
+        print(f"Excluding {newly_excluded.sum()} roll-week return(s) (2nd Thursday through the official CME Monday roll date):")
+        for d in daily.index[newly_excluded]:
+            print(f"  {d}: would-be log_ret={daily.loc[d,'log_ret']:.2f}% -- EXCLUDED (roll week)")
+    daily.loc[roll_mask, 'log_ret'] = np.nan
+
+    daily.dropna(subset=['log_ret'], inplace=True)
 
     print(f"Loaded {len(daily)} trading days. Fitting GARCH walk-forward...")
     returns = daily['log_ret']
@@ -94,7 +187,7 @@ def main():
 
     for i in range(GARCH_WARMUP_DAYS, len(dates)):
         d = dates[i]
-        hist_ret = returns.iloc[max(0, i - GARCH_ROLLING_WINDOW):i]
+        hist_ret = returns.iloc[:i]
         am = arch_model(hist_ret, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
         degenerate = False
         try:
@@ -142,17 +235,17 @@ def main():
     # wants is the forecast for the NEXT session, which requires today's own return as input
     # and is only computable after today's close. Rather than compute a specific "next trading
     # day" calendar date (would need market-calendar weekend/holiday logic just to label it),
-    # this fits ONE more model on the trailing GARCH_ROLLING_WINDOW days (today included, no
-    # held-out day) and
-    # stores it under signal_name='LATEST' instead of a date -- the monitor always reads the
-    # single most recent LATEST row (ORDER BY run_date DESC LIMIT 1), no date arithmetic
-    # needed. run_date is the last bar's own date (dates[-1], from price_bars_primary's
-    # DB-native America/New_York date), not Python's system clock -- matches this codebase's
-    # own SQL-CURRENT_DATE-not-JS/Python-local-date convention. Each day's LATEST becomes its
-    # own row (run_date differs daily), so this doubles as a running history of "what was the
-    # forward view, as of that night" -- useful later for checking forecast-vs-realized.
-    latest_hist_ret = returns.iloc[max(0, len(returns) - GARCH_ROLLING_WINDOW):]
-    am_latest = arch_model(latest_hist_ret, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
+    # this fits ONE more model on the FULL return series (today included, no held-out day,
+    # expanding just like every other fit in this script -- see the window-choice history
+    # above) and stores it under signal_name='LATEST' instead of a date -- the monitor always
+    # reads the single most recent LATEST row (ORDER BY run_date DESC LIMIT 1), no date
+    # arithmetic needed. run_date is the last bar's own date (dates[-1], from
+    # price_bars_primary's DB-native America/New_York date), not Python's system clock --
+    # matches this codebase's own SQL-CURRENT_DATE-not-JS/Python-local-date convention. Each
+    # day's LATEST becomes its own row (run_date differs daily), so this doubles as a running
+    # history of "what was the forward view, as of that night" -- useful later for checking
+    # forecast-vs-realized.
+    am_latest = arch_model(returns, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
     latest_degenerate = False
     try:
         res_latest = am_latest.fit(disp='off')
@@ -220,8 +313,10 @@ def main():
         'beta': float(beta_l) if beta_l is not None else None,
         'degenerate_fallback': bool(latest_degenerate),
         # p01/p99 included here so a downstream consumer (server/services/volatilityRegime.js)
-        # can classify hot/normal/cold against the same calibrated band this script already
-        # computed, instead of re-deriving percentiles from the full historical series itself.
+        # can show where this reading sits within its own recent historical range (purely
+        # descriptive context, not a hot/normal/cold classification -- that label was tested
+        # and removed, see volatilityRegime.js's header comment), instead of re-deriving
+        # percentiles from the full historical series itself.
         'p01': float(p01),
         'p99': float(p99),
     })
