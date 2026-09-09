@@ -5476,3 +5476,490 @@ fight_not_clean_move`. Full short/long-term watch list: Claude's own memory
   - **Full DeepSeek code-review audit trail**: `scratch/deepseek_code_review_20260830.md` (round 1), `_round2.md` (round 2, separate Globex/wider-target session-boundary fix), `_round4.md` (round 4, this thread specifically — round 3 crashed before reaching it, but its partial transcript caught one real bug in the adjacent round-2 fix, already corrected).
   - **Full DeepSeek code-review audit trail** (dispatched per user request to review the day's uncommitted work, not specific to this thread alone): `scratch/deepseek_code_review_20260830.md` (round 1, 9 findings, all fixed same session), `scratch/deepseek_code_review_20260830_round2.md` (round 2, 13 findings on a separate Globex/wider-target session-boundary fix — see `server/services/sessionBoundary.js`), `scratch/deepseek_code_review_20260830_round4.md` (round 4, this thread specifically — 11 findings, 2 of them (S1, S5) real methodology errors in Claude's own first pass, corrected above). A partial round 3 (crashed before writing a final file, but its live transcript caught one real bug in the round-2 fix — `nextTradingDay()`-vs-naive-date-arithmetic for a Friday/holiday dead-zone fire, already corrected) never reached this thread's own review — round 4 covered it separately.
 
+
+---
+## Archive batch: 2026-09-08 (cutoff 2026-09-01, keep last 7 days)
+
+## ✅ 2026-08-31 (RESOLVED): Setup D's range+RVol finding wired for live tracking — no longer a dead end
+
+Follow-up to the range+RVol combo finding above (`RESEARCH_CLAIM
+setup_d_range_rvol_combo_robust_across_windows`) — user asked "how can I track this?" and the
+honest answer was "not yet, it's backtest-only." Per this codebase's own "no dead ends" hard rule,
+wired it properly rather than leaving it a passive claim: added `active_setups.or_range_at_detection`/
+`.rvol_20d_at_detection` (real migration — `ALTER TABLE`, `server/schema.sql` regenerated,
+`ARCHITECTURE.md` updated), stamped on every future `OPENING_DRIVE_15MIN_LONG/SHORT` fire (both
+the immediate and pullback entry paths) via a new day-cached `getOrVolBaseline20d()` helper
+(trailing-20-day OR-window volume average, strictly prior days, no lookahead). NULL for every
+other setup_type, which never sets these on their candidate object. `node --check`/`eslint` clean,
+`test_invariants.mjs` shows no new regressions (the one new FAIL, `GLOBEX_VWAP_FADE_LONG`, is an
+unrelated OPTIMAL_STOP calibration drift, confirmed out of scope).
+
+**Discovered along the way**: the dev server's systemd unit had been cleanly stopped (not crashed)
+8 hours prior — restarted via the standard `./start.sh` per the existing dev workflow.
+
+**Still not done**: no frontend display of the new columns yet (Setup History view could show
+them per-fire, matching how `SHADOW`/`BACKFILL` tags already render) — the DB-level tracking is
+the priority piece (satisfies "persisted queryable" + "has a recheck path" once real SHADOW fires
+accumulate), frontend display is a nice-to-have, not blocking. No live filter/downweight wired
+yet either — this is tagging only, matching the deliberate `vol_building_signal`/`regime_pos_Nd`
+precedent (informational, not gating) until real forward data confirms the backtest finding.
+
+## 🔶 2026-08-31: Setup D (OPENING_DRIVE_15MIN) Stage 2 — a real, currently 100%-forfeited opportunity found; discriminator screen in progress
+
+Follow-up to the (resolved, below) IB_BULLISH/IB_BEARISH thread — user's redirect: "figure out
+how to capitalize on big breaks." Landscape check first: `BRACKET_BREAKOUT_SHORT` is a real,
+decisive loser (real EV -$42.60/trade, N=20, stable); everything else in the breakout family has
+essentially no real trade history except `OPENING_DRIVE_15MIN_LONG/SHORT` (Setup D), which
+already passed a real Stage 1 bar-history validation (N=138, rigor-clean, beat a blind-delay
+control) but has fired only 2 real times in 20 days — thin by starvation, not by failure.
+
+**Stage 2** (`scripts/backtest_setup_d_opening_drive_stage2.mjs`, dispatched to Gemini, every
+number independently re-verified by re-running directly): tested (a) an immediate-entry variant
+(no pullback wait) and (b) a volume-building magnitude split on both entry styles. Immediate
+entry alone fails OOS (-$1.80/trade vs Arm A's $38.15) — driven by ~46pt of real average worse
+entry price. **User's own question ("are they addressing the same trade just differently?") led
+to the real finding**: decomposing immediate-entry's 205 signals into "overlap" (139 days that
+also pull back — Arm A's entry fires) vs "exclusive" (66 days that NEVER pull back — Arm A
+structurally can't take these at all) showed the exclusive population alone is worth
+**EV=$85.54/trade — more than double Arm A's $37.54/trade on its own population** — a real,
+currently 100%-unexploited opportunity (~15% of all classified-drive days). Volume-building does
+NOT discriminate which bucket a day falls into (score distributions barely differ, median -0.41
+vs -0.20) and is actually mildly counterproductive as a filter within the exclusive bucket
+(bottom tercile $111.43 > top tercile $65.07) — ruled out as the tool for this specific job.
+Recorded as `RESEARCH_CLAIM setup_d_immediate_entry_vs_pullback_decomposition` (PROVISIONAL).
+
+**Discriminator screen ran, same session** (`scripts/backtest_setup_d_opening_drive_stage3_screen.mjs`,
+dispatched to Gemini, independently re-verified byte-for-byte): of 6 candidates, **drive
+magnitude at confirm-close is a real, OOS-validated discriminator** — `(price - OR boundary) /
+OR range`, signed by direction. Exclusive days had already traveled a median 0.69 OR-ranges by
+10:15am vs 0.38 for overlap days; holds on a chronological train/test split (train AUC=0.293,
+test AUC=0.329, same direction, doesn't decay). Honest caveat: this is close to "already-traveled-
+further is mechanically harder to fully retrace," not a hidden order-flow secret — still real,
+previously-unused information though. All 5 other candidates (order-flow imbalance,
+volume-building, lookahead-corrected NL30 alignment, gap status, structural-level proximity)
+came back genuinely null (AUC 0.45–0.51). Recorded as `RESEARCH_CLAIM
+setup_d_drive_magnitude_discriminator` (PROVISIONAL).
+
+**Built and OOS-validated, same session** (`scripts/backtest_setup_d_opening_drive_stage4_hybrid.mjs`):
+a hybrid rule — immediate entry when drive magnitude clears a threshold, otherwise the existing
+pullback-wait entry. Threshold (median split, 0.479 OR-ranges) picked using ONLY the
+chronological train fold (4 pre-registered candidates, no fine grid search), then applied blind
+to the untouched test fold: baseline (pullback-only) EV=$33.07/classified-day → hybrid
+EV=$41.96/classified-day, a real **$8.89/classified-day OOS lift**. Rigor-clean, no
+day-clustering (top5DayPct=2.7%), stable across all 3 chronological thirds. Tautology check (is
+this just "ran out of time to retrace"?) came back reassuring, not conclusive — both an
+ample-remaining-time and a thin-remaining-time subgroup show a comparable positive edge.
+Recorded as `RESEARCH_CLAIM setup_d_hybrid_drive_magnitude_entry_oos_validated` (PROVISIONAL).
+
+**Wired live SHADOW-only, same session** (`server/routes/acd.js`'s `openingDrive15Min` block):
+at confirm-close, if drive magnitude clears `DRIVE_MAG_IMMEDIATE_THRESHOLD` (0.479, hardcoded
+fallback pending a dedicated calibration row — same bootstrap pattern the pullback path's own
+stop/target already uses), fires immediately using the confirm-close bar's own price (not
+`currentPrice`, to avoid drifting away from what was actually backtested) with its own
+stop/target (159/80); otherwise falls through to the existing pullback-wait logic unchanged.
+`existingSetup`'s per-(trade_date, setup_type) dedup already guarantees this fires at most once
+per day regardless of which branch a given poll takes — no new time-window guard needed.
+`test_invariants.mjs` shows no new regressions (same 6 pre-existing FAILUREs). Still SHADOW-only
+(no real trade alerts) — real forward data needs to accumulate and confirm this before any
+promotion consideration, standard pipeline.
+
+**Separately requested, not yet built**: a real excursion check (MFE/MAE, uncapped) on the
+"immediate entry" population showed the current 80pt target is likely too tight (median real
+favorable run ≈98pt, p75≈140pt, p90≈246pt) and the 159pt stop lets ~25% of trades' real adverse
+excursion through — but MAE and MFE are comparably sized (median 88.5pt vs 98pt), so a wider
+fixed target alone probably isn't the fix; a trailing/runner mechanism (already built and
+validated on a different family earlier this session) is the more promising next angle, not yet
+tested on this specific setup. Sizing-up this setup (user's own suggestion, given its rarity) is
+reasonable in principle but premature before real forward SHADOW data exists to size against —
+revisit once it does.
+
+**Exit-mechanism follow-ups, all tested and closed out this session** (user: "test all avenues"):
+velocity (magnitude/time-to-break) added nothing beyond drive magnitude as a discriminator or MFE
+predictor (test AUC ≈ random). A fixed multiple of the trailing-20-day 1-min-bar-range as an
+ATR-scaled target/stop lost decisively to the current fixed 159/80 both in-sample and OOS. A
+precisely-confirmed Sierra Chart "ATR Ranges" level (read directly from the user's own study
+settings: session-open ± 10-session RTH ATR) does NOT reliably pin the real MFE — spread over 200
+points in the middle 50% of trades — nor does a prior-week high/low for overshoots (N=20, same
+problem). One real, smaller pattern did emerge: bearish big-break drives tend to reach/exceed the
+ATR-low, bullish ones tend to fall short of the ATR-high — a directional bias, not a magnet.
+Recorded as `RESEARCH_CLAIM setup_d_atr_weekly_level_exit_negative` (CONFIRMED). User's own take:
+"ATR gives a general target but not spot on" — consistent with the data.
+
+**Bearish floor / bullish bimodality claims, tested and closed out**: the claimed "~200pt minimum"
+for bearish drives once volume-building is confirmed sustained is false — even the top-tercile
+building subset shows median MFE only ≈119pt (N=16, thin), with 200+ reached by roughly the top
+15-25% of cases, not a floor. The "shoots up quickly OR grinds up all day" bullish pattern is real
+but not in the way floated — fast-peaking drives (<60 bars) are typically the SMALLER moves
+(median ≈60pt, N=21), slow-grinding ones (≥180 bars) the bigger ones (median ≈118pt, N=11, thin) —
+different-sized outcomes, not two equal paths to the same result.
+
+**Exit-mechanism comparison, tested and closed out**: a proper fixed-target sweep, the already-live
+breakeven-trail runner, and the already-live wider-target-on-fast-arrival mechanism (both reused,
+not reimplemented) were all tested against the current live 159/80 on this exact population, with
+one real bug caught and fixed along the way (a walk-loop off-by-one vs this codebase's own
+`resolve()` convention — made zero practical difference once corrected, since 1-min bar ranges are
+far smaller than these stop/target distances). Breakeven-trail is a clear loser (-$21 OOS,
+confirms it's a mean-reversion-tuned mechanism, a category error here). Wider-target is a wash
+(effectively identical to baseline; this setup develops too slowly for the mechanism's own
+fast-arrival assumptions to even engage). A tighter fixed target initially looked like a small
+win but its own OOS thirds are decaying badly ($171→$78→**-$104**) — not trustworthy. **No change
+made** — the live 159/80 stands, nothing tested earns the right to replace it. Recorded as
+`RESEARCH_CLAIM setup_d_exit_mechanism_comparison_negative` (CONFIRMED).
+
+**Wider target sweep and re-entry test, both settled** (`scripts/backtest_setup_d_stage6_widersweep_reentry.mjs`,
+independently re-run, numbers reproduced): a comprehensive fixed-target sweep (60-250pt × 3 stops)
+confirms the current 80/159 is the actual WINNER of the whole grid — nothing wider comes close
+(100pt drops to $24, 120pt+ falls to near-zero or negative). Re-entry after an exit is a decisive
+loser (single-entry EV=$36.53/day vs with-re-entry=-$4.96/day) — re-entering specifically after a
+TARGET_HIT is catastrophic (N=55, -$77.66 added EV per bucket), re-entering after a STOP_HIT is
+mildly positive but far too small to offset it (N=14, +$8.79), and the whole idea gets worse over
+time, not better. Recorded as `RESEARCH_CLAIM setup_d_wider_target_sweep_settled_negative` and
+`RESEARCH_CLAIM setup_d_reentry_after_exit_negative` (both CONFIRMED).
+
+**Setup D exit-mechanism thread now fully closed**: after testing ATR-scaled targets, ATR/weekly
+pinning levels, the breakeven-trail runner, the wider-target mechanism, a comprehensive fixed-target
+sweep, and re-entry — all negative — the live 159/80, single-entry, no-re-entry exit stands as the
+validated-by-elimination design. No further exit-mechanism work planned unless new evidence
+surfaces (e.g. once real forward SHADOW data accumulates for the entry rule itself).
+
+## ✅ 2026-08-31 (RESOLVED): IB_BULLISH/IB_BEARISH — real thesis doesn't match the live code at all; redesign scoped, tested, both suppressed
+
+User question ("IB_BEARISH continues to stink, how is it still live") led to a real-data audit
+that found a live misleading-text bug beyond the already-known
+`ib_daytype_calibration_structurally_unreachable` gate issue — the alert's `tier` label is a
+dead constant (`dtClass` null collapses it to the same value every fire), and the description
+text hardcodes a "best day-type" claim that's empirically wrong per real data, one that has
+flipped 3 times across 3 independent audits in this file's own comment history (noise being
+re-discovered as signal, not a stable effect).
+
+**Then the user clarified what these setups are actually supposed to be**: capitalize on a
+break-and-retest of the 60-min Initial Balance boundary, then drive until the move exhausts.
+That reframed the whole thread — confirmed the live code (`computeIbBullBear()`) implements
+none of it: no break-of-boundary check (only a midpoint-position check), zero "retest" logic
+anywhere in `acd.js`, no drive/continuation confirmation, fires as one unconditional snapshot
+the instant IB closes. The entry signal never tested the thesis it's named for, which plausibly
+explains the whole history of unstable, contradictory day-type findings.
+
+Rectified against siblings per user request: `OPEN_TEST_DRIVE_LONG/SHORT` (test-then-drive off
+the open) is the closest existing analog and is a decisive real negative (EV -$29.54/-$14.74,
+N=113/106, suppressed since 2026-07-05) — a real prior worth weighing, though the IB boundary
+(60-min-earned, widely-watched) is a different anchor than a single open price. The general
+structural-breakout-retest engine (`docs/STRUCTURAL_BREAKOUT_RETEST_SPEC.md`) already tested
+this same shape of idea on swing pivots and got a clean 0/8 negative — second independent
+caution. `IB_HIGH_FADE`/`IB_LOW_FADE` (fade thesis) and `STOP_SWEEP_LONG/SHORT` (reversal
+thesis, currently `ACTIVE` and fine) confirmed as different families, left alone.
+
+Full doc rewritten: `docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md` now leads with a
+concrete break/retest/drive detector (Idea 1, PRIMARY) as the real redesign — required confound
+controls (immortal-time-bias, structural-advantage control arm) explicit up front, given the two
+negative priors. Exit shape naturally pairs with the wider-target/breakeven-trail mechanisms or
+the 2-lot scale-out thread scoped earlier this same session (a continuation trade fits a
+runner-style exit far better than the current fixed 30-45pt target). Two refinements folded in:
+reusing the already-live `vol_building_signal` specifically as a live drive-vs-exhaustion gauge
+DURING the trade (not just an entry filter, per the user's own refinement), and a continuous-
+strength upgrade path for the break/retest/drive parameters once validated. Would be one of the
+only genuine trend-continuation bets in a ~118/122-fade roster, matching the user's documented
+breakout-trading preference — a real reason to test properly, not a guarantee of success given
+the priors.
+
+**Step 1 shipped same session**: removed the dead `tier` field (`server/routes/acd.js`, a
+dtClass-keyed ternary that always evaluated to the same value — dtClass is null at this point in
+the live session, so every live IB_BULLISH fire showed `tier='WEAK'`, every IB_BEARISH fire
+showed `tier='MARGINAL'`, regardless of actual conditions) and the two hardcoded "TREND days:
+strongest"/"TURBULENT: strongest. BALANCE: suppressed" description claims (unverified static
+text, contradicted by real data). Grepped first to confirm no frontend component reads this
+setup's `.tier` field — pure no-op on display. The live `_edgeText()` call still gives the real
+blended-EV summary. `node --check` + `eslint` clean.
+
+**Step 2 shipped same session**: dispatched the plan (not code) to DeepSeek for a design critique.
+Audited the result before acting on it (per the standing "audit all model output" rule) — caught
+one misread (DeepSeek claimed a hard contradiction between Idea 1's retest tolerance and Idea 3's
+deferral; the spec's own text already resolves this, Idea 3 only defers the OTHER two params).
+Everything else checked out and is now incorporated into the spec: resolved state-machine
+definitions (break=close not wick, fixed-fraction-of-IB-range retest tolerance for v1 not
+ATR-relative, one-signal-per-day, distinct-bar sequencing to kill an intra-bar lookahead risk), a
+redesigned confound-control plan (the naive "blind-delayed-entry" control was invalid for a
+direction-committed setup — replaced with an all-break-days control + a placebo/level-swap
+control), a new confound (drive-confirmation distance is itself a momentum filter), and an
+exit-shape correction (the fade-validated wider-target/2-lot-scaleout mechanisms are a category
+error for a continuation trade's return shape, not just mistuned — must be re-validated from the
+observed forward-return distribution, not reused wholesale). Full detail:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "DeepSeek design critique" section.
+
+**Step 3 (the placebo/level-swap test) ran and came back CLEAN NEGATIVE, same session.**
+Dispatched to Gemini, independently re-verified (Gemini's script omitted its own print calls;
+re-added them, re-ran directly against `gemini_readonly`, every number reproduced exactly — see
+`scratch/reproduce_ib_placebo_test.mjs`). NQ 1-min RTH bars, 2022-12-14 to 2026-08-31, 449 days.
+The real IB boundary showed flat-to-negative, sign-inconsistent forward returns and was actually
+WORSE than an economically meaningless IB-midpoint placebo on the bearish side across all 3
+horizons (20/40/60min) — this directly refutes the one differentiator ("a widely-watched,
+60-min-earned level") that justified testing IB despite the two prior negatives (`OPEN_TEST_DRIVE`,
+the structural-breakout-retest engine). The all-break-days control also showed the retest+drive
+filter adds no measurable EV over trading the raw break. DeepSeek's design critique predicted
+this exact outcome on mechanism grounds before the test ran. Recorded as
+`RESEARCH_CLAIM ib_break_retest_drive_placebo_test_negative` (CONFIRMED). Full numbers:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s new "Step (a0) result" section.
+
+**RESOLVED, same session: user confirmed "dump them both."** Implemented via a new
+`MANUAL_SUPPRESS_OVERRIDE` in `scripts/backtest_setup_status.mjs` (removed both from
+`DAY_TYPE_CONDITIONAL`, which was itself the mechanism giving them a pass whenever any one
+bucket cleared the bar). Ran the pipeline live — both now show `recommendation='SUPPRESS'` in
+`performance_audit`, picked up by `_suppressedSetups` on the next poll, same SHADOW-only
+treatment as every other suppressed setup_type. `OPEN_DECISION
+ib_bullish_bearish_audit_and_redesign_scoped` resolved. Full detail:
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`'s final section.
+
+**New thread opened the same turn**: user wants to figure out how to capitalize on genuine big
+breaks/continuation moves — not a revival of the IB-specific idea, a fresh direction. Not yet
+scoped.
+
+## 🔶 2026-08-31 (RESOLVED): computeRigor() gets a z-score trend field, closing a 2026-08-04 decision
+
+Resolves `OPEN_DECISION add_z_score_trend_to_rigor_stability_gate`. `computeRigor()`'s existing
+3-way chronological `stable` check collapses each third to a same-sign boolean, so two
+setup_types passing it identically can have very different real trajectories (the original
+finding: `GLOBEX_VWAP_MAGNET_LONG`'s per-third z-score strengthened 1.49→2.84→3.02 while its
+RTH sibling eroded toward noise 2.46→1.78→0.94, both "stable"). Added `zScores {z1,z2,z3}` and
+`zTrend` (`STRENGTHENING`/`DECAYING`/`MIXED`, null when thin) as standing output fields —
+each third's mean divided by its own standard error, same ≥5-events-per-third gate as the
+existing fields, informational only, never feeds `clean`. Surfaced everywhere `boundaryStraddle`
+(the 2026-08-17 precedent) already was: `rigorContext()` plus all 3 real consumer sites in
+`backtest_setup_status.mjs` (the local helper, the main SUPPRESS/PROMOTE gate's notes, and the
+`SETUP_STATUS_DOW` sub-pass's notes + blended_rigor). Verified via a live re-run: 0 DOW
+suppressions before and after (unchanged from baseline — `clean`'s gating logic untouched),
+`zTrend` populated for exactly the same rows where `stable` is computable, `test_invariants.mjs`
+shows no new failures.
+
+## 🔶 2026-08-31 (RESOLVED): condition_memory rebuilt after a month-long daily_performance_log pipeline gap
+
+Two-part fix, resolves `OPEN_DECISION condition_memory_needs_rebuild_not_backfill` (HIGH, open
+since 2026-08-19). **Part 1 — pipeline gap**: the catch-up mechanism that populates
+`daily_performance_log` only ever checked whether *today's* row existed, so a trade landing
+after its own calendar day had passed (confirmed: 2026-08-03 and 2026-08-12 trades were both
+imported in one batch on 2026-08-12 20:52 ET, 9 days late for 08-03, amid a server-instability
+window matching the already-fixed pre-2026-08-18 "multiple simultaneous nodemon supervisors"
+bug class) permanently never got backfilled — `daily_performance_log` stalled at 2026-07-31 for
+a month with zero errors logged. Fixed with a bounded historical scan added to `server/index.js`'s
+existing 30-min self-healing cron; both missing dates manually backfilled and verified same turn.
+
+**Part 2 — condition_memory rebuild**: the original double-counting concern (occurrences/wins/
+losses inflated up to ~6x by a since-removed redundant `setInterval`, fixed 2026-08-19 with an
+idempotency guard that stops NEW corruption but does nothing to un-corrupt existing counters).
+Confirmed before rebuilding: `sum(occurrences)=1088` across 31 rows vs. only 343 real qualifying
+`daily_performance_log` rows (~3.2x inflated in aggregate). Rebuilt via `scripts/rebuild_condition_memory_20260831.mjs`
+— backed up first (`condition_memory_backup_20260831`, cataloged in `docs/DB_BACKUP_CATALOG.md`),
+wiped, then replayed every qualifying date chronologically through the now-idempotent
+`updateConditionMemory()`. Deliberately done in this order (pipeline fix first) per the original
+decision's own sequencing note — rebuilding from a still-broken source would have just
+re-encoded a fresh gap. Verified: post-rebuild `sum(occurrences)=343` exactly matches the
+qualifying date count, live endpoints (`/api/pattern/combinations`, `/api/pattern/today-combination`)
+spot-checked, `test_invariants.mjs` shows no new failures (6 present failures are pre-existing
+OPTIMAL_STOP circuit-breaker trips, confirmed unrelated and already tracked separately).
+
+## 🔶 2026-08-31: 2-lot scale-out (breakeven-minus-5 runner) — SECOND pass with a real structural target, both open questions resolved, PROVISIONAL
+
+Follow-up to the same-day scoping doc (`docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`). First
+pass (`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_firstpass`, now superseded) used the
+setup's own tight `t1_level` as a placeholder runner target — user confirmed both remaining open
+questions the same day (runner arms the INSTANT Lot 1 fills; runner target should be a real
+structural level, not the setup's own tight target), so `scripts/backtest_twolot_scaleout_be_minus5.mjs`
+was rebuilt to pull the nearest known `level_prices` level below Lot 1's exit (prior-period-only
+categories, no lookahead — see script header for the full category list) as the runner target.
+
+Population: real (`ACTIVE`+`SHADOW`) OR-length SHORT-fade family, N=140 (picked up 1 new fire
+since the first pass), 139 walkable, 130 usable at the winning T1 candidate (9 excluded per
+candidate where no structural level existed below Lot 1's exit that date). **Best T1=12pt**:
+delta vs exit-all-no-runner mean=**+$7.63/trade**, plateau-clean, `computeRigor` clean, bootstrap
+98.9% positive. **Meaningfully stronger OOS behavior than the first pass**: train +$7.57/trade
+(N=91) vs test +$7.75/trade (N=39) — nearly identical, versus the first pass's train/test
+near-halving ($12.04→$6.19). Outcome composition also improved: targetHit share rose from 33.1%
+to **46.2%** (now the largest of the three buckets, not just a minority tail) — structurally
+explained, not a fluke: the first pass's target could sometimes sit closer than a wider T1
+candidate and "win" trivially; the structural-level version can't, by construction. Full
+breakdown, level-usage distribution, and remaining gaps in the spec doc's "Second-pass result."
+
+**Still not done:** independent re-verification (single script's own output); comparison against
+the user's actual current live/described strategy as the *primary* baseline (an `exactBe`
+reference arm is computed, exit-all-no-runner remains primary). Broader generalization to other
+"struggling" setup_types was raised and explicitly deferred by the user — tracked separately,
+`OPEN_DECISION twolot_scaleout_generalize_to_other_setups` (LOW), with a recommended screen
+(Setup Reference's "Left on Table" metric) for whenever it's picked up.
+`RESEARCH_CLAIM twolot_scaleout_be_minus5_orshort_structural`, `PROVISIONAL`.
+
+
+### From "🔶 2026-08-31: Setup D — direction asymmetry, drawdown, day-type, and monster-day threads (late-session round)"
+
+- **Win rate reveals shorts carry the whole edge**: current live 159/80 hits target 55.0%
+  overall (needs 66.5% to break even on target/stop alone — the strategy survives on what the
+  31% "expired" bucket does, not the raw hit rate). Split by direction: **SHORT hits 69.4%**
+  (self-sufficient, clears break-even on its own) vs **LONG only 41.2%**, with LONG's defining
+  failure being *failing to commit* (41% of longs neither hit target nor stop, just meander to
+  session end) rather than getting stopped out more. Recorded as `RESEARCH_CLAIM
+  setup_d_direction_split_winrate_long_weak_link`.
+
+- **LONG-side entry filter screen** (5 candidates: drive magnitude, order-flow, volume-building,
+  NL30, gap): one real but thin, counterintuitive lead — lighter volume-building at entry lifts
+  LONG's hit rate from 41% to 56% (N=25 vs 26) — still short of the 66.5% break-even bar. Verdict:
+  LONG's weakness is structural, not fixable with a smarter filter on what's been tested.
+
+- **Real drawdown check**: worst historical losing streak (both directions combined) is 4 trades,
+  -$964; worst peak-to-trough drawdown $1,088 — both centered on the most recent stretch in the
+  data (late July–Aug 2026). With only ~100 trades on record, a worse streak than anything
+  observed (e.g. 5 stops in a row, ~$1,600) hasn't happened yet but isn't statistically far-fetched.
+
+- **Day-type check**: LONG's only losing bucket is TURBULENT days (50% WR, N=8, thin) — BALANCE
+  and TREND are fine. SHORT is robust across all three. Not usable live as stated, though — day_type
+  isn't known until ~8:20pm ET, well after the 10:15am entry decision (same structural gap that
+  broke IB_BULLISH/IB_BEARISH).
+
+- **Monster-day early-warning screen**: does anything before 10:15am predict a 600+pt session?
+  Dispatched to Gemini, then independently audited — **2 real lookahead bugs found and fixed**
+  (Overnight Range joined to the wrong night; Gap Size compared today's open to today's own
+  not-yet-existing close — both corrected in `scripts/test_monster_day_predictors.mjs`, full
+  before/after numbers in `reports/monster_day_predictors_2026-08-31.md`). Core finding survives
+  correction: a real, clean, pre-entry signal for "today will be a monster day" exists (best:
+  first-15-min OR range, AUC=0.881), but the days it correctly flags have WORSE average PnL
+  ($18.79 vs $54.27) — extends `docs/COMPRESSION_TAIL_MFE_SPEC.md`'s existing finding that wide
+  mornings predict chop, not clean trend. No early-warning-based exit adjustment is justified.
+  Recorded as `RESEARCH_CLAIM setup_d_monster_day_predictors_corrected_still_negative`.
+
+- **Follow-up, the strongest lead found all session**: does OR range COMBINED WITH relative
+  volume (RVol) predict something the monster-day screen missed? `scripts/backtest_setup_d_range_rvol_combo.mjs` —
+  splitting into quadrants (OR range vs its own median) × (RVol vs its own median), the
+  "HIGH range + HIGH RVol" bucket is the worst by a wide margin (avg PnL -$9.65, N=31, contains
+  9 of the 11 real monster days) vs "LOW range + LOW RVol" (+$69.09, N=29) at a 20-day RVol
+  window. **Deliberately swept 5 RVol lookback windows (10/15/20/25/30 days) before trusting
+  any single one** — the user's own habitual 10-day convention initially showed this, then
+  reversed sign under a chronological-stability check (first-half direction flipped). Sweeping
+  the neighborhood found 15/20/25/30-day all agree (same direction in BOTH chronological
+  halves), only the thinnest (10-day) window disagrees — consistent with 10-day being the noisy
+  outlier, not the true answer. This is the one filter idea from today that survived a genuine
+  robustness check across parameter choices, not just one lucky number. Recorded as
+  `RESEARCH_CLAIM setup_d_range_rvol_combo_robust_across_windows` (PROVISIONAL — still needs
+  real forward SHADOW confirmation before hardening into a live filter).
+
+- Real full-population NQ daily range check (not just Setup-D-triggering days): mean 317pt,
+  median 275pt across all 449 trading days — confirms the user's own instinct that daily range
+  typically runs north of 300, with a real fat right tail (max 1,620pt) pulling the mean up.
+
+**Where this leaves Setup D**: entry (hybrid drive-magnitude rule) and exit (159/80, single entry)
+both stand as tested. The clearest actionable open thread is the long/short asymmetry — SHORT is
+a real, standalone, well-validated edge; LONG is a genuinely weak, close-to-coin-flip signal that
+survives mostly on its non-resolving trades landing near flat rather than losing badly.
+
+**RESOLVED 2026-09-01**: flagged as `OPEN_DECISION setup_d_long_short_sizing_asymmetry` and put to
+the user directly (live-capital-sizing-affecting). **Decision: leave as-is for now** — no sizing
+change, both LONG and SHORT stay SHADOW-only at the existing 159/80 combined exit (which already
+implicitly prices in the asymmetry). Revisit once real N grows past the current ~2-fires-in-20-days
+starvation level — re-check the direction split and the volume-building LONG filter lead
+(41%→56% hit rate, N=25/26) with a larger sample before deciding size-down vs pause.
+
+
+### From "30-day shadow validation"
+
+- **RESOLVED 2026-08-31: `price_bars_primary_systemic_quarterly_data_gap` — root cause fully confirmed and a standing gap-guard shipped.** `price_bars_dedup_hist` (the historical branch `price_bars_primary`'s view unions in — effectively ALL historical data, since the view's other, calendar-JOIN branch only ever covers `ts` after `dedup_hist`'s own `max(ts)`, always very recent) has 6 real, permanent, unrecoverable gaps of ~63-70 days each, one at every NQ quarterly contract rollover from Dec2023 through Mar2025 inclusive: `2023-12-14→2024-02-15`, `2024-03-14→2024-05-23`, `2024-06-20→2024-08-22`, `2024-09-19→2024-11-21`, `2024-12-19→2025-02-20`, `2025-03-20→2025-05-22`.
+  - **Mechanism, confirmed bar-by-bar at every boundary via the `contract` column**: the OLD front-month contract's data stops dead exactly at its own 3rd-Friday expiration (a partial final day, e.g. `NQU24`'s last real day is 2024-09-20), and the NEW contract's data doesn't begin until ~2 months later (also a partial first day, e.g. `NQZ24` starts 2024-11-21) — consistent with a chart/feed being manually re-pointed to each new front-month contract roughly one full rollover cycle late, for 6 consecutive quarters running, before whatever process fixed it (no gaps of this kind found after 2025-05-22).
+  - **Fix shipped**: `server/services/queries.js` gained `findTradingDayGaps()`/`assertNoTradingDayGaps()` — shared helpers for any script building a positionally-indexed trading-day array to call before treating `dates[i+1]` as "the next trading day." Retrofitted into the 2 scripts whose audits originally surfaced this bug: `scripts/backtest_turn_of_month_effect.mjs` (also migrated off its own raw `pg.Client` with hardcoded credentials onto `server/db.js` — a real DeepSeek round-3 finding, fixed in the same pass, which also surfaced a real breakage: `server/db.js` globally overrides `pg`'s `date` type parser to return a plain string rather than a `Date` object, process-wide — a raw `pg.Client` elsewhere in the same process silently inherits that override the moment anything imports `server/db.js`, which is exactly what broke this script's own `.toISOString()` calls mid-fix) and `scripts/backtest_range_boundary_rejection_traversal.mjs`. Both now skip any event/window whose index range would straddle a real gap rather than silently computing a corrupted one — verified: turn-of-month runs clean end-to-end (N=21 events); range-boundary-rejection's gap-detection and skip logic confirmed executing correctly (its own full run is genuinely long — DB query per date across years of history — not completed in-session, but the fix itself is verified working).
+  - **Not yet done**: a grep for the same `dates[i-1]`/`dates[i+1]` positional-indexing pattern found 4 more scripts with the same exposure (`backtest_poc_convergence_and_drift.mjs`, `backtest_or5_low_gap_down.mjs`, `mine_or_conditional_fade.mjs`, `backtest_unified.js`) — none audited or fixed yet. All are one-off research scripts (not live-wired), so this doesn't block resolving the main decision, but it's real — tracked as `OPEN_DECISION audit_remaining_positional_dategap_scripts_20260831`.
+  - **Separate, smaller, NOT-yet-root-caused finding surfaced while investigating this**: a ~2-month window of THIN (not absent) data around the 2025-09 rollover — `contract=NQH26` (an unusually far-dated contract for the time) appears 2025-09-28 with chronically low bar counts (~20-340/day vs the normal ~1380), and `NQZ25` (the contract that actually should have been current) shows up afterward, 2025-11-19 through 2025-12-12, an inverted sequence. Bar counts return to normal by 2025-12-01. A genuinely different symptom (present-but-sparse, not absent) from the 6 root-caused gaps above — tracked separately as `OPEN_DECISION price_bars_nqh26_contract_thin_and_early_20260928`.
+
+
+- **FIXED 2026-08-31: `detectGlobexSetup()`'s main INSERT never set `wider_target_mult`/`runner_trail_width`/`extend_target_level` at all — every setup_type firing through the entire overnight/Globex level-fade engine (~30+ types: the original `PD_VAH_FADE_SHORT`/`PD_VAL_FADE_LONG`/`PD_POC_FADE_SHORT`/`PD_POC_FADE_LONG` plus every `WIDER_WINDOW_OVERNIGHT_LEVELS` type) has never been eligible for either exit mechanism, full stop.** User caught this directly from the `quick-check.html` mobile view — 3 real overnight fires (`PD_VAL_FADE_LONG`/`PD_POC_FADE_LONG` x2) hit T1 in 3-14 bars, well within the wider-target mechanism's `MAX_BARS_TO_T1_FOR_WIDER=4` arming window, but resolved as plain fixed-target trades with `wider_target_mult`/`runner_trail_width` both `NULL` and asked why. **Not the same bug as tonight's earlier session-boundary fix** (`server/services/sessionBoundary.js` — that one fixed the mechanism's INTERNAL session-end check for candidates that DO get `wider_target_mult` set; this is a structurally different gap — the column was never in this INSERT's column list at all, so the mechanism never had a chance to try). Same bug CLASS as the already-documented `backfill_wider_target_4th_site_miss_20260818.mjs` incident (a different insert site missing the same column) and the RTH audit-only insert branch's identical fix (`~acd.js:8028`, 2026-08-18) — mirrors that exact lookup pattern (`CONDITIONAL_VARIANTS[type].trailSignalName` → `BREAKEVEN_TRAIL_TEST` calibration if trail-diverted, else `WIDER_TARGET_MULT`) rather than re-deriving it.
+  - **Verified before and after**: confirmed live via direct query that all 3 of tonight's real fires (plus the day's other 3 overnight fires) had `wider_target_mult`/`runner_trail_width` both null. Fix applied to `detectGlobexSetup()`'s INSERT (`server/routes/acd.js` ~1896), lint+syntax clean, server restarted (`./restart.sh`) to deploy — confirmed the new process is live (started 2026-08-31 07:42 ET, port 3002 responding 200, `/api/acd/setup-detection` returning valid JSON, no new server errors).
+  - **`PD_VAL_FADE_LONG` is now fully fixed** — it has no `CONDITIONAL_VARIANTS` trail entry, so it will get `wider_target_mult=1.5` on every future fire going forward. **`PD_POC_FADE_LONG` is fixed at the code level but still blocked by a separate, already-known gap**: it IS a trail-diverted type (`PD_POC_FADE_LONG_TRAIL`, `trailSignalName='B_PD_POC_FADE_LONG'`), but `BREAKEVEN_TRAIL_TEST` has no calibration row for `B_PD_POC_FADE_LONG` at all (confirmed via direct query — `B_PD_POC_FADE_SHORT` has one, `trail=19.3` from 2026-08-25; `B_PD_POC_FADE_LONG` has none), so `runner_trail_width` will keep coming back null until `scripts/backtest_breakeven_trail.mjs` actually produces that row — this matches the session-start hook's own standing `INVARIANT_WARN` for this exact signal_name, not a new gap. Once that calibration exists, this insert site will pick it up automatically with no further code change.
+  - **Follow-up audit, same night, user-requested ("check if other setups won't widen")**: checked all 22 distinct real setup_types that have ever fired via this insert site (`bet_class='GLOBEX_LEVEL'`). **None of their raw type strings match a `CONDITIONAL_VARIANTS` key directly** — every one is inserted under its base name, never diverted — so with the shipped fix, **all 22 now get `wider_target_mult` set unconditionally**; nothing else is silently excluded the way `PD_VAL_FADE_LONG`/`PD_POC_FADE_LONG` were. Full list: `10D_IB_MID_FADE_SHORT_OVERNIGHT`, `3M_POC/VAL_FADE_SHORT_OVERNIGHT`, `GLOBEX_VWAP_FADE_LONG/SHORT`, `GLOBEX_VWAP_MAGNET_LONG/SHORT`, `MONTHLY_VWAP_FADE_SHORT_OVERNIGHT`, `MPP_FADE_SHORT_OVERNIGHT`, `PD_POC_FADE_LONG/SHORT`, `PD_VAH_FADE_SHORT`, `PD_VAL_FADE_LONG`, `PM_POC_FADE_SHORT_OVERNIGHT`, `PW_LOW/POC/VAH/VAL_FADE_*_OVERNIGHT`, `WEEKLY_OPEN/VWAP_FADE_SHORT_OVERNIGHT`, `WR1_FADE_SHORT_OVERNIGHT`, `WS1_FADE_SHORT_OVERNIGHT`.
+  - **New, deeper finding surfaced by that same check**: `detectGlobexSetup()` never calls `resolveSetupType()` (confirmed — that function is a local closure defined entirely inside the separate RTH engine, ~acd.js:7270, and none of its call sites are within `detectGlobexSetup()`'s ~1493-1963 span). This means a Globex touch of `PD_POC_FADE_LONG`/`PD_POC_FADE_SHORT` is **never** diverted to the `_TRAIL` breakeven mechanism the way an RTH touch of the identical level is — it's structurally invisible to `test_invariants.mjs` check [21] and the whole `CONDITIONAL_VARIANTS` trail-health monitoring (which only ever queries `setup_type=X_TRAIL`), and with this fix it'll now default to wider-target instead. Not obviously wrong — could be a deliberate session-specific choice nobody made deliberately — flagged as `OPEN_DECISION globex_trail_diversion_never_applied_20260831` (MEDIUM) rather than silently picking one behavior.
+
+
+- **`test_invariants.mjs` circuit-breaker/vol-bucket failures investigated (2026-08-31) — one real fix, six confirmed working-as-intended.**
+  - **Fixed a real false-positive**: check [check "vol_bucket_at_fire re-derivation"] sampled the CURRENT trade_date, which isn't a genuine determinism test — `getVolBucketAtFire()`'s rolling window keeps reading new bars as the current session progresses, so re-deriving TODAY's own bucket later the same day can legitimately land in a different bucket purely from more of today's own data accumulating. Confirmed live: the sole mismatch this check has ever produced was `trade_date=today` (stored `ABOVE_AVG`, fresh `AVG`, re-derived hours later same session) — not a historical `price_bars_primary` correction, the check's own anticipated failure mode. Now excludes `trade_date < CURRENT_DATE` from the sample; failure count dropped from 7 to 6 as a direct result.
+  - **The remaining 6 (`GLOBEX_VWAP_FADE_SHORT`, `IB_BULLISH`, `OR5_LOW_FADE_SHORT`, `PD_POC_FADE_LONG`, `PD_VAH_FADE_SHORT`, `RTH_VWAP_FADE_LONG`) are NOT new bugs.** Traced `IB_BULLISH`'s full `OPTIMAL_STOP` notes directly: real N=60 behind its frozen stop/target, but 89.2% of that N comes from just 8 distinct trading days — this is EXACTLY the already-diagnosed-and-resolved `optstop_sweep_implausible_rr_thin_samples` (RESOLVED 2026-08-30, the session before this one): the circuit breaker is correctly refusing to let a day-clustered, noisy real-data recalibration attempt swing the live stop/target by more than 35%, protecting the older, more broadly-sampled frozen values. That resolution already shipped both a data-derived plausibility gate (`PLAUSIBLE_SKEW_CUTOFF` in `update_optimal_stops.mjs`, reviewed as part of tonight's earlier DeepSeek rounds) and the standing "OPTIMAL_STOP CLUSTERING WATCH" session-start-hook section that surfaces exactly this pattern every session — and explicitly left the "keep `IB_BULLISH` live vs. demote it given the clustering" call to the user, not something to decide unilaterally. Nothing further to fix here; re-verified the diagnosis still holds rather than assuming the prior session's finding is still accurate (per this codebase's own "pre-compaction claims aren't evidence" rule).
+
+
+- **RESOLVED 2026-08-31: `engagement_entry_timing_backfill_contam` (HIGH) — re-audited, and the corrected result is a materially different headline, not just a magnitude fix.** `scripts/backtest_engagement_confirmation_entry.mjs` (does the user's "wait for the tussle to resolve" idea beat immediate entry) had no `origin_status` filter at all — same unfiltered-population bug already caught once in its sibling study (`backtest_coarser_bar_entry_alignment.mjs`, whose own audit flagged this decision). Fixed to match the sibling's exact filter (`origin_status IN (ACTIVE,SHADOW)`, dynamic-exit-mechanism rows excluded) and re-ran: population dropped **10,881 → 1,501 real touches** (17,259 BACKFILL/UNKNOWN + 1,421 dynamic-exit rows excluded — confirms the ~83% BACKFILL estimate was accurate).
+  - **The original study's own headline flips.** Original (contaminated): immediate entry (Arm A) roughly tied with or beat blind mechanical delay (Arm B) in all 3 pooled views ($0.95 vs $0.69 ALL; $1.53 vs -$0.35 CONFLUENCE; $0.62-0.65 vs $1.26-1.28 NON-CONFLUENCE). Corrected (real-only): Arm A is **negative** in ALL and NON-CONFLUENCE (-$0.84, -$1.20 — was positive), and Arm B **clearly dominates** Arm A in all 3 views, including a sign flip in CONFLUENCE (-$0.35 → **+$14.57/trade**).
+  - **What stayed the same**: the real-time engagement triggers (C1/C2) still don't beat blind delay in any view, and the per-setup_type replication check still fails exactly as before (`replicates=false` both arms, both on train-selected subsets that don't hold up out-of-sample).
+  - **Real caveat, not swept under the rug**: the ALL/NON-CONFLUENCE pooled views still don't clear this codebase's own rigor-clean bar even on the corrected data (`clustered=false` but `clean=false` — fails the 3-way chronological stability check). Only the CONFLUENCE view's A/B arms are rigor-clean — that's the single most trustworthy piece of this correction, not the headline ALL-pool numbers.
+  - `RESEARCH_CLAIM engagement_confirmation_entry_timing` updated in place with full before/after numbers (status kept `PROVISIONAL` — real N, not yet rigor-stable, worth another look as real data grows rather than acted on today).
+
+
+- **DeepSeek code review round 5 (2026-08-31)** audited all three fixes above (`scratch/deepseek_code_review_20260831_round5.md`) — confirmed everything correct with no new bugs, plus a few real, cheap fixes applied same session:
+  - **Confirmed the `detectGlobexSetup()` INSERT's parameter renumbering has no off-by-one** (hand-recounted the full column list against the VALUES array) and **independently confirmed via code trace (not just the observed DB outcome) that `CONDITIONAL_VARIANTS[c.type]` is structurally dead** for the trail half — `detectGlobexSetup()` never calls `resolveSetupType()`, so no Globex candidate type can ever match a `CONDITIONAL_VARIANTS` key (which is keyed by `_TRAIL` names, not base types). This is the exact code-level confirmation `OPEN_DECISION globex_trail_diversion_never_applied_20260831` needed. **Fixed the misleading comment** at the insert site (previously claimed to "mirror" the RTH branch's working trail lookup — corrected to explain it's currently non-functional for that half and point at the open decision, so a future reader doesn't mistake it for live).
+  - **Confirmed the gap-fix work (`findTradingDayGaps`/`assertNoTradingDayGaps` and both retrofitted scripts) has correct date-diff math and full window coverage**, no missed sites. **Found one real, worth-fixing gap**: `findTradingDayGaps` is a pure function but the *module* it lives in (`server/services/queries.js`) transitively imports `server/db.js`, whose module-load-time `pg.types.setTypeParser()` call is a process-wide mutation — importing the "pure" helper is not actually side-effect-free for a caller using its own raw `pg.Client` (this is exactly what broke `backtest_turn_of_month_effect.mjs` mid-session). Added an explicit warning docstring on the export rather than doing a full db-free-module split (real refactor, left as a documented tradeoff, not urgent since the one caller this bit has already been migrated onto `query()`). Also added a fail-loud guard for a malformed-date-string producing a silent `NaN`-never-flagged gap (no current caller triggers this, defensive only).
+  - **Confirmed `backtest_engagement_confirmation_entry.mjs`'s new filter is a faithful field-for-field copy of its sibling** (no population divergence), but flagged that its header comment still asserted the OLD, pre-fix conclusion — **fixed**, now states the corrected headline and 3 real caveats on trusting the flipped numbers at face value: `waitWindow` (the Arm B/C trigger-scan horizon) is derived from a resolved-outcome statistic rather than a fully independent constant (pre-existing, not introduced by the origin_status fix); per-setup-type fallbacks (`bDelay=-1`, `volRatioP50=1.0`) fire more often now that real N dropped ~7x, changing Arm B/C2's composition in a way that isn't a clean "same test, smaller N"; and the replication gate now clears far fewer setup_types, weakening that check's own verdict independent of the headline flip. None of this invalidates the correction itself — it's why the claim stays `PROVISIONAL`.
+
+
+- **RESOLVED 2026-08-31: `audit_remaining_positional_dategap_scripts_20260831` — all 4 remaining scripts patched with the same gap-guard pattern.**
+  - `scripts/backtest_poc_convergence_and_drift.mjs` (Parts A+B, forward-return horizons) — re-ran end-to-end: both parts were already `REJECTED` before the fix and remain `REJECTED` after (kill criteria still trip) — no headline change, now correctly computed. Surfaced an 8th, very recent, much smaller gap (`2026-08-13→2026-08-19`, 6 days) not previously tracked — not investigated, likely unrelated to the historical contract-rollover mechanism given its size and recency.
+  - `scripts/backtest_or5_low_gap_down.mjs` (the most exposed per the original flag — live-wired to `OR5_LOW_FADE_LONG_GAP_DOWN`'s SHADOW-only calibration) — re-ran: N moved 147→151 (aligned) / 194→193 (against), EV moved more than the small N-shift alone would suggest ($7.77→$14.86 / -$2.08→+$8.39). Plausibly mostly real data growth over the 13 days since the original 2026-08-18 calibration rather than purely this fix — not fully isolated, and not urgent to isolate since the recommendation stays `THIN_N` regardless either way (hardcoded by design, not data-driven — zero live behavior change).
+  - `scripts/mine_or_conditional_fade.mjs` (the source mining script behind the calibration above) — same fix applied for consistency/future re-runs; not re-run this session (one-off dated-CSV output, not part of a recurring pipeline).
+  - `scripts/backtest_unified.js`'s `buildTwoDayPOC()` — fixed for correctness; feeds `PD2_VAH`/`PD2_VAL`/`2D_POC`, already confirmed no real edge (2026-07-17) independent of this fix. Not re-run (large whole-roster backtest, downstream signal already known-dead).
+  - All 4 lint/syntax clean; `test_invariants.mjs` unchanged (same 6 pre-existing circuit-breaker failures).
+
+
+- **`price_bars_nqh26_contract_thin_and_early_20260928` root-caused (2026-08-31) — the original framing was wrong, and the real shape of the problem is more dangerous than a calendar gap, not less.** NQH26 (Mar2026)'s thin, early data turns out to be genuine, real market activity for a legitimate far-dated background contract — not the anomaly. **The real gap is in `NQZ25` (Dec2025, the contract that should have been front-month for essentially the whole `2025-09-20`–`2025-12-19` window)**: it only has real (confirmed genuine front-month volume, 400k-990k/day) data in `price_bars_dedup_hist` for `2025-11-19`–`2025-12-12` — missing its own first ~2 months and final ~week entirely. During those missing windows the table has ONLY `NQH26`'s thin (~1-2% of real volume) data for the same calendar dates.
+  - **This does NOT show up as a calendar-date gap** — `findTradingDayGaps()` wouldn't flag it, since every date in the window has *some* row. That makes it a materially more dangerous failure mode than the 6 main gaps (which are at least obviously empty): any volume/liquidity-sensitive computation (rolling volume baselines, ATR-by-volume, the volume-building signal, order-flow imbalance) touching `2025-09-20`–`2025-11-18` is silently reading the wrong, ~1-2%-of-real-volume contract without any structural signal that something's off.
+  - **Not resolved** — this needs a scope/handling decision, not just documentation: whether to build a separate volume-analysis exclusion guard for this window (distinct from the calendar-gap guard, since dates aren't missing here), whether the real `NQZ25` volume data is recoverable from another source, and how many existing scripts/live features already touch this window's volume data unknowingly. `OPEN_DECISION` updated in place with the corrected root cause, left `PENDING`.
+
+
+- **RESOLVED 2026-08-31: `globex_trail_diversion_never_applied_20260831` — user decided Globex touches of `PD_POC_FADE_LONG`/`SHORT` should divert to the breakeven-trail mechanism too, matching RTH.** Added `resolveUnconditionalTrailVariant(rawType)` to `server/config/setupTypes.js` — derived from `CONDITIONAL_VARIANTS`'s own `baseType` field (a reverse map built once, filtering to `unconditional`-condition entries) rather than hand-copying the RTH engine's 7-line if-chain a second time, which is exactly the mistake that caused this whole thread. `detectGlobexSetup()` now resolves `c.type` through it before the `CONDITIONAL_VARIANTS` lookup that determines `runner_trail_width`/`wider_target_mult`.
+  - **Deliberately scoped narrow for safety**: the row's own stored `setup_type` stays the raw base name (`PD_POC_FADE_LONG`), NOT renamed to the `_TRAIL` suffix RTH uses — only the trail-calibration *lookup* uses the resolved name. Renaming the stored value to match RTH would also require updating the re-arm dedup check and the live-status check (both key off `setup_type`), which touches real live-firing behavior and was judged out of scope for tonight.
+  - **Concrete effect**: `PD_POC_FADE_SHORT` (which already has a real, validated calibration — real N=21, trail=19.3pt, OOS EV +$30.31 vs -$2.31 fixed-target baseline) now gets that real benefit on Globex fires too, not just RTH. `PD_POC_FADE_LONG` has no calibration yet, so it correctly falls back to wider-target automatically — same safe-default behavior as before.
+  - **Known remaining gap, not fixed here**: Globex fires of these 2 types are still invisible to `test_invariants.mjs` check [21] and the `CONDITIONAL_VARIANTS` trail-health monitoring generally (both filter by `setup_type=X_TRAIL`) — a smaller, not-yet-flagged follow-up if full parity with RTH's monitoring is ever wanted.
+  - Verified: `resolveUnconditionalTrailVariant()` unit-tested inline against known base types, lint/syntax clean, `test_invariants.mjs` unchanged, server restarted and confirmed live (new process, no new errors).
+
+
+- **`quick-check.html` wider-target UI simplified (2026-08-31, direct user request), with one real bug caught by the user in the process.** Removed the per-trade "Wider-target check: could not verify..." counterfactual modal box (`loadWiderTargetCounterfactual()`, `WT_NORMAL_REASONS`/`WT_ABNORMAL_NOTE`, the `#wt-counterfactual` element/CSS) and the aggregate "Wider-target research/live" session-timeline banner (`#research-note`, `loadResearchNote()`/`renderResearchNote()`) — both replaced with a single compact **`Tx1.5`** row tag, matching the existing `Vol++`/`Vol+` visual pattern.
+  - **First version was wrong, caught live by the user twice on the same real trade** (id 109447, `GLOBEX_VWAP_FADE_LONG`, fired 08:27 AM, resolved 9 bars later at 08:36 AM as `WIDER_TARGET_HIT`). v1 gated the tag on `wider_target_mult != null`, which only means the mechanism was ARMED at insert — every trade routed into that branch gets a non-null value regardless of outcome, so a trade that reached T1 too slowly to actually qualify still showed the tag. Fixed to gate on `resolution_method` starting `WIDER_` (the field that reflects the mechanism actually engaging, per `stepWiderTarget()`'s own state machine).
+  - **Second flag on the same trade was NOT a bug** — traced it against real bars: T1 was genuinely reached in 2 bars (well inside the 4-bar `MAX_BARS_TO_T1_FOR_WIDER` eligibility window), correctly arming the extension; it then rode 7 more bars before the wider target itself printed, making `bars_to_resolution=9` a correct total-including-the-extension-phase figure, not a violation of the 4-bar rule. `bars_to_resolution` conflates "bars to original T1" (the actual eligibility check) with "bars to final resolution" once this mechanism engages — the tag's tooltip now says this explicitly so it doesn't keep reading as a bug.
+  - **Max DD stat added to the Session Timeline stats row** (Wins/Losses/Net/Gross/Comm), reusing `computeRangeStats()` for the shared fields. After user clarification this is deliberately NOT the cumulative peak-to-trough figure already shown in the Performance section — it's the worst single-trade MAE (in dollars) among today's trades, scaled by that trade's own `size_multiplier` (the system's live sizing recommendation at fire time, baseline 1.0x) per a further user request to reflect "actual risk," not a flat 1-contract assumption. Deliberately NOT scaled by `trades.quantity` (the real broker-fill table) — no established, validated join from an `active_setups` row to a specific real trade's contract count exists, and CLAUDE.md's own collaboration rule bars conflating that table with the signal-firing engine without one.
+  - Verified via a real Playwright check (not just `node --check`/`curl`) per the frontend hard rule: page loads clean, zero console/page errors, `#research-note` fully removed, `Tx1.5` tag renders with the corrected count, modal opens with no leftover `wt-counterfactual` element.
+
+
+- **Five quick LOW/MEDIUM `OPEN_DECISION` items cleared in one pass (2026-08-31), picked specifically for being tractable without new backtests/mining (unlike most of the ~58-item backlog, which is blocked on N<20 or needs fresh research).**
+  - **`remove_cascade_diag_after_confirmed`** — NOT resolved, re-checked and re-flagged with fresh evidence. Re-audited the full `scratch/cascade_diag.log` (5891 lines, 2026-08-12 through 2026-08-28 — quiet since because its logging is gated behind `cascadeBreaker.active`, not a bug). Still only 2 total multi-candidate `candidates-stage` lines in 16 days of instrumentation, and in both the winner was the first-listed candidate — the fallback-picks-a-non-obvious-candidate case this decision exists to observe has still never happened. Do not remove the 4 diagnostic checkpoints yet.
+  - **`optstop_notes_malformed_json_concatenation`** — RESOLVED. No code in the current codebase or git history produces the concatenation bug (a one-time manual `noiseFloorRevert` annotation, most likely via the untracked `fix.js`/`patch.cjs`/`patch.js` scratch files present earlier this session, since cleaned up). Confirmed all 146 `OPTIMAL_STOP` signal_names' *current* rows are clean JSON — no live consumer was ever at risk. Repaired the one orphaned historical row (`FLOOR_R1_FADE_LONG`, `run_date=2026-08-07`) by merging the two concatenated objects properly.
+  - **`wider_target_pressure_gate_fails_open_on_null_reading`** — RESOLVED, the recommended fix applied. `stepWiderTarget()`'s pressure gate now fails CLOSED on a missing reading (banks instead of silently arming) once a real calibrated threshold exists; the no-threshold-supplied case is unchanged. Added synthetic test T21; full suite 42/42.
+  - **`confluence_levels_naming_canonicalization_4_sites`** — RESOLVED. Canonical form is `'VWAP'` for RTH developing (not `'RTH_VWAP'` — matches `backtest_confluence.js`'s own `availableLevels.VWAP` key), `'GLOBEX_VWAP'`/`levelBase` generally for Globex. New shared `canonicalConfluenceLevelName()` helper used at both RTH sites; Globex `detectGlobexSetup()` switched from human-readable `.name` strings to the already-existing `.levelBase` field (already used for confluence pair-matching a few lines up). Confirmed zero live consequence — `backtest_confluence.js` doesn't read this column at all.
+  - **`breakeven_trail_backfill_path_latent_width_gap`** — RESOLVED. Added the missing `runner_trail_width` lookup (3rd copy of the pattern used at the other 2 insert sites) to the early-touch backfill INSERT path. Confirmed still purely defensive/latent — all 6 live `_TRAIL` variants remain `THIN_N` in `SETUP_STATUS` (per `breakeven_trail_zero_real_survivors_20260816`), so this path never actually fires a `_TRAIL` type yet; closes the gap for whenever one is eventually promoted.
+  - All 5: lint/syntax clean, `test_invariants.mjs` shows the same pre-existing 6 circuit-breaker failures as baseline (no regressions), server restarted and confirmed live after each code change.
+
+
+
+
+- **A second batch of 5 backlog items cleared (2026-08-31)**, same "tractable without new backtests/mining" selection as the earlier 5-item pass this session.
+  - **`price_bars_multicontract_collision_audit`** — RESOLVED. Grepped every script/service referencing raw `price_bars` without `price_bars_primary`; found 3 genuinely vulnerable, currently-live/scheduled consumers (`server/routes/playbook.js` x3 sites, `scripts/derive_day_types.js`, `scripts/daily_coaching.js` x2 sites) and switched all to `price_bars_primary`. Verified near-identical query timing (489ms vs 465ms), no regression. Remaining research-only scripts (`runner_leg_backtest.mjs`, `replay_all_setups.js`, `combo_backtest.js`, `volatility_predictive_backtest.mjs`, `backtest_wpp_short_gap.mjs`) documented but not fixed — lower priority, not live/scheduled.
+  - **`optimal_stop_circuit_breaker_n_count_unreconciled_drop`** — RESOLVED, bookkeeping only. Already fixed by Opus Audit 9 (2026-08-19/20, a circuit-breaker baseline-ratchet bug) — the code's own comment explicitly names this decision as resolved; the tracker entry was just never closed.
+  - **`nodemon_child_orphan_silent_stale_serving`** — RESOLVED. Added a check to `.claude/hooks/session-start.sh`: whenever exactly one nodemon supervisor is alive, verifies the actual port-3002 holder's real PPID matches it, flagging loudly on mismatch (the exact silent failure found live 2026-08-25 — nodemon alive, port healthy, but no longer supervising the real process). Scoped to the ===1 case only to avoid noise on top of the existing 2+ duplicate-supervisor check.
+  - **`compute_levels_11am_cron_overwrites_full_session_levels`** — RESOLVED. Added an optional `--category=X` flag to `scripts/compute_levels.js` (additive, every other caller unaffected); the 11am ET post-IB cron now passes `--category=CURRENT` so it only re-upserts OR/IB levels instead of also overwriting `RTH_VWAP` with a partial-session average.
+  - **`app_jsx_dead_casesetupmap_regularevents_code`** — RESOLVED, mixed. The dead-code deletion itself was already done in earlier work this week (confirmed via the code's own dated comment). The genuine open question it left behind — should timeline enrichment (bar6_checkpoint/historical_win_rate/delta-confirmation) scope to only the 12 true case-engine types, or stay unconditional for every setup — was put to the user directly. **Decision: leave it unconditional** (scoping would have hidden this context from IB_BULLISH/BEARISH and the entire fade roster, the setups actually watched most).
+  - Two of the five (circuit breaker, dead App.jsx code) turned out to already be fixed by other work earlier this week — the tracker just hadn't been updated. Verified each against live code before acting, not assumed from the flag text, per direct user instruction mid-session not to blindly reapply a stale fix over newer work.
+  - All code changes: syntax/lint clean, `test_invariants.mjs` shows the same 6 pre-existing circuit-breaker failures as baseline (unrelated, confirmed predating this session), server restarted and confirmed healthy after each change.
+
+
+- **A third batch of 5 backlog items checked (2026-08-31)**, same session as the two earlier 5-item passes.
+  - **`selected_over_starvation_recheck_at_n20`** — still PENDING, correctly left open. Real N grew from 2 (8/18) to 10, still below the N>=20 floor this decision itself requires before drawing a conclusion. Directionally, every one of the 10 rows shows IB_BULLISH/BEARISH being the type passed over, never the reverse — consistent with the original starvation concern but too thin to call real yet.
+  - **`ai_setup_review_needs_validation_check_at_n20`** — still PENDING. Max real N is 5 (PD_VAH_FADE_SHORT), nowhere near the N>=20 trigger.
+  - **`value_area_measurement_layer_first_look`** — RESOLVED, checked 2 days ahead of the 2026-09-02 self-imposed checkpoint. Real N across all 7 lookback windows ranges 32-1343 (comfortably above thin). Honest result: value-area position (Edge vs Mid) shows no meaningful, consistent differentiation in outcome at ANY lookback — avg_pnl -$1.70 to -$7.77 for both labels, win rates flat 46.5-51.5% regardless. A genuine, decisive negative, recorded as `RESEARCH_CLAIM value_area_regime_position_first_look_no_differentiation` (CONFIRMED). The tagging itself stays live (zero cost, self-populating) — this closes the "don't let it run forgotten" checkpoint, not the mechanism.
+  - **`pd_poc_fade_short_capital_exposure_override_revisit`** — RESOLVED. All 3 stated conditions genuinely cleared (see commit `4bd4db8`): real WR beats break-even for 3 consecutive runs (not just the required 2), real_n 42-44 each time, no longer circuit-breaker-deadlocked. Put to the user directly since it's a live-capital-affecting change — confirmed, override removed. `PD_POC_FADE_SHORT` returns to normal SETUP_STATUS-driven eligibility.
+  - **`backfill_time_expired_null_resolved_at_329_rows`** — investigated, repair deliberately deferred. Confirmed worse than the original sample suggested (263/329 rows, 80%, show an impossible `resolution_bar_time < fired_at` ordering — the original sample found 3/5, 60%). The offsets are irregular (31-47 minutes), NOT the clean 4-5-hour DST-shift signature that matches this codebase's already-documented naive-timestamp bug elsewhere — a different, not-yet-identified cause. Deferred building a dedicated repair script given confirmed zero real-capital impact (100% synthetic BACKFILL data, `actual_pnl` already correctly 0).
+  - 2 of 5 genuinely couldn't be resolved yet (both correctly left PENDING, not forced) — this batch is a mix of real closures and honest "not yet" answers, not a clean 5-for-5, matching the project's own no-fabrication standard.
+
+
+- **A fourth batch of 5 backlog items checked (2026-08-31)**, same session, same "verify current state, no fabrication" discipline.
+  - **`touchqualitytest_pace_window_off_by_one_affects_live_sizing`** — RESOLVED, user-confirmed. `_tqBars` was a 10-bar slice (9-interval span) z-scored against a genuine 10-interval baseline — fixed to an 11-bar slice so the span matches what was actually validated.
+  - **`lf_session_delta_partial_vs_fullday_percentile_mismatch`** — RESOLVED, user-confirmed. Re-read the original 2026-07-08 backtest: it validated partial-day cumulative delta on both sides (self-consistent). Live's threshold was a flat full-day sum percentile instead — a different, unvalidated simplification, explaining why the factor almost never fired "high" (1/704) and almost always fired "neutral" (609/704). Rebuilt the threshold as a pooled percentile of the running cumulative delta sampled at every minute of every historical session, matching the original's implicit sampling.
+  - **`rth_active_construction_stopped_20260803`** — RESOLVED 2026-09-01 as MOOT. A third zero-real-ACTIVE-fire day was found (2026-08-18) and left genuinely unexplained at the time this batch note was written. Superseded later the same session (2026-08-31, 18:19 ET, commit `c0f62d1`): IB_BULLISH/IB_BEARISH were suppressed outright, user-confirmed, after the full redesign audit came back negative. Both now permanently `recommendation=SUPPRESS` — the "why didn't IB fire" question this decision tracked no longer applies since there's no ACTIVE-eligible state left to investigate. Verified live 2026-09-01: zero ACTIVE fires of either type since the suppression deployed.
+  - **`unbounded_price_bars_primary_4_weekly_scripts`** — RESOLVED, no code change. Confirmed none of the 4 scripts can be safely bounded without risking truncation of data they genuinely need (one needs a full trading-day index for lookback correctness, the other 3 need multi-year history by design). Matches this decision's own original caution against picking an arbitrary bound.
+  - **`globex_ambiguous_names_need_session_backfill`** — RESOLVED. Backfilled 84 historical rows (of 4 setup_types sharing names across the RTH/Globex engines) from `VALUE_FADE` to `GLOBEX_LEVEL` based on real fired_at time-of-day, backed up per `DB_MIGRATION_PROTOCOL.md`, re-ran both dependent bet_class resweeps with the corrected population (`GLOBEX_LEVEL` N grew from 227 to ~560, verdict `SHIP_FLAT`; `VALUE_FADE` verdict `SHIP_CALIBRATED`).
+  - 4 of 5 resolved; 1 correctly left open with new diagnostic progress rather than a forced answer.
+
+
+- **A fifth batch of backlog items checked (2026-08-31)**, plus one standing test_invariants.mjs failure that had never been individually investigated.
+  - **6 circuit-breaker-tripped setup_types** (not a formal OPEN_DECISION, a standing daily FAIL nobody had reviewed per-type) — individually reviewed. 5 correctly held (real-to-real recalibration with unconvincing EV improvement on thin/large swings, or the breaker correctly blocking a downgrade attempt). `OR5_LOW_FADE_SHORT` was the real judgment call: attempted move would have flipped a favorable ~1:1.9 risk:reward into an unfavorable ~2:1 one — user confirmed leave frozen despite the positive point-estimate EV, since that EV almost certainly reflects a compensating high win rate rather than a real edge. Recorded as `RESEARCH_CLAIM circuit_breaker_6_tripped_types_reviewed_20260831`.
+  - **`price_bars_nqh26_contract_thin_and_early_20260928`** — partially resolved. Added `overlapsThinVolumeWindow()`/`THIN_VOLUME_WINDOWS` to `queries.js` (companion to the existing gap-guard). Identified the 3 highest-risk consumers (full-history + volume-using backtest scripts) but a full audit of all ~20 candidate files remains open — left PENDING.
+  - **`do_not_ingest_tick_depth_into_postgres`** — resolved as a standing architectural decision with no action item (was sitting PENDING with nothing left to do).
+  - **`time_expired_display_stats_sweep_remaining`** — RESOLVED, user-confirmed. `stats.js`'s capture-ratio and `monteCarloService.js` both now include TIME_EXPIRED trades (real mark-to-market P&L), classified win/loss by sign. `patternMemoryUpdate.js`'s TARGET_HIT-only queries audited and correctly left as-is (different semantic — move magnitude on a clean hit, not a general win/loss aggregate).
+  - **`condition_memory_needs_rebuild_not_backfill`** — escalated to HIGH, not resolved. Found something bigger than the original double-counting concern while scoping the rebuild: `daily_performance_log`'s last row is 2026-07-31, a full month dead, despite real `trades` data existing through 2026-08-12 that should have triggered the pipeline's own catch-up mechanism. Not root-caused this session (deliberately not rabbit-holed) — needs its own focused investigation before any rebuild, since rebuilding from a still-broken source would just re-encode a fresh gap.
+
+

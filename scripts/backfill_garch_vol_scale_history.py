@@ -7,18 +7,28 @@ import json
 # EXPANDING window by design, not a fixed/rolling lookback -- GARCH_WARMUP_DAYS only controls
 # which day the walk-forward loop STARTS reporting output; the fit at any day i always uses
 # returns.iloc[:i], the full history from day zero, regardless of this constant's value.
-# Verified empirically 2026-09-08 (scratch/test_garch_expanding_vs_rolling.py) against a
-# rolling-250-day alternative on the same real data: correlation 0.78 (genuinely different
-# series, not noise), and the HOT/WARM/NORMAL/COOL/COLD classification would flip on 29.1% of
-# days depending on this choice. That's a real, material design tradeoff (expanding gives
-# smoother/less noisy parameter estimates -- rolling-250's alpha/beta were ~12-14x noisier
-# day-to-day on the same recent window -- at the cost of being slower to fully reflect a
-# regime change, since old data never leaves an expanding sample), not a bug and not something
-# literature mandates one specific answer for. Deliberately kept as expanding: (1) this
-# monitor is informational-only, doesn't gate any live trade, so "textbook-canonical baseline,
-# honestly documented" is the right bar, not continued optimization; (2) switching now would
-# make the LATEST reading methodologically inconsistent with the historical GARCH_VOL_SCALE
-# series already in performance_audit, which was computed with an expanding window throughout.
+#
+# Tested empirically 2026-09-08 against a rolling-250-day alternative on the same real data
+# (scratch/test_garch_expanding_vs_rolling.py, scratch/test_garch_forecast_accuracy.py) --
+# CORRECTED same day after a DeepSeek review caught two real problems with the first pass:
+# (1) the original "correlation 0.78 / 29.1% label-flip" comparison was diluted -- rolling-250
+# only actually differs from expanding once i>250 (before that, max(0,i-250)==0, i.e. it IS
+# expanding), so ~43% of the compared days were numerically identical by construction, quietly
+# shrinking both reported numbers; (2) a QLIKE-based accuracy comparison (expanding 1.6120 vs
+# rolling-250 1.6348) was NOT actually statistically distinguishable -- a single day's squared
+# return is a ~1-degree-of-freedom variance proxy with per-day QLIKE variance high enough
+# (theoretical E[QLIKE]~=1.27, per-day SD~=2 for a PERFECT forecast) that the standard error on
+# a ~350-day mean is an order of magnitude larger than the 0.023 observed gap -- this was a
+# real result read out of pure noise, not a genuine "expanding is more accurate" finding.
+# Independently re-verified the E[QLIKE]=1.27 theoretical figure by hand before accepting it.
+#
+# Kept as expanding anyway, but for the reasons that predate and don't depend on that flawed
+# test: (1) this monitor is informational-only, doesn't gate any live trade, so
+# "textbook-canonical baseline, honestly documented" is the right bar, not continued
+# optimization; (2) switching now would make the LATEST reading methodologically inconsistent
+# with the historical GARCH_VOL_SCALE series already in performance_audit, which was computed
+# with an expanding window throughout. The window-choice question remains genuinely open on
+# accuracy grounds -- this data does not distinguish the two options, in either direction.
 GARCH_WARMUP_DAYS = 100
 
 def load_env():
