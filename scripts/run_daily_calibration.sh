@@ -40,6 +40,13 @@ echo "=== Daily calibration: $(date) ==="
 # session, computed with everything available as of tonight's close.
 ./venv/bin/python3 scripts/backfill_garch_vol_scale_history.py
 
+# Rolling stop/target width recalibration for the momentum-chase live setup (2026-09-09) --
+# depends on the GARCH_VOL_SCALE series just refreshed above, must run after it. See the
+# script's own header for the full backing research (RESEARCH_CLAIM
+# setup6_momentum_chase_medium_regime_positive_20260909) and why this needs to self-recalibrate
+# nightly rather than use the one-off backtest's fixed width.
+/usr/bin/node scripts/calibrate_momentum_chase_width.mjs
+
 /usr/bin/node scripts/update_optimal_stops.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 /usr/bin/node scripts/derive_day_types.js

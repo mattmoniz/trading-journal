@@ -28,7 +28,7 @@ import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFi
 export { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues };
 import { getOrVolBaseline20d, getVolatilityScaledDefault, getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVolumeBuildingCalibration, computeLiveVolumeBuildingSignal, getPaceBaseline, getVaOverlapStreak, getPriorDayProfile } from '../services/acdLiveCalibration.js';
 export { getPaceBaseline };
-import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths, classifyOpeningCallType } from '../services/queries.js';
+import { getGLine, getConvictionData, computeDynamicConviction, getTrailingVwapStd, getTrailing24hrVwapStd, getGlobex24hrBars, rollingStats, getTrailingORWidths, classifyOpeningCallType, getPriorDayRthRange } from '../services/queries.js';
 import {
   computeACDFromBars,
   getBestACDParams,
@@ -41,6 +41,13 @@ import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant, resolveSetupType as resolveSetupTypePure } from '../config/setupTypes.js';
+// Deliberate, narrow exception to volatilityRegime.js's own "isolated, informational-only,
+// never read by any live setup" header comment (2026-09-09) -- the user explicitly asked to
+// wire the one validated positive finding from that research thread (momentum-chase,
+// RESEARCH_CLAIM setup6_momentum_chase_medium_regime_positive_20260909) into a real live gate.
+// This does NOT mean the volatility monitor itself is no longer isolated for every OTHER
+// purpose -- only this one specific setup now depends on its regime classification.
+import { computeMomentumChaseSignal } from '../services/momentumChaseDetector.js';
 import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
@@ -8015,11 +8022,7 @@ export default function createACDRouter(io) {
            AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) NOT BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
         const onHigh = onBarsRes.rows[0]?.hi;
         const onLow = onBarsRes.rows[0]?.lo;
-        const pdBarsRes = await query(
-          `SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-           WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1)
-           AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]).catch(() => ({ rows: [] }));
-        const pdHi = pdBarsRes.rows[0]?.hi, pdLo = pdBarsRes.rows[0]?.lo;
+        const { pdHigh: pdHi, pdLow: pdLo } = await getPriorDayRthRange(todayET);
 
         const sweepLevels = [
           onLow && { name: 'ONL', price: onLow, side: 'LOW' },
@@ -9126,8 +9129,9 @@ export default function createACDRouter(io) {
       } catch (_) { /* informational only, never block the response */ }
 
       const stackVolSignal = await computeStackVolSignal(todayET);
+      const momentumChaseSignal = await computeMomentumChaseSignal(todayET, etMin);
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).

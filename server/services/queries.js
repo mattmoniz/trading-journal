@@ -127,6 +127,20 @@ export async function getPriorWeekRange(date) {
   return { pwHigh: r.rows[0]?.pw_high || null, pwLow: r.rows[0]?.pw_low || null };
 }
 
+// ── Prior day RTH high/low ────────────────────────────────────────────────────
+// Extracted 2026-09-09 from an inline copy in acd.js's Stop Sweep detection (~line 8018-8022)
+// per this codebase's own "share modules instead of reimplementing" convention -- a second
+// live call site (momentumChaseDetector.js) needed the exact same query, so both now import
+// this instead of a second/third hand-rolled inline copy.
+export async function getPriorDayRthRange(date) {
+  const r = await query(`
+    SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
+    WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1)
+    AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [date]).catch(() => ({ rows: [] }));
+  return { pdHigh: r.rows[0]?.hi ?? null, pdLow: r.rows[0]?.lo ?? null };
+}
+
 // ── Structural state derivation ──────────────────────────────────────────────
 
 // ── Conviction ratings from phase_change_backtest_results ────────────────────

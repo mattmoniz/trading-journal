@@ -94,3 +94,40 @@ export async function getVolRegimeHistory(days = 180) {
     })
     .reverse();
 }
+
+// Live LOW/MEDIUM/HIGH regime classification (2026-09-09), added when the user asked to trade
+// on a real backtested finding (Setup 6 momentum-chase, RESEARCH_CLAIM
+// setup6_momentum_chase_medium_regime_positive_20260909) that was validated conditioned on this
+// exact LOW/MEDIUM/HIGH split. The cutoffs are NOT hardcoded (this codebase's own standing
+// no-static-thresholds rule) -- p30/p80 are recomputed from the real historical GARCH_VOL_SCALE
+// series every call, the same percentile-of-history convention every scratch/backtest_* script
+// in that research thread used. This is the one function this monitor's own header comment
+// warns NOT to build (a discrete classification of the continuous scale) -- deliberately
+// different from that warning: THAT one was a HOT/WARM/NORMAL/COOL/COLD label tested and found
+// not to predict next-day moves; THIS one is the exact LOW/MEDIUM/HIGH split a real, validated,
+// regime-conditioned trading finding depends on, not a fresh, unvalidated interpretive label.
+export async function getCurrentGarchRegime() {
+  const [latest, history] = await Promise.all([getLatestVolRegime(), getVolRegimeHistory(2000)]);
+  if (!latest || history.length === 0) return null;
+
+  // Linear-interpolation percentile, matching pandas' Series.quantile() default exactly (the
+  // method every scratch/backtest_* script in this research thread used) -- a simple nearest-
+  // rank index would silently diverge from what was actually validated.
+  const scales = history.map((r) => r.scale).sort((a, b) => a - b);
+  const percentile = (p) => {
+    const pos = p * (scales.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    if (lo === hi) return scales[lo];
+    return scales[lo] + (scales[hi] - scales[lo]) * (pos - lo);
+  };
+  const p30 = percentile(0.30);
+  const p80 = percentile(0.80);
+
+  let regime;
+  if (latest.scale < p30) regime = 'LOW';
+  else if (latest.scale <= p80) regime = 'MEDIUM';
+  else regime = 'HIGH';
+
+  return { regime, scale: latest.scale, asOfClose: latest.asOfClose, p30, p80 };
+}
