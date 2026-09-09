@@ -4,6 +4,21 @@ import numpy as np
 from arch import arch_model
 import json
 
+# EXPANDING window by design, not a fixed/rolling lookback -- GARCH_WARMUP_DAYS only controls
+# which day the walk-forward loop STARTS reporting output; the fit at any day i always uses
+# returns.iloc[:i], the full history from day zero, regardless of this constant's value.
+# Verified empirically 2026-09-08 (scratch/test_garch_expanding_vs_rolling.py) against a
+# rolling-250-day alternative on the same real data: correlation 0.78 (genuinely different
+# series, not noise), and the HOT/WARM/NORMAL/COOL/COLD classification would flip on 29.1% of
+# days depending on this choice. That's a real, material design tradeoff (expanding gives
+# smoother/less noisy parameter estimates -- rolling-250's alpha/beta were ~12-14x noisier
+# day-to-day on the same recent window -- at the cost of being slower to fully reflect a
+# regime change, since old data never leaves an expanding sample), not a bug and not something
+# literature mandates one specific answer for. Deliberately kept as expanding: (1) this
+# monitor is informational-only, doesn't gate any live trade, so "textbook-canonical baseline,
+# honestly documented" is the right bar, not continued optimization; (2) switching now would
+# make the LATEST reading methodologically inconsistent with the historical GARCH_VOL_SCALE
+# series already in performance_audit, which was computed with an expanding window throughout.
 GARCH_WARMUP_DAYS = 100
 
 def load_env():
