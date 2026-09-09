@@ -77,6 +77,7 @@ import antigravityEdgesRouter from './routes/antigravityEdges.js';
 import playbookRouter from './routes/playbook.js';
 import performanceAuditRouter from './routes/performanceAudit.js';
 import researchRouter from './routes/research.js';
+import volatilityRegimeRouter from './routes/volatilityRegime.js';
 import { computeAndPersistSession } from './services/developingValueService.js';
 import cron from 'node-cron';
 import { runMorningBriefLogged } from '../scripts/morning_brief.js';
@@ -358,6 +359,7 @@ app.use('/api', createPriceBarsRouter(io, getBestACDParams, computeORLevelsOnly,
 app.use('/api', createACDRouter(io));
 app.use('/api', phaseChangeRouter);
 app.use('/api', setupsRouter);
+app.use('/api', volatilityRegimeRouter);
 app.use('/api', calendarRouter);
 app.use('/api', dllRouter);
 app.use('/api', profitLockRouter);

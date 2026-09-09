@@ -14,6 +14,32 @@ echo "=== Daily calibration: $(date) ==="
 /usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
 
 /usr/bin/node scripts/backfill_mae_mfe.mjs
+
+# GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
+# explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
+# stop/target-scaling hypothesis this was originally built to feed was tested and rejected the
+# same day (RESEARCH_CLAIM garch_dual_barrier_subgroup_symmetry_negative_20260908) -- this reads
+# NOTHING into any live setup's stop/target/sizing, it's purely a "how hot/cold is volatility
+# running right now" display (quick-check.html, GET /api/setups/vol-regime). Re-runs the FULL
+# walk-forward every night (~7s measured, 454 trading days as of 2026-09-08) rather than a
+# true incremental refit -- `arch` has no online/warm-start fit path (confirmed via DeepSeek
+# design review), so "incremental" only ever meant "1 new output row," not a cheaper per-fit
+# cost; at 7s/run a full nightly re-fit is simpler and safer than a separate, error-prone
+# incremental variant for a monitoring-only feature. Idempotent: the ON CONFLICT key is
+# run_date=trade_date (fixed same day -- previously keyed on script-run-date, which would have
+# inserted duplicates on every re-run). Uses ./venv (the stable project venv), NOT
+# scratch/.venv (where `arch` was first found installed) -- a permanent nightly cron has no
+# business depending on a directory this codebase treats as ephemeral scratch work.
+# User caught a real timing gap same day ("shouldn't the cron be in the morning?"): the
+# walk-forward's own historical rows are backward-looking ("forecast FOR day d, using data
+# BEFORE d"), so its last row as of an 8:20 PM run is already stale by the time anyone checks
+# it the next morning -- today already happened. Fixed by having the script also fit one more
+# model on the FULL series (today's return included) and store it under signal_name='LATEST'
+# (not a specific date, sidesteps needing market-calendar next-trading-day logic) -- the
+# monitor reads that row, which represents a genuine forward-looking reading for the next
+# session, computed with everything available as of tonight's close.
+./venv/bin/python3 scripts/backfill_garch_vol_scale_history.py
+
 /usr/bin/node scripts/update_optimal_stops.mjs
 /usr/bin/node scripts/backtest_setup_status.mjs
 /usr/bin/node scripts/derive_day_types.js

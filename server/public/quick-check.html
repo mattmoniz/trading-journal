@@ -67,6 +67,20 @@
   .chip .val { font-size: 14px; font-weight: 700; }
   .chip .sub { font-size: 11px; font-weight: 700; text-transform: uppercase; }
 
+  /* Standalone volatility-regime card (2026-09-08) -- deliberately its own visual block, not
+     a pulse-bar chip: this reads from server/services/volatilityRegime.js, a module kept
+     structurally separate from acd.js/setups.js per user direction ("not tailored to our
+     setups... its own class, not acd"). Muted/quiet styling since it's informational only,
+     never a live alert. */
+  #vol-regime-card {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.02); font-size: 12px; color: var(--dim);
+  }
+  #vol-regime-card .vr-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+  #vol-regime-card .vr-scale { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: var(--text); font-weight: 700; }
+  #vol-regime-card .vr-asof { margin-left: auto; font-size: 11px; }
+
   /* Container */
   .wrap { max-width: 480px; margin: 0 auto; padding: 14px; }
 
@@ -247,6 +261,7 @@
 <div id="pulse-bar"></div>
 
 <div class="wrap">
+  <div id="vol-regime-card"></div>
   <div id="setup-card"><div class="empty-card">Loading…</div></div>
   <div id="sweep-watch"></div>
 
@@ -296,6 +311,33 @@ function sigmaColor(s) {
 }
 
 // ---- Top market pulse bar ----
+// Standalone volatility-regime card (2026-09-08) -- deliberately its own fetch, not bundled
+// into loadPulse()'s Promise.all with the other ACD-related endpoints, matching the same
+// "not acd" separation server/services/volatilityRegime.js's header describes. Refreshes
+// every 5 minutes: the underlying reading only changes once per night (run_daily_calibration.sh),
+// so anything faster would just be re-fetching an unchanged value.
+const VOL_REGIME_LABELS = { HOT: 'Hot', WARM: 'Warm', NORMAL: 'Normal', COOL: 'Cool', COLD: 'Cold' };
+const VOL_REGIME_COLORS = { HOT: 'var(--red)', WARM: '#f59e0b', NORMAL: 'var(--dim)', COOL: '#60a5fa', COLD: 'var(--green)' };
+async function loadVolRegime() {
+  try {
+    const data = await fetch('/api/volatility/regime').then(r => r.json());
+    renderVolRegimeCard(data?.regime || null);
+  } catch (e) { /* keep last good render */ }
+}
+function renderVolRegimeCard(regime) {
+  const el = $('vol-regime-card');
+  if (!el) return;
+  if (!regime) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  const color = VOL_REGIME_COLORS[regime.label] || 'var(--dim)';
+  const label = VOL_REGIME_LABELS[regime.label] || regime.label;
+  el.innerHTML =
+    '<span class="vr-label" style="color:' + color + '">Volatility: ' + label + '</span>' +
+    '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
+    (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
+    '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>';
+}
+
 async function loadPulse() {
   try {
     const [pulseRes, setupRes, ctxRes, buildRes] = await Promise.all([
@@ -1623,9 +1665,11 @@ loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac cali
 loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
+loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
+setInterval(loadVolRegime, 300000);
 window.addEventListener('resize', () => {
   const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
   renderEquityCurve('range-equity', rows, currentRange);

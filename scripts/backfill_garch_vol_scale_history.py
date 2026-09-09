@@ -106,6 +106,52 @@ def main():
     print(f"1st percentile scale: {p01:.4f}")
     print(f"99th percentile scale: {p99:.4f}")
 
+    # "LATEST" forward-looking reading (2026-09-08, standalone monitoring only, added after
+    # user asked "shouldn't the cron be in the morning?"). The walk-forward loop above labels
+    # each row `d` using `hist_ret = returns.iloc[:i]` -- data strictly BEFORE `d` -- so its
+    # last row is "the forecast FOR today, made using yesterday's close." By the time this
+    # script runs (8:20 PM ET, after today's close), today has already happened -- that value
+    # is retrospective, not a live reading. What a monitor checked the next morning actually
+    # wants is the forecast for the NEXT session, which requires today's own return as input
+    # and is only computable after today's close. Rather than compute a specific "next trading
+    # day" calendar date (would need market-calendar weekend/holiday logic just to label it),
+    # this fits ONE more model on the FULL return series (today included, no held-out day) and
+    # stores it under signal_name='LATEST' instead of a date -- the monitor always reads the
+    # single most recent LATEST row (ORDER BY run_date DESC LIMIT 1), no date arithmetic
+    # needed. run_date is the last bar's own date (dates[-1], from price_bars_primary's
+    # DB-native America/New_York date), not Python's system clock -- matches this codebase's
+    # own SQL-CURRENT_DATE-not-JS/Python-local-date convention. Each day's LATEST becomes its
+    # own row (run_date differs daily), so this doubles as a running history of "what was the
+    # forward view, as of that night" -- useful later for checking forecast-vs-realized.
+    am_latest = arch_model(returns, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
+    latest_degenerate = False
+    try:
+        res_latest = am_latest.fit(disp='off')
+        fcast_latest = res_latest.forecast(horizon=1, align='origin')
+        latest_pred_vol = np.sqrt(fcast_latest.variance.iloc[-1, 0])
+        omega_l = res_latest.params.get('omega', 0)
+        alpha_l = res_latest.params.get('alpha[1]', 0)
+        beta_l = res_latest.params.get('beta[1]', 0)
+        persistence_gap_l = 1 - alpha_l - beta_l
+        if persistence_gap_l > PERSISTENCE_FLOOR:
+            latest_unc_vol = np.sqrt(omega_l / persistence_gap_l)
+        elif last_valid_unc_vol is not None:
+            latest_unc_vol = last_valid_unc_vol
+            latest_degenerate = True
+        else:
+            latest_unc_vol = latest_pred_vol
+            latest_degenerate = True
+        latest_scale = latest_pred_vol / latest_unc_vol
+    except Exception:
+        latest_pred_vol = 1.0
+        latest_unc_vol = last_valid_unc_vol if last_valid_unc_vol is not None else 1.0
+        latest_scale = latest_pred_vol / latest_unc_vol
+        alpha_l = None
+        beta_l = None
+        latest_degenerate = True
+    latest_run_date = dates[-1]
+    print(f"LATEST (as of {latest_run_date} close, forecast for next session): scale={latest_scale:.4f} degenerate={latest_degenerate}")
+
     print("Upserting into performance_audit...")
     # FIXED 2026-09-08 (DeepSeek design critique, caught before the dual-barrier shadow
     # work was built on top of this): run_date used to be datetime.date.today() -- the day
@@ -135,7 +181,29 @@ def main():
             ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
                 notes = EXCLUDED.notes
         """, (d, str(d), notes_json))
-    
+
+    latest_notes_json = json.dumps({
+        'as_of_close': str(latest_run_date),
+        'forecast_vol': float(latest_pred_vol),
+        'unc_vol': float(latest_unc_vol),
+        'scale': float(latest_scale),
+        'alpha': float(alpha_l) if alpha_l is not None else None,
+        'beta': float(beta_l) if beta_l is not None else None,
+        'degenerate_fallback': bool(latest_degenerate),
+        # p01/p99 included here so a downstream consumer (server/services/volatilityRegime.js)
+        # can classify hot/normal/cold against the same calibrated band this script already
+        # computed, instead of re-deriving percentiles from the full historical series itself.
+        'p01': float(p01),
+        'p99': float(p99),
+    })
+    cursor.execute("""
+        INSERT INTO performance_audit (
+            run_date, window_days, signal_type, signal_name, sample_size, notes
+        ) VALUES (%s, 0, 'GARCH_VOL_SCALE', 'LATEST', 1, %s)
+        ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
+            notes = EXCLUDED.notes
+    """, (latest_run_date, latest_notes_json))
+
     print("Backfill complete.")
 
 if __name__ == "__main__":
