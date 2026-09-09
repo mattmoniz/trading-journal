@@ -383,8 +383,19 @@ async function loadPulseReading() {
 function renderPulseReadingCard(pulse) {
   const el = $('pulse-reading-card');
   if (!el) return;
+  // null = genuine no-data (query failed, or no session at all -- e.g. weekend/holiday).
+  // WARMING_UP = a real session is running but hasn't accumulated the ~2hrs of bars this
+  // measure needs yet -- shown distinctly so the card isn't indistinguishable from "broken"
+  // for the first 2 hours of every trading day (found live 2026-09-09).
   if (!pulse) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
+  if (pulse.state === 'WARMING_UP') {
+    el.innerHTML =
+      '<span class="pr-label">Pulse (volume)</span>' +
+      '<span class="pr-state down">Warming up</span>' +
+      '<span class="pr-note">needs ~2hrs of bars (' + pulse.barsSoFar + '/' + pulse.barsNeeded + ')</span>';
+    return;
+  }
   const isUp = pulse.state === 'PICKING_UP';
   const label = pulse.state === 'PICKING_UP' ? 'Picking Up' : pulse.state === 'DROPPING_OFF' ? 'Dropping Off' : 'Flat';
   el.innerHTML =

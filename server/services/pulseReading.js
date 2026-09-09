@@ -43,7 +43,13 @@ export async function getLivePulseReading() {
   `, [RTH_OPEN_MOD]).catch(() => ({ rows: [] }));
 
   const bars = res.rows.map((r) => Number(r.volume));
-  if (bars.length < 24) return null; // need 20-bar rolling window + 3-bar lookback + current
+  // Need 20-bar rolling window + 3-bar lookback + current = 24 bars (~2h into the session).
+  // Return a distinguishable "warming up" state rather than null for this case specifically --
+  // found live 2026-09-09: the frontend hides the card entirely on null, which for the first
+  // ~2 hours of EVERY trading day looks identical to "this is broken," not "not ready yet."
+  // `null` is still returned for genuine failure (query error, caught above) so the frontend
+  // can keep distinguishing "no data at all" from "warming up."
+  if (bars.length < 24) return { state: 'WARMING_UP', barsSoFar: bars.length, barsNeeded: 24 };
 
   const volZAt = (i) => {
     const window = bars.slice(i - 20, i);
