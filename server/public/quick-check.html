@@ -83,6 +83,22 @@
   #vol-regime-card .vr-scale { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: var(--text); font-weight: 700; }
   #vol-regime-card .vr-asof { margin-left: auto; font-size: 11px; }
 
+  /* Live pulse-reading card (2026-09-09) -- see server/services/pulseReading.js's header: this
+     is a raw, live "is volume accelerating or decelerating" read, NOT a validated trading
+     signal (RESEARCH_CLAIM pulse_vwap_slope_direction_negative_20260909 found it doesn't
+     reliably predict direction). Deliberately muted/neutral, matching the volatility card's
+     own honest-descriptive styling. */
+  #pulse-reading-card {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: rgba(255,255,255,0.02); font-size: 12px; color: var(--dim);
+  }
+  #pulse-reading-card .pr-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+  #pulse-reading-card .pr-state { font-weight: 700; }
+  #pulse-reading-card .pr-state.up { color: var(--green); }
+  #pulse-reading-card .pr-state.down { color: var(--dim); }
+  #pulse-reading-card .pr-note { margin-left: auto; font-size: 10px; color: var(--dim); }
+
   /* Container */
   .wrap { max-width: 480px; margin: 0 auto; padding: 14px; }
 
@@ -264,6 +280,7 @@
 
 <div class="wrap">
   <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
+  <div id="pulse-reading-card"></div>
   <div id="setup-card"><div class="empty-card">Loading…</div></div>
   <div id="sweep-watch"></div>
 
@@ -326,19 +343,54 @@ function sigmaColor(s) {
 async function loadVolRegime() {
   try {
     const data = await fetch('/api/volatility/regime').then(r => r.json());
-    renderVolRegimeCard(data?.regime || null);
+    renderVolRegimeCard(data?.regime || null, data?.favorableSetups || []);
   } catch (e) { /* keep last good render */ }
 }
-function renderVolRegimeCard(regime) {
+// favorableSetups (2026-09-09, direct user request: "add which setups would be successful in
+// today's regime to this card") -- from validatedSetupRegistry.js via the route, NOT computed
+// here. Only shows a line when something IS favorable today (matches #sweep-watch's own "stay
+// hidden unless there's something to say" convention) -- with only one registry entry so far,
+// showing "not favorable" every single day it isn't MEDIUM would just be noise.
+function renderVolRegimeCard(regime, favorableSetups) {
   const el = $('vol-regime-card');
   if (!el) return;
   if (!regime) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
+  el.style.flexWrap = 'wrap';
+  const favorable = (favorableSetups || []).filter(s => s.favorableToday);
   el.innerHTML =
     '<span class="vr-label">Volatility vs. recent normal</span>' +
     '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
     (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
-    '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>';
+    '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>' +
+    (favorable.length
+      ? '<span style="flex-basis:100%;font-size:11px;color:var(--green);margin-top:4px;">✓ Favors: ' + favorable.map(s => s.label).join(', ') + '</span>'
+      : '');
+}
+
+// ---- Live pulse reading (2026-09-09, direct user request after the pulse/VWAP-slope research
+// thread). Raw, live volume-acceleration state -- NOT a validated signal (RESEARCH_CLAIM
+// pulse_vwap_slope_direction_negative_20260909 found this doesn't reliably predict direction,
+// even combined with VWAP slope and price position). Shown for its own sake, same honest-
+// descriptive framing as the volatility card above. Polls the same 5min cadence as that card
+// -- this is a slow-moving-enough read (needs 20+ bars) that RTH-poll-speed isn't needed.
+async function loadPulseReading() {
+  try {
+    const data = await fetch('/api/pulse/reading').then(r => r.json());
+    renderPulseReadingCard(data?.pulse || null);
+  } catch (e) { /* keep last good render */ }
+}
+function renderPulseReadingCard(pulse) {
+  const el = $('pulse-reading-card');
+  if (!el) return;
+  if (!pulse) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  const isUp = pulse.state === 'PICKING_UP';
+  const label = pulse.state === 'PICKING_UP' ? 'Picking Up' : pulse.state === 'DROPPING_OFF' ? 'Dropping Off' : 'Flat';
+  el.innerHTML =
+    '<span class="pr-label">Pulse (volume)</span>' +
+    '<span class="pr-state ' + (isUp ? 'up' : 'down') + '">' + label + '</span>' +
+    '<span class="pr-note">informational only, not a signal</span>';
 }
 
 // ---- Volatility regime history popup (2026-09-08, direct user request: "is there a chart in
@@ -1767,10 +1819,12 @@ loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter c
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
+loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
+setInterval(loadPulseReading, 60000);
 window.addEventListener('resize', () => {
   const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
   renderEquityCurve('range-equity', rows, currentRange);
