@@ -66,3 +66,31 @@ export async function getLatestVolRegime() {
     band: { p01: +p01.toFixed(4), p99: +p99.toFixed(4) },
   };
 }
+
+// Returns the walk-forward daily scale series for charting (2026-09-08, direct user request
+// after seeing the single-number card: "is there a chart in quick check"). Each row's `scale`
+// is the forecast made using data strictly BEFORE that date (see backfill script's own header),
+// i.e. this is the SAME walk-forward series the window-choice/big-move RESEARCH_CLAIMs were
+// validated against -- not a separately computed convenience series. Excludes signal_name=
+// 'LATEST' (that's a same-day forward-only reading with no historical date of its own, handled
+// separately by getLatestVolRegime()). Capped at `days` most-recent rows (default 180 --
+// covers roughly the whole rolling-250-vs-expanding investigation window without ever returning
+// an unbounded scan; the full series is currently only ~320 rows total so this is a defensive
+// cap, not a real constraint on what's shown) and returned in ascending (chronological) order,
+// ready for a line chart's x-axis to read left-to-right without the caller needing to reverse it.
+export async function getVolRegimeHistory(days = 180) {
+  const result = await query(`
+    SELECT run_date::text as date, notes
+    FROM performance_audit
+    WHERE signal_type = 'GARCH_VOL_SCALE' AND signal_name != 'LATEST'
+    ORDER BY run_date DESC
+    LIMIT $1
+  `, [days]).catch(() => ({ rows: [] }));
+
+  return result.rows
+    .map((r) => {
+      const notes = JSON.parse(r.notes);
+      return { date: r.date, scale: +Number(notes.scale).toFixed(4) };
+    })
+    .reverse();
+}

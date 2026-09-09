@@ -76,7 +76,9 @@
     display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
     padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
     background: rgba(255,255,255,0.02); font-size: 12px; color: var(--dim);
+    cursor: pointer;
   }
+  #vol-regime-card:active { background: rgba(255,255,255,0.05); }
   #vol-regime-card .vr-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
   #vol-regime-card .vr-scale { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: var(--text); font-weight: 700; }
   #vol-regime-card .vr-asof { margin-left: auto; font-size: 11px; }
@@ -261,7 +263,7 @@
 <div id="pulse-bar"></div>
 
 <div class="wrap">
-  <div id="vol-regime-card"></div>
+  <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
   <div id="setup-card"><div class="empty-card">Loading…</div></div>
   <div id="sweep-watch"></div>
 
@@ -337,6 +339,104 @@ function renderVolRegimeCard(regime) {
     '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
     (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
     '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>';
+}
+
+// ---- Volatility regime history popup (2026-09-08, direct user request: "is there a chart in
+// quick check" -> "can i click on it and get a historical chart modal"). Same #modal/
+// #modal-backdrop + mRow/mSection convention as every other popup on this page -- reuses the
+// existing modal chrome rather than inventing new UI. GET /api/volatility/regime/history reads
+// the SAME walk-forward series (server/services/volatilityRegime.js's getVolRegimeHistory())
+// the window-choice and big-move RESEARCH_CLAIMs were validated against, not a separately
+// computed convenience series.
+async function openVolRegimeHistoryModal() {
+  let html = '<div class="m-head"><span class="m-title">Volatility Regime History</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+    '<div class="m-sub">GARCH(1,1) forecast scale vs. its own historical range -- informational only, not wired into any setup\'s stop/target/sizing</div>' +
+    '<canvas id="vol-history-canvas" class="equity" style="margin-top:10px;"></canvas>' +
+    '<div id="vol-history-loading" style="font-size:12px;color:var(--dim);text-align:center;padding:20px 0;">Loading…</div>';
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+
+  try {
+    const data = await fetch('/api/volatility/regime/history?days=180').then(r => r.json());
+    const loadingEl = $('vol-history-loading');
+    if (loadingEl) loadingEl.remove();
+    renderVolRegimeHistoryChart('vol-history-canvas', data?.history || [], data?.band || null);
+  } catch (e) {
+    const loadingEl = $('vol-history-loading');
+    if (loadingEl) loadingEl.textContent = 'Failed to load history';
+  }
+}
+
+// Same canvas-sizing/axis/gridline conventions as renderEquityCurve() above (dpr scaling,
+// padL/padR/padT/padB layout, min/max-derived y ticks) -- plots `scale` instead of cumulative
+// $, with a dashed reference line at 1.0 (this reading's own long-run "normal") instead of a
+// solid one at $0, since 1.0 is a scale-relative baseline, not a break-even point the way $0 is
+// for P&L.
+function renderVolRegimeHistoryChart(canvasId, rows, band) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!rows || rows.length < 2) {
+    ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Not enough history yet', w / 2, h / 2);
+    return;
+  }
+
+  const scales = rows.map(r => r.scale);
+  const min = Math.min(...scales, band ? band.p01 : Infinity, 1.0);
+  const max = Math.max(...scales, band ? band.p99 : -Infinity, 1.0);
+  const valRange = (max - min) || 1;
+  const padL = 40, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (rows.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  // Y-axis gridlines + scale labels (min, 1.0 baseline, max)
+  const yTicks = [...new Set([min, 1.0, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const t of yTicks) {
+    const y = yAt(t);
+    ctx.strokeStyle = t === 1.0 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
+    ctx.lineWidth = 1;
+    if (t === 1.0) ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(148,163,184,0.75)';
+    ctx.fillText(t.toFixed(2) + 'x', padL - 6, y + 3);
+  }
+
+  // Shaded band between this reading's own 1st/99th percentile (context, not a threshold)
+  if (band) {
+    ctx.fillStyle = 'rgba(148,163,184,0.06)';
+    ctx.fillRect(padL, yAt(Math.min(band.p99, max)), plotW, yAt(Math.max(band.p01, min)) - yAt(Math.min(band.p99, max)));
+  }
+
+  // X-axis date labels (first, middle, last)
+  const xTickCount = Math.min(5, rows.length);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (rows.length - 1));
+    const x = xAt(idx);
+    ctx.fillText(rows[idx].date.slice(5), Math.min(Math.max(x, padL + 18), w - padR - 18), h - 4);
+  }
+
+  const finalScale = scales[scales.length - 1];
+  const lineColor = finalScale >= 1.0 ? '#c4b5fd' : '#94a3b8'; // muted purple/grey -- deliberately NOT green/red, this isn't a win/loss signal
+
+  ctx.beginPath();
+  scales.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+  ctx.fillText(finalScale.toFixed(2) + 'x', w - padR - 2, padT + 12);
 }
 
 async function loadPulse() {
