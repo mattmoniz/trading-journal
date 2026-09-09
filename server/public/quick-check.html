@@ -316,8 +316,11 @@ function sigmaColor(s) {
 // "not acd" separation server/services/volatilityRegime.js's header describes. Refreshes
 // every 5 minutes: the underlying reading only changes once per night (run_daily_calibration.sh),
 // so anything faster would just be re-fetching an unchanged value.
-const VOL_REGIME_LABELS = { HOT: 'Hot', WARM: 'Warm', NORMAL: 'Normal', COOL: 'Cool', COLD: 'Cold' };
-const VOL_REGIME_COLORS = { HOT: 'var(--red)', WARM: '#f59e0b', NORMAL: 'var(--dim)', COOL: '#60a5fa', COLD: 'var(--green)' };
+//
+// NO qualitative HOT/WARM/NORMAL/COOL/COLD label -- shipped with one, removed same day after
+// directly testing whether it predicted next-day realized moves (it didn't: non-monotonic,
+// weak correlation ~0.14-0.15, see volatilityRegime.js's header for the full writeup). Shows
+// the raw scale only -- an honest description of the reading, not a predictive claim.
 async function loadVolRegime() {
   try {
     const data = await fetch('/api/volatility/regime').then(r => r.json());
@@ -329,10 +332,8 @@ function renderVolRegimeCard(regime) {
   if (!el) return;
   if (!regime) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
-  const color = VOL_REGIME_COLORS[regime.label] || 'var(--dim)';
-  const label = VOL_REGIME_LABELS[regime.label] || regime.label;
   el.innerHTML =
-    '<span class="vr-label" style="color:' + color + '">Volatility: ' + label + '</span>' +
+    '<span class="vr-label">Volatility vs. recent normal</span>' +
     '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
     (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
     '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>';

@@ -4,32 +4,27 @@ import numpy as np
 from arch import arch_model
 import json
 
-# EXPANDING window by design, not a fixed/rolling lookback -- GARCH_WARMUP_DAYS only controls
-# which day the walk-forward loop STARTS reporting output; the fit at any day i always uses
-# returns.iloc[:i], the full history from day zero, regardless of this constant's value.
-#
-# Tested empirically 2026-09-08 against a rolling-250-day alternative on the same real data
-# (scratch/test_garch_expanding_vs_rolling.py, scratch/test_garch_forecast_accuracy.py) --
-# CORRECTED same day after a DeepSeek review caught two real problems with the first pass:
-# (1) the original "correlation 0.78 / 29.1% label-flip" comparison was diluted -- rolling-250
-# only actually differs from expanding once i>250 (before that, max(0,i-250)==0, i.e. it IS
-# expanding), so ~43% of the compared days were numerically identical by construction, quietly
-# shrinking both reported numbers; (2) a QLIKE-based accuracy comparison (expanding 1.6120 vs
-# rolling-250 1.6348) was NOT actually statistically distinguishable -- a single day's squared
-# return is a ~1-degree-of-freedom variance proxy with per-day QLIKE variance high enough
-# (theoretical E[QLIKE]~=1.27, per-day SD~=2 for a PERFECT forecast) that the standard error on
-# a ~350-day mean is an order of magnitude larger than the 0.023 observed gap -- this was a
-# real result read out of pure noise, not a genuine "expanding is more accurate" finding.
-# Independently re-verified the E[QLIKE]=1.27 theoretical figure by hand before accepting it.
-#
-# Kept as expanding anyway, but for the reasons that predate and don't depend on that flawed
-# test: (1) this monitor is informational-only, doesn't gate any live trade, so
-# "textbook-canonical baseline, honestly documented" is the right bar, not continued
-# optimization; (2) switching now would make the LATEST reading methodologically inconsistent
-# with the historical GARCH_VOL_SCALE series already in performance_audit, which was computed
-# with an expanding window throughout. The window-choice question remains genuinely open on
-# accuracy grounds -- this data does not distinguish the two options, in either direction.
+# ROLLING window (trailing GARCH_ROLLING_WINDOW days), not expanding. This was flip-flopped
+# twice on 2026-09-08 before landing here -- read the full history before touching this again:
+#   1. Originally built expanding (all history from day zero). Kept that way at first based on
+#      a QLIKE mean-comparison that seemed to show expanding was more accurate.
+#   2. A DeepSeek review found that comparison was both diluted (rolling-250 is mathematically
+#      identical to expanding for i<=250, since max(0,i-250)==0 there -- ~43% of the compared
+#      days were not actually different) and statistically meaningless (a single day's squared
+#      return is a ~1-df variance proxy with per-day QLIKE noise an order of magnitude bigger
+#      than the observed 0.023 mean gap -- independently re-verified the theoretical
+#      E[QLIKE]~=1.27 constant behind that argument by hand before accepting it).
+#   3. Re-ran the comparison PROPERLY: restricted to the genuinely-differing days (i>250) and
+#      scored with a real paired test (scipy `wilcoxon`, not a hand-rolled one -- the hand-
+#      rolled version had a tie-handling bug that produced a spurious z=12.58 on the diluted
+#      population). Result: rolling-250 has a statistically significant edge on the TYPICAL
+#      day (one-sided Wilcoxon p=0.0054, N=203) -- median delta favors rolling (-0.037) even
+#      though a handful of outlier days made the MEAN look like it favored expanding. That's
+#      real, validated evidence, not noise -- switched to rolling on the strength of it.
+# GARCH_WARMUP_DAYS still controls which day the walk-forward loop starts reporting output;
+# GARCH_ROLLING_WINDOW controls how much trailing history each day's fit actually uses.
 GARCH_WARMUP_DAYS = 100
+GARCH_ROLLING_WINDOW = 250
 
 def load_env():
     env_vars = {}
@@ -69,6 +64,13 @@ def main():
     df_bars = pd.read_sql_query(query, conn)
     daily = df_bars.groupby('date').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}).reset_index()
     daily['date'] = pd.to_datetime(daily['date']).dt.date
+    # MISLABEL WORTH KNOWING (DeepSeek review, 2026-09-08): bars are filtered to RTH-only
+    # (570-959 = 9:30am-4pm ET) so each day's OWN high/low/open only reflect the RTH session --
+    # but the RETURN computed just below is close(t)/close(t-1), i.e. RTH-close to RTH-close.
+    # That return SPANS the entire overnight Globex session between the two closes. So the
+    # model's "daily volatility" is close-to-close (overnight-inclusive), not a measure of
+    # pure intraday RTH range -- consistent between this script and every scratch/test_garch_*
+    # script that reuses this same query, just worth knowing when interpreting a reading.
     daily.set_index('date', inplace=True)
     daily['log_ret'] = np.log(daily['close'] / daily['close'].shift(1)) * 100
     daily.dropna(inplace=True)
@@ -92,7 +94,7 @@ def main():
 
     for i in range(GARCH_WARMUP_DAYS, len(dates)):
         d = dates[i]
-        hist_ret = returns.iloc[:i]
+        hist_ret = returns.iloc[max(0, i - GARCH_ROLLING_WINDOW):i]
         am = arch_model(hist_ret, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
         degenerate = False
         try:
@@ -140,7 +142,8 @@ def main():
     # wants is the forecast for the NEXT session, which requires today's own return as input
     # and is only computable after today's close. Rather than compute a specific "next trading
     # day" calendar date (would need market-calendar weekend/holiday logic just to label it),
-    # this fits ONE more model on the FULL return series (today included, no held-out day) and
+    # this fits ONE more model on the trailing GARCH_ROLLING_WINDOW days (today included, no
+    # held-out day) and
     # stores it under signal_name='LATEST' instead of a date -- the monitor always reads the
     # single most recent LATEST row (ORDER BY run_date DESC LIMIT 1), no date arithmetic
     # needed. run_date is the last bar's own date (dates[-1], from price_bars_primary's
@@ -148,7 +151,8 @@ def main():
     # own SQL-CURRENT_DATE-not-JS/Python-local-date convention. Each day's LATEST becomes its
     # own row (run_date differs daily), so this doubles as a running history of "what was the
     # forward view, as of that night" -- useful later for checking forecast-vs-realized.
-    am_latest = arch_model(returns, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
+    latest_hist_ret = returns.iloc[max(0, len(returns) - GARCH_ROLLING_WINDOW):]
+    am_latest = arch_model(latest_hist_ret, vol='Garch', p=1, q=1, dist='Normal', rescale=False)
     latest_degenerate = False
     try:
         res_latest = am_latest.fit(disp='off')

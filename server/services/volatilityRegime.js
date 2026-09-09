@@ -4,7 +4,7 @@
 // user's explicit direction ("I don't think its meant to tailor to our setups... put it in
 // its own class, not acd"). This reads NOTHING from and writes NOTHING to any live setup's
 // stop/target/sizeMultiplier. It exists purely to answer one question for a human glancing at
-// a dashboard: "is volatility running hot or cold right now, relative to normal?"
+// a dashboard: "is volatility running hotter or cooler right now than its own recent normal?"
 //
 // A dual-barrier (stop+target scaled together) hypothesis built on this same GARCH series was
 // tested and rejected the same day (RESEARCH_CLAIM
@@ -14,28 +14,27 @@
 // underlying volatility reading itself is useful to look at, which is the only thing this
 // module does.
 //
+// NO qualitative HOT/WARM/NORMAL/COOL/COLD label -- there used to be one (a classify() function
+// bucketing against the p01/p99 band), removed the same day it was added. Directly tested
+// whether the label actually predicted next-day realized moves (scratch/
+// test_garch_label_calibration.py): it didn't, for either window choice -- non-monotonic
+// (the COLD bucket showed a HIGHER average realized move than HOT in one run), correlation
+// between the continuous scale and realized |return| only ~0.14-0.15. A confident-sounding
+// word next to a number that's been shown not to reliably predict anything is worse than no
+// word at all -- shows the raw scale only, which is an honest description of the reading
+// itself, not a claim about what happens next.
+//
 // Source data: scripts/backfill_garch_vol_scale_history.py, run nightly (run_daily_calibration.sh,
 // 8:20 PM ET) — writes a `performance_audit` row per historical trading day
 // (signal_type='GARCH_VOL_SCALE', signal_name=that day's date) plus one extra row per run under
-// signal_name='LATEST', which is the one this module reads. The LATEST row uses the full return
-// series through that night's close (today included) to forecast the NEXT session — see that
-// script's own header comment for why a plain "today" row would already be stale by the next
-// morning.
+// signal_name='LATEST', which is the one this module reads. The LATEST row uses a trailing
+// rolling window (GARCH_ROLLING_WINDOW in the Python script, currently 250 days) through that
+// night's close (today included) to forecast the NEXT session — see that script's own header
+// comment for the full expanding-vs-rolling investigation (flip-flopped twice, landed on
+// rolling with real statistical evidence, not just a design preference) and for why a plain
+// "today" row would already be stale by the next morning.
 
 import { query } from '../db.js';
-
-// Distance-from-1.0 classification bands, derived from the scale series' own p01/p99
-// calibration band (persisted alongside the reading, not a separate hardcoded threshold) --
-// matches this codebase's standing no-static-thresholds rule.
-function classify(scale, p01, p99) {
-  if (scale >= p99) return 'HOT';
-  if (scale <= p01) return 'COLD';
-  const mid = (p01 + p99) / 2;
-  const span = (p99 - p01) / 2;
-  const distFromMid = Math.abs(scale - mid) / span;
-  if (distFromMid >= 0.5) return scale > mid ? 'WARM' : 'COOL';
-  return 'NORMAL';
-}
 
 // Returns the most recent volatility-regime reading, or null if none has ever been computed
 // (e.g. the nightly job hasn't run yet on a fresh environment). Never throws — a monitoring
@@ -57,9 +56,11 @@ export async function getLatestVolRegime() {
 
   return {
     scale: +scale.toFixed(4),
-    label: classify(scale, p01, p99),
     asOfClose: as_of_close,
     degenerateFallback: !!degenerate_fallback,
+    // Purely descriptive context (where this reading sits within its own recent historical
+    // range) -- NOT a predictive classification. See header comment for why the discrete
+    // HOT/COLD label was removed rather than kept alongside this.
     band: { p01: +p01.toFixed(4), p99: +p99.toFixed(4) },
   };
 }
