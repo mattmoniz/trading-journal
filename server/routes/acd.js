@@ -48,6 +48,8 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 // This does NOT mean the volatility monitor itself is no longer isolated for every OTHER
 // purpose -- only this one specific setup now depends on its regime classification.
 import { computeMomentumChaseSignal } from '../services/momentumChaseDetector.js';
+import { computeMajorPivotDefendedBreakSignal } from '../services/majorPivotDefendedBreakDetector.js';
+import { computeStallDefendedLevelSignal } from '../services/stallDefendedLevelDetector.js';
 import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
@@ -503,7 +505,7 @@ async function logGatedCandidate({ tradeDate, setupType, gateName, gateReason, e
 // SAME frozen last bar for the entire 2-hour window regardless of its own real fired_at time.
 // Confirmed live: 17 same-afternoon dead-zone SHADOW fires all showed byte-identical volume
 // measures. Querying fresh through NOW() (matching the Globex site's own pattern) fixes both.
-async function getSessionBarsSinceOpen(boundaryMod) {
+export async function getSessionBarsSinceOpen(boundaryMod) {
   // FIXED 2026-08-28 (DeepSeek code QA, independently verified): the inner boundary-bar lookup
   // had no date floor, so a missing session-open bar (a real, if occasional, data gap) would
   // silently match a PRIOR day's boundary bar instead, pulling multiple sessions' worth of bars
@@ -9130,8 +9132,10 @@ export default function createACDRouter(io) {
 
       const stackVolSignal = await computeStackVolSignal(todayET);
       const momentumChaseSignal = await computeMomentumChaseSignal(todayET, etMin);
+      const majorPivotDefendedBreakSignal = await computeMajorPivotDefendedBreakSignal(todayET);
+      const stallDefendedLevelSignal = await computeStallDefendedLevelSignal(todayET);
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).

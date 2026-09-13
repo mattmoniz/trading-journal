@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto';
 import { query } from '../db.js';
 import { getVolumeBaseline } from './touchQuality.js';
 import { inferDirection, CONDITIONAL_VARIANTS } from '../config/setupTypes.js';
+import { etNaiveStringToUtcIso } from '../parsers/sierraParser.js';
 
 // ── Same-poll cluster batch tagging (shared, 2026-09-08) ────────────────────────────
 // Extracted out of 2 near-duplicate inline copies (the early-touch-backfill loop and the
@@ -200,6 +201,28 @@ export async function getTouchQualityBaseline(tradeDate) {
 // have already computed `d` in ET wall-clock terms (this file's/acd.js's standing
 // convention), NOT UTC, so PostgreSQL interprets the stored TIMESTAMP WITHOUT TZ
 // column correctly in its own session timezone.
+// Converts a naive "YYYY-MM-DD HH:MM:SS" ET wall-clock string (e.g. a bar's tsStr, always
+// naive-ET in this codebase per the standing convention) into the TRUE UTC epoch ms --
+// reuses sierraParser.js's already-validated etNaiveStringToUtcIso() rather than a new
+// ad-hoc conversion, per the "share modules" rule. ONLY needed when comparing a bar
+// timestamp against a genuinely-UTC anchor like Date.now() -- naive-vs-naive arithmetic
+// (e.g. computing an expires_at string by just adding minutes) does NOT need this, since
+// the mislabeling cancels out as long as nothing touches a true-UTC value in between.
+// Found live 2026-09-10 (DeepSeek code review): both majorPivotDefendedBreakDetector.js and
+// stallDefendedLevelDetector.js compared `new Date(tsStr.replace(' ','T')+'Z').getTime()`
+// (a naive string mislabeled as UTC, running ~4-5h behind the bar's true epoch) directly
+// against `Date.now()` (genuinely UTC) to decide "is this signal recent enough to insert" --
+// this made every fresh, real-time signal compute as ~4-5 hours old, which always exceeded
+// the 30/60-minute recency windows, so NEITHER detector could ever actually insert a live
+// setup. Confirmed via direct calculation before fixing (a bar 5 real minutes old computed
+// as 245 minutes old). Fixed at both call sites to use this function instead.
+export function etNaiveTimestampToMs(tsStr) {
+  const m = tsStr.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return NaN;
+  const [, y, mo, d, h, mi, s] = m.map(Number);
+  return new Date(etNaiveStringToUtcIso(y, mo, d, h, mi, s)).getTime();
+}
+
 export function fmtETStr(d) {
   const y = d.getFullYear(), mo = String(d.getMonth() + 1).padStart(2, '0'),
         day = String(d.getDate()).padStart(2, '0'),

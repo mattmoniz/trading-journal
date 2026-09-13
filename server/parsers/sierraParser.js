@@ -271,7 +271,7 @@ function mapSierraTradeToSchema(sierraRow, rowNumber, headers) {
 // which caused every import since 2026-06-09 to be stored 4 hours off from every import
 // before it (which coincidentally ran under an environment where ambient TZ resolved to
 // UTC). Full account: docs/OPEN_THREADS.md / CLAUDE.md's timestamp-handling convention.
-function etNaiveStringToUtcIso(y, mo, d, h, mi, s) {
+export function etNaiveStringToUtcIso(y, mo, d, h, mi, s) {
   const utcGuess = new Date(Date.UTC(y, mo - 1, d, h, mi, s));
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
