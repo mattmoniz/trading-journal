@@ -5963,3 +5963,1616 @@ starvation level — re-check the direction split and the volume-building LONG f
   - **`condition_memory_needs_rebuild_not_backfill`** — escalated to HIGH, not resolved. Found something bigger than the original double-counting concern while scoping the rebuild: `daily_performance_log`'s last row is 2026-07-31, a full month dead, despite real `trades` data existing through 2026-08-12 that should have triggered the pipeline's own catch-up mechanism. Not root-caused this session (deliberately not rabbit-holed) — needs its own focused investigation before any rebuild, since rebuilding from a still-broken source would just re-encode a fresh gap.
 
 
+
+---
+## Archive batch: 2026-09-09 (cutoff 2026-09-02, keep last 7 days)
+
+## ✅ 2026-09-01 (RESOLVED, negative): rolling-WR circuit breaker — not validated safe, do not ship
+
+Full arc, in order: scoped from Audit #11's R2 recommendation (`roster_level_wr_circuit_breaker_scoped`,
+below) → design v1 (pooled roster-wide rolling WR) → killed by a DeepSeek design critique BEFORE
+reaching Gemini (doubly confounded: overlapped with the already-known stop-tightening effect, and
+a textbook regression-to-the-mean/winner's-curse problem) → design v2 (composition-adjusted
+per-type scoring, empirical variance estimation, genuine walk-forward validation, a
+forward-EV-conditional-on-trigger reversion-trap kill test, pre-registered Phase 1→2 graduation
+rules) → dispatched to Gemini, audited, found 2 real gaps (a portfolio-aggregate claim asserted
+with zero backing code; no genuine fit-then-freeze split despite claiming one) → 1 correction round
+→ Gemini's corrected version claimed it now passed every check, including the reversion-trap kill
+criterion.
+
+**Audited the "passed" claim directly rather than trusting it — it doesn't hold up.** The pass
+verdict was an artifact of averaging forward EV across all 6 historical triggers, which hid a real,
+individually-confirmed failure: `IB_BEARISH` triggered 2026-07-29 (the one trigger with an adequate
+forward sample, N=10) and was followed by **+$19.20 forward EV (7/10 wins)** — independently
+re-derived directly from `active_setups`, not just trusted from the script's own number. That's the
+exact reversion-trap failure mode (firing right before a bounce-back) this whole design exists to
+prevent. The other 5 triggers are all far too thin (N=0 to N=7) to outweigh that one real data
+point either way. Separately, the walk-forward fit itself turned out weaker than claimed — its
+parameter-sweep objective hardcodes the 3 known Wave-1 setup_type NAMES directly into the scoring
+function, closer to fitting against ground-truth labels than a genuine blind degradation proxy.
+
+**Per this codebase's own 2-corrections-then-Claude-takes-over convention, this is Claude's
+take-over verdict, not Gemini's**: `RESEARCH_CLAIM rolling_wr_circuit_breaker_v2_not_validated_20260901`
+(CONFIRMED) — this specific design has NOT been validated safe for live use. Do not proceed to
+Phase 2 (live wiring). `OPEN_DECISION roster_level_wr_circuit_breaker_scoped` marked RESOLVED as
+this specific design attempt closing out negative — **the underlying need it was meant to solve is
+still real and unaddressed**: real ACTIVE win rate collapsed 68.7%→30.1% and the existing weekly
+`SETUP_STATUS` gate took ~13-14 days to catch each of 2 real collapse waves this session
+root-caused. If this thread is picked back up, it needs a non-label-leaking fit objective and a
+per-trigger (not averaged) reversion-trap check that fails on any single strong-positive-forward-EV
+trigger regardless of how the rest of the population looks. Also produced, unrelated but tracked
+separately: `OPEN_DECISION circuit_breaker_mute_tag_ha_page_requirement` (design note for a future
+attempt, not actionable now).
+
+## ✅ 2026-09-01 (RESOLVED): 8-hour server outage overnight, missed a real move — `check_watcher.mjs` had been silently missing
+
+User's own recollection ("I think there was a watcher that crashed last night and it missed a big
+trade") — confirmed real, not misremembered. `trading-journal-server.service` was down **2026-08-31
+14:43 to 22:53 ET, over 8 hours**, spanning RTH close through the evening Globex open. Real,
+meaningful move happened during the exact outage window: a 105pt swing in 30 minutes (15:21-15:51
+ET) and a 156pt full range — comparable to or larger than most live setups' entire stop-to-target
+distance, a genuine missed opportunity, not a quiet stretch.
+
+**Root cause**: `trading-journal-watcher.service` (the Gemini error watcher, whose whole job is
+detecting the main server going down and auto-restarting it via `systemctl`) had not itself
+restarted since before 2026-08-25 — over a week, not just one night. Its own second-order safety
+net — a cron job every 5 minutes (`crontab -l`) meant to check whether the watcher is alive and
+restart IT if not — had been failing on **every single run** with `MODULE_NOT_FOUND`, because
+`scratch/check_watcher.mjs` (the file the cron entry points at) simply did not exist on disk.
+`scratch/` is gitignored, so a prior commit message mentioning its addition ("Add Gemini AGENTS.md
++ check_watcher.mjs") never actually tracked the file — it's unclear whether it was ever real on
+disk or was lost at some point, but either way nothing has been supervising the watcher's own
+liveness for at least a week, and the systemd unit's `Restart=on-failure` doesn't help against
+non-crash failure modes (a graceful stop, a WSL2/session-level interruption) — matches the same
+`Restart=on-failure` blind spot already documented for the main server in
+`overnight_globex_fix_never_ran_uninterrupted` (2026-07-17/18).
+
+**Fixed same session**: rewrote `scratch/check_watcher.mjs` — minimal, single-purpose (checks
+`systemctl --user is-active trading-journal-watcher.service`, restarts if not, logs only on
+action so it doesn't spam `scratch/gemini_watcher.log` every 5 minutes forever). Tested both paths
+live: silent no-op when the watcher is healthy (confirmed), and a real stop→detect→restart→verify
+cycle when it's down (confirmed — stopped the service, ran the script, it correctly restarted and
+verified success within the same run). `loginctl show-user` confirms linger is enabled and
+`cron.service` itself is healthy, so this was genuinely just the missing file, not a deeper
+session/linger issue.
+
+**Known residual limitation, worth a future follow-up, not fixed now**: `scratch/
+check_watcher.mjs` and `scratch/gemini_error_watcher.mjs` both live in the gitignored `scratch/`
+directory, referenced by a systemd unit file and a crontab entry that point at that path — meaning
+neither script is actually version-controlled, and this exact "the file silently vanished from
+disk with no tracked history" failure mode could recur. Moving both into `scripts/` (tracked) would
+need updating `~/.config/systemd/user/trading-journal-watcher.service`'s `ExecStart` and the
+crontab entry to match — a slightly bigger change than today's fix, left as a follow-up rather than
+done opportunistically here.
+
+## 🔶 2026-09-01: root-causing the real ACTIVE WR collapse — stop-tightening is a real, partial cause, not the whole story
+
+Follow-up to Opus Audit #11 (below). User asked directly what changed between July and August to
+cause the collapse. I ruled out two cheap explanations myself first (see `RESEARCH_CLAIM
+wr_collapse_not_refire_flood_or_single_day`): not `IB_BEARISH`'s July refire-flood (excluding it
+entirely, the collapse survives and is slightly worse: 74.4%→31.8% WR), not one lucky/unlucky day
+(excluding 2026-07-29, WR barely moves). Dispatched a dedicated Gemini root-cause mine-and-run
+(`scratch/claude_request.md` → `scratch/antigravity_response.md`).
+
+**Gemini's claim: commit `d81d411` (2026-08-03) is THE root cause** — it fixed a real bug
+(`optStopQ` reading raw `p75_mae` percentiles instead of the true EV-swept `optimal_stop`), which
+crushed live stop distances for many setup_types (e.g. `PD_VAH_FADE_SHORT` 67.8pt→32pt,
+`IB_BEARISH` ~87pt→51pt), and this alone explains the collapse.
+
+**Audited before accepting, per CLAUDE.md's standing rule — and it doesn't fully hold up.**
+`d81d411` was not a careless change: it was pre-verified via `computeEvAtStopTarget()` resimulation
+(77/116 setup_types improve, 39 degrade — the degradations reasoned through as fixing a thin-tail
+overfitting bug, not a regression) and DeepSeek-reviewed before shipping (see `RESEARCH_CLAIM
+optstop_percentile_vs_ev_sweep_bug_fixed_20260803`, which itself flagged "real-world verification
+pending" and never got circled back on — a real gap in this codebase's own recheck discipline).
+Direct verification of Gemini's two named setups **contradicted its causal story on timing**:
+`IB_BEARISH` went 4-for-4 (100% WR) in its first 4 real trades immediately after its stop
+tightened (08-07 to 08-14) — the tightening didn't hurt it immediately; its real losing streak
+started weeks later (08-17 onward). `PD_VAH_FADE_SHORT`'s post-tightening sample is only N=3, too
+thin to be decisive either way.
+
+**But a proper pooled test (N=425, all real ACTIVE decisive trades Jul1-Sep1, bucketed by actual
+stop distance) found a real, partial mechanism Gemini's anecdotes had missed.** Tight stops
+(14-50pt) show WR=38.7%/EV=-$6.86; wide (78-92pt) show WR=71.6%/EV=+$10.86 — a clean, monotonic
+gradient. This is confounded with calendar time (75% of tight-stop trades are August, 86% of
+wide-stop trades are July), but **the gradient survives within-period controls**: within July
+alone, tight vs wide is 60.7%/+$10.88 vs 75.0%/+$21.84 (N=84 each); within August alone, tight vs
+wide is 24.1%/-$18.79 vs 57.9%/-$5.41 (N=57-58 each). Stop width is a real, structural contributor
+(EV degrades with it, not just WR — rules out a pure mechanical artifact).
+
+**It is NOT the sole explanation.** August's WIDEST stops (50-92pt, matched to July's typical
+width) still underperform July's TIGHTEST stops (57.9%/-$5.41 vs 60.7%/+$10.88) — there's a real,
+unexplained "August got worse across every stop-width bucket" residual on top of the stop-width
+effect. `RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse` (PROVISIONAL).
+Gemini's separate Hypothesis-1 finding (day-type regime mix did NOT shift meaningfully — the WR
+collapse happened WITHIN the same day-type, `BALANCE` days alone went 75.7%→30.9%) is independent
+of the stop-width thread and not contradicted by any of the above — still stands as ruling out a
+regime-mix explanation.
+
+**RESOLVED (superseding the "systemic, SUPPRESS/PROMOTE" hypothesis below): the real root cause
+was already found and mostly fixed by a PRIOR session (Opus Audit #9, 2026-08-19) that this
+session never checked for before starting its own dig from scratch — a real process miss, worth
+naming.** Dispatched DeepSeek to QA this session's own reasoning chain (not just Gemini's), which
+correctly flagged that every suspect named (8/3-8/12) predates the actual cliff (Aug-H2,
+8/16-8/31) and pointed at a dense, unexamined cluster of commits landing 8/16-8/19. Reading
+`scratch/opus_audit_9_results.md` (2026-08-19, triggered by the user's own complaint that night —
+*"trades are great and then we get four huge losses that wipe out everything"*) revealed it had
+already precisely diagnosed this: **the giveback since the account's exact 2026-08-05 peak was NOT
+diffuse — 3 setup_types (`PD_POC_FADE_SHORT` -$649/N=5, `IB_BULLISH` -$380/N=21,
+`GLOBEX_VWAP_FADE_LONG` -$240/N=9) explained essentially all of it, while the other 10 real types
+combined were net POSITIVE (+$249.50/N=31).** Root cause: (1) the ACTIVE promotion floor is a
+static `EV ≥ -$5/trade`, letting `PD_POC_FADE_SHORT` go live at real EV -$2.40; (2) its
+`OPTIMAL_STOP` circuit breaker was **deadlocked** — a legitimate 8/16 cleanup deleted 1,072
+phantom SHADOW rows, collapsing real-N counts, but the frozen-branch code re-emitted the
+pre-deletion baseline forever (`lastRecalibratedN: baselineN` instead of tracking the shrink),
+permanently blocking recalibration for **107 of 138 setup_types (78% of the roster, 11 of 17
+live-eligible)** — a systemic, roster-wide defect, just a completely different mechanism than this
+session's own SUPPRESS/PROMOTE hypothesis. `PD_POC_FADE_SHORT` was left trading a stale, in-sample
+82pt/47pt stop (break-even WR 64.3% vs achieved 64.0% — a coin flip at $166 risk/trade).
+
+Fixed same-night/next-morning (commits `ee0f6d8` 8/19 23:44, `30eb1a2` 8/20 06:34, DeepSeek-reviewed
+before deploy): baseline now ratchets down on a real population shrink, all 3 culprit types added to
+`CAPITAL_EXPOSURE_OVERRIDE` (`server/services/setupEligibility.js`). **Verified this session that the
+fix held**: those 3 types combined for only 1 stray real fire (the morning of 8/20 itself) across
+the rest of August — the override worked. `PD_POC_FADE_SHORT` was later properly recalibrated
+(47pt/30pt, break-even WR 61.0%) and, after 3 consecutive clean `SETUP_STATUS` runs, was correctly
+re-promoted 2026-08-31 (`OPEN_DECISION pd_poc_fade_short_capital_exposure_override_revisit`,
+user-confirmed).
+
+**But that only explains Aug 6-19. A SECOND, distinct wave hit Aug 20-31 that Audit #9 never saw**
+(it stopped at 8/19): `IB_BEARISH` alone lost **-$838 over 12 real trades (EV -$69.83)**, plus
+`PD_VAH_FADE_SHORT` (-$398/N=23) and `OR5_LOW_FADE_SHORT` (-$246/N=13). Checked whether this is the
+same circuit-breaker-deadlock mechanism: it isn't, cleanly — `IB_BEARISH`'s stop DID unstick once
+(8/20, `deltaN=18`, method `accepted`) but the freshly-recalibrated value landed at almost the same
+tight geometry it was already stuck at (51pt/50pt, break-even WR≈50.5%). Its real August 20-31
+trades ran roughly 16% WR against that bar — a genuine edge failure, not a stale-calibration
+artifact. Plausibly connected to (not yet proven) the 2026-08-12 IB-window correction revealing
+`IB_BEARISH`'s true post-correction edge is much thinner than its pre-correction blended history
+suggested (see the earlier IB-window-reclassification thread above). **The good news, checked
+live just now**: the pipeline did eventually catch this — `IB_BEARISH` flipped to `SUPPRESS` on
+2026-08-31 (real WR had fallen to 35.7%) and has zero real fires today (2026-09-01). It caught it,
+just ~2 weeks slower than the damage.
+
+**Lesson for future sessions, worth internalizing**: before starting a fresh multi-hour root-cause
+investigation into "why did performance degrade," check `scratch/opus_audit_*.md` and
+`docs/OPEN_THREADS.md` for a prior session that may have already diagnosed the same window — this
+session duplicated real effort by not doing that first, and only found Audit #9 because DeepSeek's
+QA pass on this session's OWN reasoning happened to surface the exact commit cluster that led to
+it. `OPEN_DECISION roster_level_wr_circuit_breaker_scoped` (Audit #11, above) remains open and
+relevant regardless — a rolling-WR circuit breaker would have caught both waves faster than the
+existing all-time-average `SETUP_STATUS` gate did.
+
+**Reframe (user-requested pooled ACTIVE+SHADOW view — reveals a more fundamental question than
+either individual setup's collapse):**
+
+| period | ACTIVE+SHADOW pooled | ACTIVE only | SHADOW only |
+|---|---|---|---|
+| Jul-H1 | 64.7% / +$23.21 | 68.4% / +$14.18 | 60.0% / +$34.64 |
+| Jul-H2 | 60.3% / +$0.87 | 68.7% / +$13.30 | 56.6% / **-$4.65** |
+| Aug-H1 | 49.1% / -$3.89 | 60.9% / +$6.51 | 46.5% / -$6.19 |
+| Aug-H2 | 46.2% / -$6.32 | 30.1% / -$23.76 | 47.6% / -$4.82 |
+
+**The broader detection-logic population (SHADOW) was already negative by Jul-H2** — meaning the
+underlying signal quality had been softening since mid-July. `ACTIVE` wasn't immune to this; it was
+successfully **cherry-picking a strong subset out of an already-weakening pool**, staying positive
+through July and early August despite the broader decline. Aug-H2's collapse is better understood
+as **ACTIVE losing its selection edge over SHADOW** (the two converge to similarly negative EV)
+rather than a sudden new problem — consistent with Audit #11's finding that ACTIVE underperformed
+SHADOW on shared setup_types since 2026-08-06. `OPEN_DECISION
+active_selection_edge_over_shadow_lost_early_august` (HIGH) — this is now the more fundamental open
+question than either of the two now-root-caused individual-setup waves above: what changed in HOW
+candidates get selected/promoted from SHADOW into ACTIVE that would explain the selection
+mechanism's edge disappearing? The SUPPRESS/PROMOTE methodology changes (`bbc2574`/`4a0a263`) this
+session originally (wrongly) treated as explaining the individual-setup collapses may still be
+relevant to this narrower, different question. `RESEARCH_CLAIM wr_collapse_two_wave_root_cause_20260901`
+(CONFIRMED) has the full synthesis.
+
+**Follow-up same session (still open): checked whether the selection-edge loss is the 4 known-bad
+types re-appearing, or a cluster-slot-inheritance effect — found the latter is real but minor.**
+Excluding the 4 known-bad types entirely, `ACTIVE` (N=62) still underperforms `SHADOW` (N=859) on
+the rest of the roster in Aug-H2 (32.3%/-$11.26 vs 46.0%/-$5.59) — not just those 4. Same-type
+controlled comparison: 4 of 6 shared setup_types show `ACTIVE` worse than `SHADOW` of the identical
+type in the identical window (`OR5_LOW_FADE_SHORT` gap=-$13.03, matching its own live 0-for-7
+losing streak flagged in `OPEN_DECISION or5_low_fade_short_recent_0for7_watch`). Using the
+`active_setups.selected_over` instrumentation (built for exactly this "which candidate wins the
+primary-fire slot" question): confirmed a real **cluster-slot-inheritance effect** — 12 of 83 real
+Aug-H2 `ACTIVE` fires explicitly beat another simultaneously-detected candidate (11 beat
+`IB_BEARISH`, 1 beat `IB_BULLISH` — both since-suppressed strugglers), meaning a correlated/
+overlapping setup absorbed the "primary fire" slot as its stronger cluster-mate got progressively
+suppressed through late August. Those 12 performed just as badly (25.0%/-$18.67) as everything
+else — but this only covers 12/83 (14%) of the population. **The other 71 fires (86%) had no
+contest at all and were independently, deeply negative (31.0%/-$24.62)** — the bulk of the gap
+remains genuinely unexplained. `RESEARCH_CLAIM active_selection_edge_cluster_inheritance_partial_20260901`
+(PROVISIONAL). Every mechanism checkable via direct query has now been tried (day-type mix, roster
+dilution, IB-specific bugs, stop-width, cluster-inheritance) — the next step needs a real
+resimulation-style backtest (recompute `SETUP_STATUS` eligibility under different historical
+windows), not another ad hoc query.
+
+**Built and dispatched same session, via the full 3-phase workflow (scope → DeepSeek design
+critique → Gemini mine-and-run).** v1 of this resimulation test (compare `NEWLY_PROMOTED` vs
+`ALWAYS_ACTIVE` setup_types' forward performance) was killed by DeepSeek's design critique before
+ever reaching Gemini — genuinely useful, not wasted effort: v1's no-lookahead construction was
+backwards (`run_date <= date` instead of the correct `created_at < fired_at`, inverting the exact
+convention Opus Audit #9 established), and more fundamentally, v1 was **doubly confounded from
+independent directions** — the `NEWLY_PROMOTED` cohort mechanically overlaps with the
+already-confirmed stop-tightening cohort, AND any group selected for clearing a noisy small-N
+real-EV bar is a textbook regression-to-the-mean ("winner's curse") setup that would underperform
+its own promotion-time estimate even with a completely unbiased gate. A positive v1 result would
+have been predicted under the null by both mechanisms simultaneously — it could never have
+distinguished a real gate bug from ordinary statistics. **v2** (`scratch/promotion_flip_
+attribution_test_design.md`) fixes both: correct `created_at < fired_at` reconstruction, plus a
+**"just-missed-the-bar" placebo control** (setup_types that were statistically just as good but
+didn't quite clear `PROMOTE_MIN_N=15`/`PROMOTE_MIN_WR=0.52`/`PROMOTE_MIN_EV=0`, verified exact
+constants from `scripts/backtest_setup_status.mjs`) — if the promoted cohort underperforms at the
+same rate as the just-missed cohort, it's pure mean reversion and the gate is fine; only if
+promoted underperforms MORE is there a real bug. Dispatched to Gemini 2026-09-01 ~17:50 ET
+(30min budget).
+
+**Result (audited before trusting, per standing rule): script is legitimate, result is real but
+too thin to close out.** `scripts/backtest_promotion_gate_placebo_control.mjs` — verified correct
+`created_at < fired_at` no-lookahead join, `computeRigor()`/`computeReplication()` genuinely
+imported not reimplemented, MTM/IB-window-stale exclusions match established convention. Result
+(all-data cut): `PROMOTED` underperformed its own promotion-time estimate by -$15.57 (N=7,
+estEv=+$7.71→fwdEv=-$7.86); `JUST_MISSED` placebo underperformed its near-threshold estimate by
+**more**, -$42.59 (N=22, estEv=-$0.86→fwdEv=-$43.45). `computeReplication()`: replicates=true,
+held-out favorable fraction=1.0. Stop-width control: 100% of both cohorts' forward trades fell in
+the same 30-50pt bucket, cleanly ruling out that confound. **Supports pure regression to the mean
+(winner's curse), not a promotion-gate bug** — but `PROMOTED` N=7 badly violates this codebase's
+own N≥20 floor, and `computeRigor()` shows `clean=false` for `PROMOTED` in both the all-data and
+strict (excluding known multi-calibration-run days) cuts. Also flagged: the script didn't filter
+to decisive outcomes only (`STOP_HIT`/`TARGET_HIT`) like the rest of this session's analysis,
+relying instead on excluding `MARK_TO_MARKET`/`RECOVERY_MTM` resolutions as a rough proxy — not
+identical. `RESEARCH_CLAIM promotion_gate_regression_to_mean_thin_20260901` (PROVISIONAL, NOT
+decision-grade — flagged with an `unblockCondition` to recheck once `PROMOTED` real N clears 20).
+Wired into `scripts/run_weekly_backtests.sh` so it self-recalibrates as real N grows. **This is
+the honest current state of the selection-edge residual: the leading hypothesis (a promotion-gate
+bug) now looks unlikely rather than confirmed-wrong — a real, if thin, negative — and the
+remaining ~86% of the Aug-H2 ACTIVE-underperforms-SHADOW gap (the "no contest" fires) stays
+genuinely unexplained.** No further mechanism is queued to test next; would need a fresh angle if
+resumed.
+
+**Closed loose end, same session**: the SUPPRESS/PROMOTE-overhaul resimulation the superseded
+hypothesis below called "not yet built" actually got written (`scripts/backtest_revert_split_legs.mjs`,
+found sitting run-but-unrecorded) — reran and audited it rather than leaving the output
+unrecorded. Leg A (old p75_mae/p50_mfe stop/target instead of today's EV-swept `OPTIMAL_STOP`,
+real Aug3-Sep1 ACTIVE trades): N=173, +$611.20 total simulated delta (~$3.53/trade) vs. what
+actually happened, but `Top5DayPct=52%` — badly date-concentrated, fails this codebase's own
+rigor bar. Leg B (old rec90 SUPPRESS/PROMOTE thresholds instead of the real historical gate,
+named-formula reconstruction not a literal old-code diff): N=859 (729 newly-eligible from
+SHADOW), +$2146.00 total delta, also fails rigor (`Top5DayPct=44.4%`). Both legs point the same
+direction as the closed-negative headline (tighter formulas cost money in this window) but
+neither clears the stability bar, so this doesn't reopen or change the two-wave root-cause
+conclusion above — recorded as `RESEARCH_CLAIM revert_stop_and_suppress_promote_resim_thin`
+(PROVISIONAL, thin/date-concentrated) so the result isn't lost, not as a decision-grade finding.
+
+<details><summary>Prior partial hypothesis (superseded, kept for the record — the "systemic,
+SUPPRESS/PROMOTE" framing below was a reasonable inference from the data available at the time,
+but was superseded by the two-wave root cause above)</summary>
+
+`OPEN_DECISION roster_level_wr_circuit_breaker_scoped`
+(flagged in Audit #11 below) is unaffected by this — a circuit breaker is a safety net regardless
+of full root-cause attribution. Full detail, all query provenance: `scratch/antigravity_response.md`
++ `RESEARCH_CLAIM stop_tightening_partial_not_sole_cause_of_wr_collapse`'s claim text.
+
+**Continued digging (same session): 2 more candidate explanations tested and ruled out, narrowing
+to a systemic-cause hypothesis.** (1) **Not IB-specific** — excluding `IB_BULLISH`/`IB_BEARISH`
+entirely, the collapse persists and is just as stark (non-IB: Jul WR=72.0%/EV=+$25.73 N=93 vs Aug
+WR=37.9%/EV=-$13.41 N=124); even August's widest-stop non-IB trades are still deeply negative.
+Also checked whether the 2026-08-12 IB-window correction (30min→60min IB definition,
+`docs/IB_WINDOW_RECALIBRATION_SPEC.md`) explains IB's own share — it doesn't cleanly: excluding
+the 15 stale-window-flagged July rows barely moves July's IB numbers (67.1%→66.4% WR). (2) **Not
+roster dilution** — weekly distinct real-firing setup_type count actually SHRANK across the window
+(17→14→8→7 types/week in July down to 9→9→7→7→6 in August), with at most 1 genuinely new type per
+week in August. The roster got MORE concentrated in already-established types, not diluted by
+unproven ones. `RESEARCH_CLAIM wr_collapse_residual_not_ib_specific_not_roster_dilution`
+(PROVISIONAL). **Combined with the already-ruled-out day-type-mix and single-day/single-setup
+explanations, the residual now looks systemic — a roster-wide effect, not attributable to any one
+setup_type, signal-definition bug, or composition shift.** Leading untested candidate: the
+SUPPRESS/PROMOTE methodology overhaul that landed the same week as the stop/target fix (`bbc2574`,
+2026-08-10, gate on real EV not blended; `4a0a263`, 2026-08-03, exclude `TIME_EXPIRED` from
+population queries) could have a roster-wide effect via a shared codepath no single-setup
+spot-check would surface. Properly testing this needs resimulating `SETUP_STATUS`/`OPTIMAL_STOP`
+calibration under pre- vs. post-8/3 logic across the whole roster — a real backtest script, not
+another ad hoc query. Not yet built.
+
+</details>
+
+## 🔶 2026-09-01: Opus Audit #11 — the "firehose" problem (user watching a dense afternoon firing stream)
+
+User watched a ~2.5hr stretch (13:02-15:23 ET) of the live activity feed showing ~26 fires across
+11+ setup_types, mostly stop-outs, and asked whether the system knows when to stop firing / change
+approach, whether it can catch a genuinely large trade, and whether there's a better way to decide
+when a trade fires. Dispatched to a full Opus strategic audit (`docs/OPUS_AUDIT_PROMPT_11.md` →
+`scratch/opus_audit_11_results.md`, both real DB queries + code tracing, not reasoned in the
+abstract).
+
+**Finding 1 (fixed same session): ~77% of the screenshot was a display bug, not a firing
+problem.** `server/routes/antigravityEdges.js`'s `/antigravity/edges-context` "Active setups"
+query filtered on `s.status != 'SHADOW'` — but `status` transitions to `RESOLVED`/`EXPIRED` the
+moment ANY row resolves, shadow or real, so every SHADOW fire leaked into the live feed a few
+minutes after firing. Of the 31 visible feed entries in the screenshot window, only **7 were real
+`ACTIVE` fires**; 24 were SHADOW-origin. **Fixed**: query now selects `s.origin_status` and
+filters `origin_status NOT IN ('SHADOW','BACKFILL')` (the immutable, correct field) instead of the
+mutable `status` column. Verified live against the running server post-fix: today's feed dropped
+from 31 mixed rows to 27 genuinely real `ACTIVE` rows.
+
+**Finding 2 (the real one, NOT fixed, needs a design decision): real `ACTIVE` win rate collapsed
+68.7%→30.1% between 2026-07-H2 and 2026-08-H2** (28.6% in Sept), payoff structure unchanged (avg
+win flat ~$80, avg loss shrank) — a pure hit-rate collapse. Equity peaked +$4,919.61 on 08-05, now
++$1,739.51 (-64.6%, 14 of last 18 sessions negative). SHADOW-origin population on the same tape
+declined only gently (63%→41%), so generic chop is an incomplete explanation. `RESEARCH_CLAIM
+active_vs_shadow_wr_divergence_since_20260806` (PROVISIONAL, full confound checklist applied —
+composition artifact, parameter asymmetry, entry-ordinal, single-type domination all controlled
+and the gap survives each; honest limits stated: over full history the gap nearly vanishes, this
+emerged specifically in the Aug-H2→Sep window). `OPEN_DECISION
+roster_level_wr_circuit_breaker_scoped` (HIGH) — recommended design: key on rolling
+DECISIVE-OUTCOME WIN RATE (not loss count, not fire count — both tested and found to run the wrong
+way, see below), `origin_status='ACTIVE'`-scoped, σ-derived threshold, shipped SHADOW-parallel/
+log-only first with a pre-registered kill criterion. Diagnosing WHY the divergence happened should
+come before building the breaker — a mechanical fix beats throttling around an unknown cause.
+
+**Finding 3: portfolio loss-count/dollars do NOT predict the next fire's outcome — the naive
+"throttle after losses" intuition is INVERTED on this system's real data.** By running realized $
+today, the deepest-drawdown bucket (≤-$300) has the BEST EV (+$18.44, WR 64.1%) and the
+flat/first-trade bucket is the WORST (-$17.53). `RESEARCH_CLAIM
+portfolio_loss_density_inverted_next_fire` (PROVISIONAL, all buckets `computeRigor()`-flagged
+clustered/unstable — the loss-density variable itself explains nothing; every bucket's most recent
+chronological third is negative regardless of loss context, which is really just Finding 2 showing
+up again). **Direct implication: the live "Death Sequence" 0.5x sizeMultiplier ceiling
+(`hasLossToday`, `acd.js:9008/9340`) may be sized in the wrong direction per this data** — not
+changed, flagged for the same `roster_level_wr_circuit_breaker_scoped` decision above. A hard
+fire-count cap was separately tested and also rejected — high-fire days are the PROFITABLE ones
+(2026-07-29 fired 61 times for +$1,231); a count cap would have truncated the system's best day.
+
+**Finding 4: will it catch larger trades? No, structurally — a correctly-identified design fact,
+not a bug.** Zero of the OR5/OR10/OR15/IB types in the screenshot are wired to any trail/runner
+mechanism (`CONDITIONAL_VARIANTS` has 7 `_TRAIL` entries, none in the OR/IB families). Six of
+today's types share one generic `volatility-scaled-default` calibration (37pt stop/38pt target,
+~$76 hard ceiling); `OR10_*`/`OR15_*` fired today with **no `OPTIMAL_STOP` row at all**. Realized
+OR-family ceiling all-time: $118. The one trail-wired type that fired today
+(`PD_POC_FADE_SHORT_TRAIL`) produced the day's single largest real winner, +$146.90 (N=1,
+suggestive only). This roster is scalp-sized mean-reversion by design; catching a real
+continuation move needs either repairing the already-built-but-mostly-broken
+`BREAKEVEN_TRAIL_TEST` machinery (5 of 6 blended survivors non-functional since 2026-08-04, see
+existing `OPEN_DECISION breakeven_trail_4_more_variants_lost_calibration_row`) or the longer-horizon
+IB break/retest/drive redesign (`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`).
+
+**Finding 5 — Resolved 2026-09-03: `cascadeBreaker` deleted entirely.** ~~the disabled
+`cascadeBreaker` mechanism's trigger query has no `origin_status` filter~~, so its historical
+counterfactual analysis (`cascade_breaker_validation_single_day_artifact`,
+`cascade_breaker_suppressed_ev_unstable_recent_reversal`, both now closed as `CONFIRMED`/moot) was
+measuring SHADOW/BACKFILL noise, not real trade behavior — the identical bug class already fixed
+once in `hasLossToday`. Correctly scoped to real ACTIVE trades, the old trigger (≥3 distinct-type
+stops in 45min) would have fired on only 6 of 444 real trades (1.4%) — structurally unvalidatable
+either way, confirming option (b) rather than (a). `OPEN_DECISION
+cascade_breaker_query_missing_origin_status_filter` resolved via full deletion: the computation,
+the audit-row insert, a separate duplicate computation in `antigravityEdges.js`, and the frontend
+"FADE REGIME OFF" banner (`ACDView.jsx`/`App.jsx`) are all gone. **New follow-on found during the
+deletion, not yet resolved**: `cluster_attributed_setups` was deliberately scoped narrow in 2026-07-29
+because `cascadeBreaker` was, at the time, handling the more extreme trending-cascade case — that
+coverage has had nothing behind it since 2026-08-05, over a month before anyone noticed. See
+`OPEN_DECISION trending_stop_cascade_no_suppression_since_20260805`.
+
+**Also found, not yet fixed**: the RTH refire cooldown (`isInRefireCooldown()`/
+`REFIRE_COOLDOWN_MINUTES`, real and wired at `acd.js:9747`/`9968`, contrary to what the audit brief
+assumed) is a hardcoded ~15-entry static minute map covering ~15 of ~130 live types — a standing
+no-static-thresholds violation, not evaluated further this session. Full detail, all query
+provenance, and the complete confound-checklist workthrough: `scratch/opus_audit_11_results.md`.
+
+## ✅ 2026-09-01 (RESOLVED, clean negative): post-stop price continuation / order-flow imbalance as a refire quality signal
+
+User's idea, prompted by a real chart showing sustained one-sided cumulative delta: after a
+stop-out, does what price/order-flow actually did in the window between the stop and a same-type
+refire predict the refire's outcome — was the move that caused the stop CONTINUING (real momentum
+against the fade) or reverting/fizzling (more legitimate re-test)? Two direction-aware measures,
+independent of the already-confirmed-negative `displacement_since_last_visit_fade_quality` test
+(that one used generic magnitude; this one specifically tracks further movement in the failed
+trade's own adverse direction, plus order-flow imbalance over the same window). Tested on real
+(`origin_status='ACTIVE'`) same-type refires specifically after a `STOP_HIT` (not after a win),
+N=156 across 21 distinct days (top5DayPct=55.1%, thin-ish but not disqualifying). **Clean
+negative**: post-stop continuation AUC=0.516, post-stop order-flow imbalance AUC=0.516 — both
+indistinguishable from chance. Tercile spread (T3 EV=$14.67 vs T1/T2 both negative) looked
+suggestive but isn't a real monotonic relationship given the AUC — consistent with noise, not a
+graded effect. Formation-type breakdown (`SAME_DAY_FORMING` LOW-cont EV=$0.17 vs HIGH-cont
+EV=-$8.42, N=18/26) is directionally interesting but too thin to trust on its own. `RESEARCH_CLAIM
+postloss_aggression_predicts_refire_outcome` (PROVISIONAL, 30-day recheck). Script:
+`scripts/backtest_postloss_aggression_refire.mjs`. Approach pace (below) remains the one validated
+lead from the whole refire-quality investigation; this closes out the last of the user's proposed
+angles on it.
+
+## 🔶 2026-09-01: what actually discriminates GLOBEX_VWAP_MAGNET/PD_VAH_FADE_SHORT refire outcomes — approach pace, a real lead
+
+User pushed back on the earlier refire-cooldown fix ("id hate to just mute something that is live
+rather than find out a more strict way to trade it") and asked directly: when these refiring
+setups DO work out, is it more volume, more confluence, something else? Tested 4 candidates via
+real AUC on the 58 real (`origin_status='ACTIVE'`) fires of `GLOBEX_VWAP_MAGNET_LONG/SHORT` +
+`PD_VAH_FADE_SHORT`: `confluence_score_at_detection` (AUC=0.462, noise), reconstructed
+`minutesSinceVisit`/freshness (AUC=0.554, weak — and structurally can't discriminate this
+population since 52/58 trades already share the same "just visited" status by construction of
+being refires), volume-building compositeStrength with full 58/58 bar-reconstructed coverage
+(AUC=0.477, noise — an initial N=14-coverage read of 0.625 was sampling noise from the live
+column's sparse population). **One real signal: approach pace** (points/bar over the 15 bars into
+the touch) — AUC=0.776, clean monotonic tercile WR (slow=15.0%/mid=40.0%/fast=66.7%),
+chronologically stable and strengthening ($13.67→$52.17→$105.93), 12 distinct days. Mechanistically
+sensible: a slow grind into a level suggests weak participation likely to chew through it; a sharp
+spike is the classic exhaustion-and-reverse pattern a fade wants. `RESEARCH_CLAIM
+approach_pace_discriminates_globex_refire_setups` (PROVISIONAL). **Real caveat**: dominated by
+`PD_VAH_FADE_SHORT` (N=14/18 in the fast tercile) — `GLOBEX_VWAP_MAGNET` itself only has N=2 per
+direction here, too thin to validate specifically for the setup type that started this thread.
+First-pass exploratory (N=58, single test), not yet a proper walk-forward backtest on the broader
+roster.
+
+**Built out same session** (user: "yes" to scoping the real backtest) —
+`scripts/backtest_approach_pace_fade_quality.mjs` on the FULL real fade roster (N=1354, not just
+the 3 refire-prone types). **Stronger and broader than the exploratory pass, not just a
+replication**: clean monotonic walk-forward quartile EV ($-7.22/$-0.43/$5.59/$7.44), Q4
+chronologically stable, holds independently in both RTH (AUC=0.540, N=1010) and Globex (AUC=0.563,
+N=344) per this codebase's hard rule, and — resolving the earlier concentration worry — broad
+across **76 distinct setup_types** in the fast-approach quartile with the top type only 9.1%
+share. `RESEARCH_CLAIM approach_pace_fade_quality_full_roster` (PROVISIONAL). Wired into
+`run_weekly_backtests.sh` as a standing recheck. `OPEN_DECISION
+wire_approach_pace_as_size_factor` scopes the real remaining work before this sizes real risk: a
+bar-by-bar stop/target simulation (per the new-setup-type checklist's own item 5 — the current
+result is a correlation against trades' own already-calibrated exits, not a from-scratch
+simulation) and a sensitivity check on the 15-bar window (taken from the exploratory pass,
+never independently swept). If both hold, this is a real candidate cross-cutting size factor for
+the whole fade roster — a meaningfully bigger win than the original refire-cooldown fix, if it
+pans out. Does not replace the separate, already-flagged `OPEN_DECISION
+wire_refire_cooldown_into_detectglobexsetup` (the dead-config bug fix) — the two are
+complementary, not either/or.
+
+**User's follow-up idea, tested and closed** ("just quieting the refires vs waiting until
+something more legitimate turns the odds in our favor... how far has price moved from the first
+failed trade") — a displacement-based "watcher" instead of a time-based cooldown: has price
+genuinely left the level and come back (a real re-test) vs. just chopping/clustering around it
+(should be ignored)? The single-setup exploratory check (12 `PD_VAH_FADE_SHORT` refires) looked
+like clustering wins, but 11 of 12 came from a single day (2026-08-28) — too thin/clustered to
+trust. Built the full-roster version (`scripts/backtest_displacement_since_last_visit.mjs`,
+N=958, 30+ distinct days): **clean negative, not just inconclusive**. Pooled AUC=0.514 (noise),
+and — unlike pace, which agreed in direction across every family — the formation-type breakdown
+genuinely disagrees in SIGN (`SAME_DAY_FORMING` favors clustering, `OTHER` favors displacement).
+`RESEARCH_CLAIM displacement_since_last_visit_fade_quality` (CONFIRMED negative). The single-day
+read was real but not generalizable. Approach pace remains the one validated lead from this whole
+refire-quality investigation. Kept scheduled per this codebase's no-dead-ends convention.
+
+## 🔶 2026-09-01 (in progress, methodology corrected mid-session): SAME_DAY_FORMING volume-building fade filter re-verified and STRENGTHENED, day-thin — standing weekly recheck wired
+
+User asked to forward-test/wire the parked `momentum_ctx_sameday_walkforward_stable` finding
+(docs/VOLUME_BUILDING_EXPANSION_SIGNAL_SPEC.md sec 6b, original N=324, $11.95-12.19/trade, IB/OR
+family only) given real IB/OR trade N is now healthy (446 real fires/39 days).
+
+**First pass** (smoothed 30-bar backdrop average, tercile split): binary median weakened/lost
+stability ($3.59/trade); a tercile split found a real, non-reversing top-tercile effect
+($18.06/trade, N=90) blocked only on day-diversity (12 distinct days).
+
+**User directly challenged the methodology** ("I thought we were testing using terciles? ... your
+very quick to discard when negative" / "it looks like you are terciling over a small timeframe")
+after the PRIOR_DAY_OR_DEVELOPING follow-up (below) came back looking like a clean negative on the
+first pass. Two real bugs, not just style: (1) the test measured a 30-bar **trailing average** of
+compositeStrength, not compositeStrength **at the touch bar itself** — a different variable than
+the one the large RUN/HELD test (N=36,848) actually found its signal with; (2) tercile split was
+inconsistent with that RUN/HELD test's own quartile bucketing, risking exactly the coarse-bucket-
+hides-a-real-effect failure this thread had already seen once (SAME_DAY_FORMING's binary split
+hiding what terciles revealed). **Corrected methodology (AT-TOUCH compositeStrength, quartile
+split, shared in `scripts/lib/volbuildWalkforwardAtTouch.mjs`) made the SAME_DAY_FORMING finding
+STRONGER, not weaker**: genuinely monotonic Q1→Q4 ($-7.28/$1.25/$10.17/$26.87), Q4 chronologically
+stable=true (was borderline before), progression $32.95→$30.24→$16.42. Still blocked only on
+day-diversity: Q4 spans 12 distinct days (67.2% from top 5), same constraint as before, need ≥25.
+Wired as a **standing weekly recheck** (`run_weekly_backtests.sh`) — `RESEARCH_CLAIM
+same_day_forming_volbuild_quartile_fade_quality` upserts fresh numbers weekly; `OPEN_DECISION
+same_day_forming_volbuild_quartile_promotion_trigger` (superseding the pre-correction version)
+names the concrete bar. Real IB/OR volume (15-30 fires/day) suggests weeks, not months, away.
+
+**Follow-up chased same session** (user: "yes chase it") — does the much larger, cleaner
+PRIOR_DAY_OR_DEVELOPING RUN/HELD signal (N=28,984, stable, `RESEARCH_CLAIM
+volume_building_run_held_by_level_formation_type`) translate into a real fade-quality edge for
+that family? Reused the same shared walk-forward lib. **First pass looked like a clean negative**
+(no tercile bucket positive) — but this was the SAME flawed methodology (smoothed backdrop,
+tercile) that undersold SAME_DAY_FORMING, so declaring "CONFIRMED negative" off one bucketing
+choice was premature, exactly the pattern the user's pushback named. **Corrected version (at-touch,
+quartile) is still NOT a clean positive** — genuinely inconclusive, not confirmed either way:
+U-shaped, not monotonic ($2.44/-$9.02/-$6.01/$3.14), Q4 unstable (63.5% day-clustering) and
+*declining* over chronological thirds ($9.30→$7.30→-$7.63). A raw (non-walk-forward, in-sample
+only) top-decile check hinted at more promise (+$8.66/trade) but isn't trustworthy on its own —
+at this point 4 different cuts have been tried on the same historical data, and continuing to hunt
+for a positive cut is exactly the multiple-comparisons fishing this project's rigor culture exists
+to prevent. `RESEARCH_CLAIM prior_day_volbuild_quartile_fade_quality` (PROVISIONAL, genuinely
+inconclusive — not CONFIRMED negative, that status was walked back). Kept scheduled in
+`run_weekly_backtests.sh` per this codebase's no-dead-ends convention. **Do not re-run with yet
+another ad hoc bucket/measure choice** — if revisited, it needs real accumulating forward N via
+the weekly recheck, not a new cut chosen after seeing the data.
+
+**Process lesson, stated directly because it recurred**: don't declare a rigor check's result
+(positive OR negative) final after trying only one bucketing/measure choice, especially right
+after a different bucketing choice already proved decisive for a sibling test in the same session.
+Test consistency across related claims (did I use the same measure the other test that found the
+underlying signal used?) before trusting either a positive or a negative.
+
+## ✅ 2026-09-01 (RESOLVED): idea D Step 5 built (too thin) + a large volume-building validation (user's idea) + a real Globex refire-cooldown gap found
+
+**Idea D Step 5** (`scripts/backtest_liquidity_zones_idea_d_step5.mjs`): extends the Step 0 census
+with `clusterFreshFrac`/`clusterMaxAccepted`. N=20 matches the census exactly after fixing a real
+bug (a different naive-timestamp footgun than the one below — `fired_at::text` + `new Date(str)`
+parses as local time in V8 vs node-pg's UTC-labeled native parsing, a 4hr shift that starved the
+population to N=5 before the fix). Only 14 of 20 have resolved P&L, split 1-7 per 2×2 cell — too
+thin to be decisive. `RESEARCH_CLAIM liquidity_zones_idea_d_step5_full_build` (PROVISIONAL).
+
+**Volume-building cross-check** (the user's own idea — "can we use volume build work to help
+verify liquidity zones"): does volume-building composite strength at a level touch predict RUN
+(consumed) vs HELD (defended)? Dispatched to Gemini; it produced a correct script but timed out
+(15min, 479 dates × 78 levels is genuinely heavy). Claude audited it in full, found and fixed a
+real performance bug (O(session-length) backward walk per touch → O(1) precomputed lookup,
+verified byte-identical output before trusting the fix), scoped to the most recent 120 trading
+days, and ran it for real: **N=36,848 scoreable touches, RUN rate rises monotonically with
+compositeStrength (pooled 6.5%→24.5%), holds independently in both RTH and Globex, chronologically
+stable, not day-clustered (10-17%)**. `RESEARCH_CLAIM
+volume_building_strength_predicts_level_run_vs_held` (CONFIRMED) — a real, large, independent
+validation of the liquidity-zones concept, though a caveat applies: this is a market-behavior
+finding, not license to re-run the already-rejected blanket fade-roster P&L filter using the same
+measure. Full writeup: `docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md` §4.24.
+
+**Separate, unrelated finding surfaced mid-session** (user noticed a real dashboard pattern —
+`GLOBEX_VWAP_MAGNET_LONG` firing 9 times in 2.5hrs, mostly losers): `REFIRE_COOLDOWN_MINUTES=30`
+exists in `acd.js` for `GLOBEX_VWAP_MAGNET_LONG/SHORT` but is **never consulted by
+`detectGlobexSetup()`** (the function that actually fires them) — that function has its own,
+narrower re-arm check (blocks a refire only if the prior trade resolved in under 3min, a bad-tick
+filter, not a time-since-resolution cooldown). Confirmed via real `origin_status='ACTIVE'` trade
+data: every refire in the flagged cluster fired 2-11 minutes after the prior resolution, not 30.
+Tested whether to broaden the fix to all Globex setup types — **no**: most (`PD_POC_FADE_LONG/
+SHORT`, `GLOBEX_VWAP_FADE_LONG`, `PD_VAL_FADE_LONG`) have never refired within 30min in real
+trading history at all. Two real candidates: `GLOBEX_VWAP_MAGNET_LONG/SHORT` (design-intent
+matches, but its entire real history is only 12 trades across 3 days — too thin to prove refiring
+itself is the problem vs. the setup being weak overall) and `PD_VAH_FADE_SHORT` (not currently in
+the cooldown map, but a real, 24-distinct-day negative: refire WR 25.0%/EV -$16.50 (N=12) vs.
+baseline WR 53.6%/EV +$8.23 (N=28)). An apparent 84-fire single day (2026-07-29) turned out to be
+stale `SHADOW`-only flooding predating the 2026-08-20 `SHADOW_NOISE_SUPPRESSION_MINUTES` fix for
+exactly this pattern — excluded from the real analysis. `RESEARCH_CLAIM
+globex_refire_within_30min_penalty_by_setup_type` (PROVISIONAL). Recommended fix (not yet shipped
+— live entry-gating change, needs explicit go-ahead): wire `detectGlobexSetup()` to consult
+`isInRefireCooldown()`/`REFIRE_COOLDOWN_MINUTES` for `GLOBEX_VWAP_MAGNET_LONG/SHORT`, and add
+`PD_VAH_FADE_SHORT` to that map. `OPEN_DECISION wire_refire_cooldown_into_detectglobexsetup`.
+
+**Also flagged, not yet designed**: user's own idea for a "dip absorption speed" signal (does a
+small adverse move get bought/sold back quickly and repeatedly, as a stay-in-the-trade signal) —
+distinct from liquidity zones (dynamic in-trend behavior, not static level defense), closer to the
+existing exit-management/runner thread. Real scoping gap found immediately: this codebase has no
+volume-bar/tick-bar data source, only 1-minute time bars — the user's own reference granularity
+(500/1000-volume bars) doesn't exist here today. `OPEN_DECISION
+adverse_move_absorption_speed_runner_signal`.
+
+## ✅ 2026-09-01 (RESOLVED): liquidity-zones idea D census contradiction reconciled — a 3rd SQL bug, not a real negative
+
+Resumed after a context clear left `OPEN_DECISION liquidity_zones_idea_d_census_contradiction`
+mid-investigation (flagged, not yet root-caused): the same-day 92%/N=12 (§4.1, 2026-08-26) vs.
+0.0%/N=766 (Task 2 above, 2026-09-01) idea-D-census disagreement. Found both scripts
+(`scratch/census_idea_d_cluster_freshness.mjs` and `scripts/pilot_idea_d.mjs`), read both in full,
+and reproduced the disagreement directly against the DB rather than trusting either number.
+
+**Root cause: a 3rd, previously undiscovered bug in `pilot_idea_d.mjs`**, distinct from the 2 fixed
+in the same-day audit above. Its bar-window query used one `$1` parameter both cast `::date` (day
+boundary) and compared bare against a `timestamp` column (`ts < $1`). Postgres unifies a parameter's
+type across every appearance in a single query — the explicit `::date` cast silently truncated the
+bare comparison to midnight too (confirmed directly: `SELECT $1 as raw_param` in a query mixing
+`::date` and bare usage of the same param returned `'2026-08-20'`, no time-of-day at all). That made
+`ts < $1` equivalent to `ts < <midnight>`, impossible together with the script's own `time >= 570`
+filter — **the bar-window query returned zero rows for literally every input row**, mechanically
+forcing both `anchorVisited` and `anyPartnerVisited` to false regardless of the real data. The
+0.0%/N=766 "decisive negative" was a pure artifact.
+
+Fixed (two separate query params). Corrected script: **1/6 (16.7%)** — N-starved, and using a
+narrower/less rigorous construction than the 2026-08-26 script (FADE-only population, `entry_zone`
+midpoint as an anchor-price proxy instead of a real `level_prices` lookup, no same-day-forming-level
+formation gate). Re-ran the 2026-08-26 script's more rigorous construction fresh against 6 more days
+of data instead: **N grew 12→20 (clears this codebase's N≥20 floor for the first time), rate held
+92%→90%.** Per the spec's own pre-registered rule, **idea D genuinely survives Step 0 and is worth
+building** — the opposite of what the buggy same-day audit concluded.
+
+`RESEARCH_CLAIM liquidity_zones_idea_d_free_census_rigorous_construction` (CONFIRMED, N=20/90%) is
+now the load-bearing number; `RESEARCH_CLAIM liquidity_zones_idea_d_free_census` (the
+`pilot_idea_d.mjs` N=6 result) is kept as directional-only, not weighed against it.
+`OPEN_DECISION liquidity_zones_idea_d_census_contradiction` resolved. New `OPEN_DECISION
+liquidity_zones_idea_d_step5_build_needed` (MEDIUM) flags the real remaining work — a genuine
+EV/WR-tested comparison (already-visited-partner cluster vs. genuinely-fresh cluster), which needs
+its own N≥20 per arm and will likely start as a SHADOW-tagging pass rather than a full live wire.
+Full writeup: `docs/LIQUIDITY_ZONES_DEFENDED_LEVELS_SPEC.md` §4.23.
+
+## ✅ 2026-09-01 (RESOLVED): GLOBEX_FLUSH missed a real ~530pt overnight move — 2 real bugs found and fixed
+
+User asked "did we catch the overnight drop?" — investigation of a genuine ~530pt NQ move
+(2026-08-31 evening into 2026-09-01 morning) found `GLOBEX_FLUSH_LONG/SHORT/REVERSAL_LONG/
+REVERSAL_SHORT` fired **zero** times despite this being exactly the mechanism built to catch this
+shape of move. Two real, distinct bugs, found in sequence (the first hypothesis was wrong and
+corrected before shipping anything):
+
+1. **Restart fragility** (`server/services/globexFlushDetector.js`) — the armed departure state
+   lived only in an in-memory module variable across the ~17hr overnight watch window, no DB
+   persistence. 339 `SERVER_SHUTDOWN` events in the 7 days checked — restarts are routine in this
+   codebase's dev workflow, never a rare edge case. Fixed by removing the cache and re-deriving
+   the departure fresh from real bar/level history every poll, matching `rthFlushDetector.js`'s
+   own already-restart-safe design (RTH never caches its trigger at all).
+2. **Narrow trigger window** — the actual explanation for last night, found *after* first
+   wrongly concluding bug #1 alone explained it (a manual check used the wrong day's PD_VAH,
+   caught before it shipped). The departure check only looked in a fixed 30-minute window right
+   at RTH close (4:00-4:30 PM ET) — last night's real value-area break didn't happen until
+   **10:35 PM ET**, ~6 hours after that window closed, structurally invisible regardless of
+   server uptime. Widened to check the full overnight watch period (4 PM through 9:30 AM).
+
+**Retroactively verified against real data**: the fixed logic now correctly finds the DOWN
+departure at 22:35 ET and would have fired `GLOBEX_FLUSH_SHORT` at 22:42 ET (entry 29436.75) —
+well ahead of the continued slide to ~29040. Server restarted, healthy, `test_invariants.mjs`
+shows no regressions from this change (one new unrelated FAIL, confirmed pre-existing calibration
+drift on `IB_HIGH_FADE_SHORT`, zero code overlap with the touched file).
+
+## ✅ 2026-09-01 (RESOLVED): POC-rotation-JOIN promotion decided YES, build deferred as its own session
+
+Resolves `OPEN_DECISION poc_rotation_join_promote_to_live_setup_type`. Reviewed the actual
+detection mechanism (`detectSignalEvents()`, `scripts/backtest_poc_rotation_vbp.mjs`) before
+deciding — it's a genuine ZigZag-style leg/pivot detector with an incremental running-median
+fair-value tracker, not a simple level-touch check. Porting it into `acd.js`'s live 15s-poll
+detection loop safely is comparable in scope/risk to the VWAP-reclaim structural-stop build
+already deferred this session, not a quick wire.
+
+**Decision: yes, worth pursuing.** The base trade construction has real, independently-replicated
+confluence findings with somewhere to attach (ONH/ONL EV $21.18/trade N=335; WS1 EV $22.15/trade
+N=42) and the user has asked to wire this in multiple times. Not attempted this session — flagged
+the actual build as its own new decision (`poc_rotation_join_build_live_detector`) with the full
+5-step scope (port the detector live, pick/confirm the canonical exit, wire the confluence
+findings, SETUP_STATUS/OPTIMAL_STOP calibration, SHADOW-only per N<20) since "should we start" and
+"build it" are different questions.
+
+## 🔶 2026-09-01 (in progress): 3 more research items dispatched to Gemini
+
+`prefire_orderflow_touch_gate_candidate` (a genuine pre-entry order-flow filter pilot, reusing the
+live `volZ`/`oneSidedRatio` block `STACK_VOL_BREAK_LIVE` already uses), the liquidity-zones spec's
+"idea D" free census (`liquidity_zones_defended_levels_ideas_pending_test`), and day-type-
+conditioning the inherited-vs-same-day raw expansion signal
+(`volume_building_thread_untouched_angles_for_later`, sub-item a) — all dispatched together.
+Not yet returned; audit before trusting any number, per the standing rule.
+
+## ✅ 2026-09-01 (RESOLVED): all 3 dtClass-gated sizing/standdown gates come back negative — extends the trend-gate finding
+
+Resolves `OPEN_DECISION dtclass_other_3_gates_untested`. The 2 combined Gemini dispatch tasks
+finished with very different outcomes — audited both before trusting either.
+
+**Task 1 (dtClass gates) succeeded, after a real bug fix.** The delivered script
+(`scripts/backtest_dtclass_sizing_standdown_gates.mjs`) filtered its loss-streak lookback on
+`fired_at < candidate's fired_at` — a genuine lookahead bug (a prior trade that fired earlier but
+*resolved after* the candidate fired could get counted using an outcome that wasn't actually
+knowable yet). Fixed to `resolved_at <` before running. Result, real (`ACTIVE`/`SHADOW`) fade
+population N=1122, live-reassessment TREND reads 68.0% of the time (consistent with the
+already-established ~70.6% false-positive rate for touch-moment evaluation): **all 3 gates come
+back negative or unreliable** if swapped from the dead `dtClass` source to the live reassessment
+engine — TREND-day sizing penalty (delta -$187.95, N=763, not rigor-clean), OR-expansion bonus
+(delta +$125.90 but 98% day-clustered, not trustworthy), STAND DOWN filter (delta -$1534.80 across
+574 suppressed rows). **Do not wire any of the 3** — extends, rather than contradicts, the
+original 2026-08-03 `isTrendCounterFade` finding. Recorded as `dtclass_gate_a/b/c` RESEARCH_CLAIMs.
+
+**Task 2 (IB-range exit signal) failed audit, discarded rather than run.** Its script
+(`scripts/backtest_ib_range_exit_daytype_gated.mjs`) had 3 disqualifying problems: used $20/pt
+(full NQ) instead of this codebase's MNQ $2/pt (a direct hard-rule violation), no `computeRigor()`
+call despite explicit instruction, and the comparison itself didn't test the actual research
+question (compared average MFE points across buckets — a market-move measure, not what an actual
+hold-longer exit mechanism would capture; its own comments call it "very simple/a proxy for now").
+Deleted rather than left as a misleading starting point. `wire_intraday_ib_range_exit_signal`
+stays genuinely PENDING — re-flagged with the specific fixes a real rebuild needs (real $/pt
+constant, `computeRigor()`, an actual net-P&L delta comparison instead of an MFE-magnitude proxy).
+
+## ✅ 2026-09-01 (RESOLVED): bar-10 stop-cushion checkpoint re-attempted at 8x larger population — real, no longer reverses
+
+Resolves `OPEN_DECISION trade_management_continuous_score_worth_reattempting`. Re-ran
+`scripts/backtest_stop_cushion_checkpoint.mjs` — the exact bar-10 "how much stop-cushion remains"
+test that reversed sign at N~200 back on 2026-07-27 — against the current real population
+(N=907 checkpoint-eligible events, up ~4.5x from the eligible-subset count, ~8x on the base
+ACTIVE/SHADOW population this decision's own trigger was keyed to). Result this time: a real,
+clean effect that does **not** reverse. Median split at stopCushionFraction=0.967: LOW cushion
+(closer to stop at bar 10) N=453, EV=**-$37.37/trade**; HIGH cushion (more room) N=454, EV=**+$13.09/trade**
+— delta $50.46/trade. Chronological 70/30 split holds up (train delta $53.35 N=634, test delta
+$42.99 N=273, same sign, similar magnitude — no reversal). `computeRigor`: stable=true,
+clustered=false, clean=true (all 3 chronological thirds negative for the LOW-cushion group).
+Recorded as `RESEARCH_CLAIM bar10_stop_cushion_reattempt_larger_population` (PROVISIONAL).
+
+**Real open caveat before this goes anywhere near live/SHADOW**: it may substantially overlap
+with the already-live `bar6_checkpoint`/`targetDistFraction` mechanism — both measure "how far
+underwater is this trade," just at different fixed bars (6 vs 10). Before trusting this as a
+genuinely *additive* signal rather than a later, redundant re-measurement of what bar6 already
+captures, check the correlation between the bar-6 and bar-10 reads on the same trades, and
+whether bar-10 adds real incremental information conditional on the bar-6 read. Also not yet done:
+`bet_class` split (this codebase's own standing pooling-risk caution) and `computeReplication()`.
+Does **not** itself build "the fuller continuous per-bar re-evaluation function" the original
+2026-07-26 idea envisioned — that remains a separate, larger undertaking.
+
+## ✅ 2026-09-01 (RESOLVED, wired live): slow+deep adverse-grind early exit — new informational mechanism
+
+Resolves `OPEN_DECISION slow_deep_adverse_grind_early_exit`. The CONFIRMED finding (N=691,
+family-gated across 4 bet_classes, rigor-clean, replicates — `docs/SLOW_DEEP_EARLY_EXIT_SPEC.md`)
+had no live mechanism built. Added `computeSlowDeepEarlyExit()` (`server/services/maeMfeReplay.js`),
+matching `computeBar6Checkpoint()`'s exact precedent — a pure function called once from
+`resolveSetupsByPrice()`'s shared resolution loop with the same `bars.rows` array, compute-once-
+never-overwrite. Walks forward bars tracking running MAE; the first bar where MAE crosses 75% of
+the trade's own original stop distance sets `speed=FAST` (≤2 bars) or `SLOW` (3+ bars), matching
+the CONFIRMED claim's own bar-count convention exactly. `ruleSaysExit=true` only when `speed=SLOW`
+AND the setup's bet_class is one of the 4 validated families — family-gated per the spec's own
+"never ship pooled" rule.
+
+New columns `active_setups.slow_deep_exit_speed`/`slow_deep_exit_recommended`, migrated live,
+`schema.sql` regenerated (also caught up broader unrelated drift since the last 2026-06-30
+snapshot). Purely informational — this system has no broker execution capability, matching the
+same caveat `bar6_exit_recommended` already carries. Server restarted, HTTP 200 confirmed,
+`test_invariants.mjs` shows the same 8 pre-existing FAILUREs as baseline (no regressions), lint
+clean. **Not done**: frontend display on `quick-check.html` — DB tracking was the priority piece,
+matching the same precedent used for the OR-range/RVol tagging earlier this session.
+
+## 🔶 2026-09-01 (in progress): 2 dtClass-gated backtests + IB-range exit signal, dispatched to Gemini
+
+`dtclass_other_3_gates_untested` (the 2 remaining sizeMultiplier/standDown gates keyed on the
+permanently-null `dtClass` — freshly relevant after today's sizeMultiplier audit independently
+confirmed `dtClass` is NULL on 63/63 real fires) and `wire_intraday_ib_range_exit_signal`
+(compression-based exit timing, needs day-type as a REQUIRED live condition, not the dead
+end-of-day column the original test used) both need the same live day-type reassessment engine
+(`dayTypeReassessmentService.js`/`computeCase()`) and the same rigor discipline as the
+already-resolved `backtest_trend_gate_suppression.mjs`. Dispatched together to Gemini
+(2026-09-01) with explicit instruction to reuse that exact pattern, not reimplement. Not yet
+returned — check back before trusting any number, per the standing audit-Gemini-output rule.
+
+## 🔶 2026-09-01: sizeMultiplier composite redesign Phase 0 — critique overturns the spec's own premise, redirected
+
+`OPEN_DECISION sizemultiplier_composite_redesign_scoped_pending_review` — dispatched
+`docs/SIZE_MULTIPLIER_COMPOSITE_REDESIGN_SPEC.md` to DeepSeek for the Phase 0 design critique its
+own rollout plan called for. DeepSeek used real DB tool access to verify its claims rather than
+critique abstractly (timed out mid-writeup at 15min, but had already run its verification) — its
+finding was independently re-confirmed directly against the DB (N=63 real `ACTIVE`/`SHADOW` fires
+with `size_factors_at_detection`, larger than DeepSeek's own N=41 subset, same pattern):
+`dtaRowRecommendation` NULL 63/63, `entryPressureShortBoost` TRUE 0/63, `dtClass` NULL 63/63
+(matches the already-tracked `dtclass_null_all_day_neuters_multiple_live_gates`), `smallGapDay`
+TRUE 57/63. Only 4 distinct `size_multiplier` values exist across all real fires
+(`{0.10:27, 0.25:34, 1.25:1, 1.30:1}`) — 97% sit at the two clamp floors.
+
+**The 2 factors the spec held up as the model of "self-recalibration done right" (day-type bump,
+entry-pressure boost) are exactly the two that never fire on any real row.** Real output variance
+is almost entirely loss-streak-driven (`lfConsecLosses` + `hasLossToday`), not the other ~23
+factors the spec proposed making continuous. Recorded as `RESEARCH_CLAIM
+sizemultiplier_factor_hygiene_audit_reveals_dead_factors` (PROVISIONAL — sample is day-clustered,
+92% top-5-day, but the 0%/100% factor rates are extreme enough to be structural).
+
+**Redirected, not resolved**: building a composite score on top of the current stack would fit a
+fancier model on mostly-dead/constant inputs — the spec's own Phase 1 (Gemini mine-and-run
+comparison) is premature. Next step is a factor-hygiene/saturation census (fix or remove dead
+factors, especially `dtClass` which is already separately scoped) *before* deciding whether a
+composite redesign is still worth building on whatever factors actually vary. Spec doc updated
+with a "Phase 0 critique result" section at its top; not yet done.
+
+## ✅ 2026-09-01 (RESOLVED): RTH VWAP_MAGNET's "stable loser" reading was a short-history artifact, not real
+
+Resolves `OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained` (open since 2026-08-04).
+The original finding compared `GLOBEX_VWAP_MAGNET_LONG` (real, strengthening edge, ~3.5yr
+reconstruction) against RTH `VWAP_MAGNET_SHORT` (a "stable loser across all 3 chronological
+thirds") at the same S=100/T=60 configuration — an unexplained session-dependent flip. The RTH
+side's reconstruction depended on `getTrailingVwapStd()`, which reads `session_analysis.close_vs_vwap`
+— only ~109 real days deep (back to 2026-03-25), nowhere near the Globex side's ~3.9yr
+`price_bars_primary`-derived history.
+
+Built `getTrailingRthVwapDists`/`getTrailingRthVwapStdFullHistory` (`server/services/queries.js`)
+— the RTH-bar equivalent of the Globex helper, computing the same quantity directly from
+`price_bars_primary`'s full history instead of the short table. Verified byte-identical to
+`session_analysis.close_vs_vwap` on 5 overlapping dates before trusting it. Re-ran the identical
+S=100/T=60 reconstruction both ways in the same pass (`scripts/backtest_vwap_magnet_rth_extended_window.mjs`):
+
+| | N | Mean P&L | SHORT | Rigor |
+|---|---|---|---|---|
+| Old (109-day window) | 271 | +$2.28 | **-$15.10/trade** | not stable/clean |
+| New (3.9yr window) | 747 | +$18.19 | **+$20.44/trade** | stable, clean |
+
+With 2.75x the data, RTH `VWAP_MAGNET_SHORT` flips from a "stable loser" to the strongest leg of
+the comparison. **Neither original hypothesis (a: real session mechanism / b: no mechanism, be
+skeptical of Globex too) was right — the actual answer is (c): the RTH-loser reading was itself a
+short-history statistical artifact**, exactly as the original decision's own text speculated might
+be the case. Recorded as `RESEARCH_CLAIM vwap_magnet_rth_extended_window_reconstruction`
+(PROVISIONAL — single-script, not yet independently re-verified). Does not by itself explain
+Globex's strengthening z-trend (a separate, still-open question) — isolates that the RTH side
+specifically was the artifact. New functions are backtest/reconstruction-only, not wired into any
+live path — `getTrailingVwapStd` (the live threshold source) is unchanged.
+
+## ✅ 2026-09-01 (RESOLVED, not promoted): 2-lot scale-out with breakeven-minus-5 runner — closed against the corrected baseline
+
+Resolves `OPEN_DECISION twolot_scaleout_breakeven_minus5_runner_scoped_20260831`. The 2026-08-31
+second-pass headline (+$7.63/trade) compared the mechanism against a synthetic "exit-all-no-runner"
+strawman, not the user's actual current strategy — the second pass's own text had already computed
+an `exactBe` reference arm (2-lot, exact-breakeven runner) without promoting it to primary. Doing
+that promotion: **delta beMinus5 vs exactBe is only +$1.39/trade at T1=12pt**, and **negative at 3
+of the other 4 T1 candidates** (T1=16: -$0.34, T1=20: -$1.18, T1=30: -$0.41; T1=24: +$0.19 near
+zero). Most of the original edge was a structural-baseline artifact (beating giving-up-the-runner-
+entirely, not beating what's actually already being done).
+
+**Independent re-verification**: dispatched to Gemini with an explicit instruction to build a
+fresh implementation blind to the existing script. Gemini's independent build
+(`scratch/reverify_be_minus5.mjs`) corroborated the qualitative result (+$2.30/trade at T1=12,
+thin/mixed-sign elsewhere) — audited the actual script (not just the writeup) and confirmed it
+independently arrived at the same same-bar-ambiguity handling and the same real-`stop_level`
+design choice without having seen this codebase's code, genuine convergent validation.
+
+**Conclusion: closed, not built.** The real edge over the user's actual strategy is too thin and
+not robust across the T1 neighborhood to justify live/SHADOW execution plumbing. `docs/TWOLOT_SCALEOUT_BREAKEVEN_MINUS5_SPEC.md`
+updated with a "Third-pass result — CLOSED" section; `OPEN_DECISION twolot_scaleout_generalize_to_other_setups`
+(the deferred "apply this elsewhere" question) is now moot for this specific mechanism.
+
+## ✅ 2026-09-01 (RESOLVED): breakeven-trail 5-of-6-uncalibrated decision closed; contaminated `B_FLOOR_S1_FADE_LONG` row nulled
+
+Resolves `OPEN_DECISION breakeven_trail_zero_real_survivors_20260816`. Checked current state before
+acting (the last update to this decision was 2026-08-16/20) rather than redo stale analysis:
+**`PD_POC_FADE_SHORT` has since genuinely graduated** — a real `BREAKEVEN_TRAIL_TEST` row exists
+(run_date 2026-08-25, real N=24, trail=19.3pt, OOS EV +$30.31 vs -$2.31 fixed-target baseline),
+already tracked and already wired live on both RTH and Globex (2026-08-31 `resolveUnconditionalTrailVariant`
+work) — left untouched. The other 5 wired `_TRAIL` variants remain uncalibrated (no current
+`BREAKEVEN_TRAIL_TEST` row at all — 0/5, not 0/6 as previously framed).
+
+Took the decision's own option (b) for the one remaining stale row: `B_FLOOR_S1_FADE_LONG` still has
+real (`ACTIVE`/`SHADOW`) `TARGET_HIT` N=0 (all 68 real target-hits are `BACKFILL`-origin) — nulled
+`notes.trail` on all 5 historical weekly rows for this signal_name (all held an identical stale
+trail=20.3pt, confirmed before nulling, so no distinct history was lost; original value preserved
+per-row as `notes._original_trail_before_null`). The live consumer now falls back to a plain
+fixed-target trade for `FLOOR_S1_FADE_LONG_TRAIL` instead of trailing on a synthetic-only basis,
+matching the `OPTIMAL_STOP` circuit-breaker precedent. Verified via read-back same turn.
+
+## 🔶 2026-08-31: Setup D — direction asymmetry, drawdown, day-type, and monster-day threads (late-session round)
+
+Continuation of the Setup D thread below, prompted by user follow-ups after the exit-mechanism
+work closed out. Several distinct findings, all independently re-verified:
+
+
+### From "✅ 2026-09-01 (RESOLVED): "catch more of a big move" thread — ATR precursor validated, flush exit mechanisms tested, a real Gemini-dispatch bug found+fixed"
+
+- **ATR level** (already validated earlier this session): RTH r=0.621 (N=414), Globex r=0.572
+  (N=413) — the one clear, real, independently-confirmed signal.
+
+
+- **Range-expansion slope** (is range *growing* within the window, not just its average level):
+  dropped — it's mechanically almost the same thing as ATR level (cross-corr -0.784 Globex), no
+  independent information.
+
+
+- **Directional persistence** (max same-direction run-length / fraction of bars agreeing with net
+  direction): real but weak (r=0.07-0.12), and genuinely independent of ATR (near-zero
+  cross-correlation).
+
+
+- **Combined score (zATR + zAgreeFrac)**: tested per user's "go with what worked" instruction —
+  naive equal-weight combination made it WORSE than ATR alone (RTH 0.516 vs 0.621, Globex 0.455 vs
+  0.572). ATR level alone remains the best single precursor found. `RESEARCH_CLAIM
+  early_atr_expansion_predicts_further_move_20260901` / `range_slope_and_directional_persistence_20260901`
+  already recorded earlier in this thread; no live wiring yet (precursor-only, no exit mechanism
+  built from it).
+
+**2. Exit mechanisms for RTH_FLUSH/GLOBEX_FLUSH — VWAP-slope exit and structural next-level exit**,
+dispatched to Gemini (`scripts/pilot_exits.mjs`) per the corrected design spec
+(`scratch/flush_vwap_slope_exit_design.md`). Both use the real live baseline (RTH 2-tier
+volume-building target, Globex mode-aware 3-tier), reuse `computeBalanceAndResolution()`, score via
+paired P&L (not the tautological MFE-capture ratio), and split RTH/Globex-continuation/
+Globex-reversal separately.
+
+**A real bug was found in Gemini's own script and fixed**: `getLiveTargets()`'s SQL query had no
+`ORDER BY run_date`, and the dict-building loop did last-write-wins over duplicate
+`performance_audit` rows per `signal_name` — for `GLOBEX_FLUSH_LONG`/`GLOBEX_FLUSH_SHORT` this let a
+stale 2026-08-27 row (pre-`tierTargets`) silently clobber the correct 2026-08-28/08-30 rows. Since
+the Globex-continuation population push gates on `c.tierTargets`, this zeroed the ENTIRE Globex
+continuation population — not because Globex never continues, but because of the missing
+`ORDER BY`. Gemini's original report showed this as a clean negative (Globex Continuation
+-$5.20/trade, N=68) — that number was wrong. Fixed with `DISTINCT ON (signal_name) ... ORDER BY
+signal_name, run_date DESC` (the same pattern CLAUDE.md already documents for `OPTIMAL_STOP` reads
+elsewhere) and re-ran. RTH's population and Globex-reversal's population were both unaffected by
+this bug (verified directly — RTH doesn't depend on `tierTargets`, and `GLOBEX_FLUSH_REVERSAL_*`
+only ever had 2 consistent calibration rows).
+
+**Corrected results** (structural exit is a single fixed rule, not swept — not subject to the
+overfitting concern below):
+
+
+- **RTH Continuation** (N=222): baseline $67.62/trade vs structural exit $51.53/trade — structural
+  exit UNDERPERFORMS, only beats baseline P&L on 32.3% of trades. RTH stays on its current target.
+
+
+- **Globex Continuation** (N=119, corrected from the buggy -$5.20): baseline $3.65/trade vs
+  structural exit $16.44/trade — real improvement, rigor-clean but date-concentrated (33 distinct
+  dates, top5DayPct=15.2%).
+
+
+- **Globex Reversal** (N=119): baseline $13.24/trade vs structural exit $18.59/trade — real
+  improvement, rigor-clean and well-distributed (114 distinct dates, top5DayPct=4.4%).
+
+Recorded as `RESEARCH_CLAIM globex_flush_structural_next_level_exit` (PROVISIONAL — real and
+rigor-clean, but not yet independently re-verified and Globex-continuation's date concentration is
+thinner than ideal). **Not wired live** — this is a paired-comparison research result, not a shipped
+exit mechanism.
+
+**VWAP-slope exit remains unvalidated** — its "best" numbers in `pilot_exits_out.json`
+(`bestVwapEv`/`bestVwapConf`) are the best-of-27 parameter-sweep result on the same data with no
+held-out split, the same overfitting pattern already flagged in the circuit-breaker dispatch. Do not
+trust the VWAP-slope numbers as reported; would need a genuine train/test split before promotion.
+
+**Debug/cleanup**: temporary debug logging added while diagnosing the bug was removed from
+`scripts/pilot_exits.mjs` before this was recorded; the fixed query is the only surviving change to
+the script.
+
+**UPDATE same day**: dispatched a follow-up to test DeepSeek's other 3 post-entry ideas (#1
+range-expansion slope, #2 directional persistence, #4 volume rollover — all post-entry/in-trade
+gauges, distinct from the pre-entry precursor versions already tested). Found and fixed TWO more
+real bugs in the process:
+
+1. **The structural-exit baseline above was itself wrong.** It used `tierTargets[0]` (the fixed
+   conservative tier) for every Globex trade regardless of that trade's actual pace/volume-building
+   conditions, instead of the real live score-based tier selection
+   (`globexFlushDetector.js:210-212`: `score++` for good pace, `score++` for volume-building,
+   `tierTargets[score]`). Fixed in `pilot_exits.mjs` to match. Corrected Globex baselines are
+   substantially higher (Continuation $3.65→$13.49/trade, Reversal $13.24→$30.84/trade) and **this
+   reverses the Globex-reversal structural-exit finding** — it now underperforms baseline
+   ($18.59 vs $30.84). Globex-continuation still nominally beats its corrected baseline
+   ($16.44 vs $13.49) but only wins on 42.4% of individual trades and is date-concentrated (33
+   distinct dates) — weak, not decisive. `RESEARCH_CLAIM globex_flush_structural_next_level_exit`
+   updated in place with the correction; do not cite the original same-day version (Globex Reversal
+   "+$5.35/trade") — it was an artifact of the wrong baseline.
+2. **Gemini's rigor check tested the wrong config** — `computeRigor()` was called against
+   `configs[0]` (the first entry in each sweep array) instead of the actual best-performing config
+   being reported as the headline number, and volume-rollover had no rigor check at all. Fixed in
+   `scripts/pilot_exits_extended.mjs` to rigor-check the real winning config for all three
+   mechanisms. Also found (and fixed, non-correctness, just slow) that a volume-baseline memoization
+   cache Gemini's own report claimed to add existed but was never actually called at any of its 3
+   real call sites.
+
+**Corrected results for the 3 new post-entry mechanisms** (against the corrected baseline, rigor
+against the actual winning config):
+
+
+- **Range-expansion slope** (`RESEARCH_CLAIM flush_post_entry_range_expansion_slope_exit`,
+  PROVISIONAL): real positive for BOTH Globex modes, rigor-clean — Continuation $13.49→$33.89/trade,
+  Reversal $30.84→$38.72/trade (both N=119, clean/stable, top5DayPct=4.2%). RTH underperforms
+  ($67.62→$41.28, N=222, rigor-clean negative). Best-of-4-configs sweep, no held-out split — same
+  caveat as the VWAP-slope result.
+
+
+- **Directional persistence** (`RESEARCH_CLAIM flush_post_entry_directional_persistence_exit`,
+  CONFIRMED negative): clean negative everywhere — RTH $67.62→$35.91, Globex-cont
+  $13.49→$13.13 (flat, and fails rigor stability), Globex-rev $30.84→$6.29 (badly underperforms,
+  also fails rigor stability).
+
+
+- **Volume rollover** (`RESEARCH_CLAIM flush_post_entry_volume_rollover_exit`, PROVISIONAL):
+  genuinely mixed. RTH underperforms. Globex-continuation shows a huge EV ($13.49→$50.84) but FAILS
+  rigor (clean=false, stable=false) — a textbook too-good-to-trust number, do not act on it. Globex
+  reversal shows an equally large EV ($30.84→$59.88) and PASSES rigor (clean=true, stable=true,
+  top5DayPct=4.2%) — the strongest single number of all the post-entry ideas tested, but the sibling
+  cell failing rigor on identical methodology is a real reason for caution; recommend an independent
+  re-check before this graduates past PROVISIONAL.
+
+Net picture across everything tested this session for "catch more of a Globex flush move": range-
+expansion slope and (cautiously) volume rollover on the reversal side are the two live candidates
+worth a follow-up validation pass; the earlier structural-exit and VWAP-slope findings are weaker
+than first reported once baselines are computed correctly; directional persistence (both pre- and
+post-entry forms) is a clean, closed negative. Nothing here is wired live.
+
+**CORRECTED 2026-09-02, before live-wiring began**: while building the wiring spec below,
+found `pilot_exits.mjs`/`pilot_exits_extended.mjs`'s `COMM` constant was `1`, applied once per
+trade in `getTradePnl()` (representing the full round-trip commission) — MNQ's
+`commissionPerRoundTrip` is `$2`, not `$1` (`server/config/instruments.js`). Every $/trade figure
+in this thread was $1/trade too generous. Fixed and re-ran; **all directional conclusions are
+unchanged** (a uniform per-trade shift can't change which config wins a sweep or flip a
+rigor-clean/unclean verdict), only the absolute numbers moved: range-expansion-slope Continuation
+$13.02→$32.89 (was $13.49→$33.89), Reversal $30.35→$37.72 (was $30.84→$38.72); volume-rollover
+Reversal $30.35→$58.88 (was $30.84→$59.88, still the strongest number, still Continuation-mode
+FAILS rigor). Corrected in `RESEARCH_CLAIM flush_post_entry_range_expansion_slope_exit` /
+`flush_post_entry_volume_rollover_exit` / `flush_post_entry_directional_persistence_exit`.
+
+**PRIORITY for next session** (user request, then REVISED same day after user rejected a
+display-only badge): `OPEN_DECISION wire_flush_post_entry_exit_signals_globex` (HIGH) — build the
+range-expansion-slope exit (both Globex modes) and the volume-rollover exit (reversal mode only) for
+open `GLOBEX_FLUSH_*` positions as a closed loop, not a decorative card: (1) persist the actual
+hypothetical $ P&L per real fire (not just a boolean flag), (2) segment every comparison by
+ALL-trades vs BIG-MOVE-ONLY (top tercile by realized MFE) since "catch more of a big move" is the
+whole point of this thread, not marginal average EV, (3) a real weekly promotion/retirement
+trigger — once N≥20 real fires accumulate, either promotes the finding to actually change the live
+`globexFlushDetector.js` target logic, or closes it out as a negative — never left sitting at
+PROVISIONAL indefinitely. Full build spec (persistence shape, monitoring surface, exact configs) is
+in the decision's own text — read it via `node scripts/flag_decision.mjs --list` before starting,
+don't re-derive from scratch.
+
+
+### From "✅ 2026-09-01 (RESOLVED): POC_ROTATION_JOIN_LONG/SHORT built and shipped live (SHADOW-only)"
+
+- **Extracted the canonical detector** into `server/services/pocRotationService.js`
+  (moved, not copied — `backtest_poc_rotation_vbp.mjs` now re-exports it unchanged so
+  its 14 existing downstream importers keep working without modification). Verified via
+  a fresh backtest re-run before/after the extraction: N grew 767→775 from real new
+  sessions between runs, same methodology, no behavior change.
+
+
+- **New live poller** `server/services/pocRotationJoinDetector.js`, wired into
+  `server/index.js`'s existing 60s `setInterval` alongside `detectRthFlush`/
+  `detectGlobexFlush`/`detectMomentum60Trend` (same "own poller, not the level-touch
+  candidates array" pattern — this is a whole-session leg-tracking construction, not a
+  price touching a fixed level). **Stateless/restart-safe by design**, directly applying
+  this same session's GLOBEX_FLUSH restart-fragility lesson: every poll recomputes
+  `detectSignalEvents()` fresh from real bar history; the one in-memory cache field is a
+  poll-skip optimization only, never a correctness dependency (a reset just re-attempts
+  inserting already-fired events, which harmlessly no-ops against `active_setups`'
+  unique index).
+
+
+- **Construction**: JOIN direction (trade WITH the leg that just converged back to the
+  running 24hr median fair value) + Time60_Stop20 exit (20pt stop, 60-minute time limit,
+  mark-to-market, **no fixed price target**) — the validated winner per
+  `RESEARCH_CLAIM poc_rotation_join_fade_levels_med50_fixed` (N=1935, WR=29.2%,
+  EV=+$2.40/trade, real but thin, not rigor-clean).
+
+
+- **Resolution**: since this is a genuinely target-less exit shape, it does NOT go
+  through `resolveSetupsByPrice()`'s shared generic bar-walk (WIDER_TARGET/trail/extend
+  logic) — added its own custom early-`continue` branch there instead, matching the
+  existing `ABSORPTION_LONG`/`COIL_SURGE` precedent, deliberately avoiding edits to that
+  complex shared critical path without its own review. `t1_level` on the live row is an
+  unreachable informational placeholder (entry ± 1000pt), never checked for resolution.
+
+
+- **Session span**: the full 6PM–5PM ET window continuously (matches
+  `developing_value_log`'s convention), not RTH-only or Globex-only — legs freely cross
+  both, so this satisfies CLAUDE.md's RTH+Globex-both-required rule structurally rather
+  than via two separate calibrations (per the backtest's own KNOWN LIMITATION note).
+
+
+- **Checklist items closed**: `bet_class` (added to `CONTINUATION_TYPES` — JOIN is a
+  continuation-shaped bet, not a fade), `SETUP_DISPLAY_LABELS`, `setupDefinitions.js`
+  (Setup Reference), `ARCHITECTURE.md` services table, `SETUP_STATUS` seeded via a live
+  `backtest_setup_status.mjs` run (THIN_N, N=1 each, closing the "zero real touches ever
+  is not automatically SHADOW-safe" gap immediately rather than waiting for the weekly
+  cron). `SHADOW`-only throughout (real N=0 < 20).
+
+
+- **Verified end-to-end in the actual restarted server process** (not just a manual
+  script): 2 real events fired live within the first two 60s poll cycles after restart
+  and resolved correctly — one `STOP_HIT` at exactly -$42 (20pt×$2/pt + $2 commission,
+  confirming the custom branch's bar-by-bar stop check works), two more via
+  `TIME_EXPIRED`/`MARK_TO_MARKET` at +$132/+$186.50 (confirming the time-limit path).
+
+
+- **Deliberately NOT wired yet**: the ONH/ONL (`RESEARCH_CLAIM
+  poc_rotation_join_onh_onl_confluence`, N=335, EV $21.18) and WS1 (N=42, EV $22.15)
+  confluence findings — get the base type accumulating real data first, per the original
+  decision's own explicit sequencing. Revisit as a follow-up once real N grows.
+
+
+### From "✅ 2026-09-01 (RESOLVED): audited 3 Gemini scripts from the combined dispatch — 2 real bugs found and fixed"
+
+- **Task 1 (pre-fire order-flow gate)**: clean methodology (verified the `volZ`/`oneSidedRatio`
+  formula genuinely matches `acd.js`'s live `STACK_VOL_BREAK_LIVE` code), one caveat noted (uses
+  the bar strictly before `fired_at`, not the exact trigger bar — a related but not identical
+  test). Result: negative, no monotonic predictive power, N=1446.
+
+
+- **Task 2 (liquidity-zones idea D census)**: **2 real bugs found and fixed here**, plus **a 3rd,
+  more severe one found later the same day (see the 2026-09-01 "idea D census contradiction
+  reconciled" entry below — this paragraph's "0.0%/N=766, dies for free" conclusion was WRONG,
+  a pure SQL artifact, not a real result; do not cite it).** (1) reconstructed "anchor freshness"
+  using a window going back to 6PM the prior evening, but the real live `minutesSinceVisit` only
+  ever looks at same-day RTH bars — a materially wider, non-equivalent window. (2) `fired_at` was
+  never cast to `::text`, so a JS Date object got passed back as a SQL parameter and silently
+  shifted 4 hours by the session timezone on round-trip (verified directly: Postgres rendered a
+  09:37 ET touch as 05:37 ET) — this codebase's own documented naive-timestamp footgun, hit again.
+  These 2 fixes alone were genuinely correct and needed — but a 3rd bug (a Postgres parameter
+  type-unification issue that made the bar-window query unconditionally empty for every row) was
+  still present after them and wasn't caught in this audit pass; it made the "N grew 154→766,
+  14.9%→0.0%" result meaningless. See the later entry for the real, reconciled finding.
+
+
+- **Task 3 (volume-building day-type conditioning)**: clean methodology, the closest audit given
+  it's the one positive finding — verified the composite score formula matches `acd.js`'s real
+  live `compositeStrength` computation exactly (not an invented formula), correct ground-truth
+  day-type source, canonical `classifyLevelFormation()`, no lookahead. Reproduced identically on
+  independent re-run (N=1161). Real finding: day-type composition doesn't explain the inherited-
+  vs-same-day dose-response gap, but a real BALANCE-day sign-flip interaction does (high
+  volume-building hurts same-day levels, helps inherited ones) — TREND shows an unexplained
+  same-sign puzzle in both groups, flagged for later.
+
+**Common gap across all 3**: none of Gemini's `recordClaim()` calls populated `sampleSize`/
+`winRate`/`evPerTrade`/`rigorStatus` — only free-text `claimText`, leaving the RESEARCH_CLAIM
+ledger's structured N/EV columns blank. Fixed in all 3 before finalizing. 3 throwaway scaffolding
+scripts (`check_msv.mjs`, `read_claims.mjs`, `read_all_claims.mjs`) deleted — exploration
+artifacts, not deliverables. Remaining follow-on work re-flagged as its own decisions:
+`liquidity_zones_steps_1_through_4_remaining` (MEDIUM) and
+`volume_building_inherited_level_remaining_angles_bc` (LOW).
+
+
+### From "✅ 2026-09-01 (RESOLVED): 3 more backlog items — 2 turned out already-stale, 1 needed user input"
+
+- **`value_fade_daytype_positive_signal_needs_live_gate_research`** — RESOLVED, accepted as
+  currently unactionable. Checked for a viable new live regime signal before defaulting to that:
+  none exists (the only candidate, the value-area regime layer, is explicitly tagging-only/
+  unvalidated per its own documentation) and re-testing the already-tried reassessment engine
+  would very likely hit the same structural bias already found for `isTrendCounterFade` (fade-touch
+  moments look like momentary trends). The BALANCE-day-positive edge stays real but unactionable;
+  path 1 (a genuinely new signal) stays open in principle, not permanently closed.
+
+
+- **`claude_md_restructuring_scoped_not_executed`** — RESOLVED as STALE. The restructuring this
+  decision tracked ("not started") had actually already been executed the same day it was flagged
+  (2026-08-12, per `docs/CLAUDE_MD_RESTRUCTURING_PLAN.md`'s own "Result" section — 4 commits, all
+  3 detail files genuinely exist with real content, verified directly). CLAUDE.md has since grown
+  back to 111KB (from 99KB post-split) over the 3 weeks since, as new hard rules/conventions were
+  added in full narrative form without re-applying the same condensation discipline going forward.
+  Re-flagged the actual remaining work as a fresh decision (`claude_md_needs_recondensation_20260901`,
+  LOW) rather than reusing the stale slug — this is "condense 3 weeks of new content," not "redo
+  the original split." Not started; per the original plan's own caution, this is a real multi-hour
+  task that shouldn't be rushed into a single sitting.
+
+
+- **`rolling_window_backtest_generalization_idea`** — user narrowed scope to the OR family only,
+  then asked to skip describing the boundary basis for now. Left parked, unchanged.
+
+
+- Also ran the scheduled `archive_open_threads.mjs` manually (cron catch-up hadn't caught it) —
+  `docs/OPEN_THREADS.md` was 404KB against its own 250KB cap; moved 1 old section out, still over
+  cap but that's expected given how active the last 7 days have been, not a new problem.
+
+
+### From "✅ 2026-09-01 (RESOLVED): 4 more backlog items closed — exit-mechanism family, VWAP_RECLAIM_SHORT, 18-script cron audit"
+
+- **`exit_logic_family_holistic_reassessment_20260818`** — RESOLVED. Verified, both in code and
+  empirically against the DB, that the 4 independently-built exit-timing mechanisms (bar6,
+  wider-target, slow-deep-early-exit, breakeven-trail) cannot produce contradictory signals on the
+  same trade: bar6 is purely informational (never changes resolution), slow-deep isn't wired live
+  at all, and `wider_target_mult`/`runner_trail_width` (the 2 that DO change resolution) are
+  mutually exclusive by design at every one of 5 INSERT sites checked — confirmed empirically, 0
+  of 1600 real `wider_target_mult` rows and 0 of 3 real `runner_trail_width` rows ever co-occur.
+  bar6's cutoff re-check is already tracked separately (`verify_bar6_exit_recommended_live`).
+  Sharing machinery between slow-deep and bar6 is deferred until slow-deep clears CONFIRMED
+  (still PROVISIONAL, unwired). Breakeven-trail is worth keeping scheduled — `PD_POC_FADE_SHORT`
+  already graduated to real calibration earlier this same session.
+
+
+- **`vwap_reclaim_short_structural_stop_not_yet_built`** — decision point RESOLVED (build itself
+  deferred as new decision `vwap_reclaim_short_build_structural_stop`). Real forward SHADOW data
+  has accumulated (N=20, right at the N≥20 trigger this decision set): EV=-$39.78 to -$43.58/trade,
+  WR 19-25%, `SETUP_STATUS`=THIN_N, all 3 chronological thirds negative — the fixed-point-stop
+  simplification is underperforming badly vs. Phase 1's validated structural-stop prediction
+  (EV=+$5.96/trade). Per the decision's own pre-stated logic, this means: yes, build the real
+  structural-stop resolution path. Not attempted this session — genuine risk to a shared,
+  heavily-loaded function (`resolveSetupsByPrice()`), deserves its own dedicated, reviewed session.
+
+
+- **`roadmap_phase0_18_scripts_need_recordclaim_wiring`** — RESOLVED. Individually inspected all
+  18 scripts. None actually need `recordClaim()`/cron wiring — they're one-time diagnostics (2
+  literally self-labeled "one-off, not scheduled" / "INCONCLUSIVE" in their own header comments)
+  whose findings are already superseded by later, more current live-wired work (bar6 mechanism,
+  BIGMOVE_LIVE_SIGNAL, the current flagship 1yr prop-walkthrough script, the closed candle-pattern
+  spec) or already fed into the standard `SETUP_STATUS` pipeline. Caveat: categorization based on
+  documented history + each script's own comments, not a line-by-line status re-verification of
+  all 18 `RESEARCH_CLAIM` rows.
+
+
+---
+## Archive batch: 2026-09-10 (cutoff 2026-09-03, keep last 7 days)
+
+## 🔶 2026-09-02 RESOLVED: Unified live-gate checkpoint spec — items 1+2 shipped, item 3 paused
+
+Follow-up to the sibling-reversal gate below: DeepSeek's code review of the initial wiring found
+it only reached 2 of `active_setups`'s 7 INSERT sites, missing the RTH `shadowCandidates` loop
+(the real fire path for `STOP_SWEEP`/`VWAP_MAGNET`/`C_PAIRED`/`C_REVERSAL`/`TRT`/
+`BRACKET_BREAKOUT`) and `STACK_VOL_BREAK_LIVE`. Both gaps fixed directly same session (commit
+`ab81fce`). User then asked the structural question directly: "shouldn't there be one insert
+site?" A follow-up DeepSeek design critique of the resulting spec found the scope itself was
+wrong the same way the original bug was: the "4 live-capable sites" census undercounted by 3 --
+`minuteBarSignalDetector.js`/`rthFlushDetector.js`/`globexFlushDetector.js` each hand-roll their
+own N≥20/ev≥-5 `getLiveStatus()` with **zero** exposure to any of the 7 gates. Real total: 11
+`active_setups` INSERT sites, 7 live-capable. DeepSeek also rejected the original
+`evaluateLiveGates({forceShadow,reason})` shape (can't express skip-vs-shadow) and recommended a
+3-step sequence instead of building the full runtime refactor immediately.
+
+**Item 1 SHIPPED**: `scripts/test_invariants.mjs` check `[24]` (live-gate coverage census), 0 new
+FAILs verified. **Item 2 SHIPPED**: the RTH `active` slot -- this codebase's single highest-volume
+live INSERT site -- was fail-**open** on an unknown setup_type (`_suppressedSetups?.has()` read
+directly, the only one of 3 competing eligibility checks with that posture). Fixed by swapping in
+the canonical `isLiveEligible()` already used at `shadowCandidates`, which also newly applies DOW
+suppression at this site for the first time. DeepSeek-reviewed before shipping. Server restarted
+so the fix took effect immediately rather than waiting on its own 12h cache TTL.
+
+**Item 3 explicitly PAUSED, not started**: building the full shared `runLiveGates` checkpoint
+across all 4 `acd.js` sites. User asked directly "is this worth building" -- answer: not now,
+because item 1 already delivers the main practical benefit (a future gate can never silently miss
+a site again -- the invariant test fails loudly) at a fraction of item 3's risk (one shared
+function touching every site's decision logic at once, vs. today's 4 independent chains where a
+bug in one doesn't touch the other 3). Revisit only if a third gate gets added and the per-site
+duplication becomes genuinely painful, or the 4 sites drift out of sync again despite check
+`[24]`'s safety net -- do not resume preemptively.
+
+Also found in passing, unresolved and unrelated to items 1-3 above (real, but out of scope for
+today): OR5/OR10/OR15/OR30 fade families structurally nest and their boundaries frequently share
+the same real price; `isCrossDirectionFastFlip` was extended to broaden its opposite-match lookup
+across OR-lengths (while on the pooled-fallback path only, per a DeepSeek-caught scope issue in
+the first version) -- see the sibling-reversal-gate entry below for the fuller writeup of that
+same-day thread. The 3 service-poller sites (`minuteBarSignalDetector`/`rthFlushDetector`/
+`globexFlushDetector`) still have **zero** exposure to any of the 4 force-shadow gates -- flagged
+by `test_invariants.mjs` check `[24]` every run, not fixed.
+
+Full corrected spec, the complete re-verified 11-site/7-live-capable census, and the full "why
+paused" reasoning: `docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md` -- read it before ever touching
+this thread again, line numbers will have drifted. `OPEN_DECISION
+unified_live_gate_checkpoint_scoped` RESOLVED same day.
+
+## 🔶 2026-09-02 RESOLVED NEGATIVE: Roster-wide invalidation-boundary bug (beyond IB) — sibling-reversal gate shipped live
+
+**Roster-wide invalidation-boundary extension: built, backtested twice, resolved NEGATIVE, not
+shipped.** Same session as the IB_HIGH/IB_LOW fix below: user asked "does this affect other
+setups too? I bet there's more" — a DeepSeek roster audit confirmed the same OR-based blanket
+invalidation bug *shape* extends to 7 more families (`PD_VAH`/`PD_VAL`/`PD_POC`, `PW_VAH/VAL/POC`,
+`IB_MID_SCALP`, `FLOOR_R1`, `CAM_S2`, `ONL/ONH`, `PD_IB_MID`). Two designs were built and
+backtested: (1) unconditional own-level replacement, mirroring the IB fix exactly -- pooled
++$1774.34 looked positive, but DeepSeek's own audit found 65% was a SHADOW-only artifact plus
+day-clustering, and the real ACTIVE-only number (+$338.62/152) was itself the net of 2 live
+families getting WORSE (PD_VAH -$217/51 real, PD_VAL -$349/26 real); (2) DeepSeek's proposed
+"wider-of-two" boundary (`SHORT: max(orHigh, ownLevel)`, `LONG: min(orLow, ownLevel)` -- never
+fires earlier in TIME than today's live rule) -- DeepSeek predicted this would push the
+ACTIVE-only delta ABOVE +$338.62, but a fresh backtest re-run plus an independent DB cross-check
+of the real changed trades found ACTIVE-only delta = **-$196.50**, worse than doing nothing.
+Root cause (unlike the IB case, where `OR ⊂ IB` is a mathematical invariant giving a clean
+unconditional relaxation): these 7 families' own level has no consistent containment relationship
+to the OR, and "never invalidates earlier in time" does not imply "never invalidates at a worse
+price" -- a relaxed boundary lets price drift further adverse before finally crossing it. Only
+`PD_VAH_FADE_SHORT` clearly improved on real trades (+$56.50/7); everything else with real N nets
+flat-to-negative. Confirmed NOT the same bug: `OR5_HIGH/LOW/MID_FADE` (level literally IS the OR)
+and `GLOBEX_VWAP_FADE`/`RTH_VWAP_FADE` (live-computed rolling VWAPs, need a separate universal
+rewrite). Full writeup, both backtests, and what would need to be true to revisit this (a smarter
+per-trade mechanism, not another static boundary substitution): `docs/
+ROSTER_WIDE_INVALIDATION_BOUNDARY_WHITELIST_SPEC.md` (rewritten with a RESOLVED NEGATIVE header).
+`OPEN_DECISION roster_wide_invalidation_boundary_whitelist_scoped` RESOLVED same day.
+
+**Sibling-reversal gate ("post-win opposite-family reversal") — shipped live, RTH + Globex.**
+Separate thread, same session: user watched quick-check.html and spotted the same family firing
+both directions close together, apparently erasing a win. User-designed rule: after a real win
+(ACTIVE or SHADOW), the family's opposite direction can't fire as the very next real trade until
+a different family's real trade fires; the winning direction itself stays unrestricted. Went
+through 3 real correction rounds before shipping: (1) DeepSeek design critique caught a fired-vs-
+resolved-order bug (was mostly re-measuring the *already-live* `isCrossDirectionFastFlip` gate's
+own territory, not this new pattern); (2) user pushback ("something is missing") caught a second
+bug -- the population filter silently dropped 557 real trades with a `_TRAIL`/`_GAP_*`/
+`_OVERNIGHT` suffix; (3) user pushback again resolved a genuine design ambiguity (non-directional
+context signals like `IB_BULLISH` don't count as "a different family," in either direction).
+Final backtest: N=30, EV -$36.36/trade, total -$1,090.75, rigor-clean (18 distinct dates, no
+sign reversal) -- real-money (ACTIVE-only) slice is thin (N=3, +$95.75), user explicitly chose to
+wire for all trades regardless so SHADOW data keeps accumulating on what this gate holds back.
+Shipped as `isPostWinOppositeFamilyBlocked()` (`server/routes/acd.js` ~356), wired into both the
+RTH and Globex forceShadow chains, `suppression_reason='POST_WIN_OPP_FAMILY_REV'`. **A real bug
+was found and fixed before the code-review dispatch even went out** (self-caught, not by
+DeepSeek): both call sites originally passed the pre-existing `rthLevelBase`/
+`crossDirectionLevelBase` variables (borrowed from the sibling `isCrossDirectionFastFlip` gate),
+which only strip a trailing `_LONG`/`_SHORT` and leave `_TRAIL`/`_GAP_*`/`_OVERNIGHT` in place --
+silently exempting every suffixed candidate from this new gate. Fixed to use the (correctly
+suffix-stripping) `postWinFamilyOf()` instead, without touching the existing gate's variables.
+
+**Code review returned and self-verified.** Confirmed correct: both SQL queries implement the
+settled design exactly (verified against `postWinFamilyOf`/backtest logic line by line), the
+Globex call site's `c.dir` is provably never null (every candidate reaching that point has a
+hardcoded direction or gets filtered out earlier), `postWinDirOf()` is genuinely dead code (safe
+to delete, not yet done), and the fail-open/fail-closed asymmetry on the two queries' error
+catches is intentional and bounded (a `winQ` failure fails open/unblocked, a `resetQ` failure
+fails closed/blocked -- both self-heal on the next poll). **One real, headline finding: the gate
+was wired into only 2 of 7 `active_setups` INSERT sites** -- missing the RTH `shadowCandidates`
+loop (the actual fire path for `STOP_SWEEP`/`VWAP_MAGNET`/`C_PAIRED`/`C_REVERSAL`/`TRT`/
+`BRACKET_BREAKOUT`, confirmed live via `grep`) and `STACK_VOL_BREAK_LIVE`. Directly contradicted
+the commit's own "applies universally" claim. Checked against the 30-trade backtest population:
+29 of 30 historical matches would have been caught by the pre-fix wiring anyway (their families
+route through the 2 sites that WERE gated); only 1 (`STACK_VOL_BREAK_LIVE`) would have slipped
+through -- but the STRUCTURAL gap was real regardless of how few historical instances it happened
+to catch. **Fixed same session** (commit `ab81fce`): both missing sites now wired, using
+`postWinFamilyOf()` correctly. The other 2 sites DeepSeek flagged (suppressed-audit SHADOW rows,
+early-touch backfill SHADOW rows) turned out to already hardcode `status='SHADOW'`
+unconditionally -- nothing for this gate to prevent there, confirmed by reading the code, no fix
+needed.
+
+**This coverage gap is what prompted the user's bigger structural question** ("shouldn't there
+be one insert site?") -- see the entry above this one for the resulting
+`docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`, ranked FIRST priority for next session.
+`scripts/backtest_post_win_opposite_family_reversal.mjs` has the full corrected backtest
+methodology if it needs re-running once real forward data accumulates.
+
+## 🔶 2026-09-02 (in progress): IB_HIGH/IB_LOW structural-invalidation boundary bug found+fixed live; dtClass Gate B split-by-class comes back negative
+
+**IB_HIGH/IB_LOW invalidation bug — fixed, walk-forward tested, NOT yet committed.** User flagged
+3x same-morning `IB_HIGH_FADE_SHORT` "inv." fires on quick-check.html. Root cause:
+`structurallyInvalidateSetups()` (server/routes/acd.js) killed a SHORT setup the instant price
+closed above the day's Opening Range High — a 5-30min level — but the 8 `IB_HIGH_*`/`IB_LOW_*`/
+`PD_IB_HIGH_*`/`PD_IB_LOW_*` setup types fade the 60-min Initial Balance high/low, which is
+virtually always outside the narrower OR (confirmed that day: OR High 29102.75 vs IB High 29193).
+Every one of these entries was born already past the OR-based kill-switch trigger, regardless of
+what price did afterward — not noise, a structural mismatch. Historically 13 real trades were cut
+short this way (35% of all real POST_ENTRY structural invalidations ever recorded). **Fixed**:
+those 8 setup types now use their own IB high/low as the invalidation boundary; every other
+setup type's OR-based invalidation is unchanged (zero blast radius elsewhere).
+Walk-forward re-simulation (`scripts/backtest_ib_high_low_invalidation_boundary_fix.mjs`, clean
+bar-by-bar re-walk of all N=264 real historical trades of these 8 types under both rules, not
+just what the live poller happened to catch): OLD rule total=-$1324.00, NEW rule total=-$514.00,
+**delta=+$810.00 across 65 changed trades**. Real and directionally consistent (all 3
+chronological thirds positive: $25.95/$4.67/$7.26 per trade) but NOT rigor-clean (54% of the
+delta from 5 of 24 distinct days) — recorded as `RESEARCH_CLAIM
+ib_high_low_invalidation_boundary_fix_walk_forward` (PROVISIONAL, 30-day recheck), not overclaimed
+as settled. Checked whether this bug had demoted anything: **no** — the two setup types it
+actually touches (`IB_HIGH_FADE_SHORT`, `IB_LOW_FADE_LONG`) were already `ACTIVE` despite the bug;
+the 6 others sitting at `SUPPRESS`/`THIN_N` are unaffected (either genuinely unprofitable on their
+own merits, or thin purely on real-N count, not touched by this bug's $0-delta geometry).
+**Not yet committed** — code change is live (nodemon picked it up) but awaiting explicit
+go-ahead to `git commit`.
+
+**dtClass Gate B split-by-class: informative negative, extends `docs/DTCLASS_LIVE_READ_WIRING_AND_REGIME_SPEC.md`.**
+That spec (continued this session) predicted splitting the blended OR-expansion `+0.10`
+sizeMultiplier bonus (acd.js ~8285, tested blended 2026-09-01 as `dtclass_gate_b`,
+POSITIVE_UNSTABLE/98%-day-clustered) into BALANCE-only vs TURBULENT-only sub-gates would reveal a
+clean BALANCE-specific signal, since the live day-type read's real accuracy
+(`daytype_accuracy_log`) is 65.0% for BALANCE vs 17.8% for TURBULENT. Built and ran
+`scripts/backtest_dtclass_gate_b_split_by_class.mjs` (N=1237 real fade trades replayed): **neither
+sub-gate is wireable.** BALANCE-only: N=49 but only 7 distinct dates, 91.8% concentrated in the
+top 5, EV/trade only $2.71. TURBULENT-only: N=76 but only **2 distinct dates total** (100%
+concentration) — an N=2 problem wearing an N=76 costume. Both POSITIVE_UNSTABLE, neither
+trustworthy. Recorded as `RESEARCH_CLAIM dtclass_gate_b_balance`/`dtclass_gate_b_turbulent`
+(PROVISIONAL, 30-day recheck — more real dates will accumulate live).
+
+Also shipped this session (trivial, safe): guarded `computeIbBullBear()`'s `ask_vol`/`bid_vol`
+reduce against `undefined` (caseEngine.js), matching the sibling `confirmedDeltaDir()` convention
+— closes a latent NaN footgun, zero live impact today (current callers already pass safe values).
+
+**Still not started from the spec's phased plan**: item 1 (display-tier `dayTypeEdge`/
+`dayTypeWarn` live-read wiring — turns out entangled with the DAY_TYPE_ALPHA `dtaRow` that also
+feeds real sizing at acd.js ~8259-8263, not the clean-cut "cosmetic only" swap the spec assumed;
+needs its own separate variable, not attempted), item 6 (GARCH_VOL_SCALE per-setup pilot — table
+confirmed stale, last row 2026-07-18, ~6.5 weeks behind), item 7 (a properly cross-validated
+trend/balance classifier trained against `classifyGroundTruth()`). `ABSORPTION_LONG`'s
+`dtClass==='BALANCE'` gate (acd.js ~6228, the other BALANCE-keyed consumer) confirmed to have
+**zero real fires ever** — can't be backtested the active_setups-replay way; would need a full
+bar-level "new setup type checklist" pre-test if ever revisited, out of scope for this thread.
+
+`OPEN_DECISION dtclass_live_read_wiring_and_regime_scope` stays PENDING — updated, not resolved.
+
+## ✅ 2026-09-02 (RESOLVED, negative): Full-day overnight/RTH momentum grid search — nothing tradeable found
+
+User's real goal, stated directly: "capture a larger overnight move that I can bank on being in
+at a certain time and it will be in profit later by a certain time." Extensive search, closed by
+user request after two ride-pattern candidates both failed verification. Summary so a future
+session doesn't re-derive this from scratch:
+
+**Method established and reused throughout**: `pearson()`/`permutationTest()` (exported from
+`scripts/pilot_globex_overnight_momentum_persistence_grid.mjs`) + a standing verification gauntlet
+— pooled correlation is not enough; a candidate must also show (a) consistent sign across
+per-year isolation (2023/2024/2025/2026) and (b) no real sign flips in a rolling 60-session window
+before being trusted. Two candidates failed this gauntlet, one partially passed.
+
+**Findings, most to least promising:**
+1. **03:30 ET momentum exhaustion (fade)** — the one pattern that reproduces across years
+   (`RESEARCH_CLAIM globex_momentum_0330_exhaustion`, `globex_0330_seasonality_breakdown`,
+   `globex_0330_rolling_seasonality`). Real but thin (r²≈2.8%), seasonal (flips positive in
+   August specifically — a checked, real wrinkle, not a gap). Turned into an actual bar-by-bar
+   trade with data-derived stop/target and real MNQ costs
+   (`scripts/pilot_globex_0330_exhaustion_tradeability.mjs`,
+   `RESEARCH_CLAIM globex_0330_exhaustion_fade_tradeability`): the plain version loses money net
+   of costs on every stop/target combo tested; one filtered top-tercile-momentum cell shows
+   EV=$4.04/trade (N=137) but is an isolated spike in an otherwise noisy grid and ~60%
+   concentrated in 2026 alone — not trustworthy as-is.
+2. **01:00 ET persistence (ride)** — looked real pooled (N=417, p≤0.042 across 4 checkpoints),
+   FAILED verification: 2023 opposite sign, 0/72 rolling windows independently significant.
+   `RESEARCH_CLAIM globex_0100_persistence_verification`
+   (`scripts/pilot_globex_0100_persistence_verification.mjs`).
+3. **22:00 ET persistence (ride)** — the most promising-looking candidate found: a full-day
+   30-min×30-min grid across all ~946 testable pairs (`scripts/pilot_full_day_momentum_grid.mjs`,
+   `scratch/full_day_momentum_grid.json`), Bonferroni-corrected for the ~1,000-pair
+   multiple-comparisons problem, surfaced a smooth 7-checkpoint positive cluster spanning 23:30
+   through 10:30 next day. FAILED verification worse than 01:00 did: per-year signs mixed on all
+   7 checkpoints, and the rolling window shows a genuine **documented sign reversal** — the same
+   22:00→02:00 pair was significantly NEGATIVE in August 2025 (-0.26 to -0.30, 3 windows) and only
+   became significantly POSITIVE from June 2026 onward. `RESEARCH_CLAIM
+   globex_2200_persistence_verification` (`scripts/pilot_globex_2200_persistence_verification.mjs`).
+4. **09:00 ET pre-RTH exhaustion (fade into midday RTH)** — same full-day grid surfaced a smooth
+   negative cluster (09:00→12:00/12:30/13:00, corr -0.15 to -0.17, and a wider raw-significant
+   tail through 15:30), same shape-family as the one pattern that DID hold up (03:30). **Never
+   verified** — the thread was closed by user request before this candidate got the per-year/
+   rolling check. If overnight-momentum research resumes, this is the natural next candidate to
+   test, not a new grid search.
+
+**Real data-quality finding along the way, worth knowing for ANY future 2023-inclusive
+backtest**: bars landing on an exact minute mark (e.g. 22:00, 03:30) are genuinely sparse in
+2023 (~22 sessions/year) vs 2024 (~87) / 2025 (~139) / 2026 (~174), even though 2023 has *more*
+total days with *some* data (256) than later years — a real overnight/specific-minute coverage
+gap in the earlier data, not a market-behavior difference. This made 2023's per-year read
+unreliable on its own, but did NOT rescue the 22:00 finding — the documented Aug 2025→2026 sign
+flip happens entirely within well-covered, recent data.
+
+**Bottom line**: no pattern found in this search is currently trustworthy enough to build a live
+setup on. Closed by user request ("let it go") 2026-09-02. All 5 `RESEARCH_CLAIM`s above are
+`PROVISIONAL` with the standard 30-day recheck — this is a real, recorded negative, not a
+forgotten thread; no `OPEN_DECISION` needed since nothing is pending a build/wire choice.
+
+## ✅ 2026-09-02 (RESOLVED): `wire_flush_post_entry_exit_signals_globex` built and shipped end-to-end
+
+Follow-up to the 2026-09-01 "catch more of a big move" thread below — its HIGH-priority
+next-session item, `OPEN_DECISION wire_flush_post_entry_exit_signals_globex`, is now fully
+built, not just scoped.
+
+**Found and fixed first, before wiring**: `pilot_exits.mjs`/`pilot_exits_extended.mjs`'s `COMM`
+constant was `$1`, should be `$2` (MNQ's `commissionPerRoundTrip`) — every $/trade figure the
+2026-09-01 thread recorded was $1/trade too generous. Fixed and re-ran; all directional
+conclusions (which config wins, which mechanism passes rigor) were unchanged, only absolute
+numbers moved. Corrected in the 3 affected `RESEARCH_CLAIM` rows.
+
+**Built, all 3 required parts + both monitoring surfaces**:
+1. **Persistence**: `acd.js`'s `resolveSetupsByPrice()` calls `detectPostEntryExitSignals()`
+   (extracted from `pilot_exits_extended.mjs`'s existing `simulateRangeSlope()`/
+   `simulateVolRollover()` — same detection loop, not recoded) on every open real
+   (ACTIVE/SHADOW) `GLOBEX_FLUSH_*` position each 15s poll. New `active_setups.
+   post_entry_exit_signals` JSONB column (schema regenerated, `ARCHITECTURE.md` updated).
+   Each mechanism (`range_slope`, both Globex modes; `vol_rollover`, Reversal-mode only —
+   Continuation fails rigor) persists once: `{mechanism, fired_at, fired_price,
+   hypothetical_pnl, config}`. Never touches the row's real `actual_pnl`/`resolution`.
+2. **Segmentation**: ALL-fires vs BIG-MOVE-ONLY (top tercile by `mfe_points`), folded into part 3.
+3. **Promotion/retirement trigger**: `scripts/backtest_flush_post_entry_exit_signals_promotion.mjs`
+   (wired into `run_weekly_backtests.sh`). No-ops below N=20 real fires per mechanism/mode;
+   once N≥20, always writes a final verdict — paired against the trade's own real `actual_pnl`
+   (not a resimulated baseline) via `computeRigor()`. Positive → `RESEARCH_CLAIM` CONFIRMED +
+   flags a new `OPEN_DECISION` proposing to actually change `globexFlushDetector.js`'s live
+   target logic (human call, not automatic). Negative → CONFIRMED-negative, closes the
+   mechanism out.
+4. **Monitoring**: `GET /api/setups/flush-exit-signals-summary` (new route, reuses
+   `evalBucket()`/`modeOf()`/`MECHANISMS` from the promotion script — one aggregation, not two
+   copies) feeds both surfaces the decision required: (a) `quick-check.html` RangeSlope/VolRoll
+   row tags matching the existing Vol++/Tx1.5 `.vb-tag` pattern, **tap** (not hover — the
+   touchscreen-can't-hover gap the 2nd revision caught) opens a popup reusing the existing
+   `#modal`/`#modal-backdrop` chrome, showing this trade's own hypothetical $ + the mechanism's
+   running cumulative; (b) a new ledger card on `setup-performance.html` (ALL + BIG-MOVE-ONLY,
+   current claim status).
+
+**Two real bugs caught and fixed mid-build, both before they could bite**: `pilot_exits_
+extended.mjs` and (once written) the new promotion script both had an unconditional `main()`/
+`process.exit()` call at module scope — importing either into a live route (as this build
+needed to) would have run the multi-year backtest sweep, or killed the running server process
+outright, on every server boot. Guarded both behind `import.meta.url === file://${process.argv[1]}`
+checks before any import landed. Also, the pre-commit hook caught a real hardcoded-trading-date
+`new Date().toISOString()` call in the promotion script before it was committed — fixed to
+`SELECT CURRENT_DATE::text`, the hook working exactly as designed.
+
+**Verified live at every step, not just at the end**: server restart clean after each change,
+`/api/acd/setup-detection` and the new endpoint both respond correctly, `scratch/
+server_errors.jsonl` shows zero new entries across the whole build, `test_invariants.mjs` shows
+the same 12 pre-existing (unrelated circuit-breaker) failures before and after. Both HTML pages
+Playwright-checked: no console/page/request errors, and a synthetic-row test on quick-check.html
+confirmed the full tag→tap→popup path (including `stopPropagation` correctly preventing the
+underlying row's own trade-detail modal from also opening).
+
+**Real data is still thin (0 real `GLOBEX_FLUSH_*` fires with a persisted signal as of
+shipping)** — this is a brand-new mechanism on a low-frequency setup family, so both new UI
+surfaces correctly show PROVISIONAL/thin-N rather than a fabricated number. The weekly cron
+will self-populate the ledger and eventually trigger a real promotion/retirement verdict as
+real volume accumulates — nothing further to do manually. `OPEN_DECISION
+wire_flush_post_entry_exit_signals_globex` and its `_impl_note` follow-up both marked RESOLVED.
+
+## ✅ 2026-09-01 (RESOLVED): "catch more of a big move" thread — ATR precursor validated, flush exit mechanisms tested, a real Gemini-dispatch bug found+fixed
+
+User asked (after the bad-R:R `RTH_FLUSH_LONG` thread) whether anything in the data can help catch
+more of a big move once one starts, and explicitly asked to look beyond their own VWAP-slope idea
+for other candidate signals. Three sub-threads:
+
+**1. Precursor signals (does something in the first 15 min predict more move is coming), tested
+directly by Claude (`scripts/pilot_atr_expansion_big_move_precursor.mjs`), no lookahead
+(outcome measured only from minute 15 onward):**
+## ✅ 2026-09-01 (RESOLVED): POC_ROTATION_JOIN_LONG/SHORT built and shipped live (SHADOW-only)
+
+Resolves `OPEN_DECISION poc_rotation_join_build_live_detector`. Ported
+`detectSignalEvents()` (the ZigZag-style leg/pivot + running-median-fair-value
+convergence detector, originally built and audited in
+`scripts/backtest_poc_rotation_vbp.mjs`) into a live, poll-computable form:
+
+## ✅ 2026-09-01 (RESOLVED): audited 3 Gemini scripts from the combined dispatch — 2 real bugs found and fixed
+
+Resolves `prefire_orderflow_touch_gate_candidate` and `liquidity_zones_defended_levels_ideas_pending_test`
+(Step 0 only) and `volume_building_thread_untouched_angles_for_later` (sub-item a only). Each of the
+3 delivered scripts was read in full before trusting anything, per the standing rule — 2 real bugs
+found and fixed, one script clean as-is:
+
+## ✅ 2026-09-01 (RESOLVED): 4 more backlog items closed — exit-mechanism family, VWAP_RECLAIM_SHORT, 18-script cron audit
+
+Continuation of the same-session backlog-clearing pattern, same "check for newer superseding work
+before redoing anything" discipline throughout.
+
+
+---
+## Archive batch: 2026-09-11 (cutoff 2026-09-04, keep last 7 days)
+
+## 🔶 2026-09-03 "Point of No Return" thread — SHORT shipped live SHADOW-only, LONG closed 3 ways, new "early commitment" idea opened
+
+Full detail: `docs/EXTREME_PRESSURE_POINT_OF_NO_RETURN_SPEC.md` (read this first, it's the
+canonical doc for this whole thread). Origin: user traced real `IB_LOW_FADE_SHORT` stop-outs
+and hypothesized a cumulative order-flow "point of no return" — a z-score (90-day trailing,
+same-bar-index baseline) crossing extreme relative to history predicts a session won't
+reclaim its Initial Balance boundary.
+
+**SHORT side ("Short of No Return") — built and live.** `IB_LOW_PNR_SHORT`
+(`server/services/ibLowPnrDetector.js`, new standalone poller, 60s cycle) — sell-side delta
+z>=3.0 while price is below IB Low, momentum entry, stop=150pt, no target (hold to session
+close, mark-to-market). Backtest N=15, WR=66.7%, EV=$276/trade; a placebo control (same
+window/stop, no z-filter) came back flat (EV=-$0.22), confirming the z-score is load-bearing.
+DeepSeek design + code review both clean. **Always fires SHADOW** (real live N=0 < this
+codebase's N>=20 floor) — zero real fires as of this writing, first real evaluation window is
+the next RTH afternoon (10:30am-3:30pm ET). Not yet done: promote the scratch backtest scripts
+into `scripts/` + wire through `record_claim.mjs`; a Gemini independent re-verification pass.
+
+**LONG side — tested and closed negative, three separate ways, not revisit-pending under
+these constructions:**
+1. Immediate entry (mirror of the SHORT construction): N=12, WR=33.3%, EV negative every
+   stop/target config.
+2. Multi-day hold (1-5 sessions): looked positive (5-day EV=$481) but a drift-subtracted
+   bootstrap (5000 random 12-date draws) found 30.8% did as well or better — indistinguishable
+   from NQ's own multi-year drift, not signal. A plain 10:30am entry on the same 12 dates beat
+   waiting for the z-score ($768 vs $481) — the signal chases, doesn't front-run.
+3. Pullback-then-resume entry (patient, "grind" version, not a sign-flip of the momentum
+   entry): N=10, WR=0.0% with a structural stop — worse than immediate entry, not better.
+   Buys right at the point a fresh local high reclaims after a pause — close to the worst
+   timing for a genuinely choppy move.
+
+`RESEARCH_CLAIM ib_high_pnr_long_trade_sim_negative` (CONFIRMED, updated 3x with each result).
+
+**New, UNTESTED idea opened the same day: "early commitment."** A fresh bar-level scan (not
+tied to the z-score signal at all) found big trend days (RTH net move >=400pt, either
+direction) commit to their direction within the first 20-30 minutes and grind steadily that
+way into the close — symmetric between up and down (this disproves the earlier "longs grind,
+shorts snap" framing as an explanation). What IS real: big DOWN days (N=22) are 2x+ as common
+as big UP days (N=10) at this magnitude. `RESEARCH_CLAIM
+big_trend_day_early_commitment_symmetric_timing` (PROVISIONAL, descriptive only). This
+suggests an EARLY entry ("has the day revisited its early-session extreme by a checkpoint
+time") instead of a LATE, pressure-based confirmation — but nothing beyond the descriptive
+scan has been tested. `OPEN_DECISION early_commitment_angle_untested_pending` (MEDIUM) — check
+`IB_BULLISH`/`OPEN_DRIVE_LONG`/`SHORT` for overlap first (current status: `IB_BULLISH`/
+`IB_BEARISH` both SUPPRESS, `OPEN_DRIVE_LONG`/`SHORT` both THIN_N — none currently strong, but
+`IB_BULLISH`/`IB_BEARISH` already has its own open redesign spec,
+`docs/IB_BULLISH_BEARISH_AUDIT_AND_REDESIGN_SPEC.md`, that this idea might actually belong
+inside rather than duplicate). User's own framing to build any test around: "a day usually has
+drift unless it shoots up" — most days won't qualify, the test has to actually separate rare
+early-committing days from ordinary drift, not just flag "up in the morning."
+
+
+### From "🔶 2026-09-03 "Chasing home runs" thread — 3 real cluster/backfill bugs fixed, 3 exit-mechanism ideas tested (mostly negative), a real new evaluation gap opened"
+
+- `wider_target_second_rearm_volbuilding_signal` (PROVISIONAL) — volume-building signal needs
+  21 bars of history; most fast `WIDER_TARGET_HIT` trades resolve before that, so 87% evaluated
+  to null. Wrong signal for this decision point, not a real test either way.
+
+
+
+
+- `wider_target_second_rearm_pressure_signal` (PROVISIONAL) — order-flow pressure at the
+  1.5x-target-hit bar shows a real *inversion* (strong pressure predicts LESS continuation, weak
+  predicts MORE) consistent across two bucketing methods, but the best bucket is 55% from just 2
+  calendar days — can't yet separate a real bar-level effect from a day-level trend-day
+  confound. Not actionable yet.
+
+
+
+
+- `breakeven_trail_ib_low_fade_runner_negative_20260903` (CONFIRMED) — refreshed
+  `scripts/backtest_breakeven_trail.mjs` (had gone 9 days stale vs its weekly schedule) and
+  tested a real bar-by-bar trailing exit directly against `IB_LOW_FADE_LONG`: **genuinely tested
+  negative** out-of-sample over 25 real trades, not just untried. `OR5_MID_FADE_LONG` failed a
+  different way (no stable trail width found — overfitting signature, unresolved not disproven).
+
+**`promote_wr_floor_40pct_band_rigor_comparison_20260903` (PROVISIONAL)** — tested whether
+PROMOTE's WR floor should drop from 52% to 40%. Gemini's mine-and-run had a real WR-computation
+bug (wrong source, N/EV matched but WR didn't for 4/7 rows) — corrected directly. Real result:
+neither band shows any "clean" (non-clustered + stable) types at all (day-clustering is
+near-universal roster-wide at this N), so that metric doesn't distinguish them; on stability
+alone, the 52%+ band has a thin real edge (2/11 vs 0/9) over the 40-52% band. Doesn't decisively
+support or reject the idea — only 1 type (`OR5_MID_FADE_LONG`) is actually blocked by this
+today.
+
+**Real new gap opened, not yet scoped**: `tail_skew_aware_setup_evaluation_needed`
+(`OPEN_DECISION`) — the user's own framing ("I want base hits and a few home runs") pointed out
+that plain mean-EV/WR evaluation can't distinguish "consistently mediocre" from "usually a
+small capped loss, rarely enormous" — both can show the same negative/marginal mean and get the
+same SUPPRESS verdict. `IB_MID_SCALP_FADE_LONG` (SUPPRESS, -$26.48 avg) catching the exact
+inflection of today's ~250pt rally is the concrete example. Needs a design-critique-first
+Gemini pass before touching any live SETUP_STATUS logic — connects directly to
+`promote_wr_floor_vs_ev_only_suppress_asymmetry`, resolve/scope together.
+
+User ended the session explicit that 2 months of SHADOW types not graduating to live has felt
+like "spinning wheels" — worth reading this whole entry back at the start of next session before
+assuming more investigation is the right next move; the user may want to see the *effect* of
+today's fixes (does real N actually grow faster now) before doing more design work.
+
