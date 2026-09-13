@@ -4,7 +4,18 @@
 # exactly (model-tier guard, lockfile, cwd pinning, dedicated request/response files) --
 # built 2026-08-02 after confirming `cline` is a real, working non-interactive CLI on this
 # machine (`cline --auto-approve true -t <seconds> "<prompt>"`, config at ~/.cline,
-# currently deepseek-v4-pro per ~/.cline/data/globalState.json's actModeApiModelId).
+# currently deepseek-v4-pro per ~/.cline/data/globalState.json's actModeApiModelId --
+# switched 2026-09-10 from deepseek-v4-pro to deepseek-flash (DeepSeek V4.1 Flash) on the
+# strength of DeepSeek's own API docs at the time, then switched BACK to deepseek-v4-pro
+# on 2026-09-13 at the user's explicit request after DeepSeek reversed its own rollback
+# plan and did not end up deprecating v4-pro in favor of Flash 4.1 -- don't re-attempt the
+# 2026-09-10 switch without the user asking again, since the premise it was based on no
+# longer holds. Thinking mode is on persistently in ~/.cline/data/settings/providers.json's
+# deepseek.settings.reasoning ({"enabled": true, "effort": "high"}) -- HIGH, not max, per
+# the same 2026-09-13 request (previously "max" under the Flash config) -- matching the
+# API's own {"thinking": {"type": "enabled"}, "reasoning_effort": "high"} request body per
+# the Thinking Mode guide -- not passed per-invocation here, so don't add a --thinking flag
+# below unless the persisted default is deliberately being overridden for one run.
 #
 # Usage: ./scripts/invoke_deepseek.sh [30m]   (same bare positional timeout as invoke_gemini.sh —
 #   NOT --timeout 30m, matching the exact footgun already documented for that script)
@@ -42,16 +53,20 @@ case "$TIMEOUT_ARG" in
   *) TIMEOUT_SECONDS="$TIMEOUT_ARG" ;;
 esac
 
-# Refuse to run on a non-Pro-tier model -- same standing lesson as invoke_gemini.sh's
+# Refuse to run on an unexpected model -- same standing lesson as invoke_gemini.sh's
 # guard (found live 2026-07-31: an unrelated tool's "assistant" backend had silently
-# drifted off its intended model with nothing catching it). Deliberate override:
-# ALLOW_NONPRO=1 ./scripts/invoke_deepseek.sh
+# drifted off its intended model with nothing catching it). Deliberately pinned to the
+# CURRENT intended model rather than a tier-name substring match (was "*pro*" before
+# 2026-09-10, broke that day when the temporary switch to deepseek-flash happened since
+# "flash" doesn't contain "pro"; reverted to "deepseek-v4-pro" 2026-09-13 alongside the
+# real settings switch back -- see file header). Deliberate override:
+# ALLOW_UNEXPECTED_MODEL=1 ./scripts/invoke_deepseek.sh
+EXPECTED_MODEL="deepseek-v4-pro"
 if [ -f "$GLOBAL_STATE" ]; then
   CURRENT_MODEL="$(python3 -c "import json; print(json.load(open('$GLOBAL_STATE')).get('actModeApiModelId','unknown'))" 2>/dev/null || echo unknown)"
-  CURRENT_MODEL_LC="$(echo "$CURRENT_MODEL" | tr '[:upper:]' '[:lower:]')"
-  if [[ "$CURRENT_MODEL_LC" != *"pro"* ]] && [ "${ALLOW_NONPRO:-0}" != "1" ]; then
-    echo "ERROR: cline's active model is '$CURRENT_MODEL', not a Pro-tier model." >&2
-    echo "Fix: cline auth deepseek -m deepseek-v4-pro, or override with ALLOW_NONPRO=1 if deliberate." >&2
+  if [ "$CURRENT_MODEL" != "$EXPECTED_MODEL" ] && [ "${ALLOW_UNEXPECTED_MODEL:-0}" != "1" ]; then
+    echo "ERROR: cline's active model is '$CURRENT_MODEL', expected '$EXPECTED_MODEL'." >&2
+    echo "Fix: cline auth deepseek -m $EXPECTED_MODEL, or override with ALLOW_UNEXPECTED_MODEL=1 if deliberate." >&2
     exit 1
   fi
   echo "[invoke_deepseek] Model: $CURRENT_MODEL"
