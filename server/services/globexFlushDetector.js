@@ -65,6 +65,16 @@ function resolveDepartureDay(todayET, totalMins) {
   return d.toISOString().slice(0, 10);
 }
 
+// Calendar-date-only +1 day (no wall-clock/timezone conversion involved, unlike the naive-
+// timestamp-vs-UTC-epoch footgun documented in CLAUDE.md -- this only ever adds a whole day to
+// a YYYY-MM-DD string, so UTC-noon-anchored arithmetic is safe and DST-proof). Same idiom as
+// resolveDepartureDay() above, just +1 instead of -1.
+function addOneCalendarDay(dateStr) {
+  const d = new Date(dateStr + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 // FIXED 2026-09-01 (real overnight incident: a genuine ~530pt move on 2026-08-31/09-01 was
 // never caught at all -- root-caused, AFTER first wrongly suspecting the restart-fragility bug
 // above, to a structural design gap: the departure check used to look ONLY in a 30-minute window
@@ -242,8 +252,16 @@ export async function detectGlobexFlush(io) {
     }
     // trade_date is the DEPARTURE day, not "today" -- the setup is about the value area that
     // day's RTH close broke, even though the resolution may land after midnight. Expiry caps at
-    // that departure day's own following RTH open.
-    const expiresAt = `${departureDay} 09:30:00`;
+    // that departure day's own following RTH open -- FIXED 2026-09-13 (real bug, found
+    // investigating a real ~300pt overnight flush): this was `${departureDay} 09:30:00` with no
+    // +1 day, but firedAt happens in the EVENING after that same calendar day's 9:30am already
+    // passed, so expiresAt landed BEFORE fired_at for every single fire this detector has ever
+    // produced. The one confirmed real case (id 117096, GLOBEX_FLUSH_REVERSAL_LONG, fired
+    // 2026-09-08 21:35 ET) resolved almost instantly as a flat TIME_EXPIRED (-$2) instead of
+    // tracking overnight, even though price later fell ~170pts through its own stop before ever
+    // approaching target -- the stored resolution/actual_pnl for that row (and likely every
+    // GLOBEX_FLUSH*/REVERSAL* row ever fired) was wrong/misleadingly flat as a direct result.
+    const expiresAt = `${addOneCalendarDay(departureDay)} 09:30:00`;
     const fireTags = await computeFireTags(departureDay, 'GLOBEX', totalMins);
     const ins = await query(`
       INSERT INTO active_setups (
