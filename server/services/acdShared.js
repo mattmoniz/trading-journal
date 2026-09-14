@@ -246,6 +246,65 @@ export function computeSessionEndCapStr(etNow) {
   return fmtETStr(sessionEndET);
 }
 
+// ── NQ quarterly roll-week dates (shared) ────────────────────────────────────
+// Extracted 2026-09-14 from 3 independent hand-copies (stallDefendedLevelDetector.js,
+// majorPivotDefendedBreakDetector.js, and scripts/backfill_garch_vol_scale_history.py's own
+// Python version) after the volatility-regime card needed a 4th consumer -- per this
+// codebase's own "share modules instead of reimplementing" convention. Returns the set of
+// calendar dates (YYYY-MM-DD strings) inside NQ's quarterly (Mar/Jun/Sep/Dec) roll week: the
+// 2nd Thursday of the contract month (where volume typically starts shifting to the next
+// contract) through the Monday before the 3rd Friday (CME's own official roll date). Verified
+// byte-identical to the Python version's output for 2026 before extracting.
+export function getNqRollWeekDates(year) {
+  const excluded = new Set();
+  for (const month of [2, 5, 8, 11]) {
+    const d = new Date(year, month, 1);
+    const thursdays = [], fridays = [];
+    while (d.getMonth() === month) {
+      if (d.getDay() === 4) thursdays.push(new Date(d));
+      if (d.getDay() === 5) fridays.push(new Date(d));
+      d.setDate(d.getDate() + 1);
+    }
+    const secondThursday = thursdays[1], thirdFriday = fridays[2];
+    const mondayBefore = new Date(thirdFriday); mondayBefore.setDate(mondayBefore.getDate() - 4);
+    const curr = new Date(secondThursday);
+    while (curr <= mondayBefore) { excluded.add(curr.toISOString().slice(0, 10)); curr.setDate(curr.getDate() + 1); }
+  }
+  return excluded;
+}
+
+// Convenience wrapper: is `dateStr` (YYYY-MM-DD) inside its own year's NQ roll week? Handles
+// the December-month case (whose roll week can only ever fall in December itself, so a single
+// year's getNqRollWeekDates() call always suffices -- no cross-year boundary to worry about).
+export function isInsideNqRollWeek(dateStr) {
+  const year = parseInt(dateStr.slice(0, 4), 10);
+  return getNqRollWeekDates(year).has(dateStr);
+}
+
+// Returns { start, end } (YYYY-MM-DD strings) of the roll week containing or most recently
+// covering `dateStr`, or null if `dateStr` isn't in one and none of the current year's 4 roll
+// weeks have started yet relative to it. Used to build a human-readable "resumes ~<date>"
+// message -- callers needing just a boolean should use isInsideNqRollWeek() instead.
+export function getNqRollWeekBounds(dateStr) {
+  const year = parseInt(dateStr.slice(0, 4), 10);
+  const dates = [...getNqRollWeekDates(year)].sort();
+  if (!dates.length) return null;
+  // Group into contiguous runs (4 runs/year, one per quarter) and find the one containing
+  // dateStr, if any.
+  const runs = [];
+  let run = [dates[0]];
+  for (let i = 1; i < dates.length; i++) {
+    const prev = new Date(run[run.length - 1]), cur = new Date(dates[i]);
+    if ((cur - prev) / 86400000 === 1) run.push(dates[i]);
+    else { runs.push(run); run = [dates[i]]; }
+  }
+  runs.push(run);
+  for (const r of runs) {
+    if (dateStr >= r[0] && dateStr <= r[r.length - 1]) return { start: r[0], end: r[r.length - 1] };
+  }
+  return null;
+}
+
 // Drops an active_setups row into trade_timeline_events (idempotent via ON CONFLICT).
 // event_time = fired_at (never current timestamp — per spec).
 export async function dropToTimeline(setup) {

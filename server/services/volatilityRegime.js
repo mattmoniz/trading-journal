@@ -37,6 +37,7 @@
 // next morning.
 
 import { query } from '../db.js';
+import { isInsideNqRollWeek, getNqRollWeekBounds } from './acdShared.js';
 
 // Returns the most recent volatility-regime reading, or null if none has ever been computed
 // (e.g. the nightly job hasn't run yet on a fresh environment). Never throws — a monitoring
@@ -56,6 +57,19 @@ export async function getLatestVolRegime() {
   const notes = JSON.parse(row.notes);
   const { scale, p01, p99, as_of_close, degenerate_fallback } = notes;
 
+  // Roll-week awareness (2026-09-14, user-caught: "GARCH looks frozen"). backfill_garch_vol_
+  // scale_history.py deliberately excludes NQ's quarterly contract-roll week from its return
+  // series (blended front/next-month prices produce fake single-day moves) -- so asOfClose
+  // legitimately stalls at the day BEFORE the roll week for its full ~5-trading-day duration,
+  // every quarter. That's correct behavior, not a stuck job, but showing a stale-looking date
+  // with zero context reads exactly like one -- this flags it so a caller can say so honestly.
+  // Checked against TODAY (not asOfClose) -- once the roll week passes, asOfClose will still
+  // look "a few days old" for one more day until that night's run catches up; the pause banner
+  // should disappear at that point even though the date itself hasn't advanced yet.
+  const todayET = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+  const inRollWeek = isInsideNqRollWeek(todayET);
+  const rollWeekBounds = inRollWeek ? getNqRollWeekBounds(todayET) : null;
+
   return {
     scale: +scale.toFixed(4),
     asOfClose: as_of_close,
@@ -64,6 +78,8 @@ export async function getLatestVolRegime() {
     // range) -- NOT a predictive classification. See header comment for why the discrete
     // HOT/COLD label was removed rather than kept alongside this.
     band: { p01: +p01.toFixed(4), p99: +p99.toFixed(4) },
+    rollWeekPaused: inRollWeek,
+    rollWeekResumesAfter: rollWeekBounds?.end ?? null,
   };
 }
 

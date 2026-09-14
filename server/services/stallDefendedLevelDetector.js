@@ -66,7 +66,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
 
 // EARNED literals below -- each was chosen from a real parameter sweep tested against
 // real-stop/target EV (not guessed), same category as majorPivotDefendedBreakDetector.js's
@@ -139,23 +139,8 @@ const QUIET_THRESHOLD_CACHE_TTL_MS = 20 * 60 * 60 * 1000; // ~daily -- this is a
 
 function isGlobexMod(mod) { return mod >= 1080 || mod < 510; } // matches every other detector's boundary this session
 
-function getNqRollWeekDates(year) {
-  const excluded = new Set();
-  for (const month of [2, 5, 8, 11]) {
-    const d = new Date(year, month, 1);
-    const thursdays = [], fridays = [];
-    while (d.getMonth() === month) {
-      if (d.getDay() === 4) thursdays.push(new Date(d));
-      if (d.getDay() === 5) fridays.push(new Date(d));
-      d.setDate(d.getDate() + 1);
-    }
-    const secondThursday = thursdays[1], thirdFriday = fridays[2];
-    const mondayBefore = new Date(thirdFriday); mondayBefore.setDate(mondayBefore.getDate() - 4);
-    const curr = new Date(secondThursday);
-    while (curr <= mondayBefore) { excluded.add(curr.toISOString().slice(0, 10)); curr.setDate(curr.getDate() + 1); }
-  }
-  return excluded;
-}
+// getNqRollWeekDates now imported from acdShared.js (2026-09-14 dedup -- was a local copy,
+// identical to majorPivotDefendedBreakDetector.js's own former local copy).
 
 // Same corrected 5-min-bucket volume baseline built and validated the same session (a scale
 // mismatch against touchQuality.js's 1-min-bar getVolumeBaseline() was caught and fixed) --

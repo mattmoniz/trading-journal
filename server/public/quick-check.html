@@ -360,6 +360,13 @@ function renderVolRegimeCard(regime, favorableSetups) {
     '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
     (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
     '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>' +
+    // Roll-week pause note (2026-09-14, user-caught "GARCH looks frozen"): the reading
+    // genuinely can't advance during NQ's quarterly contract-roll week (see
+    // volatilityRegime.js's getLatestVolRegime() for why) -- say so explicitly rather than
+    // showing a stale-looking date with no context, which reads exactly like a stuck job.
+    (regime.rollWeekPaused
+      ? '<span style="flex-basis:100%;font-size:11px;color:var(--amber);margin-top:4px;">⏸ Paused — inside NQ\'s quarterly contract-roll window' + (regime.rollWeekResumesAfter ? ', resumes after ' + regime.rollWeekResumesAfter : '') + '</span>'
+      : '') +
     (favorable.length
       ? '<span style="flex-basis:100%;font-size:11px;color:var(--green);margin-top:4px;">✓ Favors: ' + favorable.map(s => s.label).join(', ') + '</span>'
       : '');

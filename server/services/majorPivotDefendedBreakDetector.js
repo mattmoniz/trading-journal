@@ -56,7 +56,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
 
 const SWING_WIDTH = 5;
 const ZIGZAG_THRESHOLD = 1.5; // x ATR20 -- confirmed sweet spot, both configs peak here
@@ -90,23 +90,8 @@ function isGlobexMod(mod) {
   return mod >= 1080 || mod < 510;
 }
 
-function getNqRollWeekDates(year) {
-  const excluded = new Set();
-  for (const month of [2, 5, 8, 11]) {
-    const d = new Date(year, month, 1);
-    const thursdays = [], fridays = [];
-    while (d.getMonth() === month) {
-      if (d.getDay() === 4) thursdays.push(new Date(d));
-      if (d.getDay() === 5) fridays.push(new Date(d));
-      d.setDate(d.getDate() + 1);
-    }
-    const secondThursday = thursdays[1], thirdFriday = fridays[2];
-    const mondayBefore = new Date(thirdFriday); mondayBefore.setDate(mondayBefore.getDate() - 4);
-    const curr = new Date(secondThursday);
-    while (curr <= mondayBefore) { excluded.add(curr.toISOString().slice(0, 10)); curr.setDate(curr.getDate() + 1); }
-  }
-  return excluded;
-}
+// getNqRollWeekDates now imported from acdShared.js (2026-09-14 dedup -- was a local copy,
+// identical to stallDefendedLevelDetector.js's own former local copy).
 
 // Re-derives the full defended-break zone state from the last LOOKBACK_DAYS of 5-min bars.
 // Returns the list of confirmed breaks (streak>=1) found anywhere in that window -- the caller
