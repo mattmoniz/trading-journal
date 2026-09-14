@@ -125,6 +125,18 @@ export async function getVolRegimeHistory(days = 180) {
 export async function getCurrentGarchRegime() {
   const [latest, history] = await Promise.all([getLatestVolRegime(), getVolRegimeHistory(2000)]);
   if (!latest || history.length === 0) return null;
+  // Roll-week fail-safe (2026-09-14): during NQ's quarterly contract-roll week, `latest.scale`
+  // is a stale reading (see getLatestVolRegime()'s own comment -- the underlying series
+  // legitimately can't advance for the roll week's full duration). A LOW/MEDIUM/HIGH
+  // classification built on it would be confidently wrong, not just outdated -- and the one
+  // live consumer of this function (momentumChaseDetector.js) already fails safe on a null
+  // return (`if (!regimeInfo || ...) return null`), so returning null here is a pure
+  // no-new-behavior fix: the detector simply won't fire during the roll week instead of
+  // firing (or not firing) off a classification nobody actually computed fresh. Also protects
+  // real forward-data integrity for this SHADOW-only, real-N-awaiting setup -- a fire tagged
+  // "MEDIUM regime" during the roll week would be tagging it against a 5-day-old reading, not
+  // a genuine live one.
+  if (latest.rollWeekPaused) return null;
 
   // Linear-interpolation percentile, matching pandas' Series.quantile() default exactly (the
   // method every scratch/backtest_* script in this research thread used) -- a simple nearest-
