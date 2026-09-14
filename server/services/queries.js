@@ -237,19 +237,61 @@ export function computeDynamicConviction(base, levelKey, { nl30 = 0, structuralS
 // rule violation, moot now that they're gone. git history has them if ever needed.
 
 /**
+ * Real intraday VWAP-distance samples for one session's bars — samples the running-VWAP-
+ * vs-price distance every `sampleEveryMin` BARS (not clock time, to sidestep any ET/UTC
+ * timezone parsing entirely — bars already arrive in 1-min sequence, so "every 30th bar"
+ * IS "every 30 real minutes"), skipping the first `skipBars` bars where a freshly-started
+ * running VWAP is still too noisy to be meaningful.
+ *
+ * Replaces the prior convention (one sample per day: the session's own closing price minus
+ * that session's own VWAP) — fixed 2026-09-14 after the user questioned a live "4.8σ from
+ * VWAP" reading that turned out to be a real miscalibration, not a real reading. Verified
+ * directly: the EOD-close-only std over a trailing 30-session window was 56.2pt; the real
+ * intraday std (this sampling method, same window) is 81.5pt — 45% bigger. Price naturally
+ * wanders further from a running VWAP mid-session than it typically ends up at the close, so
+ * an EOD-close-only sample systematically UNDERSTATES real intraday dispersion, which makes
+ * any sigma-distance reading built from it look more extreme than it really is. This wasn't
+ * just a display bug — getTrailingVwapStd()/getTrailing24hrVwapStd() feed the REAL live
+ * trigger threshold for VWAP_MAGNET_LONG/SHORT and GLOBEX_VWAP_MAGNET_LONG/SHORT. Verified
+ * against real history: of 184 real GLOBEX_VWAP_MAGNET fires, 70% (128) would NOT have
+ * cleared a correctly-calibrated threshold, and those 128 show real EV=-$4.46/trade vs the
+ * 56 that would still clear it at +$3.40/trade — the old threshold was diluting a genuinely
+ * positive setup with lower-quality touches, not just displaying a wrong number.
+ */
+function sampleIntradayVwapDists(bars, { sampleEveryMin = 30, skipBars = 20 } = {}) {
+  const dists = [];
+  let pv = 0, v = 0;
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const bvol = Number(b.vol ?? b.volume ?? 1);
+    pv += (b.high + b.low + b.close) / 3 * bvol;
+    v += bvol;
+    if (i < skipBars || v === 0) continue;
+    if ((i - skipBars) % sampleEveryMin === 0) dists.push(b.close - pv / v);
+  }
+  return dists;
+}
+
+/**
  * Rolling VWAP distance std — single source of truth for VWAP_MAGNET threshold.
  * Returns { std, mean, n, threshold } where threshold = max(50, std * sigmaMult).
  * Callers: acd.js (VWAP_MAGNET), morningBrief.js (scalp-recap + trade-alerts), antigravityEdges.js.
+ *
+ * CHANGED 2026-09-14: now backed by getTrailingRthVwapDists() (real intraday sampling, see
+ * sampleIntradayVwapDists() above) instead of directly querying session_analysis.close_vs_vwap
+ * (a single EOD-close sample per day — the bug this fix corrects). This also gives it
+ * getTrailingRthVwapDists's already-longer real history (price_bars_primary back to
+ * 2022-12-14) instead of session_analysis's ~109-day-only backfill, a genuine side benefit,
+ * not just a bug fix.
  */
 export async function getTrailingVwapStd(date, days = 30, sigmaMult = 1.5) {
-  const res = await query(
-    `SELECT close_vs_vwap FROM session_analysis
-     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
-     AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`,
-    [date, days]
-  ).catch(() => ({ rows: [] }));
-  const vals = res.rows.map(r => r.close_vs_vwap);
-  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  const vals = await getTrailingRthVwapDists(date, days);
+  // Floor scaled from "20 real days" (the original, pre-2026-09-14 intent, back when this was
+  // 1 EOD sample/day) to its intraday-sampling equivalent: sampleIntradayVwapDists()'s
+  // defaults (skipBars=20, sampleEveryMin=30) over the ~390min RTH window yield ~13
+  // samples/day -- 20*13=260. Revisit this multiplier if sampleIntradayVwapDists's defaults
+  // ever change; it is NOT derived automatically from them.
+  if (vals.length < 195) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
   const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
   const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
   return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
@@ -329,8 +371,10 @@ export async function getTrailingORWidths(date, days = 90) {
  * its own) that this codebase has gotten wrong before on reimplementation. Pure relocation,
  * zero logic change (verified: same query, same bulk-fetch-then-bucket structure, same
  * cache key/TTL) — server/routes/morningBrief.js now imports this instead of defining it.
- * Returns an array of (session_close - vwap24) distances, one per historical session with
- * >50 Globex bars, for sessions strictly before `date`.
+ * CHANGED 2026-09-14: returns MANY real intraday-sampled (price - running vwap24) distances
+ * per historical session (via sampleIntradayVwapDists() above), not one EOD-close-vs-vwap24
+ * sample per session -- see that function's docstring for why. Sessions need >50 Globex bars
+ * to contribute any samples.
  */
 export async function getTrailing24hrVwapDists(date, days = 30) {
   const ck = `mb:24hrVwapDists:${date}:${days}`;
@@ -373,15 +417,10 @@ export async function getTrailing24hrVwapDists(date, days = 30) {
     bySession.get(sessDate).push(b);
   }
 
-  const dists = [];
+  let dists = [];
   for (const row of result.rows) {
     const globexBars = bySession.get(row.d) || [];
-    if (globexBars.length > 50) {
-      let pv = 0, v = 0;
-      for (const b of globexBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
-      const vwap24 = pv / v;
-      dists.push(row.close_price - vwap24);
-    }
+    if (globexBars.length > 50) dists = dists.concat(sampleIntradayVwapDists(globexBars));
   }
   return cacheSet(ck, dists, DAY_CACHE_TTL);
 }
@@ -392,27 +431,31 @@ export async function getTrailing24hrVwapDists(date, days = 30) {
  */
 export async function getTrailing24hrVwapStd(date, days = 30, sigmaMult = 1.5) {
   const vals = await getTrailing24hrVwapDists(date, days);
-  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  // Floor scaled from "20 real days" to its intraday-sampling equivalent: the ~23hr Globex+RTH
+  // window yields ~46 samples/day at sampleIntradayVwapDists()'s defaults -- 20*46=920. See
+  // getTrailingVwapStd's matching comment.
+  if (vals.length < 690) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
   const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
   const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
   return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };
 }
 
 /**
- * RTH-session-bar-derived rolling VWAP distance — the RTH sibling of
- * getTrailingRthVwapDists's Globex cousin (getTrailing24hrVwapDists above), built
- * 2026-09-01 to resolve OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained's
- * named confound: getTrailingVwapStd() (used live by RTH VWAP_MAGNET) reads
- * session_analysis.close_vs_vwap, which only goes back to 2026-03-25 (~109 real days,
- * confirmed live 2026-09-01) — nowhere near price_bars_primary's real ~3.9yr NQ history
- * (back to 2022-12-14) that the Globex sibling's calibration draws from. This function
- * computes the same quantity (RTH session close minus RTH session VWAP, matching
- * patternScannerService.js's scanSession() BETWEEN 570 AND 959 window and HLC/3 volume
- * weighting exactly) directly from price_bars_primary, so a longer, non-session_analysis-
- * limited RTH reconstruction can be built and compared against the existing short one —
- * NOT wired into any live path, this is a backtest/reconstruction-only helper. Does not
- * replace getTrailingVwapStd's live threshold (still deliberately session_analysis-backed,
- * unchanged) — this is for reconstructing history further back than that table allows.
+ * RTH-session-bar-derived rolling VWAP distance samples. Built 2026-09-01 to resolve
+ * OPEN_DECISION globex_vs_rth_vwap_magnet_divergence_unexplained's named confound:
+ * getTrailingVwapStd() (used live by RTH VWAP_MAGNET) read session_analysis.close_vs_vwap,
+ * which only goes back to 2026-03-25 (~109 real days, confirmed live 2026-09-01) — nowhere
+ * near price_bars_primary's real ~3.9yr NQ history (back to 2022-12-14) that the Globex
+ * sibling's calibration draws from. This function computes the same underlying quantity
+ * directly from price_bars_primary instead (RTH window, matching patternScannerService.js's
+ * scanSession() BETWEEN 570 AND 959 bound and HLC/3 volume weighting).
+ *
+ * CHANGED 2026-09-14 (two changes, same commit): (1) now returns MANY real intraday-sampled
+ * distances per session via sampleIntradayVwapDists() above, not one EOD-close-vs-vwap sample
+ * per session — see that function's docstring for the verified ~45%-understatement bug this
+ * fixes. (2) getTrailingVwapStd() now calls THIS function instead of querying
+ * session_analysis.close_vs_vwap directly — this is no longer "reconstruction/backtest-only,"
+ * it is the live RTH VWAP_MAGNET threshold's real data source.
  */
 export async function getTrailingRthVwapDists(date, days = 30) {
   const ck = `mb:rthVwapDists:${date}:${days}`;
@@ -431,14 +474,10 @@ export async function getTrailingRthVwapDists(date, days = 30) {
     if (!byDay.has(b.d)) byDay.set(b.d, []);
     byDay.get(b.d).push(b);
   }
-  const dists = [];
+  let dists = [];
   for (const [, dayBars] of byDay) {
     if (dayBars.length < 30) continue; // matches scanSession()'s own thin-day guard
-    let pv = 0, v = 0;
-    for (const b of dayBars) { pv += (b.high + b.low + b.close) / 3 * Number(b.vol || 1); v += Number(b.vol || 1); }
-    const vwap = pv / v;
-    const closePrice = dayBars[dayBars.length - 1].close;
-    dists.push(closePrice - vwap);
+    dists = dists.concat(sampleIntradayVwapDists(dayBars));
   }
   return cacheSet(ck, dists, DAY_CACHE_TTL);
 }
@@ -450,7 +489,7 @@ export async function getTrailingRthVwapDists(date, days = 30) {
  */
 export async function getTrailingRthVwapStdFullHistory(date, days = 30, sigmaMult = 1.5) {
   const vals = await getTrailingRthVwapDists(date, days);
-  if (vals.length < 20) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) };
+  if (vals.length < 195) return { std: 130, mean: 0, n: vals.length, threshold: Math.max(50, Math.round(130 * sigmaMult)) }; // see getTrailingVwapStd's comment for the derivation
   const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
   const std = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
   return { std, mean, n: vals.length, threshold: Math.max(50, Math.round(std * sigmaMult)) };

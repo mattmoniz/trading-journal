@@ -1,7 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
-import { getTrailingVwapStd, getTrailing24hrVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
+import { getTrailingVwapStd, getTrailing24hrVwapDists, getTrailingRthVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 
 const router = express.Router();
@@ -863,7 +863,11 @@ router.get('/live-session-context/:date', async (req, res) => {
          AND ts::date >= $2::date - 90 AND ts::date < $2
          GROUP BY et_min`, [etMin, date]).catch(() => ({ rows: [] })),
       getTrailingCumDeltas(date, 30),
-      query(`SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL ORDER BY trade_date DESC`, [date]),
+      // CHANGED 2026-09-14: was a raw session_analysis.close_vs_vwap query (one EOD-close
+      // sample per day) -- switched to getTrailingRthVwapDists (real intraday sampling, see
+      // its docstring in queries.js) so this display chip matches the fix applied to the live
+      // VWAP_MAGNET trigger threshold (getTrailingVwapStd, same underlying function now).
+      getTrailingRthVwapDists(date, 30),
       query(`SELECT high::float, low::float, close::float, volume::bigint as vol FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= $1 AND ts::date <= $2 AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [weekMonday, date]),
       getTrailingWeeklyVwapDists(date, 12),
     ]);
@@ -981,8 +985,10 @@ router.get('/live-session-context/:date', async (req, res) => {
 
     // Daily/weekly VWAP sigma bands
     const dailyVwapSigmaVal = (() => {
-      if (dailyVwapRecentRes.rows.length < 10) return Math.round((price - vwap) / 111 * 10) / 10;
-      const dists = dailyVwapRecentRes.rows.map(r => r.close_vs_vwap);
+      // Floor of 195 (~15 real days at ~13 samples/day) matches queries.js's
+      // getTrailingVwapStd's own rescaled floor, same derivation -- see its comment.
+      if (dailyVwapRecentRes.length < 195) return Math.round((price - vwap) / 111 * 10) / 10;
+      const dists = dailyVwapRecentRes;
       const mean = dists.reduce((a, b) => a + b, 0) / dists.length;
       const std = Math.sqrt(dists.reduce((s, dd) => s + (dd - mean) ** 2, 0) / dists.length);
       return std > 0 ? Math.round((price - vwap) / std * 10) / 10 : 0;
@@ -1099,12 +1105,12 @@ router.get('/trade-alerts/:date', async (req, res) => {
     }
 
     // Daily VWAP σ alert
+    // CHANGED 2026-09-14: was its own 3rd hand-rolled copy of the EOD-close-only sigma calc
+    // (session_analysis.close_vs_vwap, one sample/day) -- switched to the real, now-fixed
+    // getTrailingRthVwapStd() instead of re-deriving a third time. See queries.js's
+    // sampleIntradayVwapDists() docstring for the bug this fixes.
     const dailySigma = await (async () => {
-      const recent = await query(`SELECT close_vs_vwap FROM session_analysis WHERE trade_date >= $1::date - 30 AND trade_date < $1 AND close_vs_vwap IS NOT NULL`, [date]).catch(() => ({ rows: [] }));
-      if (recent.rows.length < 10) return Math.abs(price - vwap) / 111;
-      const dists = recent.rows.map(r => r.close_vs_vwap);
-      const mean = dists.reduce((a,b) => a+b, 0) / dists.length;
-      const std = Math.sqrt(dists.reduce((s, d) => s + (d - mean) ** 2, 0) / dists.length);
+      const { std } = await getTrailingVwapStd(date, 30); // handles its own thin-data fallback internally
       return std > 0 ? (price - vwap) / std : 0;
     })();
     if (Math.abs(dailySigma) >= 1.5) {
