@@ -82,7 +82,7 @@
 // =============================================================================
 
 import { query } from '../server/db.js';
-import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { computeRigor, breakevenWr, dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
 
 const MIN_N          = 20;    // CLAUDE.md N≥20 rule — below this, always NEUTRAL
 const SCALE_FACTOR   = 0.07;  // size_delta per σ of divergence; at z=2→0.14, z=3→0.21, cap 0.25
@@ -95,50 +95,11 @@ const WR_UP          = 0.65;
 const WR_SUPPRESS    = 0.55;
 const REAL_N_FLOOR   = 20;    // NEW down-side triggers' own real-data floor (standard N>=20)
 const EV_FLOOR       = -5;    // matches SETUP_STATUS/IB precedent, not a new number
-const BOOTSTRAP_ITERS = 2000;
 
-function breakevenWr(stopPts, targetPts) { return (stopPts + 1) / (stopPts + targetPts); }
-
-// Deterministic string hash -> uint32 seed (mulberry32), so the bootstrap below is
-// reproducible run-to-run given identical underlying data -- DeepSeek code review,
-// 2026-09-13: an unseeded Math.random() let a cell's CI (and therefore its live
-// recommendation) flip between NEUTRAL/SIZE_DOWN/SUPPRESS week-to-week from pure Monte
-// Carlo noise alone, with no actual change in the underlying trades.
-function hashSeed(str) {
-  let h = 2166136261;
-  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-  return h >>> 0;
-}
-function mulberry32(seed) {
-  let a = seed;
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function dayBlockedBootstrapCI(events, seedKey) {
-  const byDate = new Map();
-  for (const e of events) { if (!byDate.has(e.date)) byDate.set(e.date, []); byDate.get(e.date).push(e.pnl); }
-  const dateGroups = [...byDate.values()];
-  // Seed derived from the data itself (dates + pnls), not just signal_name -- so the seed
-  // changes if the underlying trades change, but stays fixed for an unchanged population.
-  // Sorted (DeepSeek verification pass, 2026-09-13) so the seed is order-independent -- the
-  // raw SQL result order within a cell isn't guaranteed stable across a table rewrite/plan
-  // change even when the underlying trade set is identical.
-  const sortedPnls = events.map(e => e.pnl).sort((a, b) => a - b).map(p => p.toFixed(2)).join(',');
-  const rand = mulberry32(hashSeed(`${seedKey}|${dateGroups.length}|${sortedPnls}`));
-  const means = [];
-  for (let i = 0; i < BOOTSTRAP_ITERS; i++) {
-    const resampled = [];
-    for (let k = 0; k < dateGroups.length; k++) resampled.push(...dateGroups[Math.floor(rand() * dateGroups.length)]);
-    means.push(resampled.reduce((a, c) => a + c, 0) / resampled.length);
-  }
-  means.sort((a, b) => a - b);
-  return { lo: means[Math.floor(BOOTSTRAP_ITERS * 0.025)], hi: means[Math.floor(BOOTSTRAP_ITERS * 0.975)] };
-}
+// breakevenWr/hashSeed/mulberry32/dayBlockedBootstrapCI moved to rigorDiagnostics.js
+// 2026-09-13 (this script's own second consumer, scripts/calibrate_momentum_ctx_sizing.mjs,
+// needed the identical breakeven/seeded-bootstrap logic -- extracted rather than copy-pasted
+// a second time, matching this codebase's own "share modules" convention).
 
 const SEVERITY = { SUPPRESS: 3, SIZE_DOWN: 2, NEUTRAL: 1 };
 

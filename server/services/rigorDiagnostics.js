@@ -167,6 +167,60 @@ export function rigorContext(rigor) {
 // and a single `replicates` boolean (same sign pooled AND held-out favorable
 // fraction >= 50%) -- deliberately a stricter bar than computeRigor()'s `clean`, since
 // this is checking for a coincidence of selection, not measurement noise.
+// Economic breakeven win rate: (stopPts + 1) / (stopPts + targetPts). The "+1" is the $2
+// round-trip commission expressed in point-equivalents at MNQ's $2/pt (see CLAUDE.md's MNQ
+// commission hard rule) -- a win rate below this means the setup is losing money even though
+// it's "winning" more often than not, since commission eats the edge. Extracted from
+// backtest_day_type_alpha.js 2026-09-13 (its own first consumer) so a second calibration
+// script needing the same real-money-breakeven test doesn't reimplement it by hand --
+// matches this file's own "written independently, then centralized" precedent above.
+export function breakevenWr(stopPts, targetPts) { return (stopPts + 1) / (stopPts + targetPts); }
+
+// Deterministic string hash -> uint32 seed (mulberry32), so a bootstrap using it is
+// reproducible run-to-run given identical underlying data. Also extracted from
+// backtest_day_type_alpha.js 2026-09-13 (DeepSeek code review: an unseeded Math.random()
+// let a cell's CI, and therefore its live recommendation, flip between NEUTRAL/SIZE_DOWN/
+// SUPPRESS week-to-week from pure Monte Carlo noise alone, with no actual change in the
+// underlying trades).
+export function hashSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+export function mulberry32(seed) {
+  let a = seed;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Day-blocked bootstrap 95% CI on mean PnL: resamples whole trading DAYS with replacement
+// (not individual trades), correctly handling day-clustering/correlated trades within a
+// session -- a naive per-trade bootstrap treats same-day trades as independent, which they
+// are not (this codebase's own dry-runs found day-clustering is rampant even at N=50-170).
+// events: array of {[dateField]: string, pnl: number}. seedKey: a string identifying this
+// specific population (e.g. a signal_name) -- combined with the actual dates/pnls so the
+// seed changes if the underlying trades change but stays fixed for an unchanged population
+// (order-independent: pnls are sorted before hashing).
+export function dayBlockedBootstrapCI(events, seedKey, { dateField = 'date', iters = 2000 } = {}) {
+  const byDate = new Map();
+  for (const e of events) { const d = e[dateField]; if (!byDate.has(d)) byDate.set(d, []); byDate.get(d).push(e.pnl); }
+  const dateGroups = [...byDate.values()];
+  const sortedPnls = events.map(e => e.pnl).sort((a, b) => a - b).map(p => p.toFixed(2)).join(',');
+  const rand = mulberry32(hashSeed(`${seedKey}|${dateGroups.length}|${sortedPnls}`));
+  const means = [];
+  for (let i = 0; i < iters; i++) {
+    const resampled = [];
+    for (let k = 0; k < dateGroups.length; k++) resampled.push(...dateGroups[Math.floor(rand() * dateGroups.length)]);
+    means.push(resampled.reduce((a, c) => a + c, 0) / resampled.length);
+  }
+  means.sort((a, b) => a - b);
+  return { lo: means[Math.floor(iters * 0.025)], hi: means[Math.floor(iters * 0.975)] };
+}
+
 export function computeReplication(units, { idFn, metricFn, selectedIds }) {
   const selectedSet = new Set(selectedIds);
   const scored = units.map(u => ({ id: idFn(u), metric: metricFn(u) })).filter(x => x.metric && Number.isFinite(x.metric.value) && x.metric.n > 0);
