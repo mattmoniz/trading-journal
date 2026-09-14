@@ -171,7 +171,22 @@ export async function computeDefendedBreaks() {
     const approachSide = pivot.type === 'HIGH' ? 1 : -1;
     let state = 'IDLE', denialStreak = 0, extremePrice = null, barsHeld = 0, side = null;
     for (let i = confirmIdx; i < bars5m.length; i++) {
-      if (rollDates.has(bars5m[i].dateStr)) continue;
+      // FIXED 2026-09-14 (real, active bug -- DeepSeek code review, independently confirmed:
+      // today's own date is inside the live Sep 10-14 2026 NQ roll week). Was `continue`,
+      // which skips a roll-week bar without resetting state -- state/extremePrice/denialStreak
+      // all survive the gap untouched, so a zone mid-TOUCHING or mid-BREAKING right as a roll
+      // week starts would silently resume post-roll as if nothing happened. That's not enough
+      // on its own even as a fix: `top`/`bot` (the pivot's own band, set at pivot-acceptance
+      // time from that date's ATR) are priced in the FRONT-month contract, so ANY post-roll bar
+      // compared against them is comparing back-month prices to a front-month reference for the
+      // rest of this pivot's test, not just the gap bar itself -- the contamination doesn't
+      // clear once the roll week ends. `break` (not `continue`, not a mid-loop state reset)
+      // permanently abandons testing THIS pivot the moment its test window touches a roll week
+      // -- a pivot whose confirm-to-break window crosses a roll-week boundary is untestable in
+      // a single price epoch and must not fire at all. Matches stallDefendedLevelDetector.js's
+      // own (already-correct) roll-week handling, which pre-filters pivots off roll dates and
+      // rejects any stall window touching one, rather than trying to skip-and-resume.
+      if (rollDates.has(bars5m[i].dateStr)) break;
       const bar = bars5m[i];
       if (state === 'IDLE') {
         const inBand = bar.high >= bot && bar.low <= top;
