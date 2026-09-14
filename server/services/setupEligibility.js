@@ -256,18 +256,30 @@ export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, 
 // (reverted same session -- see that file's getLiveStatus() for the full writeup).
 export async function getCanonicalLiveStatus(signalName) {
   const { rows } = await query(`
-    SELECT recommendation, sample_size, ev_per_trade::float as ev
+    SELECT recommendation, sample_size, ev_per_trade::float as ev, notes
     FROM performance_audit WHERE signal_type='SETUP_STATUS' AND signal_name=$1
     ORDER BY run_date DESC LIMIT 1
   `, [signalName]);
   const row = rows[0];
-  if (!row) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: 0, liveEv: null };
+  // realN: the origin_status-filtered (ACTIVE/SHADOW, not BACKFILL) real count from the row's
+  // own notes JSON -- added 2026-09-14 so callers displaying "count" to a user show the real
+  // figure, not sample_size (blended, can be ~80% synthetic BACKFILL per CLAUDE.md's hard
+  // rule on active_setups). null when the row predates this field or notes is unparseable.
+  const parseRealN = (r) => {
+    if (!r?.notes) return null;
+    try {
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      return n?.all_time_real_n ?? null;
+    } catch { return null; }
+  };
+  if (!row) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: 0, liveEv: null, realN: null };
+  const realN = parseRealN(row);
   const isLive = row.recommendation === 'ACTIVE' || row.recommendation === 'PROMOTE';
   if (!isLive) {
     return {
       status: 'SHADOW',
       reason: row.recommendation === 'THIN_N' ? 'NEW_SIGNAL_UNDER_LIVE_EVALUATION' : 'PERFORMANCE_BELOW_THRESHOLD',
-      liveN: row.sample_size, liveEv: row.ev,
+      liveN: row.sample_size, liveEv: row.ev, realN,
     };
   }
   // WR/EV cleared -- still check whether this row itself is trustworthy (see
@@ -277,14 +289,14 @@ export async function getCanonicalLiveStatus(signalName) {
   // this protection automatically without having to know to ask for it.
   if (!(await hasRealForwardClearance(signalName))) {
     const real = await getRealForwardStats(signalName);
-    return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: real.n, liveEv: real.ev };
+    return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: real.n, liveEv: real.ev, realN: real.n };
   }
   // WR/EV cleared -- still check the deliberate, human-reviewed capital-exposure override list
   // above (NOT a generic calibration-confidence auto-check -- see CAPITAL_EXPOSURE_OVERRIDE's
   // own header for why an automatic version of this was tried and reverted).
   const override = CAPITAL_EXPOSURE_OVERRIDE.get(signalName);
   if (override) {
-    return { status: 'SHADOW', reason: override.reason, liveN: row.sample_size, liveEv: row.ev };
+    return { status: 'SHADOW', reason: override.reason, liveN: row.sample_size, liveEv: row.ev, realN };
   }
-  return { status: 'ACTIVE', reason: null, liveN: row.sample_size, liveEv: row.ev };
+  return { status: 'ACTIVE', reason: null, liveN: row.sample_size, liveEv: row.ev, realN };
 }

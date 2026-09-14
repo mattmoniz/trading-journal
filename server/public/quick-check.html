@@ -648,6 +648,14 @@ function renderSetupCard(setupData) {
   if (active.stop != null)   html += '<span class="k">Stop <b class="mono" style="color:var(--red)">' + Math.round(active.stop) + '</b></span>';
   if (active.target != null) html += '<span class="k">T1 <b class="mono" style="color:var(--green)">' + Math.round(active.target) + '</b></span>';
   if (rr != null)             html += '<span class="k">R:R <b class="mono" style="color:#cbd5e1">' + rr + '</b></span>';
+  // Real historical count (origin_status ACTIVE/SHADOW only, excludes synthetic BACKFILL --
+  // CLAUDE.md hard rule) for this exact setup_type, from performance_audit SETUP_STATUS via
+  // getCanonicalLiveStatus() (2026-09-14, user request). N<20 colored amber -- this codebase's
+  // own standing floor before a WR/EV claim is decisive; still shown, just flagged as thin.
+  if (active.realN != null) {
+    const nColor = active.realN < 20 ? 'var(--amber)' : '#cbd5e1';
+    html += '<span class="k">N <b class="mono" style="color:' + nColor + '">' + active.realN + '</b></span>';
+  }
   html += '</div>';
   if (active.minsRemaining != null) {
     html += '<div class="setup-mins" style="color:' + (active.minsRemaining < 10 ? 'var(--amber)' : 'var(--dim)') + '">' + active.minsRemaining + 'm remaining</div>';

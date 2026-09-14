@@ -5983,6 +5983,13 @@ export default function createACDRouter(io) {
         const sessionDate = etHour >= 18 ? nextTradingDay(nowET) : todayET;
         const globexSetup = await detectGlobexSetup(sessionDate, io);
         const stackVolSignal = await computeStackVolSignal(todayET);
+        // Real historical count for the trade-card display -- see the matching RTH comment
+        // above (~line 9852) for why this reuses getCanonicalLiveStatus rather than a new query.
+        if (globexSetup?.type) {
+          const canonicalStatus = await getCanonicalLiveStatus(globexSetup.type).catch(() => null);
+          globexSetup.realN = canonicalStatus?.realN ?? null;
+          globexSetup.liveN = canonicalStatus?.liveN ?? null;
+        }
         return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal });
       }
 
@@ -9850,6 +9857,12 @@ export default function createACDRouter(io) {
       // bigMoveSignal/sigmaContinuation/stackVolSignal computation MOVED from here to before
       // the `if (!active) return` early return above (2026-08-04) — see that block for why.
 
+      // Real historical count for the fired setup_type, for the frontend's trade-card display
+      // (2026-09-14, user request). Reuses the canonical SETUP_STATUS reader rather than a new
+      // hand-rolled query — realN is origin_status-filtered (ACTIVE/SHADOW only, excludes
+      // synthetic BACKFILL per CLAUDE.md's hard rule), liveN is the blended sample_size.
+      const canonicalStatus = await getCanonicalLiveStatus(active.type).catch(() => null);
+
       res.json({
         setup: {
           ...active,
@@ -9859,6 +9872,8 @@ export default function createACDRouter(io) {
           targetLabel: persistedLevels.targetLabel,
           detectedAt, minsRemaining, isExpired, setupId, firedEtHour,
           sizeMultiplier: active.sizeMultiplier ?? 1.0,
+          realN: canonicalStatus?.realN ?? null,
+          liveN: canonicalStatus?.liveN ?? null,
         },
         noNewEntries: !!noNewEntries,
         bigMoveSignal,
