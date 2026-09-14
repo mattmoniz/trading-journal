@@ -364,6 +364,93 @@ export async function isOppositeDirectionOpen(direction) {
   return rows.some(r => resolveDirection(r) === oppositeDir);
 }
 
+// Same-setup-type "refire gate" (2026-09-13, OPEN_DECISION same_type_refire_gate_live_wiring_
+// pending). Generalizes isPostWinOppositeFamilyBlocked()'s event-based mechanism (blocked until
+// a DIFFERENT setup fires, never a fixed-minute timer) to the SAME exact setup_type re-firing,
+// instead of opposite-direction. Calibrated by scripts/backtest_same_setup_refire_gate.mjs
+// (daily cron, signal_type='SAME_TYPE_REFIRE_GATE_CALIB'), per (setup_type, RTH/GLOBEX session)
+// with a pooled _POOLED_ALL_RTH/_POOLED_ALL_GLOBEX fallback -- same blended-default pattern as
+// isCrossDirectionFastFlip()'s _POOLED_ALL. First real GATE row (stable across 9 days of nightly
+// recalibration through 2026-09-11, _POOLED_ALL_RTH only): N=335 blocked real trades,
+// blockedEv=-$8.54 vs allowedEv=-$0.19, distinctDates=41, NOT day-clustered
+// (computeRigor().clustered -- top5DayPct fell from 59% on 2026-09-03 to 49.9% by 2026-09-11 as
+// more data accumulated, a genuinely stabilizing signal, not a one-day fluke). No individual
+// (setup_type, session) row has cleared GATE yet, and _POOLED_ALL_GLOBEX has not either.
+//
+// BLOCKING DEFINITION -- deliberately unscoped by trade_date, matching the calibration script's
+// own SQL exactly (see that file's header for the full derivation, including the exact-tie-
+// boundary bug it corrects): for a live candidate about to fire, blocked iff the most recent
+// REAL (same `real_trades` population the calibration script itself uses -- origin_status IN
+// ACTIVE/SHADOW, resolution IN TARGET_HIT/STOP_HIT/TIME_EXPIRED, actual_pnl NOT NULL -- not a
+// looser filter) SAME-setup_type trade has resolved, AND no real DIFFERENT-setup_type trade
+// (same population) has fired since. No explicit upper bound is needed on the "has anything
+// fired since" query the way the calibration's `d.fired_at < t.fired_at` needs one -- live,
+// "now" already caps it, since nothing can have a fired_at in the future.
+//
+// Phase-0 DeepSeek design critique (2026-09-13, scratch/deepseek_response.md) confirmed this
+// simplification is mathematically equivalent to the calibration's own EXISTS/NOT EXISTS chain-
+// walk, found isDirectionLossBlocked() (~line 392) is a direct precedent for an unscoped "most
+// recent resolution" query already living in this hot path (so an index on
+// (setup_type, resolved_at DESC), not trade_date-scoping, is the right mitigation if this ever
+// shows up as slow -- isDirectionLossBlocked's own equivalent query has run unindexed since
+// 2026-09-05 with no reported issue), and caught that an earlier draft of this function had
+// silently dropped the resolution/actual_pnl filter the calibration script requires -- fixed
+// below before this was ever wired live, not caught after the fact.
+//
+// KNOWN LIMITATION (same DeepSeek pass): at the RTH main active-slot path only
+// (skipRedundantShadowInsert, ~line 9381), a candidate this gate forces to SHADOW gets silently
+// SKIPPED instead of inserted whenever a same-type trade also resolved within the last
+// SHADOW_NOISE_SUPPRESSION_MINUTES (5min) -- and this gate's own trigger condition (a same-type
+// trade JUST resolved) is maximally correlated with exactly that window, more so than any of the
+// other 3 force-SHADOW gates. So this gate's real-time outcome data will be systematically
+// thinner at that one site than the "force SHADOW, don't skip" convention intends. Deliberately
+// NOT special-cased around skipRedundantShadowInsert -- that mechanism exists to prevent a real,
+// previously-shipped duplicate-row flood (2026-08-20 incident, see its own header comment above),
+// and bypassing it just for this gate would reintroduce that bug. The shadowCandidates loop (the
+// higher-volume site most level-fade candidates actually fire ACTIVE from) has no such skip and
+// is unaffected, so outcome data still accumulates there.
+async function getSameTypeRefireGateCalib(tradeDate) {
+  const cached = getCached(tradeDate, 'sameTypeRefireGateCalib', DAY_CACHE_TTL);
+  if (cached) return cached;
+  const r = await query(`
+    SELECT DISTINCT ON (signal_name) signal_name, recommendation
+    FROM performance_audit WHERE signal_type='SAME_TYPE_REFIRE_GATE_CALIB'
+    ORDER BY signal_name, run_date DESC
+  `);
+  const gated = new Set();
+  for (const row of r.rows) if (row.recommendation === 'GATE') gated.add(row.signal_name);
+  return setCached(tradeDate, 'sameTypeRefireGateCalib', gated);
+}
+
+// Same real_trades population scripts/backtest_same_setup_refire_gate.mjs's CTE requires --
+// shared between both queries below so they can never drift apart from each other or from the
+// calibration script's own filter.
+const SAME_TYPE_REFIRE_REAL_TRADE_FILTER = `
+  origin_status IN ('ACTIVE','SHADOW')
+  AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
+  AND actual_pnl IS NOT NULL AND resolved_at IS NOT NULL
+`;
+
+export async function isSameSetupRefireBlocked(tradeDate, setupType, session) {
+  const gated = await getSameTypeRefireGateCalib(tradeDate);
+  if (!gated.has(`${setupType}_${session}`) && !gated.has(`_POOLED_ALL_${session}`)) return false;
+
+  const lastQ = await query(`
+    SELECT resolved_at::text AS resolved_at FROM active_setups
+    WHERE setup_type = $1 AND ${SAME_TYPE_REFIRE_REAL_TRADE_FILTER}
+    ORDER BY resolved_at DESC LIMIT 1
+  `, [setupType]).catch(() => ({ rows: [] }));
+  if (!lastQ.rows.length) return false;
+
+  const resetQ = await query(`
+    SELECT 1 FROM active_setups
+    WHERE setup_type != $1 AND ${SAME_TYPE_REFIRE_REAL_TRADE_FILTER}
+      AND fired_at > $2
+    LIMIT 1
+  `, [setupType, lastQ.rows[0].resolved_at]).catch(() => ({ rows: [] }));
+  return resetQ.rows.length === 0;
+}
+
 // Direction-loss-alternation gate (2026-09-05, user-requested and tested before wiring --
 // RESEARCH_CLAIM direction_alternation_after_loss_gate_20260905, OPEN_DECISION
 // direction_alternation_after_loss_gate_pending). Roster-wide, event-based (no timer): whichever
@@ -1338,6 +1425,10 @@ async function detectGlobexSetup(sessionDate, io) {
       // already forced SHADOW, not just when cross-direction did.
       if (live.status !== 'SHADOW' && await isOppositeDirectionOpen(c.dir)) {
         live = { status: 'SHADOW', reason: 'OPPOSITE_DIRECTION_OPEN' };
+      }
+      // Same-type refire gate (2026-09-13) -- see isSameSetupRefireBlocked() header (~line 367).
+      if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(sessionDate, c.type, 'GLOBEX')) {
+        live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
       }
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
@@ -5785,6 +5876,13 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && await isOppositeDirectionOpen(direction)) {
                   live = { status: 'SHADOW', reason: 'OPPOSITE_DIRECTION_OPEN' };
                 }
+                // Same-type refire gate (2026-09-13) -- see isSameSetupRefireBlocked() header
+                // (~line 367). Fourth insert site wired (Globex, RTH main, shadowCandidates are
+                // the other 3) -- always RTH here, same as the 3 checks just above (this whole
+                // insert block is already guarded by `if (!isGlobexNow)`).
+                if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(todayET, svSetupType, 'RTH')) {
+                  live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
+                }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const svVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
@@ -9343,6 +9441,14 @@ export default function createACDRouter(io) {
         const oppositeDirectionOpen = !crossDirectionCooldownMin && !postWinOppBlocked && rthDir
           ? await isOppositeDirectionOpen(rthDir)
           : false;
+        // Same-type refire gate (2026-09-13) -- see isSameSetupRefireBlocked() header
+        // (~line 367). Unlike the 3 directional gates just above, this one needs no resolvable
+        // direction (mirrors isInRefireCooldown()'s shape in that respect), so it isn't gated on
+        // rthDir -- only short-circuited on the other 3 already having forced SHADOW, same
+        // pattern as oppositeDirectionOpen above.
+        const sameTypeRefireBlocked = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen
+          ? await isSameSetupRefireBlocked(todayET, active.type, 'RTH')
+          : false;
         // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
         // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
         // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
@@ -9369,7 +9475,8 @@ export default function createACDRouter(io) {
           || !!exposureOverride
           || !!crossDirectionCooldownMin
           || postWinOppBlocked
-          || oppositeDirectionOpen;
+          || oppositeDirectionOpen
+          || sameTypeRefireBlocked;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
@@ -9377,6 +9484,7 @@ export default function createACDRouter(io) {
           : crossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min`
           : postWinOppBlocked ? 'POST_WIN_OPP_FAMILY_REV'
           : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
+          : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         const skipRedundantShadowInsert = forceShadow
           && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
@@ -9666,7 +9774,13 @@ export default function createACDRouter(io) {
             // way as the two checks just above.
             const shadowOppositeDirectionOpen = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked
               && shadow.direction && await isOppositeDirectionOpen(shadow.direction);
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen) ? 'ACTIVE' : 'SHADOW';
+            // Same-type refire gate (2026-09-13) -- see isSameSetupRefireBlocked() header
+            // (~line 367). Fourth insert site wired (Globex, STACK_VOL_BREAK_LIVE, RTH main are
+            // the other 3) -- no direction required (unlike the 3 checks just above), same
+            // short-circuit pattern.
+            const shadowSameTypeRefireBlocked = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen
+              && await isSameSetupRefireBlocked(todayET, shadow.type, 'RTH');
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's
