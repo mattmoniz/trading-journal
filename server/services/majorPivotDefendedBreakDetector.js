@@ -33,9 +33,15 @@
 // was the only version tested; a dynamically-adjusting target was explicitly considered and
 // rejected as an untested, separate idea.
 //
-// LIVE STATUS: real N=0 as of this build -- inserts as SHADOW unconditionally, same as
+// LIVE STATUS: both RTH and Globex arms insert SHADOW unconditionally (hardcoded in the INSERT
+// itself, not eligibility-derived -- there is no ACTIVE path anywhere in this file), same as
 // momentumChaseDetector.js, per the standing "New setup type checklist" item 3 (N<20 resolved
-// trades => SHADOW only). No promotion-check wiring needed yet for the same reason.
+// trades => SHADOW only). No promotion-check wiring needed for the same reason. The Globex arm
+// was a hard `continue` (zero rows at all) from 2026-09-10 (its config failed a strict rigor
+// check at N=24) through 2026-09-14, then re-enabled SHADOW-only -- see the inline comment at
+// the Globex-vs-RTH branch below for why a full skip was a genuine dead end here (real N could
+// never grow past 24) and OPEN_DECISION major_pivot_globex_shadow_reeval_pending_20260914 for
+// the re-check this needs once real N clears 20.
 //
 // Zone-tracking state is NOT incremental/persistent in-process -- each call re-derives the
 // full zone set from a bounded recent lookback window (avoids the "stateful tracker silently
@@ -258,18 +264,26 @@ export async function computeMajorPivotDefendedBreakSignal(todayET) {
       const entryDate = new Date(b.entryTsStr.replace(' ', 'T') + 'Z');
       const entryMod = etModOf(entryDate);
       const session = isGlobexMod(entryMod) ? 'GLOBEX' : 'RTH';
-      // Globex arm (config "A") suppressed 2026-09-10: a strict day-blocked-bootstrap +
-      // full-placebo-range standard found 0/64 stop/target/hold cells clear the bar
-      // (RESEARCH_CLAIM major_pivot_globex_regrid_0of64_20260910), and extending the backtest
-      // window to settle it (OPEN_DECISION major_pivot_globex_extend_history_or_suppress_20260910)
-      // was found not viable -- price_bars_primary's pre-2025 NQ data is almost entirely single
-      // daily placeholder rows (~1.0 bars/day for most of 2022-2024), not real intraday bars, so
-      // pooling it would corrupt the backtest rather than strengthen it (see
-      // RESEARCH_CLAIM major_pivot_globex_extend_history_not_viable_20260910). Do not re-enable
-      // by just deleting this `continue` -- CONFIG.GLOBEX itself is the disproven 1.0x/1.5x/240min
-      // config and would need a genuinely new validated config first. RTH arm (config "B") is
-      // unaffected and continues SHADOW-only.
-      if (session === 'GLOBEX') continue;
+      // Globex arm (config "A") RE-ENABLED 2026-09-14, SHADOW-ONLY -- was a hard `continue`
+      // (zero rows, not even SHADOW) from 2026-09-10 through today, after a strict day-blocked-
+      // bootstrap + full-placebo-range standard found 0/64 stop/target/hold cells clear the bar
+      // (RESEARCH_CLAIM major_pivot_globex_regrid_0of64_20260910) at real N=24, and extending
+      // the backtest window to settle it was found not viable (price_bars_primary's pre-2025 NQ
+      // data is almost entirely single daily placeholder rows, RESEARCH_CLAIM
+      // major_pivot_globex_extend_history_not_viable_20260910). That `continue` was a genuine
+      // dead end, not caution: this insert path ALREADY hardcodes 'SHADOW','SHADOW' (see the
+      // INSERT below) with no ACTIVE path anywhere in this file, so skipping outright meant real
+      // Globex N could never grow past 24 no matter how long the code sat unchanged -- the
+      // opposite of every other thin-N mechanism in this codebase, which keeps accumulating real
+      // outcome data via SHADOW while suppressed. Re-enabled specifically to fix that: same
+      // (still-disproven) CONFIG.GLOBEX below, still zero live-capital risk (SHADOW is hardcoded,
+      // not eligibility-derived), purely to let real N start growing again from today forward.
+      // OPEN_DECISION major_pivot_globex_shadow_reeval_pending_20260914 tracks re-running the
+      // same rigor standard (major_pivot_globex_regrid_0of64_20260910's method) once real SHADOW
+      // N clears 20 -- do NOT treat any pre-20260914 pooled number as still representative once
+      // this has accumulated new data, and do NOT let this silently go ACTIVE anywhere else in
+      // the codebase without that fresh check (this file itself has no such path, but don't add
+      // one elsewhere without it). RTH arm (config "B") is unaffected, was already SHADOW-only.
       const cfg = CONFIG[session];
 
       const sign = b.direction === 'LONG' ? 1 : -1;
