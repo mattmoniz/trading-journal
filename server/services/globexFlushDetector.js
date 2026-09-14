@@ -84,11 +84,34 @@ function addOneCalendarDay(dateStr) {
 // departureDay through 9:30 AM the next day) for the FIRST bar that closes beyond PD_VAL/PD_VAH,
 // not just the first 30 minutes. Still re-derived fresh every poll (never cached) -- restart-safe
 // by construction, exactly like RTH's own trigger detection. Returns { dir, price, ts } or null.
+//
+// FIXED 2026-09-14 (docs/KNOWN_ISSUES.md item 18, found live investigating a real trade that
+// reported capturing only 43% of a 315pt "MFE"): the level lookup used to be `trade_date <= $1
+// ORDER BY trade_date DESC` -- "the nearest PRECEDING checkpoint." level_prices' own convention
+// is that a row's trade_date is the day it APPLIES TO (describes the session immediately
+// BEFORE it), so on any normal weekday `departureDay` always has its own exact-match row and
+// `<=`/DESC correctly resolves to it. But on a Saturday or Sunday `departureDay` (a real
+// calendar date `resolveDepartureDay()` can return, e.g. Sunday evening's Globex reopen),
+// level_prices has NO row at all -- there's no RTH session on a weekend to have one -- so the
+// `<=` comparison silently fell back to the LAST row that DOES exist (Friday's own trade_date),
+// which under the same convention describes THURSDAY's session, not Friday's. The row that
+// correctly describes Friday's close (needed for a Sunday-evening departure check) lives one
+// step further FORWARD, under trade_date=Monday (the next real trading day) -- unreachable by a
+// `<=` comparison while departureDay is stuck on the weekend date. Fixed by flipping the
+// comparison to `trade_date >= $1 ORDER BY trade_date ASC` -- "the nearest FOLLOWING-OR-EQUAL
+// checkpoint." On a normal weekday this returns the exact same row as before (an exact match on
+// `>=` is identical to an exact match on `<=`), so no calibrated weekday behavior changes; on a
+// weekend/holiday gap it now correctly reaches forward to the row describing the most recently-
+// closed real session, instead of silently using a session further stale. Verified directly
+// against real data for the 2026-09-13 incident (see KNOWN_ISSUES item 18): this fix changes
+// nothing about that night's own departure detection (price had already gapped past both the
+// old-wrong and new-correct level on the very first bar), but would have mattered for a smaller
+// weekend gap that only crossed the correct level.
 async function findDeparture(departureDay) {
   const levelsQ = await query(`
     SELECT DISTINCT ON (level_name) level_name, price::float FROM level_prices
-    WHERE trade_date <= $1 AND level_name IN ('PD_VAL','PD_VAH')
-    ORDER BY level_name, trade_date DESC
+    WHERE trade_date >= $1 AND level_name IN ('PD_VAL','PD_VAH')
+    ORDER BY level_name, trade_date ASC
   `, [departureDay]);
   const val = levelsQ.rows.find(r => r.level_name === 'PD_VAL')?.price;
   const vah = levelsQ.rows.find(r => r.level_name === 'PD_VAH')?.price;
