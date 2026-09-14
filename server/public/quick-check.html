@@ -163,20 +163,17 @@
   .vb-tag.strong { color: #93c5fd; background: rgba(59,130,246,0.14); }
   .vb-tag.mild { color: #94a3b8; background: rgba(148,163,184,0.08); }
   .wide-tag { color: #c4b5fd; background: rgba(139,92,246,0.14); }
-  /* Cluster leader/sibling dropdown (2026-09-08, user request): a confluence touch picks ONE
-     leader (is_cluster_primary=true) via acd.js's EV-ranked sortedCandidates loop; every other
-     level that touched the same instant gets its own real SHADOW row (is_cluster_primary=false,
-     shared cluster_touch_id) purely for that level's own calibration credit -- never a second
-     real trade. This toggle exists so that's visually obvious instead of reading as N independent
-     trades firing together. */
-  .cluster-toggle {
-    font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 10px; flex-shrink: 0;
-    color: var(--dim); background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.25);
-    cursor: pointer; user-select: none;
-  }
-  .cluster-toggle:hover { background: rgba(148,163,184,0.18); }
-  .cluster-child { padding-left: 22px; opacity: 0.72; }
-  .cluster-child .rdot { width: 5px; height: 5px; }
+  /* Cluster tag (2026-09-14, replaces the 2026-09-08 leader/collapsed-sibling dropdown -- user
+     request, after finding the collapse relied on is_cluster_primary picking a display leader,
+     which silently hid a row entirely whenever a cluster had NO member flagged primary (a real,
+     confirmed bug, not just a UX preference). A confluence touch's real siblings (shared
+     cluster_touch_id, each its own real SHADOW row for its OWN calibration credit, never a
+     second real trade) now ALWAYS render as their own normal top-level rows, in plain
+     chronological order, same as any other trade -- nothing is ever hidden or collapsed. This
+     tag is purely an identifying marker so same-instant siblings still read as linked; tapping
+     it opens a popup listing every member of the group, it does not toggle visibility of
+     anything. */
+  .cluster-tag { color: #a5b4fc; background: rgba(165,180,252,0.12); border: 1px solid rgba(165,180,252,0.35); cursor: pointer; }
   /* range_slope/vol_rollover post-entry exit-signal tags (OPEN_DECISION
      wire_flush_post_entry_exit_signals_globex) -- same restrained, non-green/red palette as
      the tags above since these are unvalidated too (PROVISIONAL until the weekly promotion
@@ -951,9 +948,10 @@ function renderTimeline() {
     return;
   }
 
-  // Extracted to a named function (2026-09-08) so both a cluster leader and its collapsed
-  // siblings can reuse the exact same row template -- previously inline in a .map() callback.
-  const rowHtml = (s, rowOpts) => {
+  // Extracted to a named function (2026-09-08) -- kept as its own function even now that every
+  // row (cluster member or not) renders identically flat, since openClusterPopup() and the main
+  // loop both benefit from one shared template.
+  const rowHtml = (s) => {
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
     const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
@@ -1034,15 +1032,15 @@ function renderTimeline() {
     // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
     // informative case, same convention as dgTag above.
     const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MomFade</span>' : '';
-    // Cluster toggle badge (2026-09-08) -- only ever on the LEADER of a group that has real
-    // siblings. onclick stops propagation so tapping the badge toggles the group instead of
-    // also opening the leader's own trade modal (same convention as every sig-tag above).
-    const siblingCount = clusterSiblingCountFor(s);
-    const clusterBadge = siblingCount > 0
-      ? '<span class="cluster-toggle" title="' + siblingCount + ' other level(s) touched at this same instant -- each gets its own real SHADOW row for its OWN calibration credit, never a second real trade. Tap to show/hide." onclick="event.stopPropagation(); toggleClusterGroup(\'' + s.cluster_touch_id + '\')">' +
-        (expandedClusters.has(s.cluster_touch_id) ? '▾' : '▸') + ' ' + siblingCount + '</span>'
+    // Cluster tag (2026-09-14) -- shown on EVERY member of a multi-row cluster, not just a
+    // designated leader (see the CSS comment above for why: picking a leader via
+    // is_cluster_primary silently hid a row whenever no member had it set). Tapping opens a
+    // popup listing the whole group; it never hides or toggles this row or any other.
+    const clusterGroupSize = s.cluster_touch_id ? (clusterGroups.get(s.cluster_touch_id)?.length || 0) : 0;
+    const clusterBadge = clusterGroupSize > 1
+      ? '<span class="vb-tag cluster-tag sig-tag" title="Fired in the same instant as ' + (clusterGroupSize - 1) + ' other level touch(es) -- each is its own real row for its OWN calibration credit, never a second real trade. Tap to see the whole group." onclick="event.stopPropagation(); openClusterPopup(\'' + s.cluster_touch_id + '\')">🔗 ' + clusterGroupSize + '</span>'
       : '';
-    return '<div class="row' + (rowOpts.child ? ' cluster-child' : '') + '" onclick="openTradeModal(' + s.id + ')">' +
+    return '<div class="row" onclick="openTradeModal(' + s.id + ')">' +
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
@@ -1052,49 +1050,41 @@ function renderTimeline() {
       '</div>';
   };
 
-  // Group rows by cluster_touch_id (2026-09-08, user request) -- a confluence touch's leader
-  // (is_cluster_primary=true) is rendered normally with a toggle badge; its real siblings
-  // (is_cluster_primary=false, same cluster_touch_id) render as indented, collapsed-by-default
-  // child rows instead of reading as N independent trades. Rows with no cluster_touch_id (the
-  // large majority -- most touches have no confluence at all) render exactly as before.
+  // Group rows by cluster_touch_id purely to know each group's size for the tag above and for
+  // openClusterPopup() below -- every row still renders flat, in plain chronological order, no
+  // grouping/reordering/collapsing of any kind (2026-09-14, replaces the leader/collapsed-
+  // sibling design -- see the CSS comment above).
   const clusterGroups = new Map();
   for (const s of resolved) {
     if (!s.cluster_touch_id) continue;
     if (!clusterGroups.has(s.cluster_touch_id)) clusterGroups.set(s.cluster_touch_id, []);
     clusterGroups.get(s.cluster_touch_id).push(s);
   }
-  function clusterSiblingCountFor(s) {
-    if (!s.cluster_touch_id || !s.is_cluster_primary) return 0;
-    const group = clusterGroups.get(s.cluster_touch_id);
-    return group ? group.filter(g => g !== s).length : 0;
-  }
 
-  const renderedClusterIds = new Set();
-  const htmlParts = [];
-  for (const s of resolved) {
-    if (s.cluster_touch_id) {
-      if (renderedClusterIds.has(s.cluster_touch_id)) continue; // already rendered via its leader
-      const group = clusterGroups.get(s.cluster_touch_id);
-      const leader = group.find(g => g.is_cluster_primary) || group[0];
-      const siblings = group.filter(g => g !== leader);
-      renderedClusterIds.add(s.cluster_touch_id);
-      htmlParts.push(rowHtml(leader, {}));
-      if (siblings.length && expandedClusters.has(s.cluster_touch_id)) {
-        for (const sib of siblings) htmlParts.push(rowHtml(sib, { child: true }));
-      }
-    } else {
-      htmlParts.push(rowHtml(s, {}));
-    }
-  }
+  const htmlParts = resolved.map(rowHtml);
   $('timeline-list').innerHTML = htmlParts.join('');
 }
 
-// Expand/collapse state for cluster dropdowns -- module-level so it survives the 20s
-// loadTimeline() poll re-render (renderTimeline() fully rebuilds innerHTML every call).
-const expandedClusters = new Set();
-function toggleClusterGroup(id) {
-  if (expandedClusters.has(id)) expandedClusters.delete(id); else expandedClusters.add(id);
-  renderTimeline();
+// Cluster group popup (2026-09-14) -- tap target for the 🔗 tag above. Lists every real row
+// that shares this cluster_touch_id, each with its own outcome, so a same-instant confluence
+// touch reads as a linked group without any row ever being hidden from the main timeline.
+function openClusterPopup(clusterTouchId) {
+  const members = timelineRows.filter(r => r.cluster_touch_id === clusterTouchId)
+    .sort((a, b) => new Date(a.fired_at) - new Date(b.fired_at));
+  if (!members.length) return;
+
+  let html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Confluence cluster — ' + members.length + ' level(s) touched together</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">Each row below is its own real SHADOW/ACTIVE row, kept for that level\'s own calibration credit — never a second real trade on the same event.</div>';
+  html += mSection('Members');
+  for (const m of members) {
+    const pnl = m.actual_pnl != null ? Number(m.actual_pnl) : null;
+    const outcome = pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : (m.resolution || 'open');
+    const color = pnl != null ? (pnl >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--dim)';
+    html += mRow((m.setup_type || '').replace(/_/g, ' '), outcome, color);
+  }
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
 }
 
 // ---- Trade detail modal ----
