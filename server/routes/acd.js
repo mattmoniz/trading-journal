@@ -2443,7 +2443,34 @@ async function buildAllCandidates(ctx) {
       const DRIVE_MAG_IMMEDIATE_THRESHOLD = 0.479;
       let openingDrive15Min = null;
       try {
-        if (currentPrice && etMin >= 615) { // confirm window (9:30-10:15) must have closed
+        // FIXED 2026-09-14 (live duplicate-flood bug, user-caught): this block previously had
+        // NO per-day dedup at all, despite the comment ~15 lines below claiming the INSERT-stage
+        // `existingSetup` check already covers it. That claim is wrong for THIS setup specifically
+        // -- both odCall/driveMag are deterministic once the 10:15 confirm-close bar exists (frozen
+        // for the rest of the day, same allRthBarsRow-freezes-at-4PM footgun this file already
+        // documents elsewhere), so every ~15s poll from 10:15 onward recomputed the IDENTICAL
+        // candidate and fired it again the instant the prior SHADOW row resolved -- the exact
+        // shape of the 2026-08-20 IB_BEARISH/BRACKET_BREAKOUT_SHORT flood incident (see
+        // isInRefireCooldown()'s header comment, ~line 527), except that incident's fix
+        // (recentlyShadowedSameType/skipRedundantShadowInsert) was only ever wired into the RTH
+        // main active-slot path, never this shadowCandidates-only setup, and OPENING_DRIVE_15MIN
+        // isn't in REFIRE_COOLDOWN_MINUTES either. Confirmed live 2026-09-14: 8 byte-identical
+        // LONG fires (same entry/stop/target, all TARGET_HIT, all $158.50) between 10:28 AM and
+        // 4:57 PM ET -- the immediate-entry branch's fixed 10:15-close entry price was already far
+        // past its own target by the time of each later poll, so every duplicate "won" instantly.
+        // This is the ENTIRE real historical sample behind both OPENING_DRIVE_15MIN_LONG (N=8) and
+        // _SHORT (N=2, 2026-08-19) -- both trading days on record are single real classification
+        // events replicated by this bug, not independent trades; see the same-day data-repair note
+        // in docs/OPEN_THREADS.md. Genuine single-fire-per-day semantics: this setup classifies AT
+        // MOST once per session (one OPEN_DRIVE call, one direction), so a plain existence check
+        // against today's real rows is correct and sufficient -- no cooldown-minutes heuristic
+        // needed, matching how a real one-shot classification event should behave.
+        const odAlreadyFiredToday = await query(`
+          SELECT 1 FROM active_setups
+          WHERE trade_date = $1 AND setup_type IN ('OPENING_DRIVE_15MIN_LONG','OPENING_DRIVE_15MIN_SHORT')
+          LIMIT 1
+        `, [todayET]).catch(() => ({ rows: [] }));
+        if (currentPrice && etMin >= 615 && !odAlreadyFiredToday.rows.length) { // confirm window (9:30-10:15) must have closed
           const odOrBars = allRthBarsRow.rows.filter(b => b.et_min < 585); // 9:30-9:45
           const odConfirmBars = allRthBarsRow.rows.filter(b => b.et_min < 615); // 9:30-10:15
           if (odOrBars.length >= 5 && odConfirmBars.length >= 15) {
@@ -2457,9 +2484,11 @@ async function buildAllCandidates(ctx) {
               // at/after minute 615), matching Stage 2/3/4's exact definition -- NOT
               // `currentPrice`, which could be several minutes later by the time a poll
               // catches this and would silently drift the entry away from what was actually
-              // backtested. `existingSetup`'s per-(trade_date,setup_type) dedup (below, at the
-              // INSERT stage) already guarantees this only ever fires once per day regardless
-              // of how many polls see driveMag clear the bar -- no extra time-window guard needed.
+              // backtested. CORRECTED 2026-09-14: this comment used to claim `existingSetup`'s
+              // per-(trade_date,setup_type) dedup (at the INSERT stage) already guaranteed a
+              // once-per-day fire -- it didn't (see the real duplicate-flood incident and fix at
+              // the top of this try block, ~line 2445). The odAlreadyFiredToday check added there
+              // is what actually makes this true now.
               const odConfirmCloseBar = allRthBarsRow.rows.find(b => b.et_min >= 615);
               const odRange = (odOrH - odOrL) || 1;
               const driveMag = odConfirmCloseBar
