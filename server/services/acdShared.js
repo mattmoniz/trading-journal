@@ -239,6 +239,57 @@ export function fmtETStr(d) {
 // `sessionEndET` as a live Date (for a `<` comparison against a per-type expiry window), so
 // it keeps its own local copy of that comparison logic -- this helper covers only the
 // callers that need the final formatted cap string directly, not a Date to compare against.
+// ── First-trading-day-after-a-gap detection (2026-09-14, user request) ──────────────────────
+// "Don't trade PD (prior-day) setups on the first trading day after a weekend or long
+// weekend" -- a normal weekend already makes the referenced "prior day" level 3 calendar
+// days old by the time Monday opens (Friday close -> Monday open); a holiday-extended weekend
+// makes it even older. Cached per trade_date (this can only change once a day) -- matches
+// this file's/queries.js's own day-stable caching convention, avoids a real query on every
+// 15s poll.
+//
+// Deliberately data-derived (observed price_bars_primary gap), not a fetched/hardcoded
+// external calendar -- matches this codebase's own established preference for self-
+// maintaining logic (see getNqRollWeekDates() just above: computed programmatically, not a
+// static holiday list that goes stale every year). Known risk, mitigated below: price_bars_
+// primary has documented gaps from real DATA QUALITY issues (quarterly contract-roll gaps,
+// a known thin-data stretch -- see docs/KNOWN_ISSUES.md), not real market closures. Those
+// gaps run ~63-70 CALENDAR DAYS -- nowhere near a real weekend/holiday's 2-4 days -- so the
+// roll-week guard below only suppresses anomalously LARGE gaps (> MAX_NORMAL_GAP_DAYS),
+// never an ordinary weekend that merely happens to fall inside a roll week's calendar span
+// (every quarter's roll week spans a real weekend by construction -- verified live 2026-09-14:
+// an unguarded roll-week check wrongly suppressed that day's genuine Fri->Mon 3-day gap
+// before this fix).
+const MAX_NORMAL_GAP_DAYS = 4; // covers a Mon/Fri holiday's 4-day weekend; matches the
+// backfill_garch_vol_scale_history.py convention for the same concept.
+const _priorTradingDayGapCache = new Map();
+export async function isFirstTradingDayAfterGap(dateStr, minGapDays = 2) {
+  if (_priorTradingDayGapCache.has(dateStr)) return _priorTradingDayGapCache.get(dateStr);
+  const r = await query(`
+    SELECT MAX(ts::date)::text as d FROM price_bars_primary
+    WHERE symbol='NQ' AND ts::date < $1::date
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+  `, [dateStr]).catch(() => ({ rows: [] }));
+  const priorDay = r.rows[0]?.d;
+  if (!priorDay) { _priorTradingDayGapCache.set(dateStr, false); return false; }
+  const gapDays = Math.round((new Date(dateStr + 'T12:00:00Z') - new Date(priorDay + 'T12:00:00Z')) / 86400000);
+  if (gapDays > MAX_NORMAL_GAP_DAYS && (isInsideNqRollWeek(dateStr) || isInsideNqRollWeek(priorDay))) {
+    // Anomalously large gap coinciding with a roll-week -- presumptively a data artifact,
+    // not a real multi-week market closure. Don't suppress PD setups over it.
+    _priorTradingDayGapCache.set(dateStr, false);
+    return false;
+  }
+  const result = gapDays >= minGapDays;
+  _priorTradingDayGapCache.set(dateStr, result);
+  return result;
+}
+
+// Matches any PD_/PD2_ (prior-day / 2-days-prior) setup_type or level name -- shared
+// predicate so acd.js's two PD-candidate insert paths (RTH keepLevelsAll, Globex candidates)
+// filter identically rather than each hand-rolling the same prefix check.
+export function isPdPriorDayType(typeOrName) {
+  return typeof typeOrName === 'string' && (typeOrName.startsWith('PD_') || typeOrName.startsWith('PD2_'));
+}
+
 export function computeSessionEndCapStr(etNow) {
   const sessionEndET = new Date(etNow);
   sessionEndET.setHours(16, 0, 0, 0);

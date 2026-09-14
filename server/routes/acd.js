@@ -15,7 +15,7 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType } from '../services/acdShared.js';
 import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -1250,6 +1250,11 @@ async function detectGlobexSetup(sessionDate, io) {
     // per-level direction like PD_VAH/PD_VAL.
     const globexVwapFadeDir = vwap24 != null ? (px >= vwap24 ? 'SHORT' : 'LONG') : null;
 
+    // No-PD-trading window (2026-09-14): see acdShared.js's isFirstTradingDayAfterGap()/
+    // isPdPriorDayType() docstrings. Filtered on the final array below, not per-source --
+    // this function has 3 separate PD-level price sources feeding it.
+    const pdGapBlock = await isFirstTradingDayAfterGap(sessionDate);
+
     const candidates = [
       // FIXED 2026-08-05: these 3 now carry widerStop/widerTarget from the real OPTIMAL_STOP
       // source too (widerOptMap, extended above), matching every other candidate here --
@@ -1277,7 +1282,8 @@ async function detectGlobexSetup(sessionDate, io) {
       },
     ].filter(c => c.level != null && Math.abs(px - c.level) <= TOUCH)
      .concat(globexVwapCandidate ? [globexVwapCandidate] : [])
-     .concat(sweepReversalCandidates);
+     .concat(sweepReversalCandidates)
+     .filter(c => !(pdGapBlock && isPdPriorDayType(c.type)));
 
     // Cluster touch credit for Globex (2026-09-07, user-spotted live: 4 real SHADOW rows
     // fired within 0.4s of each other at the identical price, none linked -- OPEN_DECISION
@@ -6767,6 +6773,7 @@ export default function createACDRouter(io) {
           const lsMon = (key) => liveStats._mon?.[key] || null;
 
           const monOverride = (key) => isMonday && lsMon(key) ? lsMon(key) : {};
+          const pdGapBlockRTH = await isFirstTradingDayAfterGap(todayET); // see acdShared.js
           const keepLevelsAll = [
             // Prior-day value area (POC, VAH, VAL — all three)
             { name: 'PD_POC_FADE',    level: lp.PD_POC ?? pdPOC,   ...(ls('PD_POC')     || {}), ...monOverride('PD_POC') },
@@ -6927,7 +6934,7 @@ export default function createACDRouter(io) {
             // sizeMultiplier stack, confluence, S2/trend-counter suppression, dedup) rather
             // than a bespoke check.
             { name: 'RTH_VWAP_FADE', level: earlyVwap, ...(ls('RTH_VWAP') || {}) },
-          ].filter(l => l.level != null);
+          ].filter(l => l.level != null && !(pdGapBlockRTH && isPdPriorDayType(l.name)));
           const keepLevels = keepLevelsAll;
 
           // Conditional type override table. Converts raw `${lv.name}_${dir}` into a
