@@ -453,12 +453,15 @@ export async function isSameSetupRefireBlocked(tradeDate, setupType, session) {
 
 // Direction-loss-alternation gate (2026-09-05, user-requested and tested before wiring --
 // RESEARCH_CLAIM direction_alternation_after_loss_gate_20260905, OPEN_DECISION
-// direction_alternation_after_loss_gate_pending). Roster-wide, event-based (no timer): whichever
-// direction's most recent real resolution was a LOSS is blocked; a WIN blocks the OPPOSITE
-// direction instead. Stays engaged for however long it takes the other side to lose -- minutes
-// or, per the real 2026-09-03/04 overnight session this was validated against (13 real SHORT
-// losses across 6 different setup_types while every real LONG won, net -$657.50 -- replaying
-// that exact sequence through this rule turns it into +$194.50), several hours.
+// direction_alternation_after_loss_gate_pending). Roster-wide, event-based (no fixed timer):
+// whichever direction's most recent real resolution was a LOSS is blocked; a WIN blocks the
+// OPPOSITE direction instead. Stays engaged for however long it takes the other side to lose --
+// minutes or, per the real 2026-09-03/04 overnight session this was validated against (13 real
+// SHORT losses across 6 different setup_types while every real LONG won, net -$657.50 --
+// replaying that exact sequence through this rule turns it into +$194.50), several hours --
+// SESSION-SCOPED since 2026-09-14 (see currentSessionStartET()'s own comment below for why:
+// this validation was itself drawn from within one continuous session, and carrying a signal
+// across the RTH->Globex boundary was never specifically tested).
 //
 // SHADOW-ONLY / OBSERVATION-ONLY (user's explicit final call 2026-09-05, after an initial
 // "wire it live" request was walked back once the honest caveat below was in front of them):
@@ -476,12 +479,48 @@ export async function isSameSetupRefireBlocked(tradeDate, setupType, session) {
 // via scripts/backtest_direction_alternation_after_loss.mjs (daily) -- if the recent effect
 // itself decays, that script's next run will show it, which is also the evidence a future
 // decision to actually enforce this live should be checked against first.
+// SESSION-SCOPED as of 2026-09-14 (user-caught live: the first real Globex trade of the
+// evening -- GLOBEX_VWAP_FADE_LONG @ 6:59pm -- showed wouldBeBlocked:true, carried over from
+// an RTH trade that had resolved at 6:17pm, before that day's Globex session had even begun).
+// Was previously fully unscoped ("most recent resolution, ever, regardless of session" --
+// confirmed deliberate at the time: "Roster-wide, event-based (no timer)... no trade_date
+// scoping"), but the mechanism's own validation evidence (13 real SHORT losses across 6
+// setup_types in the 2026-09-03/04 overnight session, RESEARCH_CLAIM
+// direction_alternation_after_loss_gate_20260905) was drawn entirely from WITHIN one
+// continuous session -- it never specifically tested or validated that a signal should carry
+// ACROSS the RTH->Globex boundary. User's explicit call: the first trade of a new session
+// should start fresh, not inherit the prior session's last outcome.
+//
+// CORRECTED same day, before shipping: an initial version scoped by resolved_at >= today's
+// 6pm -- verified DIRECTLY against the exact real case that motivated this fix, and it would
+// NOT have worked. The offending row (FLOOR_R1_FADE_SHORT_TRAIL) FIRED at 4:55pm (RTH/dead-
+// zone) but didn't RESOLVE until 6:17pm -- 17 minutes into the Globex clock -- so a
+// resolved_at-based boundary still included it. The real distinction the user wants is which
+// session the ORIGIN TRADE belongs to, not when its outcome happened to become known. Fixed
+// by classifying every candidate row's OWN fired_at against the same RTH/Globex boundary used
+// for "now" (SQL EXTRACT, matching sessionBoundary.js's isFiredInRTH() 570-960 definition,
+// with the 960-1080 dead zone bucketed as RTH-adjacent since no new candidate ever fires
+// there -- anything resolving in that window is leftover RTH activity, not a genuine Globex
+// event) -- only a same-session prior row can now block a new candidate. Re-verified against
+// the exact real case: FLOOR_R1_FADE_SHORT_TRAIL's fired_at (16:55, in [570,1080)) no longer
+// matches a Globex-session "now" (>=1080 or <570), so it's correctly excluded.
+//
+// SHADOW-only/observation-only either way -- never touches a real trade's ACTIVE/SHADOW
+// eligibility, so this changes what the DirGate tag SHOWS, not what fires live. Self-
+// contained (computes "now" itself) rather than threaded through the 4 call sites' already-
+// inconsistent local variable names (sessionDate vs todayET).
+const RTH_SESSION_FIRED_AT_SQL = `(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) >= 570 AND (EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) < 1080`;
 export async function isDirectionLossBlocked(direction) {
   if (!direction) return false;
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const nowEtMin = nowET.getHours() * 60 + nowET.getMinutes();
+  const nowIsRTH = nowEtMin >= 570 && nowEtMin < 1080;
+  const sessionFilter = nowIsRTH ? RTH_SESSION_FIRED_AT_SQL : `NOT (${RTH_SESSION_FIRED_AT_SQL})`;
   const { rows } = await query(`
     SELECT stop_level, t1_level, actual_pnl::float AS actual_pnl
     FROM active_setups
     WHERE origin_status IN ('ACTIVE','SHADOW') AND resolved_at IS NOT NULL AND actual_pnl IS NOT NULL
+      AND ${sessionFilter}
     ORDER BY resolved_at DESC LIMIT 1
   `).catch(() => ({ rows: [] }));
   const last = rows[0];
