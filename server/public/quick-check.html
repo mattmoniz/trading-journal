@@ -601,7 +601,7 @@ function renderPulseBar(pulse, setupData, ctx, build) {
   if (ctx && !ctx.noData) {
     if (ctx.sessionChar) {
       const cc = ctx.sessionChar === 'EXTREME_CHOP' ? 'var(--red)' : ctx.sessionChar === 'CHOP' ? 'var(--amber)' : ctx.sessionChar.includes('TREND') ? 'var(--green)' : 'var(--dim)';
-      chips.push(chip('Session', ctx.sessionChar.replace(/_/g, ' '), '', cc, cc));
+      chips.push(chip('Session', ctx.sessionChar.replace(/_/g, ' '), 'tap for history', cc, cc, 'openSessionTrendHistoryModal()'));
     }
     if (ctx.dailyVwapSigma != null) {
       const clr = sigmaColor(ctx.dailyVwapSigma);
@@ -630,8 +630,12 @@ function renderPulseBar(pulse, setupData, ctx, build) {
   $('pulse-bar').innerHTML = chips.join('');
 }
 
-function chip(label, val, sub, subColor, valColor) {
-  return '<div class="chip"><span class="lbl">' + label + '</span>' +
+function chip(label, val, sub, subColor, valColor, onclick) {
+  // onclick (optional, 2026-09-15, session-trend-history feature): only the Session chip
+  // passes this today -- every other existing call site is unaffected (undefined onclick
+  // renders identically to before). Cursor/tap-target styling only applied when clickable so
+  // a plain informational chip doesn't look interactive.
+  return '<div class="chip"' + (onclick ? ' style="cursor:pointer" onclick="' + onclick + '"' : '') + '><span class="lbl">' + label + '</span>' +
     '<span class="val mono" style="color:' + (valColor || 'var(--text)') + '">' + val + '</span>' +
     (sub ? '<span class="sub" style="color:' + subColor + '">' + sub + '</span>' : '') +
     '</div>';
@@ -1125,6 +1129,44 @@ function openClusterPopup(clusterTouchId) {
   }
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
+}
+
+// Session trend history popup (2026-09-15, user request: "give me a history with timestamps
+// of what the trend has been and each change for the day I want to compare it to what I see
+// on the chart"). Backend replays the SAME classifySessionChar() the live SESSION chip uses,
+// bar-by-bar, no lookahead -- this is a genuine historical record of what the chip actually
+// showed as the session unfolded, not a guess reconstructed after the fact.
+async function openSessionTrendHistoryModal() {
+  let html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Session trend history — ' + todayET() + '</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">Loading...</div>';
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+  try {
+    const data = await fetch('/api/morning-brief/session-trend-history/' + todayET()).then(r => r.json());
+    if (data.noData || !data.history?.length) {
+      html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Session trend history — ' + todayET() + '</span>' +
+        '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+        '<div class="m-sub">Not enough bars yet today to compute a history.</div>';
+      $('modal').innerHTML = html;
+      return;
+    }
+    html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Session trend history — ' + todayET() + '</span>' +
+      '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+    html += '<div class="m-sub">Each row is the exact minute the SESSION chip would have changed to a new value — compare timestamps directly against the chart.</div>';
+    html += mSection('Changes (' + data.history.length + ')');
+    // Newest first, matching the Session Timeline card's own convention.
+    for (const h of [...data.history].reverse()) {
+      const cc = h.sessionChar === 'EXTREME_CHOP' ? 'var(--red)' : h.sessionChar === 'CHOP' ? 'var(--amber)' : h.sessionChar.includes('TREND') ? 'var(--green)' : 'var(--dim)';
+      html += mRow(h.time + '  @ ' + Math.round(h.price), h.sessionChar.replace(/_/g, ' ') + '  (rots=' + h.rots + ')', cc);
+    }
+    $('modal').innerHTML = html;
+  } catch (e) {
+    html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Session trend history</span>' +
+      '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+      '<div class="m-sub" style="color:var(--red)">Failed to load: ' + e.message + '</div>';
+    $('modal').innerHTML = html;
+  }
 }
 
 // ---- Trade detail modal ----

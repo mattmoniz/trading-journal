@@ -27,6 +27,64 @@ function zScore(val, arr) {
 }
 const MIN_SAMPLES = 20;
 
+// Extracted 2026-09-15 (was inline in GET /live-session-context/:date only) so
+// GET /session-trend-history/:date can call the EXACT SAME classification logic on a
+// bars-so-far slice, per this codebase's "share modules instead of reimplementing"
+// convention -- a hand-copied second version would risk the history view silently
+// disagreeing with what was actually shown live at the time, defeating the whole point of
+// a "compare the history to what I saw on the chart" feature. `bars` must already be
+// sliced to whatever point in time the caller wants classified -- this function never
+// looks past the last element of `bars` (no lookahead), and `rotStats`/`ibTightThreshold`/
+// `ibWideThreshold` are day-level constants (derived from history strictly BEFORE the
+// session in question) that a caller computes once and reuses across every bars-so-far
+// slice, not recomputed per slice.
+function classifySessionChar({ bars, atr20, rotStats, ibTightThreshold, ibWideThreshold }) {
+  const price = bars[bars.length - 1].close;
+  const sessHi = Math.max(...bars.map(b => b.high));
+  const sessLo = Math.min(...bars.map(b => b.low));
+  const range = sessHi - sessLo;
+  const openPrice = bars[0].open;
+  const closeVsOpen = Math.round(price - openPrice);
+  const rangePct = range > 0 ? Math.round((price - sessLo) / range * 100) : 50;
+  const etMin = bars[bars.length - 1].et_min;
+
+  const rotThreshold = Math.round(atr20 * 0.15);
+  const fiveMapRot = {};
+  for (const b of bars) {
+    const bk = Math.floor(b.et_min / 5) * 5;
+    if (!fiveMapRot[bk]) fiveMapRot[bk] = { close: b.close };
+    else fiveMapRot[bk].close = b.close;
+  }
+  const fbRot = Object.values(fiveMapRot);
+  let rots = 0, lastExt = fbRot[0]?.close || 0, lastType = 'LOW';
+  for (const b of fbRot) {
+    if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= rotThreshold) { rots++; lastExt = b.close; lastType = 'HIGH'; }
+    if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= rotThreshold) { rots++; lastExt = b.close; lastType = 'LOW'; }
+    if (b.close > lastExt && lastType === 'HIGH') lastExt = b.close;
+    if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
+  }
+
+  const chopThreshold = Math.round(rotStats.mean + rotStats.std);
+  const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std);
+
+  const ibBars = bars.filter(b => b.et_min >= 570 && b.et_min < 630);
+  const ibH = ibBars.length ? Math.max(...ibBars.map(b => b.high)) : null;
+  const ibL = ibBars.length ? Math.min(...ibBars.map(b => b.low)) : null;
+  const ibRange = ibH && ibL ? Math.round(ibH - ibL) : null;
+
+  let sessionChar = 'DEVELOPING';
+  if (etMin >= 630) {
+    if (rots >= extremeChopThreshold) sessionChar = 'EXTREME_CHOP';
+    else if (rots >= chopThreshold) sessionChar = 'CHOP';
+    else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct > 70) sessionChar = 'TREND_UP';
+    else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct < 30) sessionChar = 'TREND_DOWN';
+    else if (ibRange && ibRange < ibTightThreshold) sessionChar = 'TIGHT_IB';
+    else if (ibRange && ibRange > ibWideThreshold) sessionChar = 'WIDE_IB';
+    else sessionChar = 'BALANCE';
+  }
+  return { sessionChar, rots, closeVsOpen, rangePct, ibRange, range };
+}
+
 // Fetch trailing daily cumDeltas from price bars (30-day window)
 async function getTrailingCumDeltas(date, days = 30) {
   const ck = `mb:cumDeltas:${date}:${days}`;
@@ -872,41 +930,16 @@ router.get('/live-session-context/:date', async (req, res) => {
       getTrailingWeeklyVwapDists(date, 12),
     ]);
 
-    // Rotations — 5-min close-to-close, ATR-scaled threshold (no static 65pt) — needs atr20
-    const rotThreshold = Math.round(atr20 * 0.15); // ~15% of ATR(20)
-    const fiveMapRot = {};
-    for (const b of bars) {
-      const bk = Math.floor(b.et_min / 5) * 5;
-      if (!fiveMapRot[bk]) fiveMapRot[bk] = { close: b.close };
-      else fiveMapRot[bk].close = b.close;
-    }
-    const fbRot = Object.values(fiveMapRot);
-    let rots = 0, lastExt = fbRot[0]?.close || 0, lastType = 'LOW';
-    for (const b of fbRot) {
-      if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= rotThreshold) { rots++; lastExt = b.close; lastType = 'HIGH'; }
-      if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= rotThreshold) { rots++; lastExt = b.close; lastType = 'LOW'; }
-      if (b.close > lastExt && lastType === 'HIGH') lastExt = b.close;
-      if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
-    }
-
-    // Session character assessment — σ-based CHOP thresholds from trailing rotation distribution
+    // Session character assessment — σ-based CHOP thresholds from trailing rotation distribution.
+    // Classification logic extracted to classifySessionChar() (module-level, above) 2026-09-15
+    // so GET /session-trend-history/:date can replay the identical formula on a bars-so-far
+    // slice -- see that function's own header comment.
     const rotStats = trailingRots.length >= MIN_SAMPLES ? rollingStats(trailingRots) : { mean: 10, std: 5 };
-    const chopThreshold = Math.round(rotStats.mean + rotStats.std);       // +1σ = CHOP
-    const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std); // +2σ = EXTREME_CHOP
-    const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
     const ibTightThreshold = Math.round(ibRangePercQ.rows[0]?.p33 ?? 146);  // Fallback: p33 from 252d sample
     const ibWideThreshold  = Math.round(ibRangePercQ.rows[0]?.p67 ?? 229);  // Fallback: p67 from 252d sample
-
-    let sessionChar = 'DEVELOPING';
-    if (etMin >= 630) {
-      if (rots >= extremeChopThreshold) sessionChar = 'EXTREME_CHOP';
-      else if (rots >= chopThreshold) sessionChar = 'CHOP';
-      else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct > 70) sessionChar = 'TREND_UP';
-      else if (Math.abs(closeVsOpen) > range * 0.4 && rangePct < 30) sessionChar = 'TREND_DOWN';
-      else if (ibRange && ibRange < ibTightThreshold) sessionChar = 'TIGHT_IB';
-      else if (ibRange && ibRange > ibWideThreshold) sessionChar = 'WIDE_IB';
-      else sessionChar = 'BALANCE';
-    }
+    const { sessionChar, rots } = classifySessionChar({ bars, atr20, rotStats, ibTightThreshold, ibWideThreshold });
+    const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
+    const rotThreshold = Math.round(atr20 * 0.15); // still returned in the response below, unchanged
 
     const acd = acdRes.rows[0] || {};
     const activeSetups = setupsRes.rows.filter(s => s.status === 'ACTIVE');
@@ -1060,6 +1093,75 @@ router.get('/live-session-context/:date', async (req, res) => {
     });
   } catch (err) {
     console.error('[live-session-context]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/morning-brief/session-trend-history/:date — user request (2026-09-15, while
+// looking at quick-check.html's SESSION chip): "give me a history with timestamps of what
+// the trend has been and each change for the day I want to compare it to what I see on the
+// chart." Replays classifySessionChar() (shared with live-session-context above -- same
+// exact function, not a hand-copied second version, per this codebase's standing rule) over
+// the day's own bars incrementally, one real bar at a time, using ONLY bars up to that point
+// (no lookahead -- this is a genuine historical replay, the same discipline every backtest
+// script in this codebase follows, not just a live-endpoint convenience). rotStats/
+// ibTightThreshold/ibWideThreshold are day-level constants derived from history strictly
+// BEFORE this session (identical inputs the live endpoint itself used throughout the day),
+// computed once and reused across every bars-so-far slice -- if this endpoint recomputed
+// them fresh at each point, replaying an OLD day would use TODAY's trailing stats instead of
+// what was actually known at the time, silently disagreeing with what the live chip actually
+// showed as the session unfolded.
+router.get('/session-trend-history/:date', async (req, res) => {
+  try {
+    const { date } = req.params;
+    const [barsRes, atr20, trailingRots, ibRangePercQ] = await Promise.all([
+      query(
+        `SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
+                open::float, high::float, low::float, close::float, volume::bigint as vol,
+                TO_CHAR(ts, 'HH24:MI') as time_str
+         FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
+         AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [date]),
+      getTrailingATR(date, 20),
+      getTrailingRotations(date, 90),
+      query(`
+        SELECT
+          PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p33,
+          PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY (ib_high - ib_low)) AS p67
+        FROM (
+          SELECT MAX(high)::float AS ib_high, MIN(low)::float AS ib_low
+          FROM price_bars_primary
+          WHERE symbol='NQ' AND ts::date < $1
+            AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 630
+          GROUP BY ts::date ORDER BY ts::date DESC LIMIT 90
+        ) t
+      `, [date]).catch(() => ({ rows: [{}] })),
+    ]);
+    const bars = barsRes.rows;
+    if (bars.length < 10) return res.json({ noData: true, history: [] });
+
+    const rotStats = trailingRots.length >= MIN_SAMPLES ? rollingStats(trailingRots) : { mean: 10, std: 5 };
+    const ibTightThreshold = Math.round(ibRangePercQ.rows[0]?.p33 ?? 146);
+    const ibWideThreshold  = Math.round(ibRangePercQ.rows[0]?.p67 ?? 229);
+
+    // Walk bar-by-bar (not just every 5 min) so a change is timestamped to the exact real
+    // minute it first became true, matching what a viewer watching the chart live would have
+    // seen change. Only the FIRST bar where sessionChar is eligible (et_min>=630, enforced
+    // inside classifySessionChar itself) can ever be 'DEVELOPING' -> something else; every
+    // later bar is classified against the same bars-so-far-only slice.
+    const history = [];
+    let lastChar = null;
+    for (let i = 0; i < bars.length; i++) {
+      const barsSoFar = bars.slice(0, i + 1);
+      const { sessionChar, rots } = classifySessionChar({ bars: barsSoFar, atr20, rotStats, ibTightThreshold, ibWideThreshold });
+      if (sessionChar !== lastChar) {
+        history.push({ etMin: bars[i].et_min, time: bars[i].time_str, sessionChar, rots, price: bars[i].close });
+        lastChar = sessionChar;
+      }
+    }
+
+    res.json({ date, history, currentSessionChar: lastChar, barsCount: bars.length });
+  } catch (err) {
+    console.error('[session-trend-history]', err);
     res.status(500).json({ error: err.message });
   }
 });
