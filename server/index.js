@@ -1256,6 +1256,36 @@ httpServer.listen(PORT, () => {
         }
       }
 
+      // price_bars_dedup_hist catch-up (OPEN_DECISION price_bars_dedup_hist_refresh_no_catchup_20260915)
+      // -- the nightly 8:20pm ET REFRESH (run_daily_calibration.sh's first step,
+      // scripts/refresh_price_bars_dedup_hist.mjs) is a bare node-cron tick with no catch-up
+      // if the server happens to be down/restarting at that exact moment -- the tick is just
+      // silently dropped, freezing price_bars_primary's historical UNION branch. Confirmed
+      // real 2026-09-14/15: a restart landed right on the 8:20pm schedule, the tick was
+      // missed, and price_bars_primary's live branch ALSO failed to return fresh rows for one
+      // specific poll shortly after -- together this let a live GLOBEX_VWAP_FADE_LONG trade
+      // fire with an entry price 3 calendar days stale (see OPEN_DECISION
+      // globex_vwap_fade_stale_price_after_restart_20260914, RESOLVED, for the full trace).
+      // Also found the SAME gap independently active the next morning, unrelated to that one
+      // incident -- this is a standing risk, not a one-off. Self-verifying check (not a
+      // process_log lookup like the other catch-up branches): the view's own MAX(ts) is the
+      // real signal of whether it's healthy. A freshly-refreshed view always lags "today" by
+      // design (its own WHERE clause excludes it) -- more than 1 full day behind means the
+      // scheduled refresh didn't run. Runs every tick, no day/hour gate, matching Pattern
+      // Memory's historical catch-up below -- cheap query, self-correcting, safe to check
+      // constantly. REFRESH MATERIALIZED VIEW CONCURRENTLY takes no read lock.
+      {
+        const { rows: mvRows } = await query(`SELECT MAX(ts)::date::text as latest FROM price_bars_dedup_hist WHERE symbol='NQ'`);
+        const latest = mvRows[0]?.latest;
+        if (!latest || new Date(latest) < new Date(new Date(today).getTime() - 86400000)) {
+          console.log(`[catch-up] price_bars_dedup_hist stale (latest=${latest ?? 'null'}, today=${today}) — refreshing now`);
+          await logProcess('PRICE_BARS_DEDUP_HIST_REFRESH', async () => {
+            await query(`REFRESH MATERIALIZED VIEW CONCURRENTLY price_bars_dedup_hist`);
+            return { count: 1 };
+          });
+        }
+      }
+
       // Pattern Memory catch-up — due 4:05 PM Mon–Fri; catch up after 5 PM. Deliberately does
       // NOT check process_log SUCCESS: a genuinely-skipped day (0 trades) also logs SUCCESS
       // with {skipped:true}, so that alone can't distinguish "ran fine, nothing to log" from

@@ -30,7 +30,7 @@
 
 import pg from 'pg';
 import dotenv from 'dotenv';
-import { computeVolumeProfileForRange } from '../server/services/developingValueService.js';
+import { computeVolumeProfileForRange, computeAndPersistSession } from '../server/services/developingValueService.js';
 dotenv.config();
 
 const pool = new pg.Pool({
@@ -123,6 +123,32 @@ async function computeLevelsForDate(date) {
   };
 
   // ── 1. Prior day value area + session stats ──────────────────────────────
+  // Self-heal (2026-09-15, OPEN_DECISION developing_value_log_stale_fallback_20260915):
+  // this query used to be the ONLY thing determining PD_VAH/PD_VAL/PD_POC/PD_HIGH/PD_LOW/
+  // PD_CLOSE (and everything derived from them -- the Camarilla pivots below) -- "most recent
+  // developing_value_log row before date," with no check that the row is actually for the
+  // real prior trading day. If computeAndPersistSession() ever silently skipped a day (its own
+  // `if (bars.length < 60) return null` guard, e.g. because price_bars_primary's live branch
+  // failed to return that day's bars at 4:05pm when it ran), this query would silently fall
+  // back to whichever OLDER row still exists -- the exact "closest prior applicable row" trap
+  // CLAUDE.md's own level_prices convention entry already warns about, just one table over.
+  // Confirmed real via a full systemic scan: 91 real active_setups rows across 9 distinct
+  // dates over 2 months had an entry price matching a real historical bar 24+ hours before
+  // their own fired_at -- this exact mechanism. priorBusinessDay() below already queries
+  // price_bars_primary directly for the REAL most recent trading day with actual RTH bars --
+  // use it as ground truth: if developing_value_log has no row for that exact date, compute
+  // and persist it now (reusing the real, canonical function, not reimplemented) before
+  // falling back to whatever's already there.
+  const priorDay = await priorBusinessDay(date);
+  if (priorDay) {
+    const hasPriorDayRow = await q(`SELECT 1 FROM developing_value_log WHERE trade_date = $1`, [priorDay]);
+    if (hasPriorDayRow.rows.length === 0) {
+      console.log(`  [self-heal] developing_value_log missing a row for ${priorDay} (the real prior trading day for ${date}) -- computing it now`);
+      try { await computeAndPersistSession(priorDay); }
+      catch (e) { console.log(`  [self-heal] computeAndPersistSession(${priorDay}) failed: ${e.message} -- falling back to whatever exists`); }
+    }
+  }
+
   const pdRow = await q(`
     SELECT poc::float, vah::float, val::float,
            session_high::float, session_low::float, session_close::float
@@ -173,8 +199,8 @@ async function computeLevelsForDate(date) {
   // the 60min IB (570-629, 9:30-10:30) live acd.js has used since this codebase's earliest
   // commit (2026-06-01) and docs/daytype_classifier_v2_candidate.md's documented convention
   // ("Initial Balance closes" at 10:30 ET) -- a real definitional mismatch, not just a timing
-  // one. See docs/KNOWN_ISSUES.md item 11.
-  const priorDay = await priorBusinessDay(date);
+  // one. See docs/KNOWN_ISSUES.md item 11. (priorDay already computed above, in section 1's
+  // self-heal check -- reused here rather than calling priorBusinessDay() a second time.)
   if (priorDay) {
     const pdIbR = await q(`
       SELECT MAX(high)::float AS h, MIN(low)::float AS l

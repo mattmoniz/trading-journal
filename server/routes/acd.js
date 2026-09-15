@@ -10108,7 +10108,15 @@ export default function createACDRouter(io) {
         SELECT s.*,
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str,
           TO_CHAR(s.expires_at, 'YYYY-MM-DD HH24:MI:SS') as expires_at_str,
-          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str
+          TO_CHAR(s.resolved_at, 'YYYY-MM-DD HH24:MI:SS') as resolved_at_str,
+          -- OPEN_DECISION poller_late_backfill_display_gap_20260914: a "own poller,
+          -- stateless by design" detector (pocRotationJoinDetector.js/globexFlushDetector.js/
+          -- etc) can insert a row long after its real fired_at if a server restart wiped its
+          -- in-memory poll-skip cache mid-session -- both columns are the SAME naive
+          -- (timestamp without time zone) type on the same table, so this diff needs no
+          -- timezone handling at all. NULL/negative (clock skew, or a row whose created_at
+          -- predates fired_at for any other reason) both collapse to 0 via GREATEST.
+          GREATEST(0, ROUND(EXTRACT(EPOCH FROM (s.created_at - s.fired_at)) / 60))::int as late_backfill_min
         FROM active_setups s
         WHERE s.trade_date = ANY($1) ORDER BY s.fired_at
       `, [dates]);

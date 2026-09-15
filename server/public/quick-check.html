@@ -196,6 +196,13 @@
      (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending). Only shown when
      this trade's own reading cleared the calibrated top-quartile "against" cutoff. */
   .momfade-tag { color: #fdba74; background: rgba(234,88,12,0.16); }
+  /* Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- shown
+     when a "own poller, stateless by design" detector (pocRotationJoinDetector.js/
+     globexFlushDetector.js/etc) inserted this row long after its own fired_at, typically
+     because a server restart mid-session wiped the detector's in-memory poll-skip cache.
+     Duration is shown directly in the tag text (not hidden behind a hover title) so a
+     mobile/touchscreen viewer sees it without needing to tap anything. */
+  .late-tag { color: #fde68a; background: rgba(202,138,4,0.16); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -1047,6 +1054,15 @@ function renderTimeline() {
     // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
     // informative case, same convention as dgTag above.
     const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MomFade</span>' : '';
+    // Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- see the
+    // CSS comment above. late_backfill_min comes straight from the API (created_at minus
+    // fired_at, both naive-timestamp columns diffed in SQL, no JS date-parsing needed here).
+    // 5min threshold: normal poll cadence (60s) plus a little slack shouldn't ever trip this
+    // for a genuinely real-time fire -- only a real catch-up-after-restart event should.
+    const lateMin = s.late_backfill_min || 0;
+    const lateTag = lateMin > 5
+      ? '<span class="vb-tag late-tag" title="This setup type runs its own background poller. A server restart mid-session can wipe its in-memory tracking, so on the next poll it re-scans and inserts an older signal late -- fired_at is still the real, correct touch time; only the row itself showed up late. Not a live-firing bug, and P&L/timing math for the trade itself is unaffected.">⏱ ' + formatLateDuration(lateMin) + ' late</span>'
+      : '';
     // Cluster tag (2026-09-14) -- shown on EVERY member of a multi-row cluster, not just a
     // designated leader (see the CSS comment above for why: picking a leader via
     // is_cluster_primary silently hid a row whenever no member had it set). Tapping opens a
@@ -1059,7 +1075,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -1505,6 +1521,14 @@ function to12Hour(hhmm) {
   const ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12; if (h === 0) h = 12;
   return h + ':' + String(m).padStart(2, '0') + ' ' + ampm;
+}
+
+// Used by the late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914).
+// min is already a plain integer from the API (SQL-computed, no date parsing here).
+function formatLateDuration(min) {
+  if (min < 60) return min + 'm';
+  const hrs = min / 60;
+  return (hrs >= 10 ? Math.round(hrs) : hrs.toFixed(1)) + 'h';
 }
 
 // ---- Aggregation by setup type (shared by today + week) ----
