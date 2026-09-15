@@ -33,7 +33,7 @@
 import { query } from '../db.js';
 import { getPriorDayRthRange } from './queries.js';
 import { getCurrentGarchRegime } from './volatilityRegime.js';
-import { getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues, getVaOverlapStreak } from './acdLiveCalibration.js';
+import { getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues } from './acdLiveCalibration.js';
 import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline } from './acdShared.js';
@@ -108,10 +108,6 @@ export async function computeMomentumChaseSignal(todayET, etMin) {
     const mcVaMap = await getValueAreaRegimeMap(todayET).catch(() => ({}));
     const mcRegimeStamp = computeRegimeStamp(candidate.entry, mcVaMap);
     const mcFireTags = await computeFireTags(todayET, 'RTH', etMin);
-    // Fetched for parity with other insert sites' own column set; not yet wired into a column
-    // here since active_setups' va_overlap_streak write already happens at every OTHER real
-    // insert site consistently -- add it if/when this setup gets its own dedicated review pass.
-    await getVaOverlapStreak(todayET).catch(() => null);
     const mcExpiresAt = `${todayET} 16:00:00`;
 
     const ins = await query(`

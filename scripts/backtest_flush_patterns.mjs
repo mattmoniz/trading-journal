@@ -138,10 +138,26 @@ function simulateExit(setup, targetPts) {
 async function persist(type, n, wr, ev, totalPnl, notesObj, stopPts, targetPts, extraNotes) {
   if (n === 0) { console.log(`  ${type}: N=0, skipping persist.`); return; }
   const rec = n < 20 ? 'THIN_N' : (ev < -5 ? 'SUPPRESS' : 'ACTIVE');
+  // FIXED 2026-09-14 (user-caught live, "I don't see RTH_FLUSH_SHORT ever fire"): this used to
+  // write to signal_type='SETUP_STATUS' under the SAME signal_name the real pipeline
+  // (backtest_setup_status.mjs, grouped from real active_setups rows) uses. Every consumer that
+  // reads the "current" SETUP_STATUS row via `DISTINCT ON (signal_name) ORDER BY run_date DESC`
+  // picks whichever script ran MOST RECENTLY -- so for any of these 6 flush types with nonzero
+  // real N, the displayed recommendation/N/EV literally flipped between this backtest's (large,
+  // simulated) numbers and the real pipeline's (thin, honest) numbers depending on which cron
+  // fired last that week. Confirmed live: RTH_FLUSH_LONG showed recommendation=ACTIVE/N=167/
+  // EV=+$9.13 right after this script ran, then THIN_N/N=5/EV=-$104.20 two days later once the
+  // real pipeline ran again -- same signal_name, same signal_type, genuinely different data.
+  // Both live detectors' own getLiveStatus() already bypass this table entirely (reading real
+  // active_setups directly), so this never changed which trades actually fired -- but anything
+  // else reading SETUP_STATUS at face value (dashboards, the Unified Signal Table, a human) was
+  // misled. Renamed to a distinct signal_type so it can never collide with the real pipeline's
+  // row again -- this is still a real, useful backtest reference number, just no longer
+  // masquerading as a real-trade-backed SETUP_STATUS row.
   await query(`
     INSERT INTO performance_audit
       (run_date, window_days, signal_type, signal_name, sample_size, win_rate, ev_per_trade, total_pnl, recommendation, notes)
-    VALUES (CURRENT_DATE, 0, 'SETUP_STATUS', $1, $2, $3, $4, $5, $6, $7)
+    VALUES (CURRENT_DATE, 0, 'FLUSH_BACKTEST_REFERENCE', $1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (run_date, window_days, signal_type, signal_name) DO UPDATE SET
       sample_size=EXCLUDED.sample_size, win_rate=EXCLUDED.win_rate, ev_per_trade=EXCLUDED.ev_per_trade,
       total_pnl=EXCLUDED.total_pnl, recommendation=EXCLUDED.recommendation, notes=EXCLUDED.notes
