@@ -3,6 +3,7 @@ import pool from '../server/db.js';
 import { computeCase } from '../server/services/caseEngine.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const SIGNAL_TYPE = 'DTCLASS_GATES';
 
@@ -70,10 +71,9 @@ async function run() {
            size_multiplier::float as size_multiplier
     FROM active_setups
     WHERE setup_type LIKE '%_FADE_%'
-      AND origin_status IN ('ACTIVE','SHADOW')
+      AND ${REAL_TRADE_FILTER}
       AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
-      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
     ORDER BY fired_at
   `);
   console.log(`[backtest_dtclass_gates] N=${candidates.length} candidates`);

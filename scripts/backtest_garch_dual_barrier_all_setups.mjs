@@ -28,6 +28,7 @@ import fs from 'fs';
 import { query } from '../server/db.js';
 import { computeEvAtStopTarget, DEFAULT_DPP } from './update_optimal_stops.mjs';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const MIN_N = 20;
 
@@ -90,9 +91,7 @@ async function main() {
   const realNRes = await query(`
     SELECT setup_type, COUNT(*) n
     FROM active_setups
-    WHERE origin_status IN ('ACTIVE','SHADOW')
-      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
-      AND ib_window_stale_basis IS NOT TRUE
+    WHERE ${REAL_TRADE_FILTER}
       AND (is_cluster_primary IS NULL OR is_cluster_primary = true)
       AND mae_points IS NOT NULL AND mfe_points IS NOT NULL AND actual_pnl IS NOT NULL
       AND mae_points <= 300 AND mfe_points <= 300

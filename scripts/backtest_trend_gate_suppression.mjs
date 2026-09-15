@@ -52,6 +52,7 @@ import { computeCase, computeIbBullBear } from '../server/services/caseEngine.js
 import { directionFromType } from '../server/services/maeMfeReplay.js';
 import { computeRigor } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const SIGNAL_TYPE = 'TREND_GATE_SUPPRESSION'; // performance_audit.signal_type is VARCHAR(30) -- 'TREND_GATE_SUPPRESSION_BACKTEST' (31 chars) overflowed it
 
@@ -114,10 +115,9 @@ async function run() {
            fired_at::text as fired_at, actual_pnl::float as actual_pnl
     FROM active_setups
     WHERE setup_type LIKE '%_FADE_%'
-      AND origin_status IN ('ACTIVE','SHADOW')
+      AND ${REAL_TRADE_FILTER}
       AND resolution IN ('TARGET_HIT','STOP_HIT','TIME_EXPIRED')
       AND actual_pnl IS NOT NULL
-      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
       AND (EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) BETWEEN 630 AND 960
     ORDER BY fired_at
   `);

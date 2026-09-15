@@ -1,5 +1,6 @@
 import pg from 'pg';
 import { computeRigor, computeReplication } from '../server/services/rigorDiagnostics.js';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const pool = new pg.Pool({ host: 'localhost', port: 5432, database: 'trading_journal', user: 'gemini_readonly', password: 'gemini_ro_2026' });
 
@@ -14,9 +15,7 @@ async function main() {
                resolution, size_multiplier::float AS sm, is_rth, session,
                price_at_detection::float, stop_level::float
         FROM active_setups
-        WHERE origin_status IN ('ACTIVE','SHADOW') AND actual_pnl IS NOT NULL
-          AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
-          AND ib_window_stale_basis IS NOT TRUE
+        WHERE ${REAL_TRADE_FILTER} AND actual_pnl IS NOT NULL
         ORDER BY fired_at
     `);
 

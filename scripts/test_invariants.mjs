@@ -1923,6 +1923,33 @@ async function main() {
       } else {
         ok('[25] backtest_bet_class_status.mjs imports POOLED_TRADE_FILTER, no local hand-rolled CLEAN_FILTER');
       }
+
+      // Extended 2026-09-15 (OPEN_DECISION hand_copied_real_trade_filter_needs_migration_20260915):
+      // 7 more scripts were found hand-copying REAL_TRADE_FILTER's raw SQL fragment instead of
+      // importing it -- several had already drifted (missing ib_window_stale_basis and/or
+      // stale_entry_price_basis). Migrated to import the shared constant; this extends [25]'s
+      // coverage to them so a future hand-rolled reversion doesn't go unnoticed the same way.
+      const MIGRATED_FILTER_FILES = [
+        'scripts/backtest_dtclass_gate_b_split_by_class.mjs',
+        'scripts/backtest_level_approach.js',
+        'scripts/backtest_promotion_gate_placebo_control.mjs',
+        'scripts/backtest_dtclass_sizing_standdown_gates.mjs',
+        'scripts/backtest_trend_gate_suppression.mjs',
+        'scripts/backtest_garch_dual_barrier_all_setups.mjs',
+        'scripts/backtest_revert_split_legs.mjs',
+      ];
+      for (const f of MIGRATED_FILTER_FILES) {
+        const src = fs.readFileSync(path.resolve(f), 'utf8');
+        const importsShared = /import\s*\{[^}]*\bREAL_TRADE_FILTER\b[^}]*\}\s*from\s*['"]\.\/backtest_setup_status\.mjs['"]/.test(src);
+        const hasHandRolledCopy = /NOT IN\s*\(\s*'MARK_TO_MARKET'\s*,\s*'RECOVERY_MTM'\s*\)/.test(src) && !importsShared;
+        if (!importsShared) {
+          fail(`[25] ${f} no longer imports REAL_TRADE_FILTER from backtest_setup_status.mjs -- check it hasn't reverted to a hand-rolled copy (this is exactly the drift class check [25] exists to catch).`);
+        } else if (hasHandRolledCopy) {
+          fail(`[25] ${f} imports REAL_TRADE_FILTER but ALSO still has a hand-rolled MARK_TO_MARKET/RECOVERY_MTM fragment -- likely a leftover from before the migration, or a new local copy re-added alongside the import.`);
+        } else {
+          ok(`[25] ${f} imports REAL_TRADE_FILTER, no local hand-rolled copy`);
+        }
+      }
     }
 
     // ── 26. TIMEOUT_EXIT / MARK_TO_MARKET stay on their intended sides ────────────

@@ -4,6 +4,7 @@ import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
 import { makeBarIndex, WALK_WINDOW_BARS } from '../server/services/targetCalibrationService.js';
 import { inferDirection } from '../server/config/setupTypes.js';
 import { precomputeCrossovers, computeEvAtStopTargetChronological, DEFAULT_DPP } from './update_optimal_stops.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 
 const pool = new pg.Pool({ host: 'localhost', port: 5432, database: 'trading_journal', user: 'gemini_readonly', password: 'gemini_ro_2026' });
 
@@ -21,9 +22,8 @@ async function main() {
                resolution_bar_time, selected_over
         FROM active_setups
         WHERE trade_date >= '2026-08-03' AND trade_date <= '2026-09-01'
-          AND origin_status IN ('ACTIVE','SHADOW')
+          AND ${REAL_TRADE_FILTER}
           AND actual_pnl IS NOT NULL
-          AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
         ORDER BY fired_at
     `);
     const trades = tradesRes.rows.map(t => ({

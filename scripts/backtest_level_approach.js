@@ -15,6 +15,7 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import { query } from '../server/db.js';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -68,12 +69,12 @@ async function run() {
       -- preflight_backtest_assertions.mjs check [1], roadmap Phase 0 sweep, 2026-08-10:
       -- a.status<>'SHADOW' only excludes still-open shadow positions, a different column
       -- from origin_status (immutable at insert) -- resolved BACKFILL rows passed this
-      -- filter unfiltered. Added origin_status alongside, not instead of, the existing check.
-      AND a.origin_status IN ('ACTIVE', 'SHADOW')
-      -- check [8], roadmap Phase 8 I6, 2026-08-11: MARK_TO_MARKET/RECOVERY_MTM are uncapped
-      -- by any stop (CLAUDE.md failure mode #9) and can distort avg_pnl/total_pnl here, the
-      -- same defect that flipped CONTINUATION_LEGACY's headline EV the same day.
-      AND (a.resolution_method IS NULL OR a.resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
+      -- filter unfiltered. REAL_TRADE_FILTER (unaliased -- its columns only exist on
+      -- active_setups, not the joined acd_daily_log, so no ambiguity) adds origin_status
+      -- alongside, not instead of, the existing check, plus the MTM/stale-basis exclusions
+      -- check [8] originally added by hand here (2026-08-11: MARK_TO_MARKET/RECOVERY_MTM are
+      -- uncapped by any stop, CLAUDE.md failure mode #9, and can distort avg_pnl/total_pnl).
+      AND ${REAL_TRADE_FILTER}
     GROUP BY a.setup_type, d.day_type,
              EXTRACT(dow FROM (a.fired_at AT TIME ZONE 'America/New_York'))::int
   `);
