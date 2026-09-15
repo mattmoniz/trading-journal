@@ -1,5 +1,7 @@
 # OPUS STRATEGIC AUDIT (AUDIT #13): is the "one futures contract per calendar day" data model worth rebuilding?
 
+You are Claude Opus, running at HIGH reasoning effort. This is a genuinely open-ended, multi-way tradeoff question (rebuild now / rebuild later / patch-and-move-on), not a lookup — do not answer at a reasoning effort that would treat it as one.
+
 You are being asked for a strategic architecture verdict, not a bug fix — the bug is already fixed. Give a real answer (rebuild / don't rebuild / rebuild-but-later-because-X), not both-sides-ism, and if you recommend rebuilding, give a concrete build plan specific enough that another engineer could execute it, not just "consider a per-bar model." You do not have access to the live codebase or database for this audit — everything you need to reason about is inlined below. Do not assume anything beyond what's given; flag explicitly if you'd want to verify something you can't check from this prompt alone.
 
 ## The system, briefly
