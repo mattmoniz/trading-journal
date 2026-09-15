@@ -1925,6 +1925,57 @@ async function main() {
       }
     }
 
+    // ── 26. TIMEOUT_EXIT / MARK_TO_MARKET stay on their intended sides ────────────
+    console.log('\n[26] TIMEOUT_EXIT (designed timeout exit) vs MARK_TO_MARKET (accidental session-end close) stay separated');
+    {
+      // OPEN_DECISION real_trade_filter_mtm_exclusion_undercounts_20260914 (DeepSeek
+      // design-critiqued, fixed 2026-09-15): resolveSetups.js's POC_ROTATION_JOIN and
+      // IB_LOW_PNR branches now write resolution_method='TIMEOUT_EXIT' for their designed
+      // 60min/hold-to-close exit, instead of reusing 'MARK_TO_MARKET' (the generic
+      // session-end force-close every other setup_type's incomplete positions get, which
+      // REAL_TRADE_FILTER deliberately still excludes). This check is DeepSeek's own
+      // required-before-ship verification item 6 -- catches a future edit accidentally
+      // widening TIMEOUT_EXIT to a setup_type it wasn't designed for, or a regression that
+      // reverts one of these two branches back to MARK_TO_MARKET.
+      const TIMEOUT_EXIT_TYPES = ['POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT', 'IB_LOW_PNR_SHORT'];
+      const teRows = await client.query(`SELECT DISTINCT setup_type FROM active_setups WHERE resolution_method = 'TIMEOUT_EXIT'`);
+      const unexpectedTeTypes = teRows.rows.map(r => r.setup_type).filter(t => !TIMEOUT_EXIT_TYPES.includes(t));
+      if (unexpectedTeTypes.length > 0) {
+        fail(`[26] resolution_method='TIMEOUT_EXIT' found on setup_type(s) outside the expected ${JSON.stringify(TIMEOUT_EXIT_TYPES)}: ${unexpectedTeTypes.join(', ')} -- either a new setup_type legitimately earned a designed-timeout exit (update TIMEOUT_EXIT_TYPES here) or something is writing this label without the exit design to back it up.`);
+      } else {
+        ok(`[26] resolution_method='TIMEOUT_EXIT' only appears on ${JSON.stringify(TIMEOUT_EXIT_TYPES)}`);
+      }
+
+      const staleMtmRows = await client.query(`
+        SELECT setup_type, COUNT(*)::int as n FROM active_setups
+        WHERE setup_type = ANY($1) AND resolution_method = 'MARK_TO_MARKET'
+        GROUP BY setup_type
+      `, [TIMEOUT_EXIT_TYPES]);
+      if (staleMtmRows.rows.length > 0) {
+        fail(`[26] ${TIMEOUT_EXIT_TYPES.join('/')} still have MARK_TO_MARKET rows (should all be TIMEOUT_EXIT after the 2026-09-15 backfill): ${JSON.stringify(staleMtmRows.rows)} -- either a new fire slipped through with the old label (check resolveSetups.js hasn't reverted) or a new historical row needs the same backfill scripts/backfill_timeout_exit_relabel_20260915.mjs applied.`);
+      } else {
+        ok('[26] no MARK_TO_MARKET rows remain for POC_ROTATION_JOIN/IB_LOW_PNR_SHORT');
+      }
+
+      const resolveSetupsSrc = fs.readFileSync(path.resolve('server/services/resolveSetups.js'), 'utf8');
+      // Anchored on the full "if (row.setup_type.startsWith(...)) {" statement, not the bare
+      // startsWith(...) substring -- a different, unrelated eligibility check earlier in this
+      // same file (~line 96) also contains startsWith('POC_ROTATION_JOIN')/startsWith('IB_LOW_PNR')
+      // inline, and a loose anchor matched THAT occurrence first, understating the real distance
+      // to the branch's own method= line by ~9000 chars and producing a false FAIL (caught before
+      // this check was trusted, not after).
+      if (!/if \(row\.setup_type\.startsWith\('POC_ROTATION_JOIN'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
+        fail("[26] resolveSetups.js's POC_ROTATION_JOIN branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
+      } else {
+        ok("[26] resolveSetups.js's POC_ROTATION_JOIN branch still writes TIMEOUT_EXIT");
+      }
+      if (!/if \(row\.setup_type\.startsWith\('IB_LOW_PNR'\)\) \{[\s\S]{0,2000}?method = 'TIMEOUT_EXIT'/.test(resolveSetupsSrc)) {
+        fail("[26] resolveSetups.js's IB_LOW_PNR branch no longer writes method = 'TIMEOUT_EXIT' within ~2000 chars of its own 'if (row.setup_type.startsWith(...)) {' line -- confirm the branch wasn't refactored back to MARK_TO_MARKET or moved far enough that this check's proximity window needs updating.");
+      } else {
+        ok("[26] resolveSetups.js's IB_LOW_PNR branch still writes TIMEOUT_EXIT");
+      }
+    }
+
     // ── Summary ──────────────────────────────────────────────────────────────────
     console.log(`\n${'─'.repeat(50)}`);
     if (failures === 0 && warnings === 0) {

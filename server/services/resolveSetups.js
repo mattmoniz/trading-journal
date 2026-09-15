@@ -274,9 +274,19 @@ export async function resolveSetupsByPrice(io) {
         const stopHit = long ? bar.low <= stop : bar.high >= stop;
         if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
       }
+      // TIMEOUT_EXIT, not MARK_TO_MARKET (2026-09-15, OPEN_DECISION
+      // real_trade_filter_mtm_exclusion_undercounts_20260914, DeepSeek design-critiqued):
+      // this Time60_Stop20 exit's 60-minute mark-to-market IS the designed win condition,
+      // not an accident of running out of session time -- REAL_TRADE_FILTER's MARK_TO_MARKET
+      // exclusion was built to guard against the latter (see setupExpiry.js/the generic
+      // session-end force-close below), and was silently excluding every real MTM win here,
+      // pinning real_n below the STOP_HIT-only count. TIMEOUT_EXIT matches the codebase's own
+      // existing precedent (EXTEND_TIME_EXPIRED/TRAIL_TIME_EXPIRED) for "give a designed
+      // timeout its own method string" -- no REAL_TRADE_FILTER SQL change needed, it's simply
+      // not in the exclusion list.
       if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
         const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
-        resolution = 'TIME_EXPIRED'; method = 'MARK_TO_MARKET'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+        resolution = 'TIME_EXPIRED'; method = 'TIMEOUT_EXIT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
       }
       if (resolution) {
         const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;
@@ -309,9 +319,12 @@ export async function resolveSetupsByPrice(io) {
         const stopHit = long ? bar.low <= stop : bar.high >= stop;
         if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
       }
+      // TIMEOUT_EXIT, not MARK_TO_MARKET -- same 2026-09-15 fix as POC_ROTATION_JOIN above
+      // (OPEN_DECISION real_trade_filter_mtm_exclusion_undercounts_20260914): hold-to-close
+      // is this setup's validated, designed exit, not an accidental session-end force-close.
       if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
         const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
-        resolution = 'TIME_EXPIRED'; method = 'MARK_TO_MARKET'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+        resolution = 'TIME_EXPIRED'; method = 'TIMEOUT_EXIT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
       }
       if (resolution) {
         const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;
