@@ -872,6 +872,15 @@ function renderTimeline() {
   // (genuinely never shown as a real alert, not just "unknown") and included in 'all'.
   const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate);
   const resolved = scoped
+    // stale_entry_price_basis (2026-09-15, OPEN_DECISION
+    // contract_calendar_roll_race_stale_price_20260915/globex_vwap_fade_stale_price_after_
+    // restart_20260914): rows confirmed to have a corrupted entry price (a real historical
+    // bar days old, not the actual price at fired_at). /api/setups/today returns raw rows
+    // with no server-side filter -- this endpoint's own backend sibling (/api/setups/
+    // range-summary, feeding the Performance card below) already excludes these via the
+    // shared REAL_TRADE_FILTER; this client-side filter is this card's own equivalent so
+    // Net P&L/Wins/Losses/Worst Trade don't keep re-displaying a known-corrupted trade.
+    .filter(s => !s.stale_entry_price_basis)
     .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
     .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
     .filter(s => vbFilter === 'all' || (vbFilter === 'agree' && s.vol_building_signal?.agreesMedian) || (vbFilter === 'strong' && s.vol_building_signal?.agreesP60))
