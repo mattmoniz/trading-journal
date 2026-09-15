@@ -60,7 +60,16 @@ const SUPPRESS_MAX_EV  = -5;   // EV below -$5/trade (sole condition — no WR g
 // NULL/false for every other row (this column is not written by any live INSERT path, only
 // that one-time backfill script), so this clause is a no-op for every setup_type except the
 // ones actually tagged.
-export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE`;
+// stale_entry_price_basis exclusion added 2026-09-15 (OPEN_DECISION
+// globex_vwap_fade_stale_price_after_restart_20260914): flags real trades whose entry price
+// was corrupted by one of the confirmed stale-price mechanisms (a Globex-closed weekend
+// fallback, or a stale-but-present level_prices row masking a real prior-day gap) -- 9 rows
+// as of the 2026-09-15 backfill (scripts/backfill_stale_entry_price_exclusion_20260915.mjs).
+// Same NULL/false-is-a-no-op convention as ib_window_stale_basis above. Deliberately does
+// NOT yet cover the still-actively-racing contract-calendar mechanism found the same day
+// (2026-09-14/09-15) -- that one is tracked separately since repairing it now would need
+// redoing once the underlying race is actually fixed.
+export const REAL_TRADE_FILTER = `origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE`;
 
 // Cluster touch credit Phase 2 (2026-09-07, OPEN_DECISION
 // cluster_touch_credit_phase3_sibling_rows_shipped, DeepSeek design-critiqued): a cluster's
