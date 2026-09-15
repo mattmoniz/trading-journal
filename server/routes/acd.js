@@ -51,6 +51,7 @@ import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, 
 import { computeMomentumChaseSignal } from '../services/momentumChaseDetector.js';
 import { computeMajorPivotDefendedBreakSignal } from '../services/majorPivotDefendedBreakDetector.js';
 import { computeStallDefendedLevelSignal } from '../services/stallDefendedLevelDetector.js';
+import { computeMinorDefendedLevelSignal } from '../services/minorDefendedLevelDetector.js';
 import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
@@ -9326,8 +9327,9 @@ export default function createACDRouter(io) {
       const momentumChaseSignal = await computeMomentumChaseSignal(todayET, etMin);
       const majorPivotDefendedBreakSignal = await computeMajorPivotDefendedBreakSignal(todayET);
       const stallDefendedLevelSignal = await computeStallDefendedLevelSignal(todayET);
+      const minorDefendedLevelSignal = await computeMinorDefendedLevelSignal(todayET, etMin);
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
