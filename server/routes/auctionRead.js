@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { cacheGet, cacheSet, latestBarDate } from '../lib/cache.js';
 import { getGLine } from '../services/queries.js';
 import { computeVolumeProfileForRange } from '../services/developingValueService.js';
+import { getCurrentPrice } from '../services/priceRetrieval.js';
 
 const router = express.Router();
 
@@ -201,8 +202,7 @@ router.get('/composite-profile', async (req, res) => {
     if (cached) return res.json(cached);
 
     // Current price for context
-    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-    const currentPrice = latestBar.rows[0]?.close || null;
+    const currentPrice = (await getCurrentPrice('NQ', 'auctionRead.compositeTpo')) || null;
 
     // Build TPO composite: each 1-min bar contributes 1 count to each price level it spans
     const tpoQ = await query(`
@@ -313,10 +313,7 @@ router.get('/auction-read/auto', async (req, res) => {
 
     // Today's OR + current price
     const todayLog = await query(`SELECT or_high, or_low FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
-    // Same partition-pruning fix as above (measured 640ms unbounded -> 55ms with a 5-day
-    // floor, identical result) — 5 days is generous for "the single latest bar."
-    const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-    const nqClose = latestBar.rows[0]?.close || 0;
+    const nqClose = (await getCurrentPrice('NQ', 'auctionRead.orRange')) || 0;
     const orH = todayLog.rows[0]?.or_high ? parseFloat(todayLog.rows[0].or_high) : null;
     const orL = todayLog.rows[0]?.or_low  ? parseFloat(todayLog.rows[0].or_low)  : null;
     const orRange = orH && orL ? orH - orL : null;
@@ -407,8 +404,8 @@ router.get('/auction-read/auto', async (req, res) => {
     const pwHigh = pwQ.rows[0]?.pw_high || null;
     const pwLow  = pwQ.rows[0]?.pw_low  || null;
 
-    // Latest price for pre-market display
-    const latestClose = latestBar.rows[0]?.close || null;
+    // Latest price for pre-market display (same read as nqClose above -- one query, not two)
+    const latestClose = nqClose || null;
 
     // Auto-persist reads.
     // overnight_inventory + open_vs_prior_value are fully computed from price data (98%/90%

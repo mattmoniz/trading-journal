@@ -16,6 +16,7 @@ import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.m
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType } from '../services/acdShared.js';
+import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -1007,7 +1008,7 @@ async function detectGlobexSetup(sessionDate, io) {
       if (nowET.getHours() === 18 && nowET.getMinutes() < 30) return null;
     }
     const [priceRow, pdRow, auditRow, widerLevelsRow, widerOptRow, pairAuditRow, recentBarsRow] = await Promise.all([
-      query(`SELECT close::float as price FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+      getLatestBars('NQ', { limit: 1, columns: 'close::float as price' }, 'detectGlobexSetup').then(rows => ({ rows })),
       query(`SELECT vah::float, val::float, poc::float FROM developing_value_log ORDER BY trade_date DESC LIMIT 1`),
       // FIXED 2026-08-05 (RESEARCH_CLAIM globexparams_raw_percentile_bug_pd_poc_vah_val): this
       // used to be the LIVE stop/target source for PD_VAH/VAL/POC via globexParams() below --
@@ -1722,7 +1723,15 @@ async function fetchDetectionInputs(todayET) {
       ORDER BY ts
     `, [todayET]),
     // Current price + volume + bar timestamp
-    query(`SELECT ts, close::float, volume::int FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+    getLatestBars('NQ', { limit: 1, columns: 'close::float, volume::int' }, 'runSetupDetection.latestBar').then(rows => ({
+      // Reconstruct the same "UTC-labeled Date whose UTC fields equal the naive ET digits"
+      // shape the raw pg driver used to hand back for this un-cast `ts` select -- downstream
+      // consumers (~line 9325) call .toISOString()/.getUTCHours() on this expecting exactly
+      // that naive-passthrough convention, not a true UTC instant. getLatestBars returns
+      // ts::text specifically so its OWN freshness check can use etNaiveTimestampToMs()
+      // correctly; this reconstructs the pre-existing Date shape from that same text.
+      rows: rows.map(r => ({ ...r, ts: new Date(r.ts.replace(' ', 'T') + 'Z') })),
+    })),
     // 20-bar average volume (last 20 RTH bars)
     query(`
       SELECT AVG(volume)::float as avg_vol
@@ -4718,8 +4727,7 @@ export default function createACDRouter(io) {
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const monthYear = `${nowET.getFullYear()}-${String(nowET.getMonth()+1).padStart(2,'0')}`;
       const pivot = await query('SELECT pivot_level FROM acd_monthly_pivot WHERE month_year=$1', [monthYear]);
-      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-      const nqClose = latestBar.rows[0]?.close || 0;
+      const nqClose = (await getCurrentPrice('NQ', 'permissionSlip.pivotBias')) || 0;
       const pivotLevel = parseFloat(pivot.rows[0]?.pivot_level) || null;
       const pivotBias = pivotLevel ? (nqClose > pivotLevel ? 'up' : 'down') : null;
 
@@ -4807,9 +4815,9 @@ export default function createACDRouter(io) {
   // GET /api/acd/nq/latest
   router.get('/acd/nq/latest', async (req, res) => {
     try {
-      const r = await query(`SELECT ts, close, high, low, open FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-      if (r.rows.length === 0) return res.json(null);
-      const bar = r.rows[0];
+      const bars = await getLatestBars('NQ', { limit: 1, columns: 'close, high, low, open' }, 'GET /acd/nq/latest');
+      if (bars.length === 0) return res.json(null);
+      const bar = bars[0];
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
       const todayET = nowET.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const monthYear = `${nowET.getFullYear()}-${String(nowET.getMonth() + 1).padStart(2, '0')}`;
@@ -4827,7 +4835,12 @@ export default function createACDRouter(io) {
         pivotBias = price > r1 ? 'ABOVE_R1' : price > pLevel ? 'ABOVE_PIVOT' : price > s1 ? 'BELOW_PIVOT' : 'BELOW_S1';
       }
       const opening_call_type = arQ.rows[0]?.opening_call_type || null;
-      res.json({ ts: bar.ts, close: parseFloat(bar.close), pivot: pivotRow || null, pivotBias, barAgeMinutes: Math.round((Date.now() - new Date(bar.ts).getTime()) / 60000), opening_call_type });
+      // barAgeMinutes now comes from getLatestBars() (etNaiveTimestampToMs-based) rather than
+      // the old `new Date(bar.ts).getTime()` here -- bar.ts is a naive ET timestamp, so that
+      // comparison against Date.now() was silently off by the ET/UTC offset (a real,
+      // pre-existing instance of the naive-timestamp-vs-Date.now() bug class, fixed for free
+      // by this call site's move to the shared helper).
+      res.json({ ts: bar.ts, close: parseFloat(bar.close), pivot: pivotRow || null, pivotBias, barAgeMinutes: Math.round(bar.ageMinutes), opening_call_type });
     } catch(e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -4922,8 +4935,7 @@ export default function createACDRouter(io) {
       // cacheGet imported at top of file
       const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
-      const latestBar = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-      const currentPrice = latestBar.rows[0]?.close;
+      const currentPrice = await getCurrentPrice('NQ', 'GET /acd/level-confidence');
       if (!currentPrice) return res.json({ levels: [] });
 
       const nlQ = await query(`
@@ -11583,7 +11595,7 @@ export default function createACDRouter(io) {
           ORDER BY pa.signal_type, pa.ev_per_trade DESC NULLS LAST
         `),
         // 2. Current price
-        query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+        getLatestBars('NQ', { limit: 1, columns: 'close::float as close' }, 'setup-reference.currentPrice').then(rows => ({ rows })),
         // 3. ATR(20) from daily true ranges
         query(`
           WITH daily AS (
@@ -12462,7 +12474,7 @@ export default function createACDRouter(io) {
 
       // Current price + session bars + live setup + ACD state
       const [priceQ, sessionQ, rthBarsQ, setupQ, acdQ] = await Promise.all([
-        query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+        getLatestBars('NQ', { limit: 1, columns: 'close::float' }, 'trend-watch.currentPrice').then(rows => ({ rows })),
         query(`SELECT MAX(high)::float as h, MIN(low)::float as l FROM price_bars_primary
                WHERE symbol='NQ' AND ts::date=$1
                AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959`, [todayET]),

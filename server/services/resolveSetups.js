@@ -20,6 +20,7 @@ import { classifyTouch } from './touchQuality.js';
 import { stepBreakevenTrail } from './breakevenTrailWalker.js';
 import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from './widerTargetWalker.js';
 import { stepStepTrail } from './stepTrailWalker.js';
+import { getCurrentPrice } from './priceRetrieval.js';
 import { stepPitchCatch } from './pitchCatchWalker.js';
 import { computeADXSeries } from './adxService.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
@@ -327,8 +328,7 @@ export async function resolveSetupsByPrice(io) {
       const stop = row.stop_level;
       const t1 = row.t1_level;
       if (entry == null || stop == null) continue;
-      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-      const px = currentPxQ.rows[0]?.close;
+      const px = await getCurrentPrice('NQ', 'resolveSetupsByPrice.ABSORPTION_LONG');
       if (!px) continue;
       const stopHit = px <= stop;
       const targetHit = t1 && px >= t1;
@@ -366,8 +366,7 @@ export async function resolveSetupsByPrice(io) {
       const t1 = row.t1_level;
       if (entry == null || stop == null || t1 == null) continue;
       const targetDist = Math.abs(t1 - entry);
-      const currentPxQ = await query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`);
-      const px = currentPxQ.rows[0]?.close;
+      const px = await getCurrentPrice('NQ', 'resolveSetupsByPrice.COIL_SURGE');
       if (!px) continue;
       const currentDist = Math.abs(px - t1);
       const reverted = currentDist < targetDist * 0.5;

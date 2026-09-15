@@ -10,6 +10,7 @@ import { query } from '../db.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { resolveDirection } from '../config/setupTypes.js';
 import { dropToTimeline } from './acdShared.js';
+import { getLatestBars } from './priceRetrieval.js';
 
 // Expires any ACTIVE/SHADOW setups past their expires_at; emits socket events.
 export async function expireStaleSetups(io) {
@@ -126,7 +127,7 @@ export async function structurallyInvalidateSetups(io) {
   const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 
   const [priceRow, acdRow, ibRow, pdIbRow] = await Promise.all([
-    query(`SELECT close::float FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 1`),
+    getLatestBars('NQ', { limit: 1, columns: 'close::float' }, 'structurallyInvalidateSetups').then(rows => ({ rows })),
     query(`SELECT or_high::float, or_low::float FROM acd_daily_log WHERE trade_date=$1`, [todayET]),
     query(`
       SELECT MAX(high)::float as ib_high, MIN(low)::float as ib_low

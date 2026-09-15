@@ -35,6 +35,7 @@ import { getPriorDayRthRange } from './queries.js';
 import { getCurrentGarchRegime } from './volatilityRegime.js';
 import { getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeStampValues } from './acdLiveCalibration.js';
 import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
+import { getCurrentPrice } from './priceRetrieval.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline } from './acdShared.js';
 
@@ -96,11 +97,7 @@ export async function hasMomentumChaseFiredToday(todayET) {
 export async function computeMomentumChaseSignal(todayET, etMin) {
   try {
     if (await hasMomentumChaseFiredToday(todayET)) return null;
-    const priceQ = await query(`
-      SELECT close::float as price FROM price_bars_primary
-      WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1
-    `).catch(() => ({ rows: [] }));
-    const currentPrice = priceQ.rows[0]?.price ?? null;
+    const currentPrice = await getCurrentPrice('NQ', 'momentumChaseDetector').catch(() => null);
     const candidate = await detectMomentumChaseCandidate(todayET, etMin, currentPrice);
     if (!candidate) return null;
 

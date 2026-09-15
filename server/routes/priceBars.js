@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { ingestBarFile, scanAndIngestNewBarFiles, getBars, parseContractFromFilename } from '../services/priceBarService.js';
 import { detectPhaseChange } from '../services/phaseChangeDetector.js';
 import { detectAndEmitSetup } from '../services/setupEmitter.js';
+import { getLatestBars } from '../services/priceRetrieval.js';
 
 const router = express.Router();
 
@@ -127,15 +128,19 @@ export default function createPriceBarsRouter(io, getBestACDParams, computeORLev
             AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) >= 570
           ORDER BY ts ASC LIMIT 1
         `, [symbol, todayET]),
-        query(`SELECT ts, close::float as close FROM price_bars_primary WHERE symbol=$1 ORDER BY ts DESC LIMIT 1`, [symbol]),
+        getLatestBars(symbol, { limit: 1, columns: 'close::float as close' }, 'price-bars/today-change').then(rows => ({ rows })),
       ]);
       const open = openRow.rows[0]?.open ?? null;
       const current = latestRow.rows[0]?.close ?? null;
       const change = (open != null && current != null) ? +(current - open).toFixed(2) : null;
       const changePct = (open) ? +((current - open) / open * 100).toFixed(3) : null;
+      // barAgeMinutes now comes from getLatestBars() (etNaiveTimestampToMs-based), fixing the
+      // same naive-timestamp-vs-Date.now() bug DeepSeek's Phase 2 review found here (this site
+      // was missed in the original 16-site sweep since it has no ts::date bound at all, unlike
+      // every other instance of the idiom -- also fixed by the swap above, for free).
       res.json({
         symbol, tradeDate: todayET, open, current, change, changePct,
-        barAgeMinutes: latestRow.rows[0]?.ts ? Math.round((Date.now() - new Date(latestRow.rows[0].ts).getTime()) / 60000) : null,
+        barAgeMinutes: latestRow.rows[0]?.ageMinutes != null ? Math.round(latestRow.rows[0].ageMinutes) : null,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

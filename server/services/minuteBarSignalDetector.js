@@ -22,6 +22,7 @@ import { query } from '../db.js';
 import { dropToTimeline, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../routes/acd.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { checkStandardLiveGates } from './detectorLiveGates.js';
+import { getLatestBars } from './priceRetrieval.js';
 
 const SETUP_FAMILY = 'MOMENTUM_60m_60m_TREND';
 const LOOKBACK_MIN = 60;
@@ -130,12 +131,9 @@ export async function detectMomentum60Trend(io) {
     if (!_cache.optimalStop) _cache.optimalStop = await getOptimalStop();
     if (!_cache.optimalStop) return; // backtest_momentum60_daytype.mjs hasn't run yet this week
 
-    const barsQ = await query(`
-      SELECT close::float FROM price_bars_primary
-      WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT ${LOOKBACK_MIN + 1}
-    `);
-    if (barsQ.rows.length < LOOKBACK_MIN + 1) return;
-    const closes = barsQ.rows.map(r => r.close).reverse(); // oldest first
+    const barsDesc = await getLatestBars('NQ', { limit: LOOKBACK_MIN + 1, columns: 'close::float' }, 'minuteBarSignalDetector');
+    if (barsDesc.length < LOOKBACK_MIN + 1) return;
+    const closes = barsDesc.map(r => r.close).reverse(); // oldest first
     const currentClose = closes[closes.length - 1];
     const momentumNow = currentClose - closes[0];
 

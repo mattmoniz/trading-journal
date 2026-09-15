@@ -185,19 +185,46 @@ export async function ingestBarFile(filePath) {
       bars_inserted = $4, date_from = $5, date_to = $6, file_size = $7, ingested_at = NOW()
   `, [filename, contract, symbol, barsInserted, dateFrom, dateTo, currentSize]);
 
-  // Keep the contract calendar up to date so price_bars_primary view stays correct across rollovers
+  // Keep the contract calendar up to date so price_bars_primary view stays correct across
+  // rollovers. FIXED 2026-09-15 (OPEN_DECISION contract_calendar_roll_race_stale_price_20260915,
+  // DeepSeek design-critiqued): the old version's `WHERE EXCLUDED.bar_count > existing.bar_count`
+  // guard conflated "is this scan more complete" with "is this the right winner" -- during a
+  // real quarterly contract roll (confirmed: NQU26/NQZ26 both had bars on 09-03, 11 days before
+  // this codebase's own computed roll-week window even starts), the guard could freeze the
+  // calendar on the PRE-roll contract if the new contract's count at some intermediate poll was
+  // lower than the old contract's already-complete count -- a wrong flip that could never
+  // self-correct. This produced two real STOP_HIT losses (-$76 each) on 2026-09-14 when the
+  // live "get current price" query silently walked back to a stale Friday bar because the
+  // calendar pointed 09-14 at the wrong contract.
+  //
+  // The re-rank query itself is ALREADY a deterministic function of ALL of price_bars' current
+  // contents for each date in range (not just the just-ingested file's own contract) -- so the
+  // fix is smaller than a redesign: (1) delete the monotonic guard entirely (bar_count per
+  // (date, contract) is monotone non-decreasing under this upsert-only ingest, so the winner
+  // can cross at most once, in the correct direction -- removing the guard cannot cause thrash,
+  // it only lets a wrong flip converge to the true dominant contract on the next re-scan);
+  // (2) add a deterministic tie-break (`contract ASC`) for the one genuine non-determinism the
+  // old query had (an exact bar-count tie). Explicitly REJECTED a roll-week-calendar-aware
+  // special-case (option (c) in the design critique) -- the real dual-contract overlap window
+  // is wider and less predictable than a hardcoded quarterly calendar can model, so "does the
+  // data currently have 2+ contracts" is the only reliable signal, and this query already reads
+  // that directly. See scratch/deepseek_response.md (2026-09-15, "Design critique" pass) for
+  // the full stress-test (does removing the guard thrash? does a flip corrupt already-fired
+  // trades? no and no -- fired rows are immutable snapshots, only a fresh read of a wrong
+  // contract mapping is at risk, which this fix eliminates).
   await query(`
     INSERT INTO price_bars_contract_calendar (symbol, trade_date, contract, bar_count)
     SELECT symbol, trade_date, contract, bar_count FROM (
       SELECT symbol, ts::date AS trade_date, contract, COUNT(*) AS bar_count,
-        ROW_NUMBER() OVER (PARTITION BY symbol, ts::date ORDER BY COUNT(*) DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY symbol, ts::date ORDER BY COUNT(*) DESC, contract ASC) AS rn
       FROM price_bars
       WHERE symbol = $1 AND ts::date >= $2::date AND ts::date <= $3::date
       GROUP BY symbol, ts::date, contract
     ) ranked WHERE rn = 1
     ON CONFLICT (symbol, trade_date) DO UPDATE
       SET contract = EXCLUDED.contract, bar_count = EXCLUDED.bar_count
-      WHERE EXCLUDED.bar_count > price_bars_contract_calendar.bar_count
+      WHERE price_bars_contract_calendar.contract IS DISTINCT FROM EXCLUDED.contract
+         OR price_bars_contract_calendar.bar_count IS DISTINCT FROM EXCLUDED.bar_count
   `, [symbol, dateFrom, dateTo]);
 
   console.log(`✅ ${filename}: ${barsInserted.toLocaleString()} bars upserted`);

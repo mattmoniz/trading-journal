@@ -3,6 +3,7 @@ import https from 'https';
 import { query } from '../db.js';
 import { getTrailingVwapStd } from '../services/queries.js';
 import { matchPermissionSlips } from '../services/permissionSlip.js';
+import { getLatestBars } from '../services/priceRetrieval.js';
 import { checkFadeAgainstBigMoveExit } from './acd.js';
 
 const edgesHistoryCache = new Map();
@@ -1697,12 +1698,12 @@ router.get('/antigravity/exhaustion', async (req, res) => {
     const timestamp = `${String(nowET.getHours()).padStart(2,'0')}:${String(nowET.getMinutes()).padStart(2,'0')}:${String(nowET.getSeconds()).padStart(2,'0')}`;
 
     // Get last 15 bars
-    const barsQ = await query(`
-      SELECT ts, (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
-        open::float, high::float, low::float, close::float, volume::bigint as vol
-      FROM price_bars_primary WHERE symbol='NQ' AND ts::date >= CURRENT_DATE - 5 ORDER BY ts DESC LIMIT 15
-    `);
-    const bars = barsQ.rows.reverse();
+    const barsDesc = await getLatestBars('NQ', {
+      limit: 15,
+      columns: `(EXTRACT(hour FROM ts::timestamp)*60+EXTRACT(minute FROM ts::timestamp))::int as et_min,
+        open::float, high::float, low::float, close::float, volume::bigint as vol`,
+    }, 'antigravity.exhaustion');
+    const bars = barsDesc.slice().reverse();
     if (bars.length < 10) return res.json({ signals: [], timestamp });
 
     const currentPrice = bars[bars.length - 1].close;
