@@ -1143,7 +1143,16 @@ async function openSessionTrendHistoryModal() {
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
   try {
-    const data = await fetch('/api/morning-brief/session-trend-history/' + todayET()).then(r => r.json());
+    // Check response.ok/body-present BEFORE calling .json() -- a truncated/empty response
+    // (e.g. a request landing mid-server-restart) throws "Unexpected end of JSON input" from
+    // .json() itself, which is a confusing raw error to show; this gives a real, retriable
+    // message instead. Found live 2026-09-15 (user report) -- most likely cause was several
+    // dev-server restarts happening in quick succession while this feature was being built.
+    const resp = await fetch('/api/morning-brief/session-trend-history/' + todayET());
+    if (!resp.ok) throw new Error('Server returned ' + resp.status + ' — try again in a moment.');
+    const text = await resp.text();
+    if (!text) throw new Error('Empty response — the server may have just restarted. Try again.');
+    const data = JSON.parse(text);
     if (data.noData || !data.history?.length) {
       html = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Session trend history — ' + todayET() + '</span>' +
         '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
