@@ -10,8 +10,21 @@ echo "=== Daily calibration: $(date) ==="
 
 # Refresh the materialized historical bar store (2026-07-27, price_bars_primary_materialize_historical_bars)
 # first, so today's now-closed session becomes part of the fast indexed path before the
-# calibration scripts below query it. ~8s, non-blocking (CONCURRENTLY).
+# calibration scripts below query it. ~8s, non-blocking (CONCURRENTLY). Also reconciles
+# price_bars_contract_calendar over a 45-day window right before the freeze (Tier 2 of the
+# 2026-09-15 contract-calendar fix, OPEN_DECISION contract_calendar_roll_race_stale_price_20260915).
+
 /usr/bin/node scripts/refresh_price_bars_dedup_hist.mjs
+
+# NQ contract-roll health check (2026-09-15, T3-c per OPUS_AUDIT_PROMPT_13's strategic review
+# of the contract-calendar fix, scratch/opus_audit_13_results.md) -- runs right after the
+# reconcile above so it's checking the calendar's post-reconcile state. Daily, not weekly
+# (unlike data_sanity_audit.mjs, which has this same check but only runs weekly) -- a real
+# roll's overlap window can span 12+ days, so a weekly-only cadence could let several days of
+# wrong-calendar corruption accumulate before being caught. Non-gating here, same convention
+# as test_invariants.mjs/data_sanity_audit.mjs below -- read the output, don't treat exit
+# code as build-breaking in this cron.
+/usr/bin/node scripts/check_contract_roll_health.mjs
 
 /usr/bin/node scripts/backfill_mae_mfe.mjs
 

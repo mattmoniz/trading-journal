@@ -19,6 +19,7 @@
 
 import { query } from '../server/db.js';
 import { LIVE_INSTRUMENT } from '../server/config/instruments.js';
+import { checkContractRollHealth } from './lib/contractRollHealth.mjs';
 
 const MIN_N = 20; // CLAUDE.md hard floor -- don't flag a setup_type on thin data
 let anomalyCount = 0;
@@ -205,6 +206,35 @@ console.log('\n[5] price_bars_primary multi-day gap check (NQ)');
       flag(`Gap ${row.gap_start.toISOString()} → ${row.gap_end.toISOString()} (${Number(row.gap_hours).toFixed(1)}h, no bars at all in between, vs a normal-closure ceiling of ~${cutoffHours.toFixed(0)}h) — any trend/move/regime detector scanning across this window will silently bridge the void and misread it as continuous price action`);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Check 6: NQ contract-roll health (price_bars_contract_calendar vs real volume).
+// Added 2026-09-15 after a real incident: the September quarterly roll produced a
+// wrong contract-calendar entry that made a real trading day's bars silently vanish
+// from price_bars_primary, causing two real STOP_HIT losses against a fictitious
+// price (see OPEN_DECISION contract_calendar_roll_race_stale_price_20260915, fixed
+// same day) and OPUS_AUDIT_PROMPT_13's strategic review of that fix (scratch/
+// opus_audit_13_results.md). Check [5] above could NOT have caught this -- its
+// cutoff floor (120h) is deliberately calibrated to ignore normal weekend/holiday
+// closures, and a single vanished trading day produces a gap of only ~24-48h,
+// structurally below that floor. This is a differently-shaped check, not a retune
+// of [5]. The actual queries live in scripts/lib/contractRollHealth.mjs (shared
+// with scripts/check_contract_roll_health.mjs, which runs this same check DAILY via
+// run_daily_calibration.sh -- a roll's real overlap window can span 12+ days, so a
+// weekly-only cadence could let several days of wrong-calendar corruption
+// accumulate before this script ever runs again).
+// ---------------------------------------------------------------------------
+console.log('\n[6] NQ contract-roll health (price_bars_contract_calendar vs real volume)');
+{
+  const { flagged, info } = await checkContractRollHealth('NQ', 45);
+  if (flagged.length === 0) {
+    ok('No vanished trading days or calendar/volume disagreements in the last 45 days');
+  } else {
+    for (const f of flagged) flag(f.message);
+  }
+  for (const i of info) console.log(`  ℹ️  ${i.message}`);
+  if (info.length === 0) console.log('  ℹ️  No dual-contract overlap (both holding >5% of a day\'s volume) in the last 45 days');
 }
 
 console.log('\n' + '='.repeat(80));

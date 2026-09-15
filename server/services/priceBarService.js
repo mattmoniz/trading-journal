@@ -137,20 +137,41 @@ function parseLine(line, contract, symbol) {
 // disagree about which contract a boundary date belongs to" continuity gap (the matview only
 // ever reflects the calendar as of its own last refresh), rather than leaving it to whichever
 // bar file happens to be re-ingested next.
+//
+// RANKING FIXED 2026-09-15 (same day, OPUS_AUDIT_PROMPT_13 strategic review of this exact
+// fix, scratch/opus_audit_13_results.md): ranking by COUNT(*) is a saturating, low-resolution
+// proxy -- once the new contract is even modestly liquid it prints in nearly every minute of
+// the session, so both contracts' bar counts converge toward the same ~full-session count and
+// the real decision gets made on a residual difference of a handful of bars, dominated by
+// file-ingestion timing rather than market reality. `volume` is ingested on every bar and is
+// never used for contract selection anywhere else in this codebase -- it differs between front
+// and back month by orders of magnitude through the whole overlap and crosses over once,
+// sharply, at the real roll. Ranking on SUM(volume) first makes the tie-break below nearly
+// unreachable instead of arbitrating it. Also flips the tie-break from `contract ASC` to
+// `contract DESC`: Opus's audit found `contract ASC` (the original Tier 1 choice) is a pure
+// alphabetic sort that happens to favor the EXPIRING contract in 3 of 4 NQ rolls per year
+// (H<M<U<Z, and the roll sequence is H->M->U->Z->H) -- including the exact Sep->Dec roll that
+// produced this whole incident. `contract DESC` gets that one right; note there is no single
+// lexical tie-break that's correct across every year boundary (Dec->Mar wraps Z->H), which is
+// itself the argument for making volume the primary key and leaving contract as a
+// near-unreachable last resort. day_volume is stored alongside bar_count so the calendar is
+// self-explaining (why this contract, by how much) without re-deriving it.
 export async function reconcileContractCalendar(symbol, dateFrom, dateTo) {
   await query(`
-    INSERT INTO price_bars_contract_calendar (symbol, trade_date, contract, bar_count)
-    SELECT symbol, trade_date, contract, bar_count FROM (
-      SELECT symbol, ts::date AS trade_date, contract, COUNT(*) AS bar_count,
-        ROW_NUMBER() OVER (PARTITION BY symbol, ts::date ORDER BY COUNT(*) DESC, contract ASC) AS rn
+    INSERT INTO price_bars_contract_calendar (symbol, trade_date, contract, bar_count, day_volume)
+    SELECT symbol, trade_date, contract, bar_count, day_volume FROM (
+      SELECT symbol, ts::date AS trade_date, contract,
+        COUNT(*) AS bar_count, SUM(volume) AS day_volume,
+        ROW_NUMBER() OVER (PARTITION BY symbol, ts::date ORDER BY SUM(volume) DESC, COUNT(*) DESC, contract DESC) AS rn
       FROM price_bars
       WHERE symbol = $1 AND ts::date >= $2::date AND ts::date <= $3::date
       GROUP BY symbol, ts::date, contract
     ) ranked WHERE rn = 1
     ON CONFLICT (symbol, trade_date) DO UPDATE
-      SET contract = EXCLUDED.contract, bar_count = EXCLUDED.bar_count
+      SET contract = EXCLUDED.contract, bar_count = EXCLUDED.bar_count, day_volume = EXCLUDED.day_volume
       WHERE price_bars_contract_calendar.contract IS DISTINCT FROM EXCLUDED.contract
          OR price_bars_contract_calendar.bar_count IS DISTINCT FROM EXCLUDED.bar_count
+         OR price_bars_contract_calendar.day_volume IS DISTINCT FROM EXCLUDED.day_volume
   `, [symbol, dateFrom, dateTo]);
 }
 
