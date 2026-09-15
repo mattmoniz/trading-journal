@@ -1341,28 +1341,38 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     const weekStart = new Date(nowET);
     weekStart.setDate(weekStart.getDate() - dow);
     const weekStartET = weekStart.toLocaleDateString('en-CA');
+    // YTD added 2026-09-14 (user request) -- Jan 1 of the current ET year. Since YTD ⊇ week ⊇
+    // today, widening each query's own lower bound to yearStartET (instead of weekStartET) lets
+    // ONE fetch per mechanism cover all three periods; today/week/ytd are then just different JS
+    // filters over the same rows, same pattern the today-vs-week split already used.
+    const yearStartET = `${nowET.getFullYear()}-01-01`;
 
     const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ] = await Promise.all([
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, momentum_against_fade_shadow
              FROM active_setups WHERE momentum_against_fade_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
              FROM active_setups WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
              FROM active_setups WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [weekStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
     ]);
 
+    function periodFilter(r, period) {
+      if (period === 'today') return r.trade_date === todayET;
+      if (period === 'week') return r.trade_date >= weekStartET;
+      return true; // 'ytd' -- already bounded by the query itself
+    }
     function gateStat(rows, flagCheck, period) {
       const scoped = rows
-        .filter(r => period === 'today' ? r.trade_date === todayET : true)
+        .filter(r => periodFilter(r, period))
         .filter(flagCheck);
       const n = scoped.length;
       const netIfHonored = scoped.reduce((s, r) => s - r.actual_pnl, 0); // hypothetical=0 -> delta = -actual
@@ -1370,7 +1380,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
     }
     function altExitStat(rows, hypGetter, period, extraFilter) {
-      let scoped = rows.filter(r => period === 'today' ? r.trade_date === todayET : true);
+      let scoped = rows.filter(r => periodFilter(r, period));
       if (extraFilter) scoped = scoped.filter(extraFilter);
       scoped = scoped.filter(r => hypGetter(r) != null);
       const n = scoped.length;
@@ -1387,7 +1397,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     const pitchCatchHyp = r => r.pitch_catch_shadow?.hypothetical_pnl != null ? Number(r.pitch_catch_shadow.hypothetical_pnl) : null;
 
     const mechanisms = {};
-    for (const period of ['today', 'week']) {
+    for (const period of ['today', 'week', 'ytd']) {
       mechanisms[period] = {
         dirGate: gateStat(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true, period),
         momFade: gateStat(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true, period),
@@ -1407,9 +1417,9 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       }
       return lines.join('\n');
     }
-    const summary_text = fmtBlock('today', 'Loss Prevention — Today') + '\n' + fmtBlock('week', 'Loss Prevention — This Week');
+    const summary_text = fmtBlock('today', 'Loss Prevention — Today') + '\n' + fmtBlock('week', 'Loss Prevention — This Week') + '\n' + fmtBlock('ytd', 'Loss Prevention — YTD');
 
-    res.json({ asOf: new Date().toISOString(), todayET, weekStartET, mechanisms, labels: LABELS, summary_text });
+    res.json({ asOf: new Date().toISOString(), todayET, weekStartET, yearStartET, mechanisms, labels: LABELS, summary_text });
   } catch (err) {
     console.error('[setups/loss-prevention-summary]', err.message);
     res.status(500).json({ error: err.message });

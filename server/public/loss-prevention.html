@@ -77,6 +77,7 @@
 
 <div id="today-section"></div>
 <div id="week-section"></div>
+<div id="ytd-section"></div>
 
 <script>
 const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll' };
@@ -112,9 +113,10 @@ function renderPeriod(containerId, title, mechs) {
 async function load() {
   try {
     const data = await fetch('/api/setups/loss-prevention-summary').then(r => r.json());
-    document.getElementById('asof').textContent = 'Last updated ' + new Date(data.asOf).toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET · week since ' + data.weekStartET;
+    document.getElementById('asof').textContent = 'Last updated ' + new Date(data.asOf).toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET · week since ' + data.weekStartET + ' · YTD since ' + data.yearStartET;
     renderPeriod('today-section', 'Today (' + data.todayET + ')', data.mechanisms.today);
     renderPeriod('week-section', 'This week', data.mechanisms.week);
+    renderPeriod('ytd-section', 'Year to date', data.mechanisms.ytd);
   } catch (e) { /* keep last good render */ }
 }
 
