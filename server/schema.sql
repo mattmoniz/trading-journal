@@ -6415,6 +6415,55 @@ CREATE MATERIALIZED VIEW public.price_bars_dedup_hist AS
 
 
 --
+-- Name: price_bars_dedup_hist_v2; Type: MATERIALIZED VIEW; Schema: public; Owner: -
+--
+
+CREATE MATERIALIZED VIEW public.price_bars_dedup_hist_v2 AS
+ WITH day_rank AS (
+         SELECT price_bars.symbol,
+            (price_bars.ts)::date AS d,
+            price_bars.contract,
+            row_number() OVER (PARTITION BY price_bars.symbol, ((price_bars.ts)::date) ORDER BY (sum(price_bars.volume)) DESC, (count(*)) DESC, price_bars.contract DESC) AS rn
+           FROM public.price_bars
+          WHERE ((price_bars.ts)::date < CURRENT_DATE)
+          GROUP BY price_bars.symbol, ((price_bars.ts)::date), price_bars.contract
+        ), agg AS (
+         SELECT pb.symbol,
+            pb.contract,
+            date_trunc('minute'::text, pb.ts) AS ts,
+            ((array_agg(pb.open ORDER BY pb.ts))[1])::numeric(12,4) AS open,
+            (max(pb.high))::numeric(12,4) AS high,
+            (min(pb.low))::numeric(12,4) AS low,
+            ((array_agg(pb.close ORDER BY pb.ts DESC))[1])::numeric(12,4) AS close,
+            (sum(pb.volume))::integer AS volume,
+            (sum(pb.num_trades))::integer AS num_trades,
+            (sum(pb.bid_volume))::integer AS bid_volume,
+            (sum(pb.ask_volume))::integer AS ask_volume,
+            (array_agg(pb.id ORDER BY pb.ts))[1] AS id
+           FROM public.price_bars pb
+          WHERE ((pb.ts)::date < CURRENT_DATE)
+          GROUP BY pb.symbol, pb.contract, (date_trunc('minute'::text, pb.ts))
+        )
+ SELECT DISTINCT ON (a.symbol, a.ts) a.id,
+    a.symbol,
+    a.contract,
+    a.ts,
+    a.open,
+    a.high,
+    a.low,
+    a.close,
+    a.volume,
+    a.num_trades,
+    a.bid_volume,
+    a.ask_volume
+   FROM ((agg a
+     LEFT JOIN public.price_bars_contract_calendar cc ON (((cc.symbol = a.symbol) AND (cc.trade_date = (a.ts)::date))))
+     LEFT JOIN day_rank dr ON (((dr.symbol = a.symbol) AND (dr.d = (a.ts)::date) AND (dr.contract = a.contract))))
+  ORDER BY a.symbol, a.ts, (a.contract = cc.contract) DESC NULLS LAST, COALESCE(dr.rn, (2147483647)::bigint), a.contract DESC
+  WITH NO DATA;
+
+
+--
 -- Name: price_bars_primary; Type: VIEW; Schema: public; Owner: -
 --
 
@@ -10017,6 +10066,13 @@ CREATE UNIQUE INDEX idx_pbdh_symbol_contract_ts ON public.price_bars_dedup_hist 
 --
 
 CREATE INDEX idx_pbdh_symbol_ts ON public.price_bars_dedup_hist USING btree (symbol, ts);
+
+
+--
+-- Name: idx_pbdh_v2_symbol_ts; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX idx_pbdh_v2_symbol_ts ON public.price_bars_dedup_hist_v2 USING btree (symbol, ts);
 
 
 --

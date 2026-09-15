@@ -27,6 +27,24 @@ async function main() {
   const t1 = Date.now();
   await query(`REFRESH MATERIALIZED VIEW CONCURRENTLY price_bars_dedup_hist`);
   console.log(`Refreshed price_bars_dedup_hist in ${Date.now() - t1}ms`);
+
+  // price_bars_dedup_hist_v2 (the fail-soft historical view, OPEN_DECISION
+  // contract_calendar_failsoft_join_20260915 / "T3-b") -- built 2026-09-15, not yet cut over
+  // live. FIXED same day per DeepSeek code review (scratch/deepseek_response.md): the migration
+  // script's own header used to claim v2 was "refreshed" with no ongoing mechanism actually
+  // doing so -- refreshing it here, alongside v1, means it stays ready for the eventual weekend
+  // cutover instead of silently going stale. Harmless no-op cost today (v2 isn't read by
+  // anything live yet); becomes load-bearing the moment cutover_price_bars_failsoft_join_
+  // 20260915.mjs actually runs. Uses `IF EXISTS`-style safety via a catch, not a hard
+  // dependency -- if v2 is ever dropped (e.g. after a decision NOT to cut over), this shouldn't
+  // break the nightly cron for v1.
+  try {
+    const t2 = Date.now();
+    await query(`REFRESH MATERIALIZED VIEW CONCURRENTLY price_bars_dedup_hist_v2`);
+    console.log(`Refreshed price_bars_dedup_hist_v2 in ${Date.now() - t2}ms`);
+  } catch (e) {
+    console.log(`price_bars_dedup_hist_v2 refresh skipped (${e.message}) -- not yet built or already dropped, not fatal to this cron.`);
+  }
   process.exit(0);
 }
 
