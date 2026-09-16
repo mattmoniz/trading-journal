@@ -66,7 +66,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet } from './acdShared.js';
 
 // EARNED literals below -- each was chosen from a real parameter sweep tested against
 // real-stop/target EV (not guessed), same category as majorPivotDefendedBreakDetector.js's
@@ -139,8 +139,9 @@ const QUIET_THRESHOLD_CACHE_TTL_MS = 20 * 60 * 60 * 1000; // ~daily -- this is a
 
 function isGlobexMod(mod) { return mod >= 1080 || mod < 510; } // matches every other detector's boundary this session
 
-// getNqRollWeekDates now imported from acdShared.js (2026-09-14 dedup -- was a local copy,
-// identical to majorPivotDefendedBreakDetector.js's own former local copy).
+// getNqRollWeekDates/bucketTo5mBars/buildRollWeekDateSet all now imported from acdShared.js
+// (2026-09-14/15 dedup, OPEN_DECISION defended_level_plumbing_dedup_20260915 -- see
+// acdShared.js's own header comment for the full plumbing-consolidation account).
 
 // Same corrected 5-min-bucket volume baseline built and validated the same session (a scale
 // mismatch against touchQuality.js's 1-min-bar getVolumeBaseline() was caught and fixed) --
@@ -179,16 +180,7 @@ export async function getRollingQuietThreshold() {
   const rows1m = res.rows;
   if (rows1m.length < 50) return cacheSet(QUIET_THRESHOLD_CACHE_KEY, STALL_RANGE_ATR_FRAC_FALLBACK, QUIET_THRESHOLD_CACHE_TTL_MS);
 
-  const bars5m = [];
-  let cur = null;
-  for (const row of rows1m) {
-    const minPart = parseInt(row.t.substring(14, 16), 10);
-    const bucketMin = Math.floor(minPart / 5) * 5;
-    const bucketStr = row.t.substring(0, 14) + bucketMin.toString().padStart(2, '0') + ':00';
-    if (!cur || cur.tsStr !== bucketStr) { if (cur) bars5m.push(cur); cur = { tsStr: bucketStr, dateStr: row.t.slice(0, 10), high: row.high, low: row.low }; }
-    else { cur.high = Math.max(cur.high, row.high); cur.low = Math.min(cur.low, row.low); }
-  }
-  if (cur) bars5m.push(cur);
+  const bars5m = bucketTo5mBars(rows1m, { tsField: 't' });
 
   const atrCache = new Map();
   async function atrFor(dateStr) { if (!atrCache.has(dateStr)) atrCache.set(dateStr, getRollingATR(dateStr)); return atrCache.get(dateStr); }
@@ -237,22 +229,10 @@ export async function computeStallDefendedLevelSignals() {
   const bars1m = barsRes.rows;
   if (bars1m.length < 50) return [];
 
-  const bars5m = [];
-  let cur = null;
-  for (const row of bars1m) {
-    const tsStr = row.tc;
-    const minPart = parseInt(tsStr.substring(14, 16), 10);
-    const bucketMin = Math.floor(minPart / 5) * 5;
-    const bucketStr = tsStr.substring(0, 14) + bucketMin.toString().padStart(2, '0') + ':00';
-    if (!cur || cur.tsStr !== bucketStr) { if (cur) bars5m.push(cur); cur = { tsStr: bucketStr, dateStr: row.d, high: row.high, low: row.low, close: row.close, vol: row.vol }; }
-    else { cur.high = Math.max(cur.high, row.high); cur.low = Math.min(cur.low, row.low); cur.close = row.close; cur.vol += row.vol; }
-  }
-  if (cur) bars5m.push(cur);
+  const bars5m = bucketTo5mBars(bars1m, { trackVol: true });
   if (bars5m.length < SWING_WIDTH * 2 + STALL_BARS) return [];
 
-  const rollDates = new Set();
-  const years = new Set(bars5m.map(b => parseInt(b.dateStr.slice(0, 4), 10)));
-  for (const y of years) for (const d of getNqRollWeekDates(y)) rollDates.add(d);
+  const rollDates = buildRollWeekDateSet(bars5m);
 
   const { highs, lows } = findSwingPoints(bars5m, SWING_WIDTH);
   const highPivots = highs.filter(p => !rollDates.has(bars5m[p.idx].dateStr)).sort((a, b) => a.idx - b.idx);

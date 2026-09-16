@@ -85,7 +85,7 @@ import { findSwingPoints } from './swingPivots.js';
 import { getVolumeBaseline } from './touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance } from './acdShared.js';
 
 const SWING_WIDTH = 5;
 // Light pre-filter sitting in front of the order-flow signature -- see file header for why
@@ -154,28 +154,10 @@ export async function computeMinorDefendedLevelSignals() {
   const bars1m = barsRes.rows;
   if (bars1m.length < 50) return [];
 
-  const bars5m = [];
-  const map5mEnd1mIdx = [];
-  let cur = null;
-  for (let i = 0; i < bars1m.length; i++) {
-    const row = bars1m[i];
-    const tsStr = row.tc;
-    const minPart = parseInt(tsStr.substring(14, 16), 10);
-    const bucketMin = Math.floor(minPart / 5) * 5;
-    const bucketStr = tsStr.substring(0, 14) + bucketMin.toString().padStart(2, '0') + ':00';
-    if (!cur || cur.tsStr !== bucketStr) {
-      if (cur) { bars5m.push(cur); map5mEnd1mIdx.push(i - 1); }
-      cur = { tsStr: bucketStr, dateStr: row.d, open: row.open, high: row.high, low: row.low, close: row.close };
-    } else {
-      cur.high = Math.max(cur.high, row.high); cur.low = Math.min(cur.low, row.low); cur.close = row.close;
-    }
-  }
-  if (cur) { bars5m.push(cur); map5mEnd1mIdx.push(bars1m.length - 1); }
+  const { bars5m, map5mEnd1mIdx } = bucketTo5mBars(bars1m, { trackOpen: true, trackEndIdx: true });
   if (bars5m.length < SWING_WIDTH * 2 + 5) return [];
 
-  const rollDates = new Set();
-  const years = new Set(bars5m.map(b => parseInt(b.dateStr.slice(0, 4), 10)));
-  for (const y of years) for (const d of getNqRollWeekDates(y)) rollDates.add(d);
+  const rollDates = buildRollWeekDateSet(bars5m);
 
   const atrCache = new Map();
   const uniqueDates = Array.from(new Set(bars5m.map(b => b.dateStr)));
@@ -188,23 +170,12 @@ export async function computeMinorDefendedLevelSignals() {
   const merged = [...highs.map(p => ({ ...p, type: 'HIGH' })), ...lows.map(p => ({ ...p, type: 'LOW' }))].sort((a, b) => a.idx - b.idx);
 
   // ZigZag acceptance at ZIGZAG_THRESHOLD -- a light pre-screen in front of the order-flow
-  // signature, not a replacement for it (see file header). Copied verbatim from
-  // majorPivotDefendedBreakDetector.js's own acceptance logic, just at a much lower threshold.
-  const accepted = [];
-  let lastAccepted = null;
-  for (const p of merged) {
-    if (rollDates.has(bars5m[p.idx].dateStr)) continue;
-    if (!lastAccepted) { lastAccepted = p; accepted.push(p); continue; }
-    const atr = atrCache.get(bars5m[p.idx].dateStr);
-    if (atr == null) continue;
-    if (p.type === lastAccepted.type) {
-      if ((p.type === 'HIGH' && p.price > lastAccepted.price) || (p.type === 'LOW' && p.price < lastAccepted.price)) {
-        lastAccepted = p; accepted[accepted.length - 1] = p;
-      }
-      continue;
-    }
-    if (Math.abs(p.price - lastAccepted.price) >= ZIGZAG_THRESHOLD * atr) { accepted.push(p); lastAccepted = p; }
-  }
+  // signature, not a replacement for it (see file header). Shared with
+  // majorPivotDefendedBreakDetector.js via acdShared.js's walkZigZagAcceptance(), just at a
+  // much lower threshold and against this file's own full-day ATR (pre-populated atrCache,
+  // wrapped as a trivially-resolving async getter to match the shared function's injected-
+  // resolver contract).
+  const accepted = await walkZigZagAcceptance(merged, bars5m, rollDates, ZIGZAG_THRESHOLD, (idx) => atrCache.get(bars5m[idx].dateStr));
 
   // No roll-week re-check needed here (DeepSeek review, 2026-09-15) -- the acceptance loop
   // above already excludes any pivot whose own idx date is a roll week, so `accepted` can

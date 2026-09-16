@@ -56,7 +56,7 @@ import { getRollingATR } from './levelProximityService.js';
 import { findSwingPoints } from './swingPivots.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
+import { dropToTimeline, etNaiveTimestampToMs, bucketTo5mBars, buildRollWeekDateSet, walkZigZagAcceptance } from './acdShared.js';
 
 const SWING_WIDTH = 5;
 const ZIGZAG_THRESHOLD = 1.5; // x ATR20 -- confirmed sweet spot, both configs peak here
@@ -90,8 +90,9 @@ function isGlobexMod(mod) {
   return mod >= 1080 || mod < 510;
 }
 
-// getNqRollWeekDates now imported from acdShared.js (2026-09-14 dedup -- was a local copy,
-// identical to stallDefendedLevelDetector.js's own former local copy).
+// getNqRollWeekDates/bucketTo5mBars/buildRollWeekDateSet/walkZigZagAcceptance all now imported
+// from acdShared.js (2026-09-14/15 dedup, OPEN_DECISION defended_level_plumbing_dedup_20260915
+// — see acdShared.js's own header comment for the full plumbing-consolidation account).
 
 // Re-derives the full defended-break zone state from the last LOOKBACK_DAYS of 5-min bars.
 // Returns the list of confirmed breaks (streak>=1) found anywhere in that window -- the caller
@@ -109,29 +110,10 @@ export async function computeDefendedBreaks() {
   const bars1m = barsRes.rows;
   if (bars1m.length < 50) return [];
 
-  const bars5m = [];
-  let cur = null;
-  for (let i = 0; i < bars1m.length; i++) {
-    const row = bars1m[i];
-    const tsStr = row.tc;
-    const minPart = parseInt(tsStr.substring(14, 16), 10);
-    const bucketMin = Math.floor(minPart / 5) * 5;
-    const bucketStr = tsStr.substring(0, 14) + bucketMin.toString().padStart(2, '0') + ':00';
-    if (!cur || cur.tsStr !== bucketStr) {
-      if (cur) bars5m.push(cur);
-      cur = { tsStr: bucketStr, dateStr: row.d, open: row.open, high: row.high, low: row.low, close: row.close };
-    } else {
-      cur.high = Math.max(cur.high, row.high);
-      cur.low = Math.min(cur.low, row.low);
-      cur.close = row.close;
-    }
-  }
-  if (cur) bars5m.push(cur);
+  const bars5m = bucketTo5mBars(bars1m, { trackOpen: true });
   if (bars5m.length < SWING_WIDTH * 2 + 5) return [];
 
-  const rollDates = new Set();
-  const years = new Set(bars5m.map(b => parseInt(b.dateStr.slice(0, 4), 10)));
-  for (const y of years) for (const d of getNqRollWeekDates(y)) rollDates.add(d);
+  const rollDates = buildRollWeekDateSet(bars5m);
 
   const { highs, lows } = findSwingPoints(bars5m, SWING_WIDTH);
   const merged = [...highs.map(p => ({ ...p, type: 'HIGH' })), ...lows.map(p => ({ ...p, type: 'LOW' }))].sort((a, b) => a.idx - b.idx);
@@ -146,19 +128,7 @@ export async function computeDefendedBreaks() {
   for (const d of uniqueDates) { if (!atrCache.has(d)) atrCache.set(d, getRollingATR(d)); }
   await Promise.all(Array.from(atrCache.values()));
 
-  const accepted = [];
-  let last = null;
-  for (const p of merged) {
-    if (rollDates.has(bars5m[p.idx].dateStr)) continue;
-    if (!last) { last = p; accepted.push(p); continue; }
-    const atr = await atrFor(p.idx);
-    if (atr == null) continue;
-    if (p.type === last.type) {
-      if ((p.type === 'HIGH' && p.price > last.price) || (p.type === 'LOW' && p.price < last.price)) { last = p; accepted[accepted.length - 1] = p; }
-      continue;
-    }
-    if (Math.abs(p.price - last.price) >= ZIGZAG_THRESHOLD * atr) { accepted.push(p); last = p; }
-  }
+  const accepted = await walkZigZagAcceptance(merged, bars5m, rollDates, ZIGZAG_THRESHOLD, atrFor);
 
   const completedBreaks = [];
   for (const pivot of accepted) {

@@ -356,6 +356,93 @@ export function getNqRollWeekBounds(dateStr) {
   return null;
 }
 
+// ── Defended-level detector plumbing (shared) ────────────────────────────────
+// Extracted 2026-09-15 (OPEN_DECISION defended_level_plumbing_dedup_20260915, scoped by a
+// DeepSeek design critique after rejecting a full merge of majorPivotDefendedBreakDetector.js/
+// stallDefendedLevelDetector.js/minorDefendedLevelDetector.js). Deliberately narrow — this is
+// bug-class hygiene on plumbing that is NOT trade-shape logic, not a performance change. The
+// touch/deny/break state machines (semantically inverse between MAJOR and MINOR), the
+// roll-week POLICY (continue-vs-break genuinely differs per detector and is correct as-is),
+// and every exit config (stop/target/hold) all stay exactly where they were, per the critique's
+// explicit scope. Verified byte-for-byte against each detector's own prior inline version
+// before switching over (same discipline as every other extraction in this codebase).
+
+// Buckets 1-minute bars into 5-minute OHLC bars. All 4 prior inline copies (major, minor, and
+// stall's two — computeStallDefendedLevelSignals and getRollingQuietThreshold) shared this
+// exact bucket-boundary/dateStr math and differed only in which extra fields they carried:
+// `tsField` picks the input timestamp column name (major/minor/stall's signal path use `tc`,
+// stall's getRollingQuietThreshold uses `t`); `trackOpen` carries `open` (needed by major/minor
+// for their touch state machine's `bar.open` fallback on the very first bar); `trackVol` sums a
+// per-bar `vol` field (stall's signal path only); `trackEndIdx` also returns a parallel
+// map5mEnd1mIdx array pointing each 5m bar at its last constituent 1m bar's index (minor's own
+// order-flow walk-back, the only caller that needs 1m granularity after bucketing). `close` is
+// always tracked — used by 3 of 4 callers, a harmless unused property on the 4th
+// (getRollingQuietThreshold never selects a close column, so it lands as undefined there,
+// exactly as it was simply absent before this extraction).
+export function bucketTo5mBars(bars1m, { tsField = 'tc', trackOpen = false, trackVol = false, trackEndIdx = false } = {}) {
+  const bars5m = [];
+  const map5mEnd1mIdx = trackEndIdx ? [] : null;
+  let cur = null;
+  for (let i = 0; i < bars1m.length; i++) {
+    const row = bars1m[i];
+    const tsStr = row[tsField];
+    const minPart = parseInt(tsStr.substring(14, 16), 10);
+    const bucketMin = Math.floor(minPart / 5) * 5;
+    const bucketStr = tsStr.substring(0, 14) + bucketMin.toString().padStart(2, '0') + ':00';
+    if (!cur || cur.tsStr !== bucketStr) {
+      if (cur) { bars5m.push(cur); if (trackEndIdx) map5mEnd1mIdx.push(i - 1); }
+      cur = { tsStr: bucketStr, dateStr: tsStr.slice(0, 10), high: row.high, low: row.low, close: row.close };
+      if (trackOpen) cur.open = row.open;
+      if (trackVol) cur.vol = row.vol;
+    } else {
+      cur.high = Math.max(cur.high, row.high);
+      cur.low = Math.min(cur.low, row.low);
+      cur.close = row.close;
+      if (trackVol) cur.vol += row.vol;
+    }
+  }
+  if (cur) { bars5m.push(cur); if (trackEndIdx) map5mEnd1mIdx.push(bars1m.length - 1); }
+  return trackEndIdx ? { bars5m, map5mEnd1mIdx } : bars5m;
+}
+
+// Builds the Set of roll-week date strings (YYYY-MM-DD) spanning every calendar year present
+// in `bars5m` — identical 2-line loop previously duplicated in major/minor/stall's
+// computeStallDefendedLevelSignals. Requires each bar to carry a `.dateStr`, which
+// bucketTo5mBars() above always sets.
+export function buildRollWeekDateSet(bars5m) {
+  const rollDates = new Set();
+  const years = new Set(bars5m.map(b => parseInt(b.dateStr.slice(0, 4), 10)));
+  for (const y of years) for (const d of getNqRollWeekDates(y)) rollDates.add(d);
+  return rollDates;
+}
+
+// ZigZag pivot-acceptance walk shared by majorPivotDefendedBreakDetector.js and
+// minorDefendedLevelDetector.js (each at its own ZIGZAG_THRESHOLD). Takes `atrFor(idx)` as an
+// injected async resolver rather than hardcoding an ATR source — MAJOR uses RTH-only
+// getRollingATR, MINOR uses full-day getFullDayATR, deliberately NOT interchangeable (a shared
+// function that assumed one would silently break the other). `merged` is the combined,
+// idx-sorted swing-point list (findSwingPoints output, HIGH+LOW merged); `bars5m` supplies each
+// point's dateStr for the roll-week check; `rollDates` is buildRollWeekDateSet()'s output.
+// Accepts the first non-roll-week point unconditionally, extends the run when a same-type point
+// makes a new extreme, and accepts an opposite-type point once it clears `threshold * atr` from
+// the last accepted point.
+export async function walkZigZagAcceptance(merged, bars5m, rollDates, threshold, atrFor) {
+  const accepted = [];
+  let last = null;
+  for (const p of merged) {
+    if (rollDates.has(bars5m[p.idx].dateStr)) continue;
+    if (!last) { last = p; accepted.push(p); continue; }
+    const atr = await atrFor(p.idx);
+    if (atr == null) continue;
+    if (p.type === last.type) {
+      if ((p.type === 'HIGH' && p.price > last.price) || (p.type === 'LOW' && p.price < last.price)) { last = p; accepted[accepted.length - 1] = p; }
+      continue;
+    }
+    if (Math.abs(p.price - last.price) >= threshold * atr) { accepted.push(p); last = p; }
+  }
+  return accepted;
+}
+
 // Drops an active_setups row into trade_timeline_events (idempotent via ON CONFLICT).
 // event_time = fired_at (never current timestamp — per spec).
 export async function dropToTimeline(setup) {
