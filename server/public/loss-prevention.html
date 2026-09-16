@@ -82,16 +82,24 @@
 <script>
 // KEEP IN SYNC with server/routes/setups.js's own LABELS object (loss-prevention-summary
 // endpoint) -- a key present in the API response but missing here renders as `undefined`.
-const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop' };
+const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S' };
+// KEEP IN SYNC with server/routes/setups.js's own LABELS const (loss-prevention-summary) -- same
+// duplication-across-a-static-page convention as MarketPulseBar.jsx/quick-check.html's colors.
 
 function fmtMoney(n) { return (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(0); }
 
-function renderPeriod(containerId, title, mechs) {
+// `combined` comes from the backend's own deduplicated total (server/routes/setups.js's
+// combinedStat()), NOT a naive sum of each mechanism's own lossPrevented/N here -- found
+// 2026-09-16 (user-caught live): a trade flagged by 2+ mechanisms at once (confirmed common --
+// DirGate/MomFade/EntryFlow-S all read closely related "against the trend" signals off the
+// SAME trades) was getting its one real prevented loss counted once per mechanism that flagged
+// it. A naive frontend sum here would silently reintroduce that exact bug the moment anyone
+// touched this file again -- the dedup MUST happen server-side, where the raw per-trade ids
+// are still available; by the time `mechs` reaches this function, that information is gone.
+function renderPeriod(containerId, title, mechs, combined) {
   const el = document.getElementById(containerId);
-  let totalPrevented = 0, totalNet = 0, totalN = 0;
   let html = '<div class="period-head">' + title + '</div>';
   for (const [key, s] of Object.entries(mechs)) {
-    totalPrevented += s.lossPrevented; totalNet += s.netIfHonored; totalN += s.n;
     if (s.n === 0) {
       html += '<div class="mech-card"><span class="mech-name">' + LABELS[key] + '</span><span class="no-data">no data yet</span></div>';
       continue;
@@ -105,9 +113,9 @@ function renderPeriod(containerId, title, mechs) {
       '</div>';
   }
   html = '<div class="totals-card"><div style="display:flex;justify-content:space-between;align-items:center;">' +
-    '<div><div class="mech-name">All ' + Object.keys(mechs).length + ' combined</div><div class="mech-n">N=' + totalN + '</div></div>' +
-    '<div class="mech-nums"><div class="mech-prevented mono">$' + totalPrevented.toFixed(0) + '</div>' +
-    '<div class="mech-net mono" style="color:' + (totalNet >= 0 ? 'var(--green-soft)' : 'var(--red-soft)') + '">net ' + fmtMoney(totalNet) + '</div></div>' +
+    '<div><div class="mech-name">All ' + Object.keys(mechs).length + ' combined (deduped)</div><div class="mech-n">N=' + combined.n + '</div></div>' +
+    '<div class="mech-nums"><div class="mech-prevented mono">$' + combined.lossPrevented.toFixed(0) + '</div>' +
+    '<div class="mech-net mono" style="color:' + (combined.netIfHonored >= 0 ? 'var(--green-soft)' : 'var(--red-soft)') + '">net ' + fmtMoney(combined.netIfHonored) + '</div></div>' +
     '</div></div>' + html;
   el.innerHTML = html;
 }
@@ -116,9 +124,9 @@ async function load() {
   try {
     const data = await fetch('/api/setups/loss-prevention-summary').then(r => r.json());
     document.getElementById('asof').textContent = 'Last updated ' + new Date(data.asOf).toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET · week since ' + data.weekStartET + ' · YTD since ' + data.yearStartET;
-    renderPeriod('today-section', 'Today (' + data.todayET + ')', data.mechanisms.today);
-    renderPeriod('week-section', 'This week', data.mechanisms.week);
-    renderPeriod('ytd-section', 'Year to date', data.mechanisms.ytd);
+    renderPeriod('today-section', 'Today (' + data.todayET + ')', data.mechanisms.today, data.combined.today);
+    renderPeriod('week-section', 'This week', data.mechanisms.week, data.combined.week);
+    renderPeriod('ytd-section', 'Year to date', data.mechanisms.ytd, data.combined.ytd);
   } catch (e) { /* keep last good render */ }
 }
 

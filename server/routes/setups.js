@@ -1279,6 +1279,46 @@ router.get('/setups/direction-gate-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/entry-orderflow-shadow-summary — monitoring surface for entryOrderFlowShadow.js
+// (2026-09-16, two rules: LONG_REPEAT_ADVERSE_FLOW / SHORT_MORNING_ADVERSE_FLOW). Same
+// observation-only posture and reporting shape as direction-gate-shadow-summary above --
+// wouldBeFlagged trades still fired for real. Split by rule since the two don't behave the same
+// (see entryOrderFlowShadow.js's own header for the honest caveats, especially LONG's overlap
+// with the already-live isSameSetupRefireBlocked gate). OPEN_DECISION
+// entry_orderflow_shadow_6week_revisit_20260916 is what this summary feeds into.
+router.get('/setups/entry-orderflow-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, entry_orderflow_shadow, trade_date::text as trade_date
+      FROM active_setups
+      WHERE entry_orderflow_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+        AND resolution IS NOT NULL AND actual_pnl IS NOT NULL
+    `);
+    const stat = rows => {
+      const n = rows.length;
+      if (!n) return { n: 0, wr: null, ev: null, total: 0 };
+      const total = rows.reduce((s, r) => s + r.actual_pnl, 0);
+      const wins = rows.filter(r => r.actual_pnl > 0).length;
+      return { n, wr: +(100 * wins / n).toFixed(1), ev: +(total / n).toFixed(2), total: +total.toFixed(2) };
+    };
+    const byRule = {};
+    for (const rule of ['LONG_REPEAT_ADVERSE_FLOW', 'SHORT_MORNING_ADVERSE_FLOW']) {
+      const rows = rowsQ.rows.filter(r => r.entry_orderflow_shadow.rule === rule);
+      byRule[rule] = {
+        wouldBeFlagged: stat(rows.filter(r => r.entry_orderflow_shadow.wouldBeFlagged === true)),
+        notFlagged: stat(rows.filter(r => r.entry_orderflow_shadow.wouldBeFlagged === false)),
+      };
+    }
+    res.json({
+      ...byRule,
+      note: 'Observation-only -- these numbers reflect what actually happened, not a real gate. wouldBeFlagged trades still fired for real. Scheduled revisit 2026-10-28 (6 weeks).',
+    });
+  } catch (err) {
+    console.error('[setups/entry-orderflow-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/setups/breakeven-stop-shadow-summary — monitoring surface for the
 // breakeven-stop-on-order-flow-rejection mechanism (2026-09-16, RESEARCH_CLAIM
 // orderflow_rewarded_breakeven_stop_positive_20260916). Same live, read-only
@@ -1396,24 +1436,27 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     // filters over the same rows, same pattern the today-vs-week split already used.
     const yearStartET = `${nowET.getFullYear()}-01-01`;
 
-    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ] = await Promise.all([
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
+    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ, entryFlowQ] = await Promise.all([
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, momentum_against_fade_shadow
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, momentum_against_fade_shadow
              FROM active_setups WHERE momentum_against_fade_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
              FROM active_setups WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
              FROM active_setups WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
-      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_shadow
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_shadow
              FROM active_setups WHERE breakeven_stop_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+      query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, entry_orderflow_shadow
+             FROM active_setups WHERE entry_orderflow_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
     ]);
 
@@ -1464,21 +1507,73 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
         rangeSlope: altExitStat(postEntryQ.rows, rangeSlopeHyp, period),
         volRollover: altExitStat(postEntryQ.rows, volRolloverHyp, period),
         breakevenStop: altExitStat(breakevenStopQ.rows, breakevenStopHyp, period, r => r.breakeven_stop_shadow?.classification === 'REWARDED'),
+        // entryFlowLong/Short (2026-09-16, entryOrderFlowShadow.js) -- gate-type, same shape as
+        // dirGate/momFade (hypothetical if honored is "no trade taken"). Two separate rows, not
+        // one, since the LONG and SHORT rules are genuinely different conditions (see that
+        // file's own header) -- pooling them would hide which direction is actually driving any
+        // number shown here.
+        entryFlowLong: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'LONG_REPEAT_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
+        entryFlowShort: gateStat(entryFlowQ.rows, r => r.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && r.entry_orderflow_shadow?.wouldBeFlagged === true, period),
       };
     }
 
-    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop' };
+    // Deduplicated "combined" total (found 2026-09-16, user-caught live: the frontend's naive
+    // sum of every mechanism's own lossPrevented/N double- and triple-counts a real, common
+    // case -- confirmed live, 61% of a given day's flagged trades are flagged by 2+ mechanisms
+    // at once, almost always DirGate+MomFade or DirGate+MomFade+EntryFlow-S together, since
+    // those 3 are all reading closely related "against the trend" signals off the SAME trades.
+    // Summing each mechanism's own total counted that one trade's prevented loss 2-3 times --
+    // confirmed on a real day, the naive sum showed $6,773/N=138 vs a true, per-trade-deduped
+    // $2,290/N=57. A trade flagged by multiple mechanisms only ever gets ONE real alternate
+    // action taken on it, never all of them stacked -- so this takes the SINGLE BEST available
+    // delta (hypothetical-minus-actual) per distinct row id across whichever mechanisms flagged
+    // it, not a sum across mechanisms, then aggregates that deduplicated per-trade population.
+    function deltaRows(rows, getDelta) {
+      const out = [];
+      for (const r of rows) {
+        const d = getDelta(r);
+        if (d != null) out.push({ id: r.id, trade_date: r.trade_date, delta: d });
+      }
+      return out;
+    }
+    const allDeltaRows = [
+      ...deltaRows(dirGateQ.rows, r => r.direction_gate_shadow?.wouldBeBlocked === true ? -r.actual_pnl : null),
+      ...deltaRows(momFadeQ.rows, r => r.momentum_against_fade_shadow?.against === true ? -r.actual_pnl : null),
+      ...deltaRows(stepTrailQ.rows, r => stepTrailHyp(r) != null ? stepTrailHyp(r) - r.actual_pnl : null),
+      ...deltaRows(pitchCatchQ.rows, r => (r.pitch_catch_shadow?.qualified === true && pitchCatchHyp(r) != null) ? pitchCatchHyp(r) - r.actual_pnl : null),
+      ...deltaRows(postEntryQ.rows, r => rangeSlopeHyp(r) != null ? rangeSlopeHyp(r) - r.actual_pnl : null),
+      ...deltaRows(postEntryQ.rows, r => volRolloverHyp(r) != null ? volRolloverHyp(r) - r.actual_pnl : null),
+      ...deltaRows(breakevenStopQ.rows, r => (r.breakeven_stop_shadow?.classification === 'REWARDED' && breakevenStopHyp(r) != null) ? breakevenStopHyp(r) - r.actual_pnl : null),
+      ...deltaRows(entryFlowQ.rows, r => r.entry_orderflow_shadow?.wouldBeFlagged === true ? -r.actual_pnl : null),
+    ];
+    const bestDeltaById = new Map(); // id -> { trade_date, delta } -- delta is the BEST (max) across every mechanism that flagged this row
+    for (const r of allDeltaRows) {
+      const existing = bestDeltaById.get(r.id);
+      if (!existing || r.delta > existing.delta) bestDeltaById.set(r.id, { trade_date: r.trade_date, delta: r.delta });
+    }
+    function combinedStat(period) {
+      const scoped = [...bestDeltaById.values()].filter(r => periodFilter(r, period));
+      const n = scoped.length;
+      const netIfHonored = scoped.reduce((s, r) => s + r.delta, 0);
+      const lossPrevented = scoped.reduce((s, r) => s + Math.max(0, r.delta), 0);
+      return { n, lossPrevented: +lossPrevented.toFixed(2), netIfHonored: +netIfHonored.toFixed(2) };
+    }
+    const combined = { today: combinedStat('today'), week: combinedStat('week'), ytd: combinedStat('ytd') };
+
+    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop', entryFlowLong: 'EntryFlow-L', entryFlowShort: 'EntryFlow-S' };
     function fmtBlock(period, title) {
       const lines = [title];
       for (const [key, s] of Object.entries(mechanisms[period])) {
         if (s.n === 0) { lines.push(`  ${LABELS[key]}: no data`); continue; }
         lines.push(`  ${LABELS[key]}: $${s.lossPrevented.toFixed(0)} prevented (net ${s.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(s.netIfHonored).toFixed(0)}, N=${s.n})`);
       }
+      const c = combined[period];
+      lines.push(`  All combined (deduplicated): $${c.lossPrevented.toFixed(0)} prevented (net ${c.netIfHonored >= 0 ? '+' : '-'}$${Math.abs(c.netIfHonored).toFixed(0)}, N=${c.n})`);
       return lines.join('\n');
     }
     const summary_text = fmtBlock('today', 'Loss Prevention — Today') + '\n' + fmtBlock('week', 'Loss Prevention — This Week') + '\n' + fmtBlock('ytd', 'Loss Prevention — YTD');
 
-    res.json({ asOf: new Date().toISOString(), todayET, weekStartET, yearStartET, mechanisms, labels: LABELS, summary_text });
+    res.json({ asOf: new Date().toISOString(), todayET, weekStartET, yearStartET, mechanisms, combined, labels: LABELS, summary_text });
   } catch (err) {
     console.error('[setups/loss-prevention-summary]', err.message);
     res.status(500).json({ error: err.message });

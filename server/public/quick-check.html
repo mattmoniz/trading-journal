@@ -102,11 +102,15 @@
   /* Container */
   .wrap { max-width: 480px; margin: 0 auto; padding: 14px; }
 
-  /* Active setup card */
+  /* Active setup card -- hidden by default (2026-09-16, user request: "remove that box that
+     says watching - no setup"), same display:none/.visible toggle convention as #sweep-watch
+     below, so it only ever takes up space when there's a real active setup to show. */
   #setup-card {
+    display: none;
     border: 1.5px solid var(--border); border-radius: 8px; padding: 12px 14px;
     background: rgba(15,23,42,0.4); min-height: 60px; margin-bottom: 14px;
   }
+  #setup-card.visible { display: block; }
   #setup-card.long  { border-color: var(--green); background: rgba(34,197,94,0.07); }
   #setup-card.short { border-color: var(--red); background: rgba(239,68,68,0.07); }
   .setup-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
@@ -117,7 +121,6 @@
   .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 13px; }
   .setup-grid .k { color: var(--muted); }
   .setup-mins { font-size: 12px; color: var(--dim); margin-top: 6px; }
-  .empty-card { font-size: 13px; color: var(--muted); display: flex; align-items: center; justify-content: center; height: 40px; }
 
   /* Sweep-reversal watch card (2026-08-25, direct user request: "I'd rather see it fire
      live and shadow" for the new SWEEP_REVERSAL_LONG/SHORT_OVERNIGHT mechanism). Reuses
@@ -138,7 +141,6 @@
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
   #vb-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  #vb-filter-row .vb-label { font-size: 10px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
   #timeline-stats span b { font-family: monospace; }
 
   .row {
@@ -196,6 +198,13 @@
      (OPEN_DECISION momentum_against_fade_sizemultiplier_wiring_pending). Only shown when
      this trade's own reading cleared the calibrated top-quartile "against" cutoff. */
   .momfade-tag { color: #fdba74; background: rgba(234,88,12,0.16); }
+  /* Breakeven-stop-on-order-flow-rejection shadow tag (2026-09-16) -- distinct hue from the 7
+     tag kinds above. Only shown on the REWARDED-classified subset (see breakevenStopShadow.js). */
+  .breakevenstop-tag { color: #7dd3fc; background: rgba(2,132,199,0.16); }
+  /* Entry-order-flow shadow tag (2026-09-16, entryOrderFlowShadow.js) -- one shared color for
+     both the LONG and SHORT rule (the tag TEXT distinguishes them, "EntryFlow-L"/"EntryFlow-S").
+     Only shown when wouldBeFlagged is true. */
+  .entryflow-tag { color: #d8b4fe; background: rgba(147,51,234,0.16); }
   /* Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- shown
      when a "own poller, stateless by design" detector (pocRotationJoinDetector.js/
      globexFlushDetector.js/etc) inserted this row long after its own fired_at, typically
@@ -285,7 +294,7 @@
 <div class="wrap">
   <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
   <div id="pulse-reading-card"></div>
-  <div id="setup-card"><div class="empty-card">Loading…</div></div>
+  <div id="setup-card"></div>
   <div id="sweep-watch"></div>
 
   <div id="timeline-head">
@@ -646,12 +655,15 @@ function renderSetupCard(setupData) {
   const el = $('setup-card');
   const active = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
   if (!active) {
+    // Hidden entirely (CSS display:none default) rather than an empty "Watching -- no setup"
+    // placeholder -- matches #sweep-watch's own "stay hidden unless there's something to say"
+    // convention (2026-09-16, user request).
     el.className = '';
-    el.innerHTML = '<div class="empty-card">Watching — no setup</div>';
+    el.innerHTML = '';
     return;
   }
   const isLong = (active.type || '').includes('LONG') || (active.type || '').includes('BULLISH');
-  el.className = isLong ? 'long' : 'short';
+  el.className = (isLong ? 'long' : 'short') + ' visible';
   const color = isLong ? 'var(--green)' : 'var(--red)';
   const rr = (active.entry && active.stop && active.target && Math.abs(active.entry - active.stop) > 0)
     ? (Math.abs(active.target - active.entry) / Math.abs(active.entry - active.stop)).toFixed(1) : null;
@@ -722,13 +734,61 @@ function isLossRow(s) {
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
 let timelineFilter = localStorage.getItem('timelineFilter') || 'live'; // 'live' | 'all'
-// Volume-building tracking filter (2026-08-28, user request: "keep track of" the signal across
-// ALL setup types regardless of family, ahead of it possibly gating entries later). Purely a
-// client-side display filter on the already-fetched rows -- changing this NEVER affects what
-// fires. 'all' = no filter, 'agree' = both measures agree (median cutoff), 'strong' = both agree
-// AND clear the tighter p60 cutoff (the level this project's dose-response test found real,
-// still not walk-forward validated -- see fade_roster_volume_building_walkforward_negative).
-let vbFilter = localStorage.getItem('vbFilter') || 'all'; // 'all' | 'agree' | 'strong'
+// Top-5-by-$-impact tag filter (2026-09-16, user request: replaced the Vol Building filter --
+// "add filters in the same spot, one for each of the top 5 tags that save us the most pnl").
+// Purely a client-side display filter on the already-fetched rows, same as the Vol Building
+// filter it replaces -- changing this NEVER affects what fires. TAG_META's `test` predicates
+// mirror server/routes/setups.js's loss-prevention-summary gateStat/altExitStat flag checks
+// EXACTLY (same field paths, same conditions) so a row counted as "flagged" server-side for the
+// $ ranking is counted identically client-side for the filter -- see that endpoint if either
+// side ever needs to change, and change both together.
+const TAG_META = {
+  dirGate:        { label: 'DG',  test: s => s.direction_gate_shadow?.wouldBeBlocked === true },
+  momFade:        { label: 'MF',  test: s => s.momentum_against_fade_shadow?.against === true },
+  stepTrail:      { label: 'ST',  test: s => s.step_trail_shadow?.hypothetical_pnl != null },
+  pitchCatch:     { label: 'PC',  test: s => s.pitch_catch_shadow?.qualified === true && s.pitch_catch_shadow?.hypothetical_pnl != null },
+  rangeSlope:     { label: 'RS',  test: s => s.post_entry_exit_signals?.range_slope?.hypothetical_pnl != null },
+  volRollover:    { label: 'VR',  test: s => s.post_entry_exit_signals?.vol_rollover?.hypothetical_pnl != null },
+  breakevenStop:  { label: 'BS',  test: s => s.breakeven_stop_shadow?.classification === 'REWARDED' && s.breakeven_stop_shadow?.hypothetical_pnl != null },
+  entryFlowLong:  { label: 'EFL', test: s => s.entry_orderflow_shadow?.rule === 'LONG_REPEAT_ADVERSE_FLOW' && s.entry_orderflow_shadow?.wouldBeFlagged === true },
+  entryFlowShort: { label: 'EFS', test: s => s.entry_orderflow_shadow?.rule === 'SHORT_MORNING_ADVERSE_FLOW' && s.entry_orderflow_shadow?.wouldBeFlagged === true },
+};
+let tagFilter = localStorage.getItem('tagFilter') || 'all'; // 'all' | one of TAG_META's keys
+let topTagKeys = []; // populated by loadTagRanking(), ranked by real $ lossPrevented (today), top 5
+function setTagFilter(f) {
+  tagFilter = f;
+  localStorage.setItem('tagFilter', f);
+  loadTimeline();
+}
+// Ranks by TODAY's lossPrevented (user request, 2026-09-16 -- was YTD, switched same day) --
+// the real-tier/thin-tier N split below already absorbs most of the "can jump around on thin
+// same-day N" risk this was originally guarding against.
+async function loadTagRanking() {
+  try {
+    const data = await fetch('/api/setups/loss-prevention-summary').then(r => r.json());
+    const todayStats = data.mechanisms?.today || {};
+    // Sort real (N>=20, this codebase's own "never fabricate a stat" floor) mechanisms ahead of
+    // thin ones, ranked by lossPrevented within that real tier -- but within the THIN (N<20)
+    // tier, rank by N instead of lossPrevented. Found live 2026-09-16 (user: "I dont see EFS
+    // there are alot of EFS tags"): a plain lossPrevented sort let RangeSlope's $531 (from just
+    // N=2 trades) edge out EntryFlow-S's $503 (N=16) -- a 2-trade total swings wildly and isn't
+    // more real just because it happens to currently add up slightly higher; a first attempt at
+    // this fix that only split real-vs-thin but still sorted the thin tier by $ made the exact
+    // same mistake one level down and didn't actually change the outcome (verified before
+    // shipping, not assumed). Ranking the thin tier by N instead means "more data, even if not
+    // yet enough" beats "less data that happens to sum higher."
+    topTagKeys = Object.entries(todayStats)
+      .filter(([key, s]) => TAG_META[key] && s.n > 0)
+      .sort((a, b) => {
+        const aReal = a[1].n >= 20, bReal = b[1].n >= 20;
+        if (aReal !== bReal) return (bReal ? 1 : 0) - (aReal ? 1 : 0);
+        return aReal ? b[1].lossPrevented - a[1].lossPrevented : b[1].n - a[1].n;
+      })
+      .slice(0, 5)
+      .map(([key]) => key);
+  } catch (e) { /* keep whatever was there (empty on first load -> no filter row shown yet) */ }
+  loadTimeline();
+}
 
 async function loadTimeline() {
   try {
@@ -850,9 +910,17 @@ function setTimelineFilter(f) {
   renderTimeline();
 }
 
-function setVbFilter(f) {
-  vbFilter = f;
-  localStorage.setItem('vbFilter', f);
+// Globex-watch toggle (2026-09-16, user request, added the same session Globex firing was
+// paused): a THIRD, fully INDEPENDENT toggle -- deliberately not a third value on
+// timelineFilter, because the user explicitly does not want this to touch the Live/All-driven
+// Performance stats (Wins/Losses/Net P&L/Gross/Comm/Worst Trade) at all. Those stay computed
+// from `resolved` (the normal timelineFilter-based set) unconditionally, regardless of this
+// toggle's state -- see renderTimeline()'s own comment at the point it branches on
+// `globexWatch` for exactly where the two paths split.
+let globexWatch = localStorage.getItem('globexWatch') === 'true';
+function setGlobexWatch(on) {
+  globexWatch = on;
+  localStorage.setItem('globexWatch', String(on));
   renderTimeline();
 }
 
@@ -887,7 +955,12 @@ function renderTimeline() {
     .filter(s => !s.stale_entry_price_basis)
     .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
     .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
-    .filter(s => vbFilter === 'all' || (vbFilter === 'agree' && s.vol_building_signal?.agreesMedian) || (vbFilter === 'strong' && s.vol_building_signal?.agreesP60))
+    .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
+    // Globex omitted from the main timeline entirely (2026-09-16, user request, same session
+    // Globex firing was paused) -- unconditional, not tied to the globexWatch toggle below, so
+    // it stays out of both the row list AND Performance/timeline-stats regardless of Live/All.
+    // Globex's own rows live exclusively under the separate "🌙 Globex" tab (globexRows below).
+    .filter(s => isRthAdjacent(s))
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
@@ -916,15 +989,34 @@ function renderTimeline() {
   // signal-firing engine without that link being established first. size_multiplier is the
   // one per-setup "how much was this actually sized to matter" figure this system itself
   // computes and trusts elsewhere (Alpha Engine overview, sizing displays).
-  let maxTradeDD = 0;
-  for (const s of resolved) {
-    if (s.mae_points == null) continue;
-    const mult = s.size_multiplier != null ? Number(s.size_multiplier) : 1;
-    const dd = Number(s.mae_points) * 2 * mult;
-    if (dd > maxTradeDD) maxTradeDD = dd;
+  function worstTradeDD(rows) {
+    let maxDD = 0;
+    for (const s of rows) {
+      if (s.mae_points == null) continue;
+      const mult = s.size_multiplier != null ? Number(s.size_multiplier) : 1;
+      const dd = Number(s.mae_points) * 2 * mult;
+      if (dd > maxDD) maxDD = dd;
+    }
+    return maxDD;
   }
+  const maxTradeDD = worstTradeDD(resolved);
 
-  $('timeline-title').textContent = 'Session Timeline (' + resolved.length + ')';
+  // Globex-watch rows -- computed regardless of globexWatch's current state (cheap, and the
+  // toggle button below needs the count either way) but NEVER folded into `resolved`/
+  // `rangeStats` -- those stay Live/All-driven and untouched, per the user's explicit ask.
+  // Base filters mirror `resolved` (session-scoped, resolved, not stale-priced, respects the
+  // Vol Building filter) but deliberately NOT the timelineFilter live/all restriction --
+  // Globex is now paused (force-SHADOW, see acd.js's GLOBEX_PAUSED override), so a Globex-only
+  // view restricted to origin_status='ACTIVE' would always be empty.
+  const globexRows = scoped
+    .filter(s => !s.stale_entry_price_basis)
+    .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
+    .filter(s => !isRthAdjacent(s))
+    .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
+    .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
+  const displayRows = globexWatch ? globexRows : resolved;
+
+  $('timeline-title').textContent = (globexWatch ? 'Globex Watch (' : 'Session Timeline (') + displayRows.length + ')';
   $('timeline-head').querySelector('#timeline-toggle')?.remove();
   const toggle = document.createElement('div');
   toggle.id = 'timeline-toggle';
@@ -933,7 +1025,13 @@ function renderTimeline() {
     '<button data-tf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
     'background:' + (timelineFilter === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)') + ';' +
     'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + '</button>'
-  ).join('');
+  ).join('')
+  // Globex-watch button -- visually separated (margin-left) from the Live/All pair since it's
+  // an independent toggle, not a third value in that same group. Count shown inline so it's
+  // obvious there's something to look at even before tapping it.
+  + '<button data-gw="' + (globexWatch ? 'off' : 'on') + '" style="margin-left:4px;padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
+    'background:' + (globexWatch ? 'rgba(147,51,234,0.30)' : 'rgba(15,23,42,0.8)') + ';' +
+    'color:' + (globexWatch ? '#d8b4fe' : 'var(--dim)') + '">🌙 Globex (' + globexRows.length + ')</button>';
   $('timeline-head').appendChild(toggle);
   // Click handled via delegation below (document-level listener) -- NOT attached per-button here.
   // These buttons are recreated by innerHTML on every 20s loadTimeline() poll; a listener bound
@@ -941,43 +1039,52 @@ function renderTimeline() {
   // silently swallowing the tap (found live 2026-08-28, user reported "I see it but can't click
   // on it" on the vol-building toggle -- same risk applies here, fixed for both at once).
 
-  // Volume-building tracking toggle (2026-08-28) -- pure display filter, never affects firing.
-  // Counts shown per option so it's obvious how much data exists at each bar before clicking.
-  const vbCountAll = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE')).length;
-  const vbCountAgree = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && s.vol_building_signal?.agreesMedian).length;
-  const vbCountStrong = scoped.filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && s.vol_building_signal?.agreesP60).length;
-  const vbOptions = [['all', 'All', vbCountAll], ['agree', 'Building', vbCountAgree], ['strong', 'Strong', vbCountStrong]];
-  $('vb-filter-row').innerHTML =
-    '<span class="vb-label" title="Tracking only -- does not affect what fires. See the Vol tag on each row.">Vol Building</span>' +
+  // Top-5-by-$-impact tag filter (2026-09-16, replaced Vol Building) -- pure display filter,
+  // never affects firing. Counts shown per option so it's obvious how much data exists at each
+  // bar before clicking. No label text (user request: "remove these words") -- just the
+  // buttons, "All" plus one per top-5-ranked tag from loadTagRanking().
+  const scopedForTags = s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE' && (timelineFilter === 'all' || s.origin_status === 'ACTIVE') && isRthAdjacent(s);
+  const tagOptions = [['all', 'All', scoped.filter(scopedForTags).length]]
+    .concat(topTagKeys.map(key => [key, TAG_META[key].label, scoped.filter(s => scopedForTags(s) && TAG_META[key].test(s)).length]));
+  $('vb-filter-row').innerHTML = topTagKeys.length === 0 ? '' :
     '<div style="display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);">' +
-    vbOptions.map(([val, label, count]) =>
-      '<button data-vf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
-      'background:' + (vbFilter === val ? 'rgba(59,130,246,0.25)' : 'rgba(15,23,42,0.8)') + ';' +
-      'color:' + (vbFilter === val ? '#93c5fd' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
+    tagOptions.map(([val, label, count]) =>
+      '<button data-tag="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
+      'background:' + (tagFilter === val ? 'rgba(59,130,246,0.25)' : 'rgba(15,23,42,0.8)') + ';' +
+      'color:' + (tagFilter === val ? '#93c5fd' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
     ).join('') + '</div>';
   // Click handled via delegation below (document-level listener) -- see comment on the
   // Live/All toggle above for why per-button listeners are unreliable here.
 
+  // Stats shown are ENTIRELY independent per view (2026-09-16, user: "I want to track Globex
+  // but totally separate") -- when globexWatch is on, every number below is recomputed from
+  // globexRows alone via the same shared computeRangeStats()/worstTradeDD() helpers, never
+  // blended with or falling back to the RTH-based rangeStats/maxTradeDD above. Without this,
+  // the Globex row list would sit directly under RTH's own Wins/Losses/Net P&L, which reads as
+  // if those numbers described the list below them when they don't.
+  const shownStats = globexWatch ? computeRangeStats(globexRows) : rangeStats;
+  const shownMaxDD = globexWatch ? worstTradeDD(globexRows) : maxTradeDD;
   $('timeline-stats').innerHTML =
-    '<span>Wins <b style="color:var(--green)">' + wins + '</b></span>' +
-    '<span>Losses <b style="color:var(--red)">' + losses + '</b></span>' +
-    '<span>Net P&L <b style="color:' + (netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (netPnl >= 0 ? '+' : '') + '$' + netPnl.toFixed(0) + '</b></span>' +
-    '<span title="Gross P&L before commission">Gross <b class="mono" style="color:var(--muted)">' + (grossPnl >= 0 ? '+' : '') + '$' + grossPnl.toFixed(0) + '</b></span>' +
-    '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + rangeStats.n + ' resolved">Comm <b class="mono" style="color:var(--dim)">-$' + commission.toFixed(0) + '</b></span>' +
+    '<span>Wins <b style="color:var(--green)">' + shownStats.wins + '</b></span>' +
+    '<span>Losses <b style="color:var(--red)">' + shownStats.losses + '</b></span>' +
+    '<span>Net P&L <b style="color:' + (shownStats.netPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (shownStats.netPnl >= 0 ? '+' : '') + '$' + shownStats.netPnl.toFixed(0) + '</b></span>' +
+    '<span title="Gross P&L before commission">Gross <b class="mono" style="color:var(--muted)">' + (shownStats.grossPnl >= 0 ? '+' : '') + '$' + shownStats.grossPnl.toFixed(0) + '</b></span>' +
+    '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + shownStats.n + ' resolved">Comm <b class="mono" style="color:var(--dim)">-$' + shownStats.commission.toFixed(0) + '</b></span>' +
     // Labeled "Worst Trade" (not "Max DD") -- 2026-09-08, user confusion found live: this page
     // ALSO has a real cumulative peak-to-trough "Max DD" in the Performance section below
     // (computeRangeStats().maxDD) that measures something completely different (the prop-
     // account DLL-risk figure across the whole sequence of trades) and is usually a much
     // bigger number. Reusing the same label for two different calculations on the same page
     // is exactly what caused the confusion -- see the tooltip for what THIS one actually is.
-    '<span title="Worst adverse excursion (MAE) within any ONE trade today, scaled by that trade\'s own live sizing recommendation (size_multiplier) -- NOT the cumulative peak-to-trough (see Max DD in Performance below for that)">Worst Trade <b class="mono" style="color:' + (maxTradeDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + maxTradeDD.toFixed(0) + '</b></span>';
+    '<span title="Worst adverse excursion (MAE) within any ONE trade today, scaled by that trade\'s own live sizing recommendation (size_multiplier) -- NOT the cumulative peak-to-trough (see Max DD in Performance below for that)">Worst Trade <b class="mono" style="color:' + (shownMaxDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + shownMaxDD.toFixed(0) + '</b></span>';
 
-  if (resolved.length === 0) {
+  if (displayRows.length === 0) {
     // FIXED 2026-08-28 (DeepSeek code QA): this only checked timelineFilter, so filtering to
     // "Building"/"Strong" with zero matches showed "No live trades fired yet this session" even
     // when trades clearly had fired (visible in the stats above) -- read as the toggle being
     // broken rather than an honest "nothing matches this filter" message.
-    const emptyMsg = vbFilter !== 'all' ? 'No trades match this Vol Building filter' :
+    const emptyMsg = globexWatch ? 'No Globex trades fired yet this session' :
+      tagFilter !== 'all' ? 'No trades match this tag filter' :
       timelineFilter === 'live' ? 'No live trades fired yet this session' : 'Nothing fired yet this session';
     $('timeline-list').innerHTML = '<div class="loading">' + emptyMsg + '</div>';
     return;
@@ -987,6 +1094,7 @@ function renderTimeline() {
   // row (cluster member or not) renders identically flat, since openClusterPopup() and the main
   // loop both benefit from one shared template.
   const rowHtml = (s) => {
+    const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
     const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
@@ -1041,32 +1149,42 @@ function renderTimeline() {
     // $ plus the mechanism's running cumulative -- NOT a hover tooltip like vbTag/wideTag above.
     // stopPropagation so tapping the tag doesn't also fire the row's own openTradeModal.
     const pes = s.post_entry_exit_signals || {};
-    const rsTag = pes.range_slope ? '<span class="vb-tag rangeslope-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'range_slope\')">RangeSlope</span>' : '';
-    const vrTag = pes.vol_rollover ? '<span class="vb-tag volroll-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'vol_rollover\')">VolRoll</span>' : '';
+    const rsTag = pes.range_slope ? '<span class="vb-tag rangeslope-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'range_slope\')">RS</span>' : '';
+    const vrTag = pes.vol_rollover ? '<span class="vb-tag volroll-tag sig-tag" onclick="event.stopPropagation(); openMechanismPopup(' + s.id + ', \'vol_rollover\')">VR</span>' : '';
     // Step-trail shadow tag (Opus Audit #12, 2026-09-04, OPEN_DECISION
     // step_trail_phase2_promotion_pending) -- same tap-not-hover convention as rsTag/vrTag
     // above (touchscreen viewers can't hover a title= tooltip). Only ever present when the
     // real wider-target mechanism armed AND the shadow walk resolved -- see
     // server/routes/acd.js's resolveSetupsByPrice()/completeStepTrailShadows(). Purely
     // observational: this trade's real resolution/stop/actual_pnl are completely unaffected.
-    const stTag = s.step_trail_shadow ? '<span class="vb-tag steptrail-tag sig-tag" onclick="event.stopPropagation(); openStepTrailPopup(' + s.id + ')">StepTrail</span>' : '';
+    const stTag = s.step_trail_shadow ? '<span class="vb-tag steptrail-tag sig-tag" onclick="event.stopPropagation(); openStepTrailPopup(' + s.id + ')">ST</span>' : '';
     // Pitch and Catch shadow tag (user idea, 2026-09-04, UNVALIDATED -- tracked at explicit
     // user request specifically because it's unproven; see server/services/
     // pitchCatchWalker.js's header for the full negative evidence trail). Shown whenever a
     // confirmed pullback was observed, whether or not it passed the calibrated filter --
     // qualified=false rows still tap-open to show why it was skipped, useful monitoring
     // signal on its own.
-    const pcTag = s.pitch_catch_shadow ? '<span class="vb-tag pitchcatch-tag sig-tag" onclick="event.stopPropagation(); openPitchCatchPopup(' + s.id + ')">PnC</span>' : '';
+    const pcTag = s.pitch_catch_shadow ? '<span class="vb-tag pitchcatch-tag sig-tag" onclick="event.stopPropagation(); openPitchCatchPopup(' + s.id + ')">PC</span>' : '';
     // Direction-loss-alternation gate tag (user idea + user-provided live example, 2026-09-05
     // -- see acd.js's isDirectionLossBlocked() header). Only shown when this trade WOULD have
     // been blocked (the informative case) -- every real trade gets tagged internally, but
     // showing that on every row would just be noise; this is the one worth a human looking at.
-    const dgTag = s.direction_gate_shadow?.wouldBeBlocked ? '<span class="vb-tag dirgate-tag sig-tag" onclick="event.stopPropagation(); openDirectionGatePopup(' + s.id + ')">DirGate</span>' : '';
+    const dgTag = s.direction_gate_shadow?.wouldBeBlocked ? '<span class="vb-tag dirgate-tag sig-tag" onclick="event.stopPropagation(); openDirectionGatePopup(' + s.id + ')">DG</span>' : '';
     // Momentum-against-fade shadow tag (user idea, 2026-09-05 -- see acd.js's
     // getMomentumAgainstFade()/tagMomentumAgainstFadeShadow() header). Only shown when this
     // trade's own reading cleared the calibrated top-quartile "against" cutoff -- the
     // informative case, same convention as dgTag above.
-    const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MomFade</span>' : '';
+    const mfTag = s.momentum_against_fade_shadow?.against ? '<span class="vb-tag momfade-tag sig-tag" onclick="event.stopPropagation(); openMomentumFadePopup(' + s.id + ')">MF</span>' : '';
+    // Breakeven-stop-on-order-flow-rejection shadow tag (2026-09-16) -- only shown on the
+    // REWARDED-classified subset (the only class this mechanism ever has a hypothetical
+    // response for), same convention as every tag above.
+    const bsTag = s.breakeven_stop_shadow?.classification === 'REWARDED' ? '<span class="vb-tag breakevenstop-tag sig-tag" onclick="event.stopPropagation(); openBreakevenStopPopup(' + s.id + ')">BS</span>' : '';
+    // Entry-order-flow shadow tag (2026-09-16, entryOrderFlowShadow.js) -- only shown when
+    // wouldBeFlagged is true; tag text distinguishes the LONG vs SHORT rule since they're
+    // genuinely different conditions (see that file's own header).
+    const efTag = s.entry_orderflow_shadow?.wouldBeFlagged
+      ? '<span class="vb-tag entryflow-tag sig-tag" onclick="event.stopPropagation(); openEntryFlowPopup(' + s.id + ')">' + (s.entry_orderflow_shadow.rule === 'LONG_REPEAT_ADVERSE_FLOW' ? 'EFL' : 'EFS') + '</span>'
+      : '';
     // Late-backfill tag (OPEN_DECISION poller_late_backfill_display_gap_20260914) -- see the
     // CSS comment above. late_backfill_min comes straight from the API (created_at minus
     // fired_at, both naive-timestamp columns diffed in SQL, no JS date-parsing needed here).
@@ -1088,7 +1206,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag + lateTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag + bsTag + efTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -1099,13 +1217,19 @@ function renderTimeline() {
   // grouping/reordering/collapsing of any kind (2026-09-14, replaces the leader/collapsed-
   // sibling design -- see the CSS comment above).
   const clusterGroups = new Map();
-  for (const s of resolved) {
+  for (const s of displayRows) {
     if (!s.cluster_touch_id) continue;
     if (!clusterGroups.has(s.cluster_touch_id)) clusterGroups.set(s.cluster_touch_id, []);
     clusterGroups.get(s.cluster_touch_id).push(s);
   }
 
-  const htmlParts = resolved.map(rowHtml);
+  // timelineRows overridden to whichever set is actually ON SCREEN (so openTradeModal(id) can
+  // find a tapped row) -- reassigned here, AFTER the earlier `timelineRows = resolved` above,
+  // deliberately: that earlier assignment is what openTradeModal/popups fall back to reading
+  // real numbers from when globexWatch is off; this one wins when it's on. Never affects
+  // rangeStats/timeline-stats, both already computed from `resolved` before this point.
+  timelineRows = displayRows;
+  const htmlParts = displayRows.map(rowHtml);
   $('timeline-list').innerHTML = htmlParts.join('');
 }
 
@@ -1185,6 +1309,121 @@ function mRow(k, v, color) {
 }
 function mSection(label) { return '<div class="m-section">' + label + '</div>'; }
 
+// RTH-adjacent check (2026-09-16, DeepSeek code review fix) -- matches acd.js's own
+// RTH_SESSION_FIRED_AT_SQL boundary (9:30am-6pm ET, [570,1080) minutes) exactly, NOT the
+// narrower `is_rth` generated column (9:30am-4pm, [570,960)) this file used before. The two
+// disagreeing meant a real 4-6pm dead-zone fire could get flagged/counted as "RTH" by
+// entryOrderFlowShadow.js/loss-prevention-summary while being excluded here as "Globex" --
+// widened to the same boundary everywhere so a fire's session classification never depends on
+// which part of the page you're looking at. Parses fired_at_str ('YYYY-MM-DD HH:MM:SS', always
+// naive ET per this codebase's own convention) directly via string slicing -- no Date parsing,
+// so no ambient-timezone risk.
+function isRthAdjacent(s) {
+  if (!s.fired_at_str) return false;
+  const hh = +s.fired_at_str.slice(11, 13), mm = +s.fired_at_str.slice(14, 16);
+  const mod = hh * 60 + mm;
+  return mod >= 570 && mod < 1080;
+}
+
+// $ delta shown DIRECTLY on each row's tag (2026-09-16 user request: "I only want to see the
+// tags listed and pnl items... inside the card" -- not hidden behind a tap-to-open popup).
+// Same two mechanism-shape definitions as shadowTagRows()/loss-prevention-summary
+// (server/routes/setups.js) -- gate-type net = -actual_pnl (hypothetical is "no trade taken"),
+// alt-exit net = hypothetical_pnl - actual_pnl. Returns '' (no suffix) when pnl/hyp aren't known
+// yet, never a misleading $0.
+function gateDeltaText(pnl, flagged) {
+  if (!flagged || pnl == null) return '';
+  const net = -pnl;
+  return ' ' + (net >= 0 ? '+' : '-') + '$' + Math.abs(net).toFixed(0);
+}
+function altDeltaText(pnl, hyp) {
+  if (hyp == null || pnl == null) return '';
+  const net = Number(hyp) - pnl;
+  return ' ' + (net >= 0 ? '+' : '-') + '$' + Math.abs(net).toFixed(0);
+}
+
+// Every observation-only shadow tag this codebase tracks, rendered directly on the trade card
+// (2026-09-16 user request: "add all the tags that might apply to a trade, to the trade card
+// itself as well as the pnl save attributed to it... there are a few things we're tracking and
+// i need to keep an eye on all of them"). Two mechanism shapes, matching loss-prevention-
+// summary's own convention exactly (server/routes/setups.js) so the per-trade $ shown here is
+// never a different definition than the aggregate rollup:
+//   - Gate-type (DirGate/MomFade/EntryFlow-L/EntryFlow-S): hypothetical if honored is "no trade
+//     taken" -- net = -actual_pnl (saves the loss if actual_pnl was negative, forfeits the win
+//     if it was positive).
+//   - Alt-exit-type (StepTrail/PitchCatch/RangeSlope/VolRoll/BreakevenStop): each already
+//     carries its own hypothetical_pnl for a DIFFERENT exit -- net = hypothetical_pnl - actual_pnl.
+// `s.actual_pnl` must be a real, resolved number for any $ delta to mean anything -- an
+// unresolved/still-open row shows the flag with no dollar figure rather than a misleading $0.
+// Naive-string minute diff (2026-09-16, user request: "I want to see the timing but also the
+// pnl impact when they fire" -- a behavior-monitoring view, not a market-microstructure one:
+// DirGate/MomFade/EntryFlow are all computed at the SAME instant, right after the real INSERT
+// (their own checkedAt fields differ only by however long each sequential DB call took --
+// milliseconds, always in the same DirGate->MomFade->EntryFlow code order -- so showing that
+// as "which one caught it first" would be meaningless, always the same answer regardless of
+// the market). Those 3 are simply "at entry." StepTrail/BreakevenStop DO carry a real
+// `armed_at` (when that mechanism's OWN trigger condition first became true, genuinely later
+// in the trade's life) and RangeSlope/VolRoll carry their own `fired_at` the same way -- these
+// ARE meaningfully different points in time per trade, shown as minutes-after-entry. Both
+// s.fired_at_str and every mechanism's own armed_at/fired_at are the same naive 'YYYY-MM-DD
+// HH:MM:SS' ET wall-clock shape, so diffing them as same-epoch instants gives the correct real
+// elapsed minutes with no Date-parsing/ambient-timezone risk (this codebase's own naive-vs-
+// naive-arithmetic-is-safe convention -- only a naive-vs-genuinely-UTC comparison needs care).
+function naiveToMs(str) {
+  if (!str) return null;
+  const [d, t] = str.split(' ');
+  const [y, mo, da] = (d || '').split('-').map(Number);
+  const [h, mi, se] = (t || '00:00:00').split(':').map(Number);
+  if (!y || !mo || !da) return null;
+  return Date.UTC(y, mo - 1, da, h || 0, mi || 0, se || 0);
+}
+function minutesAfterEntry(s, naiveStr) {
+  const a = naiveToMs(s.fired_at_str), b = naiveToMs(naiveStr);
+  if (a == null || b == null) return null;
+  return Math.round((b - a) / 60000);
+}
+function fmtMinutesAfter(mins) {
+  if (mins == null) return null;
+  if (mins <= 0) return 'at entry';
+  if (mins < 60) return mins + 'min after entry';
+  return (mins / 60).toFixed(1) + 'hr after entry';
+}
+function shadowTagRows(s) {
+  const pnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+  function gateRow(label, flagged, extra) {
+    // Only the flagged case is shown -- same "showing every row would just be noise" convention
+    // as the row-level tags (dgTag/mfTag/efTag above only render when true). Fixed 2026-09-16
+    // after the user pointed out a "not flagged" row is exactly that noise.
+    if (!flagged) return '';
+    // All 3 gate-type mechanisms evaluate the exact same "as of entry" moment (see header) --
+    // "at entry" is the honest answer, not a fabricated fine-grained order.
+    const timing = 'at entry';
+    if (pnl == null) return mRow(label, timing + ' · flagged' + (extra ? ' (' + extra + ')' : ''), 'var(--amber)');
+    const net = -pnl;
+    return mRow(label, timing + ' · ' + (net >= 0 ? '+' : '-') + '$' + Math.abs(net).toFixed(2) + (extra ? ' (' + extra + ')' : ''), net >= 0 ? 'var(--green)' : 'var(--red)');
+  }
+  function altExitRow(label, hyp, naiveTimingStr) {
+    if (hyp == null || pnl == null) return '';
+    const net = Number(hyp) - pnl;
+    const timing = fmtMinutesAfter(minutesAfterEntry(s, naiveTimingStr));
+    const timingPart = timing ? timing + ' · ' : ''; // omit rather than fabricate when no real timestamp exists (e.g. PitchCatch never recorded one)
+    return mRow(label, timingPart + (net >= 0 ? '+' : '-') + '$' + Math.abs(net).toFixed(2) + ' vs. actual', net >= 0 ? 'var(--green)' : 'var(--red)');
+  }
+  let out = '';
+  if (s.direction_gate_shadow) out += gateRow('DirGate', s.direction_gate_shadow.wouldBeBlocked, s.direction_gate_shadow.direction);
+  if (s.momentum_against_fade_shadow) out += gateRow('MomFade', s.momentum_against_fade_shadow.against);
+  if (s.entry_orderflow_shadow) {
+    const r = s.entry_orderflow_shadow;
+    out += gateRow(r.rule === 'LONG_REPEAT_ADVERSE_FLOW' ? 'EntryFlow-L' : 'EntryFlow-S', r.wouldBeFlagged);
+  }
+  if (s.step_trail_shadow) out += altExitRow('StepTrail', s.step_trail_shadow.hypothetical_pnl, s.step_trail_shadow.armed_at);
+  if (s.pitch_catch_shadow && s.pitch_catch_shadow.qualified === true) out += altExitRow('PitchCatch', s.pitch_catch_shadow.hypothetical_pnl, null);
+  if (s.post_entry_exit_signals?.range_slope) out += altExitRow('RangeSlope', s.post_entry_exit_signals.range_slope.hypothetical_pnl, s.post_entry_exit_signals.range_slope.fired_at);
+  if (s.post_entry_exit_signals?.vol_rollover) out += altExitRow('VolRoll', s.post_entry_exit_signals.vol_rollover.hypothetical_pnl, s.post_entry_exit_signals.vol_rollover.fired_at);
+  if (s.breakeven_stop_shadow && s.breakeven_stop_shadow.classification === 'REWARDED') out += altExitRow('BreakevenStop', s.breakeven_stop_shadow.hypothetical_pnl, s.breakeven_stop_shadow.armed_at);
+  return out;
+}
+
 function openTradeModal(id) {
   const s = timelineRows.find(r => r.id === id);
   if (!s) return;
@@ -1195,7 +1434,7 @@ function openTradeModal(id) {
 
   let html = '<div class="m-head"><span class="m-title" style="color:' + color + '">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
     '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
-  html += '<div class="m-sub">' + (s.is_rth ? 'RTH' : 'Overnight/Globex') + ' · ' + (s.origin_status || 'UNKNOWN') + ' · id ' + s.id + '</div>';
+  html += '<div class="m-sub">' + (isRthAdjacent(s) ? 'RTH' : 'Overnight/Globex') + ' · ' + (s.origin_status || 'UNKNOWN') + ' · id ' + s.id + '</div>';
 
   html += mSection('Outcome');
   html += mRow('Resolution', s.resolution, color);
@@ -1237,6 +1476,15 @@ function openTradeModal(id) {
     if (s.delta_confirmation_state) html += mRow('Delta', s.delta_confirmation_state);
     if (s.touch_quality) html += mRow('Touch quality', s.touch_quality);
     if (s.confluence_levels_at_detection && s.confluence_levels_at_detection.length) html += mRow('Confluence', s.confluence_levels_at_detection.join(', '));
+  }
+
+  // Every observation-only shadow tag this trade might carry, with the $ save/cost attributed
+  // to it (2026-09-16 user request) -- same tap-target tags as the row itself, spelled out with
+  // dollar figures here since the row can only show a short badge.
+  const tagRows = shadowTagRows(s);
+  if (tagRows) {
+    html += mSection('Tracked mechanisms (observation-only)');
+    html += tagRows;
   }
 
   if (s.historical_win_rate != null) {
@@ -1537,6 +1785,101 @@ function openMomentumFadePopup(id) {
   if (momentumFadeShadowSummary) {
     html += mfBucketRow('Against momentum (top quartile)', momentumFadeShadowSummary.against);
     html += mfBucketRow('With/neutral momentum', momentumFadeShadowSummary.withOrNeutral);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Breakeven-stop-on-order-flow-rejection popup (2026-09-16) ----
+// Shipped backend-only originally (breakevenStopShadow.js + its summary endpoint) with no
+// frontend surface at all -- added now per user request to put every tracked shadow tag on the
+// card itself, not just the ones that happened to get a popup built the same day.
+let breakevenStopShadowSummary = null;
+async function loadBreakevenStopShadowSummary() {
+  try {
+    breakevenStopShadowSummary = await fetch('/api/setups/breakeven-stop-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function openBreakevenStopPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.breakeven_stop_shadow;
+  if (!s || !shadow) return;
+
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  const hyp = shadow.hypothetical_pnl != null ? Number(shadow.hypothetical_pnl) : null;
+  let html = '<div class="m-head"><span class="m-title" style="color:#7dd3fc">Breakeven Stop — order-flow rejection confirmed</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · OBSERVATION-ONLY, not a real stop move — this trade\'s real stop never changed</div>';
+
+  html += mSection('This trade');
+  html += mRow('Armed at', shadow.armed_at);
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Hypothetical (stop to breakeven)', hyp != null ? (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2) : null,
+    hyp != null ? (hyp >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  if (real != null && hyp != null) {
+    const delta = hyp - real;
+    html += mRow('Delta (hypothetical − actual)', (delta >= 0 ? '+' : '') + '$' + delta.toFixed(2), delta >= 0 ? 'var(--green)' : 'var(--red)');
+  }
+
+  html += mSection('Running total (real trades, REWARDED classification only)');
+  if (breakevenStopShadowSummary?.rewardedInterventionCompare) {
+    const c = breakevenStopShadowSummary.rewardedInterventionCompare;
+    html += mRow('N', c.n);
+    html += mRow('Real total', (c.realTotal >= 0 ? '+' : '') + '$' + c.realTotal.toFixed(2), c.realTotal >= 0 ? 'var(--green)' : 'var(--red)');
+    html += mRow('Hypothetical total', (c.hypotheticalBreakevenTotal >= 0 ? '+' : '') + '$' + c.hypotheticalBreakevenTotal.toFixed(2), c.hypotheticalBreakevenTotal >= 0 ? 'var(--green)' : 'var(--red)');
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- Entry-order-flow shadow popup (2026-09-16, entryOrderFlowShadow.js) ----
+// One popup covers both rules (LONG_REPEAT_ADVERSE_FLOW/SHORT_MORNING_ADVERSE_FLOW) -- the
+// shadow payload's own `rule` field picks which fields are relevant to show.
+let entryFlowShadowSummary = null;
+async function loadEntryFlowShadowSummary() {
+  try {
+    entryFlowShadowSummary = await fetch('/api/setups/entry-orderflow-shadow-summary').then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function openEntryFlowPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.entry_orderflow_shadow;
+  if (!s || !shadow) return;
+
+  const isLong = shadow.rule === 'LONG_REPEAT_ADVERSE_FLOW';
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  let html = '<div class="m-head"><span class="m-title" style="color:#d8b4fe">Entry Order-Flow (' + (isLong ? 'LONG repeat' : 'SHORT morning') + ') — flagged</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · OBSERVATION-ONLY, not a real gate — this trade fired for real. 6-week revisit scheduled 2026-10-28.</div>';
+
+  html += mSection('This trade');
+  html += mRow('Prior closed bar delta', shadow.priorBarDelta != null ? shadow.priorBarDelta : null);
+  html += mRow('Adverse flow', shadow.adverseFlow === true ? 'yes' : shadow.adverseFlow === false ? 'no' : null);
+  if (isLong) {
+    html += mRow('Reference entry (last same-setup fire)', shadow.refEntryPrice);
+    html += mRow('Minutes since that fire', shadow.minutesSinceRef);
+    html += mRow('Price-drift gated (worse price)', shadow.priceDriftGated === true ? 'yes' : shadow.priceDriftGated === false ? 'no' : null);
+  } else {
+    html += mRow('ET minute-of-day', shadow.etMin);
+  }
+  html += mRow('What actually happened', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Checked at', shadow.checkedAt);
+
+  html += mSection('Running total (' + (isLong ? 'LONG repeat' : 'SHORT morning') + ' rule)');
+  const ruleSummary = entryFlowShadowSummary?.[isLong ? 'LONG_REPEAT_ADVERSE_FLOW' : 'SHORT_MORNING_ADVERSE_FLOW'];
+  if (ruleSummary) {
+    html += dgBucketRow('Flagged', ruleSummary.wouldBeFlagged);
+    html += dgBucketRow('Not flagged', ruleSummary.notFlagged);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -1905,8 +2248,10 @@ document.addEventListener('click', (e) => {
 document.addEventListener('click', (e) => {
   const tfBtn = e.target.closest('[data-tf]');
   if (tfBtn) { setTimelineFilter(tfBtn.dataset.tf); return; }
-  const vfBtn = e.target.closest('[data-vf]');
-  if (vfBtn) { setVbFilter(vfBtn.dataset.vf); return; }
+  const tagBtn = e.target.closest('[data-tag]');
+  if (tagBtn) { setTagFilter(tagBtn.dataset.tag); return; }
+  const gwBtn = e.target.closest('[data-gw]');
+  if (gwBtn) { setGlobexWatch(gwBtn.dataset.gw === 'on'); return; }
 });
 
 // ---- Boot ----
@@ -1918,13 +2263,17 @@ loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac cali
 loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
+loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
+loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
+loadTagRanking(); // top-5-by-$-impact filter row -- ranked off today's own data, 60s poll below keeps it current
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
 setInterval(loadPulseReading, 60000);
+setInterval(loadTagRanking, 60000);
 window.addEventListener('resize', () => {
   const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
   renderEquityCurve('range-equity', rows, currentRange);
