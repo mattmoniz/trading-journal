@@ -15,7 +15,7 @@ import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classi
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
@@ -65,6 +65,7 @@ import { computeADXSeries } from '../services/adxService.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
 import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
+import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -512,7 +513,12 @@ export async function isSameSetupRefireBlocked(tradeDate, setupType, session) {
 // eligibility, so this changes what the DirGate tag SHOWS, not what fires live. Self-
 // contained (computes "now" itself) rather than threaded through the 4 call sites' already-
 // inconsistent local variable names (sessionDate vs todayET).
-const RTH_SESSION_FIRED_AT_SQL = `(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) >= 570 AND (EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) < 1080`;
+// Exported 2026-09-16 (entryOrderFlowShadow.js reuse) -- DeepSeek's design-critique review of
+// that mechanism flagged that this codebase already carries 2 different "RTH" boundary
+// definitions (this one, 570-1080; sessionBoundary.js's isFiredInRTH, 570-960) and a 3rd,
+// narrower one would make it 3 -- re-exporting this exact string rather than letting a new
+// consumer re-derive its own copy is the fix, per "export the real function."
+export const RTH_SESSION_FIRED_AT_SQL = `(EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) >= 570 AND (EXTRACT(hour FROM fired_at)*60 + EXTRACT(minute FROM fired_at)) < 1080`;
 export async function isDirectionLossBlocked(direction) {
   if (!direction) return false;
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -1478,6 +1484,21 @@ async function detectGlobexSetup(sessionDate, io) {
       if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(sessionDate, c.type, 'GLOBEX')) {
         live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
       }
+      // Globex pause (2026-09-16, user's explicit call) -- unconditional, forces every Globex
+      // candidate to SHADOW regardless of any check above. NOT based on a confirmed "Globex is
+      // net negative" finding -- checked directly first and the real numbers didn't support that
+      // specific claim (full history and the last 14 days were both flat/positive for Globex;
+      // RTH was the bigger recent drag in the 30/45-day windows). User chose to pause anyway.
+      // Same "force SHADOW, never skip" convention as every other gate in this file -- Globex
+      // candidates still insert, still resolve, still accumulate real SHADOW-origin data (the
+      // user's explicit ask: "keep tracking overnight trades"). Forcing SHADOW also means these
+      // rows no longer show on quick-check.html's default view (which filters to
+      // origin_status='ACTIVE' only) without any separate frontend change. To resume live
+      // Globex firing, delete/comment out this block -- it's a single, self-contained override,
+      // deliberately not a flag threaded through config so there's exactly one place to look.
+      if (live.status !== 'SHADOW') {
+        live = { status: 'SHADOW', reason: 'GLOBEX_PAUSED' };
+      }
 
       // Minimal Globex sizeMultiplier: just the validated pair-bonus factor, matching
       // RTH's +0.15x convention exactly (single check, doesn't stack across multiple
@@ -1620,6 +1641,7 @@ async function detectGlobexSetup(sessionDate, io) {
 
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
       await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
+      await tagEntryOrderFlowShadow(ins.rows[0].id, { direction: c.dir, setupType: c.type, entryPrice: entry });
       // Cluster touch credit tagging (2026-09-07) — post-insert UPDATE, not spliced into the
       // ~37-param INSERT above, mirroring RTH's own winner-tagging (~line 9327) and this
       // codebase's feedback_sql_param_dryrun_verification convention exactly. First
@@ -5720,6 +5742,13 @@ export default function createACDRouter(io) {
         const i = svBars.length - 1;
         const bar = svBars[i];
         const isGlobexNow = bar.tod < 570 || bar.tod >= 960;
+        // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- this function is its OWN
+        // standalone async function (shared by both the RTH and Globex callers, see this
+        // function's own header), NOT nested inside runSetupDetection()'s scope, so it can't
+        // close over that handler's own `inNewEntryDeadZone` -- computed fresh here from this
+        // function's own `bar.tod`, same self-contained pattern as isGlobexNow just above,
+        // same [960,1080) boundary as the RTH handler's own inNewEntryDeadZone.
+        const inStackVolDeadZone = isInNewEntryDeadZone(bar.tod);
         const svThresholds = isGlobexNow ? STACK_VOL_THRESHOLDS.GLOBEX : STACK_VOL_THRESHOLDS.RTH;
         const { volZCutoff, osrCutoff, minClusterSize } = svThresholds;
 
@@ -5934,7 +5963,9 @@ export default function createACDRouter(io) {
             // flags this row for the bank-vs-extend branch in resolveSetupsByPrice(), the same
             // "one column is both the eligibility flag and the value" convention already used
             // by runner_trail_width for the breakeven-trail mechanism.
-            if (!isGlobexNow) {
+            // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- full skip, matching
+            // the other RTH insert sites' same fix.
+            if (!isGlobexNow && !inStackVolDeadZone) {
               const svSetupType = `STACK_VOL_BREAK_LIVE_${direction}`;
               const svEntry = bar.close;
               const svStop = direction === 'LONG' ? svEntry - stackVolSignal.calibratedStop : svEntry + stackVolSignal.calibratedStop;
@@ -5996,6 +6027,7 @@ export default function createACDRouter(io) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
                   await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
+                  await tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry });
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
                   }
@@ -6024,8 +6056,22 @@ export default function createACDRouter(io) {
       // gate's boundary ever changes. Does NOT force-close any already-open position (that
       // remains the 5-6pm hard-close gate's job) — resolveSetupsByPrice/expireStaleSetups
       // above already run unconditionally every poll, so an open trade still manages/resolves
-      // normally through this window; this only blocks NEW candidates from firing ACTIVE.
-      const inNewEntryDeadZone = etMin >= 16 * 60 && etMin < 18 * 60;
+      // normally through this window; this only blocks NEW candidates.
+      // CHANGED 2026-09-16 (user request: "stop firing trades during the deadzone," after
+      // real quick-check.html rows in this window were mistaken for live trades since nothing
+      // visually distinguished a SHADOW-only audit row from a real one): was force-SHADOW
+      // (every new candidate still got a real row, suppression_reason='POST_RTH_DEAD_ZONE',
+      // specifically so SHADOW-calibration data kept accumulating through this window) --
+      // now a FULL SKIP at every real insert site (main RTH active-slot, cluster-sibling-
+      // touch-credit, suppressed-near-level-audit, STACK_VOL_BREAK_LIVE, early-touch-backfill,
+      // shadowCandidates), matching the WEEKLY_OPEN/Globex-daily-open-window precedent (no row
+      // at all). Deliberate, user-confirmed tradeoff: real accumulated data on this window
+      // (126 trades/14 distinct days, EV~-$0.65, checked the same day) still roughly supports
+      // the original 2026-07-31 read, so stopping further SHADOW accumulation here isn't
+      // reversing a live, actively-updating finding -- it's trading a thin, already-flat
+      // population for a genuinely quiet dead zone. See CONVENTIONS_DETAIL.md's entry for
+      // the full account and which insert sites needed which flavor of this fix.
+      const inNewEntryDeadZone = isInNewEntryDeadZone(etMin);
 
       // Resolve/expire existing setups on every poll regardless of window
       await resolveSetupsByPrice(io).catch(() => {});
@@ -6591,8 +6637,9 @@ export default function createACDRouter(io) {
           // that window using the hardcoded 30pt/20pt fallback instead of the real calibrated
           // stop/target (VWAP_MAGNET_SHORT's OPTIMAL_STOP row said stop=29/target=25 the same day
           // several of its own SHADOW fires used stop=30/target=20 instead). The suppression-check
-          // side of this was never a live-alert risk (inNewEntryDeadZone force-SHADOWs everything in
-          // that exact same 4-6PM window regardless), but it did corrupt SHADOW forward-validation
+          // side of this was never a live-alert risk (inNewEntryDeadZone skips every new candidate
+          // insert entirely in that exact same 4-6PM window regardless, as of 2026-09-16 -- see
+          // that flag's own header comment), but it did corrupt SHADOW forward-validation
           // data with the wrong stop/target baked into mae_points/mfe_points/actual_pnl. Since the
           // cache key already includes todayET, a day-long TTL can never leak into a different day.
           const cachedLevelStats = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
@@ -7272,7 +7319,9 @@ export default function createACDRouter(io) {
                 // 14pt from its own level previously got a row implying it was touched at a
                 // price it wasn't. Anchoring at cand.level is what "this level really was
                 // touched" actually means.
-                if (willGetTouchCredit) {
+                // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- full skip, not a
+                // SHADOW row, matching the same fix on the suppressed-audit branch below.
+                if (willGetTouchCredit && !inNewEntryDeadZone) {
                   try {
                     const sibLevel = cand.level;
                     const sibOptStop = getOptStopForType(liveStats._opt, candType);
@@ -7288,7 +7337,7 @@ export default function createACDRouter(io) {
                     // winner of this touch, so it must never count as a second independent
                     // sample of the same market event in a cross-setup_type pooled consumer
                     // (see POOLED_TRADE_FILTER in scripts/backtest_setup_status.mjs).
-                    await query(`
+                    const sibIns = await query(`
                       INSERT INTO active_setups (
                         trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                         suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
@@ -7297,12 +7346,25 @@ export default function createACDRouter(io) {
                       )
                       VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12)
                       ON CONFLICT DO NOTHING
+                      RETURNING id
                     `, [
                       todayET, candType, currentPrice, nearLevels.length,
                       nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
                       sibLevel, sibStopLevel, sibT1Level, sibExpiresAt, sibWiderTargetMult, getBetClass(candType),
                       clusterTouchId,
                     ]);
+                    // Shadow-tag wiring (2026-09-16, found live: user asked why a real cluster-
+                    // sibling touch-credit row -- SHADOW-origin, never a live alert either way --
+                    // wasn't tagged so its own eventual "would this have been prevented" status
+                    // was visible). This INSERT never had ANY of the 3 shadow-tag calls wired --
+                    // not just entryOrderFlowShadow, DirGate/MomFade were already missing here
+                    // too, same pre-existing gap. `sibIns.rows[0]` guards ON CONFLICT DO NOTHING.
+                    if (sibIns.rows[0]) {
+                      const sibDir = isLong ? 'LONG' : 'SHORT';
+                      await tagDirectionGateShadow(sibIns.rows[0].id, sibDir);
+                      await tagMomentumAgainstFadeShadow(sibIns.rows[0].id, sibDir);
+                      await tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel });
+                    }
                   } catch (e) {
                     // Non-critical, observation-only (gives a level real N credit, never trades
                     // real capital) -- must never be able to block the winner-selection logic
@@ -8005,7 +8067,17 @@ export default function createACDRouter(io) {
               // dead-zone (4-6PM) SHADOW fire's measurement until fixed the same day.
               const auditVbSessionBars = await getSessionBarsSinceOpen(570);
               const auditVolBuildingSignal = await computeLiveVolumeBuildingSignal(todayET, auditVbSessionBars);
-              await query(`
+              // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades
+              // during the deadzone") -- this audit-only branch (SUPPRESSED_FADE/CLUSTER_ALREADY_
+              // FIRED/SAME_TYPE_REFIRE_COOLDOWN/etc.) never checked inNewEntryDeadZone at all,
+              // unlike the main RTH candidate path a few thousand lines down which already force-
+              // SHADOWs (but still WRITES) in this window. A full skip here matches the existing
+              // WEEKLY_OPEN/Globex-daily-open-window precedent (no row at all, not a SHADOW row)
+              // -- deliberate tradeoff, user-confirmed: this stops the ongoing SHADOW-calibration
+              // tracking this branch exists for during 4-6PM specifically, in exchange for a
+              // genuinely quiet dead zone. Does NOT touch the cluster_attributed_setups UPDATE
+              // below (that tags an ALREADY-EXISTING anchor row, not a new insert).
+              const auditIns = inNewEntryDeadZone ? { rows: [] } : await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
@@ -8020,6 +8092,7 @@ export default function createACDRouter(io) {
                   $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
                   $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
+                RETURNING id
               `, [
                 todayET, type, currentPrice, suppressReason,
                 nearLevels.length,
@@ -8056,7 +8129,20 @@ export default function createACDRouter(io) {
                 // own row stayed permanently unlinked from the sibling rows it beat (which
                 // DO carry this same clusterTouchId via the touch-credit INSERT above).
                 clusterTouchId,
-              ]).catch(() => {});
+              ]).catch(() => ({ rows: [] }));
+              // Shadow-tag wiring (2026-09-16, found live: the SUPPRESSED_FADE/CLUSTER_ALREADY_
+              // FIRED/etc. audit-insert branch -- this file's OWN comment a few lines up already
+              // documents this as "the suppressed near-level audit" -- had zero shadow-tag calls
+              // wired, the same gap just fixed on CLUSTER_SIBLING_TOUCH_CREDIT above. Confirmed
+              // live via a direct query: a real PM_VAL_FADE_LONG row fired here (suppression_
+              // reason='SUPPRESSED_FADE') showed both direction_gate_shadow and entry_orderflow_
+              // shadow null. `auditIns.rows[0]` guards ON CONFLICT DO NOTHING the same way the
+              // sibling-credit fix does.
+              if (auditIns.rows[0]) {
+                await tagDirectionGateShadow(auditIns.rows[0].id, dir);
+                await tagMomentumAgainstFadeShadow(auditIns.rows[0].id, dir);
+                await tagEntryOrderFlowShadow(auditIns.rows[0].id, { direction: dir, setupType: type, entryPrice: currentPrice });
+              }
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
               // this dedup, per the user's explicit ask, is that every level still gets credit
@@ -9122,6 +9208,13 @@ export default function createACDRouter(io) {
                 [todayET, bt.type]
               );
               if (existing.rows.length) continue; // already recorded (ACTIVE or SHADOW) this day
+              // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- gated on bt.etMin
+              // (when the touch ITSELF actually happened), not the outer/current etMin (when the
+              // poller happens to be catching up to it) -- this loop can legitimately backfill a
+              // touch from earlier in the session (e.g. 10am) during a poll that's currently
+              // running at 4:30pm, and that 10am touch is not a dead-zone entry just because the
+              // server got to it late. Full skip, matching the other RTH insert sites' same fix.
+              if (isInNewEntryDeadZone(bt.etMin)) continue;
               const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
               const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
               const btRegimeStamp = computeRegimeStamp(bt.entry, btVaMap);
@@ -9589,12 +9682,23 @@ export default function createACDRouter(io) {
           : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
+        // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
+        // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
+        // 'POST_RTH_DEAD_ZONE') until now; widened this existing skip-the-insert-entirely
+        // mechanism (already used for inRefireCooldown/recentlyShadowedSameType) to also cover
+        // inNewEntryDeadZone, rather than building a second, separate skip path. Deliberate
+        // tradeoff, user-confirmed: this stops the SHADOW-calibration tracking that
+        // POST_RTH_DEAD_ZONE rows previously provided during 4-6PM, in exchange for a genuinely
+        // quiet dead zone -- matches the same fix already applied to every other RTH insert
+        // site (cluster-sibling-touch-credit, suppressed-near-level-audit, STACK_VOL_BREAK_LIVE,
+        // early-touch-backfill, shadowCandidates).
         const skipRedundantShadowInsert = forceShadow
-          && (inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
+          && (inNewEntryDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
         if (skipRedundantShadowInsert) {
           logGatedCandidate({
             tradeDate: todayET, setupType: active.type, gateName: 'REDUNDANT_SHADOW_SUPPRESSED',
-            gateReason: `${forceShadowReason} + same-type resolved within ${REFIRE_COOLDOWN_MINUTES[active.type] ?? SHADOW_NOISE_SUPPRESSION_MINUTES}min`,
+            gateReason: inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+              : `${forceShadowReason} + same-type resolved within ${REFIRE_COOLDOWN_MINUTES[active.type] ?? SHADOW_NOISE_SUPPRESSION_MINUTES}min`,
             entry: active.entry, stop: active.stop, target: safeT1Level,
           });
           setupId = null;
@@ -9687,6 +9791,7 @@ export default function createACDRouter(io) {
         if (ins.rows[0]) {
           await tagDirectionGateShadow(ins.rows[0].id, rthDir);
           await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
+          await tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry });
         }
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
         // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
@@ -9828,6 +9933,14 @@ export default function createACDRouter(io) {
               logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'REFIRE_COOLDOWN_SHADOW', gateReason: `resolved within the last ${REFIRE_COOLDOWN_MINUTES[shadow.type]}min`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
               continue;
             }
+            // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- this is a real-time
+            // touch-detection loop (unlike the early-touch-backfill loop above, which gates on
+            // the touch's OWN earlier etMin instead), so the outer/current inNewEntryDeadZone is
+            // the correct flag here. Full skip, matching the other RTH insert sites' same fix.
+            if (inNewEntryDeadZone) {
+              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
+              continue;
+            }
             let sT1 = shadow.target;
             if (sT1 != null && ((isLongS && sT1 <= shadow.entry) || (!isLongS && sT1 >= shadow.entry))) sT1 = null;
             // FIXED 2026-08-16 (promotion-pipeline structural fix, Layer 1/F3): shadowCandidates
@@ -9929,6 +10042,7 @@ export default function createACDRouter(io) {
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
+              await tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry });
               // Cluster role claimed HERE, after the insert actually succeeded -- not before
               // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out
               // can never consume the primary slot for a group it was never actually written
@@ -10274,6 +10388,19 @@ export default function createACDRouter(io) {
         FROM active_setups s
         WHERE ${whereClause}
           AND s.fired_at IS NOT NULL AND s.status NOT IN ('SHADOW','ACTIVE')
+          -- Globex omitted from Performance entirely (2026-09-16, user request, same session
+          -- Globex firing was paused via the GLOBEX_PAUSED override above). FIXED same day
+          -- (DeepSeek code review): was 's.is_rth = true', but is_rth is a GENERATED column
+          -- bounded to [9:30,16:00) -- narrower than RTH_SESSION_FIRED_AT_SQL's [9:30,18:00)
+          -- that DirGate/entryOrderFlowShadow/loss-prevention-summary all already use, so a
+          -- real 4-6pm dead-zone fire (this file's own DirGate comment cites one:
+          -- FLOOR_R1_FADE_SHORT_TRAIL @16:55) would get excluded here while still being
+          -- flagged/counted elsewhere -- 4 places disagreeing on what "RTH" means. Widened to
+          -- the same boundary everywhere: 4-6pm counts as RTH-adjacent (the pause is about
+          -- overnight Globex specifically, not the maintenance gap), true Globex (>=18:00 or
+          -- <9:30) still routes to the separate Globex tab only.
+          AND (EXTRACT(hour FROM s.fired_at)*60 + EXTRACT(minute FROM s.fired_at)) >= 570
+          AND (EXTRACT(hour FROM s.fired_at)*60 + EXTRACT(minute FROM s.fired_at)) < 1080
         ORDER BY s.fired_at
       `, params);
 

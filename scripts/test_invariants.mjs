@@ -1797,7 +1797,20 @@ async function main() {
           // crossDirectionFlip added 2026-09-02 (user-flagged live gap: level-fade candidates
           // that don't win the single `active` slot fire through shadowCandidates/here, bypassing
           // this gate entirely regardless of ACTIVE/SHADOW mix on either side).
+          // newEntryDeadZone: manually verified covered 2026-09-16, but NOT detectable by
+          // GATE_PATTERNS' regex against this site's own sliced start/end window -- keep
+          // baseline false + naReasons (matching the Globex site's own precedent just above),
+          // not baseline true, or this check would FAIL every run (expected=true, present=false
+          // within the slice is treated as a real regression, not "covered elsewhere"). This
+          // site's own guard (`if (!isGlobexNow && !inStackVolDeadZone)`) sits just BEFORE this
+          // site's `start` anchor, and the flag itself is deliberately named `inStackVolDeadZone`,
+          // not `inNewEntryDeadZone`, because computeStackVolSignal() is a genuinely standalone
+          // function shared by both the RTH and Globex callers (confirmed via a real ESLint
+          // no-undef when a first attempt tried referencing the RTH handler's own
+          // inNewEntryDeadZone from inside it) -- it computes its own dead-zone flag fresh from
+          // its own bar.tod, the same self-contained pattern it already uses for isGlobexNow.
           baseline: { refireCooldown: false, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false, oppositeDirectionOpen: true },
+          naReasons: { newEntryDeadZone: 'covered via inStackVolDeadZone, computed just before this site\'s scanned slice under a different name -- see comment above, not a real gap' },
         },
         {
           label: 'RTH active slot (acd.js ~10092)',
@@ -1810,7 +1823,10 @@ async function main() {
           start: 'if (shadowCandidates.length > 0) {',
           end: 'const shadowVbSessionBars = await getSessionBarsSinceOpen(570);',
           // crossDirectionFlip added 2026-09-02, same fix/reason as STACK_VOL_BREAK_LIVE above.
-          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: false, oppositeDirectionOpen: true },
+          // newEntryDeadZone added 2026-09-16 (user request: "stop firing trades during the
+          // deadzone") -- full skip via `continue`, not force-SHADOW; see acd.js's own comment
+          // at this site.
+          baseline: { refireCooldown: true, crossDirectionFlip: true, postWinOpposite: true, newEntryDeadZone: true, oppositeDirectionOpen: true },
         },
       ];
 

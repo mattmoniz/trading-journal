@@ -165,7 +165,16 @@ async function getLiveStatus(setupType) {
   const n = +rows[0].n, ev = rows[0].ev != null ? +rows[0].ev : null;
   if (n < 20) return { status: 'SHADOW', reason: 'NEW_SIGNAL_UNDER_LIVE_EVALUATION', liveN: n, liveEv: ev };
   if (ev != null && ev < -5) return { status: 'SHADOW', reason: 'PERFORMANCE_BELOW_THRESHOLD', liveN: n, liveEv: ev };
-  return { status: 'ACTIVE', reason: null, liveN: n, liveEv: ev };
+  // Globex pause (2026-09-16, user's explicit call, same override as detectGlobexSetup()'s own
+  // GLOBEX_PAUSED) -- found missing here by DeepSeek code review the same day: this file is a
+  // SEPARATE live Globex-origin insert path (GLOBEX_FLUSH_LONG/SHORT/REVERSAL_*) that
+  // detectGlobexSetup()'s own pause never touches, since it's not inside that function's
+  // candidates loop. Without this, GLOBEX_FLUSH_* would silently start firing ACTIVE the moment
+  // its real N clears 20 (currently 1-3, so dormant today, but not permanently) while the user
+  // believes Globex is fully paused. Added HERE rather than the shared checkStandardLiveGates()
+  // checkpoint (detectorLiveGates.js) deliberately -- that checkpoint is also shared by
+  // rthFlushDetector.js/minuteBarSignalDetector.js, which are not part of this pause.
+  return { status: 'SHADOW', reason: 'GLOBEX_PAUSED', liveN: n, liveEv: ev };
 }
 
 export async function detectGlobexFlush(io) {

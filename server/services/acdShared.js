@@ -290,6 +290,20 @@ export function isPdPriorDayType(typeOrName) {
   return typeof typeOrName === 'string' && (typeOrName.startsWith('PD_') || typeOrName.startsWith('PD2_'));
 }
 
+// No-new-entries dead zone: 4:00-6:00 PM ET (user directive, 2026-07-31 -- "seems to be noise
+// and bad trades"; full-skip behavior since 2026-09-16, see acd.js's own `inNewEntryDeadZone`
+// comment). Extracted 2026-09-16 after the same `etMin >= 16*60 && etMin < 18*60` boundary got
+// duplicated a second time (computeStackVolSignal() needed its own copy, keyed off a bar's own
+// `tod` field rather than the outer handler's `etMin`, since it's a standalone function that
+// can't reach the RTH handler's own const) -- one shared boundary check for both, rather than
+// two copies of the same magic numbers drifting apart the next time this window ever changes.
+// Takes a plain ET-minute-of-day number (works for either `etMin` or a bar's own `tod`/`et_min`
+// field -- both are the same "minutes since midnight ET" unit), not a Date, so every call site
+// can pass whatever minute-of-day value it already has in scope.
+export function isInNewEntryDeadZone(etMinuteOfDay) {
+  return etMinuteOfDay >= 16 * 60 && etMinuteOfDay < 18 * 60;
+}
+
 export function computeSessionEndCapStr(etNow) {
   const sessionEndET = new Date(etNow);
   sessionEndET.setHours(16, 0, 0, 0);
