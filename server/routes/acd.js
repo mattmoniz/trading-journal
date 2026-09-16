@@ -22,7 +22,8 @@ export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
 import { completeStepTrailShadows, completePitchCatchShadows } from '../services/shadowCompletion.js';
-export { completeStepTrailShadows, completePitchCatchShadows };
+import { completeBreakevenStopShadows } from '../services/breakevenStopShadow.js';
+export { completeStepTrailShadows, completePitchCatchShadows, completeBreakevenStopShadows };
 import { resolveSetupsByPrice } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
@@ -6035,6 +6036,12 @@ export default function createACDRouter(io) {
       // Pitch and Catch shadow follow-up (user idea, 2026-09-04, UNVALIDATED) -- same
       // observation-only guarantee as the step-trail line just above.
       await completePitchCatchShadows().catch(() => {});
+      // Breakeven-stop-on-order-flow-rejection shadow follow-up (2026-09-16, RESEARCH_CLAIM
+      // orderflow_rewarded_breakeven_stop_positive_20260916) -- runs ONCE per real trade,
+      // right after it resolves (see breakevenStopShadow.js's header for why this needs no
+      // inline tracking or multi-poll retry, unlike the two shadows just above). Same
+      // observation-only guarantee -- never touches a real trade's own fields.
+      await completeBreakevenStopShadows().catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 

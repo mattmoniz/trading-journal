@@ -80,7 +80,9 @@
 <div id="ytd-section"></div>
 
 <script>
-const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll' };
+// KEEP IN SYNC with server/routes/setups.js's own LABELS object (loss-prevention-summary
+// endpoint) -- a key present in the API response but missing here renders as `undefined`.
+const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop' };
 
 function fmtMoney(n) { return (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(0); }
 
@@ -103,7 +105,7 @@ function renderPeriod(containerId, title, mechs) {
       '</div>';
   }
   html = '<div class="totals-card"><div style="display:flex;justify-content:space-between;align-items:center;">' +
-    '<div><div class="mech-name">All 6 combined</div><div class="mech-n">N=' + totalN + '</div></div>' +
+    '<div><div class="mech-name">All ' + Object.keys(mechs).length + ' combined</div><div class="mech-n">N=' + totalN + '</div></div>' +
     '<div class="mech-nums"><div class="mech-prevented mono">$' + totalPrevented.toFixed(0) + '</div>' +
     '<div class="mech-net mono" style="color:' + (totalNet >= 0 ? 'var(--green-soft)' : 'var(--red-soft)') + '">net ' + fmtMoney(totalNet) + '</div></div>' +
     '</div></div>' + html;

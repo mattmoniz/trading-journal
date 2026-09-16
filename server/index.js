@@ -177,7 +177,8 @@ app.get('/setup-performance', (req, res) => {
 
 // Loss-prevention page (2026-09-08, direct user request): Today/This-Week rollup of how much
 // realized loss each observation-only shadow tag (DirGate/MomFade/StepTrail/PitchCatch/
-// RangeSlope/VolRoll) would have prevented, reads GET /api/setups/loss-prevention-summary.
+// RangeSlope/VolRoll/BreakevenStop added 2026-09-16) would have prevented, reads
+// GET /api/setups/loss-prevention-summary.
 // Explicitly wanted on the Home Assistant page too -- that endpoint's summary_text field is
 // pre-formatted for HA's REST sensor, same convention as /api/setups/today-summary. Same
 // standalone static-page pattern as quick-check.html/setup-performance.html above -- this path

@@ -1279,6 +1279,54 @@ router.get('/setups/direction-gate-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/breakeven-stop-shadow-summary — monitoring surface for the
+// breakeven-stop-on-order-flow-rejection mechanism (2026-09-16, RESEARCH_CLAIM
+// orderflow_rewarded_breakeven_stop_positive_20260916). Same live, read-only
+// aggregate-over-the-field pattern as step-trail's/pitch-catch's own summary endpoints --
+// breakeven_stop_shadow's shape (classification/hypothetical_pnl/real_pnl/delta) mirrors
+// those two directly. Only REWARDED-classified trades ever carry a hypothetical_pnl (the
+// backing research never intervenes on NO_PUSH/REJECTED trades) -- reported separately so a
+// reader can see the classification breakdown AND the real-vs-hypothetical delta for the one
+// class this mechanism actually acts on.
+router.get('/setups/breakeven-stop-shadow-summary', async (req, res) => {
+  try {
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, breakeven_stop_shadow, fired_at, setup_type
+      FROM active_setups
+      WHERE breakeven_stop_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+    `);
+    const byClass = { NO_PUSH: [], REJECTED: [], REWARDED: [] };
+    for (const r of rowsQ.rows) {
+      const cls = r.breakeven_stop_shadow.classification;
+      if (byClass[cls]) byClass[cls].push(r);
+    }
+    function classStat(rows) {
+      const n = rows.length;
+      if (!n) return { n: 0, wr: null, ev: null, total: 0 };
+      const total = rows.reduce((s, r) => s + r.actual_pnl, 0);
+      const wins = rows.filter(r => r.actual_pnl > 0).length;
+      return { n, wr: +(100 * wins / n).toFixed(1), ev: +(total / n).toFixed(2), total: +total.toFixed(2) };
+    }
+    const rewarded = byClass.REWARDED;
+    const withHypothetical = rewarded.filter(r => r.breakeven_stop_shadow.hypothetical_pnl != null);
+    const realTotal = withHypothetical.reduce((s, r) => s + r.actual_pnl, 0);
+    const hypoTotal = withHypothetical.reduce((s, r) => s + r.breakeven_stop_shadow.hypothetical_pnl, 0);
+    res.json({
+      classification: { noPush: classStat(byClass.NO_PUSH), rejected: classStat(byClass.REJECTED), rewarded: classStat(byClass.REWARDED) },
+      rewardedInterventionCompare: {
+        n: withHypothetical.length,
+        realTotal: +realTotal.toFixed(2),
+        hypotheticalBreakevenTotal: +hypoTotal.toFixed(2),
+        delta: +(hypoTotal - realTotal).toFixed(2),
+      },
+      note: 'Observation-only -- these numbers reflect what actually happened. hypothetical_pnl on REWARDED rows shows what a breakeven-stop response would have produced instead; nothing here has changed any real trade.',
+    });
+  } catch (err) {
+    console.error('[setups/breakeven-stop-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/setups/momentum-against-fade-shadow-summary — monitoring surface for the
 // momentum-against-fade tag (see acd.js's getMomentumAgainstFade()/tagMomentumAgainstFadeShadow()
 // header for the full mechanism). Observation-only -- reports, for real trades tagged
@@ -1312,8 +1360,9 @@ router.get('/setups/momentum-against-fade-shadow-summary', async (req, res) => {
   }
 });
 
-// GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 6 observation-
-// only shadow tags (DirGate, MomFade, StepTrail, PitchCatch, RangeSlope, VolRollover), 2026-09-08
+// GET /api/setups/loss-prevention-summary — Today/This-Week rollup across all 7 observation-
+// only shadow tags (DirGate, MomFade, StepTrail, PitchCatch, RangeSlope, VolRollover,
+// BreakevenStop added 2026-09-16), 2026-09-08
 // user request: "how much loss has each of these prevented, today and this week, perpetually
 // updated" + wanted on the Home Assistant page. Two mechanism shapes, one unified definition:
 //   - Gate-type (DirGate/MomFade): the hypothetical if honored is "no trade taken" ($0) --
@@ -1347,7 +1396,7 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     // filters over the same rows, same pattern the today-vs-week split already used.
     const yearStartET = `${nowET.getFullYear()}-01-01`;
 
-    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ] = await Promise.all([
+    const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ] = await Promise.all([
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
@@ -1362,6 +1411,9 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
       query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+      query(`SELECT trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_shadow
+             FROM active_setups WHERE breakeven_stop_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
                AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
     ]);
 
@@ -1395,6 +1447,12 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
       ? Number(r.post_entry_exit_signals.vol_rollover.hypothetical_pnl) : null;
     const stepTrailHyp = r => r.step_trail_shadow?.hypothetical_pnl != null ? Number(r.step_trail_shadow.hypothetical_pnl) : null;
     const pitchCatchHyp = r => r.pitch_catch_shadow?.hypothetical_pnl != null ? Number(r.pitch_catch_shadow.hypothetical_pnl) : null;
+    // Only REWARDED-classified rows ever carry a non-null hypothetical_pnl (see
+    // breakevenStopShadow.js's header) -- the extraFilter below is technically redundant with
+    // the hypGetter!=null filter altExitStat already applies, but kept explicit to match
+    // pitchCatch's own qualified===true convention and make the "only REWARDED counts" scoping
+    // visible at the call site, not just implied by the data shape.
+    const breakevenStopHyp = r => r.breakeven_stop_shadow?.hypothetical_pnl != null ? Number(r.breakeven_stop_shadow.hypothetical_pnl) : null;
 
     const mechanisms = {};
     for (const period of ['today', 'week', 'ytd']) {
@@ -1405,10 +1463,11 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
         pitchCatch: altExitStat(pitchCatchQ.rows, pitchCatchHyp, period, r => r.pitch_catch_shadow?.qualified === true),
         rangeSlope: altExitStat(postEntryQ.rows, rangeSlopeHyp, period),
         volRollover: altExitStat(postEntryQ.rows, volRolloverHyp, period),
+        breakevenStop: altExitStat(breakevenStopQ.rows, breakevenStopHyp, period, r => r.breakeven_stop_shadow?.classification === 'REWARDED'),
       };
     }
 
-    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll' };
+    const LABELS = { dirGate: 'DirGate', momFade: 'MomFade', stepTrail: 'StepTrail', pitchCatch: 'PitchCatch', rangeSlope: 'RangeSlope', volRollover: 'VolRoll', breakevenStop: 'BreakevenStop' };
     function fmtBlock(period, title) {
       const lines = [title];
       for (const [key, s] of Object.entries(mechanisms[period])) {
