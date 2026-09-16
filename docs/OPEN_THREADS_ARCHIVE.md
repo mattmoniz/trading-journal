@@ -7863,3 +7863,270 @@ follow-up had a real WR-computation bug, caught and corrected directly by Claude
 
 
 
+
+---
+## Archive batch: 2026-09-15 (cutoff 2026-09-08, keep last 7 days)
+
+### From "🔶 2026-09-07 — acd.js duplication/dead-code audit: 3 dedup fixes, 5 orphaned detectors resolved"
+
+- Runner-trail-width lookup (4 near-identical inline copies) → `acdShared.js`'s `lookupRunnerTrailWidth()`. Fixed a real bug in the process: the 4th, undocumented copy was missing the `.catch(() => ({rows: []}))` safety net the other 3 had, on the highest-traffic of the 4 sites.
+
+
+
+
+
+
+- RSI(14) + bar-resample (2 copies: `absorptionSetup` on 2-min bars, `rsiDivSetup` on 15-min bars) → `server/services/technicalIndicators.js`'s `resampleBars()`/`computeRSI14()`.
+
+
+
+
+
+
+- Session-end/expiry-cap string (3 copies) → `acdShared.js`'s `computeSessionEndCapStr()`.
+
+Separately, checking whether RSI is even used live (user asked "Do we use rsi??") surfaced a bigger finding: **5 detectors were computing real setups every 15s poll but never inserted anywhere** — `aUpStrong`, `aDownStrong`, `aUpWeak`, `gapFill`, `rsiDivSetup`. Already flagged as "dead-weight, pre-existing" during the 2026-09-05 `buildAllCandidates()` extraction (this file's own 2026-09-05 P2 entry), but never root-caused or acted on. Traced via `git log -S`/`git blame`:
+
+
+
+
+
+
+- `rsiDivSetup` was introduced the same day but never wired into any array at all — untested either way, not a resurrection of a confirmed negative.
+
+**Resolved 2026-09-07**: deleted the `A_DOWN_STRONG`/`A_UP_WEAK` computation blocks outright (confirmed 0/389-day dead, not worth resurrecting) including their `ctx` return references and `EXPIRY_WINDOW` entries. Wired `aUpStrong`, `gapFill` (SHORT-only, matching the same historical finding), and `rsiDivSetup` into `shadowCandidates` — all 3 have zero/thin `SETUP_STATUS` coverage, so `isLiveEligible()`'s `knownTypes.has()` check keeps them SHADOW-only until real N clears the standard N≥20 bar. Added missing `SETUP_DISPLAY_LABELS` entries for `A_UP_STRONG`/`A_DOWN_WEAK`/`RSI_DIV_BULLISH`/`RSI_DIV_BEARISH` (per the new-setup-type checklist item 6). Verified: `node --check`, lint clean, module load, `test_invariants.mjs` (unchanged 19 FAILURE/85 WARNING baseline), live restart + `/api/acd/setup-detection` 200 + no new server errors.
+
+Also added a standing CLAUDE.md convention codifying proactive dedup/extraction as expected practice ("Self improvement should be a rule," user's words), not something to wait to be asked for.
+
+**Resolved same session**: the dispatched audit found real duplication in the color/threshold layer — `quick-check.html`'s `--muted`/`--dim` CSS variables were swapped relative to `MarketPulseBar.jsx`'s `C.muted`/`C.dim` (and `--green` was a genuinely different hue, `#22c55e` vs `#10b981`), so every shared threshold-color function (`sigmaColor()`, range/delta/rvol color mapping) only agreed by coincidence — each file happened to pick the oppositely-named token that resolved to the matching hex. Fixed: canonicalized `quick-check.html`'s tokens on `MarketPulseBar.jsx`'s values (the in-app dashboard is the primary surface), then corrected every duplicated-logic usage site's token-name reference to match (the value fix alone would have broken parity at several sites that were relying on the old swap to agree). Also fixed the 2 already-disagreeing cosmetic items: `ptsFromOpen`/`fmtPct`'s sign at exactly 0pt (quick-check.html now uses `>= 0` matching MarketPulseBar.jsx, not `> 0`), and the session-character fallback color (resolved automatically by the token fix). Added "KEEP IN SYNC" cross-reference comments at every duplicated site in both files, matching the precedent already used for the `sizeMultiplier` fix. Verified: token-name sequence traced by hand at all 6 duplicated-logic sites against the real current file content (not a re-typed guess) confirms parity; `npm run lint:frontend`/`build` (pre-existing unrelated lint failure confirmed via `git stash`), quick-check.html's inline `<script>` extracted and `node --check`ed, live restart + both `/quick-check` and `/api/acd/setup-detection` return 200, `test_invariants.mjs` unchanged (19F/85W baseline).
+
+
+### From "30-day shadow validation"
+
+- **2026-09-07: intraday Hurst standalone finding — retested with a proper per-type replication check before wiring, came back negative.** Yesterday's Batch 3 finding (PERSISTENT tercile -$12.52 fade EV vs MEAN_REV +$2.36, pooled N=1246/1348) was flagged as "one check away" from being ready to queue behind the prior-day-TREND gate as a second real `sizeMultiplier` wiring candidate. Ran the same N-floored (≥10 per bucket), aggImpact-ranked replication check used for the vol-regime classifier and `prior_day_profile` earlier — **does not replicate**. 30 setup_types cleared the floor; the 6 most-penalized (`OR5_HIGH_FADE_SHORT`, `PD_CLOSE_FADE_SHORT`, `PD_OR_MID_FADE_LONG`, `RTH_VWAP_FADE_LONG`, `CAM_R2_FADE_LONG`, `ONH_FADE_LONG`, pooled N=249) drive the entire pooled effect, and the held-out pool (24 remaining types, N=1032) actually **reverses sign** (+$16.96, only 58% individually favorable — a coin flip). Unlike `prior_day_profile`, which held up under this identical test and got wired live, Hurst does not — **not wired**. Recorded: `RESEARCH_CLAIM intraday_hurst_1030_replication_check_negative_20260907` (CONFIRMED). Not a dead end for the 6 concentrated types specifically (a real, large effect there), but that would need its own dedicated, narrower validation — not assumed from this pooled test.
+
+
+
+
+
+
+
+- **2026-09-07: the pending "confirm the TREND gate fires live" check now self-resolves — no human needs to remember it.** Built `scripts/verify_prior_day_trend_gate_live.mjs`, wired into `run_daily_calibration.sh` (already scheduled 8:20 PM ET every weekday, confirmed via `crontab -l` — no scheduling change needed). It checks daily for a real `active_setups` fire on a trade_date where `auction_reads.prior_day_profile='TREND'` since the gate shipped, no-ops quietly until that happens, then auto-calls `resolveDecision()` on `OPEN_DECISION prior_day_trend_gate_pending_rth_confirmation_20260906` itself. Deliberately scoped to confirm EXECUTION only (a real non-null input reached the code path on a real trading day) — not a re-verification of the reduction's own correctness, which DeepSeek's code review and this session's dry-run checks already covered. Tested: correctly no-ops right now (0 real fires since 2026-09-07, as expected).
+
+
+
+
+
+
+
+
+- **2026-09-07, later same day: dispatched the staged v3 rolling-WR-circuit-breaker design critique (per the prior session's own "NEXT SESSION: dispatch this first" note) — decisive negative, thread closed.** DeepSeek's critique went past the two specific bugs A/B were meant to fix and found the root cause: 3 of the 6 real historical collapse types (`GLOBEX_VWAP_FADE_LONG`, `PD_POC_FADE_SHORT`, `OR5_LOW_FADE_SHORT`) had fewer than 20 resolved real trades at their own collapse onset, so a baseline-gated detector structurally cannot fire on them during the window it exists to catch; the one wave type with rich history (`IB_BEARISH`, 155 real trades) is exactly the one whose only adequately-sampled trigger fired into a genuine bounce-back (+$19.20 forward EV, within ~1 SE of zero at N=10) — consistent with this codebase's own prior finding that short-horizon WR dips have NEGATIVE autocorrelation (anti-predictive, not just noisy). Lowering the forward-N floor to 10 (as B proposed) doesn't fix this — it's noise-on-noise (SE ≈ ±$15–32 against per-type dispersion this large), and it would also make the "single positive-EV trigger kills the design" rule likely to self-destruct from chance alone if applied roster-wide.
+  - **Independently re-verified against the live DB before accepting the verdict** (not trusting DeepSeek's prose numbers): total real decisive N and type count (2,653/183, matching DeepSeek's 2,574/183 closely — both correctly used the `is_cluster_primary` filter from last session's cluster-touch-credit Phase 2 ship, confirming DeepSeek used current, not stale, schema knowledge), the daily-not-weekly `SETUP_STATUS` cadence (confirmed in `run_daily_calibration.sh`), and all 6 wave-type resolved-before-collapse counts (within ±1–3 trades of DeepSeek's cited figures — the sub-20-baseline claim for 3 of 6 types holds under independent re-derivation).
+  - **Recorded `RESEARCH_CLAIM wr_circuit_breaker_v3_framing_rejected_20260907` (CONFIRMED)** with the full reasoning and both sets of verified numbers. **Resolved `OPEN_DECISION roster_level_wr_circuit_breaker_scoped`** — closed as not-solvable-at-this-data-volume via a faster leading detector; the existing daily `SETUP_STATUS` gate remains the detection mechanism, no v3 build.
+  - **Flagged a new, separate `OPEN_DECISION wr_lag_exposure_bound_alternative_20260907` (MEDIUM)** for DeepSeek's proposed alternative: since the ~13–14 day detection lag is a data-volume floor (not a schedule problem — `SETUP_STATUS` already runs daily), the honest fix is to bound the DAMAGE a collapsing type can do during that lag (a preventive per-type exposure/concentration cap) rather than trying to predict the collapse faster — a genuinely different mechanism with no fitting phase, no labels, no reversion-trap validation to fail. Not scoped or built — flagged for a future session, would need the same 3-phase workflow given it gates live position sizing.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: runSetupDetection decomposition — P3 (factor pre-fetch) extracted, and P4's real scope confirmed much larger than the last assessment implied.** Picked this back up per the prior review's own recommendation to continue with P3 while leaving P4 as a deliberate future decision.
+  - **P3 — done, committed `c138e7d`.** The ~365-line factor pre-fetch block (overnight-inventory reads, win/loss-streak + same-direction stacking counts, VWAP-sigma, turbulence confirmation, session-delta percentiles, entry-pressure calibration, pulse-score precomputation) moved verbatim into a new top-level `computeLevelFadeFactors(ctx)`, mirroring `buildAllCandidates()`'s pattern exactly. Free-variable check confirmed only 5 inputs needed from outside (`todayET`, `dtClass`, `allRthBarsRow`, `aUpFired`, `aDownFired`); return-completeness was checked by grepping all 26 candidate names against the entire rest of the file, not eyeballed — caught that `_lfOvOpen` and `_pulseVolSigma` are genuinely read downstream (would have been easy to miss as "just intermediates"), and confirmed `lfPriorStop`/`lfPriorWin` are pre-existing dead code (zero references anywhere in the file) — carried forward unchanged rather than pruned mid-move. Verified: exact byte-diff of the moved body, ESLint clean (no-undef — the same net that caught the `etMin` gap in P2), `node --check` clean, module load, server restart clean, live `GET /api/acd/setup-detection` returns 200, `test_invariants.mjs` byte-identical to baseline (19F/84W).
+  - **Honest gap**: today is a market holiday (Labor Day) — the session-closed early return short-circuits before the request ever reaches `computeLevelFadeFactors()`, so live RTH execution of the new function is verified structurally/statically but not yet exercised end-to-end. Flag for a quick check during the next real RTH session (2026-09-08).
+  - **P4's actual scope, mapped precisely for the first time this session — significantly bigger and messier than the 2026-09-06 review's summary suggested.** The prior assessment described "the level-fade block" as a phase alongside P5-P10; in the current file it's one continuous, unbroken region from the "Level Scalp detection" comment through the final persist step, with NO clean internal seams:
+    - Level Scalp / VWAP magnet / VWAP reclaim / `liveStats` / the `sizeMultiplier` IIFE: ~1,956 lines on its own (old "Level Scalp detection" through "Stop Sweep detection").
+    - Stop Sweep + Failed Sweep Reversal + priority selection + edge-based filtering + ZONE EDGE FADE + `candidates`/`shadowCandidates` array construction + the full trade-brief builder (WHY NOW/PACE/SIZE) + the first persist-to-`active_setups` step: another ~1,100+ lines after that.
+    - **5 separate `INSERT INTO active_setups` sites now live inside this combined region** (not the 2 the last review counted) — the touch-credit sibling insert, the cluster-winner insert, and at least 3 more added since (prior-day-TREND-gate era, momentum-against-fade-shadow era).
+    - The `sizeMultiplier` IIFE itself is still exactly where it was described: order-dependent, ~25+ factors, explicitly commented as unsafe to split.
+  - **Decision: still not touching P4 this session.** If anything, this more precise map makes the prior caution more clearly correct, not less — a boundary mistake anywhere in ~3,000 lines carrying 5 live INSERT sites is a materially worse risk than what the original estimate implied. Before any future attempt, get a **fresh** DeepSeek boundary/risk assessment against the file as it now stands (the 2026-09-06 review is stale — code has moved and grown since) rather than resuming from the old line numbers or old INSERT-site count.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: fresh DeepSeek P4 boundary review came back — decisive, and it closes out this decomposition effort at P3.** Dispatched against the current file (not the stale 2026-09-06 map), asking specifically whether any clean seam exists in the remaining ~3600-line region and to risk-order the now-5 `active_setups` INSERT sites.
+  - **Verdict: no clean seam exists anywhere in lines 5854–9485.** Four kinds of state thread end-to-end: `liveStats` (read via a shared module-level cache, not a parameter, at 7+ downstream points including both remaining persist sites); the `sizeMultiplier` IIFE's result (carried on a mutable `levelScalpSetup`/`active` object read ~2,500 lines later at the main INSERT); the `active` object itself (mutated in place across selection → enrichment → persist with no point where it's a finished value); and 2 of the 5 real INSERT sites already sit inside what would be the "detection" half of any split, so "detection is read-only" is false regardless of where a boundary is drawn.
+  - **The one theoretically possible coarse wrapper** (before the `candidates` array, ~line 8195) would need ~60 free-variable inputs and ~20 return values while relocating 2 live INSERT sites — DeepSeek's own bottom line, despite its mandate being to find any safe extraction: **the safer answer is to leave 5854–9485 alone entirely**, not even attempt the coarse wrapper.
+  - **Independently spot-checked before accepting** (not just trusted): the "order-dependent, do not split" sizeMultiplier comment, the exact `willGetTouchCredit` conditional, and several specific INSERT line numbers — all confirmed accurate against the live file. Also caught a small, harmless error in Claude's own prior commit message (said P3 returns 26 names; DeepSeek correctly counted 28 — the code was always right, only the prose undercounted).
+  - **Decision: the runSetupDetection decomposition effort stops at P3.** P4 stays as internally-tangled but functionally-verified-correct code. Any future work here would need a fundamentally different approach (e.g. genuinely rewriting `sizeMultiplier` as a data-driven score rather than an imperative IIFE — a much bigger, separate project) rather than a mechanical extraction. Recorded on `OPEN_DECISION acdjs_deferred_cleanup_from_deepseek_audit_20260905` (this specific sub-thread closed; the decision stays open only for whatever other deferred-cleanup items it originally tracked). Full DeepSeek response preserved at `scratch/deepseek_response_p4_boundary_review_20260907.md` (before the next dispatch overwrites the live `scratch/deepseek_response.md`).
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: sizeMultiplier factor-hygiene census re-run at N=88 (up from the original informal N=63 look) — confirms and extends the 2026-09-01 finding, with 4 factors now confirmed fully dead.** Direct SQL census against `active_setups.size_factors_at_detection` (real, `is_cluster_primary`-filtered fires only), cross-referenced against the actual `sizeMultiplier` IIFE conditions in the live code.
+  - **4 factors confirmed fully dead (0 real firings across 88 trades)**: `confluencePairPartner` (+0.15 boost), `eliteZone` (+0.15 boost), `regimePersist` (+0.10 boost — doubly dead, also gated on the already-broken `dtClass`), `entryPressureShortBoost` (a calibrated bump — still zero true occurrences).
+  - **3 more conditions dead specifically because of the already-tracked `dtclass_live_read_wiring_and_regime_scope` bug** (`dtClass` reads NULL 99% of the time): the OR-Expansion-Bias, Regime-Persistence, and TREND-day-penalty branches. This census gives that already-known bug its first precise blast-radius count *inside* `sizeMultiplier` specifically — 3 of ~26 conditions.
+  - **Newly noticed**: `overnightAlignment` is `NEUTRAL` 97% of the time, so its −0.1 penalty is functionally an always-on tax rather than a discriminator; `priorDayProfile` (added 2026-09-06) is missing from the `size_factors_at_detection` snapshot object entirely — a real tooling gap that would let a future added factor go stale unnoticed the same way.
+  - **Real output distribution**: 79/88 (90%) of real fires still sit at the 2 floor clamps (0.25 or 0.10) — less extreme than the original 97%-at-N=63 figure but still heavily saturated; `hasLossToday` (the post-IIFE ceiling, not part of the IIFE itself) is true on 88% of real fires, confirming it's now the dominant driver of real sizing outcomes, not an edge case.
+  - Recorded `RESEARCH_CLAIM sizemultiplier_factor_hygiene_census_20260907` (CONFIRMED). Updated `OPEN_DECISION sizemultiplier_composite_redesign_scoped_pending_review` with a concrete next step: prune/fix the confirmed-dead set (needs its own DeepSeek design critique first, per the higher-stakes-work rule, since this touches live sizing code) before revisiting whether a composite-score rebuild is worth building on the surviving factors. Not yet implemented — this session did the census only, no code changed.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: DeepSeek design critique of the proposed sizeMultiplier dead-factor prune caught real classification errors — 0 factors deleted, 1 safe instrumentation fix shipped.** Dispatched before touching any code, per the higher-stakes-work rule (this gates live trade sizing).
+  - **The critique found my "4 fully dead" classification was internally inconsistent and wrong for 3 of 4.** `eliteZone` and `regimePersist` are themselves gated on `dtClass` (which reads NULL 99% of the time) — they're 2 more faces of the already-tracked `dtclass_live_read_wiring_and_regime_scope` bug, not independently dead. `eliteZone` also still drives 3 other live sites (the T2 runner target, `targetLabel` text, the `description` eliteNote) that deletion would have silently broken. `confluencePairPartner` is **deliberately** armed-and-waiting — the code's own comment documents that no confluence pair has cleared its distinct-day floor yet, so 0/88 is correct-by-design, not a bug; it also shares its name with an unrelated Globex-path variable, a real collision hazard for any future edit. `entryPressureShortBoost`'s 0/88 window is contaminated: `entryPressureShortCalib` was permanently null from the `getCached()` bug (~2026-08-24 to ~2026-09-05), so most of the census window measured a known-broken calibration read, not genuine inertness.
+  - **Independently re-verified every load-bearing claim against the live code before accepting the correction** — all confirmed (the `eliteZone`/`regimePersist` dtClass-gating, the `confluencePairPartner` comment, the Globex name collision, the `entryPressureShortCalib` outage dates).
+  - **Net action: 0 factors deleted.** Only `priorDayProfile` added to the `sizeFactorsAtDetection` snapshot (commit `1aead0c`) — pure additive instrumentation, verified byte-safe, `test_invariants.mjs` unchanged from baseline.
+  - **Corrected `RESEARCH_CLAIM sizemultiplier_factor_hygiene_census_20260907`** in place (the original recording asserted the wrong classification) and updated `OPEN_DECISION sizemultiplier_composite_redesign_scoped_pending_review` with a dated re-check (~2026-09-21 to 2026-10-05, once `entryPressureShortCalib` has a real post-fix sample).
+  - **Worth noting as a process point**: this is exactly why the design-critique-before-code step of the higher-stakes-work workflow exists — the original plan, if implemented directly, would have deleted 3 factors that were never actually broken.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: dtClass item #7 (cross-validated day-type classifier) closed — real precision improvement found, but disqualified by day-clustering.** After DeepSeek's design-critique dispatch hung (32+ min, no progress, stopped), Claude designed the methodology directly and dispatched the actual mine-and-run to Gemini.
+  - **Result: a logistic regression model beats the existing live estimator's precision on the classes that matter** — TREND 36.2% vs the real 23.3% baseline, TURBULENT 44.0% vs 17.8%, holding directionally across a 3-way walk-forward stability check. Used the full 445-day `acd_daily_log` history (not the narrower 414-row live-tracked subset, which undercounts TREND ~3.5x) — a real, useful correction found along the way.
+  - **But a day-clustering check disqualifies it as usable**: 100% of correct TREND test predictions (17 of 17) come from just 4 distinct historical dates. The model is recognizing a handful of unusually clean days, not a generalizable detector.
+  - **Independently verified before accepting** — not just taken on Gemini's word: read both saved scripts directly (found and resolved one apparent leakage concern — `classifyOpeningType()` receives the full day's bars instead of the as-of-checkpoint slice, but the function only ever reads the first 5 bars internally, so it's harmless), re-derived the test-set base rates via a completely separate raw DB query (exact match: 62.4%/25.6%/12.0%), confirmed all 4 cited TREND dates are genuinely TREND in the DB, and re-ran the saved training script fresh in a clean Python venv — every reported number reproduced exactly.
+  - Recorded `RESEARCH_CLAIM dtclass_cross_validated_model_test_20260907` (CONFIRMED). Updated `OPEN_DECISION dtclass_live_read_wiring_and_regime_scope` — items 4 and 7 (the core "can we build a better regime classifier" question) are now closed as a genuine, informative negative. Items 1 (display-tier wiring, entangled with real sizing) and 6 (GARCH per-setup pilot, stale data) remain open.
+  - **Process note**: the Gemini dispatch for this was interrupted once mid-flight for a "clear out gemini first" check — confirmed print-mode dispatches are already stateless between calls (no file deletion needed), then redispatched the identical task fresh with no loss of continuity.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: user pushed back on "our current regime filter isn't good" — dug deeper into the OTHER live regime-adjacent factors (not dtClass) and found a real, live, currently-active problem.** Checked NL30 (a 30-day market-direction bucket, live in `sizeMultiplier` since 2026-07-05, never recalibrated) against current real trade data.
+  - **Two of NL30's five direction/bucket branches are currently boosting size (+0.10x) into buckets that have been consistently NEGATIVE EV across their entire real trading history**, based on a one-time 2026-07-05 backtest snapshot that was never rechecked: SHORT+`STRONG_BEAR` (claimed 77.7% WR/+$68.10 EV, real: 40.9% WR/-$10.94 EV, N=413 across 8 distinct dates, negative in all 3 chronological thirds — not a single bad day) and LONG+`MILD_BULL` (claimed 77.3% WR/+$63.70 EV, real: 45.9% WR/-$15.96 EV, N=61, worsening trend across thirds). The two penalty branches also show real EV much closer to breakeven than their original claims (likely over-penalizing now). Only LONG+`STRONG_BULL` still clearly holds up on real data.
+  - **A real methodological wrinkle found along the way**: NL30 is a slow-moving 30-day rolling sum, so any given bucket structurally clusters into a small number of contiguous calendar-date stretches rather than many independent days — this is NOT the classic single-lucky-day day-clustering failure mode the standard `top5DayPct` check is built to catch. Worth its own thought before building a recalibration script.
+  - **This is the exact no-static-thresholds anti-pattern this codebase otherwise polices** — unlike `DAY_TYPE_ALPHA`/`OPTIMAL_STOP`, NL30's conditioning has never had a scheduled recalibration script; it's a one-time hardcoded snapshot from a single historical backtest.
+  - Recorded `RESEARCH_CLAIM nl30_regime_conditioning_stale_boost_inverted_20260907` (CONFIRMED). Flagged `OPEN_DECISION nl30_regime_conditioning_needs_recalibration_20260907` as **HIGH** priority — this is real capital being sized up into a currently-losing edge, not a research-only finding. Not yet fixed — needs a design critique before touching live sizing code, per the higher-stakes-work rule.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: the NL30 finding is confirmed SYSTEMIC — two more stale sizeMultiplier factors found and confirmed against the full real trade history, per user direction to keep digging before fixing everything together.**
+  - **Loss-streak cap** (applied last, as a hard ceiling): the 3+-losses bucket, which gets the harshest cap (mult ≤ 0.10, same as 2-losses), is now essentially the **best-performing bucket** (50.7% WR, **+$4.08 EV**), not the worst as the 2026-07-05 claim (28.4% WR) assumed. Given the user trades exactly 1 MNQ micro contract and live sizing rounds via `Math.round(1×mult)`, a 0.10 cap forces a hard SKIP — **this is fully blocking real, currently-profitable trades, not just under-sizing them.**
+  - **Win-streak boost**: the largest live boost (+0.50x) goes to a bucket now showing only 57.6% WR/+$2.29 EV (claimed 87.8% WR). The 1-win bucket's real +0.25x boost is now applied to a **net-negative** bucket (-$6.39 EV).
+  - **Overnight alignment**: penalizes the wrong bucket — `NEUTRAL` gets a live -0.1x penalty while the actually-worst bucket (`COUNTER`, -$13.22 EV) gets none.
+  - **This is now confirmed systemic, not isolated**: essentially the entire non-`dtClass`-gated portion of `sizeMultiplier` was calibrated once in a ~4-day window in July 2026 with no scheduled recalibration since — unlike `DAY_TYPE_ALPHA`/`OPTIMAL_STOP`. This directly strengthens the case for the parked `sizemultiplier_composite_redesign_scoped_pending_review` effort — both threads point at the same root cause and the same fix shape (a real, scheduled, self-recalibrating replacement, not individual patches).
+  - Recorded `RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907` (CONFIRMED). Updated `OPEN_DECISION nl30_regime_conditioning_needs_recalibration_20260907` to reflect the systemic scope.
+  - **Dispatched a Gemini audit of the remaining ~6 harder-to-reconstruct factors** (daysSinceTest, minutesSinceVisit, VWAP extension, smallGapDay, deltaNeutral/High, buyersAtLevel/sellersAtLevel — all need bar/level-level history reconstruction), explicitly asked to report SKIP/TRADE-threshold impact at the user's real base=1 contract size, not just continuous EV. Not yet landed as of this entry.
+  - **User directive**: finish digging for all remaining stale factors first, then fix everything together in one pass — no code changes started yet.
+
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: shipped the first batch of sizeMultiplier fixes — 5 stale factors fixed together, per user direction ("keep digging, then fix all together").**
+  - **NL30 regime conditioning — REMOVED entirely** (all 5 branches). User's explicit call, going further than the initially-proposed partial fix (2 inverted branches, 3 weak-but-directionally-right) — given the pattern found across this whole audit, a full removal was judged simpler and safer than a delicate partial patch.
+  - **Loss-streak cap — REMOVED entirely.** Real data (split by `origin_status` to isolate actual user-facing trades) showed the harshest-capped bucket (3+ losses) is now the best-performing one (+$9.85 EV), not the worst. Same "revenge trading is reliably worse" premise already failed once for the related STAND DOWN badge (removed 2026-09-05) — failing the same way twice is the premise being wrong, not a stale number.
+  - **Win-streak boost — recalibrated, not removed.** The 1-win branch (now net -$6.39 EV) was removed; the 3 surviving branches (3+wins/2wins/firstOfDay) were cut from 0.50/0.35/0.10 down to 0.10/0.05/0.05 to match real, much smaller effect sizes. Explicitly labeled as a conservative interim cut, not a fresh precise calibration.
+  - **Overnight alignment — flipped.** Now penalizes `COUNTER` (real worst bucket, -$13.22 EV) instead of `NEUTRAL` (which was barely different from `ALIGNED`).
+  - **`daysSinceTest ≤2` boost — removed** (real EV -$3.87 at N=30); the `null`-penalty branch was left untouched (its own real sample is too thin to evaluate).
+  - Verified with the full standard discipline: syntax check, ESLint clean, line-by-line diff review before shipping, server restart clean, live endpoint returns 200, `test_invariants.mjs` byte-identical to baseline. Honest gap: today is a market holiday, so live RTH/Globex execution of these branches is unverified until the next real trading session (2026-09-08).
+  - **Not done yet**: the ~6 harder-to-reconstruct factors (minutesSinceVisit, vwapExtended, smallGapDay, deltaNeutral, deltaHigh, buyersAtLevel/sellersAtLevel) are still being audited — a first Gemini attempt had a confirmed bug (claimed `minutesSinceVisit>=180` has zero real occurrences ever; ground truth shows 2 in just an 88-row recent window), and a corrective re-dispatch is in flight. The real underlying fix — a scheduled, self-recalibrating replacement for this whole factor class, so it doesn't silently decay again — remains unbuilt; today's changes remove/soften what's currently wrong, they don't prevent future staleness.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: dead code deleted, and a recurring live timezone bug found, fixed, and given a prevention mechanism.**
+  - **Deleted 2 confirmed-dead items** flagged earlier this session but deliberately deferred: `lfPriorStop`/`lfPriorWin` (computed, never read anywhere) and `sessionBiasMatch`'s exported/destructured binding (the internal copy used by `sessionConflictFor`'s closure is untouched and still works). Verified via `node --check`, ESLint, diff review, restart, live check, `test_invariants.mjs` unchanged.
+  - **Found a genuine third occurrence of an already-documented-and-fixed timezone bug.** While auditing Gemini's `smallGapDay`/`deltaNeutral`/`deltaHigh` reconstruction, found `acd.js`'s `_lfOnGapQ` and `_lfDeltaPercQ` both cast `price_bars_primary.ts` through a UTC-then-America/New_York double timezone conversion — but that column already stores naive ET digits directly (per `server/db.js`'s own documented 2026-08-19 fix). Empirically confirmed live: a real 09:30:00 bar returns hour=5 through the cast. `_lfDeltaPercQ`'s own 2026-08-31 rewrite (for an unrelated bug) silently reintroduced this exact pattern that the 2026-08-19 fix was supposed to have ended.
+  - **Verified per-occurrence, not blanket-fixed** — the same cast is genuinely correct for `trades.entry_time`/`exit_time` (confirmed against the raw Sierra Chart import string for a real trade), so `server/routes/backtest.js` and `scripts/daily_coaching.js` were left untouched.
+  - **Added a prevention mechanism**, per explicit user frustration at this bug "getting refound" — pattern H in `scripts/hardcoded-threshold-patterns.sh`, wired into both the git pre-commit hook and the Stop hook's same-session check, so a fourth recurrence against a non-UTC column is caught automatically. The hook caught a real false positive on its first live run (its own explanatory prose quoting the bad pattern) — fixed by rewording rather than growing the exclude list.
+  - Recorded `RESEARCH_CLAIM lfongapq_lfdeltapercq_timezone_double_cast_fixed_20260907` (CONFIRMED). **Not yet resolved**: whether the `vwapExtended`/`deltaHigh` sizeMultiplier branches need fixing too — both now have reliable full-history data (95.5%/94.3% match rates against ground truth) showing negative EV despite live boosts, the same pattern already fixed for the first 5 factors. `smallGapDay` couldn't be reliably reconstructed (72.7% match rate) so there's no trustworthy retroactive number for it yet.
+  - Added a new CLAUDE.md rule (audit existing static thresholds, not just block new ones) and a memory entry (dig for every instance of a problem class before batch-fixing) reflecting today's broader pattern.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: follow-up sizeMultiplier fix shipped — VWAP Extension and deltaHigh boosts removed (commit `3f29fb5`).** Both now had reliable full-history data (95.5%/94.3% match rates against ground truth from the corrected Gemini audit) showing negative real EV despite live boosts — the same anti-pattern as the first batch. VWAP Extension: claimed z=+2.95, real EV -$2.98 (N=505, 41.1% SKIP/TRADE flip rate). deltaHigh: claimed +$28 EV, real EV -$3.32 (N=549, 37.4% flip rate). `deltaNeutral`'s penalty left unchanged — still directionally correct, zero practical consequence at base=1 either way.
+  - **Total across both rounds today: 7 stale sizeMultiplier factors fixed** (NL30, loss-streak cap, win-streak boost, overnight alignment, `daysSinceTest≤2` boost, VWAP Extension boost, deltaHigh boost).
+  - **Confirmed still good, no action needed**: `buyersAtLevel`/`sellersAtLevel` (real EV +$3.83, N=819, 55.3% flip rate — this one actually works).
+  - **Still unresolved**: `minutesSinceVisit` (36.4% reconstruction match rate, too unreliable to trust) and `smallGapDay` (72.7% match rate, also excluded — though its input computation is now at least correct going forward after the timezone fix, so a fresh look with clean data is more viable than before, just not done yet).
+  - Verified with the full standard discipline: syntax, lint, diff review, restart, live check, `test_invariants.mjs` byte-identical to baseline.
+  - **The real structural fix — a scheduled, self-recalibrating mechanism for this whole factor class — remains unbuilt.** Today shipped two rounds of manual correction to what was found broken; nothing yet prevents the next decay cycle.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: third round — `minutesSinceVisit` and `smallGapDay` also removed, closing out this session's stale-factor audit at 9 total.** Neither could be reliably reconstructed (36.4%/72.7% match rates, below every other factor's trust bar this session), so rather than dispatch a fresh Gemini pass on `smallGapDay`'s now-clean data, the user's call was direct: "Just remove and discard them." Both underlying raw values are still computed and still feed `sizeFactorsAtDetection` for future monitoring — only the live sizing effects are removed (`minutesSinceVisit`'s first-visit +0.15 boost / 3hr+-stale -0.25 penalty; `smallGapDay`'s quiet-overnight -0.15 penalty).
+  - **Total across all 3 rounds today: 9 stale sizeMultiplier factors removed/recalibrated.**
+  - Verified with the full standard discipline: syntax, lint, diff review (exactly 2 hunks), restart, live check, `test_invariants.mjs` byte-identical to baseline, no new `server_errors.jsonl` entries.
+  - Recorded `RESEARCH_CLAIM sizemultiplier_visitlatency_smallgap_removed_20260907` (CONFIRMED). Renamed the tracking decision (the old `nl30_regime_conditioning_needs_recalibration_20260907` misleadingly implied NL30 itself was still unfinished, once its scope had grown across 3 updates to cover the whole factor family) to `sizemultiplier_stale_factor_audit_remaining_scope_20260907`, now narrowed to just the one thing genuinely still open: **the scheduled, self-recalibrating recheck mechanism for this whole factor class remains unbuilt** — nothing yet catches the NEXT decay cycle automatically, for these 9 or the ~15 factors never audited this session.
+
+
+
+
+
+
+
+
+- ~~**2026-09-07, continued: user spotted a real, concrete instance of the already-documented "Globex cluster sibling touch credit not built" gap.**~~ **Resolved 2026-09-07** (commit `c351e45`) — see the entry below.
+
+
+
+
+
+
+
+- **2026-09-07, continued: shipped cluster touch credit for Globex/overnight fires, closing `OPEN_DECISION globex_cluster_sibling_touch_credit_not_built_20260907`.** A live quick-check.html screenshot had shown 4 real SHADOW setups firing within 0.4 seconds of each other at the exact same entry price (29614.25) — `PW_VAH_SWEEP_REVERSAL_SHORT_OVERNIGHT`, `PM_POC_SWEEP_REVERSAL_SHORT_OVERNIGHT`, `PD_POC_FADE_SHORT`, `PD_VAH_FADE_SHORT` — all with `cluster_touch_id` NULL and `is_cluster_primary=true`, quadruple-counting one real touch across 4 setup_types' calibration stats.
+  - **DeepSeek design-critiqued before any code was written** (higher-stakes-work rule): confirmed `detectGlobexSetup()`'s candidates loop has no winner-selection (unlike RTH's EV-ranked `sortedCandidates` + `break`) — it already fires every eligible candidate as its own independent row, so only pooled-dedup TAGGING was needed, not a ported winner-selection mechanism. Also corrected the original implementation plan: instead of splicing 2 new columns into the already ~37-param INSERT, use a post-insert UPDATE keyed by `RETURNING id`, mirroring RTH's own shipped precedent and the `feedback_sql_param_dryrun_verification` convention exactly.
+  - **"Primary" means something different here than in RTH** — array-order-first-to-insert-this-poll, not EV-best (Globex's `candidates` array is a fixed enumeration, not EV-sorted) — documented inline so a future reader doesn't misread `is_cluster_primary=true` as "the highest-EV representative." A singleton touch still gets a real non-null `cluster_touch_id` (vs RTH's NULL-for-non-clustered convention) — cosmetically different, numerically identical to any `COUNT(DISTINCT COALESCE(cluster_touch_id, id))` consumer.
+  - Verified: `node --check` + ESLint clean, both UPDATE statements dry-run correctly in a rolled-back transaction against a real row (`scratch/dryrun_globex_cluster_tagging.mjs`), server restart clean, live endpoint 200, `test_invariants.mjs` FAIL/WARN lines byte-identical to the pre-change baseline, no new `scratch/server_errors.jsonl` entries.
+  - **Honest gap**: no real multi-candidate confluence touch has occurred yet since deploy to observe the tagging fire end-to-end on live data — verified correct by SQL dry-run + static checks, not yet by a real observed cluster. If the next real overnight confluence touch doesn't show the expected `is_cluster_primary`/`cluster_touch_id` pattern, revisit.
+  - Deliberately scoped to `detectGlobexSetup()`'s own candidates only — does not cover `globexFlushDetector.js` (structurally unrelated, no confluence concept) or a theoretical cross-detector co-fire between the two, matching the same boundary RTH's own dedup already accepts.
+  - Recorded `RESEARCH_CLAIM globex_cluster_touch_credit_shipped_20260907` (PROVISIONAL, pending real-world observation). Resolved `OPEN_DECISION globex_cluster_sibling_touch_credit_not_built_20260907`.
+
+
+
+
+
+
+
+
+- **2026-09-07, continued: shipped live-safety gates for the 3 previously-unprotected service-poller detectors — but the fix is narrower than the "zero exposure" framing implied.** Closes the "single biggest un-closed gap" from `docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md`.
+  - **DeepSeek design critique (dispatched before any code) found 2 of the 4 originally-proposed gates are structurally unreachable**: `isCrossDirectionFastFlip` and `isPostWinOppositeFamilyBlocked` both check "did the opposite direction of the same family fire earlier today," but each of the 3 detectors (`minuteBarSignalDetector.js`, `rthFlushDetector.js`, `globexFlushDetector.js`) fires at most ONE real row per trade_date across ALL its own setup_types — so that scenario can never occur. Independently re-verified against each file's fire-once logic before accepting.
+  - **Only 2 gates do real work**: `CAPITAL_EXPOSURE_OVERRIDE` (future-proofing, currently empty for these families) and `isOppositeDirectionOpen` (roster-wide, not date-scoped — genuinely catches a cross-midnight opposite-direction conflict). Deliberately deviated from DeepSeek's own final recommendation (which suggested keeping all 4 gates with 2 documented as inert) in favor of this project's stronger anti-dead-code precedent — only wiring what can actually fire.
+  - Also found a real, already-shipped precedent (`server/services/ibLowPnrDetector.js` already imports and calls 2 of these gates from `acd.js` safely) confirming the import pattern is sound.
+  - New shared `server/services/detectorLiveGates.js` (`checkStandardLiveGates()`), wired into all 3 detectors. Verified: no circular import, module load tests, a direct functional test against real live DB state, server restart clean, live endpoint check, `test_invariants.mjs` byte-identical to baseline, and confirmed via live `journalctl` output that `detectGlobexFlush()` is actively polling through the new code path with zero errors during real Globex hours.
+  - **Honest framing, stated explicitly per DeepSeek's caution**: all 3 families are currently real-N=0 and always SHADOW anyway, so this is future-proofing and cross-midnight protection, not an active risk reduction today. `test_invariants.mjs` check `[24]` will likely still WARN on these files for the 2 deliberately-excluded gates — expected, not a regression, matching how `isInRefireCooldown`'s exclusion is already treated.
+  - Recorded `RESEARCH_CLAIM detector_live_gates_two_of_four_structurally_inert_20260907` (CONFIRMED). Resolved `OPEN_DECISION detector_service_poller_live_gates_shipped_20260907`.
+
+
+
+
+
+
+
+
+
