@@ -412,7 +412,8 @@ CREATE TABLE public.active_setups (
     momentum_against_fade_shadow jsonb,
     cluster_touch_id uuid,
     is_cluster_primary boolean DEFAULT true NOT NULL,
-    stale_entry_price_basis boolean
+    stale_entry_price_basis boolean,
+    breakeven_stop_shadow jsonb
 );
 
 

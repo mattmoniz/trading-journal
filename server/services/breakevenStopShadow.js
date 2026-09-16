@@ -115,6 +115,17 @@ export function computeBreakevenStopClassification(bars, { entry, stop, target, 
 // one pass, right after the real trade resolves, is sufficient. Never touches the real row's
 // status/resolution/actual_pnl/stop_level.
 export async function completeBreakevenStopShadows() {
+  // FIXED 2026-09-16 (DeepSeek code review, finding #1): the resolution_method exclusion below
+  // is a POPULATION restriction, not a data-cleanliness nicety -- it was missing from the first
+  // version, meaning the live pass silently tagged a WIDER population than the backing backtest
+  // and verifier actually covered. resolveSetups.js force-closes a still-open fade at RTH close
+  // as resolution='TIME_EXPIRED'/method='MARK_TO_MARKET' with a real actual_pnl -- these never
+  // hit stop or target for real, so simulating a breakeven-stop response against them measures
+  // something the research never tested. Confirmed real contamination before this fix: 277 of
+  // 2,051 backfilled rows were MTM-resolved, 9 of those carried a non-null hypothetical_pnl
+  // that had been silently flowing into the loss-prevention rollup -- those 277 rows' shadow
+  // tags were cleared (see scratch/fix_deepseek_findings_20260916.mjs) so this corrected filter
+  // re-tags them correctly (i.e., excludes them, matching the real backtest population).
   const pending = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, fired_at::text as fired_at,
            resolved_at::text as resolved_at,
@@ -125,6 +136,7 @@ export async function completeBreakevenStopShadows() {
       AND setup_type ~ '_FADE_(LONG|SHORT)$'
       AND origin_status IN ('ACTIVE','SHADOW')
       AND (is_cluster_primary IS NULL OR is_cluster_primary = true)
+      AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
       AND fired_at IS NOT NULL AND resolved_at IS NOT NULL AND actual_pnl IS NOT NULL
     LIMIT 200
   `);
