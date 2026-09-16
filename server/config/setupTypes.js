@@ -174,6 +174,13 @@ const CONTINUATION_TYPES = new Set([
   // JOIN = trade WITH the rotation leg's own direction once it converges back to the
   // running 24hr median fair value -- a bet the leg's move continues, not a fade of it.
   'POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT',
+  // MOMENTUM_CHASE_MEDIUM_LONG/SHORT (2026-09-09, server/services/momentumChaseDetector.js):
+  // enters on a 5-min RTH bar closing beyond the prior day's RTH high/low, betting the
+  // breakout continues -- a textbook continuation bet, same shape as POC_ROTATION_JOIN above.
+  // Found falling through to UNCLASSIFIED (no '_FADE' substring, not in either override Set)
+  // 2026-09-15 via a retroactive DeepSeek code review (finding B6) -- informational-only fix,
+  // bet_class isn't read for live sizing on this setup today.
+  'MOMENTUM_CHASE_MEDIUM_LONG', 'MOMENTUM_CHASE_MEDIUM_SHORT',
 ]);
 const MEAN_REVERSION_OVERRIDE_TYPES = new Set([
   'FAILED_AUCTION_LONG', 'FAILED_AUCTION_SHORT',

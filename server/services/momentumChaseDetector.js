@@ -39,13 +39,35 @@ import { getCurrentPrice } from './priceRetrieval.js';
 import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline } from './acdShared.js';
 
+// Once-per-ET-day error log, mirroring priceRetrieval.js's logStaleOnce() convention -- added
+// 2026-09-15 (retroactive DeepSeek review, finding A2): the whole detect-and-insert was
+// previously wrapped in an empty `catch (_) { return null }` with zero logging anywhere, so a
+// genuine bug in the INSERT itself (schema drift, a malformed calibration row) would look
+// identical to "no valid signals" -- real N stuck at 0 with no error anywhere to notice.
+let _lastMomentumChaseErrorLogDate = null;
+function logComputeErrorOnce(err) {
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  if (_lastMomentumChaseErrorLogDate === today) return;
+  _lastMomentumChaseErrorLogDate = today;
+  console.error(`[momentum-chase] computeMomentumChaseSignal threw: ${err?.message || err}. Logged once/day -- if this persists, MOMENTUM_CHASE_MEDIUM_LONG/SHORT may be silently failing to fire.`);
+}
+
 const MORNING_CUTOFF_MIN = 720; // 12:00 PM ET, matches every round of the backing backtest
+const RTH_OPEN_MIN = 570; // 9:30 AM ET
 
 // Returns a candidate { direction, entry, stop, target, width, pdHigh, pdLow, regime } or null.
 // Pure function of (todayET, etMin, currentPrice) plus live reads -- no side effects, no DB
 // writes. The caller (acd.js) decides whether/how to insert it.
 export async function detectMomentumChaseCandidate(todayET, etMin, currentPrice) {
-  if (etMin >= MORNING_CUTOFF_MIN) return null;
+  // FIXED 2026-09-15 (retroactive DeepSeek review, finding A1 --
+  // OPEN_DECISION momentum_chase_no_deepseek_review_shipped_20260915): this file only ever
+  // had an UPPER cutoff (MORNING_CUTOFF_MIN). acd.js's own RTH branch is reachable starting at
+  // 8:30 AM ET (etMin>=510, see runSetupDetection's Globex-window check just above it), a full
+  // hour before RTH actually opens -- NQ's Globex/pre-market session is still producing live
+  // 1-min bars in that window, so a gap morning could trip PDH/PDL on a pre-market price and
+  // insert a MOMENTUM_CHASE_MEDIUM_* row outside the backtest's 9:30am-12:00pm scope,
+  // contaminating the exact forward SHADOW sample this setup exists to accumulate cleanly.
+  if (etMin < RTH_OPEN_MIN || etMin >= MORNING_CUTOFF_MIN) return null;
   if (currentPrice == null) return null;
 
   const regimeInfo = await getCurrentGarchRegime().catch(() => null);
@@ -123,5 +145,8 @@ export async function computeMomentumChaseSignal(todayET, etMin) {
         ...regimeStampValues(mcRegimeStamp), ...fireTagValues(mcFireTags), getBetClass(mcSetupType)]);
     if (ins.rows[0]) { try { await dropToTimeline(ins.rows[0]); } catch (_) {} }
     return candidate;
-  } catch (_) { return null; /* informational-only build, never block the response */ }
+  } catch (err) {
+    logComputeErrorOnce(err);
+    return null; // informational-only build, never block the response
+  }
 }
