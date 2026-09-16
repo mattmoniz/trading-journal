@@ -1,47 +1,73 @@
 // Minor defended-level order-flow-rejection live detector, 2026-09-15 (SHADOW-only).
+// RECALIBRATED 2026-09-15, same day, after the original zero-threshold ship (see git history
+// for the original version) -- real_n=0 at the time, so nothing was lost by changing this
+// outright rather than running old/new in parallel.
 //
-// Backing research: RESEARCH_CLAIM orderflow_rejection_phase0_pretest_20260915 (bar-level
-// pretest, positive for RTH) and orderflow_rejection_phase2_ev_backtest_20260915 (real
-// bar-by-bar $ backtest, N=43 RTH trades/29 distinct days: best cell +$69.43/trade real vs
-// +$17.98/trade placebo, but day-blocked bootstrap CI [-$16.58, $165.62] crosses zero --
-// PROVISIONAL, not yet statistically decisive). See OPEN_DECISION
-// orderflow_rejection_classifier_for_defended_levels_20260915 for the full design thread.
+// Backing research: RESEARCH_CLAIM orderflow_rejection_major_population_thin_negative_20260915
+// (corrected text) -- a threshold sweep of the SAME order-flow signature across the pivot-
+// magnitude spectrum found the zero-filter version's own real-$ backtest barely missed
+// clearing a day-blocked bootstrap CI (crossed zero by $2.73), while a LIGHT 0.25x-ATR20
+// ZigZag magnitude pre-filter (not majorPivotDefendedBreakDetector.js's 1.5x -- see below)
+// cleanly cleared it: N=52 RTH trades, best cell (stop=2x/target=1x/hold=60min) real
+// WR=65.4%/EV=$87.72 vs placebo WR=43.3%/EV=-$15.90, day-blocked bootstrap CI [$24.87,
+// $164.19] (excludes zero), chronological half-split $76.77 (N=26) vs $98.67 (N=26), 42
+// distinct trading days, 50.8% top-5-day concentration. The full 36-cell grid showed this is
+// a BROAD positive region (most stop>=1.5x/target>=1x cells beat placebo by $50-100,
+// regardless of hold time), not one lucky cell -- confirmed via an independent Gemini
+// re-verification pass whose own numbers initially diverged sharply (N=16, all-negative) but
+// were root-caused to an implementation gap in Gemini's script (no NQ roll-week exclusion, an
+// unbounded ATR history query) rather than a flaw in this finding -- see
+// scratch/independent_rejection_verify_rollweek_atr_fixed_20260915.mjs for the fix that
+// aligned pivot counts exactly (1927=1927) while the remaining touch-state-machine difference
+// was traced to Gemini's script not having access to majorPivotDefendedBreakDetector.js's own
+// already-shipped approach-side-determination logic (this file's touch state machine is a
+// verbatim copy of that live code, not a fresh reimplementation).
+// HONEST CAVEAT: the exact "best cell" is somewhat sensitive to backtest precision -- a
+// diagnostic re-run using an exact (non-15-day-sampled) volume baseline picked a DIFFERENT
+// top cell (stop=2x/target=2x/hold=240min, CI barely crossing zero at [-$7.85, $192.76])
+// from the same broad positive region. stop=2x/target=1x/hold=60min was chosen as the live
+// config for its cleaner CI and faster resolution (less session-crossing exposure), not
+// because it's an unambiguous single best -- flag if a future recalibration picks something
+// meaningfully different.
 //
-// DELIBERATELY DIFFERENT FROM majorPivotDefendedBreakDetector.js in one key way: this file
-// has NO ATR-distance/ZigZag acceptance filter on which raw swing pivots get tracked -- every
-// raw fractal pivot (findSwingPoints, swingWidth=5) is a candidate "minor" level. That's the
-// whole point: majorPivotDefendedBreakDetector's ATR-scaled magnitude filter can get "stuck"
-// on a stale reference pivot for a day+ during an elevated-volatility stretch (found live
-// 2026-09-15 -- a real ~238pt RTH flush was missed entirely because the zigzag sequence hadn't
-// rotated off the prior day's high), and a fresh 120-day threshold sensitivity re-check
-// confirmed lowering that detector's own ATR multiplier would hurt its validated quality, not
-// fix coverage. This detector doesn't compete with that mechanism -- it fills the gap left by
-// having no distance floor at all, using order-flow rejection as its OWN acceptance criterion
-// instead. MAJOR_PIVOT_DEFENDED_BREAK's threshold and mechanism are untouched by this file.
+// A LIGHT ZigZag magnitude filter, NOT majorPivotDefendedBreakDetector.js's 1.5x-ATR20 one:
+// this file uses ZIGZAG_THRESHOLD=0.25 below -- a small pre-screen sitting in FRONT of the
+// order-flow signature, not a replacement for it. Order flow is still the primary selection
+// mechanism. This does NOT reintroduce the "stuck for a day+" failure mode that motivated
+// building this detector with no floor in the first place (the bug that started this whole
+// investigation, 2026-09-15): at that day's elevated ATR20 (~265pts), MAJOR's 1.5x needs
+// ~398pts of movement to accept a new pivot, while 0.25x only needs ~66pts -- not meaningfully
+// different from "no floor" in terms of getting stuck. The original design rationale below
+// (avoiding MAJOR's own price-magnitude-only mechanism) still holds; a small pre-filter on
+// top of order flow is a different lever than lowering MAJOR's own pure-price threshold would
+// be (which was separately, directly tested and found to hurt trade quality, not just
+// coverage -- see majorPivotDefendedBreakDetector.js's own threshold-sensitivity history).
 //
-// SIGNATURE (matches the tested scripts exactly, do not re-derive by eye): while a raw pivot's
-// band (atr*0.02) is in a "TOUCHING" state, a 1-min bar qualifies as a "push" if its bid/ask
-// delta opposes the approach side, its total volume z-score (vs the existing 90-day trailing
-// per-minute-of-day baseline, touchQuality.js's getVolumeBaseline -- reused, not reimplemented)
-// clears Z_CUT, and its one-sidedness (|delta|/total) clears D_CUT. That push bar is the
-// SIGNAL only if it shows "no reward" -- either it closes back against its own push within the
-// same bar, or the very next bar's delta flips sign with its own z>1.0. This is evaluated
-// live/bar-by-bar as the trigger itself (not backward-inferred from a later price-only denial
-// bar -- an early framing during this design thread was explicitly corrected by the user: wait
-// for the signature, don't guess which past bar it was).
+// SIGNATURE (matches the tested scripts exactly, do not re-derive by eye): while an accepted
+// pivot's band (atr*0.02) is in a "TOUCHING" state, a 1-min bar qualifies as a "push" if its
+// bid/ask delta opposes the approach side, its total volume z-score (vs the existing 90-day
+// trailing per-minute-of-day baseline, touchQuality.js's getVolumeBaseline -- reused, not
+// reimplemented) clears Z_CUT, and its one-sidedness (|delta|/total) clears D_CUT. That push
+// bar is the SIGNAL only if it shows "no reward" -- either it closes back against its own push
+// within the same bar, or the very next bar's delta flips sign with its own z>1.0. This is
+// evaluated live/bar-by-bar as the trigger itself (not backward-inferred from a later
+// price-only denial bar -- an early framing during this design thread was explicitly corrected
+// by the user: wait for the signature, don't guess which past bar it was).
 //
 // Z_CUT/D_CUT are NOT re-derived live -- they're the 75th-percentile cutoffs computed once
-// across the full push-bar population in the Phase 0/2 calibration (2025-12-01 to 2026-09-15,
-// N~104k push-bar samples). Same convention as majorPivotDefendedBreakDetector's own
-// ZIGZAG_THRESHOLD=1.5 -- a plain literal derived from a real backtest, not a live query,
-// documented with its source and date. Recalibrate if this detector's real N ever grows large
-// enough to re-run the percentile derivation on fresh data.
+// across the full push-bar population AT THE 0.25x THRESHOLD, over 2025-06-01..2026-09-15
+// (explicitly excluding the known 2025-09-19..2025-11-20 degraded-density gap -- see
+// scratch/orderflow_rejection_phase2_extended_window_sweep_20260915.mjs). Same convention as
+// majorPivotDefendedBreakDetector's own ZIGZAG_THRESHOLD=1.5 -- a plain literal derived from a
+// real backtest, not a live query, documented with its source and date. Recalibrate if this
+// detector's real N ever grows large enough to re-run the percentile derivation on fresh data.
 //
 // ATR here is DELIBERATELY the same "full calendar-day H-L range, 20-day trailing average"
 // used by both backtest scripts -- NOT levelProximityService.js's getRollingATR() (which is
-// RTH-only, 9:30am-4pm). Swapping in the RTH-only ATR would silently change the band width and
-// target sizing from what was actually tested (this codebase's own standing rule: a backtest's
-// population/definitions must match what live actually computes, window included).
+// RTH-only, 9:30am-4pm, and is what majorPivotDefendedBreakDetector.js uses instead). Swapping
+// in the RTH-only ATR would silently change the band width and target sizing from what was
+// actually tested (this codebase's own standing rule: a backtest's population/definitions must
+// match what live actually computes, window included).
 //
 // RTH-only (per the tested scope -- Globex showed the same direction but was heavily muted in
 // both the pretest and the real-$ backtest; not wired for Globex).
@@ -62,27 +88,34 @@ import { getBetClass } from '../config/setupTypes.js';
 import { dropToTimeline, etNaiveTimestampToMs, getNqRollWeekDates } from './acdShared.js';
 
 const SWING_WIDTH = 5;
-// 75th-percentile cutoffs from the 2025-12-01..2026-09-15 calibration -- see file header.
-const Z_CUT = 0.44;
-const D_CUT = 0.259;
-// CORRECTED 2026-09-15 (DeepSeek code review, same day as initial build -- caught before this
-// ever fired live): originally 5 days, based on an unmeasured assumption that "minor levels are
-// short-lived by construction." Directly measured against the real pivot-formation-to-denial lag
-// distribution over the full calibration window (N=16,686 denial events): median lag is genuinely
-// tiny (0.18 days), but the tail is real -- p90=3.9 days, p95=7.9 days, p99=31.3 days, observed
-// max=48.9 days. 5 days covers only 92.4% of real denials; this is the exact same shape of bug
-// majorPivotDefendedBreakDetector.js already found and fixed once (a 25-day lookback missing a
-// real 34-day pivot->break lag). Widened with real margin past the observed max, matching that
-// same fix's own philosophy -- not tuned to just barely cover the p99.
-const LOOKBACK_DAYS = 60;
+// Light pre-filter sitting in front of the order-flow signature -- see file header for why
+// this is NOT majorPivotDefendedBreakDetector.js's 1.5x and does not reintroduce its "stuck"
+// failure mode.
+const ZIGZAG_THRESHOLD = 0.25;
+// 75th-percentile cutoffs from the 2025-06-01..2026-09-15 (gap-excluded) calibration AT
+// THIS THRESHOLD -- see file header. Re-derived fresh for the 0.25x population, NOT reused
+// from the original zero-threshold ship's 0.44/0.259 (a different, much larger population).
+const Z_CUT = 0.849;
+const D_CUT = 0.207;
+// RECALIBRATED 2026-09-15 for the 0.25x-filtered population -- do not reuse the zero-threshold
+// ship's LOOKBACK_DAYS=60 without checking, same discipline as everywhere else in this file.
+// A magnitude-filtered pivot population is rarer by construction, so pivots can persist longer
+// before producing a denial event: direct measurement over the same window (N=4,658 denial
+// events) found median lag 0.55 days, p90=5.84, p95=10.76, p99=34.99, observed max=63.93 days
+// -- already exceeding the OLD 60-day setting. Widened with real margin past the new observed
+// max, matching the same philosophy used for both this file's own original fix and
+// majorPivotDefendedBreakDetector.js's LOOKBACK_DAYS -- not tuned to just barely cover it.
+const LOOKBACK_DAYS = 80;
 const RECENT_SIGNAL_WINDOW_MIN = 60; // only attempt inserting signals from the last hour
 const REFIRE_COOLDOWN_MIN = 15; // matches the backtest's own >15-1m-bar dedup between signals
 const CACHE_KEY = 'minorDefendedLevel:signals';
 const CACHE_TTL_MS = 90 * 1000; // shorter than majors' 4min -- these touches are fast-moving
 
-// Best cell from orderflow_rejection_phase2_ev_backtest_20260915's full grid sweep (by real EV,
-// which was also the largest real-vs-placebo delta -- not just the raw max).
-const CONFIG = { stopMult: 2.0, targetMult: 1.0, holdMin: 240 };
+// Best cell from orderflow_rejection_phase2_extended_window_sweep_20260915.mjs's full grid
+// sweep at threshold=0.25x (by real EV, which was also among the largest real-vs-placebo
+// deltas, cleanest CI, and fastest resolution -- see the file header's honest caveat about
+// this pick's sensitivity to backtest precision).
+const CONFIG = { stopMult: 2.0, targetMult: 1.0, holdMin: 60 };
 const MIN_STOP_ATR_FRAC = 0.1; // floor so a tight touch doesn't produce a near-zero stop
 
 function etModOf(dateObj) {
@@ -154,9 +187,31 @@ export async function computeMinorDefendedLevelSignals() {
   const { highs, lows } = findSwingPoints(bars5m, SWING_WIDTH);
   const merged = [...highs.map(p => ({ ...p, type: 'HIGH' })), ...lows.map(p => ({ ...p, type: 'LOW' }))].sort((a, b) => a.idx - b.idx);
 
+  // ZigZag acceptance at ZIGZAG_THRESHOLD -- a light pre-screen in front of the order-flow
+  // signature, not a replacement for it (see file header). Copied verbatim from
+  // majorPivotDefendedBreakDetector.js's own acceptance logic, just at a much lower threshold.
+  const accepted = [];
+  let lastAccepted = null;
+  for (const p of merged) {
+    if (rollDates.has(bars5m[p.idx].dateStr)) continue;
+    if (!lastAccepted) { lastAccepted = p; accepted.push(p); continue; }
+    const atr = atrCache.get(bars5m[p.idx].dateStr);
+    if (atr == null) continue;
+    if (p.type === lastAccepted.type) {
+      if ((p.type === 'HIGH' && p.price > lastAccepted.price) || (p.type === 'LOW' && p.price < lastAccepted.price)) {
+        lastAccepted = p; accepted[accepted.length - 1] = p;
+      }
+      continue;
+    }
+    if (Math.abs(p.price - lastAccepted.price) >= ZIGZAG_THRESHOLD * atr) { accepted.push(p); lastAccepted = p; }
+  }
+
+  // No roll-week re-check needed here (DeepSeek review, 2026-09-15) -- the acceptance loop
+  // above already excludes any pivot whose own idx date is a roll week, so `accepted` can
+  // never contain one; the confirmIdx-lands-on-a-roll-week case is separately and correctly
+  // handled by the inner loop's `if (rollDates.has(bars5m[i].dateStr)) break;` below.
   const candidateEvents = [];
-  for (const pivot of merged) {
-    if (rollDates.has(bars5m[pivot.idx].dateStr)) continue;
+  for (const pivot of accepted) {
     const confirmIdx = pivot.idx + SWING_WIDTH;
     if (confirmIdx >= bars5m.length) continue;
     const atr = atrCache.get(bars5m[pivot.idx].dateStr);
