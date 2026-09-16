@@ -1,5 +1,6 @@
 import { query } from '../db.js';
 import { computeRigor } from './rigorDiagnostics.js';
+import { detectRotationLegs } from './rotationDetector.js';
 
 // ─── PATTERN DETECTORS ──────────────────────────────────────────────
 // Each detector receives the full day's 1-min bars and returns pattern instances
@@ -217,85 +218,22 @@ function detectStopSweeps(bars) {
   });
 }
 
-function detectRotationProfile(bars) {
-  // Use 5-min close-to-close for meaningful rotations (not intra-bar wick noise)
-  const fiveMap = {};
-  for (const bar of bars) {
-    const bk = Math.floor(bar.et_min / 5) * 5;
-    if (!fiveMap[bk]) fiveMap[bk] = { et_min: bk, close: bar.close };
-    else fiveMap[bk].close = bar.close;
-  }
-  const fb = Object.values(fiveMap).sort((a, b) => a.et_min - b.et_min);
-
-  const rotations = [];
-  let lastExt = fb[0]?.close || 0;
-  let lastType = 'LOW';
-  let rotStart = fb[0]?.et_min || 570;
-
-  for (const bar of fb) {
-    if (bar.close > lastExt && lastType === 'LOW' && bar.close - lastExt >= 65) {
-      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'UP', size: Math.round(bar.close - lastExt) });
-      lastExt = bar.close;
-      lastType = 'HIGH';
-      rotStart = bar.et_min;
-    }
-    if (bar.close < lastExt && lastType === 'HIGH' && lastExt - bar.close >= 65) {
-      rotations.push({ et_min: rotStart, end_min: bar.et_min, dir: 'DOWN', size: Math.round(lastExt - bar.close) });
-      lastExt = bar.close;
-      lastType = 'LOW';
-      rotStart = bar.et_min;
-    }
-    if (bar.close > lastExt && lastType === 'HIGH') lastExt = bar.close;
-    if (bar.close < lastExt && lastType === 'LOW') lastExt = bar.close;
-  }
-
-  if (rotations.length < 2) return { rotations, patterns: [] };
-
-  const patterns = [];
-  const sizes = rotations.map(r => r.size);
-  const avgSize = sizes.reduce((a, b) => a + b, 0) / sizes.length;
-  const maxSize = Math.max(...sizes);
-
-  // Rotation trend: are they getting bigger or smaller?
-  const firstHalf = sizes.slice(0, Math.floor(sizes.length / 2));
-  const secondHalf = sizes.slice(Math.floor(sizes.length / 2));
-  const avgFirst = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
-  const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
-  const trend = avgSecond > avgFirst * 1.2 ? 'EXPANDING' : avgSecond < avgFirst * 0.8 ? 'CONTRACTING' : 'STABLE';
-
-  // Detect rotation clusters (3+ rotations within 30 min)
-  for (let i = 0; i < rotations.length - 2; i++) {
-    const window = rotations.slice(i, i + 3);
-    const span = window[2].end_min - window[0].et_min;
-    if (span <= 30) {
-      patterns.push({
-        pattern_type: 'ROTATION_CLUSTER',
-        et_minute: window[0].et_min,
-        duration_min: span,
-        direction: 'NEUTRAL',
-        magnitude: Math.round(window.reduce((s, r) => s + r.size, 0) / 3),
-        context: { count_in_window: 3, avg_size: Math.round(window.reduce((s, r) => s + r.size, 0) / 3) }
-      });
-    }
-  }
-
-  // Deduplicate clusters (keep one per 30-min window)
-  const seenClusters = {};
-  const dedupedPatterns = patterns.filter(p => {
-    const key = Math.floor(p.et_minute / 30);
-    if (seenClusters[key]) return false;
-    seenClusters[key] = true;
-    return true;
-  });
-
-  return {
-    rotations,
-    count: rotations.length,
-    avgSize: Math.round(avgSize),
-    maxSize,
-    trend,
-    patterns: dedupedPatterns
-  };
+// Rotation count -- now a thin wrapper around the real, validated intrabar-high/low ZigZag
+// (server/services/rotationDetector.js), matching what morningBrief.js's live Session/CHOP chip
+// already uses. Replaced 2026-09-16 (user request: "make it use the other rotation tool") --
+// this function used to run its own independent, close-only ("5-min close-to-close for
+// meaningful rotations, not intra-bar wick noise" -- confirmed live that reasoning was itself
+// wrong, see rotationDetector.js's own header for the incident) ZigZag at the same R=65
+// threshold, plus computed avg/max rotation size, a trend classification, and a "ROTATION_
+// CLUSTER" pattern type from that same close-only rotation list. All of that -- avgSize/
+// maxSize/trend/ROTATION_CLUSTER -- was confirmed to have ZERO live consumers (the only
+// reference anywhere outside this file was scripts/archive/scan_patterns.js, a retired script)
+// and was deleted outright per the user's explicit call, rather than kept alongside the more
+// accurate count. `rotations_65pt` (the one field with a real consumer -- SessionForecastPanel.
+// jsx's Daily Recap panel, via GET /api/morning-brief/scalp-recap/:date) is now the same
+// number the fixed live chip would show for the same day.
+function detectRotationCount(bars) {
+  return detectRotationLegs(bars, 65).length;
 }
 
 function detectOpenDrive(bars) {
@@ -568,13 +506,12 @@ export async function scanSession(tradeDate) {
   const atr = parseFloat(atrRes.rows[0]?.atr) || range;
 
   // Run all detectors
-  const rotProfile = detectRotationProfile(bars);
+  const rotationCount = detectRotationCount(bars);
   const allPatterns = [
     ...detectCompressionExpansion(bars, fiveBars),
     ...detectVolumeClimax(bars, fiveBars),
     ...detectFailedBreakouts(bars, acd.or_high, acd.or_low, ibHigh, ibLow),
     ...detectStopSweeps(bars),
-    ...rotProfile.patterns,
     ...detectOpenDrive(bars),
     ...detectCloseDrive(bars),
     ...detectPOCMagnet(bars),
@@ -582,7 +519,7 @@ export async function scanSession(tradeDate) {
   ];
 
   // Classify session
-  const sessionType = classifySession(bars, rotProfile.count, closePct);
+  const sessionType = classifySession(bars, rotationCount, closePct);
   const openType = classifyOpen(bars);
   const closeType = classifyClose(bars);
 
@@ -606,10 +543,7 @@ export async function scanSession(tradeDate) {
     close_vs_vwap: Math.round(closePrice - finalVwap),
     poc,
     close_vs_poc: Math.round(closePrice - poc),
-    rotations_65pt: rotProfile.count,
-    avg_rotation_size: rotProfile.avgSize || 0,
-    max_rotation_size: rotProfile.maxSize || 0,
-    rotation_trend: rotProfile.trend || 'NONE',
+    rotations_65pt: rotationCount,
     compressions: allPatterns.filter(p => p.pattern_type === 'COMPRESSION_EXPANSION').length,
     volume_climaxes: allPatterns.filter(p => p.pattern_type === 'VOLUME_CLIMAX').length,
     failed_breakouts: allPatterns.filter(p => p.pattern_type === 'FAILED_BREAKOUT').length,
@@ -619,7 +553,6 @@ export async function scanSession(tradeDate) {
     metrics: JSON.stringify({
       ib_range: ibHigh && ibLow ? Math.round(ibHigh - ibLow) : null,
       or_range: acd.or_high && acd.or_low ? Math.round(acd.or_high - acd.or_low) : null,
-      rotation_trend: rotProfile.trend,
     }),
   };
 
@@ -639,16 +572,14 @@ export async function persistScan(tradeDate, result) {
     `INSERT INTO session_analysis (trade_date, session_type, open_type, close_type,
       open_price, close_price, session_high, session_low, range_pt, atr_ratio,
       gap_pt, gap_filled, close_vs_open, close_pct_of_range, vwap, close_vs_vwap,
-      poc, close_vs_poc, rotations_65pt, avg_rotation_size, max_rotation_size,
-      rotation_trend, compressions, volume_climaxes, failed_breakouts, stop_sweeps,
-      vwap_crosses, patterns, metrics)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
+      poc, close_vs_poc, rotations_65pt, compressions, volume_climaxes, failed_breakouts,
+      stop_sweeps, vwap_crosses, patterns, metrics)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
     [a.trade_date, a.session_type, a.open_type, a.close_type,
      a.open_price, a.close_price, a.session_high, a.session_low, a.range_pt, a.atr_ratio,
      a.gap_pt, a.gap_filled, a.close_vs_open, a.close_pct_of_range, a.vwap, a.close_vs_vwap,
-     a.poc, a.close_vs_poc, a.rotations_65pt, a.avg_rotation_size, a.max_rotation_size,
-     a.rotation_trend, a.compressions, a.volume_climaxes, a.failed_breakouts, a.stop_sweeps,
-     a.vwap_crosses, a.patterns, a.metrics]);
+     a.poc, a.close_vs_poc, a.rotations_65pt, a.compressions, a.volume_climaxes, a.failed_breakouts,
+     a.stop_sweeps, a.vwap_crosses, a.patterns, a.metrics]);
 
   for (const p of patterns) {
     await query(

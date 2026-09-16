@@ -413,7 +413,8 @@ CREATE TABLE public.active_setups (
     cluster_touch_id uuid,
     is_cluster_primary boolean DEFAULT true NOT NULL,
     stale_entry_price_basis boolean,
-    breakeven_stop_shadow jsonb
+    breakeven_stop_shadow jsonb,
+    entry_orderflow_shadow jsonb
 );
 
 
@@ -6696,9 +6697,6 @@ CREATE TABLE public.session_analysis (
     poc double precision,
     close_vs_poc double precision,
     rotations_65pt integer,
-    avg_rotation_size double precision,
-    max_rotation_size double precision,
-    rotation_trend character varying(20),
     compressions integer DEFAULT 0,
     volume_climaxes integer DEFAULT 0,
     failed_breakouts integer DEFAULT 0,
@@ -6729,6 +6727,18 @@ CREATE SEQUENCE public.session_analysis_id_seq
 --
 
 ALTER SEQUENCE public.session_analysis_id_seq OWNED BY public.session_analysis.id;
+
+
+--
+-- Name: session_analysis_rotation_fields_backup_20260916; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.session_analysis_rotation_fields_backup_20260916 (
+    trade_date date,
+    avg_rotation_size double precision,
+    max_rotation_size double precision,
+    rotation_trend character varying(20)
+);
 
 
 --
@@ -6766,6 +6776,23 @@ CREATE SEQUENCE public.session_patterns_id_seq
 --
 
 ALTER SEQUENCE public.session_patterns_id_seq OWNED BY public.session_patterns.id;
+
+
+--
+-- Name: session_patterns_rotation_cluster_backup_20260916; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.session_patterns_rotation_cluster_backup_20260916 (
+    id integer,
+    trade_date date,
+    pattern_type character varying(50),
+    et_minute integer,
+    duration_min integer,
+    direction character varying(10),
+    magnitude double precision,
+    context jsonb,
+    created_at timestamp with time zone
+);
 
 
 --

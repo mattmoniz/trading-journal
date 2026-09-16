@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { getSessionForecast } from '../services/sessionForecastService.js';
 import { getTrailingVwapStd, getTrailing24hrVwapDists, getTrailingRthVwapDists, rollingStats, getTrailingORWidths } from '../services/queries.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
+import { detectRotationLegs, ROTATION_LEG_THRESHOLD } from '../services/rotationDetector.js';
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ const MIN_SAMPLES = 20;
 // `ibWideThreshold` are day-level constants (derived from history strictly BEFORE the
 // session in question) that a caller computes once and reuses across every bars-so-far
 // slice, not recomputed per slice.
-function classifySessionChar({ bars, atr20, rotStats, ibTightThreshold, ibWideThreshold }) {
+export function classifySessionChar({ bars, rotStats, ibTightThreshold, ibWideThreshold }) {
   const price = bars[bars.length - 1].close;
   const sessHi = Math.max(...bars.map(b => b.high));
   const sessLo = Math.min(...bars.map(b => b.low));
@@ -48,21 +49,12 @@ function classifySessionChar({ bars, atr20, rotStats, ibTightThreshold, ibWideTh
   const rangePct = range > 0 ? Math.round((price - sessLo) / range * 100) : 50;
   const etMin = bars[bars.length - 1].et_min;
 
-  const rotThreshold = Math.round(atr20 * 0.15);
-  const fiveMapRot = {};
-  for (const b of bars) {
-    const bk = Math.floor(b.et_min / 5) * 5;
-    if (!fiveMapRot[bk]) fiveMapRot[bk] = { close: b.close };
-    else fiveMapRot[bk].close = b.close;
-  }
-  const fbRot = Object.values(fiveMapRot);
-  let rots = 0, lastExt = fbRot[0]?.close || 0, lastType = 'LOW';
-  for (const b of fbRot) {
-    if (b.close > lastExt && lastType === 'LOW' && b.close - lastExt >= rotThreshold) { rots++; lastExt = b.close; lastType = 'HIGH'; }
-    if (b.close < lastExt && lastType === 'HIGH' && lastExt - b.close >= rotThreshold) { rots++; lastExt = b.close; lastType = 'LOW'; }
-    if (b.close > lastExt && lastType === 'HIGH') lastExt = b.close;
-    if (b.close < lastExt && lastType === 'LOW') lastExt = b.close;
-  }
+  // Rotation counting (2026-09-16, user-caught): switched from a close-only, ATR*0.15
+  // reimplementation to detectRotationLegs() -- the SAME real intrabar-high/low ZigZag, at
+  // the SAME R=65 "validated construction" threshold, that already gates the live
+  // POC_ROTATION_JOIN setup. See detectRotationLegs()'s own header comment for the full
+  // incident (a close-only count silently missed 29 of 80 real intrabar reversals that day).
+  const rots = detectRotationLegs(bars, ROTATION_LEG_THRESHOLD).length;
 
   const chopThreshold = Math.round(rotStats.mean + rotStats.std);
   const extremeChopThreshold = Math.round(rotStats.mean + 2 * rotStats.std);
@@ -170,17 +162,36 @@ async function getTrailingWeeklyVwapDists(date, weeks = 12) {
   return cacheSet(ck, dists, MB_DAY_CACHE_TTL);
 }
 
-// Fetch trailing rotation counts from session_analysis (90-day window)
-async function getTrailingRotations(date, days = 90) {
+// Fetch trailing rotation counts, computed fresh via detectRotationLegs() over each trailing
+// day's own RTH bars -- NOT read from session_analysis.rotations_65pt (patternScannerService.js's
+// OWN, independent, close-only rotation count). Fixed 2026-09-16: the live "Session/CHOP" chip
+// (classifySessionChar(), above) now counts today's rotations via detectRotationLegs() -- but
+// this function was still feeding it a mean/std baseline computed by a DIFFERENT method
+// entirely, an apples-to-oranges comparison that would have silently miscalibrated the CHOP/
+// EXTREME_CHOP thresholds the moment the live side changed. Both sides of that comparison now
+// go through the identical function. RTH-only (570-959), matching what the live endpoints
+// themselves bound "today" to.
+export async function getTrailingRotations(date, days = 90) {
   const ck = `mb:rotations:${date}:${days}`;
   const cached = cacheGet(ck);
   if (cached) return cached;
-  const res = await query(
-    `SELECT rotations_65pt FROM session_analysis
-     WHERE trade_date >= $1::date - $2::int AND trade_date < $1
-     AND rotations_65pt IS NOT NULL
-     ORDER BY trade_date DESC`, [date, days]).catch(() => ({ rows: [] }));
-  return cacheSet(ck, res.rows.map(r => r.rotations_65pt), MB_DAY_CACHE_TTL);
+  const res = await query(`
+    SELECT ts::date AS d, high::float AS high, low::float AS low
+    FROM price_bars_primary
+    WHERE symbol='NQ' AND ts::date >= $1::date - $2::int AND ts::date < $1
+      AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    ORDER BY ts
+  `, [date, days]).catch(() => ({ rows: [] }));
+  // r.d is a raw 'YYYY-MM-DD' string, not a Date object -- server/db.js's own type parser for
+  // OID 1082 (date) returns the value as-is (pg.types.setTypeParser(1082, (val) => val)).
+  const byDay = {};
+  for (const r of res.rows) {
+    (byDay[r.d] ||= []).push({ high: r.high, low: r.low });
+  }
+  const counts = Object.values(byDay)
+    .filter(bars => bars.length >= 10)
+    .map(bars => detectRotationLegs(bars, ROTATION_LEG_THRESHOLD).length);
+  return cacheSet(ck, counts, MB_DAY_CACHE_TTL);
 }
 
 // getTrailingORWidths moved to server/services/queries.js 2026-09-05 (was independently,
@@ -220,7 +231,7 @@ async function getTrailingDelta30P50(date, days = 30) {
 }
 
 // Fetch trailing ATR(20) for rotation threshold
-async function getTrailingATR(date, days = 20) {
+export async function getTrailingATR(date, days = 20) {
   const ck = `mb:atr:${date}:${days}`;
   const cached = cacheGet(ck);
   if (cached != null) return cached;
@@ -844,12 +855,11 @@ router.get('/live-session-context/:date', async (req, res) => {
     })();
 
     const [
-      atr20, delta30P50, trailingRots, ibRangePercQ, acdRes, setupsRes, pdRes,
+      delta30P50, trailingRots, ibRangePercQ, acdRes, setupsRes, pdRes,
       m1VA, m3VA, ibRangeCtx, pdIbRes, pdOrRes, ib10Ctx, or5Ctx, allDayBars,
       trailing24hrDists, volBaselineRes, trailingDeltas,
       dailyVwapRecentRes, weekBarsRes, trailingWkDists,
     ] = await Promise.all([
-      getTrailingATR(date, 20),
       getTrailingDelta30P50(date, 30),
       getTrailingRotations(date, 90),
       // IB range classification thresholds — derived from rolling p33/p67 of last 90 sessions.
@@ -937,9 +947,9 @@ router.get('/live-session-context/:date', async (req, res) => {
     const rotStats = trailingRots.length >= MIN_SAMPLES ? rollingStats(trailingRots) : { mean: 10, std: 5 };
     const ibTightThreshold = Math.round(ibRangePercQ.rows[0]?.p33 ?? 146);  // Fallback: p33 from 252d sample
     const ibWideThreshold  = Math.round(ibRangePercQ.rows[0]?.p67 ?? 229);  // Fallback: p67 from 252d sample
-    const { sessionChar, rots } = classifySessionChar({ bars, atr20, rotStats, ibTightThreshold, ibWideThreshold });
+    const { sessionChar, rots } = classifySessionChar({ bars, rotStats, ibTightThreshold, ibWideThreshold });
     const rotSigma = rotStats.std > 0 ? Math.round((rots - rotStats.mean) / rotStats.std * 10) / 10 : 0;
-    const rotThreshold = Math.round(atr20 * 0.15); // still returned in the response below, unchanged
+    const rotThreshold = ROTATION_LEG_THRESHOLD; // the real, validated intrabar threshold detectRotationLegs() uses -- still returned in the response below
 
     const acd = acdRes.rows[0] || {};
     const activeSetups = setupsRes.rows.filter(s => s.status === 'ACTIVE');
@@ -1114,14 +1124,13 @@ router.get('/live-session-context/:date', async (req, res) => {
 router.get('/session-trend-history/:date', async (req, res) => {
   try {
     const { date } = req.params;
-    const [barsRes, atr20, trailingRots, ibRangePercQ] = await Promise.all([
+    const [barsRes, trailingRots, ibRangePercQ] = await Promise.all([
       query(
         `SELECT (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts))::int as et_min,
                 open::float, high::float, low::float, close::float, volume::bigint as vol,
                 TO_CHAR(ts, 'HH24:MI') as time_str
          FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959 ORDER BY ts`, [date]),
-      getTrailingATR(date, 20),
       getTrailingRotations(date, 90),
       query(`
         SELECT
@@ -1152,7 +1161,7 @@ router.get('/session-trend-history/:date', async (req, res) => {
     let lastChar = null;
     for (let i = 0; i < bars.length; i++) {
       const barsSoFar = bars.slice(0, i + 1);
-      const { sessionChar, rots } = classifySessionChar({ bars: barsSoFar, atr20, rotStats, ibTightThreshold, ibWideThreshold });
+      const { sessionChar, rots } = classifySessionChar({ bars: barsSoFar, rotStats, ibTightThreshold, ibWideThreshold });
       if (sessionChar !== lastChar) {
         history.push({ etMin: bars[i].et_min, time: bars[i].time_str, sessionChar, rots, price: bars[i].close });
         lastChar = sessionChar;
