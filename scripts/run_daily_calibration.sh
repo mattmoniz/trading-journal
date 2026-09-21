@@ -70,6 +70,13 @@ echo "=== Daily calibration: $(date) ==="
 # codebase's own "no dead ends" rule.
 /usr/bin/node scripts/recalibrate_ml_probability_sizing_pretest.mjs
 
+# Does the ML gate genuinely discriminate WITHIN Globex, not just RTH (2026-09-21, user:
+# "Globex is killing me every which way... which trades to fire"). Adding an explicit
+# is_rth feature flipped the Globex TAKE bucket's sign in one retrain at N<20 either side --
+# too thin to trust yet either direction. Tracks daily with a real day-blocked bootstrap CI
+# so the next read is trustworthy instead of another single noisy snapshot.
+/usr/bin/node scripts/recalibrate_ml_globex_split.mjs
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the

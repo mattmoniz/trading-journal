@@ -69,31 +69,55 @@ MIGRATION_CATEGORIES = ['HOLDING', 'HIGHER', 'LOWER']
 # learn "loud volume after entry -> TARGET", which is unknowable at the moment a live
 # candidate would actually be scored. Also unrecoverable at promotion time: a live scorer
 # has no post-entry bars yet, so this feature could never be populated outside a backtest.
+# `is_rth` added 2026-09-21 (user: "Globex is killing me every which way... make a
+# distinction between time of day/Globex... which trades to fire"). Real motivation, not a
+# guess: splitting the ALREADY-TRAINED model's out-of-sample results by is_rth found real
+# out-of-sample discrimination the model was already partially finding WITHOUT this feature
+# -- RTH TAKE avg=$22.18/trade vs VETO avg=$5.45; GLOBEX TAKE avg=$42.19/trade (N=15, thin)
+# vs VETO avg=-$9.44/trade, against a genuinely losing Globex baseline (-$1,114 net,
+# WR=37.0%, matching the user's own "Globex is killing me" experience). Checked first
+# whether this was really genuine signal or an artifact of `minutes_from_open` silently
+# acting as an RTH/Globex proxy via its own null pattern (it isn't -- populated in BOTH
+# sessions, 42.7% RTH / 63.0% Globex, no clean split) before adding an EXPLICIT session
+# feature to sharpen what the model appears to already be finding indirectly.
+# `is_rth` is a real, non-nullable GENERATED boolean column (bounded [9:30,16:00) ET) --
+# always present, never sparse, unlike the 3 columns above.
 EXISTING_FEATURE_COLS = [
-    'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open',
+    'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open', 'is_rth_int',
 ]
 
 
-def fetch_training_dataframe(conn):
+def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     """Pulls every real, fully-featured (label + both feature snapshots present) row and
     flattens it into a pandas DataFrame ready for training. No lookahead risk here beyond
     what's already guaranteed by the label/feature columns themselves (see
     mlExtendedLabelWalker.js / mlFeatureSnapshot.js's own headers) -- this function is pure
-    SQL + flattening, no additional computation."""
+    SQL + flattening, no additional computation.
+
+    label_column, added 2026-09-21 (user request: "test the model on 5x/10x targets as well
+    as the 2.5x, just to see") -- defaults to the production 2.5x label so train.py's own
+    call is unchanged; pass 'ml_extended_label_5x'/'ml_extended_label_10x' (added by
+    backfill_ml_extended_label_wider.mjs) for the exploratory wider-target comparison
+    (compare_extended_targets.py). Same features/population either way -- only the outcome
+    definition changes."""
+    # is_rth_int: is_rth is a real boolean column, cast to int here (not selected raw) so
+    # EXISTING_FEATURE_COLS can list 'is_rth_int' like every other plain numeric feature
+    # without dataset.py needing to special-case a boolean-to-numeric conversion downstream.
+    raw_cols = [c for c in EXISTING_FEATURE_COLS if c != 'is_rth_int']
     query = f"""
         SELECT id, setup_type, fired_at::text AS fired_at, trade_date::text AS trade_date,
-            ml_extended_label, ml_pd_features, ml_intraday_features,
-            {', '.join(EXISTING_FEATURE_COLS)}
+            {label_column}, ml_pd_features, ml_intraday_features, is_rth::int AS is_rth_int,
+            {', '.join(raw_cols)}
         FROM active_setups
         WHERE {REAL_TRADE_FILTER}
-            AND ml_extended_label IS NOT NULL
+            AND {label_column} IS NOT NULL
             AND ml_pd_features IS NOT NULL
             AND ml_intraday_features IS NOT NULL
         ORDER BY fired_at ASC
     """
     df = pd.read_sql(query, conn)
 
-    df['label'] = df['ml_extended_label'].apply(lambda x: x.get('label'))
+    df['label'] = df[label_column].apply(lambda x: x.get('label'))
 
     for key in PD_FEATURE_KEYS:
         df[f'pd_{key}'] = df['ml_pd_features'].apply(lambda x, k=key: x.get(k))

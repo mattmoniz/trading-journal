@@ -417,7 +417,9 @@ CREATE TABLE public.active_setups (
     entry_orderflow_shadow jsonb,
     ml_extended_label jsonb,
     ml_pd_features jsonb,
-    ml_intraday_features jsonb
+    ml_intraday_features jsonb,
+    ml_extended_label_5x jsonb,
+    ml_extended_label_10x jsonb
 );
 
 
