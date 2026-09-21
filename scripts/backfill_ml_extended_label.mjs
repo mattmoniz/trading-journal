@@ -4,9 +4,19 @@
 // price_bars_primary past each real trade's own resolution point. Per this codebase's own
 // DB_MIGRATION_PROTOCOL.md: dry-run first (default), --apply to actually write.
 //
-// Population: POOLED_TRADE_FILTER (real, non-BACKFILL, cluster-deduped trades -- reused
-// from scripts/backtest_setup_status.mjs per this codebase's own "export the real function"
-// rule, not hand-rolled) with a real stop_level/t1_level/entry price. Idempotent --
+// Population: REAL_TRADE_FILTER (real, non-BACKFILL trades, reused from
+// scripts/backtest_setup_status.mjs per this codebase's own "export the real function"
+// rule, not hand-rolled) with a real stop_level/t1_level/entry price. CORRECTED
+// 2026-09-21 (user request: "I think I want it to assess at individual levels") from an
+// earlier POOLED_TRADE_FILTER, which silently excluded ~1,760 real cluster-sibling
+// touches (about 35% of the real pooled population) from ever getting a label at all --
+// per REAL_TRADE_FILTER/POOLED_TRADE_FILTER's own header comment in
+// backtest_setup_status.mjs: "A PER-setup_type consumer should keep using
+// REAL_TRADE_FILTER as-is -- a setup_type is never both winner and sibling of the same
+// touch, so there is no within-type double-count to guard against." This script (and the
+// ML meta-labeling model reading its output) scores each individual candidate row on its
+// own setup_type/features, not a cross-setup_type aggregate -- exactly the per-row
+// consumer shape that convention already says should NOT exclude siblings. Idempotent --
 // only ever touches rows where ml_extended_label IS NULL, safe to re-run daily.
 //
 // The subtle correctness point this script exists to get right: computeExtendedLabel()
@@ -19,7 +29,7 @@
 // accepted regardless of total bar count, since those are genuine early resolutions.
 import { query } from '../server/db.js';
 import { resolveDirection } from '../server/config/setupTypes.js';
-import { POOLED_TRADE_FILTER } from './backtest_setup_status.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 import { computeExtendedLabel, EXTENDED_TARGET_MULT, DEFAULT_MAX_HOLD_BARS } from '../server/services/mlExtendedLabelWalker.js';
 
 const APPLY = process.argv.includes('--apply');
@@ -30,7 +40,7 @@ async function main() {
       t1_level::float AS t1_level, entry_zone_low::float AS entry_zone_low,
       entry_zone_high::float AS entry_zone_high
     FROM active_setups
-    WHERE ${POOLED_TRADE_FILTER}
+    WHERE ${REAL_TRADE_FILTER}
       AND status = 'RESOLVED'
       AND ml_extended_label IS NULL
       AND stop_level IS NOT NULL AND t1_level IS NOT NULL
@@ -38,7 +48,7 @@ async function main() {
     ORDER BY fired_at ASC
   `);
 
-  console.log(`Candidates (real, pooled, unlabeled, resolved): ${candidates.rows.length}`);
+  console.log(`Candidates (real, all individual touches incl. cluster siblings, unlabeled, resolved): ${candidates.rows.length}`);
 
   let labeled = 0, tooRecent = 0, directionUnresolvable = 0, noBars = 0;
   const byExitReason = { STOP: 0, TARGET: 0, TIME: 0 };

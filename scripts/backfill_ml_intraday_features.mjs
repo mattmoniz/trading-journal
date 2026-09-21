@@ -15,8 +15,11 @@
 //      PRIOR session.
 //
 // Per this codebase's DB_MIGRATION_PROTOCOL.md: dry-run first (default), --apply to write.
+//
+// Population: REAL_TRADE_FILTER, not POOLED_TRADE_FILTER -- corrected 2026-09-21 alongside
+// the other 2 ML backfills, see backfill_ml_extended_label.mjs's header for why.
 import { query } from '../server/db.js';
-import { POOLED_TRADE_FILTER } from './backtest_setup_status.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 import { computeDevelopingValueFeatures } from '../server/services/mlFeatureSnapshot.js';
 
 const APPLY = process.argv.includes('--apply');
@@ -28,13 +31,13 @@ async function main() {
     SELECT id, fired_at::text AS fired_at, is_rth,
       entry_zone_low::float AS entry_zone_low, entry_zone_high::float AS entry_zone_high
     FROM active_setups
-    WHERE ${POOLED_TRADE_FILTER}
+    WHERE ${REAL_TRADE_FILTER}
       AND ml_intraday_features IS NULL
       AND (entry_zone_low IS NOT NULL OR entry_zone_high IS NOT NULL)
     ORDER BY fired_at ASC
   `);
 
-  console.log(`Candidates (real, pooled, unlabeled): ${candidates.rows.length}`);
+  console.log(`Candidates (real, all individual touches, unlabeled): ${candidates.rows.length}`);
 
   let written = 0, noBarsYet = 0;
   const toWrite = [];

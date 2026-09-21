@@ -1,21 +1,30 @@
 # Training dataset extraction for the meta-labeling model.
 #
-# POOLED_TRADE_FILTER below is a hand-mirrored copy of scripts/backtest_setup_status.mjs's
+# REAL_TRADE_FILTER below is a hand-mirrored copy of scripts/backtest_setup_status.mjs's
 # own JS-exported constant -- there is no cross-language import mechanism in this repo, so
 # this is a KNOWN, deliberate duplication (unlike everywhere else in this codebase, where
 # "export the real function" means literally reusing the same JS function). Kept in sync
-# manually; if backtest_setup_status.mjs's REAL_TRADE_FILTER/POOLED_TRADE_FILTER text ever
-# changes, this must be updated to match. Current text as of 2026-09-21:
+# manually; if backtest_setup_status.mjs's REAL_TRADE_FILTER text ever changes, this must
+# be updated to match. Current text as of 2026-09-21:
 #   REAL_TRADE_FILTER = origin_status IN ('ACTIVE','SHADOW') AND (resolution_method IS NULL
 #     OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM')) AND
 #     ib_window_stale_basis IS NOT TRUE AND stale_entry_price_basis IS NOT TRUE
-#   POOLED_TRADE_FILTER = REAL_TRADE_FILTER + " AND is_cluster_primary"
-POOLED_TRADE_FILTER = """
+#
+# CORRECTED 2026-09-21 (user request: "I think I want it to assess at individual levels"):
+# was POOLED_TRADE_FILTER (REAL_TRADE_FILTER + "AND is_cluster_primary"), which silently
+# excluded ~1,760 real cluster-sibling touches (~35% of the real population) from ever
+# being trained on or scored. Per REAL_TRADE_FILTER/POOLED_TRADE_FILTER's own header
+# comment in backtest_setup_status.mjs: POOLED_TRADE_FILTER is for a CROSS-setup_type
+# aggregate consumer (avoids double/triple-counting one touch event once per cluster
+# member); a PER-row consumer that scores each candidate on its own setup_type/features --
+# exactly what this model does -- should use REAL_TRADE_FILTER, since there's no
+# within-type double-count to guard against and excluding siblings just throws away real,
+# independently-labeled training/scoring rows for no reason.
+REAL_TRADE_FILTER = """
     origin_status IN ('ACTIVE','SHADOW')
     AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))
     AND ib_window_stale_basis IS NOT TRUE
     AND stale_entry_price_basis IS NOT TRUE
-    AND is_cluster_primary
 """
 
 import pandas as pd
@@ -76,7 +85,7 @@ def fetch_training_dataframe(conn):
             ml_extended_label, ml_pd_features, ml_intraday_features,
             {', '.join(EXISTING_FEATURE_COLS)}
         FROM active_setups
-        WHERE {POOLED_TRADE_FILTER}
+        WHERE {REAL_TRADE_FILTER}
             AND ml_extended_label IS NOT NULL
             AND ml_pd_features IS NOT NULL
             AND ml_intraday_features IS NOT NULL

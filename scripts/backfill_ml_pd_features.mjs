@@ -7,11 +7,12 @@
 // acd.js's own live PD-level reads already use. See mlFeatureSnapshot.js's own header for
 // why this is scoped to prior-day-only features tonight, not the full ~35-feature spec.
 //
-// Population: same POOLED_TRADE_FILTER as backfill_ml_extended_label.mjs (real,
-// non-BACKFILL, cluster-deduped trades) -- these two backfills are independent (different
+// Population: same REAL_TRADE_FILTER as backfill_ml_extended_label.mjs (real,
+// non-BACKFILL trades, individual-level -- see that file's header for the 2026-09-21
+// correction from POOLED_TRADE_FILTER) -- these two backfills are independent (different
 // columns, no shared state) and can run in either order.
 import { query } from '../server/db.js';
-import { POOLED_TRADE_FILTER } from './backtest_setup_status.mjs';
+import { REAL_TRADE_FILTER } from './backtest_setup_status.mjs';
 import { computePriorDayLevelFeatures } from '../server/services/mlFeatureSnapshot.js';
 
 const APPLY = process.argv.includes('--apply');
@@ -21,13 +22,13 @@ async function main() {
     SELECT id, trade_date::text AS trade_date, entry_zone_low::float AS entry_zone_low,
       entry_zone_high::float AS entry_zone_high
     FROM active_setups
-    WHERE ${POOLED_TRADE_FILTER}
+    WHERE ${REAL_TRADE_FILTER}
       AND ml_pd_features IS NULL
       AND (entry_zone_low IS NOT NULL OR entry_zone_high IS NOT NULL)
     ORDER BY trade_date ASC
   `);
 
-  console.log(`Candidates (real, pooled, unlabeled): ${candidates.rows.length}`);
+  console.log(`Candidates (real, all individual touches, unlabeled): ${candidates.rows.length}`);
 
   let written = 0, noPriorDayData = 0;
   const toWrite = [];
