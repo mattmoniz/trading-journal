@@ -795,14 +795,15 @@ function renderMlSiloTradeList(trades) {
 
 async function loadPulse() {
   try {
-    const [pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes] = await Promise.all([
+    const [pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes, volPileRes] = await Promise.all([
       fetch('/api/market/pulse').then(r => r.json()).catch(() => null),
       fetch('/api/acd/setup-detection').then(r => r.json()).catch(() => null),
       fetch('/api/morning-brief/live-session-context/' + todayET()).then(r => r.json()).catch(() => null),
       fetch('/api/acd/building-strength-live').then(r => r.json()).catch(() => null),
       fetch('/api/globex/rotation-badge').then(r => r.json()).catch(() => null),
+      fetch('/api/globex/volume-pile').then(r => r.json()).catch(() => null),
     ]);
-    renderPulseBar(pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes);
+    renderPulseBar(pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes, volPileRes);
     renderSetupCard(setupRes);
     renderStandalonePositionCard(setupRes);
   } catch (e) { /* keep last good render */ }
@@ -863,8 +864,9 @@ function currentSessionDateET() {
 }
 
 let lastRotBadge = null;
+let lastVolPile = null;
 
-function renderPulseBar(pulse, setupData, ctx, build, rotBadge) {
+function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   if (!pulse || pulse.error) return;
   const chips = [];
 
@@ -951,6 +953,18 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge) {
     chips.push(chip('Globex Rot', rbLabel, rbSub, rbColor, rbColor, 'openRotationBadgeModal()'));
   }
 
+  // Live "volume piling on" descriptive gauge (server/services/volumePileGauge.js) --
+  // deliberately NOT a trade-timing signal. A bare volume spike on its own was tested and found
+  // to mark a fakeout more often than a real continuation; this only tells you what volume is
+  // doing right now, same honest-descriptive framing as the Expand/pulse-reading chips. Tap
+  // for the full caveat text.
+  lastVolPile = volPile || null;
+  if (volPile && volPile.state && volPile.state !== 'WARMING_UP' && volPile.state !== 'INSUFFICIENT_BASELINE') {
+    const vpColor = volPile.state === 'PILING_ON' ? 'var(--amber)' : 'var(--dim)';
+    const vpLabel = volPile.state === 'PILING_ON' ? 'PILING ON' : 'QUIET';
+    chips.push(chip('Vol Watch', vpLabel, 'tap for detail', vpColor, vpColor, 'openVolumePileModal()'));
+  }
+
   $('pulse-bar').innerHTML = chips.join('');
 }
 
@@ -972,6 +986,26 @@ function openRotationBadgeModal() {
   if (d.thresholdLegs != null) html += mRow('Threshold', '>= ' + d.thresholdLegs + ' legs');
   if (d.hitRate != null) html += mRow('Historical hit rate', (d.hitRate * 100).toFixed(1) + '%' + (d.n ? ' (n=' + d.n + ')' : ''));
   if (d.ci) html += mRow('95% range', (d.ci[0] * 100).toFixed(1) + '-' + (d.ci[1] * 100).toFixed(1) + '%');
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+function openVolumePileModal() {
+  const d = lastVolPile;
+  const title = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Volume watch</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  if (!d || !d.state) {
+    $('modal').innerHTML = title + '<div class="m-sub">No data available.</div>';
+    $('modal-backdrop').classList.add('open');
+    return;
+  }
+  let html = title;
+  html += '<div class="m-sub">' + (d.explanation || '') + '</div>';
+  html += mSection('Current read');
+  html += mRow('State', d.state === 'PILING_ON' ? 'Piling on' : 'Quiet');
+  html += mRow('Last 30min volZ', d.atVolZ);
+  html += mRow('Preceding 60min volZ', d.preVolZ);
+  html += mRow('Delta', d.delta);
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
 }
