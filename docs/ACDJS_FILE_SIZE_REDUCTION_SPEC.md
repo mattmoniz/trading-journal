@@ -57,9 +57,39 @@ grep-confirmed individually before removal, not assumed from a pattern.
 (1,628 lines), the `/acd/live` deletion (~537 lines), the `description`/`confluenceNote` removal,
 and the dead-import sweep.
 
-The rest of this document (Phase B's remaining `/performance-audit/unified` extraction, the
-"not in scope" section, and the general verification checklist) is the original 2026-09-16 text,
-unexecuted.
+## Phase B — `/performance-audit/unified` extracted 2026-09-20
+
+Unlike Phase A, this handler was confirmed genuinely self-contained before moving: grepped
+every acd.js-local module-level function/const against the handler body (zero hits), confirmed
+it never reads `req` (no query params) and only calls `res.json()`/`res.status()` at its two
+exit points. Moved verbatim (diffed byte-identical against the pre-move source) to
+`server/services/unifiedSignalTable.js`'s `computeUnifiedPerformanceAudit()`, with the two
+`res.json(...)` exit points converted to plain `return`s — acd.js's route handler is now a
+6-line wrapper. ESLint's no-undef passed with only 2 imports (`query`, `getLatestBars`) on the
+first attempt, confirming the grep-based dependency analysis was complete this time.
+
+`acd.js`: 10,091 → 9,214 lines. **Cumulative reduction today: 12,286 → 9,214 lines (~25%).**
+
+**Verification found the response isn't fully deterministic, independent of this extraction** —
+confirmed by fetching `/api/performance-audit/unified` twice in a row against the SAME (new)
+code with no change between calls: 7,853 of 9,267 `pairs` entries differed. Root-caused: the
+`pairsWinQ` query (feeding `wr20`/`ev20`/`wr6m`/`ev6m`/`wr1y`/`ev1y`) has no `run_date` filter
+or `DISTINCT ON` — it selects every historical calibration row for each `(signal_name,
+window_days)` combination, and the JS `forEach` assignment (`pairWins[name][window] = {...}`)
+lets whichever row Postgres happens to return last for a tied `ORDER BY signal_name,
+window_days` sort key win, which isn't guaranteed stable across calls. This is byte-identical
+to the pre-extraction query text (confirmed via diff) — a real, pre-existing bug, not something
+Phase B introduced. See docs/OPEN_THREADS.md's 2026-09-20 entry for the flagged fix.
+
+## Not yet started
+
+- `/performance-audit/unified`'s bar-history replay + the smaller route handlers (`/market/pulse`
+  226 lines, `/acd/correlation` 174 lines) — the "not in scope" section below.
+- Phase C (`runSetupDetection`'s own remaining body) — deliberately deferred, needs the
+  `liveStats` block-scoping problem solved first.
+
+The rest of this document (the "not in scope" section and the general verification checklist)
+is the original 2026-09-16 text, unexecuted.
 
 ## Current state (measured directly, not from an old comment)
 
