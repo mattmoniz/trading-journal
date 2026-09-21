@@ -433,4 +433,14 @@ echo "=== Weekly backtest run: $(date) ==="
 # Phase 2 bar (still at zero real armed data as of 2026-09-05).
 /usr/bin/node scripts/calibrate_step_trail_per_setup_time.mjs
 
+# Globex overnight rotation-count badge self-recalibration (2026-09-21, user request: "can this
+# be tested and calibrated weekly? incase the states or times change") -- re-derives BOTH the
+# rotation-count thresholds AND the checkpoint wall-clock times fresh from the trailing real-day
+# window every week, never hardcoded. Read live by server/services/globexRotationBadge.js
+# (12h-cache via getGlobalCalib()) to drive quick-check.html's Globex Rot chip. See
+# RESEARCH_CLAIM overnight_rotation_count_predicts_rth_range_20260921 and docs/OPEN_THREADS.md's
+# 2026-09-21 entry. Purely informational (direction-agnostic RTH-range-magnitude lean) -- never
+# gates/sizes a real trade.
+/usr/bin/node scripts/calibrate_globex_rotation_badge.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

@@ -795,13 +795,14 @@ function renderMlSiloTradeList(trades) {
 
 async function loadPulse() {
   try {
-    const [pulseRes, setupRes, ctxRes, buildRes] = await Promise.all([
+    const [pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes] = await Promise.all([
       fetch('/api/market/pulse').then(r => r.json()).catch(() => null),
       fetch('/api/acd/setup-detection').then(r => r.json()).catch(() => null),
       fetch('/api/morning-brief/live-session-context/' + todayET()).then(r => r.json()).catch(() => null),
       fetch('/api/acd/building-strength-live').then(r => r.json()).catch(() => null),
+      fetch('/api/globex/rotation-badge').then(r => r.json()).catch(() => null),
     ]);
-    renderPulseBar(pulseRes, setupRes, ctxRes, buildRes);
+    renderPulseBar(pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes);
     renderSetupCard(setupRes);
     renderStandalonePositionCard(setupRes);
   } catch (e) { /* keep last good render */ }
@@ -861,7 +862,9 @@ function currentSessionDateET() {
   return nowET.getHours() >= 18 ? nextTradingDayET(nowET) : todayET();
 }
 
-function renderPulseBar(pulse, setupData, ctx, build) {
+let lastRotBadge = null;
+
+function renderPulseBar(pulse, setupData, ctx, build, rotBadge) {
   if (!pulse || pulse.error) return;
   const chips = [];
 
@@ -935,7 +938,42 @@ function renderPulseBar(pulse, setupData, ctx, build) {
     chips.push(chip('Expand', bucketLabel, momSub, bucketColor, bucketColor));
   }
 
+  // Globex overnight rotation badge (RESEARCH_CLAIM overnight_rotation_count_predicts_rth_range,
+  // weekly self-recalibrating -- see server/services/globexRotationBadge.js's header). Only
+  // shown during the window this signal actually applies to (6pm-9:30am ET); direction-agnostic,
+  // predicts RTH range magnitude only. Tap for the full precise explanation, same convention as
+  // the Session chip's tap-for-history.
+  lastRotBadge = rotBadge || null;
+  if (rotBadge && rotBadge.state && rotBadge.state !== 'NO_CALIBRATION' && rotBadge.state !== 'OUT_OF_WINDOW') {
+    const rbColor = rotBadge.state === 'HIGH_LIKELIHOOD' ? 'var(--red)' : rotBadge.state === 'LOW_LIKELIHOOD' ? 'var(--dim)' : 'var(--muted)';
+    const rbLabel = rotBadge.state === 'HIGH_LIKELIHOOD' ? 'HIGH' : rotBadge.state === 'LOW_LIKELIHOOD' ? 'LOW' : rotBadge.label || rotBadge.state;
+    const rbSub = rotBadge.currentRotCount != null ? rotBadge.currentRotCount + ' rot · tap for detail' : 'tap for detail';
+    chips.push(chip('Globex Rot', rbLabel, rbSub, rbColor, rbColor, 'openRotationBadgeModal()'));
+  }
+
   $('pulse-bar').innerHTML = chips.join('');
+}
+
+function openRotationBadgeModal() {
+  const d = lastRotBadge;
+  const title = '<div class="m-head"><span class="m-title" style="color:#a5b4fc">Globex rotation badge</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  if (!d || !d.state) {
+    $('modal').innerHTML = title + '<div class="m-sub">No data available.</div>';
+    $('modal-backdrop').classList.add('open');
+    return;
+  }
+  let html = title;
+  html += '<div class="m-sub">' + (d.explanation || '') + '</div>';
+  html += mSection('Current read');
+  html += mRow('Rotations so far', d.currentRotCount);
+  html += mRow('State', d.label || d.state);
+  if (d.checkpoint) html += mRow('Checkpoint used', d.checkpoint + ' ET');
+  if (d.thresholdLegs != null) html += mRow('Threshold', '>= ' + d.thresholdLegs + ' legs');
+  if (d.hitRate != null) html += mRow('Historical hit rate', (d.hitRate * 100).toFixed(1) + '%' + (d.n ? ' (n=' + d.n + ')' : ''));
+  if (d.ci) html += mRow('95% range', (d.ci[0] * 100).toFixed(1) + '-' + (d.ci[1] * 100).toFixed(1) + '%');
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
 }
 
 function chip(label, val, sub, subColor, valColor, onclick) {
