@@ -18,21 +18,29 @@ def load_model(model_path):
 
 def score_candidate(model_bundle, features: dict, approval_threshold: float):
     """Scores ONE candidate. `features` must have every key in model_bundle['feature_cols']
-    (missing keys are fine -- LightGBM handles them as NaN -- but an unexpected SHAPE
-    mismatch, e.g. wrong feature_cols entirely, will raise, which is correct: a silent
-    shape mismatch would produce a meaningless score with no error, exactly the kind of
-    failure mode this codebase's own hard rules warn about elsewhere.
+    present in the dict (a genuinely missing/never-computed feature, not merely null-valued
+    -- null IS a legitimate value LightGBM handles natively via its own split-direction
+    learning, same as during training). A missing KEY raises -- fixed 2026-09-21 (DeepSeek
+    full-review finding #3): the original `features.get(col)` silently turned a missing key
+    into NaN with no error, so a caller that forgot to compute a feature (or passed the
+    wrong feature set entirely) would still get a plausible-looking probability back instead
+    of a loud failure -- exactly the silent-wrong-score failure mode this codebase's own
+    hard rules warn about elsewhere. Raising here is what the original docstring already
+    claimed happened; now it actually does.
 
     Returns {probability, verdict} -- verdict is 'TAKE' if probability clears the model's
     own persisted approval_threshold (from ml_models, never hardcoded here), else 'VETO'.
     """
     model = model_bundle['model']
     feature_cols = model_bundle['feature_cols']
+    missing = [col for col in feature_cols if col not in features]
+    if missing:
+        raise ValueError(f"score_candidate: features dict is missing required keys: {missing}")
     # Named DataFrame, not a bare positional list -- LightGBM was trained on named columns
     # (dataset.py's DataFrame), so scoring with a plain list relies on the caller getting
     # positional order exactly right with no way to catch a mistake. This makes a
     # feature-order bug loud (a KeyError from the dict) instead of a silent wrong score.
-    row = pd.DataFrame([{col: features.get(col) for col in feature_cols}], columns=feature_cols)
+    row = pd.DataFrame([{col: features[col] for col in feature_cols}], columns=feature_cols)
     probability = float(model.predict_proba(row)[0][1])
     verdict = 'TAKE' if probability >= approval_threshold else 'VETO'
     return {'probability': probability, 'verdict': verdict}

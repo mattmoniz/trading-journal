@@ -3,9 +3,17 @@ metadata (ml_models table). Run manually: python3 train.py (from the venv).
 
 Chronological split, not random -- per this codebase's own standing "no lookahead in
 backtests/replays" hard rule, and the spec's own "no model is trained on data it has not
-genuinely seen in the future" principle. A PURGE_DAYS gap is excluded between train and test
-to reduce contamination from trades whose forward-replay label window could otherwise span
-the split boundary.
+genuinely seen in the future" principle. A PURGE_DAYS gap is excluded between each
+consecutive split boundary to reduce contamination from trades whose forward-replay label
+window could otherwise span it.
+
+THREE-WAY split (train / val / test), not train/test. Fixed 2026-09-21 after a DeepSeek
+full-code-review found the original two-way split's TEST set was reused three times during
+training -- for LightGBM early-stopping's own loss-based model selection, for picking the
+approval_threshold percentile, and for the reported AUC/P&L -- so "out of sample" was
+overstated; the model had effectively seen the test set's loss curve. Now: VAL is used for
+early stopping and threshold selection (the model/decision-maker gets to look at it), TEST is
+touched exactly once, at the very end, to report the final honest number.
 """
 import sys
 import os
@@ -23,10 +31,11 @@ from dataset import fetch_training_dataframe
 
 PURGE_DAYS = 3  # matches DEFAULT_MAX_HOLD_BARS=60 (~1hr) with generous margin for session gaps
 TEST_FRACTION = 0.2
+VAL_FRACTION = 0.2  # carved out of the remaining 0.8 -- train ends up ~60%
 MODEL_DIR = os.path.join(os.path.dirname(__file__), 'artifacts')
 
 
-def chronological_split(df, test_fraction=TEST_FRACTION, purge_days=PURGE_DAYS):
+def chronological_split(df, test_fraction=TEST_FRACTION, val_fraction=VAL_FRACTION, purge_days=PURGE_DAYS):
     # format='mixed' -- fired_at is naive ET text from Postgres (::text cast in
     # dataset.py's query), and rows genuinely have inconsistent sub-second precision
     # (some with microseconds, some without). No timezone conversion risk here (both
@@ -34,13 +43,18 @@ def chronological_split(df, test_fraction=TEST_FRACTION, purge_days=PURGE_DAYS):
     # parsing-format issue caught by pandas' own strict inference refusing to guess.
     fired_dt = pd.to_datetime(df['fired_at'], format='mixed')
     df = df.assign(_fired_dt=fired_dt).sort_values('_fired_dt').reset_index(drop=True)
-    split_idx = int(len(df) * (1 - test_fraction))
-    split_date = df.iloc[split_idx]['_fired_dt']
-    purge_start = split_date - timedelta(days=purge_days)
+    n = len(df)
+    test_split_idx = int(n * (1 - test_fraction))
+    val_split_idx = int(n * (1 - test_fraction - val_fraction))
+    test_split_date = df.iloc[test_split_idx]['_fired_dt']
+    val_split_date = df.iloc[val_split_idx]['_fired_dt']
+    test_purge_start = test_split_date - timedelta(days=purge_days)
+    val_purge_start = val_split_date - timedelta(days=purge_days)
 
-    train = df[df['_fired_dt'] < purge_start].drop(columns=['_fired_dt'])
-    test = df[df['_fired_dt'] >= split_date].drop(columns=['_fired_dt'])
-    return train, test
+    train = df[df['_fired_dt'] < val_purge_start].drop(columns=['_fired_dt'])
+    val = df[(df['_fired_dt'] >= val_split_date) & (df['_fired_dt'] < test_purge_start)].drop(columns=['_fired_dt'])
+    test = df[df['_fired_dt'] >= test_split_date].drop(columns=['_fired_dt'])
+    return train, val, test
 
 
 def main():
@@ -49,29 +63,34 @@ def main():
     print(f"Full dataset: {len(df)} rows, {len(feature_cols)} features")
     print(f"Label rate: {df['label'].mean():.3f}")
 
-    train, test = chronological_split(df)
+    train, val, test = chronological_split(df)
     print(f"Train: {len(train)} rows ({train['fired_at'].min()} to {train['fired_at'].max()})")
+    print(f"Val:   {len(val)} rows ({val['fired_at'].min()} to {val['fired_at'].max()})")
     print(f"Test:  {len(test)} rows ({test['fired_at'].min()} to {test['fired_at'].max()})")
     # Persisted so any later comparison (the silo dashboard) can honestly separate
     # in-sample rows (the model has already seen these, so its verdict on them is
     # artificially confident -- an overfitting-biased comparison, not a real one) from
     # genuinely out-of-sample test rows, rather than re-deriving the split boundary or
-    # silently conflating the two populations.
+    # silently conflating the two populations. test_start_at is TEST's own start (the only
+    # rows never touched during training/threshold-selection) -- val rows are in-sample for
+    # threshold-selection purposes even though the model's gradient never trained on them.
     train_end_at = train['fired_at'].max()
     test_start_at = test['fired_at'].min()
-    print(f"Purge gap: {PURGE_DAYS} days excluded between train and test")
+    print(f"Purge gap: {PURGE_DAYS} days excluded at each split boundary")
 
     # Section 4.6-style minimum-dataset gate (this codebase's own "never fabricate a stat"
     # discipline, applied to model training rather than a hand-written stat) -- refuse to
     # proceed rather than silently train and report a meaningless model.
-    if len(train) < 500 or len(test) < 50:
-        print(f"ABORT: insufficient data (train={len(train)}, test={len(test)}). Need train>=500, test>=50.")
+    if len(train) < 500 or len(val) < 50 or len(test) < 50:
+        print(f"ABORT: insufficient data (train={len(train)}, val={len(val)}, test={len(test)}). "
+              f"Need train>=500, val>=50, test>=50.")
         sys.exit(1)
     if not (0.05 <= train['label'].mean() <= 0.95):
         print(f"ABORT: train label rate {train['label'].mean():.3f} outside [0.05, 0.95] -- degenerate.")
         sys.exit(1)
 
     X_train, y_train = train[feature_cols], train['label']
+    X_val, y_val = val[feature_cols], val['label']
     X_test, y_test = test[feature_cols], test['label']
 
     model = lgb.LGBMClassifier(
@@ -79,39 +98,35 @@ def main():
         num_leaves=15, min_child_samples=20,
         objective='binary', random_state=42, verbose=-1,
     )
+    # VAL, not TEST, drives early stopping -- TEST must stay untouched until the single
+    # final report below (DeepSeek review finding #2: reusing TEST here was model-selection
+    # leakage on the "out of sample" number).
     model.fit(
         X_train, y_train,
-        eval_set=[(X_test, y_test)],
+        eval_set=[(X_val, y_val)],
         callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)],
     )
 
-    test_proba = model.predict_proba(X_test)[:, 1]
-    test_auc = roc_auc_score(y_test, test_proba)
-    print(f"\nTest AUC: {test_auc:.4f}")
-
-    # Real-dollar comparison, not just AUC -- this is the number that actually matters for
-    # the user's stated goal ("see how the pnl changes"). Needs the real actual_pnl joined
-    # back in, which fetch_training_dataframe() doesn't carry (kept the feature matrix
-    # lean) -- pull it directly here for this one comparison.
-    test_ids = tuple(test['id'].tolist())
-    pnl_q = pd.read_sql(
-        f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {test_ids}",
+    # PERCENTILE thresholds, not absolute probability cutoffs -- caught before trusting the
+    # result: with a 16% base rate, this model's raw output never reaches 0.5 (max observed
+    # 0.43), so an absolute >=0.5/0.6/0.7 cutoff silently approves ZERO trades every time, a
+    # degenerate, uninformative result. Ranking by score and taking the top N% is the correct
+    # lens for an imbalanced classifier without a separately calibrated probability (this
+    # model has none yet). Swept and chosen on VAL, never TEST (same leakage fix as above).
+    val_proba = model.predict_proba(X_val)[:, 1]
+    val_ids = tuple(val['id'].tolist())
+    val_pnl_q = pd.read_sql(
+        f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {val_ids}",
         conn,
     )
-    test_with_pnl = test.merge(pnl_q, on='id')
-    test_with_pnl['ml_proba'] = test_proba
-
-    # PERCENTILE thresholds, not absolute probability cutoffs -- caught before trusting the
-    # result: with a 16% base rate, this model's raw output never reaches 0.5 on the test
-    # set (max observed 0.43), so an absolute >=0.5/0.6/0.7 cutoff silently approves ZERO
-    # trades every time, a degenerate, uninformative result. Ranking by score and taking
-    # the top N% is the correct lens for an imbalanced classifier without a separately
-    # calibrated probability (this model has none yet -- see notes above train_n).
-    all_pnl = test_with_pnl['actual_pnl'].sum()
-    print(f"  all {len(test_with_pnl)} test trades: P&L=${all_pnl:.2f}, WR={100*test_with_pnl['actual_pnl'].gt(0).mean():.1f}%")
+    val_with_pnl = val.merge(val_pnl_q, on='id')
+    val_with_pnl['ml_proba'] = val_proba
+    print(f"\n--- Threshold selection on VAL ({len(val_with_pnl)} rows, never seen by TEST report below) ---")
+    print(f"  all {len(val_with_pnl)} val trades: P&L=${val_with_pnl['actual_pnl'].sum():.2f}, "
+          f"WR={100*val_with_pnl['actual_pnl'].gt(0).mean():.1f}%")
     for pct in [50, 25, 10]:
-        cutoff = np.percentile(test_proba, 100 - pct)
-        approved = test_with_pnl[test_with_pnl['ml_proba'] >= cutoff]
+        cutoff = np.percentile(val_proba, 100 - pct)
+        approved = val_with_pnl[val_with_pnl['ml_proba'] >= cutoff]
         ml_pnl = approved['actual_pnl'].sum()
         ml_wr = 100 * approved['actual_pnl'].gt(0).mean() if len(approved) else float('nan')
         print(f"  top {pct}% by score (proba>={cutoff:.3f}): {len(approved)} trades | "
@@ -119,12 +134,32 @@ def main():
 
     # Chosen approval threshold, persisted (not hardcoded elsewhere) so score.py's live-
     # facing function can produce a real TAKE/VETO verdict for a SINGLE new candidate,
-    # where a percentile can't be computed in isolation. top-25% picked as the balanced
-    # choice among the 3 swept above (better N than top-10%'s 58, better P&L than
-    # top-50%'s +$192.80) -- a judgment call worth revisiting once more data accumulates,
-    # not a permanent constant.
-    approval_threshold = float(np.percentile(test_proba, 75))
-    print(f"\nPersisted approval threshold (top-25% cutoff): {approval_threshold:.4f}")
+    # where a percentile can't be computed in isolation. top-25% kept as the standing
+    # balanced choice (matches the original single-split run's own pick) -- a judgment call
+    # worth revisiting once more data accumulates, not a permanent constant.
+    approval_threshold = float(np.percentile(val_proba, 75))
+    print(f"\nPersisted approval threshold (top-25% cutoff, from VAL): {approval_threshold:.4f}")
+
+    # TEST touched exactly once, here, using the threshold already frozen from VAL above --
+    # this is the honest, final, "genuinely never seen until this line" number.
+    test_proba = model.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, test_proba)
+    test_ids = tuple(test['id'].tolist())
+    pnl_q = pd.read_sql(
+        f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {test_ids}",
+        conn,
+    )
+    test_with_pnl = test.merge(pnl_q, on='id')
+    test_with_pnl['ml_proba'] = test_proba
+    approved_test = test_with_pnl[test_with_pnl['ml_proba'] >= approval_threshold]
+    print(f"\n--- Final TEST report ({len(test_with_pnl)} rows, touched once, this section only) ---")
+    print(f"Test AUC: {test_auc:.4f}")
+    all_pnl = test_with_pnl['actual_pnl'].sum()
+    print(f"  all {len(test_with_pnl)} test trades: P&L=${all_pnl:.2f}, WR={100*test_with_pnl['actual_pnl'].gt(0).mean():.1f}%")
+    ml_pnl = approved_test['actual_pnl'].sum()
+    ml_wr = 100 * approved_test['actual_pnl'].gt(0).mean() if len(approved_test) else float('nan')
+    print(f"  ML-approved (proba>={approval_threshold:.3f}, VAL-frozen threshold): "
+          f"{len(approved_test)} trades | P&L=${ml_pnl:.2f} | WR={ml_wr:.1f}%")
 
     importances = dict(zip(feature_cols, model.feature_importances_.tolist()))
     top_features = dict(sorted(importances.items(), key=lambda x: -x[1])[:10])
@@ -146,9 +181,15 @@ def main():
         model_version, len(train), len(test),
         float(train['label'].mean()), float(test['label'].mean()), float(test_auc),
         json.dumps(feature_cols),
-        json.dumps({'top_features': top_features, 'purge_days': PURGE_DAYS}),
+        json.dumps({
+            'top_features': top_features, 'purge_days': PURGE_DAYS,
+            'val_n': len(val), 'val_positive_rate': float(val['label'].mean()),
+            'split': 'three-way (train/val/test), threshold+early-stopping on VAL, TEST touched once',
+        }),
         model_path, approval_threshold, train_end_at, test_start_at,
-        'First trained model, full-roster scope per user request 2026-09-21.',
+        'Retrained 2026-09-21 after DeepSeek full-review findings #1 (touch_quality_vol_z '
+        'lookahead leak, dropped) and #2 (test-set reuse for early-stopping/threshold, fixed '
+        'via a proper train/val/test split). Full-roster scope per user request 2026-09-21.',
     ))
     conn.commit()
     print(f"Model metadata persisted to ml_models (version={model_version})")

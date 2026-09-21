@@ -44,17 +44,24 @@ MIGRATION_CATEGORIES = ['HOLDING', 'HIGHER', 'LOWER']
 # own standing discipline): `rvol_20d_at_detection`/`or_range_at_detection` are 100%
 # missing here -- both are Setup-D-only fields (OPENING_DRIVE_15MIN_LONG/SHORT), null for
 # every other setup_type, so across the whole roster they're pure noise -- EXCLUDED, not
-# included as DeepSeek's critique assumed. The remaining 4 are genuinely sparse but not
+# included as DeepSeek's critique assumed. The remaining 3 are genuinely sparse but not
 # empty (`nl30_at_detection` 90% missing, `confluence_score_at_detection` 31% missing,
-# `minutes_from_open` 25% missing, `touch_quality_vol_z` 56% missing) -- kept, since
-# LightGBM natively handles missing values via its own split-direction learning rather than
-# needing imputation, but this sparsity is real and worth remembering when reading feature
-# importances later (a sparse feature can still show up as "important" on the rows where it
-# exists without being broadly useful). regime_pos_*/size_factors_at_detection deferred to
-# a later iteration, same reasoning.
+# `minutes_from_open` 25% missing) -- kept, since LightGBM natively handles missing values
+# via its own split-direction learning rather than needing imputation, but this sparsity is
+# real and worth remembering when reading feature importances later (a sparse feature can
+# still show up as "important" on the rows where it exists without being broadly useful).
+# regime_pos_*/size_factors_at_detection deferred to a later iteration, same reasoning.
+#
+# `touch_quality_vol_z` REMOVED 2026-09-21 (DeepSeek full-review finding #1, independently
+# verified against resolveSetups.js/touchQuality.js before acting): it is NOT snapshotted at
+# detection time despite this file's own prior comment claiming so -- it's written during
+# trade RESOLUTION from the max volume z-score across bars AFTER fired_at (touchQuality.js's
+# post-touch reaction window). Training on it is a real lookahead leak -- the model could
+# learn "loud volume after entry -> TARGET", which is unknowable at the moment a live
+# candidate would actually be scored. Also unrecoverable at promotion time: a live scorer
+# has no post-entry bars yet, so this feature could never be populated outside a backtest.
 EXISTING_FEATURE_COLS = [
     'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open',
-    'touch_quality_vol_z',
 ]
 
 
