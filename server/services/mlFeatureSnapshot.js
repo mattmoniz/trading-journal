@@ -1,3 +1,5 @@
+import { computeProfile, computeRunningVwapSeries } from './developingValueService.js';
+
 // Feature-snapshot computation for the DeepSeek meta-labeling filter thread
 // (docs/1. Deepseek_ML_Meta_Labeling_SPEC.md, Section 3). Per the DeepSeek Phase 0 design
 // critique (2026-09-20/21): only about half the spec's ~35 features are already stored on
@@ -57,3 +59,58 @@ export function computePriorDayLevelFeatures(entry, pdRow) {
 function dist(entry, level) { return (entry != null && level != null) ? round1(entry - level) : null; }
 function round1(x) { return Math.round(x * 10) / 10; }
 function numOrNull(x) { return x == null ? null : Number(x); }
+
+// ── Same-session (intraday) features, added 2026-09-21 with the user watching ──────────
+// This is the higher-lookahead-risk half deferred the night before -- built now with the
+// user present rather than unsupervised, per docs/OPEN_THREADS.md's own stated reason for
+// the deferral. Lookahead-safety here rests entirely on the CALLER: `bars` must be every
+// price_bars_primary row for the candidate's own session, STRICTLY BEFORE `fired_at`
+// (never including or after it -- mirrors the extended-label walker's own `ts > fired_at`
+// boundary, just the opposite side of the same fired_at instant). computeDevelopingValueFeatures()
+// itself has no awareness of "now" or "fired_at" -- it only ever sees whatever bars array
+// it's handed, so passing the wrong bars is the only way this could leak the future; the
+// backfill script's own query is what actually enforces the boundary (see
+// backfill_ml_intraday_features.mjs's `ts < $1::timestamp`).
+//
+// Reuses the real, already-validated functions, per this codebase's "export the real
+// function, never reimplement" rule -- computeProfile()/computeRunningVwapSeries() are
+// developingValueService.js's own canonical POC/VAH/VAL and running-VWAP implementations
+// (spread-volume approximation, same method used for developing_value_log itself), not a
+// second, independent reimplementation of the same math.
+//
+// Deliberately NOT included in this pass (still genuinely deferred, more machinery needed
+// than tonight's slice): range-percentile-vs-60-day-baseline (needs a rolling historical
+// comparison, not just today's own bars -- va_width_pctile_60d/ib_range_pctile_60d already
+// exist but only cover ~17% of real rows, a one-time historical backfill never kept
+// current, not a reliable feature to lean on) and swing-structure/bars-since-swing (needs
+// swingPivots.js integration). Both flagged as open follow-ons, not silently dropped.
+//
+// bars: ascending-ts array of { high, low, close, volume, bid_volume, ask_volume } for
+//   price_bars_primary rows strictly before the candidate's own fired_at, same session only
+//   (caller determines the session-open boundary via the candidate's own `is_rth` column --
+//   RTH boundary mod 570, Globex boundary mod 1080, matching this codebase's existing
+//   session-boundary convention elsewhere).
+// entry: the candidate's own real entry price.
+export function computeDevelopingValueFeatures(bars, entry) {
+  if (!bars || bars.length === 0 || entry == null) return null;
+
+  const profile = computeProfile(bars.map(b => ({ high: b.high, low: b.low, volume: (Number(b.bid_volume) || 0) + (Number(b.ask_volume) || 0) })));
+  const vwapSeries = computeRunningVwapSeries(bars.map(b => ({ high: b.high, low: b.low, close: b.close, volume: (Number(b.bid_volume) || 0) + (Number(b.ask_volume) || 0) })));
+  const devVwap = vwapSeries[vwapSeries.length - 1] ?? null;
+
+  let sessionDelta = 0;
+  for (const b of bars) sessionDelta += (Number(b.ask_volume) || 0) - (Number(b.bid_volume) || 0);
+  const recentBars = bars.slice(-15);
+  let recentDelta = 0;
+  for (const b of recentBars) recentDelta += (Number(b.ask_volume) || 0) - (Number(b.bid_volume) || 0);
+
+  return {
+    barsInSessionSoFar: bars.length,
+    distToDevPoc: profile ? dist(entry, profile.poc) : null,
+    distToDevVah: profile ? dist(entry, profile.vah) : null,
+    distToDevVal: profile ? dist(entry, profile.val) : null,
+    distToDevVwap: dist(entry, devVwap),
+    sessionCumulativeDelta: round1(sessionDelta),
+    recentDelta15Bars: round1(recentDelta),
+  };
+}
