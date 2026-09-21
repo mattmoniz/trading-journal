@@ -433,4 +433,21 @@ echo "=== Weekly backtest run: $(date) ==="
 # Phase 2 bar (still at zero real armed data as of 2026-09-05).
 /usr/bin/node scripts/calibrate_step_trail_per_setup_time.mjs
 
+# ML meta-labeling silo: weekly retrain + rescore + walk-forward recalibration
+# (2026-09-21, DeepSeek/user session). train.py retrains fresh on all real touches
+# through today (a genuinely NEW model_version each week, not a static one-shot --
+# this is the actual "learning mechanism" the user asked for); run_silo_scoring.py
+# scores the whole roster against the newly-trained latest model, feeding
+# MLSiloView.jsx/quick-check.html's ML Silo card. recalibrate_ml_walkforward.mjs then
+# re-runs the expanding-window walk-forward and updates the RESEARCH_CLAIM's
+# day-blocked bootstrap CI with this week's real fold count -- the claim's status
+# flips PROVISIONAL->CONFIRMED automatically once the CI excludes zero, rather than
+# sitting frozen at whatever it read the day it was first computed. See
+# RESEARCH_CLAIM ml_metalabel_walkforward_directionally_positive_unstable for the
+# current numbers -- as of 2026-09-21 (7 folds, N=113 ML-approved trades, 20 distinct
+# dates) the CI still crosses zero, so nothing here is wired to live sizing/gating yet.
+./venv/bin/python3 scripts/ml_meta_labeling/train.py
+./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
+/usr/bin/node scripts/recalibrate_ml_walkforward.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="
