@@ -486,3 +486,64 @@ export async function dropToTimeline(setup) {
       : null,
   ]);
 }
+
+// Moved here from server/routes/acd.js 2026-09-21 (mlSiloService.js needed it too, and
+// acd.js already imports FROM acdShared.js -- acdShared.js importing back from acd.js
+// would be a real circular import, exactly what this file's own header says it exists to
+// avoid). acd.js now imports this instead of defining its own copy -- behavior-identical,
+// not reimplemented. Rolls Fri/Sat forward to Monday; used anywhere a post-6PM-ET "today"
+// needs to roll to the next real trading session.
+export function nextTradingDay(etDate) {
+  const d = new Date(etDate);
+  d.setDate(d.getDate() + 1);
+  if (d.getDay() === 0) d.setDate(d.getDate() + 1); // Sun → Mon
+  if (d.getDay() === 6) d.setDate(d.getDate() + 2); // Sat → Mon
+  return d.toLocaleDateString('en-CA');
+}
+
+// Shared today/week/month/year/all date-range resolution, extracted 2026-09-21 from
+// /api/setups/range-summary's own inline logic (server/routes/acd.js) so a second consumer
+// (the ML silo's own range-filterable view, per user request) doesn't reimplement this same
+// session-boundary-aware date math a second time -- per this codebase's own "share modules
+// instead of reimplementing" convention. Verified byte-identical to the original inline
+// logic before this extraction replaced it there. Returns a shape describing HOW to filter
+// by trade_date, not a finished SQL clause -- callers use their own column alias (`s.` in
+// range-summary, `a.` in the ML silo), so this stays alias-agnostic.
+//   mode='dates': filter via `<alias>.trade_date = ANY(dates)`
+//   mode='since': filter via `<alias>.trade_date >= sinceStr::date`
+//   mode='all':   no filter (every row)
+export function resolveRangeDates(range, nowET) {
+  const todayET = nowET.toLocaleDateString('en-CA');
+  if (range === 'today') {
+    // Post-6PM ET: the new Globex session (tomorrow's trade_date) has already opened --
+    // roll forward rather than showing the just-closed RTH session. Matches
+    // currentSessionDateET()'s own convention elsewhere in this codebase.
+    const sessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
+    return { mode: 'dates', dates: [sessionDate], rangeLabel: sessionDate };
+  }
+  if (range === 'week') {
+    const dow = nowET.getDay(); // 0=Sun...6=Sat
+    // Sunday: the week opening tonight starts TOMORROW (Monday) -- post-6PM Sunday
+    // activity is already tagged trade_date=Monday under this app's own rollover
+    // convention, so Sunday shows the upcoming week, not the one that already closed
+    // out last Friday.
+    const daysSinceMonday = dow === 0 ? 1 : 1 - dow;
+    const monday = new Date(nowET);
+    monday.setDate(monday.getDate() + daysSinceMonday);
+    const weekDates = [];
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(monday);
+      d.setDate(d.getDate() + i);
+      weekDates.push(d.toLocaleDateString('en-CA'));
+    }
+    return { mode: 'dates', dates: weekDates, rangeLabel: weekDates[0] + ' → ' + weekDates[4] };
+  }
+  if (range === 'month' || range === 'year') {
+    const days = range === 'month' ? 30 : 365;
+    const since = new Date(nowET);
+    since.setDate(since.getDate() - days);
+    const sinceStr = since.toLocaleDateString('en-CA');
+    return { mode: 'since', sinceStr, rangeLabel: 'trailing ' + days + 'd (since ' + sinceStr + ')' };
+  }
+  return { mode: 'all', rangeLabel: 'all time' };
+}

@@ -4,7 +4,7 @@
 // header for the full "why isolated" reasoning). Read-only: every endpoint here only ever
 // reads ml_models/ml_verdicts/active_setups, never writes.
 import express from 'express';
-import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList } from '../services/mlSiloService.js';
+import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades } from '../services/mlSiloService.js';
 
 const router = express.Router();
 
@@ -48,6 +48,27 @@ router.get('/ml-silo/trades', async (req, res) => {
     res.json({ trades, modelVersion: model.model_version });
   } catch (e) {
     console.error('[ml-silo/trades]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/ml-silo/range-trades?range=today|week|month|year|all&sample=test|train|all —
+// added 2026-09-21 (user request: same today/week/month/year/all views as the main
+// Performance section, with charts, for the ML silo). Returns raw per-trade rows (like
+// /api/setups/range-summary does for the main Performance tab) rather than pre-aggregated
+// stats -- the frontend computes wins/losses/net/gross/commission/maxDD/equity-curve itself,
+// same pattern as quick-check.html's own computeRangeStats()/renderEquityCurve(), split into
+// "all scored" vs "ML-approved" (verdict=TAKE) subsets.
+router.get('/ml-silo/range-trades', async (req, res) => {
+  try {
+    const model = await getLatestModel();
+    if (!model) return res.json({ trades: [], rangeLabel: null });
+    const sample = ['test', 'train', 'all'].includes(req.query.sample) ? req.query.sample : 'test';
+    const range = ['today', 'week', 'month', 'year', 'all'].includes(req.query.range) ? req.query.range : 'today';
+    const result = await getRangeTrades({ modelVersion: model.model_version, sample, range });
+    res.json({ ...result, modelVersion: model.model_version, sample, range });
+  } catch (e) {
+    console.error('[ml-silo/range-trades]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

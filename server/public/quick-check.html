@@ -568,47 +568,102 @@ function renderMlSiloCard(data) {
     '<span style="margin-left:auto;font-size:11px;">tap for detail →</span>';
 }
 
+// Range-filterable ML silo modal (2026-09-21, user request: "the same views as i see here
+// in this photo but for ML? With the charts pnl and different timeframes") -- mirrors the
+// main Performance section's Today/Week/Month/Year/All tabs + Wins/Losses/Net/Gross/Comm/
+// Worst-Trade stats row + equity curve, applied to two populations (All scored vs
+// ML-Approved) instead of one account. Backed by /api/ml-silo/range-trades, which returns
+// raw per-trade rows (like /api/setups/range-summary does) so this computes stats/curves
+// client-side -- same division of labor as the main Performance section.
+let mlSiloRange = 'today';
+let mlSiloTradesCache = [];
+
 async function openMlSiloModal() {
   let html = '<div class="m-head"><span class="m-title">ML Meta-Labeling Silo</span>' +
     '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
-    '<div class="m-sub">Fully isolated -- never changes what fires as a real alert. Scored across the whole roster, not just what\'s currently ACTIVE. Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>' +
+    '<div class="m-sub">Fully isolated -- never changes what fires as a real alert. Scored across every level individually (not collapsed to one cluster "winner"). Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>' +
+    '<div id="ml-silo-model-line" style="font-size:11px;color:var(--dim);margin-top:6px;"></div>' +
+    '<div id="ml-silo-range-tabs" class="range-filter" style="margin-top:10px;"></div>' +
+    '<div id="ml-silo-range-label" style="font-size:11px;color:var(--dim);margin-top:4px;"></div>' +
     '<canvas id="ml-silo-canvas" class="equity" style="margin-top:10px;"></canvas>' +
-    '<div id="ml-silo-stats" style="font-size:12px;color:var(--dim);margin-top:10px;">Loading…</div>' +
+    '<div style="font-size:11px;color:#3b82f6;font-weight:700;margin-top:10px;">All Trades</div>' +
+    '<div id="ml-silo-all-stats" class="range-stats-row"></div>' +
+    '<div style="font-size:11px;color:#c4b5fd;font-weight:700;margin-top:8px;">ML-Approved</div>' +
+    '<div id="ml-silo-take-stats" class="range-stats-row"></div>' +
     '<div id="ml-silo-trades" style="margin-top:10px;"></div>';
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
+  await loadMlSiloRange(mlSiloRange);
+}
 
+function renderMlSiloRangeTabs() {
+  const el = $('ml-silo-range-tabs');
+  if (!el) return;
+  el.innerHTML = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['year', 'Year'], ['all', 'All']].map(([val, label]) =>
+    '<button class="range-btn ' + (mlSiloRange === val ? 'active' : '') + '" data-ml-range="' + val + '">' + label + '</button>'
+  ).join('');
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => loadMlSiloRange(b.dataset.mlRange)));
+}
+
+async function loadMlSiloRange(range) {
+  mlSiloRange = range;
+  renderMlSiloRangeTabs();
+  const statsEl = $('ml-silo-all-stats');
+  if (statsEl) statsEl.innerHTML = '<span style="color:var(--dim);">Loading…</span>';
   try {
-    const [summary, tradesRes] = await Promise.all([
-      fetch('/api/ml-silo/summary?sample=test').then(r => r.json()),
-      fetch('/api/ml-silo/trades?sample=test&limit=15').then(r => r.json()),
-    ]);
-    renderMlSiloModalStats(summary);
-    renderMlSiloEquityChart('ml-silo-canvas', summary?.series || []);
-    renderMlSiloTradeList(tradesRes?.trades || []);
+    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test').then(r => r.json());
+    mlSiloTradesCache = data?.trades || [];
+    const modelEl = $('ml-silo-model-line');
+    if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
+    const labelEl = $('ml-silo-range-label');
+    if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlSiloTradesCache.length + ' scored candidate' + (mlSiloTradesCache.length === 1 ? '' : 's') : '';
+    renderMlSiloRangeView();
   } catch (e) {
-    const statsEl = $('ml-silo-stats');
     if (statsEl) statsEl.textContent = 'Failed to load.';
   }
 }
-function renderMlSiloModalStats(data) {
-  const el = $('ml-silo-stats');
-  if (!el) return;
-  if (!data?.model || !data?.comparison) { el.textContent = 'No trained model yet.'; return; }
-  const m = data.model;
-  const all = data.comparison.allTrades;
-  const take = data.comparison.byVerdict?.find(v => v.verdict === 'TAKE');
-  const veto = data.comparison.byVerdict?.find(v => v.verdict === 'VETO');
-  const fmtD = n => n == null ? '--' : (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
-  const row = (label, s, color) => s ? '<div style="margin-top:4px;"><span style="color:' + color + ';font-weight:700;">' + label + '</span> N=' + s.n + ' WR=' + Number(s.win_rate || 0).toFixed(1) + '% P&L=' + fmtD(s.total_pnl) + '</div>' : '';
-  el.innerHTML =
-    '<div>' + m.model_version + ' &middot; trained ' + m.trained_at + ' &middot; AUC=' + Number(m.test_auc).toFixed(3) + '</div>' +
-    row('All Trades', all, '#94a3b8') + row('ML-Approved', take, '#c4b5fd') + row('ML-Vetoed', veto, '#64748b');
+
+// Deliberately does NOT filter is_cluster_primary -- see getRangeTrades()'s own header
+// comment (mlSiloService.js) for why: each level in a cluster is its own scored candidate
+// here, unlike the main Performance section's account-level totals.
+function computeMlRangeStats(trades) {
+  const decided = trades.filter(t => t.actual_pnl != null).slice().sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
+  let running = 0, peak = 0, maxDD = 0, worstTrade = 0;
+  let wins = 0, losses = 0;
+  for (const t of decided) {
+    const pnl = parseFloat(t.actual_pnl);
+    running += pnl;
+    if (isWinRow(t)) wins++; else if (isLossRow(t)) losses++;
+    if (pnl < worstTrade) worstTrade = pnl;
+    if (running > peak) peak = running;
+    const dd = peak - running;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const netPnl = running;
+  const commission = decided.length * COMMISSION_PER_TRADE;
+  const grossPnl = netPnl + commission;
+  return { n: decided.length, wins, losses, netPnl, grossPnl, commission, maxDD, worstTrade, decided };
 }
-// Same canvas-sizing/axis conventions as renderVolRegimeHistoryChart() above -- two lines
-// (all-trades vs ML-approved cumulative P&L), dashed $0 reference line since this IS a
-// break-even point (unlike the volatility chart's 1.0x scale reference).
-function renderMlSiloEquityChart(canvasId, series) {
+
+function renderMlStatsRow(containerId, trades) {
+  const el = $(containerId);
+  if (!el) return;
+  const s = computeMlRangeStats(trades);
+  if (s.n === 0) { el.innerHTML = '<span style="color:var(--dim);">No scored candidates in this range.</span>'; return; }
+  const clr = (v) => v >= 0 ? 'var(--green)' : 'var(--red)';
+  el.innerHTML =
+    '<span>Wins <b class="mono" style="color:var(--green)">' + s.wins + '</b></span>' +
+    '<span>Losses <b class="mono" style="color:var(--red)">' + s.losses + '</b></span>' +
+    '<span>Net <b class="mono" style="color:' + clr(s.netPnl) + '">' + (s.netPnl >= 0 ? '+' : '') + '$' + s.netPnl.toFixed(0) + '</b></span>' +
+    '<span title="Before commission">Gross <b class="mono" style="color:var(--muted)">' + (s.grossPnl >= 0 ? '+' : '') + '$' + s.grossPnl.toFixed(0) + '</b></span>' +
+    '<span title="$' + COMMISSION_PER_TRADE + '/round-trip x ' + s.n + '">Comm <b class="mono" style="color:var(--dim)">-$' + s.commission.toFixed(0) + '</b></span>' +
+    '<span title="Worst single realized trade P&L in this range">Worst <b class="mono" style="color:' + (s.worstTrade < 0 ? 'var(--red)' : 'var(--dim)') + '">' + (s.worstTrade < 0 ? '-$' + Math.abs(s.worstTrade).toFixed(0) : '$0') + '</b></span>';
+}
+
+// Two-line equity curve (All Trades vs ML-Approved), built from raw per-trade points --
+// same x-axis time/date convention as the main Performance section's renderEquityCurve()
+// (today shows times, everything else shows dates via fmtAxisTime()).
+function renderMlSiloRangeEquityChart(canvasId, allTrades, takeTrades, range) {
   const canvas = $(canvasId);
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -619,18 +674,27 @@ function renderMlSiloEquityChart(canvasId, series) {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  if (!series || series.length < 2) {
+  const allDecided = computeMlRangeStats(allTrades).decided;
+  const takeDecided = computeMlRangeStats(takeTrades).decided;
+  if (allDecided.length < 2) {
     ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('Not enough test-period data yet', w / 2, h / 2);
+    ctx.fillText('Not enough resolved candidates in this range', w / 2, h / 2);
     return;
   }
 
-  const allVals = series.map(r => r.allCumPnl), mlVals = series.map(r => r.mlCumPnl);
-  const min = Math.min(0, ...allVals, ...mlVals), max = Math.max(0, ...allVals, ...mlVals);
+  const cumulate = (rows) => {
+    let running = 0;
+    const points = [0], times = [rows[0]?.fired_at_str];
+    for (const t of rows) { running += parseFloat(t.actual_pnl); points.push(running); times.push(t.fired_at_str); }
+    return { points, times };
+  };
+  const allSeries = cumulate(allDecided);
+  const takeSeries = cumulate(takeDecided);
+
+  const min = Math.min(0, ...allSeries.points, ...takeSeries.points), max = Math.max(0, ...allSeries.points, ...takeSeries.points);
   const valRange = (max - min) || 1;
-  const padL = 50, padR = 8, padT = 10, padB = 20;
+  const padL = 50, padR = 8, padT = 20, padB = 20;
   const plotW = w - padL - padR, plotH = h - padT - padB;
-  const xAt = (i) => padL + (i / (series.length - 1)) * plotW;
   const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
 
   ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
@@ -638,21 +702,42 @@ function renderMlSiloEquityChart(canvasId, series) {
   ctx.setLineDash([]);
   ctx.font = '10px monospace'; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
   ctx.fillText('$0', padL - 6, yAt(0) + 3);
-  ctx.fillText('$' + max.toFixed(0), padL - 6, yAt(max) + 3);
-  ctx.fillText('$' + min.toFixed(0), padL - 6, yAt(min) + 3);
+  ctx.fillText(fmtAxisMoney(max), padL - 6, yAt(max) + 3);
+  ctx.fillText(fmtAxisMoney(min), padL - 6, yAt(min) + 3);
 
-  const drawLine = (vals, color) => {
+  const useTime = range === 'today';
+  const drawLine = (series, color) => {
+    if (series.points.length < 2) return;
+    const xAt = (i) => padL + (i / (series.points.length - 1)) * plotW;
     ctx.beginPath();
-    vals.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+    series.points.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
     ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+    // x-axis labels for this line's own timestamps (both series share the same range window)
+    const xTickCount = Math.min(5, series.points.length);
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '10px monospace';
+    for (let k = 0; k < xTickCount; k++) {
+      const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (series.points.length - 1));
+      const x = xAt(idx);
+      ctx.fillText(fmtAxisTime(series.times[idx], useTime), Math.min(Math.max(x, padL + 20), w - padR - 20), h - 4);
+    }
   };
-  drawLine(allVals, '#3b82f6');
-  drawLine(mlVals, '#c4b5fd');
+  drawLine(allSeries, '#3b82f6');
+  drawLine(takeSeries, '#c4b5fd');
 
   ctx.textAlign = 'left'; ctx.font = '10px monospace';
   ctx.fillStyle = '#3b82f6'; ctx.fillText('● All Trades', padL, 12);
   ctx.fillStyle = '#c4b5fd'; ctx.fillText('● ML-Approved', padL + 70, 12);
 }
+
+function renderMlSiloRangeView() {
+  const all = mlSiloTradesCache;
+  const take = mlSiloTradesCache.filter(t => t.ml_verdict === 'TAKE');
+  renderMlStatsRow('ml-silo-all-stats', all);
+  renderMlStatsRow('ml-silo-take-stats', take);
+  renderMlSiloRangeEquityChart('ml-silo-canvas', all, take, mlSiloRange);
+  renderMlSiloTradeList(all.slice().sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || '')).slice(0, 15));
+}
+
 function renderMlSiloTradeList(trades) {
   const el = $('ml-silo-trades');
   if (!el) return;
@@ -661,7 +746,7 @@ function renderMlSiloTradeList(trades) {
   el.innerHTML = '<div style="font-size:11px;color:var(--dim);margin-bottom:4px;">Recent, why ML gated each:</div>' +
     trades.map(t =>
       '<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid var(--border);">' +
-      '<span>' + t.setup_type + '</span>' +
+      '<span>' + t.setup_type + (t.is_cluster_primary === false ? ' <span style="color:var(--dim);" title="Cluster sibling, not the touch\'s primary level">(sib)</span>' : '') + '</span>' +
       '<span style="color:' + (t.ml_verdict === 'TAKE' ? '#c4b5fd' : 'var(--dim)') + ';font-weight:700;">' + t.ml_verdict + ' (' + Number(t.ml_probability).toFixed(2) + ')</span>' +
       '<span style="color:' + (t.actual_pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtD(t.actual_pnl) + '</span>' +
       '</div>'

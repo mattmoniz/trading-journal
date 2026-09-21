@@ -37,6 +37,24 @@ echo "=== Daily calibration: $(date) ==="
 /usr/bin/node scripts/backfill_ml_pd_features.mjs --apply
 /usr/bin/node scripts/backfill_ml_intraday_features.mjs --apply
 
+# ML meta-labeling silo: retrain + rescore + walk-forward recalibration. MOVED here from
+# run_weekly_backtests.sh 2026-09-21 (user request, same reasoning already established for
+# backtest_calibrated_wider_target.mjs/the cross-direction fast-flip calibration above --
+# waiting up to 6 days for a weekly recheck wastes real newly-resolved-trade data that the
+# 3 daily backfills right above THIS ALREADY produce every night). train.py retrains fresh
+# on all real touches through today (a genuinely NEW model_version daily, not a static
+# one-shot -- this is the actual "learning mechanism" the user asked for); run_silo_scoring.py
+# scores the whole roster against the newly-trained latest model, feeding
+# MLSiloView.jsx/quick-check.html's ML Silo card. recalibrate_ml_walkforward.mjs then re-runs
+# the expanding-window walk-forward and updates the RESEARCH_CLAIM's day-blocked bootstrap CI
+# with that day's real fold count -- status flips PROVISIONAL->CONFIRMED automatically once
+# the CI excludes zero. See RESEARCH_CLAIM
+# ml_metalabel_walkforward_directionally_positive_unstable for current numbers -- nothing
+# here is wired to live sizing/gating yet.
+./venv/bin/python3 scripts/ml_meta_labeling/train.py
+./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
+/usr/bin/node scripts/recalibrate_ml_walkforward.mjs
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the

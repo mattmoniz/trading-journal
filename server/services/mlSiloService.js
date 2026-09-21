@@ -9,6 +9,7 @@
 // (every setup_type), not just the 9 currently-ACTIVE ones -- the whole point of this silo
 // is to see what the model does across trades that don't currently fire live at all.
 import { query } from '../db.js';
+import { resolveRangeDates } from './acdShared.js';
 
 async function getLatestModel() {
   const r = await query(`
@@ -130,4 +131,54 @@ async function getTradeList({ modelVersion, sample = 'test', setupType = null, v
   return r.rows;
 }
 
-export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList };
+// Range-filterable trade list, added 2026-09-21 (user request: "the same views... for ML,
+// with charts, pnl and different timeframes" -- mirroring /api/setups/range-summary's own
+// today/week/month/year/all tabs). Reuses the shared resolveRangeDates() (acdShared.js) so
+// this doesn't reimplement that same session-boundary date math a third time.
+//
+// Deliberately does NOT exclude is_cluster_primary=false rows, unlike the main Performance
+// section's own getDecidedRows() (quick-check.html) -- that exclusion exists to avoid
+// double-counting ONE real market touch as several trades in an ACCOUNT-level P&L total.
+// This silo's whole point (per the same-day individual-level fix) is the opposite: each
+// level touched in a cluster is its OWN scored candidate, and the user explicitly asked to
+// see them individually, not collapsed to one cluster "winner." is_cluster_primary is
+// returned in the row so a consumer that DOES want account-level totals can filter it
+// itself, but the default here is per-level.
+async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }) {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+
+  const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const resolved = resolveRangeDates(range, nowET);
+
+  const positional = [modelVersion];
+  const conditions = ['v.model_version = $1'];
+  if (boundaryParam) {
+    positional.push(boundaryParam);
+    conditions.push(`a.fired_at ${sample === 'test' ? '>=' : '<='} $${positional.length}::timestamp`);
+  }
+  if (resolved.mode === 'dates') {
+    positional.push(resolved.dates);
+    conditions.push(`a.trade_date = ANY($${positional.length})`);
+  } else if (resolved.mode === 'since') {
+    positional.push(resolved.sinceStr);
+    conditions.push(`a.trade_date >= $${positional.length}::date`);
+  }
+
+  const sql = `
+    SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
+      TO_CHAR(a.fired_at, 'YYYY-MM-DD HH24:MI:SS') AS fired_at_str,
+      a.actual_pnl::float AS actual_pnl, a.resolution, a.is_cluster_primary,
+      v.probability::float AS ml_probability, v.verdict AS ml_verdict
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY a.fired_at ASC
+  `;
+  const r = await query(sql, positional);
+  return { rangeLabel: resolved.rangeLabel, trades: r.rows };
+}
+
+export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades };

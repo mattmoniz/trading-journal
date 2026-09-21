@@ -22,7 +22,7 @@ import multer from 'multer';
 import { query } from '../db.js';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -849,14 +849,10 @@ export async function checkFadeAgainstBigMoveExit(_setupRow, _currentSessionDate
 
 
 // ── Globex helpers ────────────────────────────────────────────────────────────
-
-export function nextTradingDay(etDate) {
-  const d = new Date(etDate);
-  d.setDate(d.getDate() + 1);
-  if (d.getDay() === 0) d.setDate(d.getDate() + 1); // Sun → Mon
-  if (d.getDay() === 6) d.setDate(d.getDate() + 2); // Sat → Mon
-  return d.toLocaleDateString('en-CA');
-}
+// nextTradingDay() moved to acdShared.js 2026-09-21 (mlSiloService.js needed it too),
+// imported above alongside the other acdShared helpers -- re-exported here so this file's
+// own existing external consumers of `nextTradingDay` from acd.js keep working unchanged.
+export { nextTradingDay };
 
 // True outside real CME Globex-open hours (Sun 6PM ET -> Fri 5PM ET, with the daily 5-6PM ET
 // maintenance break) -- the exact schedule server/index.js's autonomous poller already encoded
@@ -7530,53 +7526,22 @@ export default function createACDRouter(io) {
       const range = ['today', 'week', 'month', 'year', 'all'].includes(req.query.range) ? req.query.range : 'today';
       const origin = ['live', 'real', 'all'].includes(req.query.origin) ? req.query.origin : 'live';
       const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const todayET = nowET.toLocaleDateString('en-CA');
 
-      let whereClause, params, rangeLabel;
-      if (range === 'today') {
-        // FIXED 2026-08-09: was `[todayET]` + next day appended once >=6PM ET (matching
-        // /api/setups/today's own deliberately wider "today + tomorrow" contract) -- for
-        // THIS endpoint (the Performance tab's "Today" filter) that meant the tab kept
-        // showing the RTH session that had already closed, blended with the new Globex
-        // session, from 6PM until local midnight, instead of resetting the moment the new
-        // session opened. Same user report, same fix as the Session Timeline's own
-        // currentSessionDateET() -- single session date, not an accumulating pair. Only
-        // consumer is quick-check.html (grepped 2026-08-09), so this is safe to change here
-        // directly rather than filtering client-side.
-        const sessionDate = nowET.getHours() >= 18 ? nextTradingDay(nowET) : todayET;
-        whereClause = 's.trade_date = $1';
-        params = [sessionDate];
-        rangeLabel = sessionDate;
-      } else if (range === 'week') {
-        const dow = nowET.getDay(); // 0=Sun...6=Sat
-        // Sunday: the week opening tonight starts TOMORROW (Monday) -- post-6PM Sunday
-        // activity is already tagged trade_date=Monday under this app's own rollover
-        // convention, so Sunday shows the upcoming week, not the one that already
-        // closed out last Friday.
-        const daysSinceMonday = dow === 0 ? 1 : 1 - dow;
-        const monday = new Date(nowET);
-        monday.setDate(monday.getDate() + daysSinceMonday);
-        const weekDates = [];
-        for (let i = 0; i < 5; i++) {
-          const d = new Date(monday);
-          d.setDate(d.getDate() + i);
-          weekDates.push(d.toLocaleDateString('en-CA'));
-        }
-        whereClause = 's.trade_date = ANY($1)';
-        params = [weekDates];
-        rangeLabel = weekDates[0] + ' → ' + weekDates[4];
-      } else if (range === 'month' || range === 'year') {
-        const days = range === 'month' ? 30 : 365;
-        const since = new Date(nowET);
-        since.setDate(since.getDate() - days);
-        const sinceStr = since.toLocaleDateString('en-CA');
+      // resolveRangeDates() extracted to acdShared.js 2026-09-21 (mlSiloService.js's own
+      // range-filterable view needed the same today/week/month/year/all logic) -- verified
+      // byte-identical to this endpoint's own prior inline version before the extraction.
+      const resolved = resolveRangeDates(range, nowET);
+      const rangeLabel = resolved.rangeLabel;
+      let whereClause, params;
+      if (resolved.mode === 'dates') {
+        whereClause = resolved.dates.length === 1 ? 's.trade_date = $1' : 's.trade_date = ANY($1)';
+        params = resolved.dates.length === 1 ? [resolved.dates[0]] : [resolved.dates];
+      } else if (resolved.mode === 'since') {
         whereClause = 's.trade_date >= $1::date';
-        params = [sinceStr];
-        rangeLabel = 'trailing ' + days + 'd (since ' + sinceStr + ')';
+        params = [resolved.sinceStr];
       } else {
         whereClause = 'TRUE';
         params = [];
-        rangeLabel = 'all time';
       }
 
       const setupsRes = await query(`
