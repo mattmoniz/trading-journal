@@ -181,4 +181,51 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
   return { rangeLabel: resolved.rangeLabel, trades: r.rows };
 }
 
-export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades };
+// "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
+// coupling step the user asked for next, 2026-09-21. NEITHER piece is validated on its own
+// yet (this model's walk-forward CI still crosses zero; step_trail_shadow's own
+// RESEARCH_CLAIM step_trail_runner_shadow_parallel_20260904 is PROVISIONAL, not promoted --
+// see CLAUDE.md's "Step-trail runner extension" entry), so this stays exactly what the rest
+// of the silo already is: a read-only, isolated RESEARCH COMPARISON, never live-wired.
+// Composes two already-computed, already-persisted pieces (ml_verdicts.verdict='TAKE' +
+// active_setups.step_trail_shadow's own hypothetical_pnl, written independently by
+// acd.js's resolveSetupsByPrice()/completeStepTrailShadows() on every real trade that
+// reaches the existing 1.5x wider target) rather than inventing new trade machinery --
+// answers "what would ML-gated entry + the step-trail exit have done" vs. "what did
+// ML-gated entry + the normal exit actually do," on the same real trade population.
+async function getStepTrailComparison(modelVersion, sample = 'test') {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+  const boundaryClause = sample === 'test' ? 'a.fired_at >= $2::timestamp'
+    : sample === 'train' ? 'a.fired_at <= $2::timestamp' : '1=1';
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+  const params = boundaryParam ? [modelVersion, boundaryParam] : [modelVersion];
+
+  const r = await query(`
+    SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
+      a.actual_pnl::float AS normal_pnl,
+      (a.step_trail_shadow->>'hypothetical_pnl')::float AS trail_pnl
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE v.model_version = $1 AND v.verdict = 'TAKE'
+      AND a.step_trail_shadow IS NOT NULL
+      AND ${boundaryClause}
+    ORDER BY a.fired_at ASC
+  `, params);
+
+  const rows = r.rows;
+  const n = rows.length;
+  const normalTotal = rows.reduce((s, x) => s + x.normal_pnl, 0);
+  const trailTotal = rows.reduce((s, x) => s + x.trail_pnl, 0);
+  return {
+    sample, n,
+    normalTotal: +normalTotal.toFixed(2),
+    trailTotal: +trailTotal.toFixed(2),
+    normalAvg: n ? +(normalTotal / n).toFixed(2) : null,
+    trailAvg: n ? +(trailTotal / n).toFixed(2) : null,
+    rows,
+  };
+}
+
+export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison };

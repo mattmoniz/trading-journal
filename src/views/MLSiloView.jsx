@@ -236,6 +236,7 @@ export default function MLSiloView() {
   const [verdictFilter, setVerdictFilter] = React.useState('');
   const [range, setRange] = React.useState('today');
   const [rangeData, setRangeData] = React.useState(null);
+  const [stepTrailComparison, setStepTrailComparison] = React.useState(null);
 
   React.useEffect(() => {
     setLoading(true);
@@ -264,6 +265,16 @@ export default function MLSiloView() {
       .then(d => setRangeData(d))
       .catch(() => setRangeData(null));
   }, [range, sample]);
+
+  // "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
+  // coupling step, 2026-09-21 (user's explicit "next step" request). Fetched once per
+  // sample toggle (not range-scoped -- the underlying population is already thin, N<30).
+  React.useEffect(() => {
+    fetch(`${API_URL}/ml-silo/step-trail-comparison?sample=${sample}`)
+      .then(r => r.json())
+      .then(d => setStepTrailComparison(d?.comparison || null))
+      .catch(() => setStepTrailComparison(null));
+  }, [sample]);
 
   if (loading) return <div style={{ padding: 40, color: 'var(--text-muted)' }}>Loading…</div>;
   if (!summary?.model) {
@@ -342,6 +353,34 @@ export default function MLSiloView() {
       <div style={{ marginBottom: 24 }}>
         <EquityCurveChart series={series} />
       </div>
+
+      {stepTrailComparison && stepTrailComparison.n > 0 && (
+        <div style={{ marginBottom: 24, background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.25)', borderRadius: 8, padding: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24' }}>
+            ML + Step-Trail Coupling (research only, N={stepTrailComparison.n})
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0 8px' }}>
+            Both pieces individually unvalidated — this model's own walk-forward CI still crosses zero, and
+            the step-trail mechanism's own finding is PROVISIONAL, not promoted. ML-approved trades' real
+            exit vs. the step-trail mechanism's own hypothetical exit. Directional only, not a basis for
+            anything yet.
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+            Normal exit: <b style={{ fontFamily: 'monospace' }}>{fmtDollar(stepTrailComparison.normalTotal)}</b>
+            {' '}&middot;{' '}
+            Step-trail hypothetical: <b style={{ fontFamily: 'monospace' }}>{fmtDollar(stepTrailComparison.trailTotal)}</b>
+            {' '}&middot;{' '}
+            Delta:{' '}
+            <b style={{
+              fontFamily: 'monospace',
+              color: (stepTrailComparison.trailTotal - stepTrailComparison.normalTotal) >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE,
+            }}>
+              {(stepTrailComparison.trailTotal - stepTrailComparison.normalTotal) >= 0 ? '+' : ''}
+              {fmtDollar(stepTrailComparison.trailTotal - stepTrailComparison.normalTotal)}
+            </b>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
         <h3 style={{ color: 'var(--text-primary)', fontSize: 15, margin: 0 }}>Per-trade: why ML gated this one</h3>

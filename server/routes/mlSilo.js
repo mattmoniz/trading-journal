@@ -4,7 +4,7 @@
 // header for the full "why isolated" reasoning). Read-only: every endpoint here only ever
 // reads ml_models/ml_verdicts/active_setups, never writes.
 import express from 'express';
-import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades } from '../services/mlSiloService.js';
+import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison } from '../services/mlSiloService.js';
 
 const router = express.Router();
 
@@ -69,6 +69,24 @@ router.get('/ml-silo/range-trades', async (req, res) => {
     res.json({ ...result, modelVersion: model.model_version, sample, range });
   } catch (e) {
     console.error('[ml-silo/range-trades]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/ml-silo/step-trail-comparison?sample=test|train|all — "ML gates entry, a
+// validated trail mechanism decides how far to let it run" (the coupling step, 2026-09-21).
+// Composes two already-isolated, already-PROVISIONAL research mechanisms (this model's
+// TAKE verdicts + step_trail_shadow's hypothetical exit) purely for comparison -- never
+// live-wired, see getStepTrailComparison()'s own header for the full account.
+router.get('/ml-silo/step-trail-comparison', async (req, res) => {
+  try {
+    const model = await getLatestModel();
+    if (!model) return res.json({ comparison: null });
+    const sample = ['test', 'train', 'all'].includes(req.query.sample) ? req.query.sample : 'test';
+    const comparison = await getStepTrailComparison(model.model_version, sample);
+    res.json({ modelVersion: model.model_version, comparison });
+  } catch (e) {
+    console.error('[ml-silo/step-trail-comparison]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

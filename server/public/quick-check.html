@@ -590,10 +590,34 @@ async function openMlSiloModal() {
     '<div id="ml-silo-all-stats" class="range-stats-row"></div>' +
     '<div style="font-size:11px;color:#c4b5fd;font-weight:700;margin-top:8px;">ML-Approved</div>' +
     '<div id="ml-silo-take-stats" class="range-stats-row"></div>' +
+    '<div id="ml-silo-step-trail" style="margin-top:14px;"></div>' +
     '<div id="ml-silo-trades" style="margin-top:10px;"></div>';
   $('modal').innerHTML = html;
   $('modal-backdrop').classList.add('open');
   await loadMlSiloRange(mlSiloRange);
+  loadMlSiloStepTrail();
+}
+
+// "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
+// coupling step (2026-09-21, user's explicit "next step" request). NEITHER piece is
+// individually validated yet (this model's own walk-forward CI crosses zero; step_trail_
+// shadow's own RESEARCH_CLAIM is PROVISIONAL) -- shown here purely as a research
+// comparison, clearly labeled, never as a claim either mechanism is ready. Fetched once per
+// modal open, not range-scoped (the underlying population is already thin, N<30).
+async function loadMlSiloStepTrail() {
+  const el = $('ml-silo-step-trail');
+  if (!el) return;
+  try {
+    const data = await fetch('/api/ml-silo/step-trail-comparison?sample=test').then(r => r.json());
+    const c = data?.comparison;
+    if (!c || c.n < 1) { el.innerHTML = ''; return; }
+    const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+    const delta = c.trailTotal - c.normalTotal;
+    el.innerHTML =
+      '<div style="font-size:11px;color:#fbbf24;font-weight:700;">ML + Step-Trail Coupling (research only, N=' + c.n + ')</div>' +
+      '<div style="font-size:11px;color:var(--dim);margin-top:2px;">Both pieces individually unvalidated -- ML-approved trades\' real exit vs. the step-trail mechanism\'s own hypothetical exit. Directional only, not a basis for anything yet.</div>' +
+      '<div style="font-size:12px;margin-top:4px;">Normal exit: <b class="mono">' + fmtD(c.normalTotal) + '</b> &nbsp; Step-trail hypothetical: <b class="mono">' + fmtD(c.trailTotal) + '</b> &nbsp; Delta: <b class="mono" style="color:' + (delta >= 0 ? 'var(--green)' : 'var(--red)') + '">' + (delta >= 0 ? '+' : '') + fmtD(delta) + '</b></div>';
+  } catch (e) { el.innerHTML = ''; }
 }
 
 function renderMlSiloRangeTabs() {

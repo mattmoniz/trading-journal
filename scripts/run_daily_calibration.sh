@@ -55,6 +55,13 @@ echo "=== Daily calibration: $(date) ==="
 ./venv/bin/python3 scripts/ml_meta_labeling/run_silo_scoring.py
 /usr/bin/node scripts/recalibrate_ml_walkforward.mjs
 
+# "ML gates entry, a validated trail mechanism decides how far to let it run" -- the
+# coupling step, 2026-09-21 (user's explicit "next step" request). Composes this model's
+# TAKE verdicts with the already-running step_trail_shadow hypothetical (both individually
+# still PROVISIONAL, never live-wired) purely as a research comparison. See
+# recalibrate_ml_step_trail_comparison.mjs's own header for the full account.
+/usr/bin/node scripts/recalibrate_ml_step_trail_comparison.mjs
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the
