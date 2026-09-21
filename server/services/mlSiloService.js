@@ -167,6 +167,16 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
     conditions.push(`a.trade_date >= $${positional.length}::date`);
   }
 
+  // Globex omitted entirely (2026-09-21, user request: "eliminate globex view from
+  // rth...similar to how we do it for all trades? The pnl is different for rth in the ml
+  // view") -- matches /api/setups/range-summary's own already-established 2026-09-16
+  // decision to exclude Globex from the main Performance section entirely, unconditionally,
+  // not just filter it out of a toggle. Same exact RTH-window boundary (570-1080 minutes =
+  // 9:30am-6pm ET) as that endpoint's own query, so the two are now genuinely
+  // apples-to-apples comparable instead of silently pooling two different populations.
+  conditions.push(`(EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) >= 570`);
+  conditions.push(`(EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) < 1080`);
+
   const sql = `
     SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
       TO_CHAR(a.fired_at, 'YYYY-MM-DD HH24:MI:SS') AS fired_at_str,

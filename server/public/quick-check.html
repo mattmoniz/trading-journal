@@ -656,7 +656,7 @@ async function loadMlSiloRange(range) {
     const modelEl = $('ml-silo-model-line');
     if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
     const labelEl = $('ml-silo-range-label');
-    if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlSiloTradesCache.length + ' scored candidate' + (mlSiloTradesCache.length === 1 ? '' : 's') : '';
+    if (labelEl) labelEl.textContent = data?.rangeLabel ? data.rangeLabel + ' — ' + mlSiloTradesCache.length + ' scored candidate' + (mlSiloTradesCache.length === 1 ? '' : 's') + ' (RTH only, matches Performance)' : '';
     renderMlSiloRangeView();
   } catch (e) {
     if (statsEl) statsEl.textContent = 'Failed to load.';

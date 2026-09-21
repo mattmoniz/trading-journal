@@ -330,7 +330,7 @@ export default function MLSiloView() {
         ))}
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
-        {rangeData?.rangeLabel ? `${rangeData.rangeLabel} — ${(rangeData.trades || []).length} scored candidates` : 'Loading…'}
+        {rangeData?.rangeLabel ? `${rangeData.rangeLabel} — ${(rangeData.trades || []).length} scored candidates (RTH only, matches Performance)` : 'Loading…'}
       </div>
 
       <div style={{ marginBottom: 16 }}>
