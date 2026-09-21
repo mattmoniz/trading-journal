@@ -128,6 +128,13 @@
   #setup-card.visible { display: block; }
   #setup-card.long  { border-color: var(--green); background: rgba(34,197,94,0.07); }
   #setup-card.short { border-color: var(--red); background: rgba(239,68,68,0.07); }
+  /* shadow-only override (2026-09-21, user-caught live: a deliberately-suppressed setup type
+     -- IB_BULLISH, killed 2026-08-31 -- rendered with IDENTICAL green "act on this" styling
+     as a real ACTIVE fire, since this card never distinguished origin_status before). Same
+     amber "not a trusted signal" language as #sweep-watch below, applied here too -- wins
+     over .long/.short via source order (this rule comes after them). */
+  #setup-card.shadow-only { border-color: rgba(245,158,11,0.4) !important; background: rgba(245,158,11,0.06) !important; }
+  .setup-shadow-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(245,158,11,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; margin-left: 6px; }
   .setup-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
@@ -918,14 +925,21 @@ function renderSetupCard(setupData) {
     return;
   }
   const isLong = (active.type || '').includes('LONG') || (active.type || '').includes('BULLISH');
-  el.className = (isLong ? 'long' : 'short') + ' visible';
-  const color = isLong ? 'var(--green)' : 'var(--red)';
+  // originStatus (2026-09-21) -- ACTIVE means this was actually shown as a real live alert
+  // at fire time; anything else (SHADOW/BACKFILL/UNKNOWN/null) is background-tracked only,
+  // most commonly a deliberately-suppressed setup_type (e.g. IB_BULLISH/IB_BEARISH, killed
+  // 2026-08-31) still generating candidates the priority-selection array evaluates every
+  // poll. Never let this render identically to a real ACTIVE fire.
+  const isShadowOnly = active.originStatus != null && active.originStatus !== 'ACTIVE';
+  el.className = (isShadowOnly ? 'shadow-only' : (isLong ? 'long' : 'short')) + ' visible';
+  const color = isShadowOnly ? 'var(--amber)' : (isLong ? 'var(--green)' : 'var(--red)');
   const rr = (active.entry && active.stop && active.target && Math.abs(active.entry - active.stop) > 0)
     ? (Math.abs(active.target - active.entry) / Math.abs(active.entry - active.stop)).toFixed(1) : null;
 
   let html = '<div class="setup-head">';
   html += '<span class="dot" style="background:' + color + (active.minsRemaining != null && active.minsRemaining <= 0 ? ';animation:none' : '') + '"></span>';
   html += '<span class="setup-type" style="color:' + color + '">' + (active.type || '').replace(/_/g, ' ') + '</span>';
+  if (isShadowOnly) html += '<span class="setup-shadow-tag" title="' + (active.suppressionReason || 'background-tracked') + '">BACKGROUND ONLY — NOT LIVE</span>';
   html += '<span class="setup-time mono">fired ' + (active.detectedAt || '') + ' ET</span>';
   html += '</div>';
   html += '<div class="setup-grid">';

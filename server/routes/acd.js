@@ -7267,6 +7267,17 @@ export default function createACDRouter(io) {
       // synthetic BACKFILL per CLAUDE.md's hard rule), liveN is the blended sample_size.
       const canonicalStatus = await getCanonicalLiveStatus(active.type).catch(() => null);
 
+      // origin_status/suppression_reason for the prominent trade-card display (2026-09-21,
+      // user-caught live: a deliberately dead/suppressed setup type -- IB_BULLISH, killed
+      // 2026-08-31, "dump them both" -- rendered with IDENTICAL green "act on this" styling
+      // as a real ACTIVE fire, because this response never told the frontend which one it
+      // was). Fetched directly by setupId (the real active_setups row this fire actually
+      // wrote/reused) rather than re-deriving eligibility here, so this can never disagree
+      // with what was actually persisted.
+      const originRow = setupId
+        ? await query(`SELECT origin_status, suppression_reason FROM active_setups WHERE id=$1`, [setupId]).catch(() => ({ rows: [] }))
+        : { rows: [] };
+
       res.json({
         setup: {
           ...active,
@@ -7278,6 +7289,8 @@ export default function createACDRouter(io) {
           sizeMultiplier: active.sizeMultiplier ?? 1.0,
           realN: canonicalStatus?.realN ?? null,
           liveN: canonicalStatus?.liveN ?? null,
+          originStatus: originRow.rows[0]?.origin_status ?? null,
+          suppressionReason: originRow.rows[0]?.suppression_reason ?? null,
         },
         noNewEntries: !!noNewEntries,
         bigMoveSignal,
