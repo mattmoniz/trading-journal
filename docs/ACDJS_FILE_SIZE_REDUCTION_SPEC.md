@@ -70,16 +70,18 @@ first attempt, confirming the grep-based dependency analysis was complete this t
 
 `acd.js`: 10,091 → 9,214 lines. **Cumulative reduction today: 12,286 → 9,214 lines (~25%).**
 
-**Verification found the response isn't fully deterministic, independent of this extraction** —
-confirmed by fetching `/api/performance-audit/unified` twice in a row against the SAME (new)
-code with no change between calls: 7,853 of 9,267 `pairs` entries differed. Root-caused: the
-`pairsWinQ` query (feeding `wr20`/`ev20`/`wr6m`/`ev6m`/`wr1y`/`ev1y`) has no `run_date` filter
-or `DISTINCT ON` — it selects every historical calibration row for each `(signal_name,
-window_days)` combination, and the JS `forEach` assignment (`pairWins[name][window] = {...}`)
-lets whichever row Postgres happens to return last for a tied `ORDER BY signal_name,
-window_days` sort key win, which isn't guaranteed stable across calls. This is byte-identical
-to the pre-extraction query text (confirmed via diff) — a real, pre-existing bug, not something
-Phase B introduced. See docs/OPEN_THREADS.md's 2026-09-20 entry for the flagged fix.
+**Verification found the response wasn't fully deterministic, independent of this extraction —
+FIXED same session.** Confirmed by fetching `/api/performance-audit/unified` twice in a row
+against the SAME (new) code with no change between calls: 7,853 of 9,267 `pairs` entries
+differed. Root cause, confirmed by direct DB query: all 3 confluence-pairs queries
+(`pairsBaseQ`/`pairsSubQ`/`pairsWinQ`) had no `run_date` filter/`DISTINCT ON` — `performance_audit`
+accumulates one row per `(signal_name, window_days)` per weekly recalibration run (16 distinct
+`run_date`s found per pair), and `pairsBaseQ` fed `pairs` directly via a 1:1 `.map()` with zero
+dedup, inflating the real 778 distinct pairs into 9,267 array entries. Fixed by wrapping all 3
+in `DISTINCT ON` subqueries. Byte-identical to the pre-extraction query text before the fix
+(confirmed via diff) — a real, pre-existing bug, not something Phase B introduced. Full account
+and verification: docs/OPEN_THREADS.md's 2026-09-20 entry, `OPEN_DECISION
+unified_pairs_query_missing_run_date_filter_20260920` (RESOLVED).
 
 ## Not yet started
 

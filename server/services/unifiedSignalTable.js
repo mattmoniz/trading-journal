@@ -180,46 +180,70 @@ export async function computeUnifiedPerformanceAudit() {
       SELECT MAX(bk) FILTER (WHERE cv - vol < t * 0.7) as vah,
              MIN(bk) FILTER (WHERE cv - vol < t * 0.7) as val FROM cum
     `, [todayET]).catch(() => ({ rows: [] })),
-    // Confluence pairs (base/sub/rolling-window) — independent reads of performance_audit
+    // Confluence pairs (base/sub/rolling-window) — independent reads of performance_audit.
+    // FIXED 2026-09-20 (OPEN_DECISION unified_pairs_query_missing_run_date_filter_20260920):
+    // none of these 3 queries filtered by run_date -- performance_audit accumulates one row
+    // per (signal_name, window_days) per weekly recalibration run (confirmed live: 16
+    // distinct run_dates per pair), so every one of these was reading ALL 16 historical
+    // copies, not just the latest. pairsBaseQ (this first query) fed `pairs` directly via a
+    // 1:1 .map() with no dedup at all -- confirmed live this inflated the real 778 distinct
+    // confluence pairs into 9,267 array entries (mostly stale duplicates). pairsSubQ/pairsWinQ
+    // didn't duplicate rows the same way (their JS consumers key by signal_name/window_days
+    // into a plain object), but which of the 16 historical values won was whichever row
+    // Postgres happened to return last for a tied ORDER BY sort key -- non-deterministic,
+    // confirmed live via two consecutive identical-code calls returning different values for
+    // 7,853 of 9,267 pairs. All 3 now wrap DISTINCT ON (matching this codebase's own
+    // latest-per-signal_name pattern used everywhere else, e.g. OPTIMAL_STOP/SETUP_STATUS
+    // readers) in a subquery so the outer ORDER BY (needed for display ranking, not just
+    // dedup) can stay independent of the DISTINCT ON columns.
     query(`
-      SELECT signal_name, sample_size,
-        ROUND(win_rate*100, 2)::float AS wr_pct,
-        ROUND(ev_per_trade::numeric, 2)::float AS ev,
-        recommendation
-      FROM performance_audit
-      WHERE signal_type='CONTEXT_ANALYSIS'
-        AND signal_name LIKE 'PAIR_%'
-        AND window_days = 9999
-        AND signal_name NOT LIKE '%_DOW_%'
-        AND signal_name NOT LIKE '%_TOD_%'
-        AND signal_name NOT LIKE '%_DT_%'
-      ORDER BY ev_per_trade DESC NULLS LAST
+      SELECT signal_name, sample_size, wr_pct, ev, recommendation FROM (
+        SELECT DISTINCT ON (signal_name) signal_name, sample_size,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev,
+          recommendation
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND signal_name LIKE 'PAIR_%'
+          AND window_days = 9999
+          AND signal_name NOT LIKE '%_DOW_%'
+          AND signal_name NOT LIKE '%_TOD_%'
+          AND signal_name NOT LIKE '%_DT_%'
+        ORDER BY signal_name, run_date DESC
+      ) latest
+      ORDER BY ev DESC NULLS LAST
     `),
     query(`
-      SELECT signal_name,
-        ROUND(win_rate*100, 2)::float AS wr_pct,
-        ROUND(ev_per_trade::numeric, 2)::float AS ev,
-        sample_size, recommendation
-      FROM performance_audit
-      WHERE signal_type='CONTEXT_ANALYSIS'
-        AND window_days = 9999
-        AND (signal_name LIKE 'PAIR_%_DOW_%'
-          OR signal_name LIKE 'PAIR_%_TOD_%'
-          OR signal_name LIKE 'PAIR_%_DT_%')
-      ORDER BY signal_name, ev_per_trade DESC NULLS LAST
+      SELECT signal_name, wr_pct, ev, sample_size, recommendation FROM (
+        SELECT DISTINCT ON (signal_name) signal_name,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev,
+          sample_size, recommendation
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND window_days = 9999
+          AND (signal_name LIKE 'PAIR_%_DOW_%'
+            OR signal_name LIKE 'PAIR_%_TOD_%'
+            OR signal_name LIKE 'PAIR_%_DT_%')
+        ORDER BY signal_name, run_date DESC
+      ) latest
+      ORDER BY signal_name, ev DESC NULLS LAST
     `),
     query(`
-      SELECT signal_name, window_days,
-        sample_size,
-        ROUND(win_rate*100, 2)::float AS wr_pct,
-        ROUND(ev_per_trade::numeric, 2)::float AS ev
-      FROM performance_audit
-      WHERE signal_type='CONTEXT_ANALYSIS'
-        AND signal_name LIKE 'PAIR_%'
-        AND window_days IN (365, 182, 20)
-        AND signal_name NOT LIKE '%_DOW_%'
-        AND signal_name NOT LIKE '%_TOD_%'
-        AND signal_name NOT LIKE '%_DT_%'
+      SELECT signal_name, window_days, sample_size, wr_pct, ev FROM (
+        SELECT DISTINCT ON (signal_name, window_days) signal_name, window_days,
+          sample_size,
+          ROUND(win_rate*100, 2)::float AS wr_pct,
+          ROUND(ev_per_trade::numeric, 2)::float AS ev
+        FROM performance_audit
+        WHERE signal_type='CONTEXT_ANALYSIS'
+          AND signal_name LIKE 'PAIR_%'
+          AND window_days IN (365, 182, 20)
+          AND signal_name NOT LIKE '%_DOW_%'
+          AND signal_name NOT LIKE '%_TOD_%'
+          AND signal_name NOT LIKE '%_DT_%'
+        ORDER BY signal_name, window_days, run_date DESC
+      ) latest
       ORDER BY signal_name, window_days
     `),
     // Real per-setup calibration, correctly latest-per-signal_name (2026-07-20).
