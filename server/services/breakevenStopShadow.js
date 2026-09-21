@@ -4,6 +4,28 @@
 // actual_pnl/stop_level, only writes its own JSONB column after the real trade has already
 // resolved through its own unmodified path).
 //
+// PROMOTED TO LIVE 2026-09-21 for in-scope rows (server/services/breakevenStopWalker.js,
+// wired into resolveSetupsByPrice()) -- this file's retrospective classifier now only ever
+// runs for rows where `breakeven_stop_eligible IS NOT TRUE` (out-of-scope setup_types, and any
+// row inserted before this column existed). For live-eligible rows, the resolution write
+// already reflects whatever the live mechanism actually did, so this function's own
+// `delta = hypotheticalPnl - actual_pnl` would silently measure breakeven-vs-breakeven (≈0),
+// not breakeven-vs-plain -- see breakevenStopWalker.js's own header and
+// docs/OPEN_THREADS.md's 2026-09-21 entry (DeepSeek design critique F4) for why the shadow and
+// the live mechanism cannot share this same delta semantics once promoted.
+//
+// RESIDUAL BAR-WINDOW DIVERGENCE (DeepSeek code-review Finding 3, 2026-09-21, deliberately NOT
+// unified): this file's own bar fetch below is fire-minute-INCLUSIVE (`ts >= date_trunc('minute',
+// fired_at)`); the live resolution loop (resolveSetups.js) and the counterfactual follow-up pass
+// (breakevenStopWalker.js's completeBreakevenStopCounterfactuals()) are both fire-minute-EXCLUSIVE
+// (`ts > fired_at`). The promotion decision itself was re-validated on the EXCLUSIVE convention
+// (N=178, CI [$6.38, $29.49] -- see docs/OPEN_THREADS.md), so this divergence doesn't invalidate
+// anything already shipped. But it IS a latent trap for any future cross-comparison of this
+// shadow's still-running out-of-scope population against the live mechanism's own results, or for
+// the upcoming momentum_against_fade_shadow (MF) promotion work if it ever needs to reconcile
+// against this file. Don't assume the two populations are bar-for-bar comparable without
+// rechecking which convention each side used.
+//
 // Backing research: RESEARCH_CLAIM orderflow_named_level_slicethrough_net_negative_20260915
 // (the underlying classifier: a trade showing an early adverse order-flow push that SUCCEEDS
 // -- "REWARDED" -- averages -$15.02/trade real, vs +$2.27 baseline/+$9.30 when the push fails
@@ -34,8 +56,12 @@
 // classification of 1 borderline trade out of 1,820 (a push bar whose z-score sits between
 // the rounded and true cutoff). Kept at full precision to match the backtest exactly rather
 // than accept an avoidable, silent 1-trade divergence.
-const Z_CUT = -0.0551991443084654;
-const D_CUT = 0.2213130416402452;
+//
+// Re-exported from breakevenStopWalker.js (the new canonical home as of the 2026-09-21
+// promotion) rather than redeclared here -- single source of truth for the exact same
+// constants the live mechanism now uses.
+export { Z_CUT, D_CUT } from './breakevenStopWalker.js';
+import { Z_CUT, D_CUT } from './breakevenStopWalker.js';
 
 import { query } from '../db.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
@@ -134,6 +160,7 @@ export async function completeBreakevenStopShadows() {
     FROM active_setups
     WHERE status = 'RESOLVED' AND breakeven_stop_shadow IS NULL
       AND setup_type ~ '_FADE_(LONG|SHORT)$'
+      AND breakeven_stop_eligible IS NOT TRUE
       AND origin_status IN ('ACTIVE','SHADOW')
       AND (is_cluster_primary IS NULL OR is_cluster_primary = true)
       AND (resolution_method IS NULL OR resolution_method NOT IN ('MARK_TO_MARKET','RECOVERY_MTM'))

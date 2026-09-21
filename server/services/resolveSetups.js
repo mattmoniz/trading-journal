@@ -22,6 +22,7 @@ import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from './widerTargetWalker.j
 import { stepStepTrail } from './stepTrailWalker.js';
 import { getCurrentPrice } from './priceRetrieval.js';
 import { stepPitchCatch } from './pitchCatchWalker.js';
+import { stepBreakevenStop } from './breakevenStopWalker.js';
 import { computeADXSeries } from './adxService.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline } from './acdShared.js';
@@ -471,6 +472,14 @@ export async function resolveSetupsByPrice(io) {
     // stop/target of a real, user-visible trade, not just a size hint. Mutually exclusive
     // with trailWidth/extendTarget -- no setup_type row sets more than one of the three.
     const widerTargetMult = row.wider_target_mult;
+    // Breakeven-stop-on-order-flow-rejection (promoted live 2026-09-21, server/services/
+    // breakevenStopWalker.js). Mutually exclusive with the three dynamic-exit mechanisms
+    // above -- per DeepSeek's 2026-09-21 design critique (F2), the backing research only ever
+    // validated BE against the ORIGINAL fixed stop/target; composing it with a widened target
+    // or a trailing stop is an untested combination, so BE only engages when NONE of the other
+    // three are set on this row (mirrors their own existing pairwise-exclusivity invariant).
+    const breakevenStopEligible = row.breakeven_stop_eligible === true
+      && trailWidth == null && extendTarget == null && widerTargetMult == null;
 
     let resolution = null, resolvedAt = null, priceAtRes = null, method = null;
     let runMfe = 0, runMae = 0, barCount = 0;
@@ -519,6 +528,15 @@ export async function resolveSetupsByPrice(io) {
     };
     let pitchCatchShadowResolution = null;
     let pitchCatchShadowDisabled = false;
+    // Breakeven-stop live state — same re-derive-from-scratch-every-poll convention as every
+    // other mechanism above. `baseline` (volume z-score baseline) is fetched once per row,
+    // lazily, only if this row is actually eligible -- a DB call inside the per-bar loop would
+    // be wasteful and against this file's own "fetch once per row" convention (matches
+    // touch_quality's own dateCache-style single fetch elsewhere in this file). If the fetch
+    // fails, `beDisabled` is set and this row falls through to the plain fixed-stop/target
+    // path below for its entire remaining life -- never mid-trade, decided once up front.
+    let beState = { pendingPush: null, armed: false, armedAtTs: null, breakevenStop: null, sawRejection: false, pushEvaluated: false };
+    let beBaseline = null, beDisabled = false, beCounterfactualResolution = null;
     // FIXED 2026-08-30 (user-flagged, real Overnight/Globex PD_POC_FADE_SHORT fire): computed
     // once per row (not per bar) and fed into every session-end check below. row.fired_at is
     // already ::text-cast (this file's standard convention). See
@@ -526,6 +544,16 @@ export async function resolveSetupsByPrice(io) {
     // closes -- all three exit mechanisms below independently hand-rolled an RTH-only
     // `hour>=16` check that silently misjudged session-end for any Globex-fired trade.
     const firedMod = firedAtToMod(row.fired_at);
+
+    if (breakevenStopEligible) {
+      try {
+        beBaseline = await getTouchQualityBaseline(row.trade_date);
+        if (!beBaseline) beDisabled = true;
+      } catch (e) {
+        console.error('breakeven-stop baseline fetch error (non-critical, falling back to plain path for this row):', e.message);
+        beDisabled = true;
+      }
+    }
 
     for (const bar of bars.rows) {
       barCount++;
@@ -743,6 +771,51 @@ export async function resolveSetupsByPrice(io) {
 
         if (resolution) break;
         continue;
+      }
+
+      if (breakevenStopEligible && !beDisabled) {
+        try {
+          // barCount was already incremented (1-based) at the top of this loop, so
+          // bars.rows.length - barCount is exactly the count of bars strictly after this one
+          // in the currently-fetched array -- see stepBreakevenStop()'s own header for why
+          // this must match the offline classifier's "i <= L-3" candidate-position bound.
+          const step = stepBreakevenStop(beState, bar, { entry, stop, t1, long, baseline: beBaseline, barsRemainingAfter: bars.rows.length - barCount });
+          beState = step.state;
+          if (step.resolution) {
+            resolution = step.resolution.resolution;
+            method = step.resolution.method;
+            resolvedAt = bar.ts;
+            priceAtRes = step.resolution.priceAtRes;
+          }
+          // Plain-path counterfactual -- ALWAYS computed on the same real bars, completely
+          // independent of whatever beState/armed actually did, so a later analysis can
+          // always answer "what would have happened without BE" for this row, whether or not
+          // BE ever actually armed. Per the user's own request (2026-09-21) that this be
+          // available for comparing BE's effect against any future risk-management mechanism,
+          // not just for BE's own promotion decision. Never influences the REAL
+          // resolution/method/priceAtRes above.
+          if (!beCounterfactualResolution) {
+            const cfStopHit = long ? bar.low <= stop : bar.high >= stop;
+            const cfTargetHit = long ? bar.high >= t1 : bar.low <= t1;
+            if (cfStopHit) beCounterfactualResolution = { resolution: 'STOP_HIT', priceAtRes: stop, resolvedAt: bar.ts };
+            else if (cfTargetHit) beCounterfactualResolution = { resolution: 'TARGET_HIT', priceAtRes: t1, resolvedAt: bar.ts };
+          }
+          if (resolution) break;
+          continue;
+        } catch (e) {
+          // Per this file's own established convention (see the try/catch blocks above),
+          // isolate a failure to THIS row only. Unlike the observation-only shadows, BE is the
+          // REAL resolution path for this row once eligible -- freeze beDisabled and fall
+          // through to the plain path below for the rest of this row's remaining bars. This DOES
+          // revert the effective stop back to the original (wider) one -- confirmed safe, not
+          // just "less surprising," per DeepSeek's 2026-09-21 code review: stepBreakevenStop()
+          // is pure arithmetic over an already-validated baseline (guarded above), so it has no
+          // realistic throw point; state is re-derived from scratch every poll (no saved cursor
+          // to corrupt); and reverting to the original stop is the CONSERVATIVE direction to
+          // fail in (degrades to pre-promotion behavior, never a surprise tighter stop-out).
+          console.error('breakeven-stop live computation error (non-critical, falling back to plain path for the rest of this trade):', e.message);
+          beDisabled = true;
+        }
       }
 
       const t1Hit = long ? bar.high >= t1 : bar.low <= t1;
@@ -987,6 +1060,43 @@ export async function resolveSetupsByPrice(io) {
       stepTrailShadowPayload = null;
     }
 
+    // Breakeven-stop live payload -- written for every live-eligible row regardless of
+    // whether BE actually armed, per DeepSeek's F4/F8 findings and the user's explicit
+    // 2026-09-21 request: persist BOTH the real outcome and a plain-path counterfactual
+    // (computed above, independent of beState) so a later analysis can always reconstruct
+    // "what would have happened without BE" -- not just when this mechanism helped. `delta`
+    // is oriented the same way the retrospective shadow always was (positive = BE-favorable),
+    // so this stays directly comparable to any future mechanism's own delta on the same rows.
+    // `live_active` distinguishes a row where BE actually changed the real outcome (armed AND
+    // the counterfactual differs from the real path) from one where it was merely eligible.
+    let breakevenStopLivePayload = null;
+    try {
+      if (breakevenStopEligible) {
+        const cf = beCounterfactualResolution;
+        let counterfactualPnl = null;
+        if (cf) {
+          const cfPts = long ? cf.priceAtRes - entry : entry - cf.priceAtRes;
+          counterfactualPnl = Math.round((cfPts * PNL_PER_POINT - COMMISSION) * 100) / 100;
+        }
+        const realPnlRounded = Math.round(pnl * 100) / 100;
+        breakevenStopLivePayload = JSON.stringify({
+          eligible: true,
+          disabled: beDisabled,
+          classification: beDisabled ? null : (beState.armed ? 'REWARDED' : (beState.sawRejection ? 'REJECTED' : 'NO_PUSH')),
+          armed_at: beState.armedAtTs,
+          live_active: beState.armed && cf != null && cf.priceAtRes !== priceAtRes,
+          real_resolution_method: method,
+          real_pnl: realPnlRounded,
+          counterfactual_resolution: cf?.resolution ?? null,
+          counterfactual_pnl: counterfactualPnl,
+          delta: counterfactualPnl != null ? Math.round((realPnlRounded - counterfactualPnl) * 100) / 100 : null,
+        });
+      }
+    } catch (e) {
+      console.error('breakeven-stop live payload error (non-critical, writing without it):', e.message);
+      breakevenStopLivePayload = null;
+    }
+
     // Pitch and Catch shadow payload -- same widening-armed gate as step-trail (never write
     // for a trade that never even reached the wider target). Written for BOTH a real
     // re-entry (qualified=true, real hypothetical_pnl) and a confirmed-but-filtered-out
@@ -1025,14 +1135,15 @@ export async function resolveSetupsByPrice(io) {
           runner_peak_price=COALESCE($12, runner_peak_price),
           runner_trail_price=COALESCE($13, runner_trail_price),
           step_trail_shadow=COALESCE($14::jsonb, step_trail_shadow),
-          pitch_catch_shadow=COALESCE($15::jsonb, pitch_catch_shadow)
+          pitch_catch_shadow=COALESCE($15::jsonb, pitch_catch_shadow),
+          breakeven_stop_live=COALESCE($16::jsonb, breakeven_stop_live)
       WHERE id=$1 AND status=$7
       RETURNING *
     `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch,
         Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount,
         armedAt, peakPrice != null ? Math.round(peakPrice * 100) / 100 : null,
         trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null,
-        stepTrailShadowPayload, pitchCatchShadowPayload]);
+        stepTrailShadowPayload, pitchCatchShadowPayload, breakevenStopLivePayload]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}

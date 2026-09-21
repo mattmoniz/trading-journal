@@ -290,6 +290,22 @@ export function isPdPriorDayType(typeOrName) {
   return typeof typeOrName === 'string' && (typeOrName.startsWith('PD_') || typeOrName.startsWith('PD2_'));
 }
 
+// Breakeven-stop-on-order-flow-rejection live-wiring scope check (2026-09-21). Single shared
+// source for the exact population this mechanism applies to -- MUST match
+// breakevenStopShadow.js's own retrospective classification scope exactly (non-overnight named-
+// level fades only; `_OVERNIGHT`-suffixed variants structurally don't match since they don't end
+// in `_LONG`/`_SHORT`; GLOBEX_VWAP_MAGNET is a separate setup family, not a fade, and doesn't
+// match either). Computed once at every real INSERT site (matching wider_target_mult/
+// runner_trail_width/extend_target_level's own "set once at entry, never re-derived mid-life"
+// convention, per DeepSeek's 2026-09-21 design critique) and persisted to
+// active_setups.breakeven_stop_eligible -- never re-derive this inline at resolution time, or a
+// future scope-regex change would silently apply retroactively to already-open trades instead of
+// only new ones. Do NOT widen this scope without a fresh Phase 0 test on the wider population
+// first, per this codebase's own standing "backtest population must match what fires live" rule.
+export function isBreakevenStopEligible(setupType) {
+  return typeof setupType === 'string' && /_FADE_(LONG|SHORT)$/.test(setupType);
+}
+
 // No-new-entries dead zone: 4:00-6:00 PM ET (user directive, 2026-07-31 -- "seems to be noise
 // and bad trades"; full-skip behavior since 2026-09-16, see acd.js's own `inNewEntryDeadZone`
 // comment). Extracted 2026-09-16 after the same `etMin >= 16*60 && etMin < 18*60` boundary got

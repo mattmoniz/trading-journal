@@ -22,14 +22,15 @@ import multer from 'multer';
 import { query } from '../db.js';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
 import { completeStepTrailShadows, completePitchCatchShadows } from '../services/shadowCompletion.js';
 import { completeBreakevenStopShadows } from '../services/breakevenStopShadow.js';
-export { completeStepTrailShadows, completePitchCatchShadows, completeBreakevenStopShadows };
+import { completeBreakevenStopCounterfactuals } from '../services/breakevenStopWalker.js';
+export { completeStepTrailShadows, completePitchCatchShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
 import { resolveSetupsByPrice } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
@@ -1581,11 +1582,13 @@ async function detectGlobexSetup(sessionDate, io) {
           price_at_detection, historical_win_rate, historical_sessions, suppression_reason,
           confluence_score_at_detection, confluence_levels_at_detection, size_multiplier,
           runner_trail_width, wider_target_mult,
-          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak
+          ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak,
+          breakeven_stop_eligible
         ) VALUES ($1,$2,NOW(),$3,$10,$10,$4,$5,$6,$7,$8,$9,NULL,NULL,$11,$12,$13,$14,$15,$16,
           ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
           ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-          $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+          $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
+          $${20 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
         ON CONFLICT DO NOTHING
         RETURNING id, trade_date, fired_at::text as fired_at, setup_type, entry_zone_low, entry_zone_high,
                   stop_level, t1_level, t1_label, historical_win_rate, historical_sessions, expires_at
@@ -1617,7 +1620,7 @@ async function detectGlobexSetup(sessionDate, io) {
           // globex_ambiguous_names_need_session_backfill for the
           // still-open historical-data side of this (existing rows' bet_class not yet
           // corrected retroactively -- this fix only affects future fires).
-          'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal), vaOverlapStreak]);
+          'GLOBEX_LEVEL', JSON.stringify(globexVolBuildingSignal), vaOverlapStreak, isBreakevenStopEligible(c.type)]);
 
       if (!ins.rows[0]) continue; // ON CONFLICT — already exists
 
@@ -3760,11 +3763,12 @@ export default function createACDRouter(io) {
                     trade_date, setup_type, fired_at, expires_at, status, origin_status,
                     entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                     extend_target_level, price_at_detection, confluence_score_at_detection,
-                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, va_overlap_streak
+                    confluence_levels_at_detection, suppression_reason, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, va_overlap_streak,
+                    breakeven_stop_eligible
                   ) VALUES ($1,$2,NOW(),$3,$4,$4,$5,$5,$6,$7,$8,$9,$5,$10,$11,$12,
                     ${REGIME_STAMP_COLS.map((_, i) => `$${13 + i}`).join(', ')},
                     ${FIRE_TAG_COLS.map((_, i) => `$${13 + REGIME_STAMP_COLS.length + i}`).join(', ')},
-                    $${13 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${14 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                    $${13 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${14 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${15 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                   ON CONFLICT DO NOTHING
                   RETURNING id, trade_date, fired_at::text as fired_at, entry_zone_low, stop_level, t1_level, t1_label
                 `, [todayET, svSetupType, svExpiresAt, live.status, svEntry, svStop, svT1,
@@ -3772,7 +3776,7 @@ export default function createACDRouter(io) {
                     svExtendTarget, levelDensity, stackVolSignal.levels, live.reason,
                     ...regimeStampValues(svRegimeStamp),
                     ...fireTagValues(svFireTags),
-                    getBetClass(svSetupType), svVaOverlapStreak]);
+                    getBetClass(svSetupType), svVaOverlapStreak, isBreakevenStopEligible(svSetupType)]);
                 if (ins.rows[0]) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
@@ -3838,6 +3842,13 @@ export default function createACDRouter(io) {
       // inline tracking or multi-poll retry, unlike the two shadows just above). Same
       // observation-only guarantee -- never touches a real trade's own fields.
       await completeBreakevenStopShadows().catch(() => {});
+      // Breakeven-stop LIVE counterfactual follow-up (found 2026-09-21 via DeepSeek code
+      // review, before this mechanism ever fired live for real): the inline computation in
+      // resolveSetupsByPrice() can leave the plain-path counterfactual null for BE_STOP_HIT
+      // rows specifically -- see breakevenStopWalker.js's own header for the full reasoning.
+      // Never touches the real trade's own fields, only the counterfactual side of its own
+      // already-written breakeven_stop_live JSONB.
+      await completeBreakevenStopCounterfactuals().catch(() => {});
       await expireStaleSetups(io).catch(() => {});
       await structurallyInvalidateSetups(io).catch(() => {});
 
@@ -5128,16 +5139,16 @@ export default function createACDRouter(io) {
                         trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                         suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
                         entry_zone_low, entry_zone_high, stop_level, t1_level, expires_at, wider_target_mult, bet_class,
-                        is_cluster_primary, cluster_touch_id
+                        is_cluster_primary, cluster_touch_id, breakeven_stop_eligible
                       )
-                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12)
+                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12,$13)
                       ON CONFLICT DO NOTHING
                       RETURNING id
                     `, [
                       todayET, candType, currentPrice, nearLevels.length,
                       nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
                       sibLevel, sibStopLevel, sibT1Level, sibExpiresAt, sibWiderTargetMult, getBetClass(candType),
-                      clusterTouchId,
+                      clusterTouchId, isBreakevenStopEligible(candType),
                     ]);
                     // Shadow-tag wiring (2026-09-16, found live: user asked why a real cluster-
                     // sibling touch-credit row -- SHADOW-origin, never a live alert either way --
@@ -5578,13 +5589,13 @@ export default function createACDRouter(io) {
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label, expires_at,
                   historical_win_rate, historical_sessions, runner_trail_width, wider_target_mult,
                   ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, vol_building_signal, va_overlap_streak,
-                  cluster_touch_id
+                  cluster_touch_id, breakeven_stop_eligible
                 )
                 VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW',$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,
                   ${REGIME_STAMP_COLS.map((_, i) => `$${16 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${16 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${16 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${18 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length},
-                  $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
+                  $${19 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${20 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length})
                 ON CONFLICT DO NOTHING
                 RETURNING id
               `, [
@@ -5622,7 +5633,7 @@ export default function createACDRouter(io) {
                 // that comment), but this INSERT never actually wrote it, so the winner's
                 // own row stayed permanently unlinked from the sibling rows it beat (which
                 // DO carry this same clusterTouchId via the touch-credit INSERT above).
-                clusterTouchId,
+                clusterTouchId, isBreakevenStopEligible(type),
               ]).catch(() => ({ rows: [] }));
               // Shadow-tag wiring (2026-09-16, found live: the SUPPRESSED_FADE/CLUSTER_ALREADY_
               // FIRED/etc. audit-insert branch -- this file's OWN comment a few lines up already
@@ -6445,12 +6456,14 @@ export default function createACDRouter(io) {
                   entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
                   price_at_detection, historical_win_rate, historical_sessions, historical_avg_pnl, historical_t1_hit_rate,
                   confluence_score_at_detection, confluence_levels_at_detection,
-                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width, va_overlap_streak)
+                  status, origin_status, resolution_method, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, runner_trail_width, va_overlap_streak,
+                  breakeven_stop_eligible)
                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'SHADOW','SHADOW','EARLY_TOUCH_BACKFILL',
                   ${REGIME_STAMP_COLS.map((_, i) => `$${17 + i}`).join(', ')},
                   ${FIRE_TAG_COLS.map((_, i) => `$${17 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                   $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
+                  $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${17 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5})
                 ON CONFLICT DO NOTHING
                 RETURNING id
               `, [
@@ -6468,6 +6481,7 @@ export default function createACDRouter(io) {
                 JSON.stringify(btVolBuildingSignal),
                 btRunnerTrailWidth,
                 btVaOverlapStreak,
+                isBreakevenStopEligible(bt.type),
               ]);
               // Cluster role claimed AFTER the insert above actually succeeded -- see
               // acdShared.js's claimClusterRole() header and this loop's own comment (top of
@@ -6923,14 +6937,15 @@ export default function createACDRouter(io) {
             confluence_score_at_detection, confluence_levels_at_detection,
             exhaustion_signal_at_detection, hivol_lopace_at_detection, selected_over,
             ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult,
-            size_factors_at_detection, vol_building_signal, or_range_at_detection, rvol_20d_at_detection, va_overlap_streak
+            size_factors_at_detection, vol_building_signal, or_range_at_detection, rvol_20d_at_detection, va_overlap_streak,
+            breakeven_stop_eligible
           ) VALUES ($1,$2,$3,$4,$18,$18,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$19,$20,$21,$22,$23,$24,$25,
             ${REGIME_STAMP_COLS.map((_, i) => `$${26 + i}`).join(', ')},
             ${FIRE_TAG_COLS.map((_, i) => `$${26 + REGIME_STAMP_COLS.length + i}`).join(', ')},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
             $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 5},
-            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6})
+            $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 6}, $${26 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 7})
           ON CONFLICT DO NOTHING RETURNING id, entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label
         `, [
           todayET, active.type, firedAtTs, computeExpiry(active.type),
@@ -6970,6 +6985,7 @@ export default function createACDRouter(io) {
           active.orRangeAtDetection ?? null,
           active.rvol20dAtDetection ?? null,
           activeVaOverlapStreak,
+          isBreakevenStopEligible(active.type),
         ]);
         let row = ins.rows[0];
         if (!row) {
@@ -7209,11 +7225,13 @@ export default function createACDRouter(io) {
             const shadowIns = await query(`
               INSERT INTO active_setups (trade_date, setup_type, fired_at, expires_at,
                 entry_zone_low, entry_zone_high, stop_level, t1_level, t1_label,
-                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, va_overlap_streak)
+                status, origin_status, ${REGIME_STAMP_COLS.join(', ')}, ${FIRE_TAG_COLS.join(', ')}, bet_class, wider_target_mult, vol_building_signal, va_overlap_streak,
+                breakeven_stop_eligible)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10, ${REGIME_STAMP_COLS.map((_, i) => `$${11 + i}`).join(', ')},
                 ${FIRE_TAG_COLS.map((_, i) => `$${11 + REGIME_STAMP_COLS.length + i}`).join(', ')},
                 $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 1},
-                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3})
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 2}, $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 3},
+                $${11 + REGIME_STAMP_COLS.length + FIRE_TAG_COLS.length + 4})
               ON CONFLICT DO NOTHING
               RETURNING id
             `, [
@@ -7236,6 +7254,7 @@ export default function createACDRouter(io) {
                 && CONDITIONAL_VARIANTS[shadow.type]?.trailSignalName == null) ? WIDER_TARGET_MULT : null,
               JSON.stringify(shadowVolBuildingSignal),
               shadowVaOverlapStreak,
+              isBreakevenStopEligible(shadow.type),
             ]).catch(() => ({ rows: [] }));
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
