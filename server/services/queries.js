@@ -132,10 +132,26 @@ export async function getPriorWeekRange(date) {
 // per this codebase's own "share modules instead of reimplementing" convention -- a second
 // live call site (momentumChaseDetector.js) needed the exact same query, so both now import
 // this instead of a second/third hand-rolled inline copy.
+// FIXED 2026-09-21 (user-caught live: market up 200+pts, MOMENTUM_CHASE couldn't fire on a
+// Monday despite a favorable MEDIUM GARCH regime and price clearly through the real prior
+// RTH high). Root cause: the old query picked "most recent CALENDAR date < today with ANY
+// price_bars_primary row" first, THEN filtered to RTH hours -- on the first trading day
+// after a weekend/holiday, that date is Sunday (or the holiday), which has Globex bars but
+// ZERO real RTH (9:30am-4pm) bars, so the RTH-hour filter matched nothing and MAX/MIN
+// silently returned NULL with no error (the .catch() below only guards a genuine query
+// exception, not a legitimate-looking empty result). Same root shape as the already-
+// documented level_prices "prior day" staleness bug in CLAUDE.md's Conventions section, one
+// layer down (a raw bar aggregation instead of a level_prices lookup) -- the RTH-hour
+// requirement now lives INSIDE the subquery that picks the date, so it can only ever pick a
+// date that genuinely has RTH bars, same fix shape as that convention's own >=/ASC pattern.
 export async function getPriorDayRthRange(date) {
   const r = await query(`
     SELECT MAX(high)::float as hi, MIN(low)::float as lo FROM price_bars_primary
-    WHERE symbol='NQ' AND ts::date = (SELECT MAX(ts::date) FROM price_bars_primary WHERE symbol='NQ' AND ts::date < $1)
+    WHERE symbol='NQ' AND ts::date = (
+      SELECT MAX(ts::date) FROM price_bars_primary
+      WHERE symbol='NQ' AND ts::date < $1
+        AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
+    )
     AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
   `, [date]).catch(() => ({ rows: [] }));
   return { pdHigh: r.rows[0]?.hi ?? null, pdLow: r.rows[0]?.lo ?? null };
