@@ -51,14 +51,42 @@
 import { query } from '../db.js';
 import { RTH_SESSION_FIRED_AT_SQL } from '../routes/acd.js';
 
+// FIXED 2026-09-17 (user-caught live: circled a real STOP_HIT PW_HIGH_FADE_SHORT that showed
+// as un-flagged, priorBarDelta=-135 -- traced to the 09:50 bar, not the 09:51 bar that had
+// actually closed by fired_at). The Sierra ingestion pipeline (sierraWatcher.js, poll 5s +
+// 2s stability debounce by default) has real, multi-second lag between a minute rolling over
+// and that minute's bar landing in price_bars_primary -- roughly a third of today's RTH SHORT
+// fires land within ~15s of their own minute boundary, the exact window where the
+// just-closed bar may not have been ingested yet. The original query silently fell back to
+// whichever bar WAS available (one bar too old), with no way to tell from the stored row that
+// this had happened. Didn't change this specific trade's verdict (both the 09:50 and 09:51
+// bars read net-selling), but is a real, systematic staleness risk for this rule generally.
+// One short retry (matching the watcher's own ~5s+2s cadence) resolves the common case;
+// `barStale` is stored either way so a future audit can see when it didn't.
 async function getPriorClosedBarDelta() {
-  const r = await query(`
-    SELECT (ask_volume::int - bid_volume::int) AS delta
-    FROM price_bars_primary
-    WHERE symbol='NQ' AND ts < date_trunc('minute', NOW())
-    ORDER BY ts DESC LIMIT 1
-  `).catch(() => ({ rows: [] }));
-  return r.rows[0]?.delta ?? null;
+  const fetchLatest = async () => {
+    const r = await query(`
+      SELECT ts::text AS ts, (ask_volume::int - bid_volume::int) AS delta
+      FROM price_bars_primary
+      WHERE symbol='NQ' AND ts < date_trunc('minute', NOW())
+      ORDER BY ts DESC LIMIT 1
+    `).catch(() => ({ rows: [] }));
+    return r.rows[0] ?? null;
+  };
+  // NOW() is timestamptz; price_bars_primary.ts is a naive column (no offset) -- must cast to
+  // ::timestamp (applies the session's own America/New_York TimeZone setting) BEFORE ::text,
+  // or the '-04'/'-05' offset suffix makes the string compare below always mismatch.
+  const expectedTs = await query(`SELECT (date_trunc('minute', NOW()) - INTERVAL '1 minute')::timestamp::text AS ts`)
+    .then(r => r.rows[0]?.ts).catch(() => null);
+
+  let bar = await fetchLatest();
+  let barStale = expectedTs != null && bar != null && bar.ts !== expectedTs;
+  if (barStale) {
+    await new Promise(res => setTimeout(res, 8000)); // ~poll(5s)+stability(2s)+margin
+    const retried = await fetchLatest();
+    if (retried && retried.ts === expectedTs) { bar = retried; barStale = false; }
+  }
+  return { delta: bar?.delta ?? null, barStale };
 }
 
 // Last REAL fire (any origin ACTIVE/SHADOW) of the exact same setup_type, within the current
@@ -97,7 +125,7 @@ export async function classifyEntryOrderFlowShadow({ direction, setupType, entry
   const nowEtMin = nowET.getHours() * 60 + nowET.getMinutes();
   const nowIsRTH = nowEtMin >= 570 && nowEtMin < 1080; // matches RTH_SESSION_FIRED_AT_SQL's own bounds
 
-  const priorBarDelta = await getPriorClosedBarDelta();
+  const { delta: priorBarDelta, barStale } = await getPriorClosedBarDelta();
   const adverseFlow = priorBarDelta == null ? null : (direction === 'SHORT' ? priorBarDelta > 0 : priorBarDelta < 0);
   const checkedAt = new Date().toISOString();
 
@@ -109,13 +137,13 @@ export async function classifyEntryOrderFlowShadow({ direction, setupType, entry
     // real time-of-day boundary the accumulated data actually supports, instead of guessing one
     // now and baking it into which rows even get flagged.
     const wouldBeFlagged = nowIsRTH && adverseFlow === true;
-    return { direction, setupType, rule: 'SHORT_MORNING_ADVERSE_FLOW', priorBarDelta, adverseFlow, etMin: nowEtMin, wouldBeFlagged, checkedAt };
+    return { direction, setupType, rule: 'SHORT_MORNING_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, etMin: nowEtMin, wouldBeFlagged, checkedAt };
   }
 
   // LONG_REPEAT_ADVERSE_FLOW -- RTH only (see file header); Globex has too little real data to
   // calibrate, not tested as "no effect," so it's simply not evaluated outside RTH here.
   if (!nowIsRTH) {
-    return { direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW', priorBarDelta, adverseFlow, wouldBeFlagged: false, notApplicable: 'GLOBEX_NOT_YET_CALIBRATED', checkedAt };
+    return { direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, wouldBeFlagged: false, notApplicable: 'GLOBEX_NOT_YET_CALIBRATED', checkedAt };
   }
   const todayET = nowET.toLocaleDateString('en-CA'); // matches acd.js's own todayET convention
   const lastFire = await getLastSameSetupFire(setupType, nowIsRTH, todayET);
@@ -130,7 +158,7 @@ export async function classifyEntryOrderFlowShadow({ direction, setupType, entry
   const wouldBeFlagged = priceDriftGated && adverseFlow === true;
   return {
     direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW',
-    priorBarDelta, adverseFlow, refEntryPrice, minutesSinceRef, priceDriftGated, wouldBeFlagged, checkedAt,
+    priorBarDelta, barStale, adverseFlow, refEntryPrice, minutesSinceRef, priceDriftGated, wouldBeFlagged, checkedAt,
   };
 }
 

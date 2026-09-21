@@ -9,9 +9,8 @@ import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { query } from '../db.js';
 import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from '../services/maeMfeReplay.js';
-import { computeDirImbalance } from '../services/entryPressureService.js';
 import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
-import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding } from '../services/touchQuality.js';
+import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
@@ -3313,7 +3312,7 @@ async function computeLevelFadeFactors(ctx) {
         // ~9-15s total, see docs/OPEN_THREADS.md) — collapsed into one Promise.all,
         // same pattern already applied to the Unified Level Fade Setups section above.
         const _cachedVwapSigmaPre = getCached(todayET, 'lfVwapSigma');
-        const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ, _lfTurbRangeQ] = await Promise.all([
+        const [_lfArRow, _lfPriorQ, _lfSameDirCountQ, _lfNl30Q, _lfVwapSigmaQ, _lfRecencyQ] = await Promise.all([
           query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] })),
           // origin_status='ACTIVE' added 2026-07-27 (unify_sizemultiplier_into_validated_score) --
           // this drives lfConsecWins/lfConsecLosses, the win/loss-streak sizing factor (the largest
@@ -3379,21 +3378,6 @@ async function computeLevelFadeFactors(ctx) {
               AND status = 'RESOLVED'
             GROUP BY level_base
           `, [todayET]).catch(() => ({ rows: [] })),
-          query(`
-            SELECT AVG(daily_range)::float AS avg_first15_range
-            FROM (
-              SELECT ts::date AS dt, MAX(high) - MIN(low) AS daily_range
-              FROM price_bars_primary
-              WHERE symbol = 'NQ'
-                AND ts::date IN (
-                  SELECT DISTINCT ts::date FROM price_bars_primary
-                  WHERE symbol = 'NQ' AND ts::date < $1
-                  ORDER BY ts::date DESC LIMIT 20
-                )
-                AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 584
-              GROUP BY ts::date
-            ) sub
-          `, [todayET]).catch(() => ({ rows: [] })),
         ]);
         const _lfOvInv  = _lfArRow.rows[0]?.overnight_inventory;
         const _lfOvOpen = _lfArRow.rows[0]?.open_vs_prior_value;
@@ -3452,19 +3436,20 @@ async function computeLevelFadeFactors(ctx) {
         // Level recency: last test date per level base name (past 21 days).
         // Research 2026-07-05: 1-2d ago = 65.9% WR $22 EV, 21d+ fresh = 60.5% WR -$5 EV.
         const lfRecencyMap = Object.fromEntries(_lfRecencyQ.rows.map(r => [r.level_base, r.last_date]));
-  
-        // TURBULENT intraday range confirmation: first-15-min range vs rolling 20-day average.
-        // Research 2026-07-05: range >= avg → 79.99% WR N=39 (56% of TURBULENT days pass);
-        //                       range < avg → 67.67% WR N=21 (44% false calls).
-        // Threshold is the rolling mean itself — no hardcoded number.
-        const _lfAvgFirst15Range = _lfTurbRangeQ.rows[0]?.avg_first15_range ?? null;
-        const _lfFirst15Bars = allRthBarsRow.rows.filter(b => b.et_min >= 570 && b.et_min <= 584);
-        const _lfFirst15Range = _lfFirst15Bars.length >= 3
-          ? Math.max(..._lfFirst15Bars.map(b => b.high)) - Math.min(..._lfFirst15Bars.map(b => b.low))
-          : null;
-        // turbConfirmed = true once 9:45 has passed and range >= rolling mean
-        const turbConfirmed = _lfFirst15Range != null && _lfAvgFirst15Range != null && _lfFirst15Range >= _lfAvgFirst15Range;
-  
+
+        // TURBULENT intraday range confirmation (turbConfirmed) / eliteZone / isWithIbDirection /
+        // the ELITE ZONE T2-runner trade-brief feature all REMOVED 2026-09-20 (user-requested dead-
+        // code sweep following the sizeMultiplier factor-hygiene census). eliteZone was defined as
+        // `dtClass === 'TURBULENT' && isWithIbDirection(dir) && turbConfirmed` -- confirmed 0% true
+        // across all 137 real fired trades with a sizing snapshot (dtClass is null 99.3% of the
+        // time during RTH, a known, separately-tracked bug with no safe live fix -- see
+        // dtclass_other_3_gates_untested). This entire chain (this query's _lfTurbRangeQ, the
+        // _lfAvgFirst15Range/_lfFirst15Bars/_lfFirst15Range/turbConfirmed derivation, isWithIbDirection,
+        // and the eliteZone-gated T2 target/targetLabel clause/eliteNote text/sizeFactorsAtDetection
+        // field/trade-brief field) had no consumer left once the eliteZone sizeMultiplier bump was
+        // deleted earlier the same day -- confirmed via full-body grep before removing, not just a
+        // read-through. Removing _lfTurbRangeQ also drops one DB query per poll that was computing a
+        // number nothing downstream used anymore.
         // OR Expansion Bias: no A Up/A Down breach yet = untouched liquidity reinforces fade.
         // BALANCE: 78.88% WR N=161 (+5.77pp lift, z=2.03). TURBULENT: 96.15% WR N=26 (+20.97pp, z=2.77).
         // aUpFired/aDownFired are written to DB progressively each poll — real-time, not lookahead.
@@ -3584,87 +3569,19 @@ async function computeLevelFadeFactors(ctx) {
         const _lfDeltaNeutral = _lfDeltaP25 != null && _lfAbsDelta < _lfDeltaP25;
         const _lfDeltaHigh    = _lfDeltaP75 != null && _lfAbsDelta > _lfDeltaP75;
   
-        // SHORT entry-time selling-pressure calibration (2026-08-24, RESEARCH_CLAIM
-        // pressure_entry_sizing_direction_asymmetric) — same read-once-per-poll-then-cache
-        // convention as deltaCalib/widerTargetPressureThreshold in resolveSetupsByPrice()
-        // above, just scoped here since this factor is consumed by the sizeMultiplier IIFE
-        // below, not the resolution walker. Recomputed weekly by
-        // scripts/calibrate_pressure_entry_sizing_short.mjs, which floors bump to 0 (not a
-        // hardcoded literal) if real forward EV isn't clearly positive — per explicit user
-        // instruction to track this for real degradation rather than freeze it at ship time.
-        // null threshold = factor disabled, never a hardcoded fallback number.
-        const entryPressureShortCalib = await getGlobalCalib('entryPressureShortCalib', async () => {
-          const r = await query(`
-            SELECT notes FROM performance_audit
-            WHERE signal_type='ENTRY_PRESSURE_SHORT' AND signal_name='THRESHOLD'
-            ORDER BY run_date DESC LIMIT 1
-          `);
-          let val = { threshold: null, bump: 0 };
-          try {
-            const parsed = r.rows[0] ? JSON.parse(r.rows[0].notes) : null;
-            if (parsed) val = { threshold: parsed.threshold ?? null, bump: parsed.bump ?? 0 };
-          } catch (_) {}
-          return val;
-        });
-  
-        // ── Pulse score pre-computation (MC-calibrated 2026-07-08) ───────────────
-        // Parameters: vol≥2.5σ (3 bars), delta 15-bar direction-aware, struct 8-bar strict, rot≤1 full session
-        // Score distribution: 0→58.8% WR, 1→65.4%, 2→71.8%, 3→78.8% (N=80 CI=[73.8%,85%])
-        const _pulseBars = allRthBarsRow.rows;
-  
-        // Per-minute vol baseline (90-day, cached per day)
-        let _pulseVolBaseline = getCached(todayET, 'pulseVolBaseline');
-        if (!_pulseVolBaseline) {
-          const _pvbQ = await query(`
-            SELECT (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
-                    EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York'))::int AS et_min,
-                   AVG((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS avg_vol,
-                   STDDEV((COALESCE(ask_volume,0)+COALESCE(bid_volume,0))::float) AS std_vol
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND ts::date >= $1::date - 90 AND ts::date < $1
-              AND (EXTRACT(hour FROM ts AT TIME ZONE 'America/New_York')*60 +
-                   EXTRACT(minute FROM ts AT TIME ZONE 'America/New_York')) BETWEEN 570 AND 959
-            GROUP BY 1
-          `, [todayET]).catch(() => ({ rows: [] }));
-          _pulseVolBaseline = {};
-          for (const r of _pvbQ.rows) _pulseVolBaseline[r.et_min] = { avg: +r.avg_vol, std: +(r.std_vol || 1) };
-          if (Object.keys(_pulseVolBaseline).length > 0) setCached(todayET, 'pulseVolBaseline', _pulseVolBaseline);
-        }
-  
-        // Vol sigma: max sigma across last 3 bars
-        const _pulseLast3 = _pulseBars.slice(-3);
-        let _pulseVolSigma = null;
-        for (const b of _pulseLast3) {
-          const bl = _pulseVolBaseline?.[b.et_min];
-          if (!bl || bl.avg <= 0) continue;
-          const vol = (b.ask_vol || 0) + (b.bid_vol || 0);
-          const sig = (vol - bl.avg) / bl.std;
-          if (_pulseVolSigma == null || sig > _pulseVolSigma) _pulseVolSigma = sig;
-        }
-        const _pulseHighVol = _pulseVolSigma != null && _pulseVolSigma >= 2.5;
-  
-        // Delta 15-bar (direction computed per-setup inside IIFE)
-        const _pulseDelta15 = _pulseBars.slice(-15).reduce((s, b) => s + ((b.ask_vol || 0) - (b.bid_vol || 0)), 0);
-  
-        // Micro structure: last 8 bars strict higher-lows OR lower-highs
-        const _pulseStruct = (() => {
-          const last8 = _pulseBars.slice(-8);
-          if (last8.length < 2) return false;
-          const hl = last8.every((b, i) => i === 0 || b.low  >= last8[i - 1].low);
-          const lh = last8.every((b, i) => i === 0 || b.high <= last8[i - 1].high);
-          return hl || lh;
-        })();
-  
-        // Rotations ≤1: full session close sign-changes (rarely fires — tiebreaker)
-        let _pulseRots = 0;
-        for (let i = 2; i < _pulseBars.length; i++) {
-          const d1 = Math.sign(_pulseBars[i].close   - _pulseBars[i - 1].close);
-          const d0 = Math.sign(_pulseBars[i - 1].close - _pulseBars[i - 2].close);
-          if (d1 !== 0 && d0 !== 0 && d1 !== d0) _pulseRots++;
-        }
-        const _pulseLowRots = _pulseRots <= 1;
-  
+        // entryPressureShortCalib REMOVED 2026-09-20 -- see the sizeMultiplier closeout comment
+        // at this factor's old sizing-usage site (~line 7420) for the full account; it read
+        // performance_audit's ENTRY_PRESSURE_SHORT threshold weekly, solely to feed the now-
+        // removed sizeMultiplier bump.
+
+        // Pulse-score pre-computation (_pulseHighVol/_pulseDelta15/_pulseStruct/_pulseLowRots/
+        // _pulseVolSigma, MC-calibrated 2026-07-08, including a real per-poll DB query for the
+        // volatility baseline) REMOVED 2026-09-20 -- its only consumer, the pulseScore/
+        // pulseVolSigma trade-brief fields, was itself confirmed dead (zero frontend readers
+        // since the 2026-07-13 ACDView.jsx purge) and removed the same pass. See
+        // docs/TRADEBRIEF_DEAD_FIELDS_CLEANUP_SPEC.md. Not to be confused with the separate,
+        // real, already-shipped server/services/pulseReading.js / GET /api/pulse/reading live
+        // feature -- confirmed independent (no shared import), untouched by this removal.
 
   return {
     priorDayProfile,
@@ -3672,10 +3589,8 @@ async function computeLevelFadeFactors(ctx) {
     lfFirstOfDay, lfConsecLosses, lfConsecWins,
     _lfSameDirCounts, _lfNl30Bucket,
     _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
-    turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
+    _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
     _lfDeltaNeutral, _lfDeltaHigh,
-    entryPressureShortCalib,
-    _pulseHighVol, _pulseDelta15, _pulseStruct, _pulseLowRots, _pulseVolSigma,
   };
 }
 // Factory: needs io for socket events
@@ -6199,10 +6114,8 @@ export default function createACDRouter(io) {
         lfFirstOfDay, lfConsecLosses, lfConsecWins,
         _lfSameDirCounts, _lfNl30Bucket,
         _lfVwap, _lfVwapMean, _lfVwapStd, lfRecencyMap,
-        turbConfirmed, _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
+        _lfOrExpanded, _lfRegimePersist, _lfSmallGap, _lfOvOpen,
         _lfDeltaNeutral, _lfDeltaHigh,
-        entryPressureShortCalib,
-        _pulseHighVol, _pulseDelta15, _pulseStruct, _pulseLowRots, _pulseVolSigma,
       } = await computeLevelFadeFactors({ todayET, dtClass, allRthBarsRow, aUpFired, aDownFired });
       // ── Level Scalp detection ────────────────────────────────────────────
       // Backtested 90 days of 1-min bars. These replace EMA_SNAPBACK (0% WR, removed).
@@ -6618,13 +6531,10 @@ export default function createACDRouter(io) {
             if (ibSetup?.type === 'IB_BEARISH') return dir === 'LONG';  // down-trend: LONG fades fail
             return true; // unknown trend direction: suppress all fades
           };
-          // Fade in IB direction: IB broke UP + LONG fade = with momentum (elite on TURBULENT).
-          // Used for ELITE_ZONE badge. Different from isTrendCounterFade: no day_type gate.
-          const isWithIbDirection = (dir) => {
-            if (!ibSetup) return false;
-            return (ibSetup.type === 'IB_BULLISH' && dir === 'LONG') ||
-                   (ibSetup.type === 'IB_BEARISH' && dir === 'SHORT');
-          };
+          // isWithIbDirection (fade-in-IB-direction check) REMOVED 2026-09-20 -- its only
+          // consumer was the ELITE_ZONE badge (eliteZone, below), which was itself removed the
+          // same day as confirmed structurally dead (dtClass===TURBULENT gate, dtClass null
+          // 99.3% of real fires). See the turbConfirmed/eliteZone removal comment ~line 3441.
 
           // Live stats from performance_audit (UNIFIED_BACKTEST directional rows, latest run).
           // Cached with DAY_CACHE_TTL (was a bare 60s default until 2026-08-04) — backtests
@@ -6715,7 +6625,7 @@ export default function createACDRouter(io) {
               // below and docs/OPEN_THREADS.md for the full incident writeup.
               query(`
                 SELECT DISTINCT ON (signal_name) signal_name, recommendation,
-                  sample_size, win_rate::float, ev_per_trade::float
+                  sample_size, win_rate::float, ev_per_trade::float, notes
                 FROM performance_audit
                 WHERE signal_type = 'SETUP_STATUS'
                 ORDER BY signal_name, run_date DESC
@@ -6865,7 +6775,18 @@ export default function createACDRouter(io) {
             // See the setupStatusQ comment above for the incident this fixed.
             liveStats._setupStats = {};
             for (const r of setupStatusQ.rows) {
-              liveStats._setupStats[r.signal_name] = { wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size, recommendation: r.recommendation };
+              let parsedSsNotes = {};
+              try { parsedSsNotes = JSON.parse(r.notes || '{}'); } catch (_) {}
+              liveStats._setupStats[r.signal_name] = {
+                wr: r.win_rate, ev: r.ev_per_trade, n: r.sample_size, recommendation: r.recommendation,
+                // real_n/real_ev (ACTIVE/SHADOW-origin only, excludes BACKFILL synthetic data) —
+                // added 2026-09-20 (sortedcandidates_ev_score_weakly_calibrated_20260920) so the
+                // within-cluster ranking below (directionalEv) can rank on genuinely real-fired-trade
+                // EV instead of the blended wr/ev/n above (still real+synthetic mixed) — mirrors
+                // liveStats._dta's existing realN/realEv parsing from the same notes shape.
+                realN:  parsedSsNotes.all_time_real_n  ?? null,
+                realEv: parsedSsNotes.all_time_real_ev ?? null,
+              };
             }
             // Formats a live edge stat honestly: real N≥20 numbers, or an explicit "not enough
             // data yet" instead of ever falling back to a hand-typed/approximate literal.
@@ -7253,14 +7174,44 @@ export default function createACDRouter(io) {
             let winnerFound = false;
             if (!clusterAlreadyFired) {
               const dirKey = isLong ? 'long' : 'short';
-              const directionalEv = (cand) => {
+              // Ranking source fix (2026-09-20, RESEARCH_CLAIM
+              // sortedcandidates_ev_score_weakly_calibrated_20260920 / OPEN_DECISION
+              // sortedcandidates_ev_source_prefer_setup_status_20260920, DeepSeek design-critiqued
+              // before shipping): this used to rank purely on liveStats[base][dirKey].ev, which is
+              // ONLY ever populated from UNIFIED_BACKTEST (a weekly-refreshed, bar-simulated
+              // backtest) -- measured against real SETUP_STATUS ev, that source correlates at only
+              // r=0.56 across the roster with 27% outright sign disagreements, and a direct
+              // real-outcome check on 15 real confluence clusters showed the picked winner
+              // underperforming its passed-over siblings on average. Now ranks by real,
+              // ACTIVE/SHADOW-origin-only SETUP_STATUS EV (liveStats._setupStats[candType].realEv,
+              // same real_n/real_ev notes fields liveStats._dta already parses) whenever that
+              // candidate clears the codebase's own N>=20 significance floor (SUPPRESS_MIN_N in
+              // backtest_setup_status.mjs) on REAL trades specifically -- not blended sample_size,
+              // which still mixes in synthetic BACKFILL rows and would defeat the point of
+              // preferring "real" data. Falls back to the old UNIFIED_BACKTEST/cand.ev chain for a
+              // THIN_N candidate (real_n<20), which is exactly the same split candSuppressed below
+              // already uses to gate real vs THIN_N types, so this needs no new threshold
+              // philosophy. candType is resolved into a tuple once per candidate here (not inside
+              // directionalEv, which a .sort() comparator can invoke more than once per element)
+              // rather than a second time in the loop below -- resolveSetupType is a pure,
+              // side-effect-free wrapper (resolveSetupTypePure), so calling it twice was never a
+              // correctness bug, but resolving once into a tuple is cheap and removes the
+              // duplication entirely.
+              const directionalEv = (cand, candType) => {
+                const real = liveStats._setupStats?.[candType];
+                if (real?.realEv != null && real?.realN != null && real.realN >= 20) return real.realEv;
                 const base = cand.name.replace(/_FADE$/, '');
                 return liveStats[base]?.[dirKey]?.ev ?? cand.ev ?? -999;
               };
               const sideOk = (cand) => isLong ? cand.level < currentPrice : cand.level > currentPrice;
-              const sortedCandidates = nearLevels.filter(sideOk).sort((a, b) => directionalEv(b) - directionalEv(a));
-              for (const cand of sortedCandidates) {
-                const candType = resolveSetupType(`${cand.name}_${dir}`, cand);
+              const sortedCandidates = nearLevels
+                .filter(sideOk)
+                .map(cand => {
+                  const candType = resolveSetupType(`${cand.name}_${dir}`, cand);
+                  return { cand, candType, ev: directionalEv(cand, candType) };
+                })
+                .sort((a, b) => b.ev - a.ev);
+              for (const { cand, candType } of sortedCandidates) {
                 const candRecentlyFired = recentlyFiredTypes.has(candType);
                 const candSuppressed = !!liveStats._suppressedSetups?.has(candType);
                 const candDowSuppressed = !!liveStats._dowSuppressToday?.has(candType);
@@ -7397,25 +7348,18 @@ export default function createACDRouter(io) {
             const buyersAtLevel  = isLong  && approachDelta > 0; // buyers defending support on approach
             const sellersAtLevel = !isLong && approachDelta < 0; // sellers pressing resistance on approach
 
-            // Entry-time selling pressure boost (SHORT only) — RESEARCH_CLAIM
-            // pressure_entry_sizing_direction_asymmetric, genuinely out-of-sample validated
-            // 2026-08-24 (chronological train EV=+$8.08 N=22, test EV=+$33.41 N=23, an
-            // absorption mechanism — selling pressure hitting AFTER approachDelta was NOT
-            // already selling — that held in both halves). The companion LONG-side "avoid
-            // high buying pressure" finding did NOT replicate (inverted train/test, discarded)
-            // — deliberately SHORT-only, do not extend to LONG without a fresh OOS check.
-            // computeDirImbalance() on the last fully-completed bar (allRthBarsRow.rows'
-            // last element — this file's own price_bars_primary poll only ever contains
-            // closed bars, same convention exhaustionSignalAtDetection above uses for "the
-            // entry bar"). entryPressureShortCalib is read live from performance_audit
-            // (ENTRY_PRESSURE_SHORT), recalibrated weekly — never a hardcoded threshold/bump.
-            let entryPressureShortBoost = false;
-            if (!isLong && entryPressureShortCalib?.threshold != null) {
-              const _epBar = allRthBarsRow.rows[allRthBarsRow.rows.length - 1];
-              const _epPressure = _epBar ? computeDirImbalance(_epBar.bid_vol, _epBar.ask_vol, false) : null;
-              entryPressureShortBoost = _epPressure !== null && _epPressure >= entryPressureShortCalib.threshold;
-            }
-
+            // entryPressureShortBoost REMOVED 2026-09-20 (docs/OPEN_THREADS.md's sizeMultiplier
+            // closeout -- user request: "clean up if it was only created to be part of the
+            // size multiplier"). Traced every consumer of entryPressureShortBoost/
+            // entryPressureShortCalib before removing: both were used ONLY to feed the now-
+            // removed sizeMultiplier bump and the sizeFactorsAtDetection monitoring field
+            // (itself never read by any script/route/frontend as of this date) -- no display
+            // text, no other decision, no other consumer anywhere in this file. Unlike
+            // lfConsecWins/priorDayProfile/dtaRow/daysSinceTest (kept -- each feeds real
+            // displayed text or another live decision independent of sizing), this factor's
+            // entire reason to exist was sizeMultiplier. entryPressureShortCalib (the weekly-
+            // recalibrated ENTRY_PRESSURE_SHORT threshold/bump read) and the computeDirImbalance
+            // import it was the only caller of are removed with it.
             // Confluence+exhaustion interaction signal (informational only — RESEARCH_CLAIM
             // confluence_exhaustion_interaction is still PROVISIONAL, not a validated live edge;
             // do NOT use this to gate sizeMultiplier or suppression). Mirrors
@@ -7545,11 +7489,6 @@ export default function createACDRouter(io) {
               }
             }
 
-            // Elite zone: TURBULENT day + fade in IB direction + intraday range confirmation.
-            // Research 2026-07-05: range >= 20d avg → 79.99% WR N=39; range < avg → 67.67% WR N=21.
-            // turbConfirmed gates out the ~44% of TURBULENT calls that are false (classifier 20% accuracy).
-            const eliteZone = dtClass === 'TURBULENT' && isWithIbDirection(dir) && turbConfirmed;
-
             // Level recency: lookup level's last test date (21-day window, pre-fetched above).
             const levelBase = lv.name.replace(/_FADE$/, '');
             const lastTestDate = lfRecencyMap[lv.name] ?? lfRecencyMap[levelBase] ?? null;
@@ -7595,16 +7534,12 @@ export default function createACDRouter(io) {
             }
             const dtaRow = (dtaUnproven || dtaRealBad) ? null : dtaRowRaw;
 
-            // Specific confluence pair bonus: live lookup against backtest_confluence.js's real
-            // PAIR:X+Y data (server/services/rigorDiagnostics.js-checked, distinct-day-gated —
-            // see liveStats._pairBonus construction above for why touch count alone isn't safe
-            // to use here). Replaced the old hardcoded 5-pair _PAIR_BONUS_MAP 2026-07-22 —
-            // that map was never validated against real data; as of this date NO pair clears
-            // the distinct-day floor yet, so this correctly yields no bonus until real
-            // convergence data accumulates.
-            const _nearNames = new Set(nearLevels.filter(l => l.name !== lv.name).map(l => l.name));
-            const _pairPartners = liveStats._pairBonus?.[levelBase];
-            const confluencePairPartner = _pairPartners ? [..._pairPartners].find(p => _nearNames.has(p)) ?? null : null;
+            // confluencePairPartner REMOVED 2026-09-20 (same sizeMultiplier closeout as
+            // entryPressureShortBoost above -- traced every consumer first: this fed ONLY the
+            // now-removed sizeMultiplier bump and 2 fields (sizeFactorsAtDetection, and this
+            // object's own top-level field) that no script/route/frontend has ever read).
+            // liveStats._pairBonus itself (the real, validated PAIR:X+Y data this looked up)
+            // is untouched -- only this one, now-consumerless read of it is gone.
 
             // Revisit latency: intraday minutes since price last closed within 10pt of this level.
             // Verified 2026-07-06: first visit of day = 78% WR +$71 EV (z=+2.74 N=283);
@@ -7623,8 +7558,7 @@ export default function createACDRouter(io) {
               entry: currentPrice,
               stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
               target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
-              t2: eliteZone ? (isLong ? currentPrice + targetPts * 2 : currentPrice - targetPts * 2) : null,
-              targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}${confluenceCount >= 2 ? ` · ${confluenceCount}× confluence` : ''}${eliteZone ? ` · T2: ${targetPts * 2}pt runner` : ''}`,
+              targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}${confluenceCount >= 2 ? ` · ${confluenceCount}× confluence` : ''}`,
               description: (() => {
                 const lvStats = ls(lv.name.replace(/_FADE$/, ''));
                 const lDir = lvStats?.long, sDir = lvStats?.short;
@@ -7633,7 +7567,6 @@ export default function createACDRouter(io) {
                   : '';
                 const dirMae = isLong ? (lDir?.mae_p80w ?? null) : (sDir?.mae_p80w ?? null);
                 const stopNote = dirMae != null ? ` Stop calibration: 80% of winners needed <${Math.round(dirMae)}pt of room.` : '';
-                const eliteNote = eliteZone ? ` ⚡ ELITE ZONE: 78-82% WR. T2 runner at ${targetPts * 2}pt — p75 MFE on confirmed TURBULENT winners is 157pt.` : '';
                 const dtNote = (() => {
                   if (!dtaRow || dtaRow.recommendation === 'NEUTRAL') return dtClass ? ` (${dtClass} day)` : '';
                   const pct = Math.round((dtaRow.wr ?? 0) * 100);
@@ -7660,7 +7593,7 @@ export default function createACDRouter(io) {
                 const hivolLopaceNote = hivolLopaceAtDetection
                   ? ` ⚠ HIGH VOLUME, LOW PACE into this touch (heavy volume without matching price movement) — historically a real headwind, not a defended level as the "absorption" idea would suggest (validated: -$7.91 EV vs +$0.07 EV control, N=1548, train/test consistent).`
                   : '';
-                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${hivolLopaceNote}${eliteNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
+                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${hivolLopaceNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
               })(),
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               // OPEN_DECISION sizemultiplier_needs_per_factor_instrumentation (2026-08-20,
@@ -7683,9 +7616,6 @@ export default function createACDRouter(io) {
                 lfConsecWins, lfConsecLosses, lfFirstOfDay,
                 overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
                 buyersAtLevel: !!buyersAtLevel, sellersAtLevel: !!sellersAtLevel,
-                entryPressureShortBoost: !!entryPressureShortBoost,
-                confluencePairPartner: !!confluencePairPartner,
-                eliteZone: !!eliteZone,
                 daysSinceTest,
                 dtaRowRecommendation: dtaRow?.recommendation ?? null,
                 openVsPriorValue: _lfOvOpen ?? null,
@@ -7710,286 +7640,45 @@ export default function createACDRouter(io) {
                 touchQualityTest: !!touchQualityTest,
                 touchQualitySlice: !!touchQualitySlice,
               },
-              sizeMultiplier: (() => {
-                let mult = 1.0;
-                // MARGINAL-tier starting discount: EV < $30 with no confluence → -0.25 base
-                // (PRIME/SOLID tiers or confluent setups start at full size)
-                if (lv.ev < 30 && confluenceCount < 2) mult = Math.max(mult - 0.25, 0.25);
-                // First-of-day / win-streak boost — RECALIBRATED 2026-09-07 (RESEARCH_CLAIM
-                // sizemultiplier_loss_win_streak_overnight_stale_20260907): the 2026-07-05
-                // magnitudes (0.50/0.35/0.25/0.10 for claimed 87.8%/79.7%/76.6%/79.4% WR) were
-                // never rechecked. Real full-history data: 3+wins N=297 WR=57.6% EV=+$2.29,
-                // 2wins N=205 WR=51.2% EV=+$0.69, firstOfDay N=168 WR=53.0% EV=+$1.34 -- still
-                // directionally positive but far smaller than claimed, magnitudes cut to match.
-                // 1win N=601 WR=47.9% EV=-$6.39 -- now net NEGATIVE, branch removed outright
-                // rather than just shrunk. These are a conservative interim cut, not a fresh
-                // precise calibration -- see OPEN_DECISION
-                // nl30_regime_conditioning_needs_recalibration_20260907 for the real fix (a
-                // scheduled recalibration mechanism for this whole factor class).
-                if      (lfConsecWins >= 3)  mult = Math.min(mult + 0.10, 1.5);     // was 0.50, real EV +$2.29
-                else if (lfConsecWins === 2)  mult = Math.min(mult + 0.05, 1.5);    // was 0.35, real EV +$0.69
-                else if (lfFirstOfDay)        mult = Math.min(mult + 0.05, 1.5);    // was 0.10, real EV +$1.34
-                // Overnight alignment — FLIPPED 2026-09-07 (RESEARCH_CLAIM
-                // sizemultiplier_loss_win_streak_overnight_stale_20260907): the 2026-07-05 claim
-                // (NEUTRAL 68.2% WR vs 72-73% aligned/counter, penalize NEUTRAL) does not hold on
-                // real full-history data -- NEUTRAL N=1613 EV=-$1.78 and ALIGNED N=349 EV=-$0.66
-                // are similar; COUNTER N=257 EV=-$13.22 is by far the worst bucket and was
-                // getting NO penalty. Same -0.1 magnitude, now applied to the bucket real data
-                // actually supports penalizing.
-                if (isOvernightCounter(dir)) mult = Math.max(mult - 0.1, 0.25);
-                // Approach delta: buyers/sellers confirming level (research 2026-07-05: +6% WR)
-                if (buyersAtLevel || sellersAtLevel) mult = Math.min(mult + 0.15, 1.5);
-                // Entry-time selling-pressure boost (SHORT only, RESEARCH_CLAIM
-                // pressure_entry_sizing_direction_asymmetric — see entryPressureShortBoost
-                // computation above). Bump read live, recalibrated weekly, floors to 0 on a
-                // bad recalibration — deliberately not a hardcoded literal like this IIFE's
-                // other constants, since N is still thin (N=364 at ship time) and the user
-                // asked this be tracked for real degradation, not frozen at today's number.
-                if (entryPressureShortBoost) mult = Math.min(mult + (entryPressureShortCalib?.bump ?? 0), 1.5);
-                // Specific confluence pair bonus: verified N≥20 pairs (2026-07-05 Gemini Task 4)
-                if (confluencePairPartner) mult = Math.min(mult + 0.15, 1.5);
-                // Elite zone: TURBULENT + with IB direction = 78-82% WR (best segment)
-                if (eliteZone) mult = Math.min(mult + 0.15, 1.5);
-                // Level recency — the "<=2 days ago = proven defender" BOOST removed 2026-09-07
-                // (RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907): the
-                // 2026-07-05 claim was +$22 EV; real ground-truth data (ground-truth JSONB
-                // snapshot, N=30, clears this codebase's N>=20 floor) shows -$3.87 EV, now
-                // negative. The "21d+/never-tested = unproven" PENALTY below is UNCHANGED --
-                // its own real sample (N=0 in the same ground-truth window) is too thin to
-                // evaluate either way, left as-is pending more data, not part of this fix.
-                if (daysSinceTest == null) mult = Math.max(mult - 0.1, 0.25);
-                // Day-type significance: data-driven from performance_audit DAY_TYPE_ALPHA rows.
-                // size_delta scales with z_score (no fixed amount). Currently: only WEEKLY_VWAP_FADE_LONG
-                // BALANCE reaches z≥1.5 (z=1.9). All other day_type divergences are within noise.
-                if (dtaRow?.recommendation === 'SIZE_UP_STRONG' || dtaRow?.recommendation === 'SIZE_UP') {
-                  mult = Math.min(mult + (dtaRow.sizeDelta ?? 0.10), 1.5);
-                } else if (dtaRow?.recommendation === 'SIZE_DOWN') {
-                  mult = Math.max(mult - (dtaRow.sizeDelta ?? 0.10), 0.25);
-                } else if (dtaRow?.recommendation === 'SUPPRESS') {
-                  mult = 0.25;
-                }
-                // Open vs prior value: INSIDE_VALUE = 68.28% WR (z=-2.43) vs OUTSIDE = 72.74% (2026-07-05)
-                if (_lfOvOpen === 'INSIDE_VALUE') mult = Math.max(mult - 0.15, 0.25);
-                // Stacking override REMOVED 2026-09-04 (was: "7+ same-dir setups = 62.4% WR
-                // -$15.7 EV (N=1922), trend day, fades dead" -> hard-reset mult=0.10,
-                // overwriting every other factor's contribution, not just capping it).
-                // Re-checked against current data before removing, not just assumed stale:
-                // the live roster grew ~5x (28->146 distinct real-firing setup_types) and daily
-                // real fire volume ~27x (36/week->970/week) between the 2026-07-05 calibration
-                // and now, so the raw count "7" now sits at the ~2nd percentile of real daily
-                // activity (median same-direction count is 65) -- it fires on 98% of trading
-                // days, not the rare "everything piling one way" event it was calibrated to
-                // catch. Recalibrating to a new count (rather than removing) was considered and
-                // rejected: bucketing real Jul20-Sep4 trades by same-direction count-at-fire-time
-                // showed a NON-monotonic relationship (0-6: WR 54.1%/EV-$2.27; 7-19: WR 51.8%/
-                // EV-$7.35; 20-49: WR 64.0%/EV+$19.64 -- but computeRigor() on that "best" bucket
-                // showed top5DayPct=81.3%/clustered=true, and 3 individual days (07-29 to 07-31)
-                // accounted for 94% of its total profit; every day since Aug 19 in that same
-                // bucket is a roughly-breakeven scatter of small wins/losses, not a real edge).
-                // Splitting cleanly at the original 7 also failed: BOTH sides show the same
-                // "DECAYING" chronological trend (positive early-window thirds, negative recent
-                // thirds) via computeRigor(), meaning the apparent stacking effect is confounded
-                // with calendar time (the same account-wide edge decay affecting the whole
-                // roster), not a real, independent, currently-predictive signal about crowding.
-                // _lfSameDirCounts is kept (still feeds the informational `stackCount` field
-                // below, directly -- not via a local var) -- only the hard sizing override is
-                // removed. See OPEN_DECISION
-                // stacking_sizemultiplier_override_removed_needs_revalidation for the path back
-                // to a real, re-derived version of this factor if one exists. DeepSeek review
-                // (2026-09-04) caught that the removal left a dead `_lfSameDirN` local (it was
-                // only ever read by the deleted line) with a comment wrongly claiming it fed
-                // `stackCount` -- `stackCount` reads `_lfSameDirCounts[dir]` directly. Removed.
-                // DeepSeek review (2026-09-04) also flagged: two OTHER hard ceilings remain after
-                // this removal and independently explain most of the "92% of trades run at
-                // 0.10-0.25x" observation cited above -- the loss-streak cap a few lines below
-                // (mult<=0.25 after 1 same-type loss, <=0.10 after 2+) and the post-IIFE
-                // "Death Sequence" hasLossToday cap (<=0.5x on ANY prior loss today, any setup
-                // type). Do not conclude "removal did nothing" from a future re-check showing the
-                // global distribution still clustered low -- measure the delta specifically in the
-                // lfConsecLosses===0 && !hasLossToday subset (this override's only real point of
-                // leverage), not the full population, when revalidating.
-                // NL30 regime conditioning REMOVED 2026-09-07 (RESEARCH_CLAIM
-                // nl30_regime_conditioning_stale_boost_inverted_20260907, user-directed removal,
-                // not a partial fix): the 2026-07-05 calibration (verified N=229-429 per bucket
-                // at the time) never had a scheduled recalibration path. Real full-history data
-                // found 2 of the 5 branches actively INVERTED (SHORT+STRONG_BEAR boost: claimed
-                // +$68.10 EV, real -$10.94 EV N=413 across 8 distinct dates, negative in all 3
-                // chronological thirds; LONG+MILD_BULL boost: claimed +$63.70 EV, real -$15.96 EV
-                // N=61, worsening trend) and the other 3 too weak/thin to trust as still-current.
-                // NL30 itself (`_lfNl30Bucket`) is still computed and still feeds the
-                // `nl30Bucket` field in `sizeFactorsAtDetection` for future monitoring -- only
-                // this live sizing effect is removed. See OPEN_DECISION
-                // nl30_regime_conditioning_needs_recalibration_20260907 for the path back to a
-                // real, scheduled version of this factor if one is ever built.
-                // Revisit latency boost/penalty REMOVED 2026-09-07 (user-directed removal, same
-                // audit as sizemultiplier_loss_win_streak_overnight_stale_20260907): the
-                // 2026-07-06 calibration (first visit = 78% WR +$71 EV N=283; 3hr+ stale return =
-                // 60% WR -$35 EV N=129) never had a scheduled recalibration path, and Gemini's
-                // full-history reconstruction only matched ground truth 36.4% of the time --
-                // too unreliable to confirm the effect is still real, decayed, or inverted.
-                // `minutesSinceVisit` is still computed and still feeds `sizeFactorsAtDetection`
-                // for future monitoring -- only this live sizing effect is removed. See
-                // OPEN_DECISION sizemultiplier_stale_factor_audit_remaining_scope_20260907.
-                // VWAP Extension BOOST REMOVED 2026-09-07 (part of the same audit as
-                // RESEARCH_CLAIM sizemultiplier_loss_win_streak_overnight_stale_20260907 --
-                // followed up after fixing the _lfDeltaPercQ/_lfOnGapQ timezone bug found the
-                // same session). Original 2026-07-06 claim was z=+2.95 N=600; real full-history
-                // data (95.5% match rate against ground truth, N=505) shows WR=54.5% but
-                // EV=-$2.98 -- negative despite the WR-above-50% look (losses outsized wins on
-                // average), and this condition flips 41.1% of trades across the base=1
-                // SKIP/TRADE threshold, so it's a real, consequential miscalibration, not a
-                // cosmetic one. _lfVwap/_lfVwapMean/_lfVwapStd are still computed and still feed
-                // sizeFactorsAtDetection for monitoring -- only this live sizing effect is
-                // removed.
-                // OR Expansion Bias: no expansion yet = liquidity intact (BALANCE z=2.03 N=161, TURBULENT z=2.77 N=26)
-                if (!_lfOrExpanded && (dtClass === 'BALANCE' || dtClass === 'TURBULENT'))
-                  mult = Math.min(mult + 0.10, 1.5);
-                // Regime Persistence: TURBULENT 3-day streak +8.89pp (N=157, z=3.45). Skip on NEUTRAL NL30.
-                if (_lfRegimePersist && dtClass === 'TURBULENT' && _lfNl30Bucket !== 'NEUTRAL')
-                  mult = Math.min(mult + 0.10, 1.5);
-                // TREND day: all fades structurally underperform (58.6% WR -$9,802 total, Opus audit 2026-07-07).
-                // Size down — don't block entirely (WITH-trend fades can still be marginal), but penalize.
-                if (dtClass === 'TREND') mult = Math.max(mult - 0.25, 0.25);
-                // Small overnight gap penalty REMOVED 2026-09-07 (user-directed removal, same
-                // audit as sizemultiplier_loss_win_streak_overnight_stale_20260907): the
-                // 2026-07-07 Opus-audit calibration (quiet consolidation days = 60.8% WR -$27 EV
-                // N=332) never had a scheduled recalibration path, and its own input query
-                // (_lfOnGapQ) carried the timezone double-cast bug fixed earlier this session --
-                // every historical bar before that fix was potentially misclassified, so the
-                // ground truth Gemini reconstructed against (72.7% match rate) was itself
-                // contaminated. `_lfSmallGap` is still computed and still feeds
-                // `sizeFactorsAtDetection` for future monitoring -- only this live sizing effect
-                // is removed. See OPEN_DECISION
-                // sizemultiplier_stale_factor_audit_remaining_scope_20260907.
-                // Session delta magnitude (backtest 2026-07-08, N=4354):
-                // Neutral |Δ|<p25 = 57.9% WR -$3 EV — quiet session kills fade resolution.
-                // Thresholds: rolling p25/p75 of 60-session |cumulative delta| (no hardcoded numbers).
-                if (_lfDeltaNeutral) mult = Math.max(mult - 0.10, 0.25);
-                // High |Δ|>p75 BOOST REMOVED 2026-09-07 (same follow-up audit as the VWAP
-                // Extension removal above): original claim was 69.3% WR +$28 EV; real
-                // full-history data (94.3% match rate against ground truth, N=549) shows
-                // WR=51.9% and EV=-$3.32 -- negative, and flips 37.4% of trades across the
-                // base=1 SKIP/TRADE threshold. _lfDeltaHigh is still computed and still feeds
-                // sizeFactorsAtDetection for monitoring -- only this live sizing effect is
-                // removed. deltaNeutral's penalty above is unchanged -- its real EV (-$0.98,
-                // 0% flip rate) still points the same direction as its original claim and has
-                // no practical consequence at base=1 either way.
-                // Pulse score: informational only — not wired to sizeMultiplier.
-                // Backtest shows real lift on aggregate but too many false negatives on strong days.
-                // Weekly backtest_pulse_score.mjs continues to accumulate data; revisit when N is larger.
-                const _psDeltaDiv  = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
-                const _pulseScore  = (_pulseHighVol ? 1 : 0) + (_psDeltaDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
-                // Session-bias conflict (2026-07-16, scripts/backtest_session_bias_conflict.mjs):
-                // firing a mechanical fade against a strongly one-sided PERMISSION_SLIP session
-                // read (>=65% WR opposing direction, same threshold sessionConflictFor already
-                // uses for IB_BULLISH/IB_BEARISH's flag-only version, ~line 3505) costs real EV.
-                // CONFLICT N=4037 WR=58.6% EV=-$14.93 vs NO_CONFLICT N=1887 WR=78.1% EV=+$28.62
-                // (z=-8.25, far past the -2.0 SUPPRESS bar this codebase uses elsewhere) — checked
-                // for a day-type confound before trusting it (this codebase has been burned by
-                // exactly that shape of false signal before, see the "rotation as sizing factor"
-                // thread in docs/OPEN_THREADS.md): holds up independently within BALANCE
-                // (-$6/+$46), TREND (-$24/+$5), and TURBULENT (-$28/+$12) — not a re-labeled
-                // day-type effect. User decision 2026-07-16: extend the existing IB-only flag to
-                // level-fades and fold into sizeMultiplier, not suppress outright.
-                if (sessionConflictFor(dir)) mult = Math.max(mult - 0.25, 0.25);
-                // Touch-quality TEST approach (slow pace + building volume into the touch),
-                // ACTIVE-status setup_types only — RESEARCH_CLAIM
-                // fade_touch_quality_test_slice_filter_active_setups (PROVISIONAL, N=28).
-                // Deliberately NOT applied to SUPPRESS/THIN_N types — the same test found no
-                // real edge there (EV=$0.85 vs -$5.77 baseline, not worth reversing a
-                // suppression call over). Wired experimental per user's explicit 2026-08-27
-                // decision — SHADOW/informational findings here don't need full rigor-clean
-                // proof before being tried, unlike a change to a live SUPPRESS/ACTIVE gate.
-                if (touchQualityTest && !liveStats._suppressedSetups?.has(type)) mult = Math.min(mult + 0.15, 1.5);
-                // Prior-day TREND risk gate (2026-09-06, RESEARCH_CLAIM
-                // prior_day_trend_profile_anticipates_rotation_day + the real-setup replication
-                // check on the same date): the broad real fade roster (19 setup_types, N=1027)
-                // nets WORSE on days preceded by a TREND day (-$10.86/trade avg diff, only 37%
-                // of types individually favorable) -- a pooled effect, not per-type, so this is
-                // a direct pooled gate (mirrors the existing dtClass==='TREND' line above) rather
-                // than a per-(setup_type, prior_day_profile) DAY_TYPE_ALPHA-style mirror, which
-                // would decompose N=1027 into cells mostly below this codebase's own N>=20 floor
-                // and fail to act on the confirmed finding (DeepSeek design critique, 2026-09-06,
-                // see docs/OPEN_THREADS.md for the full reasoning). Deliberately placed HERE,
-                // immediately before the loss-streak cap rather than mid-stack alongside dtClass
-                // -- DeepSeek's review found the mid-stack dtClass/sessionConflictFor SUPPRESS-
-                // shaped adjustments are NOT actually terminal (later additive boosts like
-                // touchQualityTest above can silently erode them back up), which defeats the
-                // purpose of a risk-reduction gate. This slot sits after every remaining additive
-                // boost, so the reduction actually sticks, while the loss-streak cap (Math.min,
-                // next) can still only reduce further, never undoing this. Additive/independent
-                // from the existing dtClass==='TREND' line (7445) rather than a replacement --
-                // they measure different temporal referents (today's day-type vs yesterday's
-                // profile) and can legitimately both apply the same day.
-                if (priorDayProfile === 'TREND') mult = Math.max(mult - 0.25, 0.25);
-                // LOSS STREAK CAP REMOVED 2026-09-07 (RESEARCH_CLAIM
-                // sizemultiplier_loss_win_streak_overnight_stale_20260907, user-directed
-                // removal): the 2026-07-05 claim (1x=47% WR, 2x=31.6% WR, 3+x=28.4% WR, a
-                // monotonic decay used to justify an increasingly severe cap up to mult<=0.10)
-                // does not hold on real full-history data, split by origin_status to isolate
-                // real user-facing trades: 1_loss__ACTIVE N=96 EV=-$0.82, 2_losses__ACTIVE N=45
-                // EV=-$4.63, 3+_losses__ACTIVE N=41 EV=+$9.85 -- the bucket getting the HARSHEST
-                // cap is now the BEST-performing one, not the worst. This is the same premise
-                // ("revenge trading after losses is reliably worse") already tested and found
-                // not to hold for the related STAND DOWN badge (removed 2026-09-05) -- failing
-                // the same way twice is the premise being wrong, not a stale number. lfConsecLosses
-                // is still computed and still feeds `streakWarn`/`sizeFactorsAtDetection` for
-                // monitoring -- only this live sizing cap is removed.
-                return mult;
-              })(),
-              overnightAlignment: isOvernightAligned(dir) ? 'ALIGNED' : isOvernightCounter(dir) ? 'COUNTER' : 'NEUTRAL',
-              eliteZone,
-              dayTypeEdge: dtaRow?.recommendation?.startsWith('SIZE_UP') ? {
-                strong:    dtaRow.recommendation === 'SIZE_UP_STRONG',
-                wr:        dtaRow.wr,
-                n:         dtaRow.n,
-                dayType:   dtClass,
-                sizeDelta: dtaRow.sizeDelta,
-              } : null,
-              dayTypeWarn: (dtaRow?.recommendation === 'SIZE_DOWN' || dtaRow?.recommendation === 'SUPPRESS') ? {
-                suppress: dtaRow.recommendation === 'SUPPRESS',
-                wr:       dtaRow.wr,
-                n:        dtaRow.n,
-                dayType:  dtClass,
-              } : null,
-              streakWarn: lfConsecLosses >= 2 ? { losses: lfConsecLosses } : null,
-              streakBoost: lfConsecWins >= 2 ? { wins: lfConsecWins } : null,
-              // Same field shape/threshold as ibSetup.sessionConflict (~line 3598) -- backtest
-              // and full writeup at the sizeMultiplier factor above (~line 5085).
-              sessionConflict: sessionConflictFor(dir),
-              // STAND DOWN removed 2026-09-05 (was: drove MarketPulseBar.jsx's "SKIP" dashboard
-              // badge on lfConsecLosses>=2 || (dtClass==='TREND' && lfConsecLosses>=1)). The
-              // premise (loss-streak trades are reliably worse, Opus audit 2026-07-07) was
-              // rigorously re-tested 2026-09-04 with a within-period chronological control and
-              // did NOT hold up -- split in half, after-2+-loss trades were BETTER than normal in
-              // the first half (EV $19.97 vs $15.32) and LESS BAD than normal in the second half
-              // (EV -$6.87 vs -$9.68); the pooled-negative reading was a calendar-time confound
-              // (loss streaks cluster during the account's bad stretches, which drag down
-              // everything, not just streak-trades), not a real predictive effect. Half the
-              // trigger (the TREND-day clause) was also already structurally dead (dtClass is
-              // null on 100% of real trades, a separately tracked bug). A verdict-style "SKIP"
-              // badge built on a refuted premise actively works against this project's stated
-              // purpose (unemotional, data-driven discipline) -- worse than no badge, not
-              // neutral. Resolved OPEN_DECISION standdown_loss_streak_premise_refuted_needs_ui_decision
-              // as (a): removed rather than patched with an unvalidated replacement condition.
-              // MarketPulseBar.jsx's SKIP badge now triggers only on a real sizeMultiplier===0
-              // (a genuine floor from another factor), not this refuted heuristic.
-              smallGapDay: _lfSmallGap,
-              sessionDeltaNeutral: _lfDeltaNeutral,
-              sessionDeltaHigh: _lfDeltaHigh,
-              pulseScore: (() => {
-                const dDiv = dir === 'SHORT' ? _pulseDelta15 > 0 : dir === 'LONG' ? _pulseDelta15 < 0 : false;
-                return (_pulseHighVol ? 1 : 0) + (dDiv ? 1 : 0) + (_pulseStruct ? 1 : 0) + (_pulseLowRots ? 1 : 0);
-              })(),
-              pulseVolSigma: _pulseVolSigma != null ? +_pulseVolSigma.toFixed(2) : null,
-              confluencePairPartner,
-              openVsPriorValue: _lfOvOpen,
+              // sizeMultiplier calculation moved to touchQuality.js's computeSizeMultiplier()
+              // 2026-09-20 -- see that function's own header comment for the full account
+              // (stripped from ~17 factors to 1 the same day, per RESEARCH_CLAIM
+              // sizemultiplier_stripped_to_pressure_only_20260920, then extracted out of acd.js
+              // per docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md's "default new/simplified logic to
+              // server/services/" convention -- a pure, zero-closure function, unlike the rest
+              // of runSetupDetection, which is not yet safely extractable, see that spec).
+              sizeMultiplier: computeSizeMultiplier({ buyersAtLevel, sellersAtLevel }),
+              // overnightAlignment, dayTypeEdge, dayTypeWarn, streakWarn, streakBoost,
+              // sessionConflict (this top-level copy), smallGapDay, sessionDeltaNeutral,
+              // sessionDeltaHigh, pulseScore, pulseVolSigma, stackCount (this top-level copy),
+              // and tier (this object's own PRIME/SOLID/MARGINAL/WEAK/KILL label, a THIRD,
+              // distinct `tier` scope from liveStats.tier and the unified-level-fade `tier` --
+              // both of those are untouched) all REMOVED 2026-09-20 -- see
+              // docs/TRADEBRIEF_DEAD_FIELDS_CLEANUP_SPEC.md for the full account (`tier`
+              // itself surfaced during a DeepSeek review of this diff, not originally named in
+              // the spec, but confirmed via the same zero-consumer check). Each was confirmed
+              // via git history + exhaustive grep to have had zero frontend readers, either
+              // since a 2026-07-13 dead-code purge removed the ACDView.jsx components that
+              // used to render them (dayTypeEdge/dayTypeWarn/pulseScore/streakWarn/streakBoost/
+              // sessionDeltaNeutral/sessionDeltaHigh/stackCount), or since creation
+              // (overnightAlignment never had one at all). sessionConflict/smallGapDay/tier
+              // were found the same way during this pass, not originally named in that spec,
+              // but fit the identical pattern -- confirmed zero consumers before removing. The
+              // underlying values these fields displayed are NOT gone -- lfConsecWins/
+              // lfConsecLosses, _lfDeltaNeutral/_lfDeltaHigh, dtaRow, _lfSameDirCounts,
+              // sessionConflictFor(dir), and _lfSmallGap all still feed
+              // sizeFactorsAtDetection's own separate monitoring copies below, or (for
+              // overnightAlignment/stackCount specifically) sizeFactorsAtDetection's copy a
+              // few lines up -- only these redundant, unread top-level display copies are gone.
+              // pulseScore/pulseVolSigma's own underlying computation (_pulseHighVol,
+              // _pulseDelta15, _pulseStruct, _pulseLowRots, _pulseVolSigma, including a real
+              // per-poll DB query) had NO other consumer at all and was removed entirely, not
+              // just this display field -- see that computation's own former site (~line 3600)
+              // for the full removal.
               buyersAtLevel,
               sellersAtLevel,
               confluenceCount,
               confluenceLevels: nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
-              stackCount: _lfSameDirCounts[dir] ?? 0,
-              tier: lv.ev >= 50 ? 'PRIME' : lv.ev >= 20 ? 'SOLID' : lv.ev >= 0 ? 'MARGINAL' : lv.ev >= -20 ? 'WEAK' : 'KILL',
               exhaustionSignalAtDetection,
               hivolLopaceAtDetection,
             };
@@ -8561,12 +8250,15 @@ export default function createACDRouter(io) {
         (pd2VAL && Math.abs(liveVwap - pd2VAL) <= 15)
       );
 
-      // Overnight structural reads — data variables for trade brief + conviction section below.
-      // isOvernightAligned, isOvernightCounter, isS2DoubleCounter are defined ABOVE (before the
-      // level fade section at ~line 3786) to fix TDZ bug. Only the data bindings follow here.
-      const arRow2 = await query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
-      const overnightInv = arRow2.rows[0]?.overnight_inventory;
-      const openVsValue = arRow2.rows[0]?.open_vs_prior_value;
+      // arRow2/overnightInv/openVsValue REMOVED 2026-09-20 (DeepSeek code review of the
+      // "Build full trade brief" removal caught this) -- these existed solely to feed
+      // `whyParts` inside that now-deleted text-generation block; once that block was
+      // removed, this query ran every poll (a real DB round-trip on a hot, ~15s-cadence
+      // endpoint) for a result nothing read. eslint's config only enables no-undef, not
+      // no-unused-vars, so this slipped past lint -- caught by an independent review reading
+      // the actual diff, not by tooling. isOvernightAligned/isOvernightCounter/isS2DoubleCounter
+      // (defined above, before the level fade section at ~line 3786) are untouched and still
+      // real, still called elsewhere.
       // priorDayProfile already fetched earlier (~line 5545, via getPriorDayProfile) for the
       // sizeMultiplier TREND-day gate -- reused here rather than re-querying the same field.
 
@@ -8791,7 +8483,32 @@ export default function createACDRouter(io) {
         // scripts/pilot_already_turned_entry.mjs-style per-setup-type study, not a one-line polarity
         // flip. Recorded as OPEN_DECISION directional_conflict_gate_polarity_pending_build1_throttle_study.
 
-        // Build full trade brief: WHY NOW + PACE + SIZE
+        // "Build full trade brief" text-generation section REMOVED 2026-09-20 (user-requested
+        // investigation + closeout, docs/OPEN_THREADS.md 2026-09-20 entry). Traced via
+        // git history the same way as the tripleStack/Group-A trade-brief fields earlier the
+        // same day: `git show e8946e5 -- src/views/ACDView.jsx` (the 2026-07-13 dead-code
+        // purge) shows the removed component literally rendered `sc2.description` (split on
+        // '\n\n' into blocks, matching this section's own `brief.join('\n\n')` construction)
+        // plus `sc2.tier`/`sc2.sizeMultiplier`/etc. -- a REAL consumer existed and was removed
+        // as dead code the same day as every other Group-A field; the backend text-generation
+        // machinery feeding it was simply never cleaned up in the same pass. Confirmed no
+        // OTHER consumer exists today (checked src/, quick-check.html, setup-performance.html,
+        // loss-prevention.html, and the 'setup-detected' WebSocket emit payload -- the only
+        // emit site is the unrelated Globex path, which never included description/tradeBrief).
+        // Removed entirely: `sizeMult` (already independently dead -- assigned, never read; the
+        // REAL ceiling logic below reads `hasLossToday` directly), `aligned`/`counter` (this
+        // local pair -- the functions `isOvernightAligned`/`isOvernightCounter` themselves stay,
+        // still called for the real sizeFactorsAtDetection.overnightAlignment monitoring field),
+        // the `range20Q`/`r20`/`rangeQuintile` query and derivation, `PROFILES`/`liveProfile`/
+        // `_profLS`/`prof`, `whyParts`/`confParts`/`momentumQ`/`momentumLine`, the entire
+        // `brief` array and every `.push()` onto it (MOMENTUM/WHY NOW/CONFLUENCE/STATS/STOP/
+        // TARGET/PACE/HOLD/CONVICTION/EXHAUSTION/RANGE POSITION/SIZE text), and the
+        // `active.tradeBrief`/`active.description`/`active.paceProfile` assignments that
+        // consumed it all. KEPT (real, working, unrelated to text generation): the
+        // `lossesToday`/`hasLossToday` query and the `active.sizeMultiplier` post-IIFE ceiling
+        // + `active.sizeFactorsAtDetection` multIife/hasLossToday/schemaVersion merge -- both
+        // confirmed live, working mechanisms (the "Death Sequence" protection and its real
+        // per-factor monitoring snapshot), independent of whether any text ever displayed them.
         if (active) {
           // origin_status='ACTIVE' filter added 2026-07-27 (unify_sizemultiplier_into_validated_score
           // investigation) -- this query predates the origin_status column (written 2026-06-22,
@@ -8810,343 +8527,19 @@ export default function createACDRouter(io) {
               AND (resolution='STOP_HIT' OR (status='RESOLVED' AND actual_pnl < 0))
           `, [todayET]).catch(() => ({ rows: [{ count: 0 }] }));
           const hasLossToday = (lossesToday.rows[0]?.count || 0) > 0;
-          let sizeMult = hasLossToday ? 0.5 : 1.0;
-
-          const aligned = isOvernightAligned(active.direction);
-          const counter = isOvernightCounter(active.direction);
-
-          // 20-day range quintile
-          const range20Q = await query(`
-            SELECT MAX(h) as hi, MIN(l) as lo FROM (
-              SELECT MAX(high)::float as h, MIN(low)::float as l
-              FROM price_bars_primary WHERE symbol='NQ'
-              AND ts::date BETWEEN ($1::date - 20) AND ($1::date - 1)
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 959
-              GROUP BY ts::date
-            ) x
-          `, [todayET]).catch(() => ({ rows: [] }));
-          const r20 = range20Q.rows[0];
-          let rangeQuintile = null;
-          if (r20?.hi && r20?.lo && currentPrice) {
-            const pct = (currentPrice - r20.lo) / (r20.hi - r20.lo);
-            rangeQuintile = pct >= 0.80 ? 'TOP' : pct >= 0.60 ? 'UPPER' : pct >= 0.40 ? 'MID' : pct >= 0.20 ? 'LOWER' : 'BOT';
-          }
-
-          // Day type for triple stack
-          // Fixed 2026-09-05 (finding #0, see getGlobalCalib's header near line 113) --
-          // getCached returns null on a miss, never undefined, so `!== undefined` always
-          // took the cached branch and never queried -- dayTypeForStack was permanently
-          // undefined, and dayTypeLabel (below) was permanently null, so triple-stack
-          // day-type gating never actually fired. `!= null` correctly treats a miss as a miss.
-          const cachedDT = getCached(todayET, 'dayTypeStack');
-          let dayTypeForStack;
-          if (cachedDT != null) { dayTypeForStack = cachedDT; }
-          else {
-            const dtRow = await query(`SELECT day_type FROM acd_daily_log WHERE trade_date=$1`, [todayET]).catch(() => ({ rows: [] }));
-            dayTypeForStack = dtRow.rows[0]?.day_type || dtClass || null;
-            setCached(todayET, 'dayTypeStack', dayTypeForStack);
-          }
-          const dayTypeLabel = dayTypeForStack === 'TREND' ? 'TREND' : dayTypeForStack === 'BALANCE' ? 'BALANCE' : dayTypeForStack === 'TURBULENT' ? 'TURBULENT' : null;
-
-          // Triple stack conviction assessment
-          const alignLabel = aligned ? 'ALIGNED' : counter ? 'COUNTER' : 'NEUTRAL';
-          let tripleStack = null;
-          // Money combos (from backtest)
-          if (alignLabel === 'ALIGNED' && dayTypeLabel === 'TURBULENT') {
-            tripleStack = { conviction: 'MAXIMUM', wr: '83-100%', note: 'ALIGNED + TURBULENT is the strongest combo in the system. Every range quintile shows 83%+ WR. Full size with conviction.' };
-          } else if (rangeQuintile === 'MID' && alignLabel === 'ALIGNED' && dayTypeLabel === 'TREND') {
-            tripleStack = { conviction: 'VERY HIGH', wr: '88%', note: 'MID range + ALIGNED + TREND. Price has room, structure supports, trend confirms. 7 of 8 trades won.' };
-          } else if (rangeQuintile === 'MID' && alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
-            tripleStack = { conviction: 'HIGH', wr: '75%', note: 'MID range + ALIGNED + BALANCE. Sweet spot — balanced auction with structural support.' };
-          } else if (rangeQuintile === 'UPPER' && alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
-            tripleStack = { conviction: 'HIGH', wr: '69%', note: 'UPPER range + ALIGNED + BALANCE. Good room with structural backing.' };
-          }
-          // Death combos
-          else if (alignLabel === 'COUNTER' && dayTypeLabel === 'BALANCE' && (rangeQuintile === 'UPPER' || rangeQuintile === 'LOWER')) {
-            tripleStack = { conviction: 'AVOID', wr: '0%', note: `${rangeQuintile} + COUNTER + BALANCE = 0% WR (N=12-18). Do NOT take this trade. Every single one lost.` };
-          } else if (alignLabel === 'COUNTER' && dayTypeLabel === 'TREND') {
-            tripleStack = { conviction: 'AVOID', wr: '13-27%', note: 'COUNTER + TREND. Fighting momentum with structural headwind. Skip unless you see overwhelming absorption.' };
-          } else if (alignLabel === 'COUNTER' && dayTypeLabel === 'BALANCE') {
-            tripleStack = { conviction: 'LOW', wr: '25-34%', note: 'COUNTER + BALANCE. Structural headwind in a range day. Reduce size significantly or skip.' };
-          }
-          // Moderate combos
-          else if (alignLabel === 'ALIGNED' && dayTypeLabel === 'BALANCE') {
-            tripleStack = { conviction: 'MODERATE', wr: '51-55%', note: 'ALIGNED + BALANCE. Structure supports but no trend confirmation. Standard size, manage normally.' };
-          } else if (alignLabel === 'ALIGNED' && dayTypeLabel === 'TREND') {
-            tripleStack = { conviction: 'MODERATE', wr: '55%', note: 'ALIGNED + TREND. Good combo. Go with the trend, use structure as confirmation.' };
-          }
-
-          // Setup profiles — style/pace/hold describe genuine trade MECHANICS (entry timing,
-          // expiry windows, structural gates), which don't go stale the way a backtested WR%
-          // does, so they stay static prose. stats/stop/target/bestWR/conviction are built live
-          // from liveStats._setupStats / liveStats._opt (cached once per day via getCached,
-          // not a fresh query per request — this whole handler is already a hot, expensive
-          // endpoint per CLAUDE.md's data-fetching performance rule) instead of the hand-typed
-          // WR%/$/N literals this object had until 2026-07-17 (OPEN_DECISION
-          // acd_profiles_hardcoded_playbook_stats_table). Several had already drifted
-          // measurably from real numbers by the time they were checked: VALUE_AREA_RESPONSIVE_
-          // SHORT claimed 18% WR (real ~24%, EV actually positive), C_STANDALONE_DOWN claimed
-          // 63% WR while its only construction path was `if (false)`-disabled (dead code at the
-          // time) -- entry removed same session. C_STANDALONE_UP/DOWN were both re-enabled to
-          // construct again later the same night (user directive: shadow every confirmed-
-          // losing setup instead of freezing its data collection entirely), so both have real
-          // PROFILES entries again below.
-          const _profLS = getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL);
-          function liveProfile(setupType, style, pace, hold) {
-            const stat = _profLS?._setupStats?.[setupType];
-            const opt = _profLS?._opt?.[setupType];
-            const n = stat?.n ?? null;
-            const thin = n != null && n < 20;
-            const wrInt = n != null ? Math.round(stat.wr * 100) : null;
-            const evStr = n != null ? `${stat.ev >= 0 ? '+' : '-'}$${Math.abs(stat.ev).toFixed(2)}` : null;
-
-            const stats = n == null
-              ? 'Not yet calibrated — no fired trades yet.'
-              : `WR: ${wrInt}% | EV: ${evStr}/trade | N=${n}${thin ? ' (thin sample — provisional, not yet decisive)' : ''}`;
-
-            const stop = opt
-              ? `Stop: ~${opt.stop}pt (sweep-optimal, recalibrated weekly by update_optimal_stops.mjs).`
-              : 'Stop: not yet calibrated (no OPTIMAL_STOP row for this setup) — the live entry logic falls back to a structural distance.';
-            const target = opt
-              ? `Target: ~${opt.target}pt (sweep-optimal). R:R ${opt.stop > 0 ? (opt.target / opt.stop).toFixed(2) : '—'}:1.`
-              : 'Target: not yet calibrated for this setup.';
-
-            const bestWR = stat?.recommendation === 'DAY_TYPE_MANAGED'
-              ? 'Day-type-dependent — see the live DAY_TYPE_MANAGED bucket breakdown (Alpha Engine Overview / session-start hook), not duplicated here to avoid a second source of truth.'
-              : 'No live day-type/alignment breakdown currently meets the N≥20 floor for this setup.';
-
-            const statusNote = stat?.recommendation === 'SUPPRESS'
-              ? `⚠️ Currently SUPPRESSED live (N=${n}, EV=${evStr}) — this card is informational only, not an active recommendation.`
-              : thin
-              ? `Sample is still too thin (N=${n}) to trust as a live edge — treat as unproven.`
-              : stat?.recommendation === 'PROMOTE'
-              // PROMOTE is based on recent 90-day performance (N≥15, WR≥52%, EV>$0) clearing
-              // backtest_setup_status.mjs's bar, which can differ from the all-time stats
-              // shown above (e.g. a setup can show negative all-time EV but have genuinely
-              // improved in the last 90 days) — spell that out instead of letting the two
-              // numbers look contradictory.
-              ? `Recently promoted back to live — the last 90 days cleared the bar (N≥15, WR≥52%, EV>$0) even though the all-time stats above can lag that recent improvement.`
-              : stat?.recommendation === 'ACTIVE'
-              ? 'Confirmed live at current calibration.'
-              : '';
-
-            return { style, stats, stop, target, pace, hold, bestWR, conviction: statusNote || 'Standard context.' };
-          }
-
-          const PROFILES = {
-            'VALUE_AREA_RESPONSIVE_SHORT': liveProfile('VALUE_AREA_RESPONSIVE_SHORT', 'sniper',
-              'Quick rejection expected at 2D VAH. Price should stall and reverse within 3-5 bars. If it keeps making new highs after your entry, the fade is failing.',
-              'This is a fade at a value-area boundary, not a breakout continuation. Let the calibrated target play out rather than taking an early fixed-point partial — the stop/target pair above is already the EV-optimized pair, not a starting guess.'),
-            'IB_BEARISH': liveProfile('IB_BEARISH', 'grinder',
-              'Steady selling over 30-60 min. NOT a crash. Expect pullbacks to IB Low — hold through them. If price reclaims IB Low and holds above for 10+ bars, the break is failing.',
-              'GRINDER. Be patient — this trade needs time to work. Day-type matters a lot here (see the live day-type breakdown below, not a fixed historical number).'),
-            'OPEN_DRIVE_SHORT': liveProfile('OPEN_DRIVE_SHORT', 'scalp',
-              "FAST. You know within 15 bars if this works. If no selling follow-through by 10:00 AM, exit. Do not hold past IB close.",
-              'Morning trade only. If it is working by 10:00, hold to target. If price is churning sideways, the drive is absorbing and you should cut.'),
-            'OPEN_DRIVE_LONG': liveProfile('OPEN_DRIVE_LONG', 'scalp',
-              'FAST. Entry on first touch of OR High after pullback. If it bounces, ride. If it slices through OR High, cut immediately.',
-              'Know within 15 bars whether this is working. Day type matters more than day-of-week here — check the live breakdown, not a fixed claim.'),
-            'TRT_LONG': liveProfile('TRT_LONG', 'grinder',
-              'SLOW. This takes 1-2 hours to play out. A+C failed and price pushes through the OR — the reversal grinds, it does not spike. Be patient.',
-              "DO NOT CUT EARLY. 120-minute expiry by design (see EXPIRY_WINDOW.TRT_LONG below) — the whole point of this setup is that it takes time to resolve. An early partial defeats the setup's own thesis."),
-            'ZONE_EDGE_FADE': liveProfile('ZONE_EDGE_FADE', 'scalp',
-              'FAST. Price hits the zone edge and either bounces within 5-10 bars or breaks through. If no fade in 10 bars, the edge is failing — cut or let it expire.',
-              'Do NOT hold for runners — this is a balance-zone rotation trade, targeting the other side of the zone or the first structural level inside.'),
-            // Re-added 2026-07-17 alongside re-enabling both setups' construction (see the
-            // C_STANDALONE block above) -- both are currently SUPPRESS live, so this card will
-            // show the ⚠️ SUPPRESSED conviction note automatically via liveProfile().
-            'C_STANDALONE_UP': liveProfile('C_STANDALONE_UP', 'sniper',
-              'Fast initial move after the C signal confirms. Once price breaks above OR High, trapped shorts can accelerate the rally.',
-              'Only fires when no A signal has fired today and no C has already fired — a standalone break, not a confirmation of an existing signal.'),
-            'C_STANDALONE_DOWN': liveProfile('C_STANDALONE_DOWN', 'sniper',
-              'Fast initial move after the C signal confirms. Once price breaks below OR Low near the PD-2 value area, trapped longs can accelerate the sell-off.',
-              'Only fires near a gated PD-2 VA condition — no A signal fired today, no C already fired, and price within 25pt of PD-2 VAH/VAL.'),
-          };
-          const prof = PROFILES[active.type] || { style: 'standard', pace: 'Monitor price action at entry zone.', bestWR: '', holdNote: '' };
-
-          // Build WHY NOW section
-          const whyParts = [];
-          if (overnightInv === 'SHORT_TRAPPED' && active.direction === 'SHORT')
-            whyParts.push('Short trapped inventory means sellers from overnight are under pressure — forced buying could push against you initially, but structural imbalance favors downside resolution');
-          else if (overnightInv === 'LONG_TRAPPED' && active.direction === 'SHORT')
-            whyParts.push('Long trapped inventory — overnight longs need to exit. Selling pressure builds as trapped participants capitulate');
-          else if (overnightInv === 'SHORT_TRAPPED' && active.direction === 'LONG')
-            whyParts.push('Short trapped inventory — overnight shorts are squeezed. Covering creates buying fuel for upside continuation');
-          else if (overnightInv === 'LONG_TRAPPED' && active.direction === 'LONG')
-            whyParts.push('Long trapped inventory is structural headwind — overnight longs may sell into your rally');
-
-          if (openVsValue === 'BELOW_VALUE' && active.direction === 'SHORT')
-            whyParts.push('Open below prior value area confirms institutional selling. Price rejected from value — downside continuation likely');
-          else if (openVsValue === 'ABOVE_VALUE' && active.direction === 'LONG')
-            whyParts.push('Open above prior value area confirms institutional buying. Value migrating higher — upside continuation likely');
-          else if (openVsValue === 'ABOVE_VALUE' && active.direction === 'SHORT')
-            whyParts.push('Open above value — you are fading into strength. Structural headwind');
-          else if (openVsValue === 'BELOW_VALUE' && active.direction === 'LONG')
-            whyParts.push('Open below value — you are buying into weakness. Structural headwind');
-          else if (openVsValue === 'INSIDE_VALUE')
-            whyParts.push('Open inside value — balanced, no strong structural tilt. Context-dependent');
-
-          // FIXED 2026-09-07 (user-flagged hardcoded-WR-literal cleanup pass): was "...61% WR
-          // (N=23)" -- a hand-typed statistic with no query behind it anywhere in this
-          // codebase, a direct "never hand-type a WR%/N literal" violation. No real,
-          // operationalized backtest of "first sustained directional move after a NONTREND
-          // day" exists yet to derive a live number from (this session's real prior_day_profile
-          // work tested TREND specifically, not NONTREND's own claim) -- removed the fabricated
-          // figure rather than invent a new unverified one under time pressure. If this pattern
-          // is ever properly backtested, re-add the real number via a live query/RESEARCH_CLAIM,
-          // not a literal.
-          if (priorDayProfile === 'NONTREND')
-            whyParts.push('Prior day was NONTREND (extreme balance). Today often resolves with the first sustained directional move — a potential high-conviction break, not independently backtested yet');
-          else if (priorDayProfile === 'TREND')
-            whyParts.push('Prior day was a TREND day. Continuation bias — look for pullback entries, not fade entries');
-          else if (priorDayProfile === 'NEUTRAL')
-            whyParts.push('Prior day was NEUTRAL — unfinished business at yesterday\'s extremes. Expect test of prior range boundary before direction resolves');
-
-          // Nearby confluence levels
-          const confParts = [];
-          if (active.entry && pd2VAH && Math.abs(active.entry - pd2VAH) <= 25) confParts.push(`PD-2 VAH (${Math.round(pd2VAH)}) — strongest confluence +44.8%`);
-          if (active.entry && pd2VAL && Math.abs(active.entry - pd2VAL) <= 25) confParts.push(`PD-2 VAL (${Math.round(pd2VAL)}) — +20.5% controlled edge`);
-          if (active.entry && pdVAH && Math.abs(active.entry - pdVAH) <= 25) confParts.push(`2D VAH (${Math.round(pdVAH)}) — +9.6% controlled edge`);
-          if (active.entry && pdVAL && Math.abs(active.entry - pdVAL) <= 25) confParts.push(`2D VAL (${Math.round(pdVAL)}) — support level`);
-          if (active.entry && pdPOC && Math.abs(active.entry - pdPOC) <= 25) confParts.push(`2D POC (${Math.round(pdPOC)}) — price magnet +9.0%`);
-
-          // Rolling momentum: last 10 resolved trades for this setup
-          const momentumQ = await query(`
-            SELECT resolution, actual_pnl::float as pnl, trade_date::text as d
-            FROM active_setups WHERE setup_type=$1 AND resolution IN ('TARGET_HIT','STOP_HIT')
-            ORDER BY trade_date DESC, fired_at DESC LIMIT 10
-          `, [active.type]).catch(() => ({ rows: [] }));
-          let momentumLine = null;
-          if (momentumQ.rows.length >= 3) {
-            const recent = momentumQ.rows;
-            const recentW = recent.filter(r => r.resolution === 'TARGET_HIT').length;
-            const recentWR = (recentW / recent.length * 100).toFixed(0);
-            const allTimeWR = prof.stats?.match(/WR:\s*(\d+)%/)?.[1] || '—';
-            // Streak
-            let streak = 0, streakType = recent[0]?.resolution === 'TARGET_HIT' ? 'win' : 'loss';
-            for (const r of recent) { if ((r.resolution === 'TARGET_HIT') === (streakType === 'win')) streak++; else break; }
-            const lastWin = recent.find(r => r.resolution === 'TARGET_HIT');
-            const lastLoss = recent.find(r => r.resolution === 'STOP_HIT');
-            const streakIcon = streakType === 'win' && streak >= 3 ? '🔥' : streakType === 'loss' && streak >= 3 ? '❄️' : streak >= 2 ? (streakType === 'win' ? '📈' : '📉') : '—';
-            const momentum = parseInt(recentWR) > parseInt(allTimeWR) + 10 ? 'HOT' : parseInt(recentWR) < parseInt(allTimeWR) - 10 ? 'COOLING' : 'NORMAL';
-            momentumLine = `${streakIcon} ${streak}-${streakType} streak | Last ${recent.length}: ${recentW}W/${recent.length - recentW}L (${recentWR}%) vs ${allTimeWR}% all-time`;
-            if (lastWin) momentumLine += ` | Last win: ${lastWin.d} $${Math.round(lastWin.pnl)}`;
-            if (lastLoss) momentumLine += ` | Last loss: ${lastLoss.d} $${Math.round(lastLoss.pnl)}`;
-            if (momentum === 'COOLING') momentumLine += ' — consider reduced size or skip';
-          }
-
-          // Assemble trade brief
-          const brief = [];
-
-          if (momentumLine) brief.push(`**MOMENTUM:** ${momentumLine}`);
-
-          if (aligned || counter || whyParts.length > 0) {
-            brief.push(`**WHY NOW:** ${whyParts.join('. ') || 'No strong overnight directional tilt.'}`);
-          }
-          if (confParts.length > 0) {
-            brief.push(`**CONFLUENCE:** ${confParts.join(' | ')}`);
-          }
-          brief.push(`**STATS:** ${prof.stats || ''}`);
-          brief.push(`**STOP:** ${prof.stop || ''}`);
-          brief.push(`**TARGET:** ${prof.target || ''}`);
-          brief.push(`**PACE:** ${prof.pace}`);
-          brief.push(`**HOLD:** ${prof.hold || prof.holdNote || ''} Best conditions: ${prof.bestWR || 'standard'}.`);
-          brief.push(`**CONVICTION:** ${prof.conviction || 'Standard context.'}`);
-
-          // Triple stack assessment
-          if (tripleStack) {
-            const tsColor = tripleStack.conviction === 'MAXIMUM' || tripleStack.conviction === 'VERY HIGH' ? '🔥' : tripleStack.conviction === 'HIGH' ? '✅' : tripleStack.conviction === 'AVOID' ? '🚫' : tripleStack.conviction === 'LOW' ? '⚠️' : '';
-            brief.push(`**TRIPLE STACK:** ${tsColor} ${tripleStack.conviction} conviction (${tripleStack.wr} WR). ${tripleStack.note}`);
-
-            // Flip logic: when AVOID fires, the opposite direction has edge
-            if (tripleStack.conviction === 'AVOID') {
-              const oppDir = active.direction === 'LONG' ? 'SHORT' : 'LONG';
-              const atTop = rangeQuintile === 'TOP' || rangeQuintile === 'UPPER';
-              const atBot = rangeQuintile === 'BOT' || rangeQuintile === 'LOWER';
-              const flipNote = atTop && oppDir === 'SHORT'
-                ? `The FADE SHORT has edge here. TOP of range + this setup direction is 0% WR = the opposite side wins. If you see a failed breakout or exhaustion at this level, the short is the high-conviction play. Log via Quick Trade Log: balance_ceiling_fade.`
-                : atBot && oppDir === 'LONG'
-                ? `The BOUNCE LONG has edge here. BOTTOM of range + this setup direction is losing = the bounce is the play. If you see absorption at support, the long is high conviction. Log via Quick Trade Log: balance_floor_bounce.`
-                : `The opposite direction (${oppDir}) may have edge. This combo loses — if you see a reversal/rejection, consider the ${oppDir} fade.`;
-              brief.push(`**FLIP:** ↔ ${flipNote}`);
-            }
-          }
-
-          // Exhaustion detection at balance edges
-          if (rangeQuintile && (rangeQuintile === 'TOP' || rangeQuintile === 'BOT') && allRthBarsRow.rows.length >= 10) {
-            const last10 = allRthBarsRow.rows.slice(-10);
-            const last5 = last10.slice(-5);
-            const prior5 = last10.slice(0, 5);
-
-            const avgRange5 = last5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
-            const avgRangePrior = prior5.reduce((s, b) => s + (b.high - b.low), 0) / 5;
-            const rangeShrinking = avgRange5 < avgRangePrior * 0.6;
-
-            const lastBar = last5[last5.length - 1];
-            const barRange = lastBar.high - lastBar.low;
-            const wickRatio = rangeQuintile === 'TOP'
-              ? (lastBar.high - Math.max(lastBar.open, lastBar.close)) / (barRange || 1)
-              : (Math.min(lastBar.open, lastBar.close) - lastBar.low) / (barRange || 1);
-            const wickRejection = wickRatio > 0.5;
-
-            const closeNearExtreme = rangeQuintile === 'TOP'
-              ? (lastBar.close - lastBar.low) / (barRange || 1) < 0.3
-              : (lastBar.high - lastBar.close) / (barRange || 1) < 0.3;
-
-            const exhaustionSigns = [];
-            if (rangeShrinking) exhaustionSigns.push('bar ranges shrinking (momentum dying)');
-            if (wickRejection) exhaustionSigns.push(`long ${rangeQuintile === 'TOP' ? 'upper' : 'lower'} wick (${rangeQuintile === 'TOP' ? 'sellers' : 'buyers'} stepping in)`);
-            if (closeNearExtreme) exhaustionSigns.push(`close near ${rangeQuintile === 'TOP' ? 'low' : 'high'} of bar (${rangeQuintile === 'TOP' ? 'buyers couldn\'t hold' : 'sellers couldn\'t push'})`);
-
-            if (exhaustionSigns.length >= 2) {
-              brief.push(`**EXHAUSTION:** ⚡ ${exhaustionSigns.length} signs detected at ${rangeQuintile} of range: ${exhaustionSigns.join('; ')}. This is what a reversal looks like before it happens. Watch for the failed breakout to confirm.`);
-            } else if (exhaustionSigns.length === 1) {
-              brief.push(`**EXHAUSTION WATCH:** ${exhaustionSigns[0]}. One sign — not confirmed yet. Need 2+ for high-conviction reversal read.`);
-            }
-          }
-
-          if (rangeQuintile) {
-            brief.push(`**RANGE POSITION:** Price is in the ${rangeQuintile} quintile of the 20-day range (${Math.round(r20.lo)}–${Math.round(r20.hi)}). ${
-              rangeQuintile === 'BOT' ? 'Bottom of range — strong mean-reversion zone (71% up, +170pt avg). Bounce setups high conviction.' :
-              rangeQuintile === 'LOWER' ? 'Lower range — danger zone for longs (44% up). Downtrends accelerate here.' :
-              rangeQuintile === 'MID' ? 'Middle of range — balanced. Setups work best here (51% WR).' :
-              rangeQuintile === 'UPPER' ? 'Upper range — slight upward bias continues.' :
-              'Top of range — strength tends to continue but large reversals start here. Watch for exhaustion.'
-            }`);
-          }
-
-          // Size section — overnight is advisory, only post-loss is mechanical
-          if (hasLossToday) {
-            brief.push(`**SIZE:** 0.5x (post-loss protection). Overnight context is ${aligned ? 'supportive — consider standard size if read is strong' : counter ? 'opposing — stay small' : 'neutral'}.`);
-          } else if (aligned) {
-            brief.push(`**SIZE:** Standard or size up. Overnight structure supports this direction (61% WR when aligned, N=126). Your call based on what you see at the level.`);
-          } else if (counter) {
-            brief.push(`**SIZE:** Overnight structure opposes this direction (31% WR when counter, N=145). Consider reduced size — but big winners can come from counter setups. Use your read.`);
-          } else {
-            brief.push(`**SIZE:** Standard. No strong overnight directional tilt.`);
-          }
-
-          if (hasLossToday) brief.unshift(`⚠️ **A prior setup failed today — size reduced 50% (Death Sequence protection).**`);
 
           // Death Sequence protection (hasLossToday, cross-setup-type "any loss today") is
           // a different signal than the level-fade sizeMultiplier IIFE's own same-type
-          // lfConsecLosses ceiling (~line 5090). This line used to unconditionally
-          // overwrite active.sizeMultiplier with sizeMult, silently discarding the entire
-          // ~20-factor IIFE result levelScalpSetup already computed (~line 5018) and
-          // replacing it with this binary 0.5/1.0 value -- confirmed live: every persisted
-          // active_setups.size_multiplier row was exactly 0.500 or 1.000, and the live
-          // /api/acd/setup-detection response (read directly by MarketPulseBar.jsx) carried
-          // the same wrong value. Found 2026-07-16 auditing sizing-multiplier adherence
-          // (docs/OPEN_THREADS.md). Fixed: hasLossToday now applies as an additional ceiling
-          // on top of the real IIFE value (never exceeding 0.5x after any loss today),
-          // instead of replacing it outright -- preserves size-up signals (up to 1.5x) on
-          // clean days, still enforces Death Sequence protection on loss days.
-          // Snapshot the IIFE's pre-ceiling value + hasLossToday into sizeFactorsAtDetection
-          // (resolves sizemultiplier_needs_per_factor_instrumentation) BEFORE the ceiling
-          // overwrites active.sizeMultiplier below -- hasLossToday isn't known at candidate-
-          // construction time (where sizeFactorsAtDetection's other fields were captured), and
-          // per the comment above, dominates the real persisted value for most rows -- an
-          // instrumentation blob missing it would be silently uninformative for most real data.
+          // lfConsecLosses ceiling (~line 5090). This applies as an additional ceiling on top
+          // of the real IIFE value (never exceeding 0.5x after any loss today), never a
+          // replacement -- preserves size-up signals (up to 1.5x) on clean days, still
+          // enforces Death Sequence protection on loss days. Snapshot the IIFE's pre-ceiling
+          // value + hasLossToday into sizeFactorsAtDetection (resolves
+          // sizemultiplier_needs_per_factor_instrumentation) BEFORE the ceiling overwrites
+          // active.sizeMultiplier below -- hasLossToday isn't known at candidate-construction
+          // time (where sizeFactorsAtDetection's other fields were captured), and dominates the
+          // real persisted value for most rows -- an instrumentation blob missing it would be
+          // silently uninformative for most real data.
           if (active.sizeFactorsAtDetection) {
             active.sizeFactorsAtDetection = {
               ...active.sizeFactorsAtDetection,
@@ -9158,10 +8551,6 @@ export default function createACDRouter(io) {
           active.sizeMultiplier = hasLossToday
             ? Math.min(active.sizeMultiplier ?? 1.0, 0.5)
             : (active.sizeMultiplier ?? 1.0);
-          active.tradeBrief = brief.join('\n\n');
-          active.overnightAlignment = aligned ? 'ALIGNED' : counter ? 'COUNTER' : 'NEUTRAL';
-          active.paceProfile = prof.style;
-          active.description = brief.join('\n\n') + (active.description ? '\n\n---\n\n' + active.description : '');
         }
       }
 

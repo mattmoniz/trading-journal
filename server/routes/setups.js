@@ -1436,28 +1436,38 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     // filters over the same rows, same pattern the today-vs-week split already used.
     const yearStartET = `${nowET.getFullYear()}-01-01`;
 
+    // is_cluster_primary filter (added 2026-09-17, user question "does this number duplicate
+    // tags" -- confirmed live: 14 of 41 real EntryFlow-S-flagged rows sat inside a 2-row
+    // confluence-cluster group sharing one real touch instant with a sibling setup_type, so the
+    // same market moment was counting as 2 separate "preventions." Same CLAUDE.md
+    // is_cluster_primary gap already fixed once in this file's own equity-curve/Net-P&L stats
+    // (getDecidedRows() in quick-check.html) and once in this endpoint's own cross-mechanism
+    // dedup above -- this per-mechanism query layer never got it. Excluding is_cluster_primary=
+    // false keeps exactly one row per real touch instant, matching how quick-check.html's
+    // Session Timeline itself would only ever have shown ONE live alert at that moment.
+    const CLUSTER_PRIMARY_FILTER = `AND (is_cluster_primary IS NULL OR is_cluster_primary = true)`;
     const [dirGateQ, momFadeQ, stepTrailQ, pitchCatchQ, postEntryQ, breakevenStopQ, entryFlowQ] = await Promise.all([
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, direction_gate_shadow
              FROM active_setups WHERE direction_gate_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, momentum_against_fade_shadow
              FROM active_setups WHERE momentum_against_fade_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, step_trail_shadow
              FROM active_setups WHERE step_trail_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, pitch_catch_shadow
              FROM active_setups WHERE pitch_catch_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, post_entry_exit_signals
              FROM active_setups WHERE post_entry_exit_signals IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, breakeven_stop_shadow
              FROM active_setups WHERE breakeven_stop_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
       query(`SELECT id, trade_date::text as trade_date, actual_pnl::float as actual_pnl, entry_orderflow_shadow
              FROM active_setups WHERE entry_orderflow_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
-               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1`, [yearStartET]),
+               AND resolution IS NOT NULL AND actual_pnl IS NOT NULL AND trade_date >= $1 ${CLUSTER_PRIMARY_FILTER}`, [yearStartET]),
     ]);
 
     function periodFilter(r, period) {

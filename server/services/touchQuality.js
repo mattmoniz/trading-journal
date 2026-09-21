@@ -215,7 +215,31 @@ async function getCumulativeDeltaBaseline(queryFn, date, dir, marketStatusFn) {
   return baseline;
 }
 
+// Live sizeMultiplier calculation for a level-fade candidate — extracted out of acd.js
+// 2026-09-20 (docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md's own convention: default new/simplified
+// acd.js logic to server/services/, not inline) as part of the same-day sizeMultiplier
+// simplification (RESEARCH_CLAIM sizemultiplier_stripped_to_pressure_only_20260920). A pure,
+// zero-closure-dependency function -- unlike the rest of runSetupDetection (acd.js), which
+// CLAUDE.md's own "block-scoping footgun" entry documents as not yet safely extractable (the
+// `liveStats` let-inside-if problem) -- this calculation only ever needed two booleans, so it
+// was never actually coupled to that state to begin with. Real order-flow pressure (buyers
+// defending support / sellers defending resistance over the 5 bars approaching a level touch)
+// is the ONE factor a full-session audit confirmed carries real, real-data-confirmed signal
+// (buyerseller_pressure_confirmed_real_20260920) -- direction-consistent and growing stronger,
+// not weaker, as synthetic BACKFILL data was excluded across 3 population cuts. Every other
+// factor this calculation used to include (as many as ~17 across the day's full session --
+// 4 deleted as structurally dead earlier the same day, sessionConflict neutralized as
+// backfill-contaminated, the remaining ~11 removed here as never independently moving a real
+// trade's contract count in a full month of real data) was removed the same day -- see that
+// RESEARCH_CLAIM and the sizeMultiplier IIFE's own comment history in acd.js for the full
+// account of each stage.
+function computeSizeMultiplier({ buyersAtLevel, sellersAtLevel }) {
+  let mult = 1.0;
+  if (buyersAtLevel || sellersAtLevel) mult = Math.min(mult + 0.15, 1.5);
+  return mult;
+}
+
 export {
   getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding,
-  getCumulativeDeltaBaseline, IB_CLOSE_MOD,
+  getCumulativeDeltaBaseline, IB_CLOSE_MOD, computeSizeMultiplier,
 };

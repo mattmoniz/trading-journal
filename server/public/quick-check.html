@@ -2274,6 +2274,23 @@ setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
 setInterval(loadPulseReading, 60000);
 setInterval(loadTagRanking, 60000);
+
+// Mobile browsers throttle or fully suspend setInterval timers on a backgrounded tab (screen
+// lock, app switch) -- this page is checked mostly on a phone via the Cloudflare tunnel, so
+// that's the common case, not an edge case. Without this, a poll that should've landed 15-20s
+// ago silently doesn't, and the page shows stale data until the user manually reloads (found
+// 2026-09-17: a real SHADOW fire wasn't visible until a hard refresh). Force an immediate
+// refresh of every poll on regaining visibility, not just waiting for the next interval tick.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  loadPulse();
+  loadTimeline();
+  loadRange(currentRange);
+  loadVolRegime();
+  loadPulseReading();
+  loadTagRanking();
+});
+
 window.addEventListener('resize', () => {
   const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
   renderEquityCurve('range-equity', rows, currentRange);
