@@ -1,8 +1,41 @@
 # acd.js file-size reduction — scoping spec (2026-09-16)
 
-**Status: scoped, not started.** Written after a user question ("how many lines is acd.js" →
-"what would shrink it") turned into a real measurement pass. Nothing in this spec has been
-executed — it's the plan, verified against the file's real current structure, not a guess.
+**Status: Phase A DONE (2026-09-20). Phase B not started.** Written after a user question
+("how many lines is acd.js" → "what would shrink it") turned into a real measurement pass.
+
+## Phase A — executed 2026-09-20, corrected the spec's own premise along the way
+
+The spec's original claim ("already decoupled enough to physically move with no logic changes")
+turned out to be wrong for real, exactly the failure mode the spec's own verification section
+warned about ("Do not assume the ctx pattern alone proves it"). The exhaustive grep the spec
+demands found `buildAllCandidates()`/`computeLevelFadeFactors()` also depend on a handful of
+MODULE-LEVEL helpers that live outside their `ctx` (not the `runSetupDetection`-local closures
+Phase C is deferred over — those are a structurally different, still-unmoved problem):
+`logGatedCandidate()` (also called ~8 more times directly inside `runSetupDetection`'s own
+remaining body — re-imported back into acd.js, not just moved), `t1Guard()`/`t1GuardLabeled()`
+(confirmed used only inside `buildAllCandidates`, nowhere else in the file), and
+`_pdpMissingLogged` (a console.error dedup Set, used only inside `computeLevelFadeFactors`).
+Several other early grep "hits" (`REFIRE_COOLDOWN_MINUTES`, `isInRefireCooldown`,
+`recentlyShadowedSameType`, `tagDirectionGateShadow`, `getMomentumAgainstFade*`) turned out to be
+comment-only mentions inside the two functions' own prose, not real code references — verified
+line-by-line before concluding either way, since a bare grep hit doesn't distinguish a comment
+from a call site.
+
+All 5 moved to `server/services/acdCandidateBuilder.js` (buildAllCandidates,
+computeLevelFadeFactors, logGatedCandidate, t1Guard, t1GuardLabeled, plus the _pdpMissingLogged
+Set) — no circular import results, since acd.js only ever imports FROM the new file. Real
+reduction: **12,286 → 10,658 lines (-1,628, ~13%)**, close to the original ~1,657-line estimate
+despite the extraction unit being different from what the spec described. Verified: ESLint's
+no-undef caught 9 genuinely missing imports on the new file before they could have become a
+live bug (matchPermissionSlips, computeIbBullBear, classifyACDOpeningCall, getOrVolBaseline20d,
+computeLiveVolatilityRegime, resampleBars, computeRSI14) — fixed, then 0 errors/0 warnings on
+both files. `node scripts/test_invariants.mjs` byte-identical to baseline (25 FAIL/90 WARN),
+`npm run lint` + `npm run build` clean, `./restart.sh` + live PID/uptime check confirmed the
+running process postdates the edit, `GET /api/acd/setup-detection` returns clean JSON, zero new
+`scratch/server_errors.jsonl` entries.
+
+The rest of this document (Phase B, the "not in scope" section, and the general verification
+checklist) is the original 2026-09-16 text, unexecuted.
 
 ## Current state (measured directly, not from an old comment)
 

@@ -2,6 +2,16 @@
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
 
+## 🔶 2026-09-20 — `acd.js` file-size reduction, Phase A shipped: 12,286 → 10,658 lines
+
+User asked to continue shrinking `acd.js` and removing dead code (continuation of the same-day sizeMultiplier/trade-brief cleanup above). Executed Phase A of `docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md` — relocating `buildAllCandidates()`/`computeLevelFadeFactors()` to `server/services/acdCandidateBuilder.js`.
+
+**The spec's own premise didn't hold up under its own required verification.** It claimed the two functions were "already decoupled enough to physically move with no logic changes" since they take state via an explicit `ctx` param — but the exhaustive free-variable grep the spec itself mandates found real module-level dependencies outside `ctx`: `logGatedCandidate()`, `t1Guard()`/`t1GuardLabeled()`, and a `_pdpMissingLogged` dedup Set. All were self-contained (no dependency on `runSetupDetection`-local closures like `liveStats` — that's a separate, still-deferred Phase C problem), so all 5 moved together cleanly with zero circular import. Several other early grep hits (`REFIRE_COOLDOWN_MINUTES`, `isInRefireCooldown`, `tagDirectionGateShadow`, `getMomentumAgainstFade*`) turned out to be comment-only mentions once checked line-by-line, not real code references — left untouched in acd.js.
+
+ESLint's `no-undef` caught 9 genuinely missing imports on the new file before it could have shipped as a live bug (`matchPermissionSlips`, `computeIbBullBear`, `classifyACDOpeningCall`, `getOrVolBaseline20d`, `computeLiveVolatilityRegime`, `resampleBars`, `computeRSI14`) — this is the "grep first, lint to confirm" discipline from CLAUDE.md's Conventions section working exactly as intended, not a near-miss.
+
+Result: **acd.js 12,286 → 10,658 lines (-1,628, ~13%)**. Verified: `node scripts/test_invariants.mjs` byte-identical to baseline (25 FAIL/90 WARN), `npm run lint` + `npm run build` clean, `./restart.sh` + live PID/uptime check confirmed the running process postdates the edit, `GET /api/acd/setup-detection` returns clean JSON, zero new `scratch/server_errors.jsonl` entries. Full account in `docs/ACDJS_FILE_SIZE_REDUCTION_SPEC.md` (updated in place). Phase B (extracting `/performance-audit/unified` and `/acd/live` route handler bodies, ~1,447 more lines) and Phase C (`runSetupDetection`'s own remaining ~4,000-line body, blocked on the `liveStats` block-scoping problem) remain unstarted.
+
 ## 🔶 2026-09-20 — DeepSeek ML execution-quality thread (meta-labeling + arbitration/continuation) — NOT STARTED, 4 items pending user input
 
 User has been designing a fundamental-shift ML layer with DeepSeek (separate from Claude) aimed at "hanging on to certain trades, executing less on others" — a meta-labeling entry filter plus a continuation/runner-hold model. Two specs landed in `docs/`:
