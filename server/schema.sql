@@ -414,7 +414,8 @@ CREATE TABLE public.active_setups (
     is_cluster_primary boolean DEFAULT true NOT NULL,
     stale_entry_price_basis boolean,
     breakeven_stop_shadow jsonb,
-    entry_orderflow_shadow jsonb
+    entry_orderflow_shadow jsonb,
+    ml_extended_label jsonb
 );
 
 

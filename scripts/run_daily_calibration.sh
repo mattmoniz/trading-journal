@@ -28,6 +28,13 @@ echo "=== Daily calibration: $(date) ==="
 
 /usr/bin/node scripts/backfill_mae_mfe.mjs
 
+# ML meta-labeling data foundation (2026-09-21, DeepSeek ML thread, docs/OPEN_THREADS.md) --
+# idempotent (only ever touches rows where ml_extended_label IS NULL), so safe to run daily.
+# Observation-only research data, never read by any live decision -- see
+# mlExtendedLabelWalker.js's own header for the full "why this exists, not
+# active_setups.mfe_points" account.
+/usr/bin/node scripts/backfill_ml_extended_label.mjs --apply
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the
