@@ -47,7 +47,6 @@ import FetchStamp, { fmtFetchStamp } from './components/shared/FetchStamp.jsx';
 import CollapsibleSection from './components/shared/CollapsibleSection.jsx';
 import AccountSelector from './components/shared/AccountSelector.jsx';
 import { formatNumber, fmtP, fmtEtTime } from './utils/format.js';
-import { useAcdLive } from './utils/useAcdLive.js';
 import WinChip from './components/shared/WinChip.jsx';
 import {
   LineChart, Line, AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,

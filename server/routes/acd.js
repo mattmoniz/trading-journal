@@ -1,5 +1,17 @@
 // ACD Routes — full implementation extracted from server/index.js lines ~4759-7220
 // Covers: /api/acd/*, /api/acd/backtest/*, /api/acd/weekly/*, weekly ACD computation
+//
+// 17 dead imports removed 2026-09-20 (grep-confirmed zero remaining references each, checked
+// individually before removal, not assumed from a pattern): 4 caused by the same day's Phase A
+// relocation (classifyACDOpeningCall/computeRSI14/matchPermissionSlips/resampleBars all moved
+// to acdCandidateBuilder.js, but their old top-level imports here were never cleaned up -- this
+// file's own no-unused-vars isn't configured in eslint.config.js, so `npm run lint` didn't catch
+// it); the other 13 (computeBar6Checkpoint/computeSlowDeepEarlyExit/classifyDeltaConfirmation/
+// getDeltaConfirmationCategory/getVolumeBaseline/classifyTouch/detectPostEntryExitSignals/
+// stepBreakevenTrail/stepStepTrail/stepPitchCatch/computeADXSeries/loadVolatilityDefaultInputs/
+// computeVolatilityDefaultRatios) predate this session -- most look like the raw mechanism
+// functions from before their now-real `complete*Shadows()` wrapper pattern
+// (shadowCompletion.js/breakevenStopShadow.js) existed, never cleaned up once superseded.
 
 import express from 'express';
 import path from 'path';
@@ -8,15 +20,10 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import multer from 'multer';
 import { query } from '../db.js';
-import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from '../services/maeMfeReplay.js';
-import { classifyDeltaConfirmation, getDeltaConfirmationCategory } from '../services/deltaConfirmation.js';
-import { getVolumeBaseline, classifyTouch, computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
-import { detectPostEntryExitSignals } from '../../scripts/pilot_exits_extended.mjs';
+import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getMarketStatus, getEarlyCloseMinute } from '../services/marketCalendar.js';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
-import { resampleBars, computeRSI14 } from '../services/technicalIndicators.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
@@ -38,7 +45,6 @@ import {
 import { runParameterSearch } from '../services/acdBacktest.js';
 import { getLevelTouchLookup, getComboLookup } from '../services/engineReadHitRates.js';
 import { computeLiveVolatilityRegime } from '../services/volatilityRegimeService.js';
-import { matchPermissionSlips } from '../services/permissionSlip.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { computeVolumeProfileForRange, computeRunningVwapSeries } from '../services/developingValueService.js';
 import { UNCALIBRATED_SHADOW_TYPES, CONDITIONAL_VARIANTS, STACK_VOL_THRESHOLDS, getBetClass, BET_CLASS_STAGE, ROSTER_CAP, assertRosterCapNotExceeded, inferDirection, resolveDirection, resolveUnconditionalTrailVariant, resolveSetupType as resolveSetupTypePure } from '../config/setupTypes.js';
@@ -55,14 +61,8 @@ import { computeMinorDefendedLevelSignal } from '../services/minorDefendedLevelD
 import { getLevelFadeDefinition } from '../config/setupDefinitions.js';
 import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
-import { loadVolatilityDefaultInputs, computeVolatilityDefaultRatios } from '../../scripts/update_optimal_stops.mjs';
-import { stepBreakevenTrail } from '../services/breakevenTrailWalker.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
-import { stepStepTrail } from '../services/stepTrailWalker.js';
-import { stepPitchCatch } from '../services/pitchCatchWalker.js';
-import { computeADXSeries } from '../services/adxService.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
-import { classifyACDOpeningCall } from '../services/openingCallClassifier.js';
 import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
@@ -3378,550 +3378,13 @@ export default function createACDRouter(io) {
   // The live copy in auctionRead.js has been fixed to use the same corrected
   // computeVolumeProfileForRange() method this dead copy already had.
 
-      router.get('/acd/live', async (req, res) => {
-    try {
-      const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-
-      // Check market calendar before DB queries
-      const mktStatus = getMarketStatus(todayET);
-      if (mktStatus?.type === 'HOLIDAY') {
-        return res.json({ setup: null, reason: `Market Holiday — ${mktStatus.name}`, marketHoliday: true });
-      }
-
-      // Get today's logged OR and A levels
-      const logged = await query(`SELECT or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired FROM acd_daily_log WHERE trade_date=$1`, [todayET]);
-      if (!logged.rows.length || !logged.rows[0].or_high) return res.json({ setup: null, reason: 'No OR data for today' });
-
-      // G-Line: CME weekly open — defined once in services/queries.js
-      const todayForGLine = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      const gLine = await getGLine(todayForGLine);
-
-      // G-Line days held (prior sessions this week only — today not yet closed)
-      let gLineDaysHeld = 0;
-      if (gLine) {
-        try {
-          const weeklyQ = await query(`
-            SELECT ts::date as session_date,
-                   (array_agg(close ORDER BY ts DESC))[1]::float as session_close
-            FROM price_bars_primary
-            WHERE symbol='NQ'
-              AND ts::date >= date_trunc('week', ($1::text)::date)
-              AND ts::date < ($1::text)::date
-              AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-            GROUP BY ts::date ORDER BY ts::date ASC
-          `, [todayET]);
-          for (const s of weeklyQ.rows) { if (s.session_close > gLine) gLineDaysHeld++; }
-        } catch (_) {}
-      }
-
-      // Prior week RTH high/low
-      const pwQ = await query(`
-        SELECT MAX(high)::float as pw_high, MIN(low)::float as pw_low
-        FROM price_bars_primary WHERE symbol='NQ'
-          AND ts::date >= date_trunc('week', CURRENT_DATE) - INTERVAL '7 days'
-          AND ts::date <  date_trunc('week', CURRENT_DATE)
-          AND EXTRACT(hour FROM ts) BETWEEN 9 AND 16
-      `);
-      const pwHigh = pwQ.rows[0]?.pw_high || null;
-      const pwLow  = pwQ.rows[0]?.pw_low  || null;
-
-      // Prior month value area (VAH/POC/VAL from volume profile)
-      const pmMonthStartQ = await query(`SELECT (date_trunc('month', CURRENT_DATE) - INTERVAL '1 month')::date::text as s, (date_trunc('month', CURRENT_DATE) - INTERVAL '1 day')::date::text as e`);
-      const pmVaProfile = await computeVolumeProfileForRange(query, { startDate: pmMonthStartQ.rows[0].s, endDate: pmMonthStartQ.rows[0].e });
-      const pmVAH = pmVaProfile?.vah ?? null;
-      const pmVAL = pmVaProfile?.val ?? null;
-      const pmPOC = pmVaProfile?.poc ?? null;
-
-      // Monthly open: first RTH bar of current calendar month
-      let monthOpen = null;
-      try {
-        const moQ = await query(`
-          SELECT open::float as mo FROM price_bars_primary
-          WHERE symbol='NQ' AND ts::date = (
-            SELECT MIN(ts::date) FROM price_bars_primary
-            WHERE symbol='NQ' AND date_trunc('month', ts) = date_trunc('month', CURRENT_DATE)
-              AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 960
-          ) ORDER BY ts LIMIT 1
-        `);
-        monthOpen = moQ.rows[0]?.mo || null;
-      } catch (_) {}
-
-      const { or_high, or_low, a_multiplier, a_up_level, a_down_level, a_up_fired, a_down_fired } = logged.rows[0];
-      const orH = parseFloat(or_high), orL = parseFloat(or_low);
-      const aUp = parseFloat(a_up_level), aDown = parseFloat(a_down_level);
-      const orRange = orH - orL;
-      const orEndMin = 9 * 60 + 35; // 09:35 ET
-
-      // Get today's post-OR bars — RTH only (9:35–16:00)
-      // After-hours bars would give false signals since ACD is a morning-session framework
-      const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
-      const rthEndMin = 16 * 60; // 16:00
-
-      const bars = await query(`
-        SELECT ts, open::float, high::float, low::float, close::float, volume::bigint,
-               EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) as bar_min
-        FROM price_bars_primary
-        WHERE symbol='NQ' AND ts::date=$1
-          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) >= $2
-          AND EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts) <= $3
-        ORDER BY ts
-      `, [todayET, orEndMin, rthEndMin]);
-
-      if (!bars.rows.length) return res.json({ setup: null, reason: 'No post-OR bars yet' });
-
-      const postOR = bars.rows;
-      const sessionHigh = Math.max(...postOR.map(b => b.high));
-      const sessionLow  = Math.min(...postOR.map(b => b.low));
-      const latestBar   = postOR[postOR.length - 1];
-      const currentPrice = latestBar.close;
-      const barTime = new Date(latestBar.ts).toISOString().slice(11, 16);
-
-      // G-Line status vs current price
-      let gLineStatus = null;
-      if (gLine) {
-        const TESTING_THRESHOLD = 15;
-        if (Math.abs(currentPrice - gLine) <= TESTING_THRESHOLD) gLineStatus = 'testing';
-        else if (currentPrice > gLine) gLineStatus = 'held';
-        else gLineStatus = 'broken';
-      }
-
-      // Weis effort-vs-result warning: volume AND body declining on last 3 bars while signal active
-      let weisWarning = false;
-      if ((a_up_fired || a_down_fired) && postOR.length >= 3) {
-        const last3 = postOR.slice(-3); // [oldest, middle, newest]
-        const [b0, b1, b2] = last3;     // b2 = most recent
-        const vol0 = Number(b0.volume), vol1 = Number(b1.volume), vol2 = Number(b2.volume);
-        const body0 = Math.abs(b0.close - b0.open);
-        const body1 = Math.abs(b1.close - b1.open);
-        const body2 = Math.abs(b2.close - b2.open);
-        const volDeclining  = vol2  < vol1  && vol1  < vol0;
-        const bodyDeclining = body2 < body1 && body1 < body0;
-        weisWarning = volDeclining && bodyDeclining;
-      }
-
-      // Detect all 6 setups
-      const reachedAUp   = sessionHigh >= aUp;
-      const reachedADown = sessionLow  <= aDown;
-      const cUp   = postOR.some(b => b.close > orH);
-      const cDown = postOR.some(b => b.close < orL);
-
-      // Failed A: reached level but price has since fallen back inside OR (or below OR High / above OR Low)
-      const failedAUp   = reachedAUp   && !a_up_fired   && currentPrice < orH;
-      const failedADown = reachedADown && !a_down_fired  && currentPrice > orL;
-
-      // Determine active setup (priority order)
-      let setup = null, color = '#94a3b8', description = '';
-
-      if (a_up_fired && cUp) {
-        setup = 'A Up + C Confirmed'; color = '#22c55e';
-        description = `A Up fired and C Up confirmed. Strong continuation long. Price ${currentPrice.toFixed(2)}, above OR High ${orH.toFixed(2)}.`;
-      } else if (a_up_fired && !cUp) {
-        setup = 'A Up (no C yet)'; color = '#86efac';
-        description = `A Up fired. Waiting for C Up confirmation (close above OR High ${orH.toFixed(2)}). Still valid long.`;
-      } else if (a_down_fired && cDown) {
-        setup = 'A Down + C Confirmed'; color = '#ef4444';
-        description = `A Down fired and C Down confirmed. Strong continuation short. Price ${currentPrice.toFixed(2)}, below OR Low ${orL.toFixed(2)}.`;
-      } else if (a_down_fired && !cDown) {
-        setup = 'A Down (no C yet)'; color = '#fca5a5';
-        description = `A Down fired. Waiting for C Down confirmation (close below OR Low ${orL.toFixed(2)}). Still valid short.`;
-      } else if (failedAUp) {
-        setup = 'Failed A Up'; color = '#f97316';
-        description = `Price reached A Up (${aUp.toFixed(2)}) but failed to sustain — fell back below OR High (${orH.toFixed(2)}). Short setup. Entry near OR High, stop above session high (${sessionHigh.toFixed(2)}).`;
-      } else if (failedADown) {
-        setup = 'Failed A Down'; color = '#a78bfa';
-        description = `Price reached A Down (${aDown.toFixed(2)}) but failed to sustain — rose back above OR Low (${orL.toFixed(2)}). Long setup. Entry near OR Low, stop below session low (${sessionLow.toFixed(2)}).`;
-      } else if (reachedAUp) {
-        setup = 'Testing A Up'; color = '#fbbf24';
-        description = `Price reached A Up level (${aUp.toFixed(2)}). Watching for 5-minute sustain above OR High for long entry, or failure for short entry.`;
-      } else if (reachedADown) {
-        setup = 'Testing A Down'; color = '#fbbf24';
-        description = `Price reached A Down level (${aDown.toFixed(2)}). Watching for 5-minute sustain below OR Low for short entry, or failure for long entry.`;
-      } else if (cUp && !a_up_fired) {
-        setup = 'C Up (no A)'; color = '#6ee7b7';
-        description = `A bar closed above OR High (${orH.toFixed(2)}) without A Up firing first. Weaker signal — price accepted above OR but didn't break the A level.`;
-      } else if (cDown && !a_down_fired) {
-        setup = 'C Down (no A)'; color = '#fda4af';
-        description = `A bar closed below OR Low (${orL.toFixed(2)}) without A Down firing first. Weaker signal.`;
-      } else {
-        const distToAUp   = aUp - currentPrice;
-        const distToADown = currentPrice - aDown;
-        setup = 'No signal'; color = '#64748b';
-        description = `No setup yet. Price ${currentPrice.toFixed(2)} — ${distToAUp.toFixed(0)} pts from A Up (${aUp.toFixed(2)}), ${distToADown.toFixed(0)} pts from A Down (${aDown.toFixed(2)}).`;
-      }
-
-      // Build session timeline — with cooldown flags to prevent re-triggering on same touch
-      const timeline = [];
-      let aUpTouchTime = null, aDownTouchTime = null;
-      let aUpFiredTimeline = false, aDownFiredTimeline = false;
-      // aUpHeld: true while A Up is active after firing; set false if price reverses below OR High
-      let aUpHeld = false;
-      let failedAUpCount = 0, failedADownCount = 0;
-      let aUpCooldown2 = 0, aDownCooldown2 = 0;
-      let cUpLogged = false, cDownLogged = false;
-
-      for (const bar of postOR) {
-        const t = new Date(bar.ts).toISOString().slice(11, 16);
-        const barMinutes = bar.bar_min;
-
-        if (aUpCooldown2 > 0) aUpCooldown2--;
-        if (aDownCooldown2 > 0) aDownCooldown2--;
-
-        // Track A Up path — keep tracking even after fire to catch reversals and re-tests
-        if (!aDownFiredTimeline) {
-          // Pre-fire: detect initial test and sustained fire
-          if (!aUpFiredTimeline) {
-            if (!aUpTouchTime && aUpCooldown2 === 0 && bar.high >= aUp) {
-              aUpTouchTime = t;
-              const testLabel = failedAUpCount > 0 ? ` (re-test ${failedAUpCount + 1})` : '';
-              timeline.push({ time: t, event: `A Up tested${testLabel}`, price: aUp, color: '#fbbf24',
-                note: `Price reached the A Up level (${aUp.toFixed(2)})${failedAUpCount > 0 ? ' again after a prior failure' : ''}. The 5-minute sustain clock has started — if price holds above OR High (${orH.toFixed(2)}) without pulling back inside the OR, A Up fires and a long entry is valid.` });
-            }
-            if (aUpTouchTime) {
-              if (bar.low < orH) {
-                failedAUpCount++;
-                const attemptLabel = failedAUpCount > 1 ? ` (attempt ${failedAUpCount})` : '';
-                timeline.push({ time: t, event: `Failed A Up${attemptLabel}`, price: bar.close, color: '#f97316',
-                  note: `Price reached the A Up level${failedAUpCount > 1 ? ' again' : ''} but fell back below OR High (${orH.toFixed(2)}) before sustaining 5 minutes. ${failedAUpCount > 1 ? 'Second failure — stronger conviction that bulls cannot hold this level. ' : ''}Short setup: entry near OR High on the reversal, stop above session high (${sessionHigh.toFixed(2)}).` });
-                aUpTouchTime = null; aUpCooldown2 = 15;
-              } else if (barMinutes - (parseInt(aUpTouchTime.split(':')[0])*60 + parseInt(aUpTouchTime.split(':')[1])) >= 5) {
-                aUpFiredTimeline = true; aUpHeld = true;
-                timeline.push({ time: t, event: 'A Up fired', price: aUp, color: '#22c55e',
-                  note: `A Up confirmed — price held above OR High (${orH.toFixed(2)}) for 5 consecutive minutes. Long entry at ${aUp.toFixed(2)}, stop at OR Low (${orL.toFixed(2)}). Hold duration depends on confluence score.` });
-                aUpTouchTime = null;
-              }
-            }
-          } else {
-            // Post-fire: track if price reverses below OR High (Failed to hold) then re-tests
-            if (bar.low < orH && aUpTouchTime !== 'reversed') {
-              aUpTouchTime = 'reversed'; aUpHeld = false;
-              failedAUpCount++;
-              const attemptLabel = failedAUpCount > 1 ? ` (attempt ${failedAUpCount})` : '';
-              timeline.push({ time: t, event: `Failed A Up${attemptLabel}`, price: bar.close, color: '#f97316',
-                note: `A Up had fired but price reversed back below OR High (${orH.toFixed(2)}). The breakout failed to hold — short setup. Entry near OR High, stop above session high (${sessionHigh.toFixed(2)}).` });
-            } else if (aUpTouchTime === 'reversed' && bar.high >= aUp) {
-              // Price re-tested A Up after reversal — reset for next failure detection
-              aUpTouchTime = t;
-              timeline.push({ time: t, event: `A Up tested (re-test ${failedAUpCount + 1})`, price: aUp, color: '#fbbf24',
-                note: `Price returned to the A Up level (${aUp.toFixed(2)}) after a prior failure. Watching for sustained hold or another rejection.` });
-            } else if (aUpTouchTime !== null && aUpTouchTime !== 'reversed' && bar.low < orH) {
-              failedAUpCount++;
-              timeline.push({ time: t, event: `Failed A Up (attempt ${failedAUpCount})`, price: bar.close, color: '#f97316',
-                note: `Price reached A Up again but failed to hold above OR High (${orH.toFixed(2)}). Repeated failure strengthens the short case.` });
-              aUpTouchTime = 'reversed';
-            }
-          }
-        }
-
-        // Track A Down path — allowed if A Up never fired, or if A Up fired but reversed (no longer held)
-        if (!aUpHeld) {
-          if (!aDownTouchTime && aDownCooldown2 === 0 && bar.low <= aDown) {
-            aDownTouchTime = t;
-            timeline.push({ time: t, event: failedADownCount > 0 ? `A Down tested (re-test ${failedADownCount+1})` : 'A Down tested', price: aDown, color: '#fbbf24',
-              note: `Price reached the A Down level (${aDown.toFixed(2)}) for the first time. The 5-minute sustain clock has started — if price holds below OR Low (${orL.toFixed(2)}) without pulling back inside the OR, A Down fires and a short entry is valid.` });
-          }
-          if (aDownTouchTime && !aDownFiredTimeline) {
-            if (bar.high > orL) {
-              failedADownCount++;
-              const attemptLabelD = failedADownCount > 1 ? ` (attempt ${failedADownCount})` : '';
-              timeline.push({ time: t, event: `Failed A Down${attemptLabelD}`, price: bar.close, color: '#a78bfa',
-                note: `Price reached the A Down level${failedADownCount > 1 ? ' again' : ''} but rose back above OR Low (${orL.toFixed(2)}) before sustaining 5 minutes. ${failedADownCount > 1 ? 'Second failure — stronger conviction bears cannot hold. ' : ''}Long setup: entry near OR Low on the bounce, stop below the session low (${sessionLow.toFixed(2)}).` });
-              aDownTouchTime = null; aDownCooldown2 = 15;
-            } else if (barMinutes - (parseInt(aDownTouchTime.split(':')[0])*60 + parseInt(aDownTouchTime.split(':')[1])) >= 5) {
-              aDownFiredTimeline = true;
-              timeline.push({ time: t, event: 'A Down fired', price: aDown, color: '#ef4444',
-                note: `A Down confirmed — price held below OR Low (${orL.toFixed(2)}) for 5 consecutive minutes without pulling back inside the OR. Short entry at ${aDown.toFixed(2)}, stop at OR High (${orH.toFixed(2)}). Hold duration depends on confluence score.` });
-            }
-          }
-        }
-
-        // C confirmations
-        // G-Line (weekly open) — first touch, first close below (lost), first close above after lost (reclaimed)
-        if (gLine) {
-          if (!timeline.some(e => e.event.startsWith('G-Line')) && bar.low <= gLine && bar.high >= gLine) {
-            timeline.push({ time: t, event: 'G-Line tested', price: gLine, color: '#f59e0b',
-              note: `Price tested the G-Line (${gLine.toFixed(2)}) — the weekly open from Monday's session.\n\nAbove G-Line = week is positive / buyers in control. Below = week is negative / sellers in control. First test of this level is the key tell: does it hold or break?` });
-          }
-          if (!timeline.some(e => e.event === 'G-Line lost') && bar.close < gLine) {
-            timeline.push({ time: t, event: 'G-Line lost', price: bar.close, color: '#f59e0b',
-              note: `Price closed below the G-Line (${gLine.toFixed(2)}) — the weekly open. The week has turned negative. Sellers are in control of the weekly timeframe. A Down signals and short setups now have structural weekly tailwind.` });
-          }
-          if (timeline.some(e => e.event === 'G-Line lost') && !timeline.some(e => e.event === 'G-Line reclaimed') && bar.close > gLine) {
-            timeline.push({ time: t, event: 'G-Line reclaimed', price: bar.close, color: '#f59e0b',
-              note: `Price reclaimed the G-Line (${gLine.toFixed(2)}) after losing it — closed back above the weekly open. Bullish recovery. Week has turned positive again. A Up signals now have structural weekly tailwind.` });
-          }
-        }
-
-        // Prior month VAH — first touch and first close-through
-        if (pmVAH) {
-          if (!timeline.some(e => e.event.startsWith('PM VAH')) && bar.high >= pmVAH) {
-            timeline.push({ time: t, event: 'PM VAH tested', price: pmVAH, color: '#10b981',
-              note: `Price touched the prior month value area high (${pmVAH.toFixed(0)}) — the top of where 70% of last month's volume was accepted.\n\nAbove PM VAH = price is above monthly accepted value — buyers accepting prices beyond last month's range. Strongly initiative on the monthly timeframe.\nBelow PM VAH = still within or below monthly value — responsive territory.` });
-          }
-          if (!timeline.some(e => e.event === 'PM VAH broken') && bar.close > pmVAH) {
-            timeline.push({ time: t, event: 'PM VAH broken', price: bar.close, color: '#10b981',
-              note: `A bar closed above the prior month value area high (${pmVAH.toFixed(0)}) — price accepted above the monthly range. Multi-timeframe bullish structural shift. Prior month VAH flips to support on the monthly timeframe.` });
-          }
-        }
-        // Prior month VAL — first touch and first close-through
-        if (pmVAL) {
-          if (!timeline.some(e => e.event.startsWith('PM VAL')) && bar.low <= pmVAL) {
-            timeline.push({ time: t, event: 'PM VAL tested', price: pmVAL, color: '#10b981',
-              note: `Price touched the prior month value area low (${pmVAL.toFixed(0)}) — the bottom of where 70% of last month's volume was accepted.\n\nBelow PM VAL = price accepted below monthly value — sellers pushing below last month's range. Strongly initiative bearish.\nAbove PM VAL = still within monthly value — responsive territory.` });
-          }
-          if (!timeline.some(e => e.event === 'PM VAL broken') && bar.close < pmVAL) {
-            timeline.push({ time: t, event: 'PM VAL broken', price: bar.close, color: '#10b981',
-              note: `A bar closed below the prior month value area low (${pmVAL.toFixed(0)}) — price accepted below the monthly range. Bearish multi-timeframe structural shift.` });
-          }
-        }
-
-        // PW High — first touch and first close-through
-        if (pwHigh) {
-          if (!timeline.some(e => e.event === 'PW High tested' || e.event === 'PW High broken') && bar.high >= pwHigh) {
-            timeline.push({ time: t, event: 'PW High tested', price: pwHigh, color: '#c084fc',
-              note: `Price touched the prior week high (${pwHigh.toFixed(2)}). Key resistance — the highest price traded during last week's RTH session. A close above confirms acceptance at a new weekly high; rejection here is a short lean.` });
-          }
-          if (!timeline.some(e => e.event === 'PW High broken') && bar.close > pwHigh) {
-            timeline.push({ time: t, event: 'PW High broken', price: bar.close, color: '#c084fc',
-              note: `A bar closed above the prior week high (${pwHigh.toFixed(2)}) — price is being accepted above last week's range. Bullish structural shift. Dalton: new value is being established above the prior reference. Prior week high now acts as support.` });
-          }
-        }
-        // PW Low — first touch and first close-through
-        if (pwLow) {
-          if (!timeline.some(e => e.event === 'PW Low tested' || e.event === 'PW Low broken') && bar.low <= pwLow) {
-            timeline.push({ time: t, event: 'PW Low tested', price: pwLow, color: '#c084fc',
-              note: `Price touched the prior week low (${pwLow.toFixed(2)}). Key support — the lowest price traded during last week's RTH session. A close below confirms acceptance at a new weekly low; bounce here is a long lean.` });
-          }
-          if (!timeline.some(e => e.event === 'PW Low broken') && bar.close < pwLow) {
-            timeline.push({ time: t, event: 'PW Low broken', price: bar.close, color: '#c084fc',
-              note: `A bar closed below the prior week low (${pwLow.toFixed(2)}) — price is being accepted below last week's range. Bearish structural shift. Dalton: new value being established lower. Prior week low now acts as resistance.` });
-          }
-        }
-
-        if (!cUpLogged && bar.close > orH) {
-          cUpLogged = true;
-          timeline.push({ time: t, event: aUpFiredTimeline ? 'C Up confirmed' : 'C Up (no A)', price: bar.close, color: aUpFiredTimeline ? '#22c55e' : '#6ee7b7',
-            note: aUpFiredTimeline
-              ? `A bar closed above OR High (${orH.toFixed(2)}) after A Up already fired. C confirmation means price is being accepted above the opening range — the breakout has follow-through. Strengthens the long case and supports holding the position.`
-              : aDownFiredTimeline
-                ? `A bar closed above OR High (${orH.toFixed(2)}) after A Down had fired. A Down sellers are now trapped — price above OR High invalidates the short premise and forces short covering.`
-                : `A bar closed above OR High (${orH.toFixed(2)}) without A Up firing first. Weaker signal — price accepted above OR but didn't break the A level (${aUp.toFixed(2)}) with sustained conviction. Can still lean long but treat as lower confidence.` });
-          // A Down fired earlier but price is now above OR High → TRT Long alert
-          if (aDownFiredTimeline && !aUpFiredTimeline) {
-            timeline.push({ time: t, event: 'TRT Long potential', price: bar.close, color: '#f59e0b',
-              note: `C Up after A Down — potential TRT Long. A Down sellers trapped above OR High (${orH.toFixed(2)}). Short thesis invalidated. Trapped shorts covering fuels upside squeeze. Watch for entry on reclaim/hold of OR High as support. Stop below OR Low (${orL.toFixed(2)}).` });
-          }
-        }
-        if (!cDownLogged && bar.close < orL) {
-          cDownLogged = true;
-          timeline.push({ time: t, event: aDownFiredTimeline ? 'C Down confirmed' : 'C Down (no A)', price: bar.close, color: aDownFiredTimeline ? '#ef4444' : '#fda4af',
-            note: aDownFiredTimeline
-              ? `A bar closed below OR Low (${orL.toFixed(2)}) after A Down already fired. C confirmation means price is being accepted below the opening range — the breakdown has follow-through. Strengthens the short case.`
-              : `A bar closed below OR Low (${orL.toFixed(2)}) without A Down firing first. Weaker signal — price dipped below OR but didn't reach the A Down level (${aDown.toFixed(2)}). Likely a probe that lacked conviction. Lower confidence short lean.` });
-        }
-      }
-
-      // Generate plain-English narrative of the session
-      const narrative = [];
-
-      // Opening
-      narrative.push(`NQ opened with a ${orRange.toFixed(0)}-point opening range: high ${orH.toFixed(2)}, low ${orL.toFixed(2)}. A Up level: ${aUp.toFixed(2)}, A Down level: ${aDown.toFixed(2)}.`);
-
-      // Walk through timeline events
-      for (const ev of timeline) {
-        if (ev.event === 'A Up tested') {
-          narrative.push(`At ${ev.time}, price reached the A Up level (${aUp.toFixed(2)}). The 5-minute sustain clock started.`);
-        } else if (ev.event === 'A Up fired') {
-          narrative.push(`At ${ev.time}, A Up confirmed — price held above OR High for 5 minutes. Long signal active. Entry ${aUp.toFixed(2)}, stop at OR Low ${orL.toFixed(2)}.`);
-        } else if (ev.event === 'Failed A Up') {
-          narrative.push(`At ${ev.time}, the A Up attempt failed — price pulled back inside the OR (below ${orH.toFixed(2)}) before sustaining 5 minutes. This failure is a short setup: the bulls showed up, couldn't hold it. Entry near OR High on the way down, stop above the session high (${sessionHigh.toFixed(2)}).`);
-        } else if (ev.event === 'A Down tested') {
-          narrative.push(`At ${ev.time}, price reached the A Down level (${aDown.toFixed(2)}). The 5-minute sustain clock started.`);
-        } else if (ev.event === 'A Down fired') {
-          narrative.push(`At ${ev.time}, A Down confirmed — price held below OR Low for 5 minutes. Short signal active. Entry ${aDown.toFixed(2)}, stop at OR High ${orH.toFixed(2)}.`);
-        } else if (ev.event === 'Failed A Down') {
-          narrative.push(`At ${ev.time}, the A Down attempt failed — price recovered back inside the OR (above ${orL.toFixed(2)}). Long setup: the bears failed. Entry near OR Low on the bounce, stop below session low (${sessionLow.toFixed(2)}).`);
-        } else if (ev.event === 'C Up confirmed') {
-          narrative.push(`At ${ev.time}, C Up confirmed (close at ${ev.price.toFixed(2)}, above OR High ${orH.toFixed(2)}). Price is being accepted above the opening range — confirms the A Up signal and strengthens the long case.`);
-        } else if (ev.event === 'C Down confirmed') {
-          narrative.push(`At ${ev.time}, C Down confirmed (close at ${ev.price.toFixed(2)}, below OR Low ${orL.toFixed(2)}). Price accepted below the opening range — confirms the A Down signal.`);
-        } else if (ev.event === 'C Up (no A)') {
-          narrative.push(`At ${ev.time}, a bar closed above OR High (${ev.price.toFixed(2)}) but A Up never fired — price never reached the A Up level (${aUp.toFixed(2)}) with sustained conviction. Weaker signal, price explored above the OR without committing to a breakout.`);
-        } else if (ev.event === 'C Down (no A)') {
-          narrative.push(`At ${ev.time}, a bar closed below OR Low (${ev.price.toFixed(2)}) but A Down never fired — price dipped below the OR without reaching the A Down level (${aDown.toFixed(2)}). Weaker signal, likely a probe that faded.`);
-        }
-      }
-
-      // Current state
-      const distToAUp = aUp - currentPrice;
-      const distToADown = currentPrice - aDown;
-      if (timeline.length === 0) {
-        narrative.push(`No setups have fired yet. Price (${currentPrice.toFixed(2)}) is ${distToAUp.toFixed(0)} points from A Up and ${distToADown.toFixed(0)} points from A Down. Watching both levels.`);
-      } else {
-        if (!a_up_fired && !a_down_fired) {
-          if (currentPrice > orH) {
-            narrative.push(`Currently price (${currentPrice.toFixed(2)}) is above OR High (${orH.toFixed(2)}) — ${distToAUp.toFixed(0)} points from A Up. Watching for a sustained push through ${aUp.toFixed(2)} or a rejection back inside the OR.`);
-          } else if (currentPrice < orL) {
-            narrative.push(`Currently price (${currentPrice.toFixed(2)}) is below OR Low (${orL.toFixed(2)}) — ${distToADown.toFixed(0)} points from A Down. Watching for sustained breakdown below ${aDown.toFixed(2)} or a recovery.`);
-          } else {
-            narrative.push(`Currently price (${currentPrice.toFixed(2)}) is back inside the OR (${orL.toFixed(2)}–${orH.toFixed(2)}). No active A signal. Ranging.`);
-          }
-        }
-      }
-
-      // ── Phase 3 auto-suggestions ──────────────────────────────────────────────
-      // Bias: A signal overrides structure; fall back to overnight_inventory/open_vs_prior_value
-      const todayRead = await query(`SELECT overnight_inventory, open_vs_prior_value FROM auction_reads WHERE trade_date=$1`, [todayET]);
-      const inv2 = todayRead.rows[0]?.overnight_inventory;
-      const val2 = todayRead.rows[0]?.open_vs_prior_value;
-      const strLong  = (inv2==='SHORT_TRAPPED'&&val2!=='BELOW_VALUE')||(inv2==='NEUTRAL'&&val2==='ABOVE_VALUE');
-      const strShort = (inv2==='LONG_TRAPPED'&&val2!=='ABOVE_VALUE')||(inv2==='NEUTRAL'&&val2==='BELOW_VALUE');
-      const biasDir = a_up_fired ? 'LONG' : a_down_fired ? 'SHORT' : strLong ? 'LONG' : strShort ? 'SHORT' : 'NEUTRAL';
-
-      // VWAP (volume-weighted close across all post-OR bars)
-      const totalVol = postOR.reduce((s, b) => s + (Number(b.volume) || 1), 0);
-      const vwap = postOR.reduce((s, b) => s + b.close * (Number(b.volume) || 1), 0) / totalVol;
-
-      // 1. VWAP holding: current price on correct side of VWAP
-      const p3_vwap_holding = biasDir === 'LONG' ? currentPrice > vwap
-                            : biasDir === 'SHORT' ? currentPrice < vwap : false;
-
-      // 2. Value migrating: VWAP now vs VWAP 20 bars ago (session weighted trend)
-      const split = Math.max(1, postOR.length - 20);
-      const earlyBars = postOR.slice(0, split);
-      const earlyVol = earlyBars.reduce((s, b) => s + (Number(b.volume) || 1), 0);
-      const earlyVwap = earlyBars.reduce((s, b) => s + b.close * (Number(b.volume) || 1), 0) / earlyVol;
-      const p3_value_migrating = biasDir === 'LONG' ? vwap > earlyVwap
-                               : biasDir === 'SHORT' ? vwap < earlyVwap : false;
-
-      // 3. Delta confirming: close-position proxy (close near high = buy pressure)
-      const last10 = postOR.slice(-10);
-      const avgClosePos = last10.reduce((s, b) => {
-        const rng = b.high - b.low;
-        return s + (rng > 0 ? (b.close - b.low) / rng : 0.5);
-      }, 0) / last10.length;
-      const p3_delta_confirming = biasDir === 'LONG' ? avgClosePos > 0.55
-                                : biasDir === 'SHORT' ? avgClosePos < 0.45 : false;
-
-      // 4. Auction accepted: ≥40% of last 20 bars closing beyond OR in bias direction
-      const last20 = postOR.slice(-20);
-      const acceptCount = last20.filter(b =>
-        biasDir === 'LONG' ? b.close > orH : biasDir === 'SHORT' ? b.close < orL : false
-      ).length;
-      const p3_auction_accepted = last20.length > 0 && acceptCount / last20.length >= 0.4;
-
-      // 5. Rotations increasing: recent bar ranges expanding (balance/two-sided trade forming)
-      const last16 = postOR.slice(-16);
-      let p3_rotations_increasing = false;
-      if (last16.length >= 8) {
-        const half = Math.floor(last16.length / 2);
-        const firstHalf = last16.slice(0, half);
-        const secondHalf = last16.slice(half);
-        const rng1 = Math.max(...firstHalf.map(b => b.high)) - Math.min(...firstHalf.map(b => b.low));
-        const rng2 = Math.max(...secondHalf.map(b => b.high)) - Math.min(...secondHalf.map(b => b.low));
-        p3_rotations_increasing = rng2 > rng1 * 1.15;
-      }
-
-      const p3Suggested = { p3_vwap_holding, p3_value_migrating, p3_delta_confirming, p3_auction_accepted, p3_rotations_increasing, vwap: Math.round(vwap * 100) / 100, biasDir };
-
-      // ── Opening call auto-detection from first 15 min of bars (9:30–9:45) ──
-      // Also include the OR bars (bm 570–574) for the first-bar open price
-      const allBarsQ = await query(`
-        SELECT high::float, low::float, close::float, open::float,
-               EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) as bm
-        FROM price_bars_primary WHERE symbol='NQ' AND ts::date=$1
-          AND EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts) BETWEEN 570 AND 585
-        ORDER BY ts
-      `, [todayET]);
-      const first15 = allBarsQ.rows;
-      // FIXED 2026-09-07: was hand-written inline here AND at ~line 1660, byte-identical
-      // modulo variable names -- see classifyOpeningCallType()'s own header comment in
-      // queries.js for the full extraction rationale.
-      const opening_call_type = classifyOpeningCallType(first15, orH, orL);
-
-      // Derive setup and signal flags from live bar analysis (timeline), not stale DB values
-      let liveSetup = setup, liveColor = color, liveDescription = description;
-      if (aUpFiredTimeline && cUp) {
-        liveSetup = 'A Up + C Confirmed'; liveColor = '#22c55e';
-        liveDescription = `A Up fired and C Up confirmed. Strong continuation long. Price ${currentPrice.toFixed(2)}, above OR High ${orH.toFixed(2)}.`;
-      } else if (aUpFiredTimeline) {
-        liveSetup = 'A Up (no C yet)'; liveColor = '#86efac';
-        liveDescription = `A Up fired. Waiting for C Up confirmation (close above OR High ${orH.toFixed(2)}). Still valid long.`;
-      } else if (aDownFiredTimeline && cDown) {
-        liveSetup = 'A Down + C Confirmed'; liveColor = '#ef4444';
-        liveDescription = `A Down fired and C Down confirmed. Strong continuation short. Price ${currentPrice.toFixed(2)}, below OR Low ${orL.toFixed(2)}.`;
-      } else if (aDownFiredTimeline) {
-        liveSetup = 'A Down (no C yet)'; liveColor = '#fca5a5';
-        liveDescription = `A Down fired. Waiting for C Down confirmation (close below OR Low ${orL.toFixed(2)}).`;
-      } else if (timeline.some(e => e.event?.startsWith('Failed A Up') && !e.event.includes('attempt'))) {
-        liveSetup = 'Failed A Up'; liveColor = '#f97316';
-      } else if (timeline.some(e => e.event?.startsWith('Failed A Down') && !e.event.includes('attempt'))) {
-        liveSetup = 'Failed A Down'; liveColor = '#a78bfa';
-      }
-
-      // NL30 for dynamic conviction (reuse cache from setup-detection when available)
-      let liveNL30 = 0, liveStructState = null;
-      const cachedNL30 = getCached(todayET, 'nl30');
-      if (cachedNL30) {
-        liveNL30 = cachedNL30.nl30;
-        liveStructState = cachedNL30.nl30State === 'BULLISH' ? 'TRENDING_UP' : cachedNL30.nl30State === 'BEARISH' ? 'TRENDING_DOWN' : 'BALANCE';
-      } else {
-        try {
-          const nlQ = await query(`SELECT SUM(daily_score) OVER (ORDER BY trade_date ROWS BETWEEN 29 PRECEDING AND CURRENT ROW) as nl30 FROM acd_daily_log WHERE daily_score IS NOT NULL ORDER BY trade_date DESC LIMIT 1`);
-          liveNL30 = parseInt(nlQ.rows[0]?.nl30) || 0;
-          liveStructState = liveNL30 > 9 ? 'TRENDING_UP' : liveNL30 < -9 ? 'TRENDING_DOWN' : 'BALANCE';
-        } catch (_) {}
-      }
-
-      const rawConviction = await getConvictionData().catch(() => null);
-      const conviction = rawConviction
-        ? Object.fromEntries(Object.entries(rawConviction).map(([k, v]) => [
-            k, v ? { ...v, dynamic: computeDynamicConviction(v, k, { nl30: liveNL30, structuralState: liveStructState }) } : null
-          ]))
-        : null;
-
-      // Day type classification (available after IB close at 10:00 AM, updates at 10:30 and 11:00)
-      // Use timeline-based failure detection — simple failedAUp is false when a_up_fired=true in DB
-      const etMinLive = nowET.getHours() * 60 + nowET.getMinutes();
-      let dayType = null;
-      if (etMinLive >= 10 * 60) {
-        const tlFailedAUp   = timeline.some(e => e.event?.startsWith('Failed A Up'));
-        const tlFailedADown = timeline.some(e => e.event?.startsWith('Failed A Down'));
-        const hasA  = aUpFiredTimeline || aDownFiredTimeline;
-        const hasFA = tlFailedAUp || tlFailedADown;
-        const trendLong  = aUpFiredTimeline   && cUp   && !tlFailedAUp;
-        const trendShort = aDownFiredTimeline && cDown && !tlFailedADown;
-        if (trendLong || trendShort) {
-          dayType = { label: 'TREND DAY', color: trendLong ? '#22c55e' : '#ef4444', detail: 'Directional — go with the drive' };
-        } else if ((hasA && hasFA) || (aUpFiredTimeline && cDown) || (aDownFiredTimeline && cUp) || (tlFailedAUp && tlFailedADown)) {
-          dayType = { label: 'NEUTRAL DAY', color: '#94a3b8', detail: 'Both sides rejected — wait for extremes' };
-        } else if (hasA && !hasFA) {
-          dayType = { label: 'NORMAL DAY', color: '#f59e0b', detail: 'Responsive at extremes' };
-        } else if ((cUp || cDown) && !hasA) {
-          dayType = { label: 'NORMAL DAY', color: '#f59e0b', detail: 'C signal — responsive probe' };
-        } else {
-          dayType = { label: 'BRACKET DAY', color: '#6366f1', detail: 'Fade value area extremes' };
-        }
-      }
-
-      res.json({
-        setup: liveSetup, color: liveColor, description: liveDescription, currentPrice, barTime,
-        orHigh: orH, orLow: orL, aUpLevel: aUp, aDownLevel: aDown,
-        gLine, gLineDaysHeld, gLineStatus,
-        pwHigh, pwLow, pmVAH, pmVAL, pmPOC, monthOpen,
-        sessionHigh, sessionLow,
-        aUpFired: aUpFiredTimeline, aDownFired: aDownFiredTimeline,
-        reachedAUp, reachedADown, failedAUp, failedADown, cUp, cDown,
-        barsAnalyzed: postOR.length,
-        weisWarning,
-        timeline, narrative, p3Suggested, opening_call_type,
-        nl30: liveNL30,
-        conviction,
-        dayType,
-        dayOfWeek: new Date(todayET + 'T12:00:00').getDay(), // 1=Mon … 5=Fri
-        earlyClose: getEarlyCloseMinute(todayET) ? { rthCloseEtMin: getEarlyCloseMinute(todayET), label: getMarketStatus(todayET)?.name } : null,
-      });
-    } catch(e) { res.status(500).json({ error: e.message }); }
-  });
+// GET /api/acd/live REMOVED 2026-09-20 (user-requested dead-code investigation).
+// Its only frontend consumer, ACDSessionTimeline (via src/utils/useAcdLive.js's
+// useAcdLive() hook), was deleted 2026-07-16 (commit 9fb677b, a dead-code cleanup pass) --
+// the hook file and its 2 dead imports (App.jsx, ACDView.jsx) were never cleaned up in
+// the same pass, and this 548-line backend handler was never noticed as orphaned until
+// now. Read-only (SELECT queries only, no INSERT/UPDATE/io.emit/setCached side effects),
+// confirmed safe to delete outright -- see docs/OPEN_THREADS.md's 2026-09-20 entry.
 
   // GET /api/engine-reads/hit-rates — historical hit rates from engine_reads table
   // Used by dashboard to show calibrated conviction next to A signals and pre-market bias reads.
@@ -5711,9 +5174,8 @@ export default function createACDRouter(io) {
             const stopPts  = optStop?.stop   ?? Math.round(lv.mae_p75 ?? STOP);
             const targetPts = optStop?.target ?? Math.round(lv.mfe    ?? TARGET);
             const confluenceCount = nearLevels.length;
-            const confluenceNote = confluenceCount >= 2
-              ? ` ⚡ ${confluenceCount}× confluence: ${nearLevels.map(l => l.name.replace(/_FADE$/, '')).join(' + ')}`
-              : '';
+            // confluenceNote (text-only, fed the now-removed description field) removed
+            // 2026-09-20 in the same pass -- confluenceCount itself stays (used in targetLabel).
             // Approach delta: net buyer/seller pressure on last 5 bars before level touch.
             // Research 2026-07-05: LONG fades with net_delta>0 = 77% WR vs 71% for sellers.
             const approachDelta = last5.reduce((s, b) => s + (b.ask_vol || 0) - (b.bid_vol || 0), 0);
@@ -5931,42 +5393,13 @@ export default function createACDRouter(io) {
               stop: isLong ? currentPrice - stopPts : currentPrice + stopPts,
               target: isLong ? currentPrice + targetPts : currentPrice - targetPts,
               targetLabel: `T1: ${targetPts}pt · Stop: ${stopPts}pt · EV: $${lv.ev != null ? lv.ev.toFixed(0) : '--'}${confluenceCount >= 2 ? ` · ${confluenceCount}× confluence` : ''}`,
-              description: (() => {
-                const lvStats = ls(lv.name.replace(/_FADE$/, ''));
-                const lDir = lvStats?.long, sDir = lvStats?.short;
-                const dirStr = (lDir && sDir)
-                  ? ` (Long: ${Math.round(lDir.wr * 100)}% N=${lDir.n} / Short: ${Math.round(sDir.wr * 100)}% N=${sDir.n})`
-                  : '';
-                const dirMae = isLong ? (lDir?.mae_p80w ?? null) : (sDir?.mae_p80w ?? null);
-                const stopNote = dirMae != null ? ` Stop calibration: 80% of winners needed <${Math.round(dirMae)}pt of room.` : '';
-                const dtNote = (() => {
-                  if (!dtaRow || dtaRow.recommendation === 'NEUTRAL') return dtClass ? ` (${dtClass} day)` : '';
-                  const pct = Math.round((dtaRow.wr ?? 0) * 100);
-                  const z   = dtaRow.zScore != null ? ` ${dtaRow.zScore.toFixed(1)}σ` : '';
-                  if (dtaRow.recommendation === 'SIZE_UP_STRONG') return ` ${dtClass} EDGE: ${pct}% WR N=${dtaRow.n}${z} — size up.`;
-                  if (dtaRow.recommendation === 'SIZE_UP')        return ` ${dtClass} EDGE: ${pct}% WR N=${dtaRow.n}${z}.`;
-                  if (dtaRow.recommendation === 'SUPPRESS')       return ` WARNING — ${dtClass}: ${pct}% WR historically. Reduce size.`;
-                  if (dtaRow.recommendation === 'SIZE_DOWN')      return ` Caution — ${dtClass}: ${pct}% WR (below baseline).`;
-                  return dtClass ? ` (${dtClass} day)` : '';
-                })();
-                // Confluence+exhaustion interaction note — RESEARCH_CLAIM confluence_exhaustion_interaction
-                // is still PROVISIONAL (real but not yet decisive: fails computeRigor's stability bar
-                // both train and test as of 2026-07-23). Surfaced as a caution, not a SKIP/suppress —
-                // this is exactly the "watch until I get conviction" framework the user described,
-                // not a live-execution gate yet.
-                const exhaustionNote = exhaustionSignalAtDetection
-                  ? ` ⚠ VOLUME/DELTA EXHAUSTION at this touch (high vol, tight range, delta opposing the fade) — historically a headwind when combined with confluence, still PROVISIONAL (not yet stable enough to size/suppress on).`
-                  : '';
-                // RESEARCH_CLAIM hivol_lopace_precursor_confirmed_negative — CONFIRMED
-                // (train/test same-sign both splits). Unlike exhaustionNote above, this one
-                // is validated, not provisional — still informational only, never gates
-                // entry or sizeMultiplier per this app's standing "no execution capability"
-                // convention (same as bar6_exit_recommended/checkFadeAgainstBigMoveExit).
-                const hivolLopaceNote = hivolLopaceAtDetection
-                  ? ` ⚠ HIGH VOLUME, LOW PACE into this touch (heavy volume without matching price movement) — historically a real headwind, not a defended level as the "absorption" idea would suggest (validated: -$7.91 EV vs +$0.07 EV control, N=1548, train/test consistent).`
-                  : '';
-                return `${recencyPrefix}${lv.name.replace(/_/g, ' ')} at ${Math.round(lv.level)}. ${Math.round((lv.wr ?? 0.5) * 100)}% WR (N=${lv.n ?? 0} combined${dirStr}). MAE P50: ${lv.mae ?? '--'}pt${lv.mfe != null ? `, MFE P50: ${lv.mfe}pt` : ''}.${stopNote}${confluenceNote}${exhaustionNote}${hivolLopaceNote}${dtNote}${isMonday ? ' MONDAY: post-IB only (waits for IB close 10:30 ET).' : ' AM first touch.'}`;
-              })(),
+              // description field REMOVED 2026-09-20 (user-requested dead-code investigation,
+              // OPEN_DECISION tradebrief_description_field_unconsumed_20260920) -- confirmed zero
+              // frontend consumers anywhere (unlike targetLabel above, which persists to the real
+              // active_setups.t1_label column and has real downstream SQL consumers -- kept).
+              // recencyPrefix/daysSinceTest/dtaRow/confluenceNote's underlying inputs all stay,
+              // since they separately feed sizeFactorsAtDetection monitoring; only the
+              // description-string-building glue (this IIFE and its solely-local sub-notes) is gone.
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               // OPEN_DECISION sizemultiplier_needs_per_factor_instrumentation (2026-08-20,
               // DeepSeek-reviewed design): raw INPUT state of every factor the sizeMultiplier

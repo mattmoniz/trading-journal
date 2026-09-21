@@ -283,7 +283,7 @@ server/
 | `tradeImportService.js` | Sierra Chart export parsing with count-based dedup; tags BP fills via `levelProximityService` after insert |
 | `levelProximityService.js` | Tags BP fills with `AT_LEVEL` (≤5pt), `LATE` (5-15pt), or `CHASING` (>15pt) relative to `level_prices`; stores top-3 nearest levels in `trades.level_proximity`; `tagTradesForDate()` runs after 4 PM auto-import |
 | `volatilityRegimeService.js` | Live read-only volatility regime (morning vol z-score, trend strength) |
-| `marketCalendar.js` | NYSE/CME NQ holiday + early-close calendar 2024–2026. Exports `getMarketStatus(dateStr)` → `{type:'HOLIDAY'|'EARLY_CLOSE', name, rthCloseEtMin?}` or `null`; `isHoliday()`; `getEarlyCloseMinute()`. Used by `/api/acd/live` to short-circuit on holidays and to return `earlyClose` field on early-close days. |
+| `marketCalendar.js` | NYSE/CME NQ holiday + early-close calendar 2024–2026. Exports `getMarketStatus(dateStr)` → `{type:'HOLIDAY'|'EARLY_CLOSE', name, rthCloseEtMin?}` or `null`; `isHoliday()`; `getEarlyCloseMinute()`. Used by `ibLowPnrDetector.js`. (Its other consumer, `GET /api/acd/live`, was deleted 2026-09-20 as dead code — zero live frontend consumers since a 2026-07-16 dead-code purge, see docs/OPEN_THREADS.md's 2026-09-20 entry.) |
 
 ### Scheduled jobs (node-cron + setInterval, set up in `server/index.js`)
 Morning brief generation, EOD auto-import (4 PM — also runs `tagTradesForDate` + `backfill_auction_reads.js` for today), weekly report, monthly report, pattern memory nightly update, daily coaching (4:45 PM), **AI setup review (5:00 PM ET Mon-Fri** — auto-generates per-setup ratings via Haiku; skips if review already exists or no resolved setups), MGI level computation (9:30 PM ET Sunday via `scripts/compute_levels.js`). Each run is logged to `process_log` (see `logProcess()` calls in `index.js`).
@@ -305,7 +305,6 @@ src/
 ├── App.css                # Dark theme, CSS variables
 ├── utils/
 │   ├── usePollData.js     # Generic fetch+setInterval hook (cancellation built in)
-│   ├── useAcdLive.js      # /api/acd/live poller — 30s default, error-filtered
 │   ├── confidenceTier.js
 │   ├── format.js
 │   ├── timestamps.js

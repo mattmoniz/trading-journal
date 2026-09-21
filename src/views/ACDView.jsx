@@ -9,7 +9,6 @@ import FetchStamp from '../components/shared/FetchStamp.jsx';
 import CollapsibleSection from '../components/shared/CollapsibleSection.jsx';
 import WinChip from '../components/shared/WinChip.jsx';
 import { Dot, useDataUpdateDot, useFieldUpdateDots } from '../components/shared/UpdateDot.jsx';
-import { useAcdLive } from '../utils/useAcdLive.js';
 import { useSharedPollData, refreshSharedPollData } from '../utils/useSharedPollData.js';
 import { ViewActiveProvider, useViewActive } from '../utils/useViewActive.js';
 import ErrorBoundary from '../components/shared/ErrorBoundary.jsx';

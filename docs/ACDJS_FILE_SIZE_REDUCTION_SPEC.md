@@ -34,8 +34,32 @@ both files. `node scripts/test_invariants.mjs` byte-identical to baseline (25 FA
 running process postdates the edit, `GET /api/acd/setup-detection` returns clean JSON, zero new
 `scratch/server_errors.jsonl` entries.
 
-The rest of this document (Phase B, the "not in scope" section, and the general verification
-checklist) is the original 2026-09-16 text, unexecuted.
+## `/acd/live` — deleted outright, not extracted (2026-09-20)
+
+Phase B originally named `/performance-audit/unified` (899 lines) and `/acd/live` (548 lines) as
+extraction candidates. `/acd/live` turned out not to need extraction — it's dead code. Tracing
+consumers of `GET /api/acd/setup-detection` (for an unrelated investigation, see
+docs/OPEN_THREADS.md's 2026-09-20 entry) led to checking `/acd/live` too: its only frontend hook,
+`useAcdLive()`, was imported in `App.jsx`/`ACDView.jsx` but never actually called — the one
+component that called it, `ACDSessionTimeline`, was deleted as dead code 2026-07-16 (commit
+`9fb677b`), and the hook file plus the 548-line backend handler were never cleaned up in the same
+pass. Confirmed read-only (no INSERT/UPDATE/io.emit/setCached) before deleting the whole handler,
+`src/utils/useAcdLive.js`, and both dead imports. Phase B's remaining scope is just
+`/performance-audit/unified` now.
+
+**Same pass also found 17 dead imports at the top of acd.js** — 4 caused by Phase A itself
+(the relocated functions' old imports were never removed, since this file's `npm run lint` has
+no `no-unused-vars` rule configured to catch it), 13 pre-existing (likely superseded by the
+`complete*Shadows()` wrapper pattern without their raw imports ever being cleaned up). All
+grep-confirmed individually before removal, not assumed from a pattern.
+
+**Cumulative acd.js reduction, 2026-09-20: 12,286 → 10,091 lines (~18%)**, combining Phase A
+(1,628 lines), the `/acd/live` deletion (~537 lines), the `description`/`confluenceNote` removal,
+and the dead-import sweep.
+
+The rest of this document (Phase B's remaining `/performance-audit/unified` extraction, the
+"not in scope" section, and the general verification checklist) is the original 2026-09-16 text,
+unexecuted.
 
 ## Current state (measured directly, not from an old comment)
 
