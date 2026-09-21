@@ -62,6 +62,14 @@ echo "=== Daily calibration: $(date) ==="
 # recalibrate_ml_step_trail_comparison.mjs's own header for the full account.
 /usr/bin/node scripts/recalibrate_ml_step_trail_comparison.mjs
 
+# Phase 0 pretest: should ML probability scale POSITION SIZE among already-approved trades,
+# not just gate entry (2026-09-21, user question: "can ml test increase sizing too, for more
+# appropriate setups it likes"). Came back a real, non-thin negative on first run (Spearman
+# ~0.04-0.05, non-monotonic, HIGH-confidence trades currently the WORST of the 3 buckets) --
+# self-recalibrates daily so this either firms up or reverses as real N grows, per this
+# codebase's own "no dead ends" rule.
+/usr/bin/node scripts/recalibrate_ml_probability_sizing_pretest.mjs
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the
