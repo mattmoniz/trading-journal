@@ -4274,6 +4274,84 @@ ALTER SEQUENCE public.macro_events_id_seq OWNED BY public.macro_events.id;
 
 
 --
+-- Name: ml_models; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ml_models (
+    id integer NOT NULL,
+    model_version text NOT NULL,
+    trained_at timestamp without time zone DEFAULT now() NOT NULL,
+    train_n integer NOT NULL,
+    test_n integer NOT NULL,
+    train_positive_rate numeric(5,4),
+    test_positive_rate numeric(5,4),
+    test_auc numeric(5,4),
+    feature_list jsonb NOT NULL,
+    test_metrics jsonb,
+    model_path text NOT NULL,
+    notes text,
+    approval_threshold numeric(6,5),
+    train_end_at timestamp without time zone,
+    test_start_at timestamp without time zone
+);
+
+
+--
+-- Name: ml_models_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.ml_models_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: ml_models_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.ml_models_id_seq OWNED BY public.ml_models.id;
+
+
+--
+-- Name: ml_verdicts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ml_verdicts (
+    id integer NOT NULL,
+    active_setup_id integer NOT NULL,
+    model_version text NOT NULL,
+    scored_at timestamp without time zone DEFAULT now() NOT NULL,
+    probability numeric(6,5) NOT NULL,
+    verdict character varying(10) NOT NULL,
+    CONSTRAINT ml_verdicts_verdict_check CHECK (((verdict)::text = ANY ((ARRAY['TAKE'::character varying, 'VETO'::character varying])::text[])))
+);
+
+
+--
+-- Name: ml_verdicts_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.ml_verdicts_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: ml_verdicts_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.ml_verdicts_id_seq OWNED BY public.ml_verdicts.id;
+
+
+--
 -- Name: monte_carlo_runs; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8299,6 +8377,20 @@ ALTER TABLE ONLY public.macro_events ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: ml_models id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_models ALTER COLUMN id SET DEFAULT nextval('public.ml_models_id_seq'::regclass);
+
+
+--
+-- Name: ml_verdicts id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_verdicts ALTER COLUMN id SET DEFAULT nextval('public.ml_verdicts_id_seq'::regclass);
+
+
+--
 -- Name: monte_carlo_runs id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -8921,6 +9013,38 @@ ALTER TABLE ONLY public.macro_events
 
 ALTER TABLE ONLY public.macro_events
     ADD CONSTRAINT macro_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ml_models ml_models_model_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_models
+    ADD CONSTRAINT ml_models_model_version_key UNIQUE (model_version);
+
+
+--
+-- Name: ml_models ml_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_models
+    ADD CONSTRAINT ml_models_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ml_verdicts ml_verdicts_active_setup_id_model_version_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_verdicts
+    ADD CONSTRAINT ml_verdicts_active_setup_id_model_version_key UNIQUE (active_setup_id, model_version);
+
+
+--
+-- Name: ml_verdicts ml_verdicts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_verdicts
+    ADD CONSTRAINT ml_verdicts_pkey PRIMARY KEY (id);
 
 
 --
@@ -10069,6 +10193,20 @@ CREATE INDEX idx_learning_digest_shown ON public.learning_digest_events USING bt
 --
 
 CREATE INDEX idx_live_reads_date ON public.live_reads USING btree (trade_date);
+
+
+--
+-- Name: idx_ml_verdicts_model; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ml_verdicts_model ON public.ml_verdicts USING btree (model_version);
+
+
+--
+-- Name: idx_ml_verdicts_setup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_ml_verdicts_setup ON public.ml_verdicts USING btree (active_setup_id);
 
 
 --
@@ -14220,6 +14358,14 @@ CREATE TRIGGER update_daily_logs_updated_at BEFORE UPDATE ON public.daily_logs F
 --
 
 CREATE TRIGGER update_trades_updated_at BEFORE UPDATE ON public.trades FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
+-- Name: ml_verdicts ml_verdicts_model_version_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ml_verdicts
+    ADD CONSTRAINT ml_verdicts_model_version_fkey FOREIGN KEY (model_version) REFERENCES public.ml_models(model_version);
 
 
 --

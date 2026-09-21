@@ -1,0 +1,133 @@
+// ML meta-labeling silo -- comparison/summary reads, deliberately isolated from the live
+// trading path per this codebase's "isolate non-trading features" convention. This module
+// only ever READS ml_models/ml_verdicts and joins them against active_setups for display --
+// it never writes anything, and nothing here influences origin_status/status/suppression
+// for any real row. Model training/scoring itself lives in scripts/ml_meta_labeling/
+// (Python) -- this file is purely the read side for the comparison dashboard.
+//
+// Per the user's explicit request (2026-09-21): everything is scoped to the WHOLE roster
+// (every setup_type), not just the 9 currently-ACTIVE ones -- the whole point of this silo
+// is to see what the model does across trades that don't currently fire live at all.
+import { query } from '../db.js';
+
+async function getLatestModel() {
+  const r = await query(`
+    SELECT model_version, trained_at::text, train_n, test_n,
+      train_positive_rate::float, test_positive_rate::float, test_auc::float,
+      approval_threshold::float, train_end_at::text, test_start_at::text,
+      feature_list, test_metrics, notes
+    FROM ml_models ORDER BY trained_at DESC LIMIT 1
+  `);
+  return r.rows[0] || null;
+}
+
+// Real, in-sample-vs-out-of-sample distinction, not glossed over -- the model has already
+// seen train-period rows during fitting, so its verdict on them is a biased, optimistic
+// read, not a genuine test of anything. `sample` lets a caller ask for either explicitly;
+// the API layer defaults to 'test' (the only honest comparison) and requires an explicit
+// opt-in to see the in-sample numbers at all.
+async function getComparison(modelVersion, sample = 'test') {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+
+  const boundaryClause = sample === 'test' ? 'a.fired_at >= $2::timestamp'
+    : sample === 'train' ? 'a.fired_at <= $2::timestamp'
+    : '1=1'; // 'all' -- includes both, caller's explicit choice, not a default
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+  const params = boundaryParam ? [modelVersion, boundaryParam] : [modelVersion];
+
+  const byVerdict = await query(`
+    SELECT v.verdict, COUNT(*) AS n,
+      SUM(a.actual_pnl)::float AS total_pnl,
+      AVG(a.actual_pnl)::float AS avg_pnl,
+      100.0 * COUNT(*) FILTER (WHERE a.actual_pnl > 0) / NULLIF(COUNT(*), 0) AS win_rate
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE v.model_version = $1 AND ${boundaryClause}
+    GROUP BY v.verdict
+  `, params);
+
+  const allTrades = await query(`
+    SELECT COUNT(*) AS n,
+      SUM(a.actual_pnl)::float AS total_pnl,
+      AVG(a.actual_pnl)::float AS avg_pnl,
+      100.0 * COUNT(*) FILTER (WHERE a.actual_pnl > 0) / NULLIF(COUNT(*), 0) AS win_rate
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE v.model_version = $1 AND ${boundaryClause}
+  `, params);
+
+  return {
+    sample,
+    boundary: boundaryParam,
+    allTrades: allTrades.rows[0],
+    byVerdict: byVerdict.rows,
+  };
+}
+
+// Cumulative P&L over time, both populations, for a real vs. ML-gated equity-curve chart.
+async function getCumulativePnlSeries(modelVersion, sample = 'test') {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+  const boundaryClause = sample === 'test' ? 'a.fired_at >= $2::timestamp'
+    : sample === 'train' ? 'a.fired_at <= $2::timestamp' : '1=1';
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+  const params = boundaryParam ? [modelVersion, boundaryParam] : [modelVersion];
+
+  const r = await query(`
+    SELECT a.trade_date::text AS trade_date,
+      SUM(a.actual_pnl)::float AS all_pnl,
+      SUM(a.actual_pnl) FILTER (WHERE v.verdict = 'TAKE')::float AS ml_pnl
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE v.model_version = $1 AND ${boundaryClause}
+    GROUP BY a.trade_date
+    ORDER BY a.trade_date ASC
+  `, params);
+
+  let allCum = 0, mlCum = 0;
+  return r.rows.map(row => {
+    allCum += row.all_pnl || 0;
+    mlCum += row.ml_pnl || 0;
+    return { tradeDate: row.trade_date, allCumPnl: Math.round(allCum * 100) / 100, mlCumPnl: Math.round(mlCum * 100) / 100 };
+  });
+}
+
+// Per-trade drill-down -- the "why did ML gate this one" view. limit/offset for pagination
+// (this can be thousands of rows across the whole roster). Params are built as a single
+// positional array in the same order the $N placeholders are appended, per this codebase's
+// own standing rule to dry-run/verify $N param counts rather than count them by hand.
+async function getTradeList({ modelVersion, sample = 'test', setupType = null, verdict = null, limit = 100, offset = 0 }) {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+
+  const positional = [modelVersion];
+  const conditions = ['v.model_version = $1'];
+  if (boundaryParam) {
+    positional.push(boundaryParam);
+    conditions.push(`a.fired_at ${sample === 'test' ? '>=' : '<='} $${positional.length}::timestamp`);
+  }
+  if (setupType) { positional.push(setupType); conditions.push(`a.setup_type = $${positional.length}`); }
+  if (verdict) { positional.push(verdict); conditions.push(`v.verdict = $${positional.length}`); }
+  positional.push(limit); const limitIdx = positional.length;
+  positional.push(offset); const offsetIdx = positional.length;
+
+  const sql = `
+    SELECT a.id, a.setup_type, a.fired_at::text AS fired_at, a.trade_date::text AS trade_date,
+      a.actual_pnl::float AS actual_pnl, a.resolution,
+      v.probability::float AS ml_probability, v.verdict AS ml_verdict
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY a.fired_at DESC
+    LIMIT $${limitIdx} OFFSET $${offsetIdx}
+  `;
+  const r = await query(sql, positional);
+  return r.rows;
+}
+
+export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList };

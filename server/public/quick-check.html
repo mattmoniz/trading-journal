@@ -83,6 +83,21 @@
   #vol-regime-card .vr-scale { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: var(--text); font-weight: 700; }
   #vol-regime-card .vr-asof { margin-left: auto; font-size: 11px; }
 
+  /* ML meta-labeling silo card (2026-09-21) -- fully isolated read-only comparison, see
+     server/services/mlSiloService.js's own header for the "why isolated" account. Purple
+     accent (distinct from the neutral/muted styling every other informational card here
+     uses) since this is a genuinely different kind of thing -- a whole parallel system
+     being evaluated, not a passive descriptive reading. */
+  #ml-silo-card {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap;
+    padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(168,85,247,0.35);
+    background: rgba(168,85,247,0.06); font-size: 12px; color: var(--dim);
+    cursor: pointer;
+  }
+  #ml-silo-card:active { background: rgba(168,85,247,0.12); }
+  #ml-silo-card .ml-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; color: #d8b4fe; }
+  #ml-silo-card .ml-stat { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-weight: 700; }
+
   /* Live pulse-reading card (2026-09-09) -- see server/services/pulseReading.js's header: this
      is a raw, live "is volume accelerating or decelerating" read, NOT a validated trading
      signal (RESEARCH_CLAIM pulse_vwap_slope_direction_negative_20260909 found it doesn't
@@ -287,12 +302,14 @@
   <a onclick="jumpTo('sec-performance')">Performance</a>
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
+  <a onclick="jumpTo('ml-silo-card')">ML Silo</a>
 </div>
 
 <div id="pulse-bar"></div>
 
 <div class="wrap">
   <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
+  <div id="ml-silo-card" onclick="openMlSiloModal()"></div>
   <div id="pulse-reading-card"></div>
   <div id="setup-card"></div>
   <div id="sweep-watch"></div>
@@ -520,6 +537,135 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
 
   ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
   ctx.fillText(finalScale.toFixed(2) + 'x', w - padR - 2, padT + 12);
+}
+
+// ML meta-labeling silo card (2026-09-21) -- reads the SAME server/routes/mlSilo.js
+// endpoints the React ML Silo view (src/views/MLSiloView.jsx) reads, deliberately never
+// re-deriving the comparison aggregation here -- per the DeepSeek critique's explicit
+// warning against reimplementing this kind of aggregation twice across two frontend
+// surfaces. Slow-changing (verdicts backfilled daily, model retrained manually) -- same
+// 5min poll cadence as the volatility card, no need for anything faster.
+async function loadMlSilo() {
+  try {
+    const data = await fetch('/api/ml-silo/summary?sample=test').then(r => r.json());
+    renderMlSiloCard(data);
+  } catch (e) { /* keep last good render */ }
+}
+function renderMlSiloCard(data) {
+  const el = $('ml-silo-card');
+  if (!el) return;
+  if (!data?.model || !data?.comparison) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  const all = data.comparison.allTrades;
+  const take = data.comparison.byVerdict?.find(v => v.verdict === 'TAKE');
+  const allPnl = Number(all?.total_pnl || 0);
+  const takePnl = Number(take?.total_pnl || 0);
+  const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+  el.innerHTML =
+    '<span class="ml-label">ML Silo (out-of-sample)</span>' +
+    '<span>All: <span class="ml-stat" style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</span></span>' +
+    '<span>ML-approved: <span class="ml-stat" style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</span></span>' +
+    '<span style="margin-left:auto;font-size:11px;">tap for detail →</span>';
+}
+
+async function openMlSiloModal() {
+  let html = '<div class="m-head"><span class="m-title">ML Meta-Labeling Silo</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+    '<div class="m-sub">Fully isolated -- never changes what fires as a real alert. Scored across the whole roster, not just what\'s currently ACTIVE. Out-of-sample = genuinely never seen by the model during training, the only honest comparison.</div>' +
+    '<canvas id="ml-silo-canvas" class="equity" style="margin-top:10px;"></canvas>' +
+    '<div id="ml-silo-stats" style="font-size:12px;color:var(--dim);margin-top:10px;">Loading…</div>' +
+    '<div id="ml-silo-trades" style="margin-top:10px;"></div>';
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+
+  try {
+    const [summary, tradesRes] = await Promise.all([
+      fetch('/api/ml-silo/summary?sample=test').then(r => r.json()),
+      fetch('/api/ml-silo/trades?sample=test&limit=15').then(r => r.json()),
+    ]);
+    renderMlSiloModalStats(summary);
+    renderMlSiloEquityChart('ml-silo-canvas', summary?.series || []);
+    renderMlSiloTradeList(tradesRes?.trades || []);
+  } catch (e) {
+    const statsEl = $('ml-silo-stats');
+    if (statsEl) statsEl.textContent = 'Failed to load.';
+  }
+}
+function renderMlSiloModalStats(data) {
+  const el = $('ml-silo-stats');
+  if (!el) return;
+  if (!data?.model || !data?.comparison) { el.textContent = 'No trained model yet.'; return; }
+  const m = data.model;
+  const all = data.comparison.allTrades;
+  const take = data.comparison.byVerdict?.find(v => v.verdict === 'TAKE');
+  const veto = data.comparison.byVerdict?.find(v => v.verdict === 'VETO');
+  const fmtD = n => n == null ? '--' : (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(2);
+  const row = (label, s, color) => s ? '<div style="margin-top:4px;"><span style="color:' + color + ';font-weight:700;">' + label + '</span> N=' + s.n + ' WR=' + Number(s.win_rate || 0).toFixed(1) + '% P&L=' + fmtD(s.total_pnl) + '</div>' : '';
+  el.innerHTML =
+    '<div>' + m.model_version + ' &middot; trained ' + m.trained_at + ' &middot; AUC=' + Number(m.test_auc).toFixed(3) + '</div>' +
+    row('All Trades', all, '#94a3b8') + row('ML-Approved', take, '#c4b5fd') + row('ML-Vetoed', veto, '#64748b');
+}
+// Same canvas-sizing/axis conventions as renderVolRegimeHistoryChart() above -- two lines
+// (all-trades vs ML-approved cumulative P&L), dashed $0 reference line since this IS a
+// break-even point (unlike the volatility chart's 1.0x scale reference).
+function renderMlSiloEquityChart(canvasId, series) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!series || series.length < 2) {
+    ctx.fillStyle = 'rgba(148,163,184,0.6)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('Not enough test-period data yet', w / 2, h / 2);
+    return;
+  }
+
+  const allVals = series.map(r => r.allCumPnl), mlVals = series.map(r => r.mlCumPnl);
+  const min = Math.min(0, ...allVals, ...mlVals), max = Math.max(0, ...allVals, ...mlVals);
+  const valRange = (max - min) || 1;
+  const padL = 50, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (series.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  ctx.strokeStyle = 'rgba(148,163,184,0.35)'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(padL, yAt(0)); ctx.lineTo(w - padR, yAt(0)); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  ctx.fillText('$0', padL - 6, yAt(0) + 3);
+  ctx.fillText('$' + max.toFixed(0), padL - 6, yAt(max) + 3);
+  ctx.fillText('$' + min.toFixed(0), padL - 6, yAt(min) + 3);
+
+  const drawLine = (vals, color) => {
+    ctx.beginPath();
+    vals.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  };
+  drawLine(allVals, '#3b82f6');
+  drawLine(mlVals, '#c4b5fd');
+
+  ctx.textAlign = 'left'; ctx.font = '10px monospace';
+  ctx.fillStyle = '#3b82f6'; ctx.fillText('● All Trades', padL, 12);
+  ctx.fillStyle = '#c4b5fd'; ctx.fillText('● ML-Approved', padL + 70, 12);
+}
+function renderMlSiloTradeList(trades) {
+  const el = $('ml-silo-trades');
+  if (!el) return;
+  if (!trades.length) { el.innerHTML = ''; return; }
+  const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+  el.innerHTML = '<div style="font-size:11px;color:var(--dim);margin-bottom:4px;">Recent, why ML gated each:</div>' +
+    trades.map(t =>
+      '<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid var(--border);">' +
+      '<span>' + t.setup_type + '</span>' +
+      '<span style="color:' + (t.ml_verdict === 'TAKE' ? '#c4b5fd' : 'var(--dim)') + ';font-weight:700;">' + t.ml_verdict + ' (' + Number(t.ml_probability).toFixed(2) + ')</span>' +
+      '<span style="color:' + (t.actual_pnl >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + fmtD(t.actual_pnl) + '</span>' +
+      '</div>'
+    ).join('');
 }
 
 async function loadPulse() {
@@ -2266,12 +2412,14 @@ loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) 
 loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
+loadMlSilo(); // slow-changing (verdicts backfilled daily, model retrained manually) -- poll every 5min below
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
 loadTagRanking(); // top-5-by-$-impact filter row -- ranked off today's own data, 60s poll below keeps it current
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
+setInterval(loadMlSilo, 300000);
 setInterval(loadPulseReading, 60000);
 setInterval(loadTagRanking, 60000);
 
@@ -2287,6 +2435,7 @@ document.addEventListener('visibilitychange', () => {
   loadTimeline();
   loadRange(currentRange);
   loadVolRegime();
+  loadMlSilo();
   loadPulseReading();
   loadTagRanking();
 });

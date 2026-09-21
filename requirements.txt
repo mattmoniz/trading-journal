@@ -1,0 +1,12 @@
+# Python dependencies for scripts/*.py (server/db.js has no Python equivalent -- these
+# scripts connect to Postgres directly via psycopg2).
+# Install: source venv/bin/activate && pip install -r requirements.txt
+#
+# lightgbm/scikit-learn added 2026-09-21 for the DeepSeek meta-labeling ML thread
+# (docs/1. Deepseek_ML_Meta_Labeling_SPEC.md) -- scripts/ml_meta_labeling/.
+numpy==2.4.4
+pandas==3.0.2
+psycopg2-binary==2.9.12
+lightgbm==4.7.0
+scikit-learn==1.9.1
+joblib==1.6.0
