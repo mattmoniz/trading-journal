@@ -23,19 +23,32 @@ from score import load_model, score_candidate
 def get_latest_model(conn):
     cur = conn.cursor()
     cur.execute("""
-        SELECT model_version, model_path, approval_threshold
+        SELECT model_version, model_path, approval_threshold,
+            approval_threshold_rth, approval_threshold_globex
         FROM ml_models ORDER BY trained_at DESC LIMIT 1
     """)
     row = cur.fetchone()
     if not row:
         raise RuntimeError("No trained model found in ml_models -- run train.py first.")
-    return {'model_version': row[0], 'model_path': row[1], 'approval_threshold': float(row[2])}
+    return {
+        'model_version': row[0], 'model_path': row[1], 'approval_threshold': float(row[2]),
+        # Within-session (RTH/Globex) thresholds, 2026-09-21 (DeepSeek review finding 2-4) --
+        # a single pooled cutoff sits between the two sessions' score distributions, so on a
+        # hot RTH day every RTH trade clears it and every Globex trade doesn't, regardless of
+        # within-session quality. Fall back to the pooled threshold for either session if a
+        # model was trained before this fix (or had too few VAL rows in one session) --
+        # never crash the batch job over a NULL column from an older model_version.
+        'approval_threshold_rth': float(row[3]) if row[3] is not None else float(row[2]),
+        'approval_threshold_globex': float(row[4]) if row[4] is not None else float(row[2]),
+    }
 
 
 def main():
     conn = get_connection()
     latest = get_latest_model(conn)
-    print(f"Scoring against model_version={latest['model_version']} (threshold={latest['approval_threshold']:.4f})")
+    print(f"Scoring against model_version={latest['model_version']} "
+          f"(RTH threshold={latest['approval_threshold_rth']:.4f}, "
+          f"Globex threshold={latest['approval_threshold_globex']:.4f})")
 
     bundle = load_model(latest['model_path'])
     df, feature_cols = fetch_training_dataframe(conn)
@@ -54,7 +67,12 @@ def main():
     written = 0
     for _, row in to_score.iterrows():
         features = {col: row[col] for col in feature_cols}
-        result = score_candidate(bundle, features, latest['approval_threshold'])
+        # Within-session threshold -- rank RTH trades against RTH's own cutoff, Globex
+        # against Globex's own (see get_latest_model()'s comment). row['is_rth_int'] is
+        # always present (a real, non-nullable generated column, per dataset.py's own
+        # comment), never missing/null.
+        threshold = latest['approval_threshold_rth'] if row['is_rth_int'] else latest['approval_threshold_globex']
+        result = score_candidate(bundle, features, threshold)
         cur.execute("""
             INSERT INTO ml_verdicts (active_setup_id, model_version, probability, verdict)
             VALUES (%s, %s, %s, %s)

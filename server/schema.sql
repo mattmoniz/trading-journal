@@ -4296,7 +4296,9 @@ CREATE TABLE public.ml_models (
     notes text,
     approval_threshold numeric(6,5),
     train_end_at timestamp without time zone,
-    test_start_at timestamp without time zone
+    test_start_at timestamp without time zone,
+    approval_threshold_rth numeric(6,5),
+    approval_threshold_globex numeric(6,5)
 );
 
 
