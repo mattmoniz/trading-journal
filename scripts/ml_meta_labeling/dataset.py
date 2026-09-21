@@ -87,6 +87,46 @@ EXISTING_FEATURE_COLS = [
 ]
 
 
+def feature_cols():
+    """The full ordered feature column list -- same shape fetch_training_dataframe() returns
+    as its second value, but callable without a DB connection/query. Used internally by
+    fetch_training_dataframe() itself (single source of truth for the column list). Fire-
+    time scoring (score_one.py) deliberately does NOT use this -- it reads the feature list
+    off the persisted model bundle instead (bundle['feature_cols']), which is the more
+    correct source there: it reflects exactly what THAT specific model was trained on, and
+    stays correct even if this list changes for a later-trained model."""
+    return (
+        [f'pd_{k}' for k in PD_FEATURE_KEYS]
+        + [f'intraday_{k}' for k in INTRADAY_FEATURE_KEYS]
+        + [f'pd_migration_{c}' for c in MIGRATION_CATEGORIES]
+        + EXISTING_FEATURE_COLS
+    )
+
+
+def build_feature_dict(pd_features: dict, intraday_features: dict, existing: dict) -> dict:
+    """Single-row equivalent of fetch_training_dataframe()'s own flattening logic, extracted
+    2026-09-21 so score_one.py (fire-time scoring, see its own header) uses the EXACT SAME
+    flattening as batch training -- never a second hand-rolled copy. pd_features/
+    intraday_features are the raw ml_pd_features/ml_intraday_features JSONB dicts;
+    existing is a dict with the EXISTING_FEATURE_COLS keys already resolved (is_rth already
+    cast to is_rth_int by the caller, matching fetch_training_dataframe()'s own SQL-side cast).
+    Missing keys become None -- LightGBM handles this identically to a NaN from the batch
+    path, same native split-direction handling either way."""
+    pd_features = pd_features or {}
+    intraday_features = intraday_features or {}
+    out = {}
+    for key in PD_FEATURE_KEYS:
+        out[f'pd_{key}'] = pd_features.get(key)
+    for key in INTRADAY_FEATURE_KEYS:
+        out[f'intraday_{key}'] = intraday_features.get(key)
+    migration = pd_features.get('migrationDirVsPrior')
+    for cat in MIGRATION_CATEGORIES:
+        out[f'pd_migration_{cat}'] = int(migration == cat)
+    for col in EXISTING_FEATURE_COLS:
+        out[col] = existing.get(col)
+    return out
+
+
 def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     """Pulls every real, fully-featured (label + both feature snapshots present) row and
     flattens it into a pandas DataFrame ready for training. No lookahead risk here beyond
@@ -119,21 +159,17 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
 
     df['label'] = df[label_column].apply(lambda x: x.get('label'))
 
-    for key in PD_FEATURE_KEYS:
-        df[f'pd_{key}'] = df['ml_pd_features'].apply(lambda x, k=key: x.get(k))
-    for key in INTRADAY_FEATURE_KEYS:
-        df[f'intraday_{key}'] = df['ml_intraday_features'].apply(lambda x, k=key: x.get(k))
-
-    migration = df['ml_pd_features'].apply(lambda x: x.get('migrationDirVsPrior'))
-    for cat in MIGRATION_CATEGORIES:
-        df[f'pd_migration_{cat}'] = (migration == cat).astype(int)
-
-    feature_cols = (
-        [f'pd_{k}' for k in PD_FEATURE_KEYS]
-        + [f'intraday_{k}' for k in INTRADAY_FEATURE_KEYS]
-        + [f'pd_migration_{c}' for c in MIGRATION_CATEGORIES]
-        + EXISTING_FEATURE_COLS
+    cols = feature_cols()
+    flattened = df.apply(
+        lambda row: build_feature_dict(
+            row['ml_pd_features'], row['ml_intraday_features'],
+            {c: row[c] for c in EXISTING_FEATURE_COLS},
+        ),
+        axis=1, result_type='expand',
     )
+    for c in cols:
+        df[c] = flattened[c]
+
     meta_cols = ['id', 'setup_type', 'fired_at', 'trade_date']
 
-    return df[meta_cols + feature_cols + ['label']], feature_cols
+    return df[meta_cols + cols + ['label']], cols

@@ -63,6 +63,7 @@ import { detectRthFlush } from './services/rthFlushDetector.js';
 import { detectGlobexFlush } from './services/globexFlushDetector.js';
 import { detectPocRotationJoin } from './services/pocRotationJoinDetector.js';
 import { detectIbLowPnr } from './services/ibLowPnrDetector.js';
+import { scoreNewFires } from './services/mlFireTimeScoring.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
 import profitLockRouter, { checkAndEmitProfitLock } from './routes/profitLock.js';
@@ -1593,6 +1594,12 @@ httpServer.listen(PORT, () => {
       // for the same reason as the pollers above: a market-wide cumulative-delta
       // condition, not a price touching a fixed level.
       detectIbLowPnr().catch(() => {});
+      // ML meta-labeling fire-time scoring (2026-09-21) -- computes features + scores any
+      // real trade fired in the last 15min against the current model, closing the gap
+      // where a new trade previously sat unscored for up to 24h. Fully isolated (never
+      // gates/sizes/influences any real active_setups row, same guarantee as the rest of
+      // the ML silo thread) -- see mlFireTimeScoring.js's own header for the full account.
+      scoreNewFires().catch(() => {});
     } catch(e) { /* silent */ }
   }, 60000);
 

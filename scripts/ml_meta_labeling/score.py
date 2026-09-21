@@ -41,6 +41,19 @@ def score_candidate(model_bundle, features: dict, approval_threshold: float):
     # positional order exactly right with no way to catch a mistake. This makes a
     # feature-order bug loud (a KeyError from the dict) instead of a silent wrong score.
     row = pd.DataFrame([{col: features[col] for col in feature_cols}], columns=feature_cols)
+    # Explicit numeric coercion -- fixed 2026-09-21, found via score_new_fires.mjs's
+    # score_one.py (fire-time scoring on a freshly-fired real trade): a bare Python `None`
+    # (a genuine, legitimate missing value -- the docstring above is right that null itself
+    # is fine) in a column with NO OTHER value in this single-row frame to force numeric
+    # inference makes pandas default that column to dtype=object, which LightGBM's own
+    # dtype check flatly rejects ("pandas dtypes must be int, float or bool"). This was
+    # latent, not new: run_silo_scoring.py's batch caller never hit it because it always
+    # passes a value already read off a pandas Series (a numpy float64 NaN, which carries
+    # its own dtype and infers correctly even alone) -- a caller reading straight from the
+    # DB into a plain Python dict (exactly what a future live microservice would also do)
+    # hits this immediately. pd.to_numeric with errors='coerce' makes every column numeric
+    # regardless of how many real values happen to be present in this one row.
+    row = row.apply(pd.to_numeric, errors='coerce')
     probability = float(model.predict_proba(row)[0][1])
     verdict = 'TAKE' if probability >= approval_threshold else 'VETO'
     return {'probability': probability, 'verdict': verdict}
