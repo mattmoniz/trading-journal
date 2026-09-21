@@ -22,7 +22,7 @@ import multer from 'multer';
 import { query } from '../db.js';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
@@ -6622,8 +6622,12 @@ export default function createACDRouter(io) {
       const majorPivotDefendedBreakSignal = await computeMajorPivotDefendedBreakSignal(todayET);
       const stallDefendedLevelSignal = await computeStallDefendedLevelSignal(todayET);
       const minorDefendedLevelSignal = await computeMinorDefendedLevelSignal(todayET, etMin);
+      // Real currently-open position from any of these 4 standalone detectors, independent
+      // of whether a NEW signal is available this poll -- see getOpenStandalonePosition()'s
+      // own header (acdShared.js) for why this didn't already exist.
+      const openStandalonePosition = await getOpenStandalonePosition(todayET);
 
-      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal });
+      if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal, openStandalonePosition });
 
       // ── Persist first-detection to active_setups (source of truth) ───────────
       // fired_at = latest bar ts at first detection (bar-accurate, not poll wall-clock).
@@ -7296,6 +7300,7 @@ export default function createACDRouter(io) {
         bigMoveSignal,
         sigmaContinuation,
         stackVolSignal,
+        openStandalonePosition,
       });
     } catch(e) { console.error('setup-detection error:', e); res.status(500).json({ error: e.message }); }
   };

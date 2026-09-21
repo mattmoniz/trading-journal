@@ -135,6 +135,14 @@
      over .long/.short via source order (this rule comes after them). */
   #setup-card.shadow-only { border-color: rgba(245,158,11,0.4) !important; background: rgba(245,158,11,0.06) !important; }
   .setup-shadow-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--amber); background: rgba(245,158,11,0.15); padding: 2px 7px; border-radius: 4px; flex-shrink: 0; margin-left: 6px; }
+
+  /* Standalone-detector open position (2026-09-21, user request: "why didn't this other live
+     trade fire like this on my screen" -- MOMENTUM_CHASE/MAJOR_PIVOT_DEFENDED_BREAK/
+     STALL_DEFENDED_LEVEL/MINOR_DEFENDED_LEVEL had no "show my currently-open position"
+     mechanism at all, unlike #setup-card). Reuses the exact same shadow-only amber language
+     -- these 4 detectors are all real_n<20/SHADOW-only, never a trusted live signal. */
+  #standalone-position-card { display: none; border: 1.5px solid rgba(245,158,11,0.4); border-radius: 8px; padding: 12px 14px; background: rgba(245,158,11,0.06); margin-bottom: 14px; }
+  #standalone-position-card.visible { display: block; }
   .setup-head { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
@@ -319,6 +327,7 @@
   <div id="ml-silo-card" onclick="openMlSiloModal()"></div>
   <div id="pulse-reading-card"></div>
   <div id="setup-card"></div>
+  <div id="standalone-position-card"></div>
   <div id="sweep-watch"></div>
 
   <div id="timeline-head">
@@ -794,7 +803,35 @@ async function loadPulse() {
     ]);
     renderPulseBar(pulseRes, setupRes, ctxRes, buildRes);
     renderSetupCard(setupRes);
+    renderStandalonePositionCard(setupRes);
   } catch (e) { /* keep last good render */ }
+}
+
+// Real, currently-open position from a standalone detector (MOMENTUM_CHASE/MAJOR_PIVOT_
+// DEFENDED_BREAK/STALL_DEFENDED_LEVEL/MINOR_DEFENDED_LEVEL) -- 2026-09-21, see
+// getOpenStandalonePosition()'s own header (acdShared.js) for why this exists. Deliberately
+// a SEPARATE card from #setup-card (that one is the main level-fade engine's own "active"
+// winner, a different mechanism entirely) so the two never get conflated.
+function renderStandalonePositionCard(setupData) {
+  const el = $('standalone-position-card');
+  if (!el) return;
+  const pos = setupData?.openStandalonePosition;
+  if (!pos) { el.className = ''; el.innerHTML = ''; return; }
+  el.className = 'visible';
+  const entry = pos.entry ?? pos.entry_high;
+  const fmtP = n => n == null ? '--' : Math.round(n);
+  el.innerHTML =
+    '<div class="setup-head">' +
+    '<span class="dot" style="background:var(--amber)"></span>' +
+    '<span class="setup-type" style="color:var(--amber)">' + (pos.setup_type || '').replace(/_/g, ' ') + '</span>' +
+    '<span class="setup-shadow-tag">BACKGROUND ONLY — NOT LIVE</span>' +
+    '<span class="setup-time mono">fired ' + (pos.fired_at ? pos.fired_at.slice(11, 16) : '') + ' ET</span>' +
+    '</div>' +
+    '<div class="setup-grid">' +
+    '<span class="k">Entry <b class="mono" style="color:var(--text)">' + fmtP(entry) + '</b></span>' +
+    '<span class="k">Stop <b class="mono" style="color:var(--red)">' + fmtP(pos.stop) + '</b></span>' +
+    '<span class="k">Target <b class="mono" style="color:var(--green)">' + fmtP(pos.target) + '</b></span>' +
+    '</div>';
 }
 
 function todayET() {

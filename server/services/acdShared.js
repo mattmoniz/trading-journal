@@ -547,3 +547,32 @@ export function resolveRangeDates(range, nowET) {
   }
   return { mode: 'all', rangeLabel: 'all time' };
 }
+
+// Real, currently-OPEN position from any of the 4 standalone detectors (MOMENTUM_CHASE,
+// MAJOR_PIVOT_DEFENDED_BREAK, STALL_DEFENDED_LEVEL, MINOR_DEFENDED_LEVEL) -- added
+// 2026-09-21 (user-caught live gap: "Why didnt this other live trade fire like this on my
+// screen"). These detectors' own `compute*Signal()` functions only ever answer "is a NEW
+// entry available right now" -- once a candidate fires, a one-per-session guard makes that
+// signal go silent (null) on every later poll, even though the position stays genuinely
+// open in the DB. Unlike the main level-fade engine's own "active" card (which re-displays
+// via a real existence lookup, `existingSetup` in acd.js), these 4 detectors had NO
+// equivalent "show my currently-open position" mechanism at all -- this function is that
+// mechanism, deliberately separate from and read-only against each detector's own signal
+// logic (never touches their trigger conditions). Plain DB lookup, not a live re-evaluation
+// -- matches the same "read what was actually persisted, don't re-derive" principle as the
+// origin_status fix shipped the same session.
+const STANDALONE_DETECTOR_PREFIXES = ['MOMENTUM_CHASE', 'MAJOR_PIVOT_DEFENDED_BREAK', 'STALL_DEFENDED_LEVEL', 'MINOR_DEFENDED_LEVEL'];
+export async function getOpenStandalonePosition(todayET) {
+  const likeClauses = STANDALONE_DETECTOR_PREFIXES.map((_, i) => `setup_type LIKE $${i + 2}`).join(' OR ');
+  const params = [todayET, ...STANDALONE_DETECTOR_PREFIXES.map(p => `${p}%`)];
+  const r = await query(`
+    SELECT id, setup_type, origin_status, fired_at::text AS fired_at,
+      entry_zone_low::float AS entry, entry_zone_high::float AS entry_high,
+      stop_level::float AS stop, t1_level::float AS target, t1_label
+    FROM active_setups
+    WHERE trade_date = $1 AND (${likeClauses})
+      AND status NOT IN ('RESOLVED', 'EXPIRED')
+    ORDER BY fired_at DESC LIMIT 1
+  `, params).catch(() => ({ rows: [] }));
+  return r.rows[0] || null;
+}
