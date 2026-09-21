@@ -34,6 +34,7 @@ echo "=== Daily calibration: $(date) ==="
 # mlExtendedLabelWalker.js's own header for the full "why this exists, not
 # active_setups.mfe_points" account.
 /usr/bin/node scripts/backfill_ml_extended_label.mjs --apply
+/usr/bin/node scripts/backfill_ml_pd_features.mjs --apply
 
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
