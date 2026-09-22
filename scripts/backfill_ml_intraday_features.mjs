@@ -67,7 +67,11 @@ async function main() {
     if (!features) { noBarsYet++; continue; }
 
     written++;
-    toWrite.push({ id: row.id, features: { ...features, isRth: row.is_rth, boundaryMod } });
+    // isRth/boundaryMod DROPPED from the stored JSONB 2026-09-22 (OPEN_DECISION
+    // ml_thread_ci_gate_and_cleanup_backlog_20260921, F4) -- dead weight the model never
+    // reads, matching the same-day fix in mlFireTimeScoring.js (the live write-site twin of
+    // this backfill). boundaryMod stays a local var above (still needed for the bar query).
+    toWrite.push({ id: row.id, features });
   }
 
   console.log(`\nDry-run summary:`);

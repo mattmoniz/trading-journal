@@ -40,12 +40,11 @@ def main():
     conn = get_connection()
     cur = conn.cursor()
 
-    # Same raw-vs-computed split as dataset.py's own fetch_training_dataframe() -- filter by
-    # value, not position, so this can't silently break if EXISTING_FEATURE_COLS' order ever
-    # changes (is_rth_int is computed via is_rth::int below, never selected raw).
-    raw_cols = [c for c in EXISTING_FEATURE_COLS if c != 'is_rth_int']
+    # is_rth_int REVERTED as a training feature 2026-09-22 (matches dataset.py's own
+    # EXISTING_FEATURE_COLS comment) -- selected here only as METADATA now, for the
+    # within-session threshold selection below, never passed into `features`/model input.
     cur.execute(f"""
-        SELECT ml_pd_features, ml_intraday_features, is_rth::int AS is_rth_int, {', '.join(raw_cols)}
+        SELECT ml_pd_features, ml_intraday_features, is_rth::int AS is_rth_int, {', '.join(EXISTING_FEATURE_COLS)}
         FROM active_setups WHERE id = %s
     """, (active_setup_id,))
     row = cur.fetchone()
@@ -53,7 +52,7 @@ def main():
         print(json.dumps({'scored': False, 'reason': f'active_setup_id {active_setup_id} not found'}))
         sys.exit(0)
 
-    col_names = ['ml_pd_features', 'ml_intraday_features', 'is_rth_int'] + raw_cols
+    col_names = ['ml_pd_features', 'ml_intraday_features', 'is_rth_int'] + EXISTING_FEATURE_COLS
     row_dict = dict(zip(col_names, row))
     if row_dict['ml_pd_features'] is None or row_dict['ml_intraday_features'] is None:
         print(json.dumps({'scored': False, 'reason': 'features not computed yet'}))
@@ -62,12 +61,15 @@ def main():
     existing = {c: row_dict[c] for c in EXISTING_FEATURE_COLS}
     features = build_feature_dict(row_dict['ml_pd_features'], row_dict['ml_intraday_features'], existing)
 
-    cur.execute("SELECT model_version, model_path, approval_threshold FROM ml_models ORDER BY trained_at DESC LIMIT 1")
+    cur.execute("""
+        SELECT model_version, model_path, approval_threshold, approval_threshold_rth, approval_threshold_globex
+        FROM ml_models ORDER BY trained_at DESC LIMIT 1
+    """)
     model_row = cur.fetchone()
     if not model_row:
         print(json.dumps({'scored': False, 'reason': 'no trained model yet'}))
         sys.exit(0)
-    model_version, model_path, approval_threshold = model_row
+    model_version, model_path, approval_threshold, approval_threshold_rth, approval_threshold_globex = model_row
 
     bundle = load_model(model_path)
     # Guard against a feature-set drift between when this model was trained and now (e.g. a
@@ -78,7 +80,18 @@ def main():
         print(json.dumps({'scored': False, 'reason': f'feature set mismatch vs {model_version}: missing {missing}'}))
         sys.exit(0)
 
-    result = score_candidate(bundle, features, float(approval_threshold))
+    # Within-session threshold, matching run_silo_scoring.py's own logic exactly (FIXED
+    # 2026-09-22 -- this script previously used the pooled threshold unconditionally, a real
+    # gap: fire-time TAKE/VETO tags were being judged against a threshold that sits between
+    # RTH's and Globex's own score distributions, the exact "score distribution shifts as a
+    # whole on a trending day" issue item 3's own finding describes). Falls back to the pooled
+    # threshold for an older model trained before this fix (NULL column), never crashes.
+    session_threshold = (
+        float(approval_threshold_rth) if row_dict['is_rth_int'] and approval_threshold_rth is not None
+        else float(approval_threshold_globex) if not row_dict['is_rth_int'] and approval_threshold_globex is not None
+        else float(approval_threshold)
+    )
+    result = score_candidate(bundle, features, session_threshold)
 
     cur.execute("""
         INSERT INTO ml_verdicts (active_setup_id, model_version, probability, verdict)

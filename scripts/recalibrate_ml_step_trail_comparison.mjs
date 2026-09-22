@@ -12,7 +12,7 @@
 // research comparison of what COMBINING them would look like, nothing more.
 import { query } from '../server/db.js';
 import { getLatestModel, getStepTrailComparison } from '../server/services/mlSiloService.js';
-import { dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
+import { dayBlockedBootstrapCI, collapseClusterSiblings } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 
 async function main() {
@@ -26,7 +26,11 @@ async function main() {
     process.exit(0);
   }
 
-  const deltaEvents = result.rows.map(r => ({ date: r.trade_date, pnl: r.trail_pnl - r.normal_pnl }));
+  // Collapse correlated cluster siblings before the CI math (2026-09-22, OPEN_DECISION
+  // ml_silo_deepseek_followup_review_parked_20260921) -- doesn't change what fires/scores.
+  const deltaEvents = collapseClusterSiblings(
+    result.rows.map(r => ({ date: r.trade_date, pnl: r.trail_pnl - r.normal_pnl, cluster_touch_id: r.cluster_touch_id })),
+  );
   const ci = dayBlockedBootstrapCI(deltaEvents, 'ml_step_trail_delta', { dateField: 'date', iters: 5000 });
   const distinctDates = new Set(result.rows.map(r => r.trade_date)).size;
   const excludesZero = ci.lo > 0 || ci.hi < 0;

@@ -27,6 +27,7 @@ REAL_TRADE_FILTER = """
     AND stale_entry_price_basis IS NOT TRUE
 """
 
+import numpy as np
 import pandas as pd
 
 # The exact feature columns pulled out of the ml_pd_features/ml_intraday_features JSONB
@@ -69,21 +70,27 @@ MIGRATION_CATEGORIES = ['HOLDING', 'HIGHER', 'LOWER']
 # learn "loud volume after entry -> TARGET", which is unknowable at the moment a live
 # candidate would actually be scored. Also unrecoverable at promotion time: a live scorer
 # has no post-entry bars yet, so this feature could never be populated outside a backtest.
-# `is_rth` added 2026-09-21 (user: "Globex is killing me every which way... make a
-# distinction between time of day/Globex... which trades to fire"). Real motivation, not a
-# guess: splitting the ALREADY-TRAINED model's out-of-sample results by is_rth found real
-# out-of-sample discrimination the model was already partially finding WITHOUT this feature
-# -- RTH TAKE avg=$22.18/trade vs VETO avg=$5.45; GLOBEX TAKE avg=$42.19/trade (N=15, thin)
-# vs VETO avg=-$9.44/trade, against a genuinely losing Globex baseline (-$1,114 net,
-# WR=37.0%, matching the user's own "Globex is killing me" experience). Checked first
-# whether this was really genuine signal or an artifact of `minutes_from_open` silently
-# acting as an RTH/Globex proxy via its own null pattern (it isn't -- populated in BOTH
-# sessions, 42.7% RTH / 63.0% Globex, no clean split) before adding an EXPLICIT session
-# feature to sharpen what the model appears to already be finding indirectly.
-# `is_rth` is a real, non-nullable GENERATED boolean column (bounded [9:30,16:00) ET) --
-# always present, never sparse, unlike the 3 columns above.
+# `is_rth_int` added 2026-09-21, REVERTED 2026-09-22 (OPEN_DECISION
+# ml_silo_deepseek_followup_review_parked_20260921, item 1). Original motivation (user:
+# "Globex is killing me every which way... make a distinction between time of day/Globex...
+# which trades to fire") was real, not a guess -- splitting the model's out-of-sample results
+# by is_rth found real-looking discrimination (RTH TAKE avg=$22.18 vs GLOBEX TAKE avg=$42.19,
+# N=15, thin). DeepSeek's full-code-review flagged this as likely noise: adding the feature
+# flipped the thin Globex TAKE bucket's sign on the very next retrain (was +$42.19/N=15, then
+# -$35.50/N=14) -- a sign flip at N<20 either side is itself the signature of noise, not a
+# real improvement. Re-tested 2026-09-22 (scratch/compare_is_rth_int_20260922.py) once real
+# Globex N had grown, per DeepSeek's own stated condition for revisiting: a walk-forward
+# WITH-vs-WITHOUT comparison still showed Globex TAKE thin (N=14 vs N=20, still under this
+# codebase's own N>=20 floor) and the average swung wildly ($14.86 -> $41.49) from removing
+# just this one feature -- the same instability signature, not resolved by more data. RTH was
+# essentially a wash either way ($10.66 vs $10.49/trade). Reverted per DeepSeek's original
+# recommendation -- a feature with no stable demonstrated benefit stays out, matching this
+# codebase's own "no static thresholds/unproven inputs" discipline. `is_rth` itself remains
+# available as a real, non-nullable GENERATED boolean column (server/schema.sql,
+# [9:30,16:00) ET) if a future session wants to re-test this with a larger real Globex
+# population -- the column isn't gone, just not currently a training feature.
 EXISTING_FEATURE_COLS = [
-    'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open', 'is_rth_int',
+    'nl30_at_detection', 'confluence_score_at_detection', 'minutes_from_open',
 ]
 
 
@@ -140,14 +147,15 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     backfill_ml_extended_label_wider.mjs) for the exploratory wider-target comparison
     (compare_extended_targets.py). Same features/population either way -- only the outcome
     definition changes."""
-    # is_rth_int: is_rth is a real boolean column, cast to int here (not selected raw) so
-    # EXISTING_FEATURE_COLS can list 'is_rth_int' like every other plain numeric feature
-    # without dataset.py needing to special-case a boolean-to-numeric conversion downstream.
-    raw_cols = [c for c in EXISTING_FEATURE_COLS if c != 'is_rth_int']
+    # is_rth_int kept as METADATA only (not a training feature -- reverted 2026-09-22, see
+    # EXISTING_FEATURE_COLS' own comment above) -- still useful for RTH/Globex segmentation in
+    # analysis scripts without needing to be re-derived. cluster_touch_id is the same pattern:
+    # present in the returned frame, never in feature_cols()/cols.
     query = f"""
         SELECT id, setup_type, fired_at::text AS fired_at, trade_date::text AS trade_date,
-            {label_column}, ml_pd_features, ml_intraday_features, is_rth::int AS is_rth_int,
-            {', '.join(raw_cols)}
+            cluster_touch_id, is_rth::int AS is_rth_int,
+            {label_column}, ml_pd_features, ml_intraday_features,
+            {', '.join(EXISTING_FEATURE_COLS)}
         FROM active_setups
         WHERE {REAL_TRADE_FILTER}
             AND {label_column} IS NOT NULL
@@ -170,6 +178,37 @@ def fetch_training_dataframe(conn, label_column='ml_extended_label'):
     for c in cols:
         df[c] = flattened[c]
 
-    meta_cols = ['id', 'setup_type', 'fired_at', 'trade_date']
+    # cluster_touch_id added 2026-09-22 (OPEN_DECISION ml_silo_deepseek_followup_review_parked_
+    # 20260921) -- NOT a model feature (never in feature_cols/cols), carried through purely as
+    # metadata for two downstream uses: (1) rigorDiagnostics.js's collapseClusterSiblings()
+    # collapses correlated cluster siblings to one representative event each before computing a
+    # CONFIDENCE INTERVAL (JS side, reporting only); (2) compute_sample_weights() below
+    # down-weights correlated siblings during TRAINING itself (Python side). Neither touches
+    # live scoring or which candidates fire -- every sibling still gets its own real P&L and
+    # fires individually, per the user's explicit preference (2026-09-22: "I do like the pnl
+    # when siblings fire separately").
+    meta_cols = ['id', 'setup_type', 'fired_at', 'trade_date', 'cluster_touch_id', 'is_rth_int']
 
     return df[meta_cols + cols + ['label']], cols
+
+
+def compute_sample_weights(df: pd.DataFrame) -> pd.Series:
+    """Per-row LightGBM sample_weight: a real, correlated confluence-cluster touch (85.7%
+    sibling win/loss agreement, measured 2026-09-22 -- see OPEN_DECISION
+    ml_silo_deepseek_followup_review_parked_20260921) should not teach the model N independent
+    lessons for one real market moment repeated N times. Each cluster's siblings split a total
+    weight of 1.0 evenly (1/group_size each); a non-clustered row (cluster_touch_id is null)
+    keeps full weight 1.0, since it genuinely is one independent event.
+
+    Computed fresh against whatever rows are ACTUALLY passed in (the caller's own current
+    train/fold subset) -- never a fixed global cluster size -- so a walk-forward fold that only
+    contains a subset of a cluster's real siblings (shouldn't normally happen, since siblings
+    share the same trade_date/near-identical fired_at and folds are >=7 days wide, but this
+    stays correct even if it ever did) still sums to a fair per-fold weight rather than reusing
+    a stale whole-dataset count.
+
+    Does NOT change training/scoring POPULATION, which columns get returned, or any real
+    active_setups row -- purely an additional array handed to model.fit(sample_weight=...).
+    """
+    group_sizes = df['cluster_touch_id'].map(df['cluster_touch_id'].value_counts())
+    return np.where(df['cluster_touch_id'].isna(), 1.0, 1.0 / group_sizes).astype(float)

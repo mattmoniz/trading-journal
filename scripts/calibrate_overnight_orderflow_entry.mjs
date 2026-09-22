@@ -64,7 +64,10 @@ function minSince6pm(isoDate, timeStr, tDay) {
   return 360 + hh * 60 + mm;
 }
 
-async function fetchTrades() {
+// Exported 2026-09-22 (per CLAUDE.md's "export the real function" rule) so a related script
+// can test alternative exit MECHANISMS against this exact same population/entry/direction
+// definition without re-deriving it -- see scripts/research_overnight_orderflow_trail_exit.mjs.
+export async function fetchTrades() {
   const res = await query(`
     SELECT ts AT TIME ZONE 'America/New_York' as ts_et, open, high, low, close, bid_volume, ask_volume
     FROM price_bars_primary WHERE symbol = 'NQ' AND ts >= $1
@@ -132,22 +135,36 @@ async function fetchTrades() {
     }
     const rthCloseIdx = rth[rth.length - 1].idx;
 
-    let maeSoFar = 0;
-    const maeAtExitIdx = {};
+    let maeSoFar = 0, mfeSoFar = 0;
+    const maeAtExitIdx = {}, mfeAtExitIdx = {};
     for (let barPtr = entryBar.idx; barPtr <= rthCloseIdx; barPtr++) {
       const b = bars[barPtr];
       if (b) {
         const adverse = direction === 1 ? (entryPrice - b.low) : (b.high - entryPrice);
         if (adverse > maeSoFar) maeSoFar = adverse;
+        // MFE: max favorable excursion so far (points in the trade's OWN favor), added
+        // 2026-09-22 for the runner/trail-exit comparison below -- purely additive, does not
+        // change simTrade()'s existing MAE-only behavior or any prior calibration output.
+        const favorable = direction === 1 ? (b.high - entryPrice) : (entryPrice - b.low);
+        if (favorable > mfeSoFar) mfeSoFar = favorable;
       }
       for (const t of EXIT_TIME_CANDIDATES) {
-        if (barPtr === exitIdxByTime[t] && maeAtExitIdx[t] === undefined) maeAtExitIdx[t] = maeSoFar;
+        if (barPtr === exitIdxByTime[t] && maeAtExitIdx[t] === undefined) { maeAtExitIdx[t] = maeSoFar; mfeAtExitIdx[t] = mfeSoFar; }
       }
     }
-    trades.push({ tDay, direction, entryPrice, exitIdxByTime, maeAtExitIdx, priceAtExit: (t) => bars[exitIdxByTime[t]].close });
+    trades.push({
+      tDay, direction, entryPrice, exitIdxByTime, maeAtExitIdx, mfeAtExitIdx,
+      entryIdx: entryBar.idx, rthCloseIdx, share9pm,
+      // Session bars from the real Globex 6pm open through the entry bar (the SAME bars12am
+      // slice this file's own rotation-leg gate already filters) -- exposed for
+      // scripts/research_overnight_orderflow_regime_exit.mjs's own real computeLiveVolumeBuildingSignal()
+      // call, so it doesn't need to re-derive the session-open boundary a second way.
+      sessionBarsAtEntry: bars12am,
+      priceAtExit: (t) => bars[exitIdxByTime[t]].close,
+    });
   }
   trades.sort((a, b) => a.tDay.localeCompare(b.tDay));
-  return trades;
+  return { trades, bars };
 }
 
 function simTrade(t, stopDist, exitTime) {
@@ -181,7 +198,7 @@ function reportPool(pool, stopDist, exitTime) {
 }
 
 async function main() {
-  const trades = await fetchTrades();
+  const { trades } = await fetchTrades();
   console.log(`Total qualifying trades (badge-high-by-12am population): ${trades.length}`);
   if (trades.length < 20) {
     console.log('ABORT: fewer than 20 real qualifying days -- too thin to calibrate anything yet.');
@@ -240,4 +257,11 @@ async function main() {
   console.log(`\nRecordClaim status=${status}`);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+// Guarded 2026-09-22 (alongside exporting fetchTrades above) so importing this file for its
+// fetchTrades() export doesn't also trigger main()'s own performance_audit INSERT/recordClaim
+// side effects as an import-time accident -- matches this codebase's standard convention
+// (e.g. scripts/backtest_poc_rotation_vbp.mjs) for a script that's both directly-runnable and
+// importable.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(e); process.exit(1); });
+}

@@ -10,7 +10,7 @@
 // scheduled daily alongside the other ML scripts so this finding either firms up or reverses
 // as real N grows, instead of sitting frozen at whatever it read on 2026-09-21.
 import { query } from '../server/db.js';
-import { getLatestModel } from '../server/services/mlSiloService.js';
+import { getLatestModel, ML_CLAIM_DISTINCT_DATES_FLOOR } from '../server/services/mlSiloService.js';
 import { recordClaim } from './record_claim.mjs';
 
 function spearman(rows) {
@@ -58,10 +58,16 @@ async function main() {
   const rho = spearman(rows);
   console.log(`Spearman rank correlation (probability vs real P&L), N=${n}: ${rho.toFixed(3)}`);
 
+  const overallDistinctDates = new Set(rows.map((x) => x.trade_date)).size;
   const monotonic = bucketStats[2].avgPnl > bucketStats[1].avgPnl && bucketStats[1].avgPnl > bucketStats[0].avgPnl;
-  const status = (Math.abs(rho) >= 0.15 && monotonic) ? 'PROVISIONAL' : 'CONFIRMED';
+  const looksNegative = !(Math.abs(rho) >= 0.15 && monotonic);
+  // FIXED 2026-09-22 (OPEN_DECISION ml_thread_ci_gate_and_cleanup_backlog_20260921, F2): a
+  // "confirmed negative" verdict needs real day-spread too -- a near-zero/non-monotonic
+  // correlation from a handful of correlated days is exactly the kind of thin result that
+  // could flip once more real trading days accumulate, so it stays PROVISIONAL until then.
+  const status = (looksNegative && overallDistinctDates >= ML_CLAIM_DISTINCT_DATES_FLOOR) ? 'CONFIRMED' : 'PROVISIONAL';
   // status=CONFIRMED here means "confirmed negative" (no sizing signal found) -- a clean,
-  // near-zero/non-monotonic correlation is the decisive, not-thin-and-unclear, outcome.
+  // near-zero/non-monotonic correlation over enough distinct days is the decisive outcome.
 
   const claimText = `Phase 0 pretest (auto-refreshed by scripts/recalibrate_ml_probability_sizing_pretest.mjs) `
     + `for whether ML probability score should scale POSITION SIZE among already-approved `
@@ -78,9 +84,12 @@ async function main() {
     + `real work (TAKE beats VETO beats the unfiltered baseline, see the walk-forward/range `
     + `comparisons), but past that gate, higher confidence does not predict a better outcome -- `
     + `sizing UP on the setups this model is most confident about would currently hurt, not `
-    + `help. Not day-clustered (7-8 distinct dates per bucket). No sizing mechanism was built -- `
-    + `this Phase 0 screen came back negative, per this codebase's own "test the cheap signal-`
-    + `level pretest before building trade machinery" convention.`;
+    + `help. overallDistinctDates=${overallDistinctDates} (floor for a CONFIRMED verdict: `
+    + `${ML_CLAIM_DISTINCT_DATES_FLOOR}, per OPEN_DECISION ml_thread_ci_gate_and_cleanup_backlog_20260921 `
+    + `F2 -- fixed 2026-09-22, a near-zero/non-monotonic correlation from too few distinct days could `
+    + `still flip as more real days accumulate). No sizing mechanism was built -- this Phase 0 screen `
+    + `came back negative, per this codebase's own "test the cheap signal-level pretest before building `
+    + `trade machinery" convention.`;
 
   await recordClaim({
     slug: 'ml_metalabel_probability_sizing_pretest',

@@ -197,6 +197,43 @@ export function mulberry32(seed) {
   };
 }
 
+// Collapses correlated confluence-cluster siblings into ONE representative event each, before
+// any confidence-interval math runs -- added 2026-09-22 (OPEN_DECISION
+// ml_silo_deepseek_followup_review_parked_20260921, DeepSeek's #1-ranked finding, user
+// decision: keep every sibling firing and scoring individually with its own real P&L -- ONLY
+// fix how confident the CI math claims to be, don't touch training/scoring). Real, measured
+// risk: sibling rows sharing a cluster_touch_id agree on win/loss 85.7% of the time (vs. 50%
+// if independent) -- treating each sibling as its own independent event in a confidence
+// calculation overstates how much real, independent evidence actually exists.
+//
+// Day-blocking (dayBlockedBootstrapCI below) alone does NOT fix this: it protects against
+// cross-day serial correlation (a trending day affecting several UNRELATED trades), but a
+// day's own contribution to the resampled mean is still weighted by its raw row count, so a
+// day containing one big correlated cluster (say, 7 siblings) still casts 7 votes instead of
+// the ~1 real independent event it actually represents. This function fixes that specific gap
+// by collapsing each cluster to its own mean PnL (one row) BEFORE day-blocking runs, so the
+// two correlation sources (day-level, cluster-level) are each corrected by the mechanism built
+// for it, not just the one that happens to be handled already.
+//
+// events: array of {[dateField]: string, pnl: number, clusterField?: string|null}. A null/
+// undefined clusterField is treated as its own singleton, not merged with other nulls.
+export function collapseClusterSiblings(events, { dateField = 'date', clusterField = 'cluster_touch_id' } = {}) {
+  const byCluster = new Map();
+  const singletons = [];
+  for (const e of events) {
+    const c = e[clusterField];
+    if (c == null) { singletons.push(e); continue; }
+    if (!byCluster.has(c)) byCluster.set(c, []);
+    byCluster.get(c).push(e);
+  }
+  const collapsed = singletons.map((e) => ({ [dateField]: e[dateField], pnl: e.pnl }));
+  for (const group of byCluster.values()) {
+    const meanPnl = group.reduce((s, e) => s + e.pnl, 0) / group.length;
+    collapsed.push({ [dateField]: group[0][dateField], pnl: meanPnl });
+  }
+  return collapsed;
+}
+
 // Day-blocked bootstrap 95% CI on mean PnL: resamples whole trading DAYS with replacement
 // (not individual trades), correctly handling day-clustering/correlated trades within a
 // session -- a naive per-trade bootstrap treats same-day trades as independent, which they

@@ -9,8 +9,8 @@
 // bootstrap CI (never a hand-typed number) so the next read is trustworthy instead of
 // another single noisy snapshot.
 import { query } from '../server/db.js';
-import { getLatestModel } from '../server/services/mlSiloService.js';
-import { dayBlockedBootstrapCI } from '../server/services/rigorDiagnostics.js';
+import { getLatestModel, ML_CLAIM_DISTINCT_DATES_FLOOR } from '../server/services/mlSiloService.js';
+import { dayBlockedBootstrapCI, collapseClusterSiblings } from '../server/services/rigorDiagnostics.js';
 import { recordClaim } from './record_claim.mjs';
 
 async function main() {
@@ -19,7 +19,7 @@ async function main() {
   if (!model) { console.log('No trained model yet -- skipping.'); process.exit(0); }
 
   const r = await query(`
-    SELECT a.is_rth, v.verdict, a.actual_pnl::float AS pnl, a.trade_date::text AS trade_date
+    SELECT a.is_rth, v.verdict, a.actual_pnl::float AS pnl, a.trade_date::text AS trade_date, a.cluster_touch_id
     FROM ml_verdicts v
     JOIN active_setups a ON a.id = v.active_setup_id
     WHERE v.model_version = $1 AND a.fired_at >= $2::timestamp AND a.actual_pnl IS NOT NULL
@@ -36,7 +36,15 @@ async function main() {
     const wr = arr => arr.length ? 100 * arr.filter(x => x.pnl > 0).length / arr.length : null;
     let ci = null;
     if (take.length >= 5) {
-      ci = dayBlockedBootstrapCI(take.map(x => ({ date: x.trade_date, pnl: x.pnl })), `ml_${label}_take`, { dateField: 'date', iters: 5000 });
+      // Collapse correlated cluster siblings to one representative event each BEFORE the
+      // bootstrap runs (2026-09-22, OPEN_DECISION ml_silo_deepseek_followup_review_parked_20260921
+      // -- siblings still fire/score individually everywhere else, per the user's explicit
+      // "I like the pnl when siblings fire separately"; this ONLY affects how confident this
+      // CI claims to be).
+      const takeEvents = collapseClusterSiblings(
+        take.map(x => ({ date: x.trade_date, pnl: x.pnl, cluster_touch_id: x.cluster_touch_id })),
+      );
+      ci = dayBlockedBootstrapCI(takeEvents, `ml_${label}_take`, { dateField: 'date', iters: 5000 });
     }
     const distinctDates = new Set(take.map(x => x.trade_date)).size;
     results[label] = {
@@ -55,7 +63,10 @@ async function main() {
     console.log(`Globex TAKE N=${g.takeN} still below the N>=20 floor -- recording as PROVISIONAL/thin, not claiming a direction.`);
   }
   const globexExcludesZero = g.ci && (g.ci.lo > 0 || g.ci.hi < 0);
-  const status = (g.takeN >= 20 && globexExcludesZero) ? 'CONFIRMED' : 'PROVISIONAL';
+  // FIXED 2026-09-22 (OPEN_DECISION ml_thread_ci_gate_and_cleanup_backlog_20260921, F2):
+  // excludesZero alone doesn't rule out a thin/day-clustered population producing a false
+  // CONFIRMED -- require real day-spread too, not just N.
+  const status = (g.takeN >= 20 && globexExcludesZero && g.takeDistinctDates >= ML_CLAIM_DISTINCT_DATES_FLOOR) ? 'CONFIRMED' : 'PROVISIONAL';
 
   const claimText = `Self-recalibrating check (scripts/recalibrate_ml_globex_split.mjs, daily) of whether the `
     + `ML meta-labeling gate genuinely discriminates WITHIN Globex specifically, not just within RTH -- `

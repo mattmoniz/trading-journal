@@ -161,11 +161,27 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
 app.use('/uploads', express.static(join(__dirname, 'uploads')));
 
+// noCacheHtml (2026-09-22, user-caught live: "I still don't see an x" after a real feature
+// was already shipped and verified server-side) -- res.sendFile()'s own default Cache-Control
+// is `public, max-age=0` (Express's `send` module default), which is the EXACT SAME
+// browser-caching risk already found and fixed for this page's own fetch() calls earlier the
+// same session (see CLAUDE.md's "quick-check.html's every fetch() call must pass
+// { cache: 'no-store' }" rule) -- except this time it's the HTML DOCUMENT ITSELF, including
+// every inline <script> change ever shipped, not just one API response. `max-age=0` still lets
+// a browser serve a cached-but-revalidated copy without the user realizing the underlying file
+// changed; on mobile Safari (the primary real-world client for these pages, accessed via the
+// Cloudflare Tunnel) this can mean an entire page reload silently keeps running yesterday's
+// JavaScript. Applied to all 3 standalone static pages below for the same reason.
+function noCacheHtml(res) {
+  res.set('Cache-Control', 'no-store');
+}
+
 // Standalone read-only quick-check page — market pulse + active setup + session
 // timeline in one lightweight static page, no React/build step needed. Meant to be
 // viewed directly (bookmarked, behind the Cloudflare Access login on the tunnel),
 // not embedded elsewhere.
 app.get('/quick-check', (req, res) => {
+  noCacheHtml(res);
   res.sendFile(join(__dirname, 'public', 'quick-check.html'));
 });
 
@@ -177,6 +193,7 @@ app.get('/quick-check', (req, res) => {
 // ~/.cloudflared/config.yml's ingress rules (outside this repo) or it 404s through the
 // tunnel even though it works locally.
 app.get('/setup-performance', (req, res) => {
+  noCacheHtml(res);
   res.sendFile(join(__dirname, 'public', 'setup-performance.html'));
 });
 
@@ -190,6 +207,7 @@ app.get('/setup-performance', (req, res) => {
 // (and the API path) must ALSO be added to ~/.cloudflared/config.yml's ingress rules (outside
 // this repo) or it 404s through the tunnel even though it works locally.
 app.get('/loss-prevention', (req, res) => {
+  noCacheHtml(res);
   res.sendFile(join(__dirname, 'public', 'loss-prevention.html'));
 });
 

@@ -102,15 +102,26 @@ async function getPriorClosedBarDelta() {
 // session). `todayET` derived from the same already-ET-converted Date object the caller
 // computed `nowIsRTH` from, not a fresh `new Date().toISOString()` (that would be the naive-
 // timestamp/ambient-timezone bug this codebase's own hard rule warns about).
-async function getLastSameSetupFire(setupType, nowIsRTH, todayET) {
+async function getLastSameSetupFire(setupType, nowIsRTH, todayET, excludeId) {
   const sessionFilter = nowIsRTH ? RTH_SESSION_FIRED_AT_SQL : `NOT (${RTH_SESSION_FIRED_AT_SQL})`;
+  // FIXED 2026-09-22 (user-caught live: "I never see EFL working" -- confirmed real, not rare-
+  // by-design): this query had no exclusion for the row CURRENTLY being tagged. On any day a
+  // setup_type fires exactly once (the common case), that row's own INSERT is already visible
+  // and satisfies `fired_at < NOW()` by the time this SELECT runs (called right after insert,
+  // per tagEntryOrderFlowShadow's own header), so it silently matched ITSELF as its own "last
+  // fire" -- making refEntryPrice always equal entryPrice, which makes priceDriftGated
+  // (entryPrice < refEntryPrice) structurally always false, guaranteeing wouldBeFlagged could
+  // never be true for LONG_REPEAT_ADVERSE_FLOW. Confirmed via direct query: 123 of 150 real
+  // evaluations had a "reference" price, 0 had priceDriftGated=true -- and one spot-checked row
+  // (id 124633, CAM_R2_FADE_LONG, 2026-09-22) had NO other same-setup_type fire that day at all,
+  // yet its own refEntryPrice exactly matched its own entry price -- direct proof of self-match.
   const r = await query(`
     SELECT entry_zone_low::float AS entry_zone_low, entry_zone_high::float AS entry_zone_high, fired_at
     FROM active_setups
     WHERE setup_type=$1 AND origin_status IN ('ACTIVE','SHADOW') AND fired_at < NOW() AND ${sessionFilter}
-      AND trade_date = $2::date
+      AND trade_date = $2::date AND id IS DISTINCT FROM $3
     ORDER BY fired_at DESC LIMIT 1
-  `, [setupType, todayET]).catch(() => ({ rows: [] }));
+  `, [setupType, todayET, excludeId ?? null]).catch(() => ({ rows: [] }));
   const row = r.rows[0];
   if (!row) return null;
   return { entryPrice: row.entry_zone_high ?? row.entry_zone_low, firedAt: row.fired_at };
@@ -118,8 +129,12 @@ async function getLastSameSetupFire(setupType, nowIsRTH, todayET) {
 
 // Pure-ish classification (does real reads, no writes) -- exported separately from the tagger
 // so a future recheck/backtest-alignment script can call the exact same logic without
-// re-deriving it, per this codebase's "export the real function" convention.
-export async function classifyEntryOrderFlowShadow({ direction, setupType, entryPrice }) {
+// re-deriving it, per this codebase's "export the real function" convention. excludeId (2026-
+// 09-22, see getLastSameSetupFire's own header for why): the row being classified must never
+// match itself as its own reference -- pass the real row's own id when classifying an
+// already-inserted candidate; a retrospective recheck of a hypothetical/not-yet-inserted
+// candidate can omit it (no self-match risk, since there is no self to match).
+export async function classifyEntryOrderFlowShadow({ direction, setupType, entryPrice, excludeId = null }) {
   if (!direction || !setupType || entryPrice == null) return null;
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const nowEtMin = nowET.getHours() * 60 + nowET.getMinutes();
@@ -146,7 +161,7 @@ export async function classifyEntryOrderFlowShadow({ direction, setupType, entry
     return { direction, setupType, rule: 'LONG_REPEAT_ADVERSE_FLOW', priorBarDelta, barStale, adverseFlow, wouldBeFlagged: false, notApplicable: 'GLOBEX_NOT_YET_CALIBRATED', checkedAt };
   }
   const todayET = nowET.toLocaleDateString('en-CA'); // matches acd.js's own todayET convention
-  const lastFire = await getLastSameSetupFire(setupType, nowIsRTH, todayET);
+  const lastFire = await getLastSameSetupFire(setupType, nowIsRTH, todayET, excludeId);
   const refEntryPrice = lastFire?.entryPrice ?? null;
   const minutesSinceRef = lastFire ? +((Date.now() - new Date(lastFire.firedAt).getTime()) / 60000).toFixed(1) : null;
   // priceDriftGated is pure direction (worse price than the last same-setup fire) -- NO time
@@ -170,7 +185,7 @@ export async function classifyEntryOrderFlowShadow({ direction, setupType, entry
 export async function tagEntryOrderFlowShadow(insertedId, { direction, setupType, entryPrice }) {
   if (!insertedId || !direction || !setupType || entryPrice == null) return;
   try {
-    const result = await classifyEntryOrderFlowShadow({ direction, setupType, entryPrice });
+    const result = await classifyEntryOrderFlowShadow({ direction, setupType, entryPrice, excludeId: insertedId });
     if (!result) return;
     await query(`UPDATE active_setups SET entry_orderflow_shadow = $1 WHERE id = $2`, [JSON.stringify(result), insertedId]);
   } catch (_) { /* observation-only -- never let a tagging failure surface anywhere */ }
