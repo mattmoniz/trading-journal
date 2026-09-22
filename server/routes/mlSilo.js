@@ -4,7 +4,7 @@
 // header for the full "why isolated" reasoning). Read-only: every endpoint here only ever
 // reads ml_models/ml_verdicts/active_setups, never writes.
 import express from 'express';
-import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison } from '../services/mlSiloService.js';
+import { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison, getDayRankComparison } from '../services/mlSiloService.js';
 
 const router = express.Router();
 
@@ -87,6 +87,23 @@ router.get('/ml-silo/step-trail-comparison', async (req, res) => {
     res.json({ modelVersion: model.model_version, comparison });
   } catch (e) {
     console.error('[ml-silo/step-trail-comparison]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/ml-silo/day-rank-comparison?sample=test|train|all — item 3 of the 2026-09-21
+// DeepSeek ML silo review: the within-(day x session)-relative-ranking DIAGNOSTIC, kept as
+// its OWN separate view from /ml-silo/summary's TAKE/VETO breakdown -- see
+// getDayRankComparison()'s own header for why these two are deliberately never merged.
+router.get('/ml-silo/day-rank-comparison', async (req, res) => {
+  try {
+    const model = await getLatestModel();
+    if (!model) return res.json({ comparison: null });
+    const sample = ['test', 'train', 'all'].includes(req.query.sample) ? req.query.sample : 'test';
+    const comparison = await getDayRankComparison(model.model_version, sample);
+    res.json({ modelVersion: model.model_version, comparison });
+  } catch (e) {
+    console.error('[ml-silo/day-rank-comparison]', e.message);
     res.status(500).json({ error: e.message });
   }
 });

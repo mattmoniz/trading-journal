@@ -24,6 +24,18 @@
 // backfill_ml_intraday_features.mjs (computePriorDayLevelFeatures/
 // computeDevelopingValueFeatures) -- never a second hand-rolled copy of that logic, per this
 // codebase's own "export the real function" rule.
+//
+// The TAKE/VETO verdict this produces (via score_one.py) is a THRESHOLD verdict --
+// probability >= the frozen, within-session approval_threshold_rth/approval_threshold_globex
+// -- deliberately NOT a within-day relative rank (item 3 of the 2026-09-21 DeepSeek ML silo
+// review, OPEN_DECISION ml_silo_deepseek_followup_review_parked_20260921). A live,
+// fire-time verdict can only ever rank a candidate against candidates seen SO FAR that day
+// (a small, noisy set early in the session -- the day's first candidate has nothing to
+// compare against at all), which is a genuinely different, less reliable question than the
+// batch path's (run_silo_scoring.py) full-day rank. Rather than build two different ranking
+// definitions that could silently diverge on the same trade, this path stays a plain
+// threshold verdict -- the within-day rank (`ml_verdicts.day_rank_pct`) is computed ONLY by
+// run_silo_scoring.py, retrospectively, once the full day's cohort actually exists.
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -84,8 +96,13 @@ async function computeMissingFeatures(recentMinutes) {
     `, [row.fired_at, boundaryMod]);
     const intradayFeatures = computeDevelopingValueFeatures(barsQ.rows, entry);
     if (intradayFeatures) {
+      // isRth/boundaryMod DROPPED from the stored JSONB 2026-09-22 (OPEN_DECISION
+      // ml_thread_ci_gate_and_cleanup_backlog_20260921, F4) -- dead weight the model never
+      // reads (dataset.py's INTRADAY_FEATURE_KEYS doesn't include either; the model reads
+      // is_rth_int from active_setups.is_rth, the real generated column, directly). boundaryMod
+      // stays a local var above (still needed for the bar query itself).
       await query(`UPDATE active_setups SET ml_intraday_features=$1 WHERE id=$2 AND ml_intraday_features IS NULL`,
-        [JSON.stringify({ ...intradayFeatures, isRth: row.is_rth, boundaryMod }), row.id]);
+        [JSON.stringify(intradayFeatures), row.id]);
       intradayWritten++;
     }
   }

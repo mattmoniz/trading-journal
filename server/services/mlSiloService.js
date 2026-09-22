@@ -11,6 +11,17 @@
 import { query } from '../db.js';
 import { resolveRangeDates } from './acdShared.js';
 
+// Shared floor for any ML recalibration script's CONFIRMED/PROVISIONAL status gate --
+// added 2026-09-22, resolves OPEN_DECISION ml_thread_ci_gate_and_cleanup_backlog_20260921's
+// F2 finding (DeepSeek review): the day-blocked bootstrap CI excludesZero check alone reads
+// raw N, never distinctDates, so a thin/day-clustered population (e.g. the old Globex TAKE
+// N=14/2-distinct-dates) could flip CONFIRMED off what's really just "both trading days were
+// negative," not a real statistical statement. Exported here (not duplicated per-script) so
+// every recalibration script's status gate stays in sync -- see
+// scripts/recalibrate_ml_globex_split.mjs / recalibrate_ml_walkforward.mjs /
+// recalibrate_ml_probability_sizing_pretest.mjs for the 3 call sites this floor gates.
+export const ML_CLAIM_DISTINCT_DATES_FLOOR = 8;
+
 async function getLatestModel() {
   const r = await query(`
     SELECT model_version, trained_at::text, train_n, test_n,
@@ -27,6 +38,15 @@ async function getLatestModel() {
 // read, not a genuine test of anything. `sample` lets a caller ask for either explicitly;
 // the API layer defaults to 'test' (the only honest comparison) and requires an explicit
 // opt-in to see the in-sample numbers at all.
+// GLOBEX_EXCLUSION_SQL: matches getRangeTrades()'s own filter exactly (570-1080 minutes =
+// 9:30am-6pm ET) -- factored out 2026-09-22 (OPEN_DECISION
+// ml_silo_deepseek_followup_review_parked_20260921, item 2) so getComparison/
+// getCumulativePnlSeries/getTradeList apply the SAME Globex exclusion getRangeTrades() already
+// does, instead of silently pooling RTH+Globex. Does NOT match active_setups.is_rth (strictly
+// 9:30am-4pm) -- see getRangeTrades()'s own comment on that deliberate difference.
+const GLOBEX_EXCLUSION_SQL = `(EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) >= 570
+      AND (EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) < 1080`;
+
 async function getComparison(modelVersion, sample = 'test') {
   const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
   if (!model.rows[0]) return null;
@@ -45,7 +65,7 @@ async function getComparison(modelVersion, sample = 'test') {
       100.0 * COUNT(*) FILTER (WHERE a.actual_pnl > 0) / NULLIF(COUNT(*), 0) AS win_rate
     FROM ml_verdicts v
     JOIN active_setups a ON a.id = v.active_setup_id
-    WHERE v.model_version = $1 AND ${boundaryClause}
+    WHERE v.model_version = $1 AND ${boundaryClause} AND ${GLOBEX_EXCLUSION_SQL}
     GROUP BY v.verdict
   `, params);
 
@@ -56,7 +76,7 @@ async function getComparison(modelVersion, sample = 'test') {
       100.0 * COUNT(*) FILTER (WHERE a.actual_pnl > 0) / NULLIF(COUNT(*), 0) AS win_rate
     FROM ml_verdicts v
     JOIN active_setups a ON a.id = v.active_setup_id
-    WHERE v.model_version = $1 AND ${boundaryClause}
+    WHERE v.model_version = $1 AND ${boundaryClause} AND ${GLOBEX_EXCLUSION_SQL}
   `, params);
 
   return {
@@ -83,7 +103,7 @@ async function getCumulativePnlSeries(modelVersion, sample = 'test') {
       SUM(a.actual_pnl) FILTER (WHERE v.verdict = 'TAKE')::float AS ml_pnl
     FROM ml_verdicts v
     JOIN active_setups a ON a.id = v.active_setup_id
-    WHERE v.model_version = $1 AND ${boundaryClause}
+    WHERE v.model_version = $1 AND ${boundaryClause} AND ${GLOBEX_EXCLUSION_SQL}
     GROUP BY a.trade_date
     ORDER BY a.trade_date ASC
   `, params);
@@ -107,7 +127,7 @@ async function getTradeList({ modelVersion, sample = 'test', setupType = null, v
   const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
 
   const positional = [modelVersion];
-  const conditions = ['v.model_version = $1'];
+  const conditions = ['v.model_version = $1', GLOBEX_EXCLUSION_SQL];
   if (boundaryParam) {
     positional.push(boundaryParam);
     conditions.push(`a.fired_at ${sample === 'test' ? '>=' : '<='} $${positional.length}::timestamp`);
@@ -174,8 +194,17 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
   // not just filter it out of a toggle. Same exact RTH-window boundary (570-1080 minutes =
   // 9:30am-6pm ET) as that endpoint's own query, so the two are now genuinely
   // apples-to-apples comparable instead of silently pooling two different populations.
-  conditions.push(`(EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) >= 570`);
-  conditions.push(`(EXTRACT(hour FROM a.fired_at)*60 + EXTRACT(minute FROM a.fired_at)) < 1080`);
+  //
+  // DOES NOT MATCH active_setups.is_rth (flagged 2026-09-22, OPEN_DECISION
+  // ml_thread_ci_gate_and_cleanup_backlog_20260921 F1) -- that generated column is strictly
+  // [9:30am,4pm) ET (server/schema.sql), while this dashboard filter deliberately runs through
+  // 6pm to match range-summary's own convention. The two "RTH" populations differ by the
+  // 4pm-6pm post-RTH window: `getRangeTrades()` here counts trades fired in that window as
+  // "RTH," the recalibration scripts' own `is_rth`-based split (scripts/recalibrate_ml_
+  // globex_split.mjs) does not. This is deliberate, not a bug -- but do NOT directly compare
+  // a number from this dashboard view against a number from an `is_rth`-based script and
+  // assume they describe the same population.
+  conditions.push(GLOBEX_EXCLUSION_SQL);
 
   const sql = `
     SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
@@ -213,7 +242,7 @@ async function getStepTrailComparison(modelVersion, sample = 'test') {
   const params = boundaryParam ? [modelVersion, boundaryParam] : [modelVersion];
 
   const r = await query(`
-    SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
+    SELECT a.id, a.setup_type, a.trade_date::text AS trade_date, a.cluster_touch_id,
       a.actual_pnl::float AS normal_pnl,
       (a.step_trail_shadow->>'hypothetical_pnl')::float AS trail_pnl
     FROM ml_verdicts v
@@ -238,4 +267,49 @@ async function getStepTrailComparison(modelVersion, sample = 'test') {
   };
 }
 
-export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison };
+// Within-(day x session) relative-ranking DIAGNOSTIC view -- item 3 of the 2026-09-21
+// DeepSeek ML silo review, built 2026-09-22 per a focused follow-up design critique
+// (OPEN_DECISION ml_silo_deepseek_followup_review_parked_20260921 has the full account).
+// Deliberately a SEPARATE view from getComparison()'s TAKE/VETO breakdown above, never
+// merged into it -- `verdict` answers "does this clear an absolute, frozen threshold";
+// `day_rank_pct` (computed retrospectively, batch-only, by run_silo_scoring.py's
+// compute_day_rank_pct()) answers "how does this compare to its own day's same-session
+// peers" -- two genuinely different questions this thread learned NOT to conflate under
+// one field. DAY_RANK_TOP_QUARTILE=0.75 matches this thread's own existing
+// APPROVAL_PERCENTILE convention (train.py), not a newly-invented number. Rows with a NULL
+// day_rank_pct (thin same-day-session cohort, below run_silo_scoring.py's MIN_COHORT_N
+// floor) are excluded from both buckets -- a meaningless rank shouldn't silently count as
+// "bottom" or "top."
+const DAY_RANK_TOP_QUARTILE = 0.75;
+
+async function getDayRankComparison(modelVersion, sample = 'test') {
+  const model = await query(`SELECT test_start_at, train_end_at FROM ml_models WHERE model_version = $1`, [modelVersion]);
+  if (!model.rows[0]) return null;
+  const { test_start_at, train_end_at } = model.rows[0];
+  const boundaryClause = sample === 'test' ? 'a.fired_at >= $2::timestamp'
+    : sample === 'train' ? 'a.fired_at <= $2::timestamp' : '1=1';
+  const boundaryParam = sample === 'test' ? test_start_at : sample === 'train' ? train_end_at : null;
+  const params = boundaryParam ? [modelVersion, boundaryParam] : [modelVersion];
+
+  const r = await query(`
+    SELECT
+      COUNT(*) FILTER (WHERE v.day_rank_pct >= ${DAY_RANK_TOP_QUARTILE}) AS top_n,
+      SUM(a.actual_pnl) FILTER (WHERE v.day_rank_pct >= ${DAY_RANK_TOP_QUARTILE})::float AS top_pnl,
+      AVG(a.actual_pnl) FILTER (WHERE v.day_rank_pct >= ${DAY_RANK_TOP_QUARTILE})::float AS top_avg_pnl,
+      100.0 * COUNT(*) FILTER (WHERE v.day_rank_pct >= ${DAY_RANK_TOP_QUARTILE} AND a.actual_pnl > 0)
+        / NULLIF(COUNT(*) FILTER (WHERE v.day_rank_pct >= ${DAY_RANK_TOP_QUARTILE}), 0) AS top_win_rate,
+      COUNT(*) FILTER (WHERE v.day_rank_pct IS NOT NULL AND v.day_rank_pct < ${DAY_RANK_TOP_QUARTILE}) AS rest_n,
+      SUM(a.actual_pnl) FILTER (WHERE v.day_rank_pct IS NOT NULL AND v.day_rank_pct < ${DAY_RANK_TOP_QUARTILE})::float AS rest_pnl,
+      AVG(a.actual_pnl) FILTER (WHERE v.day_rank_pct IS NOT NULL AND v.day_rank_pct < ${DAY_RANK_TOP_QUARTILE})::float AS rest_avg_pnl,
+      100.0 * COUNT(*) FILTER (WHERE v.day_rank_pct IS NOT NULL AND v.day_rank_pct < ${DAY_RANK_TOP_QUARTILE} AND a.actual_pnl > 0)
+        / NULLIF(COUNT(*) FILTER (WHERE v.day_rank_pct IS NOT NULL AND v.day_rank_pct < ${DAY_RANK_TOP_QUARTILE}), 0) AS rest_win_rate,
+      COUNT(*) FILTER (WHERE v.day_rank_pct IS NULL) AS thin_cohort_excluded_n
+    FROM ml_verdicts v
+    JOIN active_setups a ON a.id = v.active_setup_id
+    WHERE v.model_version = $1 AND ${boundaryClause} AND ${GLOBEX_EXCLUSION_SQL} AND a.actual_pnl IS NOT NULL
+  `, params);
+
+  return { sample, topQuartileThreshold: DAY_RANK_TOP_QUARTILE, ...r.rows[0] };
+}
+
+export { getLatestModel, getComparison, getCumulativePnlSeries, getTradeList, getRangeTrades, getStepTrailComparison, getDayRankComparison };

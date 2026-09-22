@@ -1118,6 +1118,16 @@ CREATE TABLE public.active_setups_early_touch_backfill_cluster_repair_round2_bac
 
 
 --
+-- Name: active_setups_efl_selfmatch_backup_20260922; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_efl_selfmatch_backup_20260922 (
+    id integer,
+    entry_orderflow_shadow jsonb
+);
+
+
+--
 -- Name: active_setups_formation_gate_repair_backup_20260908; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2097,6 +2107,118 @@ CREATE TABLE public.active_setups_or_rename_race_duplicate_backup_20260812 (
     session character varying(8),
     minutes_from_open integer,
     bet_class character varying(24)
+);
+
+
+--
+-- Name: active_setups_overnight_orderflow_test_row_backup_20260922; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.active_setups_overnight_orderflow_test_row_backup_20260922 (
+    id integer,
+    trade_date date,
+    setup_type character varying(60),
+    fired_at timestamp without time zone,
+    expires_at timestamp without time zone,
+    resolved_at timestamp without time zone,
+    status character varying(10),
+    resolution character varying(20),
+    entry_zone_low numeric,
+    entry_zone_high numeric,
+    stop_level numeric,
+    t1_level numeric,
+    t1_label character varying(100),
+    structural_level_touched numeric,
+    structural_level_type character varying(60),
+    price_at_detection numeric,
+    price_at_resolution numeric,
+    historical_win_rate numeric,
+    historical_sessions integer,
+    historical_avg_pnl numeric,
+    historical_t1_hit_rate numeric,
+    historical_source character varying(20),
+    nl30_at_detection integer,
+    structural_state_at_detection character varying(60),
+    confluence_score_at_detection integer,
+    actual_outcome character varying(20),
+    actual_pnl numeric,
+    created_at timestamp without time zone,
+    updated_at timestamp without time zone,
+    invalidation_timing character varying(20),
+    resolution_method character varying(20),
+    overnight_bias character varying(20),
+    mae_points numeric,
+    mfe_points numeric,
+    bars_to_resolution integer,
+    resolution_bar_time timestamp without time zone,
+    replay_resolution character varying(20),
+    size_multiplier numeric(5,3),
+    suppression_reason text,
+    touch_quality character varying(20),
+    touch_quality_vol_z numeric,
+    origin_status character varying(12),
+    is_rth boolean,
+    runner_trail_width numeric,
+    breakeven_armed_at timestamp without time zone,
+    runner_peak_price numeric,
+    runner_trail_price numeric,
+    confluence_levels_at_detection text[],
+    exhaustion_signal_at_detection boolean,
+    bar6_checkpoint character varying(20),
+    bar6_exit_recommended boolean,
+    extend_target_level numeric,
+    extend_decision character varying(20),
+    delta_confirmation_state character varying(20),
+    cluster_attributed_setups text[],
+    hivol_lopace_at_detection boolean,
+    regime_pos_10d numeric(8,4),
+    regime_label_10d character varying(4),
+    regime_pos_20d numeric(8,4),
+    regime_label_20d character varying(4),
+    regime_pos_30d numeric(8,4),
+    regime_label_30d character varying(4),
+    regime_pos_45d numeric(8,4),
+    regime_label_45d character varying(4),
+    regime_pos_60d numeric(8,4),
+    regime_label_60d character varying(4),
+    regime_pos_90d numeric(8,4),
+    regime_label_90d character varying(4),
+    regime_pos_180d numeric(8,4),
+    regime_label_180d character varying(4),
+    va_width_pctile_60d numeric,
+    va_overlap_streak integer,
+    ib_range_pctile_60d numeric,
+    selected_over text[],
+    day_type_at_fire character varying(20),
+    vol_bucket_at_fire character varying(12),
+    session character varying(8),
+    minutes_from_open integer,
+    bet_class character varying(24),
+    wider_target_mult numeric,
+    ib_window_stale_basis boolean,
+    size_factors_at_detection text,
+    vol_building_signal jsonb,
+    or_range_at_detection numeric,
+    rvol_20d_at_detection numeric,
+    slow_deep_exit_speed character varying(10),
+    slow_deep_exit_recommended boolean,
+    post_entry_exit_signals jsonb,
+    step_trail_shadow jsonb,
+    pitch_catch_shadow jsonb,
+    direction_gate_shadow jsonb,
+    momentum_against_fade_shadow jsonb,
+    cluster_touch_id uuid,
+    is_cluster_primary boolean,
+    stale_entry_price_basis boolean,
+    breakeven_stop_shadow jsonb,
+    entry_orderflow_shadow jsonb,
+    ml_extended_label jsonb,
+    ml_pd_features jsonb,
+    ml_intraday_features jsonb,
+    ml_extended_label_5x jsonb,
+    ml_extended_label_10x jsonb,
+    breakeven_stop_eligible boolean,
+    breakeven_stop_live jsonb
 );
 
 
@@ -4333,6 +4455,8 @@ CREATE TABLE public.ml_verdicts (
     scored_at timestamp without time zone DEFAULT now() NOT NULL,
     probability numeric(6,5) NOT NULL,
     verdict character varying(10) NOT NULL,
+    day_rank_pct numeric(5,4),
+    day_cohort_n integer,
     CONSTRAINT ml_verdicts_verdict_check CHECK (((verdict)::text = ANY ((ARRAY['TAKE'::character varying, 'VETO'::character varying])::text[])))
 );
 
