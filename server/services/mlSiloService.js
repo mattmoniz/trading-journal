@@ -173,8 +173,26 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
   const nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const resolved = resolveRangeDates(range, nowET);
 
-  const positional = [modelVersion];
-  const conditions = ['v.model_version = $1'];
+  // Deliberately NOT `v.model_version = $1` (found 2026-09-22, user-caught live: "Today"
+  // showed 8 scored candidates right after an intraday retrain, when 67 of 68 real touches
+  // that day actually had a real verdict -- just mostly under the PRIOR model_version from
+  // earlier the same day). ml_verdicts is keyed by model_version with no cross-version
+  // carryover, and the fire-time incremental scorer (mlFireTimeScoring.js) only looks back
+  // 15 minutes, so it can never "catch up" same-day fires to a freshly-retrained model on
+  // its own -- only the once-daily backfill does, which hadn't run yet. Using each trade's
+  // own MOST RECENT verdict (any model_version, picked below via a LATERAL join) instead of
+  // requiring an exact match to the CURRENT latest model fixes this without needing to
+  // enumerate every model_version that fired today. Sample-boundary values (test_start_at/
+  // train_end_at) still come from the current model specifically -- in practice this split
+  // point has stayed frozen across every retrain observed so far (all point at the same
+  // 2026-09-09 boundary), so this doesn't change what counts as in-sample vs out-of-sample.
+  // Scoped to just THIS function, not the other 6 `v.model_version = $1` call sites in this
+  // file (getComparison/getCumulativePnlSeries/getTradeList/getStepTrailComparison/
+  // getDayRankComparison) -- those drive the model's own train/test comparison stats, whose
+  // semantics need separate, deliberate thought before changing; see
+  // OPEN_DECISION ml_silo_model_version_scoping_other_5_functions_20260922.
+  const positional = [];
+  const conditions = [];
   if (boundaryParam) {
     positional.push(boundaryParam);
     conditions.push(`a.fired_at ${sample === 'test' ? '>=' : '<='} $${positional.length}::timestamp`);
@@ -210,9 +228,16 @@ async function getRangeTrades({ modelVersion, sample = 'test', range = 'today' }
     SELECT a.id, a.setup_type, a.trade_date::text AS trade_date,
       TO_CHAR(a.fired_at, 'YYYY-MM-DD HH24:MI:SS') AS fired_at_str,
       a.actual_pnl::float AS actual_pnl, a.resolution, a.is_cluster_primary,
-      v.probability::float AS ml_probability, v.verdict AS ml_verdict
-    FROM ml_verdicts v
-    JOIN active_setups a ON a.id = v.active_setup_id
+      v.probability::float AS ml_probability, v.verdict AS ml_verdict,
+      v.model_version AS ml_model_version
+    FROM active_setups a
+    JOIN LATERAL (
+      SELECT probability, verdict, model_version
+      FROM ml_verdicts
+      WHERE active_setup_id = a.id
+      ORDER BY scored_at DESC
+      LIMIT 1
+    ) v ON true
     WHERE ${conditions.join(' AND ')}
     ORDER BY a.fired_at ASC
   `;
