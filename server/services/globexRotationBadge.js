@@ -28,7 +28,7 @@ async function getLatestCalibration() {
 // Minutes since 6:00pm ET (the overnight session's own open) for the CURRENT moment, or for
 // an arbitrary ET Date -- matches scripts/calibrate_globex_rotation_badge.mjs's own convention
 // exactly (hh>=18 -> same-evening minutes; hh<18 -> next-morning minutes, offset by 360).
-function minutesSinceOvernightOpen(etDate) {
+export function minutesSinceOvernightOpen(etDate) {
   const hh = etDate.getHours(), mm = etDate.getMinutes();
   return hh >= 18 ? (hh - 18) * 60 + mm : 360 + hh * 60 + mm;
 }

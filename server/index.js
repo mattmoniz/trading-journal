@@ -63,6 +63,7 @@ import { detectRthFlush } from './services/rthFlushDetector.js';
 import { detectGlobexFlush } from './services/globexFlushDetector.js';
 import { detectPocRotationJoin } from './services/pocRotationJoinDetector.js';
 import { detectIbLowPnr } from './services/ibLowPnrDetector.js';
+import { detectOvernightOrderflowEntry } from './services/overnightOrderflowEntryDetector.js';
 import { scoreNewFires } from './services/mlFireTimeScoring.js';
 import { manualImportFromFile } from './services/tradeImportService.js';
 import dllRouter, { checkAndEmitDLL } from './routes/dll.js';
@@ -1598,6 +1599,10 @@ httpServer.listen(PORT, () => {
       // for the same reason as the pollers above: a market-wide cumulative-delta
       // condition, not a price touching a fixed level.
       detectIbLowPnr().catch(() => {});
+      // OVERNIGHT_ORDERFLOW_LONG/SHORT (2026-09-21) -- fires once/night around 12am ET,
+      // own poller for the same reason as the pollers above: an overnight order-flow read
+      // combined with the rotation badge's own live threshold, not a price touching a level.
+      detectOvernightOrderflowEntry().catch(() => {});
       // ML meta-labeling fire-time scoring (2026-09-21) -- computes features + scores any
       // real trade fired in the last 15min against the current model, closing the gap
       // where a new trade previously sat unscored for up to 24h. Fully isolated (never

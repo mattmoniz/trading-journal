@@ -8296,3 +8296,10 @@ Remaining after `detectCStandalone`: `detectCoilSurge` (trigger/population drift
 Asked "what else can we deal with quickly" — scanned all 55 PENDING `OPEN_DECISION`s and split by whether they're actually mechanical/small vs. requiring real new engineering. Resolved 2 quick ones same session (`setup_status_dow_clear_skips_globally_suppressed_types`, `move_watcher_scripts_to_tracked_dir` — both full detail in their resolution text).
 
 The other 4 were then explicitly SCOPED (a real phased plan, not just re-stated) at the user's request — no code changed for any of them, but each decision's own notes now carry a corrected, evidence-checked plan instead of the original rough estimate:
+
+---
+## Archive batch: 2026-09-21 (cutoff 2026-09-14, keep last 7 days)
+
+### From "🔶 2026-09-20 — sizeMultiplier factor-hygiene census: 13 of 17 factors dead/near-dead on real trades, 4 confirmed structurally dead and deleted"
+
+- **Root cause pinned exactly**: `origin_status` was added 2026-07-17 — one day AFTER `backtest_session_bias_conflict.mjs`'s own 2026-07-16 date. It could not have filtered a column that didn't exist yet.

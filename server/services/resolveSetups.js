@@ -337,6 +337,38 @@ export async function resolveSetupsByPrice(io) {
       continue;
     }
 
+  // Custom resolution for OVERNIGHT_ORDERFLOW_LONG/SHORT -- see
+  // server/services/overnightOrderflowEntryDetector.js header. Same shape as IB_LOW_PNR above:
+  // a real bar-walk stop check, then TIMEOUT_EXIT at expires_at (the calibration's own chosen
+  // exit clock-time, self-recalibrating -- NOT a fixed bar count). t1_level is an unreachable
+  // informational placeholder, never checked.
+    if (row.setup_type.startsWith('OVERNIGHT_ORDERFLOW_')) {
+      const stop = row.stop_level;
+      if (entry == null || stop == null) continue;
+      const long = row.setup_type.endsWith('_LONG');
+      const barsSinceFired = await query(`
+        SELECT ts::text as ts, high::float, low::float, close::float
+        FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 AND ts <= $2 ORDER BY ts ASC
+      `, [row.fired_at, nowEt]);
+      let resolution = null, priceAtRes = null, resolvedAt = null, method = null;
+      for (const bar of barsSinceFired.rows) {
+        const stopHit = long ? bar.low <= stop : bar.high >= stop;
+        if (stopHit) { resolution = 'STOP_HIT'; method = 'PRICE_CLEAN'; priceAtRes = stop; resolvedAt = bar.ts; break; }
+      }
+      if (!resolution && row.expires_at && nowEt >= row.expires_at && barsSinceFired.rows.length > 0) {
+        const lastBar = barsSinceFired.rows[barsSinceFired.rows.length - 1];
+        resolution = 'TIME_EXPIRED'; method = 'TIMEOUT_EXIT'; priceAtRes = lastBar.close; resolvedAt = lastBar.ts;
+      }
+      if (resolution) {
+        const pnl = long ? (priceAtRes - entry) * PNL_PER_POINT - COMMISSION : (entry - priceAtRes) * PNL_PER_POINT - COMMISSION;
+        await query(`UPDATE active_setups SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_pnl=$4, price_at_resolution=$5, resolved_at=$6, updated_at=NOW() WHERE id=$1 AND status=$7`,
+          [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch]);
+        if (statusMatch === 'ACTIVE' && io) io.emit('setup-resolved', { setupId: row.id, setupType: row.setup_type, resolution });
+        count++;
+      }
+      continue;
+    }
+
   // Custom resolution for ABSORPTION_LONG: "did price move up meaningfully?"
     if (row.setup_type === 'ABSORPTION_LONG') {
       const stop = row.stop_level;

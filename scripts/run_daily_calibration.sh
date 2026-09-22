@@ -77,6 +77,15 @@ echo "=== Daily calibration: $(date) ==="
 # so the next read is trustworthy instead of another single noisy snapshot.
 /usr/bin/node scripts/recalibrate_ml_globex_split.mjs
 
+# OVERNIGHT_ORDERFLOW_LONG/SHORT entry calibration (2026-09-21, RESEARCH_CLAIM
+# overnight_9pm_orderflow_predicts_rth_direction_20260921) -- re-derives the stop distance x
+# exit clock-time grid on a fresh chronological 70/30 split every run, feeding
+# server/services/overnightOrderflowEntryDetector.js's live (SHADOW-only, real N=0) fires.
+# Must stay scheduled -- user's explicit "gather more data before proceeding" instruction is
+# what this is for; waiting on a manual re-run would let the live detector's stop/exit choice
+# go stale the moment new real trading days accumulate.
+/usr/bin/node scripts/calibrate_overnight_orderflow_entry.mjs
+
 # GARCH(1,1) daily volatility-regime reading (2026-09-08) -- standalone monitoring only, per
 # explicit user direction ("I don't think its meant to tailor to our setups"): the dual-barrier
 # stop/target-scaling hypothesis this was originally built to feed was tested and rejected the

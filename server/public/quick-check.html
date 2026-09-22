@@ -1338,7 +1338,12 @@ function renderTimeline() {
     // Globex firing was paused) -- unconditional, not tied to the globexWatch toggle below, so
     // it stays out of both the row list AND Performance/timeline-stats regardless of Live/All.
     // Globex's own rows live exclusively under the separate "🌙 Globex" tab (globexRows below).
-    .filter(s => isRthAdjacent(s))
+    // Deliberate exception (2026-09-21, user request): OVERNIGHT_ORDERFLOW_LONG/SHORT fires
+    // overnight but is DESIGNED to carry forward through RTH (expires_at is always an RTH
+    // afternoon clock time) -- shown in BOTH the Globex tab (still passes globexRows' own
+    // !isRthAdjacent filter below, unchanged) AND here, same row/same P&L in both, since it
+    // genuinely spans both sessions rather than belonging to just one.
+    .filter(s => isRthAdjacent(s) || s.setup_type?.startsWith('OVERNIGHT_ORDERFLOW_'))
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
