@@ -810,6 +810,7 @@ async function loadPulse() {
       fetch('/api/globex/rotation-badge', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
       fetch('/api/globex/volume-pile', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
     ]);
+    if (pulseRes?.currentPrice != null) lastPrice = pulseRes.currentPrice;
     renderPulseBar(pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes, volPileRes);
     renderSetupCard(setupRes);
     renderStandalonePositionCard(setupRes);
@@ -829,11 +830,20 @@ function renderStandalonePositionCard(setupData) {
   el.className = 'visible';
   const entry = pos.entry ?? pos.entry_high;
   const fmtP = n => n == null ? '--' : Math.round(n);
+  // Unrealized P&L (2026-09-22, user request), same openPnlEstimate() helper/convention as
+  // the Session Timeline's own open-row badge -- falls back to nothing shown if a live price
+  // isn't available yet, never a fabricated number.
+  const isLong = (pos.setup_type || '').includes('LONG') || (pos.setup_type || '').includes('BULLISH');
+  const openPnl = openPnlEstimate(entry, isLong);
+  const pnlHtml = openPnl == null ? '' :
+    '<span class="setup-time mono" style="color:' + (openPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' +
+    (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0) + '</span>';
   el.innerHTML =
     '<div class="setup-head">' +
     '<span class="dot" style="background:var(--amber)"></span>' +
     '<span class="setup-type" style="color:var(--amber)">' + (pos.setup_type || '').replace(/_/g, ' ') + '</span>' +
     '<span class="setup-shadow-tag">BACKGROUND ONLY — NOT LIVE</span>' +
+    pnlHtml +
     '<span class="setup-time mono">fired ' + (pos.fired_at ? pos.fired_at.slice(11, 16) : '') + ' ET</span>' +
     '</div>' +
     '<div class="setup-grid">' +
@@ -872,6 +882,13 @@ function currentSessionDateET() {
 
 let lastRotBadge = null;
 let lastVolPile = null;
+// Live NQ price, kept for computing unrealized P&L on still-open trade cards (2026-09-22,
+// user request). Sourced from /api/market/pulse (same field the "NQ" chip at the top of the
+// page already displays), refreshed every loadPulse() cycle (15s). Deliberately NOT re-
+// rendering the timeline immediately on each price tick -- loadTimeline()'s own 20s cycle
+// already calls renderTimeline() regularly, which is frequent enough for an unrealized-P&L
+// estimate and avoids adding a second re-render trigger for a single field.
+let lastPrice = null;
 
 function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   if (!pulse || pulse.error) return;
@@ -1112,6 +1129,18 @@ function renderSetupCard(setupData) {
 // undercounting commission by $1/trade since 2026-08-11, caught via direct user report
 // ("commission in live is still $1... should be $2 round trip").
 const COMMISSION_PER_TRADE = 2;
+
+// Unrealized P&L estimate for a still-open row, 2026-09-22 (user request) -- "what you'd
+// walk away with if this closed right now at the live price," same convention as a resolved
+// trade's actual_pnl (net of the full round-trip commission, MNQ $2/pt, matching this file's
+// own COMMISSION_PER_TRADE above). NOT the real resolution -- purely a live estimate for
+// display, never written anywhere or fed into any stat/aggregate. Returns null if the entry
+// price or a live price isn't available yet (never fabricates a number).
+function openPnlEstimate(entry, isLong) {
+  if (entry == null || lastPrice == null) return null;
+  const pts = isLong ? (lastPrice - entry) : (entry - lastPrice);
+  return pts * 2 - COMMISSION_PER_TRADE;
+}
 
 // Win/loss classification (2026-09-02, user-caught bug): TARGET_HIT/STOP_HIT string equality
 // alone silently missed TRAIL_EXIT (the breakeven-trail mechanism, CLAUDE.md's "Breakeven-
@@ -1542,12 +1571,16 @@ function renderTimeline() {
     const isLoss = isLossRow(s);
     const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
     const isTrail = s.resolution === 'TRAIL_EXIT';
-    const badgeText = isOpen ? 'open' :
+    const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
+    // Unrealized P&L on the "open" badge itself (2026-09-22, user request), same inline-not-
+    // hidden-behind-a-tap convention as everything else on this row. Falls back to plain
+    // "open" if a live price isn't available yet -- never shows a fabricated number.
+    const openPnl = isOpen ? openPnlEstimate(s.entry_zone_low, isLong) : null;
+    const badgeText = isOpen ? (openPnl == null ? 'open' : (openPnl >= 0 ? '+$' : '-$') + Math.abs(openPnl).toFixed(0)) :
       isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
       isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
       s.resolution === 'INVALIDATED' ? 'inv.' : '—';
-    const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
     const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
     const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
     const timeLabel = to12Hour(time);
