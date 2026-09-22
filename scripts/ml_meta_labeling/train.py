@@ -27,7 +27,8 @@ from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db import get_connection
-from dataset import fetch_training_dataframe
+from dataset import fetch_training_dataframe, compute_sample_weights
+from hyperparams import load_hyperparams
 
 PURGE_DAYS = 3  # matches DEFAULT_MAX_HOLD_BARS=60 (~1hr) with generous margin for session gaps
 TEST_FRACTION = 0.2
@@ -93,16 +94,26 @@ def main():
     X_val, y_val = val[feature_cols], val['label']
     X_test, y_test = test[feature_cols], test['label']
 
+    # Sample weights, added 2026-09-22 (OPEN_DECISION ml_silo_deepseek_followup_review_parked_
+    # 20260921, DeepSeek's #1-ranked finding) -- a correlated confluence-cluster touch (85.7%
+    # sibling win/loss agreement) shouldn't teach the model N independent lessons for one real
+    # market moment. Only applied to TRAIN's own gradient -- VAL keeps full weight (it's not
+    # being learned from, only monitored for early-stopping) so its own signal isn't diluted.
+    train_weight = compute_sample_weights(train)
+    print(f"Sample weights: {(train_weight < 1.0).sum()}/{len(train_weight)} train rows down-weighted "
+          f"(correlated cluster siblings), total effective weight={train_weight.sum():.1f} (vs raw N={len(train_weight)})")
+
+    hp = load_hyperparams(conn)
+    print(f"Hyperparameters (from ML_HYPERPARAMS if calibrated, else DEFAULT_HYPERPARAMS): {hp}")
     model = lgb.LGBMClassifier(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        num_leaves=15, min_child_samples=20,
+        **hp,
         objective='binary', random_state=42, verbose=-1,
     )
     # VAL, not TEST, drives early stopping -- TEST must stay untouched until the single
     # final report below (DeepSeek review finding #2: reusing TEST here was model-selection
     # leakage on the "out of sample" number).
     model.fit(
-        X_train, y_train,
+        X_train, y_train, sample_weight=train_weight,
         eval_set=[(X_val, y_val)],
         callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)],
     )
@@ -150,11 +161,16 @@ def main():
     # header). Deriving the cutoff SEPARATELY within each session (still from VAL, still
     # frozen at train time, same no-lookahead discipline as approval_threshold above) gives
     # each session its own ~25% TAKE rate and makes "does ML discriminate within Globex"
-    # finally answerable. Used only by run_silo_scoring.py's batch path -- score_one.py's
-    # fire-time path (a single row, no cohort to rank against) deliberately keeps using the
-    # pooled `approval_threshold` above; this is an accepted, documented divergence, not an
-    # oversight.
-    val_is_rth = X_val['is_rth_int'].astype(bool)
+    # finally answerable. CORRECTED 2026-09-22: this used to say score_one.py's fire-time
+    # path deliberately kept using the pooled threshold, "an accepted, documented divergence,
+    # not an oversight" -- that reasoning didn't actually hold up (the threshold here is
+    # precomputed and FROZEN by the time either script uses it; applying a fixed cutoff to
+    # one row vs. many rows is the exact same comparison, no cohort needed) -- score_one.py
+    # now also uses the within-session threshold, matching run_silo_scoring.py.
+    # is_rth_int is metadata-only now (not a training feature, reverted this same day, see
+    # EXISTING_FEATURE_COLS' own comment in dataset.py) -- read from val/test directly,
+    # not X_val/X_test (which only carry actual model-input feature columns).
+    val_is_rth = val['is_rth_int'].astype(bool)
     val_proba_rth = val_proba[val_is_rth.values]
     val_proba_globex = val_proba[~val_is_rth.values]
     approval_threshold_rth = float(np.percentile(val_proba_rth, 75)) if len(val_proba_rth) >= 20 else None
@@ -185,7 +201,7 @@ def main():
 
     # Within-session TEST report -- confirms the fix actually produces a real ~25% TAKE
     # rate in EACH session, not just RTH, before trusting the new thresholds.
-    test_is_rth = X_test['is_rth_int'].astype(bool).values
+    test_is_rth = test['is_rth_int'].astype(bool).values
     for label, mask, thresh in [
         ('RTH', test_is_rth, approval_threshold_rth),
         ('Globex', ~test_is_rth, approval_threshold_globex),

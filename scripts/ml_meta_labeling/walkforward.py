@@ -34,6 +34,7 @@ from sklearn.metrics import roc_auc_score
 sys.path.insert(0, os.path.dirname(__file__))
 from db import get_connection
 from dataset import fetch_training_dataframe, compute_sample_weights
+from hyperparams import load_hyperparams
 
 PURGE_DAYS = 3
 FOLD_DAYS = 7
@@ -87,19 +88,18 @@ def compute_online_rank(fold_df):
     return fold_df
 
 
-def main():
-    conn = get_connection()
-    df, feature_cols = fetch_training_dataframe(conn)
-    fired_dt = pd.to_datetime(df['fired_at'], format='mixed')
-    df = df.assign(_fired_dt=fired_dt).sort_values('_fired_dt').reset_index(drop=True)
-    print(f"Full dataset: {len(df)} rows, spanning {df['_fired_dt'].min()} to {df['_fired_dt'].max()}")
+def run_walkforward_folds(df, feature_cols, hp):
+    """The real fold loop, extracted 2026-09-22 (item 5, hyperparameter sweep) so
+    scripts/sweep_ml_hyperparams.py can call the SAME real walk-forward logic once per
+    candidate hyperparameter set, per this codebase's "export the real function, never
+    reimplement" rule -- a sweep script hand-rolling a second copy of this loop is exactly
+    the duplication risk that rule exists to prevent (a fix/safety-net landing in one copy
+    and not the other). `df` must already have `_fired_dt`/`actual_pnl` merged in (see
+    main()'s own setup below) -- this function does no DB I/O itself, matching score.py's
+    "no DB access in the reusable core" convention.
 
-    # Pull real actual_pnl for every candidate row up front (dataset.py's own frame doesn't
-    # carry it, kept lean on purpose) -- one query, not one per fold.
-    ids = tuple(df['id'].tolist())
-    pnl_q = pd.read_sql(f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {ids}", conn)
-    df = df.merge(pnl_q, on='id')
-
+    Returns (fold_results: list[DataFrame], fold_summaries: list[dict], skipped_thin_train: int).
+    """
     start = df['_fired_dt'].min()
     end = df['_fired_dt'].max()
     fold_start = start
@@ -127,8 +127,7 @@ def main():
             continue
 
         model = lgb.LGBMClassifier(
-            n_estimators=300, max_depth=5, learning_rate=0.05,
-            num_leaves=15, min_child_samples=20,
+            **hp,
             objective='binary', random_state=42, verbose=-1,
         )
         # Sample weights (2026-09-22, matches train.py's own fix, OPEN_DECISION
@@ -191,6 +190,26 @@ def main():
             'online_take_n': len(online_take), 'online_take_pnl': round(float(online_take['actual_pnl'].sum()), 2),
         })
         fold_start = fold_end
+
+    return fold_results, fold_summaries, skipped_thin_train
+
+
+def main():
+    conn = get_connection()
+    hp = load_hyperparams(conn)  # loaded once, not per-fold -- same value used across every fold
+    print(f"Hyperparameters (from ML_HYPERPARAMS if calibrated, else DEFAULT_HYPERPARAMS): {hp}")
+    df, feature_cols = fetch_training_dataframe(conn)
+    fired_dt = pd.to_datetime(df['fired_at'], format='mixed')
+    df = df.assign(_fired_dt=fired_dt).sort_values('_fired_dt').reset_index(drop=True)
+    print(f"Full dataset: {len(df)} rows, spanning {df['_fired_dt'].min()} to {df['_fired_dt'].max()}")
+
+    # Pull real actual_pnl for every candidate row up front (dataset.py's own frame doesn't
+    # carry it, kept lean on purpose) -- one query, not one per fold.
+    ids = tuple(df['id'].tolist())
+    pnl_q = pd.read_sql(f"SELECT id, actual_pnl::float AS actual_pnl FROM active_setups WHERE id IN {ids}", conn)
+    df = df.merge(pnl_q, on='id')
+
+    fold_results, fold_summaries, skipped_thin_train = run_walkforward_folds(df, feature_cols, hp)
 
     if not fold_results:
         print("No folds had enough training data -- cannot walk forward yet.")

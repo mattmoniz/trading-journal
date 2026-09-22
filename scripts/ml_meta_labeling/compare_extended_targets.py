@@ -27,8 +27,9 @@ from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, os.path.dirname(__file__))
 from db import get_connection
-from dataset import fetch_training_dataframe
+from dataset import fetch_training_dataframe, compute_sample_weights
 from train import chronological_split
+from hyperparams import load_hyperparams
 
 VARIANTS = [
     {'label': '2.5x (production)', 'column': 'ml_extended_label'},
@@ -72,13 +73,17 @@ def run_variant(conn, variant):
         print(f"SKIPPED -- train label rate {train['label'].mean():.3f} outside [0.05, 0.95], degenerate.")
         return None
 
+    hp = load_hyperparams(conn)
     model = lgb.LGBMClassifier(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        num_leaves=15, min_child_samples=20,
+        **hp,
         objective='binary', random_state=42, verbose=-1,
     )
+    # Sample weights (2026-09-22, matches train.py's own fix, OPEN_DECISION
+    # ml_silo_deepseek_followup_review_parked_20260921) -- correlated cluster siblings
+    # down-weighted so one real market moment doesn't teach the model N independent lessons.
+    train_weight = compute_sample_weights(train)
     model.fit(
-        train[feature_cols], train['label'],
+        train[feature_cols], train['label'], sample_weight=train_weight,
         eval_set=[(val[feature_cols], val['label'])],
         callbacks=[lgb.early_stopping(stopping_rounds=30, verbose=False)],
     )
