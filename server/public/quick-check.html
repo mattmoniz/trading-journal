@@ -1345,7 +1345,14 @@ function renderTimeline() {
   // strictly better since it's already populated back to 2026-07-17, not just from today.
   // Rows with origin_status IN ('BACKFILL','UNKNOWN') or null are excluded from 'live'
   // (genuinely never shown as a real alert, not just "unknown") and included in 'all'.
-  const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate);
+  // ALSO keep any still-open (SHADOW/ACTIVE status) row regardless of trade_date (2026-09-22,
+  // user-caught live: a real MAJOR_PIVOT_DEFENDED_BREAK trade fired mid-RTH, still open,
+  // silently vanished from the timeline the instant the clock crossed 6PM ET and sessionDate
+  // rolled to tomorrow -- the 2026-08-09 fix above correctly stops a CLOSED session's trades
+  // from piling up past 6PM, but was never scoped to also protect a trade that's still
+  // genuinely open when the session rolls. A trade that hasn't resolved yet should never just
+  // disappear because of a date boundary.
+  const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate || s.status === 'SHADOW' || s.status === 'ACTIVE');
   // Base filter chain shared by BOTH the 'live' and 'all' populations -- everything except the
   // origin_status condition itself, which is what actually distinguishes them. Extracted 2026-
   // 09-22 (user request: show each tab's own count, same as the Globex tab already does) so
@@ -1432,9 +1439,16 @@ function renderTimeline() {
   // Vol Building filter) but deliberately NOT the timelineFilter live/all restriction --
   // Globex is now paused (force-SHADOW, see acd.js's GLOBEX_PAUSED override), so a Globex-only
   // view restricted to origin_status='ACTIVE' would always be empty.
+  // FIXED 2026-09-22 (user-caught live: "I don't see a globex trade" -- two real Globex
+  // fires from minutes earlier, both still genuinely open, were invisible here): this used
+  // to explicitly EXCLUDE still-open (SHADOW/ACTIVE status) rows -- the opposite of the
+  // "show open trades inline with an amber badge" fix already applied to the main timeline
+  // (`resolved`, below) the same day. That fix was never carried over to this separate,
+  // parallel filter chain. Now includes open rows here too, same rowHtml() amber-badge
+  // rendering either way.
   const globexRows = scoped
     .filter(s => !s.stale_entry_price_basis)
-    .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
+    .filter(s => s.fired_at_str)
     .filter(s => !isRthAdjacent(s))
     .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
