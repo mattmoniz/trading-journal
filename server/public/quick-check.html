@@ -187,6 +187,9 @@
   .badge.win { color: var(--green); background: rgba(34,197,94,0.12); }
   .badge.loss { color: var(--red); background: rgba(239,68,68,0.12); }
   .badge.other { color: var(--dim); background: rgba(148,163,184,0.1); }
+  /* Still-open row (2026-09-22, user request) -- amber, matches --amber used elsewhere on this
+     page for "in progress/worth attention" states (Worst Trade, Max DD when > 0). */
+  .badge.open { color: var(--amber-soft); background: rgba(245,158,11,0.15); }
   /* Volume-building tracking tag (2026-08-28) -- deliberately NEUTRAL (slate, not green/red):
      this signal has NOT been validated (walk-forward test failed out-of-sample, see
      fade_roster_volume_building_walkforward_negative RESEARCH_CLAIM) -- it's a tracking marker
@@ -352,6 +355,10 @@
       <div class="perf-subhead">Performance <span id="perf-subcount" class="perf-subcount"></span></div>
       <div id="perf-toggle" class="perf-toggle"></div>
     </div>
+    <div class="perf-head-row" style="margin-top:4px;">
+      <div class="perf-subhead" style="font-size:10px;color:var(--dim);" title="Collapsed = one row per real market touch (a confluence cluster's siblings excluded). Declustered = every cluster-sibling trade counted individually too.">Cluster view</div>
+      <div id="cluster-toggle" class="perf-toggle"></div>
+    </div>
     <div id="range-stats" class="range-stats-row"></div>
     <canvas id="range-equity" class="equity"></canvas>
     <div id="range-agg" style="margin-top:14px;"><div class="loading">Loading…</div></div>
@@ -388,7 +395,7 @@ function sigmaColor(s) {
 // the raw scale only -- an honest description of the reading, not a predictive claim.
 async function loadVolRegime() {
   try {
-    const data = await fetch('/api/volatility/regime').then(r => r.json());
+    const data = await fetch('/api/volatility/regime', { cache: 'no-store' }).then(r => r.json());
     renderVolRegimeCard(data?.regime || null, data?.favorableSetups || []);
   } catch (e) { /* keep last good render */ }
 }
@@ -429,7 +436,7 @@ function renderVolRegimeCard(regime, favorableSetups) {
 // -- this is a slow-moving-enough read (needs 20+ bars) that RTH-poll-speed isn't needed.
 async function loadPulseReading() {
   try {
-    const data = await fetch('/api/pulse/reading').then(r => r.json());
+    const data = await fetch('/api/pulse/reading', { cache: 'no-store' }).then(r => r.json());
     renderPulseReadingCard(data?.pulse || null);
   } catch (e) { /* keep last good render */ }
 }
@@ -474,7 +481,7 @@ async function openVolRegimeHistoryModal() {
   $('modal-backdrop').classList.add('open');
 
   try {
-    const data = await fetch('/api/volatility/regime/history?days=180').then(r => r.json());
+    const data = await fetch('/api/volatility/regime/history?days=180', { cache: 'no-store' }).then(r => r.json());
     const loadingEl = $('vol-history-loading');
     if (loadingEl) loadingEl.remove();
     renderVolRegimeHistoryChart('vol-history-canvas', data?.history || [], data?.band || null);
@@ -563,7 +570,7 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
 // 5min poll cadence as the volatility card, no need for anything faster.
 async function loadMlSilo() {
   try {
-    const data = await fetch('/api/ml-silo/summary?sample=test').then(r => r.json());
+    const data = await fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json());
     renderMlSiloCard(data);
   } catch (e) { /* keep last good render */ }
 }
@@ -624,7 +631,7 @@ async function loadMlSiloStepTrail() {
   const el = $('ml-silo-step-trail');
   if (!el) return;
   try {
-    const data = await fetch('/api/ml-silo/step-trail-comparison?sample=test').then(r => r.json());
+    const data = await fetch('/api/ml-silo/step-trail-comparison?sample=test', { cache: 'no-store' }).then(r => r.json());
     const c = data?.comparison;
     if (!c || c.n < 1) { el.innerHTML = ''; return; }
     const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
@@ -651,7 +658,7 @@ async function loadMlSiloRange(range) {
   const statsEl = $('ml-silo-all-stats');
   if (statsEl) statsEl.innerHTML = '<span style="color:var(--dim);">Loading…</span>';
   try {
-    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test').then(r => r.json());
+    const data = await fetch('/api/ml-silo/range-trades?range=' + range + '&sample=test', { cache: 'no-store' }).then(r => r.json());
     mlSiloTradesCache = data?.trades || [];
     const modelEl = $('ml-silo-model-line');
     if (modelEl) modelEl.textContent = data?.modelVersion ? data.modelVersion + ' (out-of-sample)' : 'No trained model yet.';
@@ -796,12 +803,12 @@ function renderMlSiloTradeList(trades) {
 async function loadPulse() {
   try {
     const [pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes, volPileRes] = await Promise.all([
-      fetch('/api/market/pulse').then(r => r.json()).catch(() => null),
-      fetch('/api/acd/setup-detection').then(r => r.json()).catch(() => null),
-      fetch('/api/morning-brief/live-session-context/' + todayET()).then(r => r.json()).catch(() => null),
-      fetch('/api/acd/building-strength-live').then(r => r.json()).catch(() => null),
-      fetch('/api/globex/rotation-badge').then(r => r.json()).catch(() => null),
-      fetch('/api/globex/volume-pile').then(r => r.json()).catch(() => null),
+      fetch('/api/market/pulse', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      fetch('/api/acd/setup-detection', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      fetch('/api/morning-brief/live-session-context/' + todayET(), { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      fetch('/api/acd/building-strength-live', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      fetch('/api/globex/rotation-badge', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      fetch('/api/globex/volume-pile', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
     ]);
     renderPulseBar(pulseRes, setupRes, ctxRes, buildRes, rotBadgeRes, volPileRes);
     renderSetupCard(setupRes);
@@ -1022,10 +1029,24 @@ function chip(label, val, sub, subColor, valColor, onclick) {
 }
 
 // ---- Active setup card ----
+// Manual dismiss (2026-09-22, user request: "add an 'x' to close out the major pivot defended
+// banner? I thought we had this?" -- matches #sweep-watch's own dismiss pattern, added 2026-09-
+// 07). Keyed by the backing active_setups row's own id (setup.setupId, already returned by
+// GET /api/acd/setup-detection) so a genuinely NEW candidate (different id) always overrides a
+// dismissal of the previous one -- same guarantee as sweep-watch. Persisted so a page reload
+// doesn't un-dismiss it. Unlike sweep-watch, NOT gated on the trade being resolved first -- this
+// card only ever shows a still-open/current candidate in the first place, so "only dismissible
+// once resolved" would mean never dismissible at all.
+let setupCardDismissedId = localStorage.getItem('setupCardDismissedId');
+function dismissSetupCard(setupId) {
+  setupCardDismissedId = String(setupId);
+  localStorage.setItem('setupCardDismissedId', setupCardDismissedId);
+  loadPulse();
+}
 function renderSetupCard(setupData) {
   const el = $('setup-card');
   const active = setupData?.setup && !setupData.setup.isExpired ? setupData.setup : null;
-  if (!active) {
+  if (!active || (active.setupId != null && String(active.setupId) === setupCardDismissedId)) {
     // Hidden entirely (CSS display:none default) rather than an empty "Watching -- no setup"
     // placeholder -- matches #sweep-watch's own "stay hidden unless there's something to say"
     // convention (2026-09-16, user request).
@@ -1050,6 +1071,10 @@ function renderSetupCard(setupData) {
   html += '<span class="setup-type" style="color:' + color + '">' + (active.type || '').replace(/_/g, ' ') + '</span>';
   if (isShadowOnly) html += '<span class="setup-shadow-tag" title="' + (active.suppressionReason || 'background-tracked') + '">BACKGROUND ONLY — NOT LIVE</span>';
   html += '<span class="setup-time mono">fired ' + (active.detectedAt || '') + ' ET</span>';
+  if (active.setupId != null) {
+    html += '<button onclick="dismissSetupCard(' + active.setupId + ')" aria-label="Dismiss" ' +
+      'style="background:none;border:none;color:var(--dim);font-size:18px;line-height:1;padding:0 2px;cursor:pointer;flex-shrink:0;">×</button>';
+  }
   html += '</div>';
   html += '<div class="setup-grid">';
   if (active.entry != null)  html += '<span class="k">Entry <b class="mono" style="color:var(--text)">' + Math.round(active.entry) + '</b></span>';
@@ -1143,7 +1168,7 @@ function setTagFilter(f) {
 // same-day N" risk this was originally guarding against.
 async function loadTagRanking() {
   try {
-    const data = await fetch('/api/setups/loss-prevention-summary').then(r => r.json());
+    const data = await fetch('/api/setups/loss-prevention-summary', { cache: 'no-store' }).then(r => r.json());
     const todayStats = data.mechanisms?.today || {};
     // Sort real (N>=20, this codebase's own "never fabricate a stat" floor) mechanisms ahead of
     // thin ones, ranked by lossPrevented within that real tier -- but within the THIN (N<20)
@@ -1170,7 +1195,7 @@ async function loadTagRanking() {
 
 async function loadTimeline() {
   try {
-    const data = await fetch('/api/setups/today').then(r => r.json());
+    const data = await fetch('/api/setups/today', { cache: 'no-store' }).then(r => r.json());
     allTimelineRows = Array.isArray(data?.setups) ? data.setups : [];
     renderTimeline();
     renderSweepWatch();
@@ -1321,7 +1346,12 @@ function renderTimeline() {
   // Rows with origin_status IN ('BACKFILL','UNKNOWN') or null are excluded from 'live'
   // (genuinely never shown as a real alert, not just "unknown") and included in 'all'.
   const scoped = allTimelineRows.filter(s => s.trade_date === sessionDate);
-  const resolved = scoped
+  // Base filter chain shared by BOTH the 'live' and 'all' populations -- everything except the
+  // origin_status condition itself, which is what actually distinguishes them. Extracted 2026-
+  // 09-22 (user request: show each tab's own count, same as the Globex tab already does) so
+  // liveCount/allCount can be computed independently of whichever tab is currently selected,
+  // without duplicating this whole filter chain a second time.
+  const baseFiltered = scoped
     // stale_entry_price_basis (2026-09-15, OPEN_DECISION
     // contract_calendar_roll_race_stale_price_20260915/globex_vwap_fade_stale_price_after_
     // restart_20260914): rows confirmed to have a corrupted entry price (a real historical
@@ -1331,8 +1361,15 @@ function renderTimeline() {
     // shared REAL_TRADE_FILTER; this client-side filter is this card's own equivalent so
     // Net P&L/Wins/Losses/Worst Trade don't keep re-displaying a known-corrupted trade.
     .filter(s => !s.stale_entry_price_basis)
-    .filter(s => s.fired_at_str && s.status !== 'SHADOW' && s.status !== 'ACTIVE')
-    .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
+    // Still-open (status IN ('SHADOW','ACTIVE')) rows now INCLUDED inline (2026-09-22, user
+    // request: "have open trades fire inline but have them orange while they're open") --
+    // previously excluded entirely, so a trade like a 12-hour-hold MAJOR_PIVOT_DEFENDED_BREAK
+    // only ever showed in the separate "currently open" card, never in this list, until it
+    // finished. rowHtml() below renders an amber "open" badge for these; computeRangeStats()/
+    // getDecidedRows() already independently filter on `actual_pnl != null`, so an open row
+    // (actual_pnl always null) flowing into this array does NOT get counted in Wins/Losses/
+    // Net P&L/Worst Trade -- verified before making this change, not assumed.
+    .filter(s => s.fired_at_str)
     .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
     // Globex omitted from the main timeline entirely (2026-09-16, user request, same session
     // Globex firing was paused) -- unconditional, not tied to the globexWatch toggle below, so
@@ -1343,7 +1380,11 @@ function renderTimeline() {
     // afternoon clock time) -- shown in BOTH the Globex tab (still passes globexRows' own
     // !isRthAdjacent filter below, unchanged) AND here, same row/same P&L in both, since it
     // genuinely spans both sessions rather than belonging to just one.
-    .filter(s => isRthAdjacent(s) || s.setup_type?.startsWith('OVERNIGHT_ORDERFLOW_'))
+    .filter(s => isRthAdjacent(s) || s.setup_type?.startsWith('OVERNIGHT_ORDERFLOW_'));
+  const liveCount = baseFiltered.filter(s => s.origin_status === 'ACTIVE').length;
+  const allCount = baseFiltered.length;
+  const resolved = baseFiltered
+    .filter(s => timelineFilter === 'all' || s.origin_status === 'ACTIVE')
     .sort((a, b) => (b.fired_at_str || '').localeCompare(a.fired_at_str || ''));
   timelineRows = resolved;
 
@@ -1404,10 +1445,10 @@ function renderTimeline() {
   const toggle = document.createElement('div');
   toggle.id = 'timeline-toggle';
   toggle.style.cssText = 'display:flex;gap:1px;border-radius:6px;overflow:hidden;border:1px solid var(--border);';
-  toggle.innerHTML = [['live', 'Live'], ['all', 'All']].map(([val, label]) =>
+  toggle.innerHTML = [['live', 'Live', liveCount], ['all', 'All', allCount]].map(([val, label, count]) =>
     '<button data-tf="' + val + '" style="padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;border:none;' +
     'background:' + (timelineFilter === val ? 'rgba(51,65,85,0.6)' : 'rgba(15,23,42,0.8)') + ';' +
-    'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + '</button>'
+    'color:' + (timelineFilter === val ? 'var(--text)' : 'var(--dim)') + '">' + label + ' (' + count + ')</button>'
   ).join('')
   // Globex-watch button -- visually separated (margin-left) from the Live/All pair since it's
   // an independent toggle, not a third value in that same group. Count shown inline so it's
@@ -1478,14 +1519,20 @@ function renderTimeline() {
   // loop both benefit from one shared template.
   const rowHtml = (s) => {
     const rowPnl = s.actual_pnl != null ? parseFloat(s.actual_pnl) : null;
+    // Still open (2026-09-22, user request) -- status hasn't reached RESOLVED/EXPIRED yet, so
+    // there's no real outcome to badge. Checked BEFORE isWin/isLoss (both already correctly
+    // return false for a null resolution, but this makes the open case explicit rather than
+    // falling through the win/loss ternary by omission).
+    const isOpen = s.status === 'SHADOW' || s.status === 'ACTIVE';
     const isWin = isWinRow(s);
     const isLoss = isLossRow(s);
-    const badgeClass = isWin ? 'win' : isLoss ? 'loss' : 'other';
+    const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
     const isTrail = s.resolution === 'TRAIL_EXIT';
-    const badgeText = isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
+    const badgeText = isOpen ? 'open' :
+      isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
       isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
-      s.resolution === 'INVALIDATED' ? 'inv.' : (s.status === 'ACTIVE' ? 'live' : '—');
+      s.resolution === 'INVALIDATED' ? 'inv.' : '—';
     const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
     const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
     const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
@@ -1655,7 +1702,7 @@ async function openSessionTrendHistoryModal() {
     // .json() itself, which is a confusing raw error to show; this gives a real, retriable
     // message instead. Found live 2026-09-15 (user report) -- most likely cause was several
     // dev-server restarts happening in quick succession while this feature was being built.
-    const resp = await fetch('/api/morning-brief/session-trend-history/' + todayET());
+    const resp = await fetch('/api/morning-brief/session-trend-history/' + todayET(), { cache: 'no-store' });
     if (!resp.ok) throw new Error('Server returned ' + resp.status + ' — try again in a moment.');
     const text = await resp.text();
     if (!text) throw new Error('Empty response — the server may have just restarted. Try again.');
@@ -1907,7 +1954,7 @@ $('modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'moda
 let flushExitSignalsSummary = null;
 async function loadFlushExitSignalsSummary() {
   try {
-    const data = await fetch('/api/setups/flush-exit-signals-summary').then(r => r.json());
+    const data = await fetch('/api/setups/flush-exit-signals-summary', { cache: 'no-store' }).then(r => r.json());
     flushExitSignalsSummary = Array.isArray(data?.summary) ? data.summary : null;
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
@@ -1959,7 +2006,7 @@ function openMechanismPopup(id, mechanism) {
 let stepTrailShadowSummary = null;
 async function loadStepTrailShadowSummary() {
   try {
-    stepTrailShadowSummary = await fetch('/api/setups/step-trail-shadow-summary').then(r => r.json());
+    stepTrailShadowSummary = await fetch('/api/setups/step-trail-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2031,7 +2078,7 @@ function openStepTrailPopup(id) {
 let pitchCatchShadowSummary = null;
 async function loadPitchCatchShadowSummary() {
   try {
-    pitchCatchShadowSummary = await fetch('/api/setups/pitch-catch-shadow-summary').then(r => r.json());
+    pitchCatchShadowSummary = await fetch('/api/setups/pitch-catch-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2087,7 +2134,7 @@ function openPitchCatchPopup(id) {
 let directionGateSummary = null;
 async function loadDirectionGateSummary() {
   try {
-    directionGateSummary = await fetch('/api/setups/direction-gate-shadow-summary').then(r => r.json());
+    directionGateSummary = await fetch('/api/setups/direction-gate-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2135,7 +2182,7 @@ function openDirectionGatePopup(id) {
 let momentumFadeShadowSummary = null;
 async function loadMomentumFadeShadowSummary() {
   try {
-    momentumFadeShadowSummary = await fetch('/api/setups/momentum-against-fade-shadow-summary').then(r => r.json());
+    momentumFadeShadowSummary = await fetch('/api/setups/momentum-against-fade-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2183,7 +2230,7 @@ function openMomentumFadePopup(id) {
 let breakevenStopShadowSummary = null;
 async function loadBreakevenStopShadowSummary() {
   try {
-    breakevenStopShadowSummary = await fetch('/api/setups/breakeven-stop-shadow-summary').then(r => r.json());
+    breakevenStopShadowSummary = await fetch('/api/setups/breakeven-stop-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2229,7 +2276,7 @@ function openBreakevenStopPopup(id) {
 let entryFlowShadowSummary = null;
 async function loadEntryFlowShadowSummary() {
   try {
-    entryFlowShadowSummary = await fetch('/api/setups/entry-orderflow-shadow-summary').then(r => r.json());
+    entryFlowShadowSummary = await fetch('/api/setups/entry-orderflow-shadow-summary', { cache: 'no-store' }).then(r => r.json());
   } catch (e) { /* popup falls back to per-trade-only view below */ }
 }
 
@@ -2407,14 +2454,22 @@ function fmtAxisTime(firedAtStr, useTime) {
 // setup-type calibration credit, but it is NOT a second independent trade. Summing every row
 // without this filter counts the same real market event once per cluster member, exactly the
 // overcounting CLAUDE.md's is_cluster_primary hard rule warns about for any aggregation.
-function getDecidedRows(rows) {
+// declustered=false (default): CLAUDE.md's is_cluster_primary hard rule -- collapse a
+// confluence cluster to its one real touch, so one market event isn't counted as several
+// trades in an account-level total. declustered=true: keep every cluster-sibling row too --
+// added 2026-09-22 (user request, after learning about the collapsed/sibling split while
+// diagnosing the ML Silo P&L mismatch) as an explicit, user-toggled view of the SAME
+// underlying trades the per-setup-type table (renderAggTable/aggregateBySetup) already
+// shows uncollapsed -- this just applies that same population to the account-level
+// Net/equity-curve/drawdown figures instead of only the setup breakdown.
+function getDecidedRows(rows, declustered = false) {
   return rows
-    .filter(s => s.actual_pnl != null && s.is_cluster_primary !== false)
+    .filter(s => s.actual_pnl != null && (declustered || s.is_cluster_primary !== false))
     .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
 }
 
-function computeRangeStats(rows) {
-  const decided = getDecidedRows(rows);
+function computeRangeStats(rows, declustered = false) {
+  const decided = getDecidedRows(rows, declustered);
 
   let running = 0, peak = 0, maxDD = 0;
   let wins = 0, losses = 0;
@@ -2431,8 +2486,8 @@ function computeRangeStats(rows) {
   return { n: decided.length, wins, losses, netPnl, grossPnl, commission, maxDD };
 }
 
-function renderRangeStats(containerId, rows) {
-  const s = computeRangeStats(rows);
+function renderRangeStats(containerId, rows, declustered = false) {
+  const s = computeRangeStats(rows, declustered);
   if (s.n === 0) { $(containerId).innerHTML = ''; return; }
   const clr = (v) => v >= 0 ? 'var(--green)' : 'var(--red)';
   $(containerId).innerHTML =
@@ -2442,11 +2497,11 @@ function renderRangeStats(containerId, rows) {
     '<span title="Peak-to-trough on the cumulative P&L curve -- the DLL-risk figure">Max DD <b class="mono" style="color:' + (s.maxDD > 0 ? 'var(--amber)' : 'var(--dim)') + '">-$' + s.maxDD.toFixed(0) + '</b></span>';
 }
 
-function renderEquityCurve(canvasId, rows, range) {
+function renderEquityCurve(canvasId, rows, range, declustered = false) {
   const canvas = $(canvasId);
   // Shared with computeRangeStats() via getDecidedRows() (2026-09-08 -- previously a separate
   // inline copy that could silently drift, see that function's header for the incident).
-  const decided = getDecidedRows(rows);
+  const decided = getDecidedRows(rows, declustered);
 
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || canvas.parentElement.clientWidth;
@@ -2526,6 +2581,10 @@ function renderEquityCurve(canvasId, rows, range) {
 // all" -- i.e. switch which one is shown, don't show both.
 let currentRange = 'today';
 let performanceFilter = localStorage.getItem('performanceFilter') || 'live'; // 'live' | 'all'
+// 'collapsed' (default) = one row per real market touch, matching account-level reality.
+// 'declustered' = every confluence-cluster sibling counted as its own trade too -- see
+// getDecidedRows()'s header comment for why this exists and what it's the same population as.
+let clusterView = localStorage.getItem('clusterView') || 'collapsed'; // 'collapsed' | 'declustered'
 let currentRangeRowsLive = [];
 let currentRangeRowsAll = [];
 let currentLiveData = null, currentAllData = null;
@@ -2559,28 +2618,44 @@ function setPerformanceFilter(f) {
   renderPerformance();
 }
 
+function renderClusterToggle() {
+  const el = $('cluster-toggle');
+  if (!el) return;
+  el.innerHTML = [['collapsed', 'Collapsed'], ['declustered', 'Declustered']].map(([val, label]) =>
+    '<button data-cv="' + val + '" class="' + (clusterView === val ? 'active' : '') + '">' + label + '</button>'
+  ).join('');
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setClusterView(b.dataset.cv)));
+}
+
+function setClusterView(v) {
+  clusterView = v;
+  localStorage.setItem('clusterView', v);
+  renderPerformance();
+}
+
 // Re-renders from already-fetched cached data -- no network call, so the Live/All toggle
 // switches instantly.
 function renderPerformance() {
   renderPerfToggle();
+  renderClusterToggle();
   const rows = performanceFilter === 'live' ? currentRangeRowsLive : currentRangeRowsAll;
   const data = performanceFilter === 'live' ? currentLiveData : currentAllData;
   if (!data) return; // nothing fetched yet
 
+  const declustered = clusterView === 'declustered';
+  const decidedN = getDecidedRows(rows, declustered).length;
   if (performanceFilter === 'live') {
-    const info = subcountLabel(data);
-    $('perf-subcount').textContent = '(' + info.liveN.toLocaleString() + ' real trade' + (info.liveN === 1 ? '' : 's') + ')';
+    $('perf-subcount').textContent = '(' + decidedN.toLocaleString() + ' real trade' + (decidedN === 1 ? '' : 's') + (declustered ? ', declustered' : '') + ')';
   } else {
     const info = subcountLabel(data);
-    const total = info.liveN + info.shadowN + info.backfillN;
     $('perf-subcount').textContent = info.parts.length
-      ? '(' + total.toLocaleString() + ' total — ' + info.liveN.toLocaleString() + ' live + ' + info.parts.join(' + ') + ')'
-      : '(' + total.toLocaleString() + ' total, all live)';
+      ? '(' + decidedN.toLocaleString() + ' total' + (declustered ? ', declustered' : '') + ' — incl. ' + info.parts.join(' + ') + ')'
+      : '(' + decidedN.toLocaleString() + ' total, all live' + (declustered ? ', declustered' : '') + ')';
   }
 
-  renderRangeStats('range-stats', rows);
+  renderRangeStats('range-stats', rows, declustered);
   renderAggTable('range-agg', rows);
-  renderEquityCurve('range-equity', rows, currentRange);
+  renderEquityCurve('range-equity', rows, currentRange, declustered);
 }
 
 async function loadRange(range) {
@@ -2589,8 +2664,8 @@ async function loadRange(range) {
   document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
   try {
     const [liveData, allData] = await Promise.all([
-      fetch('/api/setups/range-summary?range=' + range + '&origin=live').then(r => r.json()),
-      fetch('/api/setups/range-summary?range=' + range + '&origin=all').then(r => r.json()),
+      fetch('/api/setups/range-summary?range=' + range + '&origin=live', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/setups/range-summary?range=' + range + '&origin=all', { cache: 'no-store' }).then(r => r.json()),
     ]);
     if (myRequestId !== rangeRequestSeq) return; // a newer tab click/poll superseded this response -- discard
 
