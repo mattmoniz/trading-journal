@@ -577,17 +577,32 @@ export function resolveRangeDates(range, nowET) {
 // logic (never touches their trigger conditions). Plain DB lookup, not a live re-evaluation
 // -- matches the same "read what was actually persisted, don't re-derive" principle as the
 // origin_status fix shipped the same session.
+// FIXED 2026-09-22 (found live: card stayed empty for a real, still-open MAJOR_PIVOT_
+// DEFENDED_BREAK_LONG position all evening): two bugs. (1) this used to require an exact
+// `trade_date = $1` match against the CALLER's own calendar-date todayET -- these 4
+// detectors' rows carry the RTH session's trade_date, which stops matching "today" the
+// moment the calendar rolls to a new date while the position is still open overnight (a
+// real gap, not just theoretical -- these positions can and do stay open into and through
+// Globex hours). Dropped the trade_date filter entirely; `status NOT IN (...)` plus each
+// row's own bounded `expires_at` (enforced by expireStaleSetups(), runs every poll) already
+// guarantees at most a small, genuinely-open set, so a plain recency bound on fired_at is
+// enough to keep the query cheap without reintroducing the day-boundary bug. (2) the RTH
+// route only ever called this from its own branch -- the Globex branch (`inGlobex`, this
+// same file ~line 3885) returns its own response shape before reaching this call at all,
+// so the card silently had nothing to show for the entire Globex/overnight session even
+// when a real position was genuinely open. Now called from both branches.
 const STANDALONE_DETECTOR_PREFIXES = ['MOMENTUM_CHASE', 'MAJOR_PIVOT_DEFENDED_BREAK', 'STALL_DEFENDED_LEVEL', 'MINOR_DEFENDED_LEVEL'];
-export async function getOpenStandalonePosition(todayET) {
-  const likeClauses = STANDALONE_DETECTOR_PREFIXES.map((_, i) => `setup_type LIKE $${i + 2}`).join(' OR ');
-  const params = [todayET, ...STANDALONE_DETECTOR_PREFIXES.map(p => `${p}%`)];
+export async function getOpenStandalonePosition() {
+  const likeClauses = STANDALONE_DETECTOR_PREFIXES.map((_, i) => `setup_type LIKE $${i + 1}`).join(' OR ');
+  const params = STANDALONE_DETECTOR_PREFIXES.map(p => `${p}%`);
   const r = await query(`
     SELECT id, setup_type, origin_status, fired_at::text AS fired_at,
       entry_zone_low::float AS entry, entry_zone_high::float AS entry_high,
       stop_level::float AS stop, t1_level::float AS target, t1_label
     FROM active_setups
-    WHERE trade_date = $1 AND (${likeClauses})
+    WHERE (${likeClauses})
       AND status NOT IN ('RESOLVED', 'EXPIRED')
+      AND fired_at >= NOW() - INTERVAL '3 days'
     ORDER BY fired_at DESC LIMIT 1
   `, params).catch(() => ({ rows: [] }));
   return r.rows[0] || null;

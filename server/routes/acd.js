@@ -3869,7 +3869,12 @@ export default function createACDRouter(io) {
         for (const row of closedRows.rows ?? []) {
           try { await dropToTimeline(row); } catch (_) {}
         }
-        return res.json({ setup: null, sessionClosed: true });
+        // Same fix as the Globex branch below: this UPDATE only force-closes status='ACTIVE'
+        // rows, but all 4 standalone detectors insert status='SHADOW' -- a genuinely still-
+        // open SHADOW position survives this hard-close gap untouched, so the card needs to
+        // keep showing it here too, not just outside the 5-6PM window.
+        const openStandalonePosition = await getOpenStandalonePosition();
+        return res.json({ setup: null, sessionClosed: true, openStandalonePosition });
       }
 
       // Globex window: 6 PM–8:30 AM ET — fire level fades against PD VAH/VAL/POC only.
@@ -3891,7 +3896,14 @@ export default function createACDRouter(io) {
           globexSetup.realN = canonicalStatus?.realN ?? null;
           globexSetup.liveN = canonicalStatus?.liveN ?? null;
         }
-        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal });
+        // FIXED 2026-09-22: this branch used to return before ever calling
+        // getOpenStandalonePosition(), so a real, still-open standalone-detector position
+        // (MOMENTUM_CHASE/MAJOR_PIVOT_DEFENDED_BREAK/STALL_DEFENDED_LEVEL/MINOR_DEFENDED_
+        // LEVEL -- all RTH-session detectors whose positions can stay open into Globex hours)
+        // silently disappeared from quick-check.html's standalone card the moment the route
+        // crossed into Globex mode at 6PM, even though the position was still genuinely open.
+        const openStandalonePosition = await getOpenStandalonePosition();
+        return res.json({ setup: globexSetup, sessionClosed: false, globexMode: true, stackVolSignal, openStandalonePosition });
       }
 
       // Was a hardcoded `false` (never wired to anything — confirmed zero frontend consumers
@@ -6639,7 +6651,7 @@ export default function createACDRouter(io) {
       // Real currently-open position from any of these 4 standalone detectors, independent
       // of whether a NEW signal is available this poll -- see getOpenStandalonePosition()'s
       // own header (acdShared.js) for why this didn't already exist.
-      const openStandalonePosition = await getOpenStandalonePosition(todayET);
+      const openStandalonePosition = await getOpenStandalonePosition();
 
       if (!active) return res.json({ setup: null, noNewEntries: !!noNewEntries, bigMoveSignal, sigmaContinuation, stackVolSignal, momentumChaseSignal, majorPivotDefendedBreakSignal, stallDefendedLevelSignal, minorDefendedLevelSignal, openStandalonePosition });
 
