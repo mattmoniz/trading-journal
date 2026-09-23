@@ -33,7 +33,7 @@
 // timestamp (not NOW()), so a re-poll harmlessly no-ops against active_setups' unique
 // (trade_date, setup_type, fired_at) index. _cache.firedToday is a POLL-SKIP OPTIMIZATION ONLY.
 import { query } from '../db.js';
-import { detectRotationLegs } from './rotationDetector.js';
+import { detectRotationLegs, getOvernightSessionBars } from './rotationDetector.js';
 import { minutesSinceOvernightOpen } from './globexRotationBadge.js';
 import { getGlobalCalib } from './acdShared.js';
 import { getCanonicalLiveStatus } from './setupEligibility.js';
@@ -106,17 +106,17 @@ export async function detectOvernightOrderflowEntry() {
     );
     if (already.rows.length) { _cache.firedToday = true; return; }
 
-    const barsRes = await query(`
-      SELECT ts::text as ts, close::float,
-        COALESCE(bid_volume,0)::float as bid_volume, COALESCE(ask_volume,0)::float as ask_volume
-      FROM price_bars_primary WHERE symbol='NQ'
-        AND ((ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18)
-          OR (ts::date = $1::date AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) < 570))
-      ORDER BY ts ASC
-    `, [tradeDate]);
-    if (barsRes.rows.length < 10) return; // not enough overnight bars yet
+    // FIXED 2026-09-23: this used to hand-roll the same `ts::date = $1::date - 1` query the
+    // badge had (see getOvernightSessionBars()'s header, rotationDetector.js, for the full
+    // incident) -- harmless here only because this whole function already returns above if
+    // overnightMin is outside the 12am-1am entry window, by which point CURRENT_DATE has
+    // always already rolled over and the old arithmetic happened to be correct. Switched to
+    // the shared, genuinely-correct helper anyway so this can't silently break if the entry
+    // window ever changes, and so there's one query to fix instead of two.
+    const barsRows = await getOvernightSessionBars(nowEt, tradeDate);
+    if (barsRows.length < 10) return; // not enough overnight bars yet
 
-    const bars = barsRes.rows.map((b) => {
+    const bars = barsRows.map((b) => {
       const d = new Date(b.ts.replace(' ', 'T') + 'Z');
       return { ts: b.ts, close: b.close, high: b.close, low: b.close, bid_volume: b.bid_volume, ask_volume: b.ask_volume, min: minutesSinceOvernightOpen(d) };
     });

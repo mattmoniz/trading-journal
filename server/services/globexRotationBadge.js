@@ -12,7 +12,7 @@
 
 import { query } from '../db.js';
 import { getGlobalCalib } from './acdShared.js';
-import { detectRotationLegs, ROTATION_LEG_THRESHOLD } from './rotationDetector.js';
+import { detectRotationLegs, ROTATION_LEG_THRESHOLD, getOvernightSessionBars } from './rotationDetector.js';
 
 async function getLatestCalibration() {
   return getGlobalCalib('globexRotationBadgeCalib', async () => {
@@ -75,17 +75,16 @@ export async function getGlobexRotationBadgeState() {
     return { state: 'OUT_OF_WINDOW', label: null, explanation: 'Outside the overnight (6pm-9:30am ET) window this badge applies to.' };
   }
 
-  // Real overnight bars for the CURRENT session, 6pm ET through now.
-  const barsRes = await query(`
-    SELECT ts::text as ts, high::float, low::float FROM price_bars_primary WHERE symbol='NQ'
-      AND ((ts::date = $1::date - 1 AND EXTRACT(hour FROM ts) >= 18)
-        OR (ts::date = $1::date AND (EXTRACT(hour FROM ts)*60+EXTRACT(minute FROM ts)) < 570))
-    ORDER BY ts ASC
-  `, [todayET]);
-  if (barsRes.rows.length < 10) {
+  // Real overnight bars for the CURRENT session, 6pm ET through now. FIXED 2026-09-23: this
+  // used to hardcode `ts::date = $1::date - 1` for the evening half, which is wrong whenever
+  // checked BEFORE midnight (the calendar hasn't rolled over yet) -- see getOvernightSessionBars()'s
+  // own header (rotationDetector.js) for the full incident. Now shared with
+  // overnightOrderflowEntryDetector.js so there's one correct place, not two duplicated queries.
+  const barsRes = await getOvernightSessionBars(nowET, todayET);
+  if (barsRes.length < 10) {
     return { state: 'INSUFFICIENT_DATA', label: null, explanation: 'Not enough overnight bars yet to read a rotation count.' };
   }
-  const bars = barsRes.rows.map((b) => ({ ...b, min: minutesSinceOvernightOpen(new Date(b.ts.replace(' ', 'T') + 'Z')) }));
+  const bars = barsRes.map((b) => ({ ...b, min: minutesSinceOvernightOpen(new Date(b.ts.replace(' ', 'T') + 'Z')) }));
   // Live running total through THIS MOMENT -- fine for "rotations so far" display, but NOT
   // valid for the checkpoint classification below (see the bug this fixed, 2026-09-22).
   const currentRotCount = detectRotationLegs(bars, ROTATION_LEG_THRESHOLD).length;
