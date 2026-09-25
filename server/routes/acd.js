@@ -5160,10 +5160,22 @@ export default function createACDRouter(io) {
                     // main path applies (opposite direction open, same-type refire, opening-drive
                     // counter-trade). resolveSetupsByPrice()'s sibling fill gate only counts it once
                     // sibLevel actually trades.
+                    // FIXED 2026-09-25 (DeepSeek review of ALL_LEVELS_LIVE, SHOULD-FIX): this
+                    // originally checked only 3 of the 6 guards the winner path applies, missing
+                    // isInRefireCooldown/isCrossDirectionFastFlip/isPostWinOppositeFamilyBlocked --
+                    // the concrete gap was a REFIRE_COOLDOWN_MINUTES type (PD_VAH_FADE_SHORT, OR5
+                    // family) able to fire ACTIVE as a sibling 15-30min after its own last
+                    // resolution, reintroducing a documented losing refire pattern (25% vs 53.6% WR).
                     let sibLive = false;
                     if (winnerFound && isLevelForcedLive(candType)) {
                       const sibDirStr = isLong ? 'LONG' : 'SHORT';
-                      sibLive = !(await isOppositeDirectionOpen(sibDirStr))
+                      const sibLevelBase = candType.replace(/_(LONG|SHORT)$/, '');
+                      const sibCrossDirCooldown = await isCrossDirectionFastFlip(todayET, sibLevelBase, sibDirStr);
+                      const sibPostWinOppBlocked = !sibCrossDirCooldown
+                        && await isPostWinOppositeFamilyBlocked(todayET, postWinFamilyOf(candType), sibDirStr);
+                      sibLive = !sibCrossDirCooldown && !sibPostWinOppBlocked
+                        && !(await isOppositeDirectionOpen(sibDirStr))
+                        && !(await isInRefireCooldown(todayET, candType))
                         && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
                         && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
                     }

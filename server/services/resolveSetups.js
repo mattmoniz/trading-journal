@@ -441,7 +441,12 @@ export async function resolveSetupsByPrice(io) {
     if (!long && t1 >= entry) continue;
 
     // Fetch starts at the earliest fire MINUTE (not fired_at) so a sibling's fire-minute bar is
-    // available to its fill gate below; every other row still starts strictly after fired_at.
+    // available to its fill gate below; every non-sibling row still starts strictly after
+    // fired_at. NOTE (DeepSeek review, 2026-09-25): a Globex-origin sibling (detectGlobexSetup's
+    // own non-first cluster candidates, also is_cluster_primary=false) enters at currentPrice, so
+    // its fill gate below is a harmless no-op (fillIdx always 0) -- but its walk window still
+    // widens to the fire minute, a minor calibration-only drift for that population, not a
+    // correctness issue (confirmed no wrong entry-price application).
     const isSibling = row.is_cluster_primary === false;
     const fireMinute = `${row.fired_at.slice(0, 16)}:00`;
     const bars = { rows: sharedBarsRows.filter(b => (isSibling ? b.ts >= fireMinute : b.ts > row.fired_at)) };
@@ -464,6 +469,10 @@ export async function resolveSetupsByPrice(io) {
           await query(`UPDATE active_setups SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='SIBLING_UNFILLED',
                          actual_outcome='NOT_FILLED', actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()
                        WHERE id=$1 AND status=$2`, [row.id, statusMatch]);
+          // Every other resolution branch below emits on ACTIVE (DeepSeek review, 2026-09-25) --
+          // without this, an ACTIVE sibling that never fills sits stale on the frontend until
+          // the next poll's own fetch.
+          if (statusMatch === 'ACTIVE' && io) io.emit('setup-expired', { setupId: row.id, setupType: row.setup_type, resolution: 'NOT_FILLED' });
           count++;
         }
         continue;

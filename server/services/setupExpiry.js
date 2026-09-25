@@ -193,11 +193,19 @@ export async function structurallyInvalidateSetups(io) {
   // t1_level added 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug) --
   // resolveDirection() below needs it alongside stop_level for its price-derived fallback;
   // this SELECT previously had stop_level but not t1_level, so the fallback couldn't run.
+  // Cluster siblings excluded (2026-09-25, DeepSeek review of ALL_LEVELS_LIVE commit 36ddedc,
+  // BLOCKER): an ACTIVE-origin sibling is a resting limit at its OWN level, and this function's
+  // classification is purely time-based (minutes_active) then MTMs at entry_zone_high/low --
+  // exactly the phantom-fill shape the sibling fill gate in resolveSetupsByPrice() exists to
+  // prevent. An unfilled sibling that sits >=2min then the OR breaks got INVALIDATED/POST_ENTRY
+  // with a real, fabricated actual_pnl, bypassing the fill gate entirely. resolveSetupsByPrice()
+  // (which runs first every poll) already owns a sibling's whole lifecycle -- leave it to that
+  // fill-gated walk and expireStaleSetups()'s SIBLING_UNFILLED backstop instead.
   const activeWithTime = await query(`
     SELECT id, setup_type, trade_date, stop_level, t1_level, entry_zone_low, entry_zone_high,
       EXTRACT(epoch FROM ((NOW() AT TIME ZONE 'America/New_York') - fired_at)) / 60 as minutes_active
     FROM active_setups
-    WHERE trade_date=$1 AND status='ACTIVE'
+    WHERE trade_date=$1 AND status='ACTIVE' AND (is_cluster_primary IS NULL OR is_cluster_primary = true)
   `, [todayET]);
 
   let count = 0;
