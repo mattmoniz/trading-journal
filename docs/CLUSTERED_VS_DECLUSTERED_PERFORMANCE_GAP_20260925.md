@@ -112,6 +112,27 @@ cluster's own target-distance spread a trade happens to sit on — a geometry ar
 confluence packing, not evidence that the sibling setup_types are individually better-edged
 trades.
 
+**CORRECTION, same day — this does NOT survive a proper rigor check, and the finding above
+overstated it.** Cluster sizes are dominated by 2-member clusters (168 of 291 clusters with
+≥2 members; only 25 clusters have 3+), so the "closest vs farthest" split above is mostly just
+rank0-vs-rank1 of pairs, not a broad multi-rank effect — the full rank breakdown (rank 0 through
+7) is NOT monotonic (rank 4, N=14, actually shows a *higher* win rate and mean than rank 0), and
+neither is a continuous-distance decile breakdown (mean P&L bounces between deciles rather than
+decaying; the farthest decile has the *worst* win rate, 37.8%, but one of the *higher* means,
+$26.82, likely a couple of large winners in a thin, wide 50-367pt bucket). Run through the
+paired-within-cluster + day-blocked-bootstrap discipline this codebase requires before trusting
+any comparison-style finding: the closest-minus-farthest difference per cluster is mean **+$4.08**
+with day-blocked CI **[-$9.94, $20.87]** — crosses zero. Both the closest and farthest
+populations are day-clustered (61.3% of N from the top 5 of just 15 distinct dates) and fail
+`computeRigor()`'s `clean` check; the farthest group's own chronological trend is
+`STRENGTHENING`, the opposite of what a decaying "hard target" mechanism should look like.
+
+**Corrected read: win rate trends down with target distance (directionally consistent with the
+hypothesis), but the dollar effect is small, non-monotonic, day-clustered, and does not clear a
+real significance bar at the current N=160 pairs / 15 distinct dates.** This is a real lead worth
+re-checking as more data accumulates (see the follow-up note below), not a confirmed mechanism
+— downgraded accordingly in the recorded `RESEARCH_CLAIM`.
+
 ## Finding 4: an additional, un-repaired contamination source sits on top of this
 
 Cluster-sibling resolution breakdown, last 20 days (272 sibling rows with a matched primary):
@@ -137,13 +158,16 @@ Finding 3.
 The Declustered "outperformance" is real as a number, but it is **not evidence that firing every
 level in a confluence cluster live would make money**. It's the sum of three effects, none of
 which reflect real trading edge:
-1. It's almost entirely SHADOW-background data (Finding 2) — the real, live-fired trades over
-   the identical window show no such recovery.
-2. Of the sibling population that *is* real (filled trades, non-phantom), a large chunk of its
-   apparent edge is a target-distance geometry artifact (Finding 3) — the primary structurally
-   gets stuck with the hardest target in every cluster, not a worse setup_type.
+1. It's almost entirely SHADOW-background data (Finding 2, solid) — the real, live-fired trades
+   over the identical window show no such recovery.
+2. A target-distance geometry effect (Finding 3) is directionally real on win rate but, once
+   properly paired and day-blocked, does NOT clear significance on dollar terms at the current
+   sample size — a real lead, not a confirmed driver of the gap.
 3. An unknown remaining chunk is still phantom-fill contamination from before today's fix
    (Finding 4), not yet backfilled out of the historical rows.
+
+**Finding 1 (the SHADOW-vs-real split) is the solid, decisive part of this investigation.**
+Finding 3 is a real hypothesis worth continuing to track, not yet a proven mechanism.
 
 This directly reinforces why `ALL_LEVELS_LIVE` was reverted the same morning (see CLAUDE.md's
 "Where to look" entry) — the sibling population that looked so promising on the Declustered
@@ -159,10 +183,15 @@ own entry price, for exactly the reasons above.
 - `OPEN_DECISION case_engine_family_cluster_tagging_gap_20260908` (PENDING) — the older
   case-engine setup family (`C_PAIRED`/`C_REVERSAL`/`TRT`/etc.) still has zero cluster-tagging
   coverage, so its own sibling population isn't represented in any of the numbers above at all.
-- The target-distance geometry effect in Finding 3 is itself a candidate real signal worth its
-  own follow-up: does a level's distance-to-target *rank within its confluence cluster* (not
-  just confluence presence/absence, already tested and rejected 2026-09-09) predict outcome
-  quality on its own, outside the cluster-tagging context? Not yet tested as a standalone idea.
+- The target-distance geometry effect in Finding 3 is a real lead, not yet a confirmed signal —
+  win rate trends the right direction but the dollar effect fails a paired/day-blocked
+  significance check at N=160 pairs/15 dates, and the full rank/decile distribution isn't
+  monotonic. Re-check once more real data accumulates (more distinct dates, not just more rows,
+  since the current population is day-clustered at 61.3% top-5-day concentration) before treating
+  this as anything more than "worth watching." Not the same question as confluence
+  presence/absence (already tested and rejected 2026-09-09) — this is specifically about
+  distance-to-target rank within a cluster, still untested as a standalone factor outside this
+  cluster-tagging context.
 
 ## Fixes already shipped in this space (chronological, for context)
 
