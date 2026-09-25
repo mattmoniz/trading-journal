@@ -28,10 +28,10 @@ import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from '../services/open
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
-import { completeStepTrailShadows, completePitchCatchShadows } from '../services/shadowCompletion.js';
+import { completeStepTrailShadows, completePitchCatchShadows, completeT1FloorRunnerShadows } from '../services/shadowCompletion.js';
 import { completeBreakevenStopShadows } from '../services/breakevenStopShadow.js';
 import { completeBreakevenStopCounterfactuals } from '../services/breakevenStopWalker.js';
-export { completeStepTrailShadows, completePitchCatchShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
+export { completeStepTrailShadows, completePitchCatchShadows, completeT1FloorRunnerShadows, completeBreakevenStopShadows, completeBreakevenStopCounterfactuals };
 import { resolveSetupsByPrice } from '../services/resolveSetups.js';
 export { resolveSetupsByPrice };
 import { getDayTypeAtFire, getVolBucketAtFire, minutesFromSessionOpen, computeFireTags, FIRE_TAG_COLS, fireTagValues } from '../services/fireTags.js';
@@ -3842,6 +3842,12 @@ export default function createACDRouter(io) {
       // Pitch and Catch shadow follow-up (user idea, 2026-09-04, UNVALIDATED) -- same
       // observation-only guarantee as the step-trail line just above.
       await completePitchCatchShadows().catch(() => {});
+      // T1-floor runner shadow follow-up (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
+      // t1floor_runner_positive_slow_population_20260925) -- picks up rows whose real PLAIN
+      // (PRICE_CLEAN) resolution already happened but whose floor-runner walk didn't get enough
+      // bars to finish in that same poll. Same observation-only guarantee as the two shadows
+      // above; scoped to the PLAIN path those two never see (no wider_target_mult required).
+      await completeT1FloorRunnerShadows().catch(() => {});
       // Breakeven-stop-on-order-flow-rejection shadow follow-up (2026-09-16, RESEARCH_CLAIM
       // orderflow_rewarded_breakeven_stop_positive_20260916) -- runs ONCE per real trade,
       // right after it resolves (see breakevenStopShadow.js's header for why this needs no

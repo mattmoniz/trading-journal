@@ -9,9 +9,10 @@ import { query } from '../db.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
 import { resolveDirection } from '../config/setupTypes.js';
 import { firedAtToMod } from './sessionBoundary.js';
-import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from './widerTargetWalker.js';
+import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER, WIDER_TARGET_MULT } from './widerTargetWalker.js';
 import { stepStepTrail } from './stepTrailWalker.js';
 import { stepPitchCatch } from './pitchCatchWalker.js';
+import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getGlobalCalib, getCached, DAY_CACHE_TTL } from './acdShared.js';
 
 // Step-trail shadow follow-up pass (Opus Audit #12, 2026-09-04). resolveSetupsByPrice()'s
@@ -252,6 +253,73 @@ export async function completePitchCatchShadows() {
     completed++;
    } catch (e) {
      console.error(`completePitchCatchShadows row id=${row.id} error (non-critical, retrying next poll):`, e.message);
+   }
+  }
+  return completed;
+}
+
+// T1-floor runner shadow follow-up pass (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
+// t1floor_runner_positive_slow_population_20260925). Same structural need as the two passes
+// above (resolveSetupsByPrice()'s inline attempt can only see bars through "now" at the moment
+// the REAL trade resolves, and the row then drops out of its own `active` query forever) --
+// but scoped DIFFERENTLY: this mechanism applies to the PLAIN PRICE_CLEAN path (the "slow"
+// majority the wider-target mechanism's fast+pressure gate never sees at all), not to trades
+// that armed wider_target_mult. No arming phase to re-derive -- the runner starts the instant
+// the real trade resolves, so this walk is simpler than the other two (a single
+// stepT1FloorRunner call per bar, no composed inner widerTargetState).
+export async function completeT1FloorRunnerShadows() {
+  const pending = await query(`
+    SELECT id, trade_date::text as trade_date, fired_at::text as fired_at,
+           entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
+           t1_level::float as t1_level, actual_pnl::float as actual_pnl
+    FROM active_setups
+    WHERE status='RESOLVED' AND resolution='TARGET_HIT' AND resolution_method='PRICE_CLEAN'
+      AND t1_floor_runner_shadow IS NULL
+  `);
+  if (!pending.rows.length) return 0;
+
+  let completed = 0;
+  for (const row of pending.rows) {
+   try {
+    const dir = resolveDirection(row);
+    if (dir === null) continue;
+    const long = dir === 'LONG';
+    const entry = row.entry_zone_high ?? row.entry_zone_low;
+    const t1 = row.t1_level;
+    if (entry == null || t1 == null) continue;
+    const firedMod = firedAtToMod(row.fired_at);
+    const ft = long ? entry + WIDER_TARGET_MULT * Math.abs(t1 - entry) : entry - WIDER_TARGET_MULT * Math.abs(t1 - entry);
+
+    const barsRes = await query(`
+      SELECT ts::text as ts, high::float, low::float, close::float,
+        (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
+      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts ASC
+    `, [row.fired_at]);
+    if (!barsRes.rows.length) continue;
+
+    let floorState = {};
+    let shadowResolution = null;
+    for (const bar of barsRes.rows) {
+      const step = stepT1FloorRunner(floorState, bar, { t1, ft, long, firedMod });
+      floorState = step.state;
+      if (step.resolution) { shadowResolution = { ...step.resolution, resolvedAt: bar.ts }; break; }
+    }
+    if (!shadowResolution) continue; // still not resolved -- retry again next poll
+
+    const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
+    const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
+    const hypotheticalPnl = t1FloorPnlFromResolution(shadowResolution, { entry, t1, long, dollarsPerPoint: PNL_PER_POINT, commission: COMMISSION });
+    const payload = JSON.stringify({
+      target_mult: WIDER_TARGET_MULT,
+      hypothetical_resolution: shadowResolution.resolution, hypothetical_method: shadowResolution.method,
+      hypothetical_exit_price: shadowResolution.priceAtRes, hypothetical_pnl: Math.round(hypotheticalPnl * 100) / 100,
+      real_pnl: row.actual_pnl, delta: Math.round((hypotheticalPnl - row.actual_pnl) * 100) / 100,
+      resolved_at: shadowResolution.resolvedAt, completed_inline: false,
+    });
+    await query(`UPDATE active_setups SET t1_floor_runner_shadow=$2::jsonb, updated_at=NOW() WHERE id=$1 AND t1_floor_runner_shadow IS NULL`, [row.id, payload]);
+    completed++;
+   } catch (e) {
+     console.error(`completeT1FloorRunnerShadows row id=${row.id} error (non-critical, retrying next poll):`, e.message);
    }
   }
   return completed;

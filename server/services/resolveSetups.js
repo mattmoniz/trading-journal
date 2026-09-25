@@ -18,8 +18,9 @@ import { computeBar6Checkpoint, computeSlowDeepEarlyExit } from './maeMfeReplay.
 import { getDeltaConfirmationCategory, classifyDeltaConfirmation } from './deltaConfirmation.js';
 import { classifyTouch } from './touchQuality.js';
 import { stepBreakevenTrail } from './breakevenTrailWalker.js';
-import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER } from './widerTargetWalker.js';
+import { stepWiderTarget, MAX_BARS_TO_T1_FOR_WIDER, WIDER_TARGET_MULT } from './widerTargetWalker.js';
 import { stepStepTrail } from './stepTrailWalker.js';
+import { stepT1FloorRunner, t1FloorPnlFromResolution } from './t1FloorRunnerWalker.js';
 import { getCurrentPrice } from './priceRetrieval.js';
 import { stepPitchCatch } from './pitchCatchWalker.js';
 import { stepBreakevenStop } from './breakevenStopWalker.js';
@@ -599,6 +600,15 @@ export async function resolveSetupsByPrice(io) {
     };
     let pitchCatchShadowResolution = null;
     let pitchCatchShadowDisabled = false;
+    // T1-floor runner shadow state (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
+    // t1floor_runner_positive_slow_population_20260925). No arming phase (unlike step-trail/
+    // pitch-catch, which wait for the EXISTING wider-target mechanism to arm first) -- this
+    // mechanism applies to the SLOW/plain PRICE_CLEAN population those two never see at all, so
+    // it's tracked in the GENERIC terminal branch below, not the widerTargetMult branch above.
+    // Same independence/observational guarantees: a fully separate JSONB column, never
+    // influences the REAL resolution/method/priceAtRes this loop computes.
+    let t1FloorShadowResolution = null;
+    let t1FloorShadowDisabled = false;
     // Breakeven-stop live state — same re-derive-from-scratch-every-poll convention as every
     // other mechanism above. `baseline` (volume z-score baseline) is fetched once per row,
     // lazily, only if this row is actually eligible -- a DB call inside the per-bar loop would
@@ -907,6 +917,31 @@ export async function resolveSetupsByPrice(io) {
         method = trailCalibrationMissing ? 'TRAIL_UNCALIBRATED' : 'PRICE_CLEAN';
         resolvedAt = bar.ts;
         priceAtRes = t1;
+
+        // T1-floor runner shadow (2026-09-25, PROVISIONAL -- see t1FloorRunnerWalker.js's
+        // header). Scoped to the exact population backtested (method==='PRICE_CLEAN' --
+        // excludes TRAIL_UNCALIBRATED, a separate known-broken mechanism state). Tries the
+        // already-fetched remaining bars in THIS poll first (barCount is 1-based, so
+        // bars.rows.slice(barCount) is every bar strictly after the one that just resolved --
+        // same convention documented in velocity_wider_target_t1floor_vs_origstop.mjs); whatever
+        // is still unresolved (still running as of "now") is picked up by
+        // completeT1FloorRunnerShadows() on a later poll, same two-part architecture as the
+        // step-trail/pitch-catch shadows above. Never influences resolution/method/priceAtRes
+        // set just above -- fully independent, try/catch-isolated, non-critical.
+        if (method === 'PRICE_CLEAN' && !t1FloorShadowDisabled) {
+          try {
+            const ft = long ? entry + WIDER_TARGET_MULT * Math.abs(t1 - entry) : entry - WIDER_TARGET_MULT * Math.abs(t1 - entry);
+            let floorState = {};
+            for (const laterBar of bars.rows.slice(barCount)) {
+              const floorStep = stepT1FloorRunner(floorState, laterBar, { t1, ft, long, firedMod });
+              floorState = floorStep.state;
+              if (floorStep.resolution) { t1FloorShadowResolution = { ...floorStep.resolution, resolvedAt: laterBar.ts }; break; }
+            }
+          } catch (e) {
+            console.error('t1-floor-runner shadow computation error (non-critical, retrying next poll via completion pass):', e.message);
+            t1FloorShadowDisabled = true;
+          }
+        }
         break;
       } else if (stopHit) {
         resolution = 'STOP_HIT';
@@ -1196,6 +1231,29 @@ export async function resolveSetupsByPrice(io) {
       pitchCatchShadowPayload = null;
     }
 
+    // T1-floor runner shadow payload (2026-09-25, PROVISIONAL) -- unlike step-trail/pitch-catch,
+    // NOT gated on widerTargetState.widening (this mechanism applies to the PLAIN PRICE_CLEAN
+    // path those two never see -- see t1FloorRunnerWalker.js's header). Only set when the
+    // already-fetched remaining bars in THIS poll were enough to resolve it; the far more common
+    // case (still running as of "now") is left NULL here and picked up by
+    // completeT1FloorRunnerShadows()'s follow-up pass, same architecture as the other two shadows.
+    let t1FloorShadowPayload = null;
+    try {
+      if (t1FloorShadowResolution) {
+        const hypotheticalPnl = t1FloorPnlFromResolution(t1FloorShadowResolution, { entry, t1, long, dollarsPerPoint: PNL_PER_POINT, commission: COMMISSION });
+        t1FloorShadowPayload = JSON.stringify({
+          target_mult: WIDER_TARGET_MULT,
+          hypothetical_resolution: t1FloorShadowResolution.resolution, hypothetical_method: t1FloorShadowResolution.method,
+          hypothetical_exit_price: t1FloorShadowResolution.priceAtRes, hypothetical_pnl: Math.round(hypotheticalPnl * 100) / 100,
+          real_pnl: Math.round(pnl * 100) / 100, delta: Math.round((hypotheticalPnl - pnl) * 100) / 100,
+          resolved_at: t1FloorShadowResolution.resolvedAt, completed_inline: true,
+        });
+      }
+    } catch (e) {
+      console.error('t1-floor-runner shadow payload error (non-critical, writing without it):', e.message);
+      t1FloorShadowPayload = null;
+    }
+
     const updated = await query(`
       UPDATE active_setups
       SET status='RESOLVED', resolution=$2, resolution_method=$3, actual_outcome=$2,
@@ -1207,14 +1265,15 @@ export async function resolveSetupsByPrice(io) {
           runner_trail_price=COALESCE($13, runner_trail_price),
           step_trail_shadow=COALESCE($14::jsonb, step_trail_shadow),
           pitch_catch_shadow=COALESCE($15::jsonb, pitch_catch_shadow),
-          breakeven_stop_live=COALESCE($16::jsonb, breakeven_stop_live)
+          breakeven_stop_live=COALESCE($16::jsonb, breakeven_stop_live),
+          t1_floor_runner_shadow=COALESCE($17::jsonb, t1_floor_runner_shadow)
       WHERE id=$1 AND status=$7
       RETURNING *
     `, [row.id, resolution, method, Math.round(pnl * 100) / 100, priceAtRes, resolvedAt, statusMatch,
         Math.round(runMae * 100) / 100, Math.round(runMfe * 100) / 100, barCount,
         armedAt, peakPrice != null ? Math.round(peakPrice * 100) / 100 : null,
         trailStopPrice != null ? Math.round(trailStopPrice * 100) / 100 : null,
-        stepTrailShadowPayload, pitchCatchShadowPayload, breakevenStopLivePayload]);
+        stepTrailShadowPayload, pitchCatchShadowPayload, breakevenStopLivePayload, t1FloorShadowPayload]);
 
     if (updated.rows.length) {
       try { await dropToTimeline(updated.rows[0]); } catch (_) {}
