@@ -6700,6 +6700,16 @@ export default function createACDRouter(io) {
       const firedTimeStr = latestBarTs
         ? `${String(latestBarTs.getUTCHours()).padStart(2,'0')}:${String(latestBarTs.getUTCMinutes()).padStart(2,'0')}:00`
         : `${String(etNow.getHours()).padStart(2,'0')}:${String(etNow.getMinutes()).padStart(2,'0')}:00`;
+      // Bar-time-of-day companion to firedTimeStr (2026-09-25, real bug found live: a touch whose
+      // bar falls inside the 9:30-9:35 dead zone could still insert ACTIVE if the poll processing
+      // it happened to run a few minutes late, since the dead-zone check below used the poll's
+      // current wall-clock etMin, not the actual fired_at this row gets stamped with -- same class
+      // of bug the early-touch-backfill loop's own bt.etMin comment already warns about, just
+      // missed here. Confirmed live: PD_HIGH_FADE_SHORT/OR5_HIGH_FADE_SHORT fired_at=9:33/9:34am
+      // (inside the block) but weren't inserted until 9:35:58/9:36:37 wall-clock (after it), so
+      // etMin read as clear. Use THIS (the row's own fired-bar time) for any dead-zone check that
+      // gates whether THIS candidate may go live, not the poll's own current etMin.
+      const firedEtMin = latestBarTs ? latestBarTs.getUTCHours() * 60 + latestBarTs.getUTCMinutes() : etMin;
 
       // Expiry per setup type (minutes from fired_at); null = no time expiry
       const EXPIRY_WINDOW = {
@@ -6930,9 +6940,21 @@ export default function createACDRouter(io) {
           dowSuppressToday: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._dowSuppressToday ?? new Set(),
           knownTypes: getCached(todayET, 'levelFadeStats', DAY_CACHE_TTL)?._knownSetupTypes ?? new Set(),
         });
+        // FIXED 2026-09-25 (real bug, live same day): the outer inNewEntryDeadZone/inRthOpenDeadZone
+        // (computed from the poll's current wall-clock etMin, ~line 3833) do not reflect what THIS
+        // row's own fired_at will be -- that's firedTimeStr/firedEtMin (the triggering BAR's time,
+        // ~line 6700), which can be several minutes earlier than the poll's actual wall-clock
+        // processing time. A touch whose bar fell inside the dead zone slipped through as ACTIVE
+        // because by the time the poll got around to inserting it, wall-clock etMin had already
+        // moved past the window -- confirmed live: PD_HIGH_FADE_SHORT/OR5_HIGH_FADE_SHORT
+        // fired_at=9:33/9:34am (inside 9:30-9:35) but weren't inserted until 9:35:58/9:36:37
+        // wall-clock (after it). Re-derive using firedEtMin, the same fix shape the early-touch-
+        // backfill loop's own bt.etMin comment already documents for exactly this reason.
+        const mainInNewEntryDeadZone = isInNewEntryDeadZone(firedEtMin);
+        const mainInRthOpenDeadZone = isInRthOpenDeadZone(firedEtMin);
         const forceShadow = isTrailMechanism
           || baseIneligible
-          || inNewEntryDeadZone
+          || mainInNewEntryDeadZone
           || inRefireCooldown
           || !!exposureOverride
           || !!crossDirectionCooldownMin
@@ -6941,9 +6963,9 @@ export default function createACDRouter(io) {
           || sameTypeRefireBlocked
           || openingDriveCounter
           || liveTimeWindowBlocked
-          || inRthOpenDeadZone;
+          || mainInRthOpenDeadZone;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
-          : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+          : mainInNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
           : exposureOverride ? exposureOverride.reason
           : crossDirectionCooldownMin ? `CROSS_DIRECTION_FAST_FLIP_${crossDirectionCooldownMin}min`
@@ -6952,7 +6974,7 @@ export default function createACDRouter(io) {
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
           : liveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
-          : inRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
+          : mainInRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
         // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
@@ -7211,12 +7233,19 @@ export default function createACDRouter(io) {
               logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'REFIRE_COOLDOWN_SHADOW', gateReason: `resolved within the last ${REFIRE_COOLDOWN_MINUTES[shadow.type]}min`, entry: shadow.entry, stop: shadow.stop, target: shadow.target });
               continue;
             }
-            // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- this is a real-time
-            // touch-detection loop (unlike the early-touch-backfill loop above, which gates on
-            // the touch's OWN earlier etMin instead), so the outer/current inNewEntryDeadZone is
-            // the correct flag here. Full skip, matching the other RTH insert sites' same fix.
-            if (inNewEntryDeadZone || inRthOpenDeadZone) {
-              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: inRthOpenDeadZone ? '9:30-9:35 ET no-new-entries window' : '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
+            // 4-6PM no-new-entries dead zone (2026-09-16, user request). CORRECTED 2026-09-25:
+            // this comment used to claim this loop is "real-time" (unlike the early-touch-backfill
+            // loop above) and so the outer/current inNewEntryDeadZone/inRthOpenDeadZone was the
+            // correct flag -- that was wrong. The INSERT below (~line 7317) uses firedAtTs, the
+            // exact same triggering-BAR timestamp the main active-slot path uses, not NOW() -- so
+            // this loop has the identical staleness risk the main path had (see the firedEtMin
+            // comment ~line 6700 for the full incident: a touch whose bar fell inside 9:30-9:35
+            // could still slip through if the poll processing it ran a few minutes late). Switched
+            // to firedEtMin-derived flags, matching the main active-slot fix.
+            const shadowInNewEntryDeadZone = isInNewEntryDeadZone(firedEtMin);
+            const shadowInRthOpenDeadZone = isInRthOpenDeadZone(firedEtMin);
+            if (shadowInNewEntryDeadZone || shadowInRthOpenDeadZone) {
+              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: shadowInRthOpenDeadZone ? '9:30-9:35 ET no-new-entries window' : '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
               continue;
             }
             let sT1 = shadow.target;

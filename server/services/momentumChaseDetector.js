@@ -37,7 +37,7 @@ import { getValueAreaRegimeMap, computeRegimeStamp, REGIME_STAMP_COLS, regimeSta
 import { computeFireTags, FIRE_TAG_COLS, fireTagValues } from './fireTags.js';
 import { getCurrentPrice } from './priceRetrieval.js';
 import { getBetClass } from '../config/setupTypes.js';
-import { dropToTimeline } from './acdShared.js';
+import { dropToTimeline, isInRthOpenDeadZone } from './acdShared.js';
 
 // Once-per-ET-day error log, mirroring priceRetrieval.js's logStaleOnce() convention -- added
 // 2026-09-15 (retroactive DeepSeek review, finding A2): the whole detect-and-insert was
@@ -68,6 +68,16 @@ export async function detectMomentumChaseCandidate(todayET, etMin, currentPrice)
   // insert a MOMENTUM_CHASE_MEDIUM_* row outside the backtest's 9:30am-12:00pm scope,
   // contaminating the exact forward SHADOW sample this setup exists to accumulate cleanly.
   if (etMin < RTH_OPEN_MIN || etMin >= MORNING_CUTOFF_MIN) return null;
+  // 9:30-9:35 ET no-new-entries dead zone (2026-09-25 -- found while root-causing a live "why did
+  // the market trade the first 5 minutes today" report: this file had ZERO reference to either
+  // dead-zone helper anywhere, unlike every acd.js insert site. RTH_OPEN_MIN=570 (9:30am) let this
+  // detector fire starting at the exact instant the window opens. fired_at here is NOW() (not a
+  // bar-derived timestamp like acd.js's firedTimeStr), and this function is called synchronously
+  // right before the INSERT in computeMomentumChaseSignal, so etMin is not stale here the way
+  // acd.js's outer etMin was -- a plain check against it is sufficient, no firedEtMin-style fix
+  // needed. Real N=0/SHADOW-only, so zero live-capital risk either way, but this setup's own
+  // MORNING window is still supposed to exclude the dead zone like every other RTH insert site.
+  if (isInRthOpenDeadZone(etMin)) return null;
   if (currentPrice == null) return null;
 
   const regimeInfo = await getCurrentGarchRegime().catch(() => null);

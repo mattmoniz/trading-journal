@@ -260,7 +260,14 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
 // price to actually trade before the trade counts (sibling fill gate, same day) -- without it the
 // declustered view credits ~12% unfillable wins (RESEARCH_CLAIM
 // sibling_phantom_fill_inflates_shadow_ev_20260925).
-export const ALL_LEVELS_LIVE = { enabled: true, addedDate: '2026-09-25' };
+// REVERTED 2026-09-25 (~09:45 ET, same morning as ship): the entry-price question for siblings
+// (own-level resting order vs immediate current-price fill) was never resolved with the user
+// before this went live, and the phantom-fill discovery surfaced mid-session shook confidence in
+// shipping this without that answered first. enabled:false restores the one-winner-per-touch
+// behavior that ran stable for 3 weeks; the sibling fill gate, RTH-open dead zone, and PD_VAL
+// time-window fix from the same morning are UNRELATED and stay as-is. Re-enable only after the
+// entry-price design question is explicitly settled with the user.
+export const ALL_LEVELS_LIVE = { enabled: false, addedDate: '2026-09-25', revertedDate: '2026-09-25' };
 export function isLevelFadeType(setupType) {
   return /_FADE_(LONG|SHORT)/.test(setupType || '');
 }
