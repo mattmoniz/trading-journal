@@ -6920,7 +6920,13 @@ export default function createACDRouter(io) {
           : false;
         // Per-setup live time window (2026-09-25) -- see LIVE_TIME_WINDOW_OVERRIDE in
         // setupEligibility.js (PD_VAL_FADE_LONG after 13:00 ET). Pure lookup, no query.
-        const liveTimeWindowBlocked = isLiveTimeWindowBlocked(active.type, etMin);
+        // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925):
+        // was checked against the outer poll-wall-clock etMin -- the same staleness class as the
+        // dead-zone bug fixed earlier this session (a touch's bar can fall right at the 780/960
+        // boundary while poll processing lags past it, making the wall-clock etMin read the wrong
+        // side of the window). Switched to firedEtMin (the row's own triggering-bar time), same
+        // fix shape as mainInRthOpenDeadZone/mainInNewEntryDeadZone above.
+        const liveTimeWindowBlocked = isLiveTimeWindowBlocked(active.type, firedEtMin);
         // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
         // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
         // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
@@ -7307,7 +7313,10 @@ export default function createACDRouter(io) {
             // Only evaluated when this row would otherwise go ACTIVE (it can't change a SHADOW row).
             const shadowOpeningDriveCounter = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked
               && shadow.direction && (await isOpeningDriveCounterTrade(shadow.direction)).blocked;
-            const shadowLiveTimeWindowBlocked = isLiveTimeWindowBlocked(shadow.type, etMin);
+            // FIXED 2026-09-25 (OPEN_DECISION live_time_window_blocked_etmin_staleness_20260925) --
+            // same firedEtMin fix as the main active-slot site above; this loop's INSERT also
+            // stamps fired_at from firedAtTs (the triggering bar's time), not NOW().
+            const shadowLiveTimeWindowBlocked = isLiveTimeWindowBlocked(shadow.type, firedEtMin);
             const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowLiveTimeWindowBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
