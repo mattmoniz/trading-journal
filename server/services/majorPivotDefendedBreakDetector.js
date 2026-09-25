@@ -99,7 +99,11 @@ function isGlobexMod(mod) {
 // filters to "recent" ones before attempting an insert. Exported (not just used internally)
 // so this live code path can be directly verified against the backtest's own known-good
 // output -- see scratch/verify_live_detector_matches_backtest.mjs.
-export async function computeDefendedBreaks() {
+// zigzagThreshold param added 2026-09-25 (user request: test a looser threshold for "does
+// following the breakout direction work" research WITHOUT changing what live actually fires on
+// -- see scratch/backtest_follow_defended_break_looser_20260925.mjs) -- defaults to the live
+// constant, so every existing caller (the live detector itself) is byte-identical, unchanged.
+export async function computeDefendedBreaks(zigzagThreshold = ZIGZAG_THRESHOLD) {
   const barsRes = await query(`
     SELECT to_char(ts, 'YYYY-MM-DD HH24:MI:SS') as tc, to_char(ts,'YYYY-MM-DD') as d,
            open::float, high::float, low::float, close::float
@@ -128,7 +132,7 @@ export async function computeDefendedBreaks() {
   for (const d of uniqueDates) { if (!atrCache.has(d)) atrCache.set(d, getRollingATR(d)); }
   await Promise.all(Array.from(atrCache.values()));
 
-  const accepted = await walkZigZagAcceptance(merged, bars5m, rollDates, ZIGZAG_THRESHOLD, atrFor);
+  const accepted = await walkZigZagAcceptance(merged, bars5m, rollDates, zigzagThreshold, atrFor);
 
   const completedBreaks = [];
   for (const pivot of accepted) {
