@@ -268,12 +268,23 @@ export async function completePitchCatchShadows() {
 // the real trade resolves, so this walk is simpler than the other two (a single
 // stepT1FloorRunner call per bar, no composed inner widerTargetState).
 export async function completeT1FloorRunnerShadows() {
+  // FIXED 2026-09-25 (DeepSeek code review, before this mechanism's forward data had a chance to
+  // accumulate any real rows -- caught same day it shipped): the WHERE below now mirrors the
+  // INLINE gate's eligibility exactly (resolveSetups.js's generic terminal branch is only
+  // reached when wider_target_mult/runner_trail_width/extend_target_level are all null, and
+  // ABSORPTION_LONG's own snapshot branch -- resolved_at=NOW(), not a bar-walk touch -- never
+  // reaches that branch at all). Without this, the completion pass silently picked up
+  // wider-target-eligible-but-too-slow-to-arm rows and ABSORPTION_LONG snapshot rows the inline
+  // shadow correctly excludes -- a different, broader population than what was backtested.
   const pending = await query(`
-    SELECT id, trade_date::text as trade_date, fired_at::text as fired_at,
+    SELECT id, trade_date::text as trade_date, fired_at::text as fired_at, resolved_at::text as resolved_at,
            entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
            t1_level::float as t1_level, actual_pnl::float as actual_pnl
     FROM active_setups
     WHERE status='RESOLVED' AND resolution='TARGET_HIT' AND resolution_method='PRICE_CLEAN'
+      AND wider_target_mult IS NULL AND runner_trail_width IS NULL AND extend_target_level IS NULL
+      AND setup_type <> 'ABSORPTION_LONG'
+      AND resolved_at IS NOT NULL
       AND t1_floor_runner_shadow IS NULL
   `);
   if (!pending.rows.length) return 0;
@@ -290,11 +301,19 @@ export async function completeT1FloorRunnerShadows() {
     const firedMod = firedAtToMod(row.fired_at);
     const ft = long ? entry + WIDER_TARGET_MULT * Math.abs(t1 - entry) : entry - WIDER_TARGET_MULT * Math.abs(t1 - entry);
 
+    // FIXED 2026-09-25 (DeepSeek code review, CRITICAL): was `ts > row.fired_at` -- stepT1FloorRunner
+    // has NO arming phase (it assumes T1 is ALREADY banked the instant it starts walking), so
+    // feeding it bars from fired_at (near entry, well before t1) made its own floorHit check
+    // (bar.low <= t1 for a long) fire almost immediately on bar 1, resolving nearly every row as
+    // T1_FLOOR_HIT/delta≈0 without ever actually walking the runner. Must start strictly after the
+    // real T1-touch bar (resolved_at), matching the inline path's own bars.rows.slice(barCount)
+    // exactly -- resolved_at IS the touch bar's own bar.ts for this population (the generic
+    // branch writes resolvedAt=bar.ts), so `ts > resolved_at` is the correct equivalent.
     const barsRes = await query(`
       SELECT ts::text as ts, high::float, low::float, close::float,
         (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int as mod
       FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts ASC
-    `, [row.fired_at]);
+    `, [row.resolved_at]);
     if (!barsRes.rows.length) continue;
 
     let floorState = {};
