@@ -22,7 +22,13 @@ import { query } from '../server/db.js';
 
 const TARGET_TYPES = ['POC_ROTATION_JOIN_LONG', 'POC_ROTATION_JOIN_SHORT', 'IB_LOW_PNR_SHORT'];
 const COMMIT = process.argv.includes('--commit');
-const BACKUP_TABLE = 'active_setups_timeout_exit_relabel_backup_20260915';
+// Re-runs (e.g. the 2026-09-25 expiry-race repair) pass --backup-table=<fresh name>: the
+// original 20260915 table was created with active_setups' column set AS OF that date, so
+// appending rows after new columns were added fails ("INSERT has more expressions than target
+// columns") -- safely, before the UPDATE, but it still blocks the repair.
+const BACKUP_TABLE = process.argv.find(a => a.startsWith('--backup-table='))?.split('=')[1]
+  ?? 'active_setups_timeout_exit_relabel_backup_20260915';
+if (!/^[a-z0-9_]+$/.test(BACKUP_TABLE)) throw new Error(`invalid --backup-table name: ${BACKUP_TABLE}`);
 
 async function main() {
   const check = await query(`

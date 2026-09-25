@@ -24,6 +24,7 @@ import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMulti
 import { cacheGet, cacheSet } from '../lib/cache.js';
 import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
+import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from '../services/openingDriveGate.js';
 export { dropToTimeline } from '../services/acdShared.js';
 import { expireStaleSetups, structurallyInvalidateSetups } from '../services/setupExpiry.js';
 export { expireStaleSetups, structurallyInvalidateSetups };
@@ -3755,6 +3756,10 @@ export default function createACDRouter(io) {
                 if (live.status !== 'SHADOW' && await isSameSetupRefireBlocked(todayET, svSetupType, 'RTH')) {
                   live = { status: 'SHADOW', reason: 'SAME_TYPE_REFIRE' };
                 }
+                // Opening-drive counter-trade gate (2026-09-25) -- see openingDriveGate.js header.
+                if (live.status !== 'SHADOW' && (await isOpeningDriveCounterTrade(direction)).blocked) {
+                  live = { status: 'SHADOW', reason: OPENING_DRIVE_GATE.REASON };
+                }
                 const svRegimeStamp = computeRegimeStamp(svEntry, await getValueAreaRegimeMap(todayET).catch(() => ({})));
                 const svFireTags = await computeFireTags(todayET, 'RTH', bar.tod);
                 const svVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
@@ -6869,6 +6874,11 @@ export default function createACDRouter(io) {
         const sameTypeRefireBlocked = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen
           ? await isSameSetupRefireBlocked(todayET, active.type, 'RTH')
           : false;
+        // Opening-drive counter-trade gate (2026-09-25) -- see server/services/openingDriveGate.js
+        // header. No-op (no queries) outside 9:31-10:00 ET; same short-circuit pattern as above.
+        const openingDriveCounter = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen && !sameTypeRefireBlocked && rthDir
+          ? (await isOpeningDriveCounterTrade(rthDir)).blocked
+          : false;
         // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
         // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
         // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
@@ -6896,7 +6906,8 @@ export default function createACDRouter(io) {
           || !!crossDirectionCooldownMin
           || postWinOppBlocked
           || oppositeDirectionOpen
-          || sameTypeRefireBlocked;
+          || sameTypeRefireBlocked
+          || openingDriveCounter;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
@@ -6905,6 +6916,7 @@ export default function createACDRouter(io) {
           : postWinOppBlocked ? 'POST_WIN_OPP_FAMILY_REV'
           : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
+          : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
         // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
@@ -7222,7 +7234,11 @@ export default function createACDRouter(io) {
             // short-circuit pattern.
             const shadowSameTypeRefireBlocked = !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen
               && await isSameSetupRefireBlocked(todayET, shadow.type, 'RTH');
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked) ? 'ACTIVE' : 'SHADOW';
+            // Opening-drive counter-trade gate (2026-09-25) -- see openingDriveGate.js header.
+            // Only evaluated when this row would otherwise go ACTIVE (it can't change a SHADOW row).
+            const shadowOpeningDriveCounter = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked
+              && shadow.direction && (await isOpeningDriveCounterTrade(shadow.direction)).blocked;
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's

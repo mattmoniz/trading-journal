@@ -116,6 +116,35 @@ export const CONTEXTUAL_DIRECTION_TYPES = new Set([
 ]);
 
 /**
+ * Setup types whose stop AND target are each anchored to their OWN independent real
+ * structural level (via acdCandidateBuilder.js's t1GuardLabeled() -- "every candidate must
+ * be a REAL structural level, no arbitrary price+multiple fallbacks") rather than a
+ * calibrated, proportional pair from OPTIMAL_STOP. Exhaustive list, derived directly from
+ * every t1GuardLabeled() call site in acdCandidateBuilder.js (2026-09-24) -- not a guess.
+ *
+ * WHY THIS MATTERS: an MFE-to-risk ratio ("R-multiple") is only a meaningful "does this
+ * setup run far" metric when stop/target come from the SAME calibration process. For this
+ * family, the ratio is essentially arbitrary -- a real check on 15 C_PAIRED_LONG trades
+ * found it ranging from 0.01 to 105.50, driven entirely by how far apart two unrelated
+ * levels (e.g. Opening Range Low vs Prior Day VAH) happened to sit that day, not by how far
+ * price ran after entry. Found 2026-09-24 (user: "why did they hit two huge targets today"
+ * after being told these setups show no real 2x+ "propensity"). The right metric for this
+ * family is TARGET_HIT rate (does price ever reach the independently-placed level), never
+ * an MFE/risk average or ranking. See CLAUDE.md's Conventions entry on this.
+ *
+ * Explicitly does NOT include FAILED_AUCTION_LONG/SHORT (reads OPTIMAL_STOP's calibrated
+ * stop/target) or ZONE_EDGE_FADE (an ATR-scaled fade) -- both were wrongly guessed into an
+ * earlier draft of this classification before being checked against the real code.
+ */
+export const LEVEL_ANCHORED_EXIT_TYPES = new Set([
+  'TRT_LONG', 'TRT_SHORT', 'TRT_LONG_V2', 'TRT_SHORT_V2', 'TRT_MAH_LONG', 'TRT_MAH_SHORT',
+  'A_UP_STRONG', 'A_DOWN_WEAK',
+  'C_PAIRED_LONG', 'C_PAIRED_SHORT', 'C_REVERSAL_LONG', 'C_REVERSAL_SHORT',
+]);
+
+export const usesLevelAnchoredExit = (setupType) => LEVEL_ANCHORED_EXIT_TYPES.has(setupType);
+
+/**
  * Strategy family: MEAN_REVERSION (betting price reverts off a touched level) vs
  * CONTINUATION (betting price keeps moving the direction it's already moving).
  *
@@ -688,3 +717,13 @@ export function resolveSetupType(rawType, lv, { sessionOpenPrice, prevRthClose }
   // UNCONDITIONAL_VARIANT_BY_BASE_TYPE above) — reuse rather than re-list them here.
   return resolveUnconditionalTrailVariant(rawType);
 }
+
+// Setup families whose DESIGNED exit is a time-based mark-to-market handled by their own
+// branch in resolveSetupsByPrice() (resolution_method='TIMEOUT_EXIT' -- see resolveSetups.js's
+// POC_ROTATION_JOIN / IB_LOW_PNR / OVERNIGHT_ORDERFLOW_ branches). expireStaleSetups() (the
+// generic 60s backstop) must give these a grace window past expires_at before force-closing
+// them as MARK_TO_MARKET: found 2026-09-25 that the two resolvers raced at the timeout instant
+// and the backstop won ~1 in 5 times (7 of 36 POC_ROTATION_JOIN timeouts since 2026-09-15),
+// mislabeling real designed-exit wins as MARK_TO_MARKET -- which REAL_TRADE_FILTER excludes,
+// silently undercounting real N/EV (test_invariants.mjs check [26]).
+export const DESIGNED_TIMEOUT_EXIT_PREFIXES = Object.freeze(['POC_ROTATION_JOIN', 'IB_LOW_PNR', 'OVERNIGHT_ORDERFLOW_']);

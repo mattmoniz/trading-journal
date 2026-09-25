@@ -8,7 +8,7 @@
 
 import { query } from '../db.js';
 import { LIVE_INSTRUMENT } from '../config/instruments.js';
-import { resolveDirection } from '../config/setupTypes.js';
+import { resolveDirection, DESIGNED_TIMEOUT_EXIT_PREFIXES } from '../config/setupTypes.js';
 import { dropToTimeline } from './acdShared.js';
 import { getLatestBars } from './priceRetrieval.js';
 
@@ -45,12 +45,21 @@ export async function expireStaleSetups(io) {
   // stop_level/t1_level added 2026-08-17 (OPEN_DECISION islongsetup_gap_variant_direction_bug)
   // -- resolveDirection() below needs both for its price-derived direction fallback; this
   // SELECT previously omitted them entirely, so the fallback silently never ran here.
+  // Designed-timeout families (DESIGNED_TIMEOUT_EXIT_PREFIXES) get a grace window so their own
+  // resolveSetupsByPrice() branch (15s poll) records the designed TIMEOUT_EXIT first; this 60s
+  // backstop only closes them if that branch still hasn't after the grace (e.g. no bars
+  // arrived), in which case MARK_TO_MARKET is the correct "accidental close" label. The grace
+  // is plumbing (several multiples of the 15s poll), not a trading threshold.
+  // `_` is a LIKE single-char wildcard -- escape it so this is an exact prefix match, same as
+  // resolveSetups.js's startsWith() checks (DeepSeek code review 2026-09-25).
+  const timeoutPatterns = DESIGNED_TIMEOUT_EXIT_PREFIXES.map(p => `${p.replace(/_/g, '\\_')}%`);
   const candidates = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, entry_zone_low, entry_zone_high,
            stop_level, t1_level
     FROM active_setups
     WHERE status IN ('ACTIVE', 'SHADOW') AND expires_at IS NOT NULL AND expires_at < NOW()
-  `);
+      AND NOT (setup_type LIKE ANY($1::text[]) AND expires_at > NOW() - INTERVAL '5 minutes')
+  `, [timeoutPatterns]);
   let lastKnownClose = null;
   if (candidates.rows.length) {
     const pxRow = await query(`SELECT close::float as close FROM price_bars_primary WHERE symbol='NQ' ORDER BY ts DESC LIMIT 1`);

@@ -42,6 +42,7 @@
 // keeps accumulating on exactly what's held back.
 import { isOppositeDirectionOpen } from '../routes/acd.js';
 import { CAPITAL_EXPOSURE_OVERRIDE } from './setupEligibility.js';
+import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from './openingDriveGate.js';
 
 export async function checkStandardLiveGates({ direction, setupType }) {
   // Guard against a future caller passing an unresolved direction -- isOppositeDirectionOpen
@@ -55,6 +56,13 @@ export async function checkStandardLiveGates({ direction, setupType }) {
 
   if (await isOppositeDirectionOpen(direction)) {
     return { forceShadow: true, reason: 'OPPOSITE_DIRECTION_OPEN' };
+  }
+
+  // Opening-drive counter-trade gate (2026-09-25) -- see openingDriveGate.js header. Clock-
+  // windowed to 9:31-10:00 ET inside the function, so it's a no-op (no queries) for Globex
+  // callers and for any RTH call outside that window.
+  if ((await isOpeningDriveCounterTrade(direction)).blocked) {
+    return { forceShadow: true, reason: OPENING_DRIVE_GATE.REASON };
   }
 
   return { forceShadow: false, reason: null };

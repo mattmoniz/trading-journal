@@ -227,4 +227,39 @@ echo "=== Daily calibration: $(date) ==="
 /usr/bin/node scripts/verify_va_overlap_streak_real_coverage.mjs
 /usr/bin/node scripts/verify_wide_ib_turbulent_exit_timing_recheck.mjs
 
+# Tick-microstructure trend/efficiency-ratio fade-outcome finding (2026-09-23) --
+# PROVISIONAL, not yet confirmed. Moved from weekly to DAILY same day per user request
+# (matching the precedent already set for the live trade meta-labeler's own walk-forward
+# recheck: cheap to run, and daily catches newly-resolved real fade fires as they happen
+# instead of waiting up to a week). Re-runs the real active_setups join + LightGBM
+# classifier against a genuinely sliding 183-day window and updates
+# RESEARCH_CLAIM tick_trend_efficiency_fade_outcome_provisional_20260923 either way --
+# each run appends a new performance_audit row (this table's own append-only
+# convention), so the FULL day-by-day history of the AUC/p-value is preserved, not just
+# the latest snapshot -- see scripts/report_tick_trend_fade_history.mjs to view the trend
+# and judge whether the finding is stable/reliable over time, not just whether any single
+# day's number clears a bar. Never auto-promotes to CONFIRMED even if the numbers
+# improve -- that's a human call. See docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md.
+/usr/bin/node scripts/recheck_tick_trend_fade_finding.mjs
+
+# Same daily self-recalibration discipline, applied to the ordinal "how far will it run"
+# (reach_R) fade-outcome model (RESEARCH_CLAIM ordinal_reach_r_track_b_harness_20260924,
+# 2026-09-24). Fade-only, tick-based -- the all-setups/bar-only variant tested the same day
+# was negative (Spearman -0.1997, fails its own permutation null) and is NOT rechecked here.
+/usr/bin/node scripts/recheck_ordinal_reach_r_finding.mjs
+
+# Same daily self-recalibration discipline, applied to the MAE/MFE quantile path-distribution
+# gating finding (RESEARCH_CLAIM mae_mfe_quantile_pathdist_gate_20260924, 2026-09-24 --
+# DeepSeek's proposal: predict the forward MAE/MFE distribution and derive stop/target from
+# it via a rule, instead of directly fitting a parameter the way OPTIMAL_STOP does). Gates
+# the level-pair combinatorial idea. Fade-only, RTH-only, tick-based.
+/usr/bin/node scripts/recheck_quantile_model_finding.mjs
+
+# Opening-drive counter-trade gate (LIVE force-SHADOW since 2026-09-25,
+# server/services/openingDriveGate.js). Reuses the service's own pure functions; FROZEN
+# percentile -- this script reports retrospective drift + the post-freeze prospective sample
+# and fires the pre-registered look at >=20 distinct prospective days. It never changes the
+# live P. See OPEN_DECISION opening_drive_gate_6week_revisit_20260925.
+/usr/bin/node scripts/recheck_opening_drive_gate.mjs
+
 echo "=== Daily calibration complete: $(date) ==="
