@@ -22,7 +22,7 @@ Two caveats that apply to everything below:
 ## 2. Systemic critique (what's structurally wrong, ranked by how much I trust it)
 
 1. **The fade roster is a near-zero-edge book with a slightly-too-low hit rate.** Most fade families calibrate to stop ≈ target (many on the `volatility-scaled-default` 37/38pt fallback, all `_OVERNIGHT` types on a 45/90 default), which needs ~49% WR; they're realizing ~40-45%. There is no family-level fix hiding in the time-of-day or first-30-minutes data (tested below) — the improvement has to come from entries or exits, not filters.
-2. **Wide-target calibrations don't hold up live.** The two live setups calibrated to a 2:1 target — `IB_HIGH_FADE_SHORT` (25/50) and `OR5_HIGH_FADE_SHORT` (35-40/70-80) — realized **12% and 11% WR live since 09-10** against ~32-37% breakeven. The EV-maximizing optimizer picks far targets that rarely print. Worth re-running their calibration with a hit-rate-aware objective (the forward-path/exit-policy tooling built on 09-24 is the right tool).
+2. **Wide-target calibrations look bad live, but that's not what's fixable.** `IB_HIGH_FADE_SHORT` (25/50) and `OR5_HIGH_FADE_SHORT` (35-40/70-80) realized 12% and 11% WR live since 09-10 vs ~32-37% breakeven — yet the §10 test found tightening their targets makes them *worse*. (Corrected: an earlier draft of this review recommended re-calibrating them.)
 3. **The live bar lets mildly negative setups stay live.** SUPPRESS triggers only below -$5/trade real EV, so `PD_VAL_FADE_LONG` (all-time -$4.85) and `IB_LOW_FADE_LONG` (-$1.67) are live now. I tested raising the bar retroactively (status as of the prior day, no lookahead): EV≥0 → +$400 over 46 days, EV≥2.5 → +$720, CI crossing zero every time. Directionally right, not decisive — not changed.
 4. **(Lead, not confirmed) The first live touch may be the weaker trade.** Live trades averaged -$9.08 vs -$0.63 for SHADOW trades of the *same setup on the same day* (CI [-19.7, +3.4]); the best same-day shadows were re-fires suppressed by the cluster/refire gates (+$4). Not promotion timing (setup-days with only-live vs only-shadow fires are equal). Consistent with the opening-burst finding that later fires beat earlier ones. `RESEARCH_CLAIM live_first_touch_underperforms_same_day_shadow_lead_20260925`.
 5. **New setup types lose while unproven.** A setup's first ~5 real fires average -$8.9/trade in every window (N=330/603/799). They're SHADOW, so it's not live money — but it is most of the "mass firing" noise on the dashboard. (Correction to an earlier draft: "setups with <20 fires caused all the losses" was partly circular; with a no-lookahead definition the proven/unproven gap is not significant.)
@@ -32,7 +32,7 @@ Two caveats that apply to everything below:
 
 | Setup | 8wk pooled (N / EV / CI) | Live ACTIVE since 08-01 | Critique → suggestion |
 |---|---|---|---|
-| `IB_HIGH_FADE_SHORT` | 89 / +$3.54 / [-8, 15] | 25 / -$11.50 (12% WR since 09-10) | Wide 25/50 target rarely hits live. Re-calibrate with a hit-rate-aware objective before trusting it live. |
+| `IB_HIGH_FADE_SHORT` | 89 / +$3.54 / [-8, 15] | 25 / -$11.50 (12% WR since 09-10) | Wide 25/50 target rarely hits live — but the §10 test shows a *closer* target makes it worse (-$5/trade), so leave the geometry; the live gap looks like thin-N noise. |
 | `PD_VAL_FADE_LONG` | 84 / +$3.11 / [-10, 17] | 42 / -$8.19 | Sits at -$4.85 all-time — live only because the SUPPRESS line is -$5. Candidate for the live-bar decision above. |
 | `IB_LOW_FADE_LONG` | 63 / +$1.73 / [-14, 19] | 16 / -$3.81 | Flat. Fine to leave; no edge to protect. |
 | `IB_MID_SCALP_FADE_SHORT` | 51 / +$3.40 / [-13, 20] | 13 / **+$13.73** | The one live setup doing well live. Tight 12/40 geometry (BE 23%). Keep. |
@@ -95,3 +95,25 @@ What the data says, honestly:
 - 283 clean RTH days (2025-03 → 2026-09). Most-approached levels: DAILY_OPEN, OR5 mid/low/high, IB_MID, ONH, CAM_R1, IB_HIGH, PD_CLOSE, PD_VAH. VWAP levels excluded (their stored values include the rest of that day = lookahead); OR/IB only counted after they form.
 - Most frequent within-15pt pairs are mostly near-duplicates by construction (PD_IB_LOW+PD_LOW 53% of days, PD_HIGH+PD_IB_HIGH 43%, 3M_POC+PM_POC 39%, DAILY_OPEN+OR5_MID 37%).
 - **Confluence zones see less follow-through, not more**: 183pt vs 244pt max move over the next 4 hours vs isolated levels (0.87× after matching time of day). No pair beats the isolated-level baseline with confidence; 25 pairs are significantly below it. The "which pair goes furthest" ranking doesn't persist from the first half of history to the second (rank correlation 0.04). `RESEARCH_CLAIM level_confluence_top50_travel_20260925`.
+
+## 10. Concrete setup improvements — tested (added after review feedback)
+
+Method (`scratch/setup_improvement_variants_20260925.mjs`): for every setup with ≥30 real trades, re-simulate its *current* stop/target on real bars (so the baseline is computed the same way as the variants), then 5 fixed changes: target = 1× stop, target ×0.75, stop ×0.75, skip fires after 1:00pm, skip fires 9:30-9:34. "Robust" = day-blocked CI above zero and positive in both halves; only trusted where the simulator reproduces the setup's real outcomes. ~186 tests were run, so ~5 would pass by luck — hence the two-window requirement.
+
+**Recommended (holds in both the 8- and 11-week windows):**
+1. **`PD_VAL_FADE_LONG` (live): stop firing it live after 1:00pm.** +$5.02/trade (8wk) and +$5.55/trade (11wk), CI above zero both times, both halves positive. Smallest, safest change on the list.
+
+**Promising, re-check before acting (one window only):**
+2. `PD_VAL_FADE_LONG`: target = stop distance (~39pt instead of 50) — +$13/trade over 11 weeks, but most of it from the earlier half.
+3. `GLOBEX_VWAP_FADE_LONG`: widen the target to equal the stop (it's ~25pt target vs ~48pt stop now, which needs ~66% WR to break even) — +$10/trade over 11 weeks, same direction over 8. Only matters once Globex is unpaused.
+4. Overnight `_OVERNIGHT` fades on the 45/90 default: closer structural targets helped several (see §4 VWAP row correction); a proper overnight geometry calibration is the fix, not per-level targets.
+
+**Tested and rejected — don't do these:**
+- Any one-size geometry change across the whole roster (target = 1× stop: -$2.06/trade; stop ×0.75: -$4.59/trade).
+- Tightening `IB_HIGH_FADE_SHORT`'s target (-$5/trade).
+- Changing `PD_POC_FADE_LONG` or `ONL_FADE_LONG` geometry — their current settings beat every variant.
+- `IB_BULLISH` target change (+$9.8 over 8 weeks flips to -$7.4 over 11).
+
+**Can't be judged with a generic simulator** (their real exits — structural invalidation, level-anchored targets, special timeouts — aren't reproduced; the simulated baseline matched real P&L on under half their trades): `IB_BEARISH`, `C_PAIRED_*`, `FAILED_SWEEP_REVERSAL_*`, `STOP_SWEEP_LONG`, `IB_LOW_FADE_*`, `FAILED_AUCTION_LONG`. Improving those needs setup-specific simulation.
+
+Decision record: `OPEN_DECISION setup_improvement_candidates_20260925`.
