@@ -32,11 +32,20 @@
   .mono { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-variant-numeric: tabular-nums; }
 
   /* Top market bar — left padding reserved so the fixed hamburger button never overlaps the NQ chip */
+  /* Two-column layout (2026-09-24, user request: group NQ-through-Vol-Watch into two
+     columns of similar datapoints instead of one wrapping row) -- col 1 = price/session
+     character + the sizing decision that follows from it, col 2 = volatility/volume-flow
+     readings across different lenses (today's vol, VWAP-distance x3 timeframes, overnight
+     rotation, volume pile). See renderPulseBar()'s col1Chips/col2Chips split. */
   #pulse-bar {
-    display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 6px;
+    display: flex; flex-direction: column; gap: 6px;
     background: rgba(15,23,42,0.96); border-bottom: 1px solid var(--border);
     padding: 10px 14px 10px 46px; position: sticky; top: 0; z-index: 10; backdrop-filter: blur(10px);
   }
+  /* Each group is its own wrapping row (chips keep natural size, wrap onto a 2nd
+     line if needed) -- NOT a side-by-side column, which squeezed every chip to
+     half width and forced overflow on a phone-width screen (2026-09-24 user report). */
+  .pulse-col { display: flex; flex-wrap: wrap; gap: 8px; row-gap: 6px; }
 
   /* Hamburger nav — a separate fixed element, never touched by pulse-bar's own
      periodic innerHTML re-render, so it survives every 15s poll untouched. */
@@ -67,52 +76,13 @@
   .chip .val { font-size: 14px; font-weight: 700; }
   .chip .sub { font-size: 11px; font-weight: 700; text-transform: uppercase; }
 
-  /* Standalone volatility-regime card (2026-09-08) -- deliberately its own visual block, not
-     a pulse-bar chip: this reads from server/services/volatilityRegime.js, a module kept
-     structurally separate from acd.js/setups.js per user direction ("not tailored to our
-     setups... its own class, not acd"). Muted/quiet styling since it's informational only,
-     never a live alert. */
-  #vol-regime-card {
-    display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
-    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
-    background: rgba(255,255,255,0.02); font-size: 12px; color: var(--dim);
-    cursor: pointer;
-  }
-  #vol-regime-card:active { background: rgba(255,255,255,0.05); }
-  #vol-regime-card .vr-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
-  #vol-regime-card .vr-scale { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; color: var(--text); font-weight: 700; }
-  #vol-regime-card .vr-asof { margin-left: auto; font-size: 11px; }
-
-  /* ML meta-labeling silo card (2026-09-21) -- fully isolated read-only comparison, see
-     server/services/mlSiloService.js's own header for the "why isolated" account. Purple
-     accent (distinct from the neutral/muted styling every other informational card here
-     uses) since this is a genuinely different kind of thing -- a whole parallel system
-     being evaluated, not a passive descriptive reading. */
-  #ml-silo-card {
-    display: flex; align-items: center; gap: 10px; margin: 0 0 14px; flex-wrap: wrap;
-    padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(168,85,247,0.35);
-    background: rgba(168,85,247,0.06); font-size: 12px; color: var(--dim);
-    cursor: pointer;
-  }
-  #ml-silo-card:active { background: rgba(168,85,247,0.12); }
-  #ml-silo-card .ml-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; color: #d8b4fe; }
-  #ml-silo-card .ml-stat { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; font-weight: 700; }
-
-  /* Live pulse-reading card (2026-09-09) -- see server/services/pulseReading.js's header: this
-     is a raw, live "is volume accelerating or decelerating" read, NOT a validated trading
-     signal (RESEARCH_CLAIM pulse_vwap_slope_direction_negative_20260909 found it doesn't
-     reliably predict direction). Deliberately muted/neutral, matching the volatility card's
-     own honest-descriptive styling. */
-  #pulse-reading-card {
-    display: flex; align-items: center; gap: 10px; margin: 0 0 14px;
-    padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border);
-    background: rgba(255,255,255,0.02); font-size: 12px; color: var(--dim);
-  }
-  #pulse-reading-card .pr-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
-  #pulse-reading-card .pr-state { font-weight: 700; }
-  #pulse-reading-card .pr-state.up { color: var(--green); }
-  #pulse-reading-card .pr-state.down { color: var(--dim); }
-  #pulse-reading-card .pr-note { margin-left: auto; font-size: 10px; color: var(--dim); }
+  /* Volatility-regime and pulse-reading -- 2026-09-24: compacted from two full-width
+     multi-line boxes into ordinary .chip pills (user request: "too much screenspace").
+     Logic/data source stays separate (still their own service files, still their own load
+     functions, per the original "not tailored to our setups" direction) -- only the VISUAL
+     presentation changed, matching the chip() helper's own markup exactly so they sit in
+     the same compact row as vol-regime/pulse-reading's shared wrapper below. */
+  #info-chips-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 14px; }
 
   /* Container */
   .wrap { max-width: 480px; margin: 0 auto; padding: 14px; }
@@ -167,8 +137,10 @@
   .sweep-watch-note { font-size: 11px; color: var(--dim); margin-top: 6px; line-height: 1.5; }
 
   /* Session timeline */
-  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #timeline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; cursor: pointer; user-select: none; }
   #timeline-head h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+  #timeline-chevron { color: var(--dim); font-size: 11px; padding: 2px 4px; }
+  #timeline-body.collapsed { display: none; }
   #timeline-stats { display: flex; gap: 14px; font-size: 13px; margin-bottom: 12px; padding: 8px 12px; background: rgba(255,255,255,0.03); border-radius: 6px; border: 1px solid var(--border); }
   #vb-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
   #timeline-stats span b { font-family: monospace; }
@@ -320,25 +292,29 @@
   <a onclick="jumpTo('sec-performance')">Performance</a>
   <a href="/setup-performance">Setup Performance →</a>
   <a href="/loss-prevention">Loss Prevention →</a>
-  <a onclick="jumpTo('ml-silo-card')">ML Silo</a>
+  <a onclick="jumpTo('sec-models')">Models</a>
 </div>
 
-<div id="pulse-bar"></div>
+<div id="pulse-bar"><div id="pulse-col-1" class="pulse-col"></div><div id="pulse-col-2" class="pulse-col"></div></div>
 
 <div class="wrap">
-  <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
-  <div id="ml-silo-card" onclick="openMlSiloModal()"></div>
-  <div id="pulse-reading-card"></div>
+  <div id="info-chips-row">
+    <div id="vol-regime-card" onclick="openVolRegimeHistoryModal()"></div>
+    <div id="pulse-reading-card"></div>
+  </div>
   <div id="setup-card"></div>
   <div id="standalone-position-card"></div>
   <div id="sweep-watch"></div>
 
-  <div id="timeline-head">
+  <div id="timeline-head" onclick="toggleTimelineCollapse()">
     <h2 id="timeline-title">Session Timeline</h2>
+    <span id="timeline-chevron">▾</span>
   </div>
-  <div id="vb-filter-row"></div>
-  <div id="timeline-stats"></div>
-  <div id="timeline-list"><div class="loading">Loading…</div></div>
+  <div id="timeline-body">
+    <div id="vb-filter-row"></div>
+    <div id="timeline-stats"></div>
+    <div id="timeline-list"><div class="loading">Loading…</div></div>
+  </div>
 
   <div class="section-block" id="sec-performance">
     <h2>Performance</h2>
@@ -365,6 +341,18 @@
   </div>
 </div>
 
+<div class="wrap section-block" id="sec-models">
+  <h2>Models</h2>
+  <div class="perf-head-row">
+    <div class="perf-subhead">Track B / ML tracking</div>
+    <div id="models-toggle" class="perf-toggle"></div>
+  </div>
+  <div id="models-stat-row" style="font-size:12px;color:var(--dim);margin-top:8px;display:flex;gap:14px;flex-wrap:wrap;"></div>
+  <canvas id="models-history-canvas" class="equity" style="margin-top:10px;"></canvas>
+  <div id="models-detail" style="margin-top:10px;font-size:11px;color:var(--dim);"></div>
+  <div id="models-illustration"></div>
+</div>
+
 <div id="modal-backdrop">
   <div id="modal"></div>
 </div>
@@ -375,6 +363,29 @@ const $ = (id) => document.getElementById(id);
 // Sign at exactly 0 matches MarketPulseBar.jsx's `ptsFromOpen >= 0 ? '+' : ''` (>= not >) --
 // found disagreeing (no '+' at exactly 0pt here vs. '+0pt' there) in the 2026-09-07 audit.
 function fmtPct(n) { return (n >= 0 ? '+' : '') + n; }
+
+// KEEP IN SYNC with server/config/setupTypes.js's inferDirection() -- the canonical resolver,
+// duplicated here because this is a standalone page that can't import that module. Fixed
+// 2026-09-24 (user-caught live: A_UP_STRONG and C_PAIRED_LONG fired on the identical real
+// cluster touch -- same entry, same direction -- but showed opposite-signed live unrealized
+// P&L). Root cause: 3 separate call sites here used a bare `.includes('LONG') ||
+// .includes('BULLISH')` check, which is missing the `_UP`/`_DOWN` patterns the real resolver
+// also checks -- "A_UP_STRONG" contains neither "LONG" nor "BULLISH" as a substring, so it
+// silently fell through to the SHORT branch of openPnlEstimate(), flipping its live P&L sign
+// relative to the real direction. This is the exact "each consumer hand-rolls its own
+// direction heuristic" anti-pattern setupTypes.js's own header names -- one more independent
+// instance of it, now fixed by giving this file one shared, correct copy instead of 3 partial
+// ones. Never silently returns a default direction -- callers must handle null (setup name
+// carries no direction, e.g. ZONE_EDGE_FADE) explicitly, matching the real resolver's contract.
+function isLongSetupType(setupType) {
+  if (!setupType) return null;
+  const base = (setupType || '').replace(/_GAP_(UP|DOWN)$/, '');
+  if (base.includes('LONG') || base.includes('BULLISH') || base.includes('_UP')) return true;
+  if (base.includes('SHORT') || base.includes('BEARISH') || base.includes('_DOWN')) return false;
+  if (base.endsWith('UP')) return true;
+  if (base.endsWith('DOWN')) return false;
+  return null;
+}
 // KEEP IN SYNC with MarketPulseBar.jsx's sigmaColor() -- same 1.5σ/1σ thresholds, duplicated
 // because this is a standalone page that can't import that module.
 function sigmaColor(s) {
@@ -404,28 +415,22 @@ async function loadVolRegime() {
 // here. Only shows a line when something IS favorable today (matches #sweep-watch's own "stay
 // hidden unless there's something to say" convention) -- with only one registry entry so far,
 // showing "not favorable" every single day it isn't MEDIUM would just be noise.
+// Compacted 2026-09-24 (user: "too much screenspace") -- one chip() line instead of a
+// wrapped multi-line box. Roll-week-pause/degenerate-fallback/favorable-setup detail moved
+// into the tap-for-detail modal (openVolRegimeHistoryModal) instead of always being shown
+// inline; the sub-line still surfaces a "Favors X" or "⏸ Paused" flag when one is active,
+// since those are the only two states worth a glance without tapping in.
 function renderVolRegimeCard(regime, favorableSetups) {
   const el = $('vol-regime-card');
   if (!el) return;
   if (!regime) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
-  el.style.flexWrap = 'wrap';
   const favorable = (favorableSetups || []).filter(s => s.favorableToday);
-  el.innerHTML =
-    '<span class="vr-label">Volatility vs. recent normal</span>' +
-    '<span class="vr-scale">' + regime.scale.toFixed(2) + 'x</span>' +
-    (regime.degenerateFallback ? '<span title="GARCH fit was numerically degenerate today; carried forward the last valid reading">⚠</span>' : '') +
-    '<span class="vr-asof">as of ' + regime.asOfClose + ' close</span>' +
-    // Roll-week pause note (2026-09-14, user-caught "GARCH looks frozen"): the reading
-    // genuinely can't advance during NQ's quarterly contract-roll week (see
-    // volatilityRegime.js's getLatestVolRegime() for why) -- say so explicitly rather than
-    // showing a stale-looking date with no context, which reads exactly like a stuck job.
-    (regime.rollWeekPaused
-      ? '<span style="flex-basis:100%;font-size:11px;color:var(--amber);margin-top:4px;">⏸ Paused — inside NQ\'s quarterly contract-roll window' + (regime.rollWeekResumesAfter ? ', resumes after ' + regime.rollWeekResumesAfter : '') + '</span>'
-      : '') +
-    (favorable.length
-      ? '<span style="flex-basis:100%;font-size:11px;color:var(--green);margin-top:4px;">✓ Favors: ' + favorable.map(s => s.label).join(', ') + '</span>'
-      : '');
+  const sub = regime.rollWeekPaused ? '⏸ Paused'
+    : favorable.length ? '✓ ' + favorable[0].label + (favorable.length > 1 ? ' +' + (favorable.length - 1) : '')
+    : '';
+  const subColor = regime.rollWeekPaused ? 'var(--amber)' : 'var(--green)';
+  el.innerHTML = chip('Vol', regime.scale.toFixed(2) + 'x' + (regime.degenerateFallback ? ' ⚠' : ''), sub, subColor, 'var(--text)');
 }
 
 // ---- Live pulse reading (2026-09-09, direct user request after the pulse/VWAP-slope research
@@ -440,28 +445,22 @@ async function loadPulseReading() {
     renderPulseReadingCard(data?.pulse || null);
   } catch (e) { /* keep last good render */ }
 }
+// Compacted 2026-09-24 (user: "too much screenspace") -- one chip() line, "informational
+// only, not a signal" dropped from always-visible text (still true, just not worth a
+// permanent inline sentence) -- kept as a title tooltip instead.
 function renderPulseReadingCard(pulse) {
   const el = $('pulse-reading-card');
   if (!el) return;
-  // null = genuine no-data (query failed, or no session at all -- e.g. weekend/holiday).
-  // WARMING_UP = a real session is running but hasn't accumulated the ~2hrs of bars this
-  // measure needs yet -- shown distinctly so the card isn't indistinguishable from "broken"
-  // for the first 2 hours of every trading day (found live 2026-09-09).
   if (!pulse) { el.style.display = 'none'; return; }
   el.style.display = 'flex';
+  el.title = 'Informational only, not a trading signal';
   if (pulse.state === 'WARMING_UP') {
-    el.innerHTML =
-      '<span class="pr-label">Pulse (volume)</span>' +
-      '<span class="pr-state down">Warming up</span>' +
-      '<span class="pr-note">needs ~2hrs of bars (' + pulse.barsSoFar + '/' + pulse.barsNeeded + ')</span>';
+    el.innerHTML = chip('Pulse', 'Warming up', pulse.barsSoFar + '/' + pulse.barsNeeded + ' bars', 'var(--dim)', 'var(--dim)');
     return;
   }
   const isUp = pulse.state === 'PICKING_UP';
   const label = pulse.state === 'PICKING_UP' ? 'Picking Up' : pulse.state === 'DROPPING_OFF' ? 'Dropping Off' : 'Flat';
-  el.innerHTML =
-    '<span class="pr-label">Pulse (volume)</span>' +
-    '<span class="pr-state ' + (isUp ? 'up' : 'down') + '">' + label + '</span>' +
-    '<span class="pr-note">informational only, not a signal</span>';
+  el.innerHTML = chip('Pulse', label, '', 'var(--dim)', isUp ? 'var(--green)' : 'var(--dim)');
 }
 
 // ---- Volatility regime history popup (2026-09-08, direct user request: "is there a chart in
@@ -562,34 +561,242 @@ function renderVolRegimeHistoryChart(canvasId, rows, band) {
   ctx.fillText(finalScale.toFixed(2) + 'x', w - padR - 2, padT + 12);
 }
 
-// ML meta-labeling silo card (2026-09-21) -- reads the SAME server/routes/mlSilo.js
-// endpoints the React ML Silo view (src/views/MLSiloView.jsx) reads, deliberately never
-// re-deriving the comparison aggregation here -- per the DeepSeek critique's explicit
-// warning against reimplementing this kind of aggregation twice across two frontend
-// surfaces. Slow-changing (verdicts backfilled daily, model retrained manually) -- same
-// 5min poll cadence as the volatility card, no need for anything faster.
-async function loadMlSilo() {
+// ---- Tick-trend/efficiency-ratio fade-outcome research (2026-09-23) ----
+// PROVISIONAL research finding, NOT a live signal -- see docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md.
+// Reads GET /api/setups/tick-trend-fade-history, which is the SAME performance_audit rows
+// scripts/report_tick_trend_fade_history.mjs reads -- one real row per daily recheck
+// (scripts/run_daily_calibration.sh), not a separately-derived convenience series.
+// Standalone card removed 2026-09-24 (user request: consolidate into the "Models" section,
+// loadModelsTab()) -- the modal below is now opened from there instead of its own card.
+async function openTickTrendHistoryModal() {
+  let html = '<div class="m-head"><span class="m-title">Tick Trend — Fade Outcome Model</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+    '<div class="m-sub">PROVISIONAL research finding, not a live signal or gate. Predicts real ' +
+    'fade-setup STOP_HIT vs TARGET_HIT from tick-derived trend/efficiency features at fire time. ' +
+    'Rechecked daily against newly-accumulated real outcomes -- a single day clearing (or missing) ' +
+    'a significance bar means little; a stable AUC across many days is the real reliability signal.</div>' +
+    '<canvas id="tick-trend-history-canvas" class="equity" style="margin-top:10px;"></canvas>' +
+    '<div id="tick-trend-history-loading" style="font-size:12px;color:var(--dim);text-align:center;padding:20px 0;">Loading…</div>' +
+    '<div id="tick-trend-history-stats" style="font-size:12px;color:var(--dim);margin-top:8px;"></div>';
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+
   try {
-    const data = await fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json());
-    renderMlSiloCard(data);
-  } catch (e) { /* keep last good render */ }
+    const data = await fetch('/api/setups/tick-trend-fade-history', { cache: 'no-store' }).then(r => r.json());
+    const loadingEl = $('tick-trend-history-loading');
+    if (loadingEl) loadingEl.remove();
+    const history = data?.history || [];
+    renderTickTrendHistoryChart('tick-trend-history-canvas', history, history[history.length - 1]?.frozen_model_new_days);
+
+    const statsEl = $('tick-trend-history-stats');
+    if (statsEl && history.length) {
+      const aucs = history.map(h => h.test_auc).filter(v => v != null);
+      if (aucs.length >= 2) {
+        const mean = aucs.reduce((a, b) => a + b, 0) / aucs.length;
+        const variance = aucs.reduce((a, b) => a + (b - mean) ** 2, 0) / aucs.length;
+        const std = Math.sqrt(variance);
+        const nBelow = aucs.filter(a => a < 0.5).length;
+        const unstable = nBelow / aucs.length > 0.3;
+        statsEl.innerHTML =
+          mSection('Stability across ' + aucs.length + ' runs') +
+          mRow('Mean AUC', mean.toFixed(4)) +
+          mRow('Std dev', std.toFixed(4)) +
+          mRow('Runs below random (0.5)', nBelow + ' / ' + aucs.length + ' (' + (100 * nBelow / aucs.length).toFixed(0) + '%)') +
+          mRow('Read', unstable ? 'Unstable -- flips sides of random too often to trust yet' : 'Reasonably consistent so far -- still not confirmation on its own', unstable ? 'var(--red)' : 'var(--green)');
+      } else {
+        statsEl.innerHTML = '<div style="text-align:center;padding:8px 0;">Need at least 2 daily runs to judge stability -- check back tomorrow.</div>';
+      }
+    }
+  } catch (e) {
+    const loadingEl = $('tick-trend-history-loading');
+    if (loadingEl) loadingEl.textContent = 'Failed to load history';
+  }
 }
-function renderMlSiloCard(data) {
-  const el = $('ml-silo-card');
+
+// Same canvas-sizing/axis/gridline conventions as renderVolRegimeHistoryChart() above --
+// plots test_auc instead of GARCH scale, with a dashed reference line at 0.5 (random
+// chance) instead of 1.0, since 0.5 is this metric's own meaningful baseline.
+// MIN_POINTS_FOR_CHART=5 (raised from 2, 2026-09-24, user report "I see nothing useful" --
+// a 2-point line has no real trend to show, it's just noise connected by a straight line
+// that reads as more informative than it is). Below 5 real daily-recheck points, shows a
+// plain progress message instead -- referencing the frozen model's own pre-registered
+// 20-distinct-day prospective floor (score_frozen_model.py) when known, since THAT's the
+// number that actually matters for when this chart becomes real evidence, not just the
+// daily-recheck run count.
+function renderTickTrendHistoryChart(canvasId, rows, frozenNewDays) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const aucRows = (rows || []).filter(r => r.test_auc != null);
+  const MIN_POINTS_FOR_CHART = 5;
+  if (aucRows.length < MIN_POINTS_FOR_CHART) {
+    ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(`Still collecting daily evidence (${aucRows.length} run${aucRows.length === 1 ? '' : 's'} so far)`, w / 2, h / 2 - 10);
+    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.55)';
+    const floorMsg = frozenNewDays != null
+      ? `Frozen model: ${frozenNewDays}/20 real post-freeze days -- chart fills in as this grows`
+      : 'Chart appears once there are enough points to show a real trend, not just noise';
+    ctx.fillText(floorMsg, w / 2, h / 2 + 12);
+    return;
+  }
+
+  const aucs = aucRows.map(r => r.test_auc);
+  const min = Math.min(...aucs, 0.5);
+  const max = Math.max(...aucs, 0.5);
+  const valRange = (max - min) || 1;
+  const padL = 40, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (aucRows.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  const yTicks = [...new Set([min, 0.5, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const t of yTicks) {
+    const y = yAt(t);
+    ctx.strokeStyle = t === 0.5 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
+    ctx.lineWidth = 1;
+    if (t === 0.5) ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(148,163,184,0.75)';
+    ctx.fillText(t.toFixed(3), padL - 6, y + 3);
+  }
+
+  const xTickCount = Math.min(5, aucRows.length);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (aucRows.length - 1));
+    const x = xAt(idx);
+    ctx.fillText(aucRows[idx].date.slice(5), Math.min(Math.max(x, padL + 18), w - padR - 18), h - 4);
+  }
+
+  const finalAuc = aucs[aucs.length - 1];
+  const lineColor = finalAuc >= 0.5 ? '#fbbf24' : '#94a3b8'; // amber (matches the card's PROVISIONAL accent) vs muted grey below random
+
+  ctx.beginPath();
+  aucs.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+  ctx.fillText(finalAuc.toFixed(4), w - padR - 2, padT + 12);
+}
+
+// Same canvas conventions as renderTickTrendHistoryChart() above, adapted for the ordinal
+// "how far will it run" model (2026-09-24): plots Spearman correlation (range -1..1, can be
+// negative -- unlike AUC which floors at 0) with a dashed reference line at 0 (no
+// relationship) instead of 0.5.
+function renderOrdinalHistoryChart(canvasId, rows) {
+  const canvas = $(canvasId);
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || canvas.parentElement.clientWidth;
+  const h = 170;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const rhoRows = (rows || []).filter(r => r.spearman != null);
+  const MIN_POINTS_FOR_CHART = 5; // matches renderTickTrendHistoryChart's own bar -- a 1-4
+                                   // point line has no real trend to show, just noise
+  if (rhoRows.length < MIN_POINTS_FOR_CHART) {
+    ctx.fillStyle = 'rgba(148,163,184,0.75)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(`Still collecting daily evidence (${rhoRows.length} run${rhoRows.length === 1 ? '' : 's'} so far)`, w / 2, h / 2 - 10);
+    ctx.font = '11px sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.55)';
+    ctx.fillText('Chart appears once there are enough points for a real trend', w / 2, h / 2 + 12);
+    return;
+  }
+
+  const rhos = rhoRows.map(r => r.spearman);
+  const min = Math.min(...rhos, 0);
+  const max = Math.max(...rhos, 0);
+  const valRange = (max - min) || 1;
+  const padL = 40, padR = 8, padT = 10, padB = 20;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const xAt = (i) => padL + (i / (rhoRows.length - 1)) * plotW;
+  const yAt = (v) => padT + plotH - ((v - min) / valRange) * plotH;
+
+  const yTicks = [...new Set([min, 0, max].filter(v => v >= min && v <= max))].sort((a, b) => a - b);
+  ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const t of yTicks) {
+    const y = yAt(t);
+    ctx.strokeStyle = t === 0 ? 'rgba(148,163,184,0.35)' : 'rgba(148,163,184,0.12)';
+    ctx.lineWidth = 1;
+    if (t === 0) ctx.setLineDash([4, 3]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(148,163,184,0.75)';
+    ctx.fillText(t.toFixed(3), padL - 6, y + 3);
+  }
+
+  const xTickCount = Math.min(5, rhoRows.length);
+  ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(148,163,184,0.75)';
+  for (let k = 0; k < xTickCount; k++) {
+    const idx = xTickCount === 1 ? 0 : Math.round((k / (xTickCount - 1)) * (rhoRows.length - 1));
+    const x = xAt(idx);
+    ctx.fillText(rhoRows[idx].date.slice(5), Math.min(Math.max(x, padL + 18), w - padR - 18), h - 4);
+  }
+
+  const finalRho = rhos[rhos.length - 1];
+  const lineColor = finalRho > 0 ? '#fbbf24' : '#94a3b8';
+
+  ctx.beginPath();
+  rhos.forEach((v, i) => { const x = xAt(i), y = yAt(v); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+  ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.stroke();
+
+  ctx.fillStyle = lineColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+  ctx.fillText(finalRho.toFixed(4), w - padR - 2, padT + 12);
+}
+
+// Illustrative $ backtest for the frozen binary model (2026-09-24, user request: "can we
+// apply that backtest" to a dollar chart like the Meta-Labeler's). Reads
+// GET /api/setups/frozen-model-dollar-illustration (server/routes/setups.js), which joins
+// scripts/tick_microstructure/backtest_frozen_model_dollar_illustration.py's artifact against
+// active_setups live. Reuses renderMlSiloRangeEquityChart() as-is (same {actual_pnl,
+// fired_at_str} row shape) rather than writing a second equity-curve renderer.
+// IMPORTANT, and said explicitly in the label below: this is the SAME historical held-out
+// test set already summarized as the "Test AUC" number above it -- not new/prospective
+// evidence. The frozen model's real prospective evidence is score_frozen_model.py, gated
+// behind a pre-registered 20-distinct-day floor (currently 1/20) -- this illustration does
+// not substitute for that and updates only when the script above is manually re-run.
+async function loadFrozenModelIllustration() {
+  const el = $('models-illustration');
   if (!el) return;
-  if (!data?.model || !data?.comparison) { el.style.display = 'none'; return; }
-  el.style.display = 'flex';
-  const all = data.comparison.allTrades;
-  const take = data.comparison.byVerdict?.find(v => v.verdict === 'TAKE');
-  const allPnl = Number(all?.total_pnl || 0);
-  const takePnl = Number(take?.total_pnl || 0);
-  const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
-  el.innerHTML =
-    '<span class="ml-label">ML Silo (out-of-sample)</span>' +
-    '<span>All: <span class="ml-stat" style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</span></span>' +
-    '<span>ML-approved: <span class="ml-stat" style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</span></span>' +
-    '<span style="margin-left:auto;font-size:11px;">tap for detail →</span>';
+  try {
+    const data = await fetch('/api/setups/frozen-model-dollar-illustration', { cache: 'no-store' }).then(r => r.json());
+    const rows = (data?.rows || []).filter(r => r.actual_pnl != null);
+    if (rows.length < 2) { el.innerHTML = ''; return; }
+    const takeRows = rows.filter(r => r.predicted_take);
+    const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+    const allSum = rows.reduce((a, r) => a + parseFloat(r.actual_pnl), 0);
+    const takeSum = takeRows.reduce((a, r) => a + parseFloat(r.actual_pnl), 0);
+    el.innerHTML =
+      '<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:6px;">' +
+      '<div style="font-size:11px;color:var(--dim);margin-bottom:8px;">Illustrative: $ on the SAME historical held-out test set (' +
+      (data.n_test_days ?? '?') + ' days, never seen during training) already behind the AUC above -- NOT new or prospective evidence, just that same result in dollar terms.</div>' +
+      '<div style="font-size:12px;display:flex;gap:14px;margin-bottom:6px;">' +
+      '<span>All (test set): <b style="color:' + (allSum >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allSum) + '</b></span>' +
+      '<span>Model-approved: <b style="color:' + (takeSum >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takeSum) + '</b></span>' +
+      '</div>' +
+      '<canvas id="frozen-illustration-canvas" class="equity"></canvas>' +
+      '</div>';
+    renderMlSiloRangeEquityChart('frozen-illustration-canvas', rows, takeRows, 'all');
+  } catch (e) { el.innerHTML = ''; }
 }
+
+// ML meta-labeling silo (2026-09-21) -- reads the SAME server/routes/mlSilo.js endpoints the
+// React ML Silo view (src/views/MLSiloView.jsx) reads, deliberately never re-deriving the
+// comparison aggregation here -- per the DeepSeek critique's explicit warning against
+// reimplementing this kind of aggregation twice across two frontend surfaces. Standalone
+// card removed 2026-09-24 (user request: consolidate into the "Models" section,
+// loadModelsTab()) -- the modal below is now opened from there instead of its own card.
 
 // Range-filterable ML silo modal (2026-09-21, user request: "the same views as i see here
 // in this photo but for ML? With the charts pnl and different timeframes") -- mirrors the
@@ -833,7 +1040,7 @@ function renderStandalonePositionCard(setupData) {
   // Unrealized P&L (2026-09-22, user request), same openPnlEstimate() helper/convention as
   // the Session Timeline's own open-row badge -- falls back to nothing shown if a live price
   // isn't available yet, never a fabricated number.
-  const isLong = (pos.setup_type || '').includes('LONG') || (pos.setup_type || '').includes('BULLISH');
+  const isLong = isLongSetupType(pos.setup_type);
   const openPnl = openPnlEstimate(entry, isLong);
   const pnlHtml = openPnl == null ? '' :
     '<span class="setup-time mono" style="color:' + (openPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' +
@@ -892,7 +1099,10 @@ let lastPrice = null;
 
 function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   if (!pulse || pulse.error) return;
-  const chips = [];
+  // Column 1: price & session. Column 2: volatility & flow. Grouping added 2026-09-24
+  // (user request) purely for layout -- no chip's own logic changed by which column it's in.
+  const col1 = [];
+  const col2 = [];
 
   const fromOpenStr = pulse.ptsFromOpen != null ? fmtPct(pulse.ptsFromOpen.toFixed(0)) + 'pt' : '—';
   // KEEP IN SYNC with MarketPulseBar.jsx's fromOpenClr/moveColor/deltaColor/rvolColor -- same
@@ -901,20 +1111,20 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
   // usage there, NOT this file's own --muted/--dim naming intuition -- verify against
   // MarketPulseBar.jsx directly before changing either.
   const fromOpenClr = pulse.ptsFromOpen == null ? 'var(--muted)' : pulse.ptsFromOpen > 0 ? 'var(--green)' : pulse.ptsFromOpen < 0 ? 'var(--red)' : 'var(--muted)';
-  chips.push(chip('NQ', pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—', fromOpenStr, fromOpenClr, 'var(--text)'));
+  col1.push(chip('NQ', pulse.currentPrice ? pulse.currentPrice.toFixed(2) : '—', fromOpenStr, fromOpenClr, 'var(--text)'));
 
   const moveColor = pulse.rangeClass === 'EXTENDED' ? 'var(--red)' : pulse.rangeClass === 'QUIET' ? 'var(--muted)' : 'var(--amber)';
   const rangeLabel = pulse.rangeClass === 'EXTENDED' ? 'BIG' : pulse.rangeClass === 'QUIET' ? 'QUIET' : 'NORMAL';
-  chips.push(chip('Range', pulse.sessionRange ? pulse.sessionRange.toFixed(0) + 'pt' : '—', rangeLabel, moveColor, moveColor));
+  col1.push(chip('Range', pulse.sessionRange ? pulse.sessionRange.toFixed(0) + 'pt' : '—', rangeLabel, moveColor, moveColor));
 
   const deltaColor = pulse.deltaClass === 'HIGH' ? (pulse.deltaSign === 'BUYING' ? 'var(--green)' : 'var(--red)') : 'var(--dim)';
   const deltaArrow = pulse.deltaSign === 'BUYING' ? '▲' : pulse.deltaSign === 'SELLING' ? '▼' : '—';
-  chips.push(chip('CumΔ', pulse.sessionDelta != null ? deltaArrow + ' ' + Math.abs(pulse.sessionDelta).toLocaleString() : '—', pulse.deltaClass !== 'NORMAL' ? pulse.deltaClass : '', deltaColor, deltaColor));
+  col1.push(chip('CumΔ', pulse.sessionDelta != null ? deltaArrow + ' ' + Math.abs(pulse.sessionDelta).toLocaleString() : '—', pulse.deltaClass !== 'NORMAL' ? pulse.deltaClass : '', deltaColor, deltaColor));
 
   if (pulse.rvol != null) {
     const rvolColor = pulse.rvolSigma >= 2 ? 'var(--red)' : pulse.rvolSigma >= 1 ? 'var(--amber)' : pulse.rvolSigma < -0.5 ? 'var(--muted)' : 'var(--dim)';
     const rvolLabel = pulse.rvolSigma >= 2 ? 'EXTREME' : pulse.rvolSigma >= 1 ? 'SPIKE' : '';
-    chips.push(chip('RVol', pulse.rvol.toFixed(1) + '×', rvolLabel, rvolColor, rvolColor));
+    col2.push(chip('RVol', pulse.rvol.toFixed(1) + '×', rvolLabel, rvolColor, rvolColor));
   }
 
   // Size chip
@@ -932,25 +1142,25 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
     const base = parseInt(localStorage.getItem('baseContracts') || '2');
     const rec = Math.round(base * mult);
     const vColor = rec === 0 ? 'var(--red)' : mult >= 1.1 ? 'var(--green)' : mult >= 0.85 ? '#60a5fa' : mult >= 0.5 ? 'var(--amber)' : '#f97316';
-    chips.push(chip('Size', base + ' → ' + (rec === 0 ? 'SKIP' : rec + ' ct'), '(' + mult.toFixed(2) + '×)', vColor, vColor));
+    col1.push(chip('Size', base + ' → ' + (rec === 0 ? 'SKIP' : rec + ' ct'), '(' + mult.toFixed(2) + '×)', vColor, vColor));
   }
 
   if (ctx && !ctx.noData) {
     if (ctx.sessionChar) {
       const cc = ctx.sessionChar === 'EXTREME_CHOP' ? 'var(--red)' : ctx.sessionChar === 'CHOP' ? 'var(--amber)' : ctx.sessionChar.includes('TREND') ? 'var(--green)' : 'var(--dim)';
-      chips.push(chip('Session', ctx.sessionChar.replace(/_/g, ' '), 'tap for history', cc, cc, 'openSessionTrendHistoryModal()'));
+      col1.push(chip('Session', ctx.sessionChar.replace(/_/g, ' '), '', cc, cc, 'openSessionTrendHistoryModal()'));
     }
     if (ctx.dailyVwapSigma != null) {
       const clr = sigmaColor(ctx.dailyVwapSigma);
-      chips.push(chip('RVWAP', fmtPct(ctx.dailyVwapSigma) + 'σ', '', clr, clr));
+      col2.push(chip('RVWAP', fmtPct(ctx.dailyVwapSigma) + 'σ', '', clr, clr));
     }
     if (ctx.vwap24Sigma != null) {
       const clr = sigmaColor(ctx.vwap24Sigma);
-      chips.push(chip('24H', fmtPct(ctx.vwap24Sigma) + 'σ', '', clr, clr));
+      col2.push(chip('24H', fmtPct(ctx.vwap24Sigma) + 'σ', '', clr, clr));
     }
     if (ctx.weeklyVwapSigma != null) {
       const clr = sigmaColor(ctx.weeklyVwapSigma);
-      chips.push(chip('WK VWAP', fmtPct(ctx.weeklyVwapSigma) + 'σ', '', clr, clr));
+      col2.push(chip('WK VWAP', fmtPct(ctx.weeklyVwapSigma) + 'σ', '', clr, clr));
     }
   }
 
@@ -961,35 +1171,34 @@ function renderPulseBar(pulse, setupData, ctx, build, rotBadge, volPile) {
     const bucketColor = { VERY_QUIET: 'var(--dim)', QUIET: 'var(--dim)', NORMAL: 'var(--muted)', ELEVATED: 'var(--amber)', HIGH: 'var(--red)' }[build.bucket] || 'var(--muted)';
     const bucketLabel = { VERY_QUIET: 'QUIET', QUIET: 'QUIET', NORMAL: 'NORMAL', ELEVATED: 'ELEV', HIGH: 'HIGH' }[build.bucket] || build.bucket;
     const momSub = build.momentumContext === 'ACTIVE' ? 'on active base' : build.momentumContext === 'QUIET' ? 'from quiet base' : '';
-    chips.push(chip('Expand', bucketLabel, momSub, bucketColor, bucketColor));
+    col1.push(chip('Expand', bucketLabel, momSub, bucketColor, bucketColor));
   }
 
   // Globex overnight rotation badge (RESEARCH_CLAIM overnight_rotation_count_predicts_rth_range,
   // weekly self-recalibrating -- see server/services/globexRotationBadge.js's header). Only
   // shown during the window this signal actually applies to (6pm-9:30am ET); direction-agnostic,
-  // predicts RTH range magnitude only. Tap for the full precise explanation, same convention as
-  // the Session chip's tap-for-history.
+  // predicts RTH range magnitude only.
   lastRotBadge = rotBadge || null;
   if (rotBadge && rotBadge.state && rotBadge.state !== 'NO_CALIBRATION' && rotBadge.state !== 'OUT_OF_WINDOW') {
     const rbColor = rotBadge.state === 'HIGH_LIKELIHOOD' ? 'var(--red)' : rotBadge.state === 'LOW_LIKELIHOOD' ? 'var(--dim)' : 'var(--muted)';
     const rbLabel = rotBadge.state === 'HIGH_LIKELIHOOD' ? 'HIGH' : rotBadge.state === 'LOW_LIKELIHOOD' ? 'LOW' : rotBadge.label || rotBadge.state;
-    const rbSub = rotBadge.currentRotCount != null ? rotBadge.currentRotCount + ' rot · tap for detail' : 'tap for detail';
-    chips.push(chip('Globex Rot', rbLabel, rbSub, rbColor, rbColor, 'openRotationBadgeModal()'));
+    const rbSub = rotBadge.currentRotCount != null ? rotBadge.currentRotCount + ' rot' : '';
+    col2.push(chip('Globex Rot', rbLabel, rbSub, rbColor, rbColor, 'openRotationBadgeModal()'));
   }
 
   // Live "volume piling on" descriptive gauge (server/services/volumePileGauge.js) --
   // deliberately NOT a trade-timing signal. A bare volume spike on its own was tested and found
   // to mark a fakeout more often than a real continuation; this only tells you what volume is
-  // doing right now, same honest-descriptive framing as the Expand/pulse-reading chips. Tap
-  // for the full caveat text.
+  // doing right now, same honest-descriptive framing as the Expand/pulse-reading chips.
   lastVolPile = volPile || null;
   if (volPile && volPile.state && volPile.state !== 'WARMING_UP' && volPile.state !== 'INSUFFICIENT_BASELINE') {
     const vpColor = volPile.state === 'PILING_ON' ? 'var(--amber)' : 'var(--dim)';
     const vpLabel = volPile.state === 'PILING_ON' ? 'PILING ON' : 'QUIET';
-    chips.push(chip('Vol Watch', vpLabel, 'tap for detail', vpColor, vpColor, 'openVolumePileModal()'));
+    col2.push(chip('Vol Watch', vpLabel, '', vpColor, vpColor, 'openVolumePileModal()'));
   }
 
-  $('pulse-bar').innerHTML = chips.join('');
+  $('pulse-col-1').innerHTML = col1.join('');
+  $('pulse-col-2').innerHTML = col2.join('');
 }
 
 function openRotationBadgeModal() {
@@ -1071,7 +1280,7 @@ function renderSetupCard(setupData) {
     el.innerHTML = '';
     return;
   }
-  const isLong = (active.type || '').includes('LONG') || (active.type || '').includes('BULLISH');
+  const isLong = isLongSetupType(active.type);
   // originStatus (2026-09-21) -- ACTIVE means this was actually shown as a real live alert
   // at fire time; anything else (SHADOW/BACKFILL/UNKNOWN/null) is background-tracked only,
   // most commonly a deliberately-suppressed setup_type (e.g. IB_BULLISH/IB_BEARISH, killed
@@ -1571,7 +1780,7 @@ function renderTimeline() {
     const isLoss = isLossRow(s);
     const badgeClass = isOpen ? 'open' : isWin ? 'win' : isLoss ? 'loss' : 'other';
     const isTrail = s.resolution === 'TRAIL_EXIT';
-    const isLong = (s.setup_type || '').includes('LONG') || (s.setup_type || '').includes('BULLISH');
+    const isLong = isLongSetupType(s.setup_type);
     // Unrealized P&L on the "open" badge itself (2026-09-22, user request), same inline-not-
     // hidden-behind-a-tap convention as everything else on this row. Falls back to plain
     // "open" if a live price isn't available yet -- never shows a fabricated number.
@@ -2652,11 +2861,23 @@ function subcountLabel(data) {
   return { liveN, shadowN, backfillN, parts };
 }
 
-function renderPerfToggle() {
-  $('perf-toggle').innerHTML = [['live', 'Live'], ['all', 'All']].map(([val, label]) =>
-    '<button data-pf="' + val + '" class="' + (performanceFilter === val ? 'active' : '') + '">' + label + '</button>'
+// Generic .perf-toggle renderer (extracted 2026-09-24, user request: "I would like to reuse
+// that toggle pattern more" -- was hand-copied 2x already, Collapsed/Declustered and Live/All,
+// before the Models tab below became the 3rd use). elId: container element id. options: array
+// of [value, label] pairs. currentVal: the currently-active value. onSelect(val): called with
+// the clicked option's value -- caller owns state + persistence + re-render, this only owns
+// the button markup and click wiring.
+function renderToggle(elId, options, currentVal, onSelect) {
+  const el = $(elId);
+  if (!el) return;
+  el.innerHTML = options.map(([val, label]) =>
+    '<button data-tval="' + val + '" class="' + (currentVal === val ? 'active' : '') + '">' + label + '</button>'
   ).join('');
-  $('perf-toggle').querySelectorAll('button').forEach(b => b.addEventListener('click', () => setPerformanceFilter(b.dataset.pf)));
+  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => onSelect(b.dataset.tval)));
+}
+
+function renderPerfToggle() {
+  renderToggle('perf-toggle', [['live', 'Live'], ['all', 'All']], performanceFilter, setPerformanceFilter);
 }
 
 function setPerformanceFilter(f) {
@@ -2666,18 +2887,190 @@ function setPerformanceFilter(f) {
 }
 
 function renderClusterToggle() {
-  const el = $('cluster-toggle');
-  if (!el) return;
-  el.innerHTML = [['collapsed', 'Collapsed'], ['declustered', 'Declustered']].map(([val, label]) =>
-    '<button data-cv="' + val + '" class="' + (clusterView === val ? 'active' : '') + '">' + label + '</button>'
-  ).join('');
-  el.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setClusterView(b.dataset.cv)));
+  renderToggle('cluster-toggle', [['collapsed', 'Collapsed'], ['declustered', 'Declustered']], clusterView, setClusterView);
 }
 
 function setClusterView(v) {
   clusterView = v;
   localStorage.setItem('clusterView', v);
   renderPerformance();
+}
+
+// Consolidated "Models" section (2026-09-24, user request: "I would like to track charts of
+// these three models history and update going forward... I don't want to see ML silo and
+// ticks on the quick check page") -- replaces the standalone ml-silo-card and tick-trend-card
+// with one tabbed section, reusing renderToggle() and the existing chart-rendering functions
+// for each model rather than duplicating them. Per the user's explicit request, each tab
+// carries a plain-English "what this model is testing for" explanation -- apply this same
+// convention to any future model added here.
+// Default tab is Meta-Labeler, not Binary -- 2026-09-24, user report ("I see nothing useful
+// in ordinal or binary charts"): both are genuinely too early (ordinal has 1 daily-recheck
+// point, binary has 2 hugging 0.5) to show anything but a flat/near-empty chart, while
+// Meta-Labeler already has weeks of real trade-level history. Land on the tab with real
+// content; a user who's already picked a tab (localStorage) keeps their own choice.
+let modelsTab = localStorage.getItem('modelsTab') || 'metalabeler';
+const MODEL_EXPLAINERS = {
+  binary: 'What this tests: given the order-flow/trend state at the moment a real fade trade fires, will it hit its STOP or its TARGET? Frozen model (not retrained daily) -- the real test is how it scores brand-new trades it has never seen, tracked here day by day.',
+  ordinal: 'What this tests: not just win/lose, but HOW FAR a trade is likely to run -- distinguishing a small win from a real home run. Fade setups only (a broader "every setup type" version was tried and found not to work -- different setups don\'t share one pattern).',
+  metalabeler: 'What this tests: should a real setup signal actually be taken or vetoed, based on patterns learned from real prior outcomes. Fully isolated -- it never changes what fires as a real alert, it only tracks what WOULD have happened if its calls were followed.',
+  propensity: 'What this tests: which real setups actually tend to travel far before resolving. Two separate metrics -- calibrated-exit setups (median R-multiple: MFE vs. that trade\'s own risk) and level-anchored setups (target-hit rate -- their stop/target come from two independent real levels, so an R-multiple would be meaningless). Stability compares the setup\'s propensity in the 2nd half of its history vs the 1st with a day-blocked CI (never a raw trend number -- too easy to misread as "stable" when it\'s really just too thin to tell). "n/a — drifted" means the setup\'s own stop distance shifted enough between halves that any stability read would be confounded by recalibration, not a real edge change, so none is shown.',
+};
+
+function renderModelsToggle() {
+  renderToggle('models-toggle', [['binary', 'Binary'], ['ordinal', 'Ordinal'], ['metalabeler', 'Meta-Labeler'], ['propensity', 'Propensity']], modelsTab, setModelsTab);
+}
+
+function setModelsTab(v) {
+  modelsTab = v;
+  localStorage.setItem('modelsTab', v);
+  loadModelsTab();
+}
+
+async function loadModelsTab() {
+  renderModelsToggle();
+  const statRow = $('models-stat-row');
+  const detail = $('models-detail');
+  if (!statRow || !detail) return;
+  const illEl = $('models-illustration');
+  if (illEl) illEl.innerHTML = ''; // only the 'binary' branch below repopulates this
+  const canvasEl = $('models-history-canvas');
+  if (canvasEl) canvasEl.style.display = ''; // only the 'propensity' branch below hides this (it's a table, not a chart)
+  const explainerHtml = '<div style="margin-bottom:8px;">' + MODEL_EXPLAINERS[modelsTab] + '</div>';
+
+  if (modelsTab === 'binary') {
+    try {
+      const data = await fetch('/api/setups/tick-trend-fade-history', { cache: 'no-store' }).then(r => r.json());
+      const history = data?.history || [];
+      const latest = history[history.length - 1];
+      const auc = latest?.test_auc;
+      statRow.innerHTML = auc != null
+        ? '<span>Test AUC: <b style="color:' + (auc >= 0.5 ? 'var(--green)' : 'var(--red)') + '">' + auc.toFixed(4) + '</b></span><span>PROVISIONAL, not confirmed</span>'
+        : '<span>No data yet</span>';
+      renderTickTrendHistoryChart('models-history-canvas', history, latest?.frozen_model_new_days);
+      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openTickTrendHistoryModal()">tap for full stability detail →</div>';
+      loadFrozenModelIllustration();
+    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
+  } else if (modelsTab === 'ordinal') {
+    try {
+      const data = await fetch('/api/setups/ordinal-reach-r-history', { cache: 'no-store' }).then(r => r.json());
+      const history = data?.history || [];
+      const latest = history[history.length - 1];
+      const rho = latest?.spearman;
+      statRow.innerHTML = rho != null
+        ? '<span>Spearman: <b style="color:' + (rho > 0 ? 'var(--green)' : 'var(--red)') + '">' + rho.toFixed(4) + '</b></span><span>PROVISIONAL, not confirmed</span>'
+        : '<span>No data yet</span>';
+      renderOrdinalHistoryChart('models-history-canvas', history);
+      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openOrdinalHistoryModal()">tap for full stability detail →</div>';
+    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
+  } else if (modelsTab === 'metalabeler') {
+    try {
+      const [summary, rangeData] = await Promise.all([
+        fetch('/api/ml-silo/summary?sample=test', { cache: 'no-store' }).then(r => r.json()),
+        fetch('/api/ml-silo/range-trades?range=all&sample=test', { cache: 'no-store' }).then(r => r.json()),
+      ]);
+      const all = summary?.comparison?.allTrades;
+      const take = summary?.comparison?.byVerdict?.find(v => v.verdict === 'TAKE');
+      const allPnl = Number(all?.total_pnl || 0);
+      const takePnl = Number(take?.total_pnl || 0);
+      const fmtD = n => (n < 0 ? '-$' : '$') + Math.abs(n).toFixed(0);
+      statRow.innerHTML =
+        '<span>All: <b style="color:' + (allPnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(allPnl) + '</b></span>' +
+        '<span>ML-approved: <b style="color:' + (takePnl >= 0 ? 'var(--green)' : 'var(--red)') + '">' + fmtD(takePnl) + '</b></span>';
+      const trades = rangeData?.trades || [];
+      const takeTrades = trades.filter(t => t.ml_verdict === 'TAKE');
+      renderMlSiloRangeEquityChart('models-history-canvas', trades, takeTrades, 'all');
+      detail.innerHTML = explainerHtml + '<div style="cursor:pointer;color:var(--dim);" onclick="openMlSiloModal()">tap for full detail (range filters, trade list) →</div>';
+    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
+  } else if (modelsTab === 'propensity') {
+    if (canvasEl) canvasEl.style.display = 'none';
+    try {
+      const data = await fetch('/api/setups/propensity-screen', { cache: 'no-store' }).then(r => r.json());
+      const results = data?.results || [];
+      const calib = results.filter(r => r.family === 'CALIBRATED_EXIT' && !r.thin).sort((a, b) => b.medianR - a.medianR);
+      const level = results.filter(r => r.family === 'LEVEL_ANCHORED' && !r.thin).sort((a, b) => b.targetHitRate - a.targetHitRate);
+      const thinCount = results.filter(r => r.thin).length;
+      statRow.innerHTML = '<span>' + calib.length + ' calibrated-exit + ' + level.length + ' level-anchored setups scored (N≥20)</span><span>' + thinCount + ' more below N=20</span>';
+
+      // 4-state categorical stability badge ONLY -- no supplementary trend number (Spearman
+      // rejected 2026-09-24, DeepSeek critique: at N=20-40, Spearman(date,reach_R) is
+      // redundant with the period-split CI, misleading (hovers near zero regardless of real
+      // decay), monotonic-only (misses a strengthen-weaken-strengthen pattern), and endpoint-
+      // sensitive (1 outlier trade at either end can move it more than the middle 30 do).
+      // Drift OVERRIDES the stability read here, not just a side note next to it -- a first
+      // draft showed both a ⚠ icon AND the (possibly confounded) IMPROVING/DEGRADING label
+      // side by side, which invites exactly the misread this whole mechanism exists to
+      // prevent ("a user sees a number/label and thinks 'stable', when it's actually just
+      // too thin/confounded to tell"). Four fixed categories only, no color gradient tied to
+      // CI width or magnitude -- a flat accent per category is a category marker, not a scale.
+      const stabBadge = (s, drift) => {
+        if (drift) return '<span style="color:var(--amber);" title="Stop distance shifted >20% between halves -- period-split result would be confounded by recalibration, not a real edge change, so it is not shown">n/a — drifted</span>';
+        if (!s) return '<span style="color:var(--dim);">inconclusive at N</span>';
+        if (s.excludesZero && s.direction === 'DEGRADING') return '<span style="color:var(--red);">CI excludes zero, declines</span>';
+        if (s.excludesZero && s.direction === 'IMPROVING') return '<span style="color:var(--green);">CI excludes zero, improves</span>';
+        return '<span style="color:var(--dim);">inconclusive at N</span>';
+      };
+      const row = (name, cells) => '<tr><td style="padding:4px 6px;font-size:11.5px;">' + name + '</td>' + cells.map(c => '<td style="padding:4px 6px;font-size:11.5px;text-align:right;">' + c + '</td>').join('') + '</tr>';
+
+      let html = '<div style="font-size:11px;color:var(--dim);margin:8px 0 4px;">CALIBRATED-EXIT (R-multiple = MFE / risk)</div>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:var(--dim);font-size:10px;text-transform:uppercase;"><th style="text-align:left;padding:4px 6px;">Setup</th><th style="text-align:right;padding:4px 6px;">N/days</th><th style="text-align:right;padding:4px 6px;">Median R</th><th style="text-align:right;padding:4px 6px;">%≥2x</th><th style="text-align:right;padding:4px 6px;">Stability</th></tr></thead><tbody>';
+      html += calib.slice(0, 15).map(r => row(r.setupType, [r.n + '/' + r.distinctDays, r.medianR.toFixed(2), r.pct2x.toFixed(0) + '%', stabBadge(r.stability, r.calibrationDrift)])).join('');
+      html += '</tbody></table>';
+
+      html += '<div style="font-size:11px;color:var(--dim);margin:12px 0 4px;">LEVEL-ANCHORED (target-hit rate -- stop/target are 2 independent real levels, R-multiple would be meaningless)</div>';
+      html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="color:var(--dim);font-size:10px;text-transform:uppercase;"><th style="text-align:left;padding:4px 6px;">Setup</th><th style="text-align:right;padding:4px 6px;">N/days</th><th style="text-align:right;padding:4px 6px;">Target-hit</th><th style="text-align:right;padding:4px 6px;">Stop-hit</th><th style="text-align:right;padding:4px 6px;">Stability</th></tr></thead><tbody>';
+      html += level.map(r => row(r.setupType, [r.n + '/' + r.distinctDays, r.targetHitRate.toFixed(0) + '%', r.stopHitRate.toFixed(0) + '%', stabBadge(r.stability, false)])).join('');
+      html += '</tbody></table>';
+
+      detail.innerHTML = explainerHtml + html;
+    } catch (e) { detail.innerHTML = explainerHtml + '<div>Failed to load</div>'; }
+  }
+}
+
+// Minimal stability-history modal for the ordinal model, mirroring openTickTrendHistoryModal()'s
+// own stats-across-runs convention exactly (same read: is the correlation's SIGN and stability
+// across many days the real signal, not any single day's number).
+async function openOrdinalHistoryModal() {
+  let html = '<div class="m-head"><span class="m-title">Ordinal Model — How Far Will It Run</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>' +
+    '<div class="m-sub">PROVISIONAL research finding, not a live signal or gate. Predicts real fade-setup ' +
+    'MFE-in-R (how far price ran before the stop) from tick-derived features at fire time. Rechecked daily -- ' +
+    'a stable positive correlation across many days is the real reliability signal, not any single day.</div>' +
+    '<canvas id="ordinal-history-canvas" class="equity" style="margin-top:10px;"></canvas>' +
+    '<div id="ordinal-history-loading" style="font-size:12px;color:var(--dim);text-align:center;padding:20px 0;">Loading…</div>' +
+    '<div id="ordinal-history-stats" style="font-size:12px;color:var(--dim);margin-top:8px;"></div>';
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+
+  try {
+    const data = await fetch('/api/setups/ordinal-reach-r-history', { cache: 'no-store' }).then(r => r.json());
+    const loadingEl = $('ordinal-history-loading');
+    if (loadingEl) loadingEl.remove();
+    const history = data?.history || [];
+    renderOrdinalHistoryChart('ordinal-history-canvas', history);
+
+    const statsEl = $('ordinal-history-stats');
+    if (statsEl && history.length) {
+      const rhos = history.map(h => h.spearman).filter(v => v != null);
+      if (rhos.length >= 2) {
+        const mean = rhos.reduce((a, b) => a + b, 0) / rhos.length;
+        const variance = rhos.reduce((a, b) => a + (b - mean) ** 2, 0) / rhos.length;
+        const std = Math.sqrt(variance);
+        const nBelowZero = rhos.filter(r => r < 0).length;
+        const unstable = nBelowZero / rhos.length > 0.3;
+        statsEl.innerHTML =
+          mSection('Stability across ' + rhos.length + ' runs') +
+          mRow('Mean Spearman', mean.toFixed(4)) +
+          mRow('Std dev', std.toFixed(4)) +
+          mRow('Runs at/below zero', nBelowZero + ' / ' + rhos.length + ' (' + (100 * nBelowZero / rhos.length).toFixed(0) + '%)') +
+          mRow('Read', unstable ? 'Unstable -- flips sign too often to trust yet' : 'Reasonably consistent so far -- still not confirmation on its own', unstable ? 'var(--red)' : 'var(--green)');
+      } else {
+        statsEl.innerHTML = '<div style="text-align:center;padding:8px 0;">Need at least 2 daily runs to judge stability -- check back tomorrow.</div>';
+      }
+    }
+  } catch (e) {
+    const loadingEl = $('ordinal-history-loading');
+    if (loadingEl) loadingEl.textContent = 'Failed to load history';
+  }
 }
 
 // Re-renders from already-fetched cached data -- no network call, so the Live/All toggle
@@ -2759,6 +3152,23 @@ document.addEventListener('click', (e) => {
   if (gwBtn) { setGlobexWatch(gwBtn.dataset.gw === 'on'); return; }
 });
 
+// Session Timeline collapse (2026-09-24 user request -- reaching Performance below it took a
+// lot of scrolling). Purely a display toggle -- loadTimeline()'s own 20s poll keeps running
+// underneath regardless of collapsed state, same as any other hidden-but-still-polling card
+// in this file (#sweep-watch, #standalone-position-card). Persisted so a manual collapse
+// survives a reload, matching the clusterView/performanceFilter convention.
+let timelineCollapsed = localStorage.getItem('timelineCollapsed') === '1';
+function applyTimelineCollapseState() {
+  $('timeline-body').classList.toggle('collapsed', timelineCollapsed);
+  $('timeline-chevron').textContent = timelineCollapsed ? '▸' : '▾';
+}
+function toggleTimelineCollapse() {
+  timelineCollapsed = !timelineCollapsed;
+  localStorage.setItem('timelineCollapsed', timelineCollapsed ? '1' : '0');
+  applyTimelineCollapseState();
+}
+applyTimelineCollapseState();
+
 // ---- Boot ----
 loadPulse();
 loadTimeline();
@@ -2771,14 +3181,14 @@ loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) 
 loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadEntryFlowShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadVolRegime(); // slow-changing (nightly cron writes it) -- poll every 5min below, not every 15s like the live pulse
-loadMlSilo(); // slow-changing (verdicts backfilled daily, model retrained manually) -- poll every 5min below
+loadModelsTab(); // consolidated Models section (2026-09-24) -- slow-changing (daily recheck/manual retrain), poll every 5min below
 loadPulseReading(); // live, but bar-level (5-min) not tick-level -- 60s poll is plenty, no need for loadPulse's 15s cadence
 loadTagRanking(); // top-5-by-$-impact filter row -- ranked off today's own data, 60s poll below keeps it current
 setInterval(loadPulse, 15000);
 setInterval(loadTimeline, 20000);
 setInterval(() => loadRange(currentRange), 60000);
 setInterval(loadVolRegime, 300000);
-setInterval(loadMlSilo, 300000);
+setInterval(loadModelsTab, 300000);
 setInterval(loadPulseReading, 60000);
 setInterval(loadTagRanking, 60000);
 
@@ -2794,7 +3204,7 @@ document.addEventListener('visibilitychange', () => {
   loadTimeline();
   loadRange(currentRange);
   loadVolRegime();
-  loadMlSilo();
+  loadModelsTab();
   loadPulseReading();
   loadTagRanking();
 });

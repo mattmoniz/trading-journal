@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import { query, getClient } from '../db.js';
 import { getStructuralLevels } from '../services/phaseChangeDetector.js';
 import { runSetupBacktest, getBacktestEdge } from '../services/setupBacktestService.js';
@@ -1586,6 +1587,204 @@ router.get('/setups/loss-prevention-summary', async (req, res) => {
     res.json({ asOf: new Date().toISOString(), todayET, weekStartET, yearStartET, mechanisms, combined, labels: LABELS, summary_text });
   } catch (err) {
     console.error('[setups/loss-prevention-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Day-by-day history of the tick-microstructure trend/efficiency-ratio fade-outcome
+// finding (docs/TICK_MICROSTRUCTURE_PILOT_SPEC.md, RESEARCH_CLAIM
+// tick_trend_efficiency_fade_outcome_provisional_20260923) -- 2026-09-23, user request
+// ("track this more closely like on a second modal chart"). Reads the SAME
+// performance_audit rows scripts/report_tick_trend_fade_history.mjs reads, not a
+// separately-derived series -- each daily recheck (scripts/run_daily_calibration.sh)
+// appends a new row (confirmed: the table's ON CONFLICT key includes run_date), so this
+// is a real accumulating history, not a single snapshot re-shown.
+router.get('/setups/tick-trend-fade-history', async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT run_date, sample_size, notes
+      FROM performance_audit
+      WHERE signal_type = 'RESEARCH_CLAIM'
+        AND signal_name = 'tick_trend_efficiency_fade_outcome_provisional_20260923'
+      ORDER BY run_date ASC
+    `);
+    const history = rows.map(r => {
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      // 2026-09-24: recheck_tick_trend_fade_finding.mjs was rewritten to nest these under
+      // `sliding_window` (informational) and `frozen_model` (canonical prospective evidence)
+      // instead of flat top-level fields -- this endpoint was never updated to match, so it
+      // silently rendered "?" on quick-check.html despite the DB holding a real number
+      // (found live via a user screenshot). Read the new nested shape, falling back to the
+      // old flat shape for historical rows recorded before the rewrite.
+      const sw = n.sliding_window ?? n;
+      return {
+        date: r.run_date instanceof Date ? r.run_date.toISOString().slice(0, 10) : String(r.run_date).slice(0, 10),
+        test_auc: sw.real_test_auc ?? null,
+        empirical_p_value: sw.empirical_p_value ?? null,
+        test_n_trades: r.sample_size,
+        test_n_days: sw.test_n_days ?? null,
+        top_feature: sw.top_feature ?? null,
+        status: n.status ?? null,
+        frozen_model_auc: n.frozen_model?.frozen_auc ?? null,
+        frozen_model_new_days: n.frozen_model?.n_new_days ?? null,
+        simulated: false,
+      };
+    });
+
+    // Retrospective walk-forward backfill (2026-09-24, user request: "I want it to continue
+    // into everything as we move forward" -- one continuous line, historical simulation
+    // feeding straight into the live daily recheck above, not two disconnected series).
+    // scripts/tick_microstructure/backfill_tick_trend_walkforward_history.py -- see that
+    // file's own header for why this is legitimate (a real, computed-not-fabricated
+    // hindsight re-derivation) and why it's still NOT the frozen model's genuine prospective
+    // evidence (score_frozen_model.py's own pre-registered 20-day floor is untouched by this).
+    const { rows: wfRows } = await query(`
+      SELECT run_date, sample_size, notes
+      FROM performance_audit
+      WHERE signal_type = 'ML_WALKFORWARD_BACKTEST' AND signal_name = 'tick_trend_fade_outcome_walkforward'
+      ORDER BY run_date ASC
+    `);
+    const liveDates = new Set(history.map(h => h.date));
+    for (const r of wfRows) {
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      const date = r.run_date instanceof Date ? r.run_date.toISOString().slice(0, 10) : String(r.run_date).slice(0, 10);
+      if (liveDates.has(date)) continue; // live pipeline value wins on an overlapping date
+      history.push({
+        date, test_auc: n.test_auc ?? null, empirical_p_value: null, test_n_trades: r.sample_size,
+        test_n_days: n.n_test_days ?? null, top_feature: null, status: null,
+        frozen_model_auc: null, frozen_model_new_days: null, simulated: true,
+      });
+    }
+    history.sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({ history });
+  } catch (err) {
+    console.error('[setups/tick-trend-fade-history]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Same daily-history pattern as tick-trend-fade-history above, for the ordinal "how far
+// will it run" (reach_R) model (RESEARCH_CLAIM ordinal_reach_r_track_b_harness_20260924,
+// 2026-09-24, fade-only/tick-based). Daily recheck writes flat top-level fields on `notes`
+// (no sliding_window/frozen_model nesting -- this model has no separate frozen-artifact
+// concept yet, unlike the binary model).
+router.get('/setups/ordinal-reach-r-history', async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT run_date, sample_size, notes
+      FROM performance_audit
+      WHERE signal_type = 'RESEARCH_CLAIM'
+        AND signal_name = 'ordinal_reach_r_track_b_harness_20260924'
+      ORDER BY run_date ASC
+    `);
+    const history = rows.map(r => {
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      return {
+        date: r.run_date instanceof Date ? r.run_date.toISOString().slice(0, 10) : String(r.run_date).slice(0, 10),
+        spearman: n.real_spearman ?? null,
+        spearman_pvalue: n.spearman_pvalue ?? null,
+        permutation_empirical_p: n.permutation_empirical_p ?? null,
+        calibration_monotone: n.calibration_monotone ?? null,
+        test_n_trades: r.sample_size,
+        test_n_days: n.test_n_days ?? null,
+        status: n.status ?? null,
+        simulated: false,
+      };
+    });
+
+    // Retrospective walk-forward backfill -- same convention as tick-trend-fade-history's own
+    // merge above (see backfill_ordinal_walkforward_history.py's header for the full rationale).
+    const { rows: wfRows } = await query(`
+      SELECT run_date, sample_size, notes
+      FROM performance_audit
+      WHERE signal_type = 'ML_WALKFORWARD_BACKTEST' AND signal_name = 'ordinal_reach_r_walkforward'
+      ORDER BY run_date ASC
+    `);
+    const liveDates = new Set(history.map(h => h.date));
+    for (const r of wfRows) {
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      const date = r.run_date instanceof Date ? r.run_date.toISOString().slice(0, 10) : String(r.run_date).slice(0, 10);
+      if (liveDates.has(date)) continue;
+      history.push({
+        date, spearman: n.spearman ?? null, spearman_pvalue: n.spearman_pvalue ?? null,
+        permutation_empirical_p: null, calibration_monotone: null, test_n_trades: r.sample_size,
+        test_n_days: n.n_test_days ?? null, status: null, simulated: true,
+      });
+    }
+    history.sort((a, b) => a.date.localeCompare(b.date));
+
+    res.json({ history });
+  } catch (err) {
+    console.error('[setups/ordinal-reach-r-history]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Illustrative $ backtest for the frozen tick_trend_efficiency_fade_outcome model
+// (2026-09-24, user request: "can we apply that backtest" to a dollar chart like the
+// Meta-Labeler's All-vs-Approved equity curve). Reads
+// scripts/tick_microstructure/backtest_frozen_model_dollar_illustration.py's artifact
+// ({id, predicted_take} for the SAME chronological day-blocked test split that already
+// produced the frozen model's freeze-decision AUC) and joins it live against
+// active_setups so actual_pnl/fired_at is always current, never a stale copy. NOT the
+// frozen model's genuine prospective evidence (that's score_frozen_model.py, gated
+// behind a pre-registered 20-distinct-day floor) -- this is the same historical
+// validation split already summarized as an AUC number, just in dollar terms. The
+// frontend must label it as such, not as new evidence.
+router.get('/setups/frozen-model-dollar-illustration', async (req, res) => {
+  try {
+    const artifactPath = '/home/mmoniz/trading-journal/scripts/tick_microstructure/artifacts/frozen_model_test_set_predictions.json';
+    if (!fs.existsSync(artifactPath)) {
+      return res.json({ rows: [], n_train_days: null, n_test_days: null });
+    }
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+    const idToPredictedTake = new Map(artifact.rows.map(r => [r.id, r.predicted_take]));
+    const ids = artifact.rows.map(r => r.id);
+    if (ids.length === 0) return res.json({ rows: [], n_train_days: artifact.n_train_days, n_test_days: artifact.n_test_days });
+
+    const { rows: dbRows } = await query(
+      `SELECT id, fired_at::text as fired_at_str, actual_pnl
+       FROM active_setups WHERE id = ANY($1) AND actual_pnl IS NOT NULL
+       ORDER BY fired_at ASC`,
+      [ids]
+    );
+    const rows = dbRows.map(r => ({
+      fired_at_str: r.fired_at_str,
+      actual_pnl: r.actual_pnl,
+      predicted_take: idToPredictedTake.get(r.id) ?? null,
+    }));
+    res.json({ rows, n_train_days: artifact.n_train_days, n_test_days: artifact.n_test_days, n_test_trades: artifact.n_test_trades });
+  } catch (err) {
+    console.error('[setups/frozen-model-dollar-illustration]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Roster-wide travel-propensity screen (2026-09-24) -- reads
+// scripts/backtest_setup_propensity_screen.mjs's persisted SETUP_PROPENSITY_SCREEN rows.
+// Two metric families (see that script's own header for the full rationale): CALIBRATED_EXIT
+// (R-multiple) vs LEVEL_ANCHORED (target-hit rate) -- never mixed into one column, per the
+// standing Convention on why R-multiple is meaningless for the level-anchored family.
+router.get('/setups/propensity-screen', async (req, res) => {
+  try {
+    const { rows } = await query(`
+      SELECT signal_name as setup_type, notes
+      FROM performance_audit
+      WHERE signal_type = 'SETUP_PROPENSITY_SCREEN'
+      ORDER BY run_date DESC
+    `);
+    const seen = new Set();
+    const results = [];
+    for (const r of rows) {
+      if (seen.has(r.setup_type)) continue; // DISTINCT-latest-per-signal_name, matches the standing performance_audit dedup rule
+      seen.add(r.setup_type);
+      const n = typeof r.notes === 'string' ? JSON.parse(r.notes) : r.notes;
+      results.push(n);
+    }
+    res.json({ results });
+  } catch (err) {
+    console.error('[setups/propensity-screen]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

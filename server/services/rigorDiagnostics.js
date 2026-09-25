@@ -258,6 +258,57 @@ export function dayBlockedBootstrapCI(events, seedKey, { dateField = 'date', ite
   return { lo: means[Math.floor(iters * 0.025)], hi: means[Math.floor(iters * 0.975)] };
 }
 
+// Day-blocked bootstrap 95% CI on the DIFFERENCE between two groups' mean PnL (e.g. a
+// tercile spread, a signed-vs-unsigned feature comparison) -- added 2026-09-24 per Opus
+// Audit #14's illustrative tercile check (scratch/opus_audit_14_ml_strategy_results.md
+// section 2.3), generalized here rather than hand-rolled once, since the audit itself
+// flags this exact shape ("terciles of a signed feature, T3-T1, day-blocked CI") as a
+// pattern worth reusing for future feature-signing checks, not a one-off.
+//
+// Resamples whole trading DAYS with replacement (same day-clustering correction as
+// dayBlockedBootstrapCI above), and on each iteration recomputes mean(groupB) -
+// mean(groupA) using whichever group-A/group-B trades happen to fall on the resampled
+// days -- this preserves real day-level correlation for BOTH groups jointly, unlike
+// bootstrapping each group's CI independently and subtracting (which would overstate
+// the delta's precision by ignoring shared-day correlation between the two groups).
+// events: array of {[dateField]: string, [groupField]: any, pnl: number}.
+export function dayBlockedBootstrapDeltaCI(events, seedKey, {
+  dateField = 'date', groupField = 'group', groupA, groupB, iters = 2000,
+} = {}) {
+  const byDate = new Map();
+  for (const e of events) {
+    const d = e[dateField];
+    if (!byDate.has(d)) byDate.set(d, []);
+    byDate.get(d).push(e);
+  }
+  const dateGroups = [...byDate.values()];
+  const sortedPnls = events.map(e => e.pnl).sort((a, b) => a - b).map(p => p.toFixed(2)).join(',');
+  const rand = mulberry32(hashSeed(`${seedKey}|delta|${dateGroups.length}|${sortedPnls}`));
+  const deltas = [];
+  for (let i = 0; i < iters; i++) {
+    const aVals = [];
+    const bVals = [];
+    for (let k = 0; k < dateGroups.length; k++) {
+      const day = dateGroups[Math.floor(rand() * dateGroups.length)];
+      for (const e of day) {
+        if (e[groupField] === groupA) aVals.push(e.pnl);
+        else if (e[groupField] === groupB) bVals.push(e.pnl);
+      }
+    }
+    if (aVals.length === 0 || bVals.length === 0) continue;
+    const meanA = aVals.reduce((s, v) => s + v, 0) / aVals.length;
+    const meanB = bVals.reduce((s, v) => s + v, 0) / bVals.length;
+    deltas.push(meanB - meanA);
+  }
+  deltas.sort((a, b) => a - b);
+  if (deltas.length < iters * 0.5) return { lo: null, hi: null, n_valid_iters: deltas.length };
+  return {
+    lo: deltas[Math.floor(deltas.length * 0.025)],
+    hi: deltas[Math.floor(deltas.length * 0.975)],
+    n_valid_iters: deltas.length,
+  };
+}
+
 export function computeReplication(units, { idFn, metricFn, selectedIds }) {
   const selectedSet = new Set(selectedIds);
   const scored = units.map(u => ({ id: idFn(u), metric: metricFn(u) })).filter(x => x.metric && Number.isFinite(x.metric.value) && x.metric.n > 0);

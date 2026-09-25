@@ -71,7 +71,8 @@ export async function resolveSetupsByPrice(io) {
            entry_zone_low::float as entry_zone_low, entry_zone_high::float as entry_zone_high,
            stop_level::float as stop_level, t1_level::float as t1_level, status, touch_quality,
            runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level,
-           wider_target_mult::float as wider_target_mult, origin_status, post_entry_exit_signals
+           wider_target_mult::float as wider_target_mult, origin_status, post_entry_exit_signals,
+           breakeven_stop_eligible
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
   // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the

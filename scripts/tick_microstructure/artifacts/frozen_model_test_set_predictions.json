@@ -1,0 +1,2077 @@
+{
+  "n_train_days": 45,
+  "n_test_days": 10,
+  "n_test_trades": 414,
+  "rows": [
+    {
+      "id": 121089,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121086,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121090,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121126,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121127,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121093,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121094,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121100,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121097,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121098,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121106,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121111,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121112,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121119,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121120,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121122,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121134,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121135,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121137,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121146,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121147,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121156,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121174,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121181,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121184,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121199,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121201,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121202,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121216,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121215,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121218,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121220,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121228,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121242,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121248,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121290,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121299,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121309,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121316,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121327,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121330,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121358,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121478,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121621,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121685,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121684,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121690,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121732,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121801,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121823,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121824,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121825,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121834,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121826,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121827,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121829,
+      "predicted_take": false,
+      "predicted_proba": 0.49606215343872034
+    },
+    {
+      "id": 121830,
+      "predicted_take": false,
+      "predicted_proba": 0.48788891941012696
+    },
+    {
+      "id": 121833,
+      "predicted_take": true,
+      "predicted_proba": 0.5636074088243394
+    },
+    {
+      "id": 122006,
+      "predicted_take": false,
+      "predicted_proba": 0.4818743635481546
+    },
+    {
+      "id": 121836,
+      "predicted_take": false,
+      "predicted_proba": 0.4240839268897969
+    },
+    {
+      "id": 122118,
+      "predicted_take": true,
+      "predicted_proba": 0.5202888034319363
+    },
+    {
+      "id": 121852,
+      "predicted_take": false,
+      "predicted_proba": 0.4558603827146068
+    },
+    {
+      "id": 121850,
+      "predicted_take": false,
+      "predicted_proba": 0.4558603827146068
+    },
+    {
+      "id": 121853,
+      "predicted_take": false,
+      "predicted_proba": 0.45458976717519106
+    },
+    {
+      "id": 121855,
+      "predicted_take": true,
+      "predicted_proba": 0.593327224106736
+    },
+    {
+      "id": 121863,
+      "predicted_take": true,
+      "predicted_proba": 0.5852993584358699
+    },
+    {
+      "id": 121869,
+      "predicted_take": true,
+      "predicted_proba": 0.5430577845461462
+    },
+    {
+      "id": 121875,
+      "predicted_take": true,
+      "predicted_proba": 0.5957647155389978
+    },
+    {
+      "id": 121883,
+      "predicted_take": true,
+      "predicted_proba": 0.5618603892761623
+    },
+    {
+      "id": 121912,
+      "predicted_take": true,
+      "predicted_proba": 0.625408381390741
+    },
+    {
+      "id": 121910,
+      "predicted_take": false,
+      "predicted_proba": 0.4961041935687108
+    },
+    {
+      "id": 122120,
+      "predicted_take": true,
+      "predicted_proba": 0.6011527623357458
+    },
+    {
+      "id": 121925,
+      "predicted_take": false,
+      "predicted_proba": 0.4650222678880079
+    },
+    {
+      "id": 121933,
+      "predicted_take": true,
+      "predicted_proba": 0.5934201958426243
+    },
+    {
+      "id": 122007,
+      "predicted_take": true,
+      "predicted_proba": 0.507216095778717
+    },
+    {
+      "id": 121936,
+      "predicted_take": false,
+      "predicted_proba": 0.47811438388660504
+    },
+    {
+      "id": 121941,
+      "predicted_take": false,
+      "predicted_proba": 0.41504475532099866
+    },
+    {
+      "id": 121944,
+      "predicted_take": false,
+      "predicted_proba": 0.4777691734005298
+    },
+    {
+      "id": 121945,
+      "predicted_take": false,
+      "predicted_proba": 0.42398820375059226
+    },
+    {
+      "id": 121951,
+      "predicted_take": false,
+      "predicted_proba": 0.49023676383931425
+    },
+    {
+      "id": 121955,
+      "predicted_take": false,
+      "predicted_proba": 0.4290960945638526
+    },
+    {
+      "id": 121970,
+      "predicted_take": false,
+      "predicted_proba": 0.46822846820135366
+    },
+    {
+      "id": 121975,
+      "predicted_take": true,
+      "predicted_proba": 0.5797959350395706
+    },
+    {
+      "id": 121982,
+      "predicted_take": true,
+      "predicted_proba": 0.5926135403329305
+    },
+    {
+      "id": 122080,
+      "predicted_take": true,
+      "predicted_proba": 0.6311357716148012
+    },
+    {
+      "id": 122082,
+      "predicted_take": true,
+      "predicted_proba": 0.5657656463019018
+    },
+    {
+      "id": 122468,
+      "predicted_take": true,
+      "predicted_proba": 0.505996496479359
+    },
+    {
+      "id": 122469,
+      "predicted_take": true,
+      "predicted_proba": 0.518206472699027
+    },
+    {
+      "id": 122471,
+      "predicted_take": false,
+      "predicted_proba": 0.3164433158589786
+    },
+    {
+      "id": 122473,
+      "predicted_take": false,
+      "predicted_proba": 0.27035361113567946
+    },
+    {
+      "id": 122474,
+      "predicted_take": false,
+      "predicted_proba": 0.28119736921362126
+    },
+    {
+      "id": 122475,
+      "predicted_take": false,
+      "predicted_proba": 0.31980397521859844
+    },
+    {
+      "id": 122476,
+      "predicted_take": false,
+      "predicted_proba": 0.47012245078318393
+    },
+    {
+      "id": 122477,
+      "predicted_take": false,
+      "predicted_proba": 0.4599038331285753
+    },
+    {
+      "id": 122478,
+      "predicted_take": true,
+      "predicted_proba": 0.5741271563248942
+    },
+    {
+      "id": 122480,
+      "predicted_take": true,
+      "predicted_proba": 0.5118410055068171
+    },
+    {
+      "id": 122481,
+      "predicted_take": false,
+      "predicted_proba": 0.32882928672963196
+    },
+    {
+      "id": 122483,
+      "predicted_take": false,
+      "predicted_proba": 0.43729025351185463
+    },
+    {
+      "id": 122484,
+      "predicted_take": false,
+      "predicted_proba": 0.4564774440797408
+    },
+    {
+      "id": 122485,
+      "predicted_take": false,
+      "predicted_proba": 0.48032343361023516
+    },
+    {
+      "id": 122486,
+      "predicted_take": false,
+      "predicted_proba": 0.4815149041214818
+    },
+    {
+      "id": 122487,
+      "predicted_take": true,
+      "predicted_proba": 0.5527521774604132
+    },
+    {
+      "id": 122497,
+      "predicted_take": true,
+      "predicted_proba": 0.5529503347057318
+    },
+    {
+      "id": 122502,
+      "predicted_take": true,
+      "predicted_proba": 0.5140579431475598
+    },
+    {
+      "id": 122597,
+      "predicted_take": true,
+      "predicted_proba": 0.5283014356620619
+    },
+    {
+      "id": 122610,
+      "predicted_take": true,
+      "predicted_proba": 0.6601984456399196
+    },
+    {
+      "id": 122635,
+      "predicted_take": false,
+      "predicted_proba": 0.4480840585694912
+    },
+    {
+      "id": 122639,
+      "predicted_take": false,
+      "predicted_proba": 0.4607439196611815
+    },
+    {
+      "id": 122656,
+      "predicted_take": false,
+      "predicted_proba": 0.4646452233051577
+    },
+    {
+      "id": 122684,
+      "predicted_take": false,
+      "predicted_proba": 0.4965691169432236
+    },
+    {
+      "id": 122697,
+      "predicted_take": false,
+      "predicted_proba": 0.49083407339222673
+    },
+    {
+      "id": 122700,
+      "predicted_take": true,
+      "predicted_proba": 0.606846153160088
+    },
+    {
+      "id": 122716,
+      "predicted_take": false,
+      "predicted_proba": 0.4403141705334585
+    },
+    {
+      "id": 122730,
+      "predicted_take": false,
+      "predicted_proba": 0.44485593365269854
+    },
+    {
+      "id": 122732,
+      "predicted_take": true,
+      "predicted_proba": 0.6036016322136566
+    },
+    {
+      "id": 122736,
+      "predicted_take": true,
+      "predicted_proba": 0.5256896022454534
+    },
+    {
+      "id": 122756,
+      "predicted_take": false,
+      "predicted_proba": 0.46859143762019795
+    },
+    {
+      "id": 122810,
+      "predicted_take": false,
+      "predicted_proba": 0.4536152472205049
+    },
+    {
+      "id": 122901,
+      "predicted_take": false,
+      "predicted_proba": 0.3954981600144307
+    },
+    {
+      "id": 122920,
+      "predicted_take": false,
+      "predicted_proba": 0.32039281329804314
+    },
+    {
+      "id": 122923,
+      "predicted_take": true,
+      "predicted_proba": 0.5627163343820394
+    },
+    {
+      "id": 122925,
+      "predicted_take": true,
+      "predicted_proba": 0.5312851058235678
+    },
+    {
+      "id": 122931,
+      "predicted_take": true,
+      "predicted_proba": 0.5740744621807121
+    },
+    {
+      "id": 122932,
+      "predicted_take": false,
+      "predicted_proba": 0.4803703635618385
+    },
+    {
+      "id": 122938,
+      "predicted_take": true,
+      "predicted_proba": 0.6338907600207009
+    },
+    {
+      "id": 122945,
+      "predicted_take": false,
+      "predicted_proba": 0.490778770818417
+    },
+    {
+      "id": 122948,
+      "predicted_take": true,
+      "predicted_proba": 0.5225591489373922
+    },
+    {
+      "id": 122949,
+      "predicted_take": true,
+      "predicted_proba": 0.556618899496719
+    },
+    {
+      "id": 122957,
+      "predicted_take": true,
+      "predicted_proba": 0.6469291788325613
+    },
+    {
+      "id": 122961,
+      "predicted_take": true,
+      "predicted_proba": 0.6197853554110461
+    },
+    {
+      "id": 122972,
+      "predicted_take": true,
+      "predicted_proba": 0.5384109280084817
+    },
+    {
+      "id": 122984,
+      "predicted_take": true,
+      "predicted_proba": 0.5384313941673171
+    },
+    {
+      "id": 122981,
+      "predicted_take": true,
+      "predicted_proba": 0.6434204276536384
+    },
+    {
+      "id": 122977,
+      "predicted_take": false,
+      "predicted_proba": 0.4936229028865629
+    },
+    {
+      "id": 122986,
+      "predicted_take": true,
+      "predicted_proba": 0.5179473395017216
+    },
+    {
+      "id": 122993,
+      "predicted_take": true,
+      "predicted_proba": 0.5974463772252732
+    },
+    {
+      "id": 122992,
+      "predicted_take": true,
+      "predicted_proba": 0.5475209757037224
+    },
+    {
+      "id": 123007,
+      "predicted_take": true,
+      "predicted_proba": 0.5434243143585187
+    },
+    {
+      "id": 123011,
+      "predicted_take": true,
+      "predicted_proba": 0.5939602054256232
+    },
+    {
+      "id": 123008,
+      "predicted_take": true,
+      "predicted_proba": 0.5939602054256232
+    },
+    {
+      "id": 122996,
+      "predicted_take": true,
+      "predicted_proba": 0.6048030452513188
+    },
+    {
+      "id": 123005,
+      "predicted_take": false,
+      "predicted_proba": 0.43851822914778626
+    },
+    {
+      "id": 123012,
+      "predicted_take": false,
+      "predicted_proba": 0.41044386814188705
+    },
+    {
+      "id": 123014,
+      "predicted_take": true,
+      "predicted_proba": 0.5786594750331593
+    },
+    {
+      "id": 123025,
+      "predicted_take": true,
+      "predicted_proba": 0.569014476897977
+    },
+    {
+      "id": 123026,
+      "predicted_take": false,
+      "predicted_proba": 0.4869039556837862
+    },
+    {
+      "id": 123027,
+      "predicted_take": true,
+      "predicted_proba": 0.5633759447664028
+    },
+    {
+      "id": 123029,
+      "predicted_take": false,
+      "predicted_proba": 0.40247647920245494
+    },
+    {
+      "id": 123032,
+      "predicted_take": false,
+      "predicted_proba": 0.4874311914293408
+    },
+    {
+      "id": 123036,
+      "predicted_take": true,
+      "predicted_proba": 0.5496270876622729
+    },
+    {
+      "id": 123041,
+      "predicted_take": true,
+      "predicted_proba": 0.549480986898606
+    },
+    {
+      "id": 123042,
+      "predicted_take": true,
+      "predicted_proba": 0.5861912102592112
+    },
+    {
+      "id": 123048,
+      "predicted_take": true,
+      "predicted_proba": 0.5347176896633714
+    },
+    {
+      "id": 123052,
+      "predicted_take": false,
+      "predicted_proba": 0.4710311650597011
+    },
+    {
+      "id": 123054,
+      "predicted_take": true,
+      "predicted_proba": 0.5328704907831926
+    },
+    {
+      "id": 123056,
+      "predicted_take": true,
+      "predicted_proba": 0.5321229050734422
+    },
+    {
+      "id": 123057,
+      "predicted_take": false,
+      "predicted_proba": 0.48087660874622234
+    },
+    {
+      "id": 123059,
+      "predicted_take": true,
+      "predicted_proba": 0.5348241710294814
+    },
+    {
+      "id": 123066,
+      "predicted_take": true,
+      "predicted_proba": 0.5284747238021364
+    },
+    {
+      "id": 123071,
+      "predicted_take": true,
+      "predicted_proba": 0.5642428162251827
+    },
+    {
+      "id": 123077,
+      "predicted_take": true,
+      "predicted_proba": 0.5082170004181468
+    },
+    {
+      "id": 123078,
+      "predicted_take": true,
+      "predicted_proba": 0.5430158338631326
+    },
+    {
+      "id": 123099,
+      "predicted_take": true,
+      "predicted_proba": 0.5033187779744979
+    },
+    {
+      "id": 123100,
+      "predicted_take": false,
+      "predicted_proba": 0.432179203867864
+    },
+    {
+      "id": 123112,
+      "predicted_take": false,
+      "predicted_proba": 0.4835496424253937
+    },
+    {
+      "id": 123117,
+      "predicted_take": false,
+      "predicted_proba": 0.4643254636299976
+    },
+    {
+      "id": 123120,
+      "predicted_take": false,
+      "predicted_proba": 0.3968698247257806
+    },
+    {
+      "id": 123138,
+      "predicted_take": false,
+      "predicted_proba": 0.4051287913509108
+    },
+    {
+      "id": 123140,
+      "predicted_take": true,
+      "predicted_proba": 0.5611295219679486
+    },
+    {
+      "id": 123142,
+      "predicted_take": false,
+      "predicted_proba": 0.3817828796998719
+    },
+    {
+      "id": 123149,
+      "predicted_take": true,
+      "predicted_proba": 0.5352482623506418
+    },
+    {
+      "id": 123171,
+      "predicted_take": true,
+      "predicted_proba": 0.5153741198653464
+    },
+    {
+      "id": 123187,
+      "predicted_take": false,
+      "predicted_proba": 0.40451936135512123
+    },
+    {
+      "id": 123233,
+      "predicted_take": false,
+      "predicted_proba": 0.474246249503898
+    },
+    {
+      "id": 123234,
+      "predicted_take": false,
+      "predicted_proba": 0.24912739698638248
+    },
+    {
+      "id": 123236,
+      "predicted_take": false,
+      "predicted_proba": 0.24444880160263402
+    },
+    {
+      "id": 123237,
+      "predicted_take": false,
+      "predicted_proba": 0.36935264054703243
+    },
+    {
+      "id": 123239,
+      "predicted_take": false,
+      "predicted_proba": 0.40678279459805095
+    },
+    {
+      "id": 123240,
+      "predicted_take": false,
+      "predicted_proba": 0.347826991726839
+    },
+    {
+      "id": 123242,
+      "predicted_take": false,
+      "predicted_proba": 0.437138978638973
+    },
+    {
+      "id": 123243,
+      "predicted_take": false,
+      "predicted_proba": 0.41554934333369353
+    },
+    {
+      "id": 123245,
+      "predicted_take": false,
+      "predicted_proba": 0.4339049379317786
+    },
+    {
+      "id": 123246,
+      "predicted_take": true,
+      "predicted_proba": 0.5252530812722588
+    },
+    {
+      "id": 123247,
+      "predicted_take": false,
+      "predicted_proba": 0.35360806768587155
+    },
+    {
+      "id": 123248,
+      "predicted_take": false,
+      "predicted_proba": 0.4619778505494643
+    },
+    {
+      "id": 123249,
+      "predicted_take": false,
+      "predicted_proba": 0.4923659776690021
+    },
+    {
+      "id": 123251,
+      "predicted_take": false,
+      "predicted_proba": 0.41950336821553014
+    },
+    {
+      "id": 123252,
+      "predicted_take": false,
+      "predicted_proba": 0.47713585189145447
+    },
+    {
+      "id": 123253,
+      "predicted_take": false,
+      "predicted_proba": 0.45627685474082286
+    },
+    {
+      "id": 123254,
+      "predicted_take": true,
+      "predicted_proba": 0.6938669161928653
+    },
+    {
+      "id": 123255,
+      "predicted_take": true,
+      "predicted_proba": 0.5796841369580324
+    },
+    {
+      "id": 123256,
+      "predicted_take": true,
+      "predicted_proba": 0.5198902932895488
+    },
+    {
+      "id": 123257,
+      "predicted_take": false,
+      "predicted_proba": 0.3538003015952592
+    },
+    {
+      "id": 123258,
+      "predicted_take": false,
+      "predicted_proba": 0.48760332827814196
+    },
+    {
+      "id": 123259,
+      "predicted_take": false,
+      "predicted_proba": 0.4375349368623216
+    },
+    {
+      "id": 123260,
+      "predicted_take": false,
+      "predicted_proba": 0.41437944729579745
+    },
+    {
+      "id": 123261,
+      "predicted_take": false,
+      "predicted_proba": 0.4783753714457135
+    },
+    {
+      "id": 123263,
+      "predicted_take": true,
+      "predicted_proba": 0.5032539705524003
+    },
+    {
+      "id": 123264,
+      "predicted_take": false,
+      "predicted_proba": 0.30856194470998255
+    },
+    {
+      "id": 123265,
+      "predicted_take": false,
+      "predicted_proba": 0.4278807141230327
+    },
+    {
+      "id": 123266,
+      "predicted_take": false,
+      "predicted_proba": 0.49173730931601284
+    },
+    {
+      "id": 123267,
+      "predicted_take": true,
+      "predicted_proba": 0.5868737859088955
+    },
+    {
+      "id": 123268,
+      "predicted_take": true,
+      "predicted_proba": 0.5546851367167444
+    },
+    {
+      "id": 123269,
+      "predicted_take": false,
+      "predicted_proba": 0.3995707802801144
+    },
+    {
+      "id": 123270,
+      "predicted_take": false,
+      "predicted_proba": 0.33588335634723654
+    },
+    {
+      "id": 123271,
+      "predicted_take": false,
+      "predicted_proba": 0.3731012155731194
+    },
+    {
+      "id": 123272,
+      "predicted_take": false,
+      "predicted_proba": 0.4126102084761358
+    },
+    {
+      "id": 123273,
+      "predicted_take": false,
+      "predicted_proba": 0.40614709690843087
+    },
+    {
+      "id": 123277,
+      "predicted_take": false,
+      "predicted_proba": 0.4269657097939777
+    },
+    {
+      "id": 123283,
+      "predicted_take": false,
+      "predicted_proba": 0.4698009749058109
+    },
+    {
+      "id": 123290,
+      "predicted_take": true,
+      "predicted_proba": 0.5409391701367735
+    },
+    {
+      "id": 123300,
+      "predicted_take": false,
+      "predicted_proba": 0.4818257423117863
+    },
+    {
+      "id": 123302,
+      "predicted_take": true,
+      "predicted_proba": 0.5279988625061501
+    },
+    {
+      "id": 123313,
+      "predicted_take": true,
+      "predicted_proba": 0.5386963488331328
+    },
+    {
+      "id": 123333,
+      "predicted_take": true,
+      "predicted_proba": 0.5207362768332223
+    },
+    {
+      "id": 123342,
+      "predicted_take": true,
+      "predicted_proba": 0.5601059246616025
+    },
+    {
+      "id": 123347,
+      "predicted_take": true,
+      "predicted_proba": 0.5031681720144769
+    },
+    {
+      "id": 123350,
+      "predicted_take": true,
+      "predicted_proba": 0.5831595132370314
+    },
+    {
+      "id": 123353,
+      "predicted_take": true,
+      "predicted_proba": 0.5322913715920923
+    },
+    {
+      "id": 123362,
+      "predicted_take": false,
+      "predicted_proba": 0.4409543658830931
+    },
+    {
+      "id": 123366,
+      "predicted_take": false,
+      "predicted_proba": 0.3779781288555219
+    },
+    {
+      "id": 123367,
+      "predicted_take": true,
+      "predicted_proba": 0.5051595897989244
+    },
+    {
+      "id": 123374,
+      "predicted_take": true,
+      "predicted_proba": 0.6636685821625075
+    },
+    {
+      "id": 123382,
+      "predicted_take": true,
+      "predicted_proba": 0.618697753502393
+    },
+    {
+      "id": 123393,
+      "predicted_take": true,
+      "predicted_proba": 0.5761639656856242
+    },
+    {
+      "id": 123406,
+      "predicted_take": true,
+      "predicted_proba": 0.5295075992699588
+    },
+    {
+      "id": 123411,
+      "predicted_take": true,
+      "predicted_proba": 0.5904213237405278
+    },
+    {
+      "id": 123421,
+      "predicted_take": true,
+      "predicted_proba": 0.5406547561079456
+    },
+    {
+      "id": 123422,
+      "predicted_take": true,
+      "predicted_proba": 0.5282556371379235
+    },
+    {
+      "id": 123429,
+      "predicted_take": true,
+      "predicted_proba": 0.5800560242823226
+    },
+    {
+      "id": 123436,
+      "predicted_take": true,
+      "predicted_proba": 0.5103881806855094
+    },
+    {
+      "id": 123448,
+      "predicted_take": true,
+      "predicted_proba": 0.5646646009283068
+    },
+    {
+      "id": 123469,
+      "predicted_take": true,
+      "predicted_proba": 0.5455305060222824
+    },
+    {
+      "id": 123546,
+      "predicted_take": true,
+      "predicted_proba": 0.515827132861284
+    },
+    {
+      "id": 123550,
+      "predicted_take": true,
+      "predicted_proba": 0.5095874604652143
+    },
+    {
+      "id": 123591,
+      "predicted_take": true,
+      "predicted_proba": 0.5687882966166136
+    },
+    {
+      "id": 123707,
+      "predicted_take": true,
+      "predicted_proba": 0.5163217617691088
+    },
+    {
+      "id": 123715,
+      "predicted_take": false,
+      "predicted_proba": 0.47899332835636205
+    },
+    {
+      "id": 123731,
+      "predicted_take": false,
+      "predicted_proba": 0.4947168257041228
+    },
+    {
+      "id": 123761,
+      "predicted_take": false,
+      "predicted_proba": 0.4287527304427555
+    },
+    {
+      "id": 123810,
+      "predicted_take": false,
+      "predicted_proba": 0.3329557184441574
+    },
+    {
+      "id": 123813,
+      "predicted_take": false,
+      "predicted_proba": 0.4251023667798135
+    },
+    {
+      "id": 123814,
+      "predicted_take": false,
+      "predicted_proba": 0.419391227304805
+    },
+    {
+      "id": 123815,
+      "predicted_take": false,
+      "predicted_proba": 0.35266783671057833
+    },
+    {
+      "id": 123817,
+      "predicted_take": false,
+      "predicted_proba": 0.3917626983046826
+    },
+    {
+      "id": 123818,
+      "predicted_take": false,
+      "predicted_proba": 0.42341511486791206
+    },
+    {
+      "id": 123819,
+      "predicted_take": false,
+      "predicted_proba": 0.4683274463647009
+    },
+    {
+      "id": 123821,
+      "predicted_take": false,
+      "predicted_proba": 0.34279457363746046
+    },
+    {
+      "id": 123822,
+      "predicted_take": false,
+      "predicted_proba": 0.3116516600805214
+    },
+    {
+      "id": 123823,
+      "predicted_take": false,
+      "predicted_proba": 0.3433977581117506
+    },
+    {
+      "id": 123824,
+      "predicted_take": false,
+      "predicted_proba": 0.23586831363641142
+    },
+    {
+      "id": 123825,
+      "predicted_take": false,
+      "predicted_proba": 0.4201429001036424
+    },
+    {
+      "id": 123826,
+      "predicted_take": false,
+      "predicted_proba": 0.3713906115830675
+    },
+    {
+      "id": 123827,
+      "predicted_take": false,
+      "predicted_proba": 0.45669954223975145
+    },
+    {
+      "id": 123828,
+      "predicted_take": true,
+      "predicted_proba": 0.5152984345960986
+    },
+    {
+      "id": 123830,
+      "predicted_take": false,
+      "predicted_proba": 0.365530160388182
+    },
+    {
+      "id": 123831,
+      "predicted_take": false,
+      "predicted_proba": 0.4297214689304703
+    },
+    {
+      "id": 123832,
+      "predicted_take": true,
+      "predicted_proba": 0.62703664439368
+    },
+    {
+      "id": 123834,
+      "predicted_take": true,
+      "predicted_proba": 0.533638934966072
+    },
+    {
+      "id": 123837,
+      "predicted_take": true,
+      "predicted_proba": 0.6184086123510515
+    },
+    {
+      "id": 123839,
+      "predicted_take": true,
+      "predicted_proba": 0.5757788927565263
+    },
+    {
+      "id": 123846,
+      "predicted_take": false,
+      "predicted_proba": 0.4329127867217499
+    },
+    {
+      "id": 123868,
+      "predicted_take": false,
+      "predicted_proba": 0.48723136497422503
+    },
+    {
+      "id": 123869,
+      "predicted_take": true,
+      "predicted_proba": 0.5427723822307376
+    },
+    {
+      "id": 123876,
+      "predicted_take": false,
+      "predicted_proba": 0.4889342861483018
+    },
+    {
+      "id": 123881,
+      "predicted_take": true,
+      "predicted_proba": 0.532434662719866
+    },
+    {
+      "id": 123887,
+      "predicted_take": false,
+      "predicted_proba": 0.488941318887672
+    },
+    {
+      "id": 123898,
+      "predicted_take": false,
+      "predicted_proba": 0.4710530107069633
+    },
+    {
+      "id": 123901,
+      "predicted_take": true,
+      "predicted_proba": 0.5554175058713308
+    },
+    {
+      "id": 123907,
+      "predicted_take": true,
+      "predicted_proba": 0.6107605973040439
+    },
+    {
+      "id": 123922,
+      "predicted_take": false,
+      "predicted_proba": 0.38096233591488393
+    },
+    {
+      "id": 123940,
+      "predicted_take": false,
+      "predicted_proba": 0.343411013463521
+    },
+    {
+      "id": 123943,
+      "predicted_take": false,
+      "predicted_proba": 0.39768339178067846
+    },
+    {
+      "id": 123954,
+      "predicted_take": true,
+      "predicted_proba": 0.5531501783984649
+    },
+    {
+      "id": 123968,
+      "predicted_take": true,
+      "predicted_proba": 0.5667165371678228
+    },
+    {
+      "id": 123964,
+      "predicted_take": true,
+      "predicted_proba": 0.5667165371678228
+    },
+    {
+      "id": 123965,
+      "predicted_take": false,
+      "predicted_proba": 0.4706001741060771
+    },
+    {
+      "id": 123967,
+      "predicted_take": true,
+      "predicted_proba": 0.5667165371678228
+    },
+    {
+      "id": 123974,
+      "predicted_take": false,
+      "predicted_proba": 0.3932534211274129
+    },
+    {
+      "id": 123981,
+      "predicted_take": false,
+      "predicted_proba": 0.4775398369044807
+    },
+    {
+      "id": 124034,
+      "predicted_take": true,
+      "predicted_proba": 0.6251082366445322
+    },
+    {
+      "id": 124049,
+      "predicted_take": true,
+      "predicted_proba": 0.6027721968992914
+    },
+    {
+      "id": 124115,
+      "predicted_take": true,
+      "predicted_proba": 0.5592412623094859
+    },
+    {
+      "id": 124119,
+      "predicted_take": true,
+      "predicted_proba": 0.5180518217865366
+    },
+    {
+      "id": 124151,
+      "predicted_take": false,
+      "predicted_proba": 0.40750783249754174
+    },
+    {
+      "id": 124158,
+      "predicted_take": true,
+      "predicted_proba": 0.5666235389787736
+    },
+    {
+      "id": 124160,
+      "predicted_take": true,
+      "predicted_proba": 0.5151529308977
+    },
+    {
+      "id": 124179,
+      "predicted_take": false,
+      "predicted_proba": 0.4790292091592602
+    },
+    {
+      "id": 124229,
+      "predicted_take": false,
+      "predicted_proba": 0.44994468170656937
+    },
+    {
+      "id": 124230,
+      "predicted_take": false,
+      "predicted_proba": 0.4821193880513248
+    },
+    {
+      "id": 124231,
+      "predicted_take": false,
+      "predicted_proba": 0.44994468170656937
+    },
+    {
+      "id": 124225,
+      "predicted_take": true,
+      "predicted_proba": 0.5525631539911735
+    },
+    {
+      "id": 124298,
+      "predicted_take": false,
+      "predicted_proba": 0.4355189604910158
+    },
+    {
+      "id": 124297,
+      "predicted_take": false,
+      "predicted_proba": 0.3264054498352808
+    },
+    {
+      "id": 124299,
+      "predicted_take": false,
+      "predicted_proba": 0.49942121357567226
+    },
+    {
+      "id": 124300,
+      "predicted_take": false,
+      "predicted_proba": 0.45615483963770853
+    },
+    {
+      "id": 124327,
+      "predicted_take": true,
+      "predicted_proba": 0.5193883836938935
+    },
+    {
+      "id": 124339,
+      "predicted_take": false,
+      "predicted_proba": 0.4610181999602652
+    },
+    {
+      "id": 124349,
+      "predicted_take": false,
+      "predicted_proba": 0.49652669872823585
+    },
+    {
+      "id": 124350,
+      "predicted_take": true,
+      "predicted_proba": 0.5744724809290337
+    },
+    {
+      "id": 124359,
+      "predicted_take": false,
+      "predicted_proba": 0.4407549506800353
+    },
+    {
+      "id": 124445,
+      "predicted_take": true,
+      "predicted_proba": 0.5309012081835882
+    },
+    {
+      "id": 124459,
+      "predicted_take": false,
+      "predicted_proba": 0.41197107559363505
+    },
+    {
+      "id": 124469,
+      "predicted_take": true,
+      "predicted_proba": 0.5761463546288602
+    },
+    {
+      "id": 124506,
+      "predicted_take": false,
+      "predicted_proba": 0.41329206307385913
+    },
+    {
+      "id": 124517,
+      "predicted_take": false,
+      "predicted_proba": 0.46131833576279524
+    },
+    {
+      "id": 124520,
+      "predicted_take": false,
+      "predicted_proba": 0.28420993585427184
+    },
+    {
+      "id": 124521,
+      "predicted_take": false,
+      "predicted_proba": 0.4601912910112147
+    },
+    {
+      "id": 124522,
+      "predicted_take": true,
+      "predicted_proba": 0.5470147817292608
+    },
+    {
+      "id": 124523,
+      "predicted_take": false,
+      "predicted_proba": 0.46464702631372556
+    },
+    {
+      "id": 124526,
+      "predicted_take": false,
+      "predicted_proba": 0.3038440886394923
+    },
+    {
+      "id": 124528,
+      "predicted_take": false,
+      "predicted_proba": 0.38273251564210004
+    },
+    {
+      "id": 124584,
+      "predicted_take": true,
+      "predicted_proba": 0.5228798533438103
+    },
+    {
+      "id": 124532,
+      "predicted_take": true,
+      "predicted_proba": 0.6222567042136589
+    },
+    {
+      "id": 124583,
+      "predicted_take": true,
+      "predicted_proba": 0.6330442526598388
+    },
+    {
+      "id": 124535,
+      "predicted_take": true,
+      "predicted_proba": 0.568821595830869
+    },
+    {
+      "id": 124533,
+      "predicted_take": true,
+      "predicted_proba": 0.5628393497324705
+    },
+    {
+      "id": 124539,
+      "predicted_take": true,
+      "predicted_proba": 0.6185316136364551
+    },
+    {
+      "id": 124537,
+      "predicted_take": false,
+      "predicted_proba": 0.35776157401917286
+    },
+    {
+      "id": 124536,
+      "predicted_take": true,
+      "predicted_proba": 0.6185316136364551
+    },
+    {
+      "id": 124543,
+      "predicted_take": false,
+      "predicted_proba": 0.34349985051777077
+    },
+    {
+      "id": 124554,
+      "predicted_take": true,
+      "predicted_proba": 0.567123571910867
+    },
+    {
+      "id": 124587,
+      "predicted_take": false,
+      "predicted_proba": 0.19665309618292356
+    },
+    {
+      "id": 124588,
+      "predicted_take": false,
+      "predicted_proba": 0.3568063922775343
+    },
+    {
+      "id": 124590,
+      "predicted_take": true,
+      "predicted_proba": 0.5464551458863355
+    },
+    {
+      "id": 124594,
+      "predicted_take": true,
+      "predicted_proba": 0.5678523793108112
+    },
+    {
+      "id": 124595,
+      "predicted_take": false,
+      "predicted_proba": 0.2343982614222041
+    },
+    {
+      "id": 124596,
+      "predicted_take": true,
+      "predicted_proba": 0.5218279006477347
+    },
+    {
+      "id": 124598,
+      "predicted_take": false,
+      "predicted_proba": 0.4454915644827883
+    },
+    {
+      "id": 124599,
+      "predicted_take": false,
+      "predicted_proba": 0.4810255099208762
+    },
+    {
+      "id": 124600,
+      "predicted_take": false,
+      "predicted_proba": 0.45450621406391417
+    },
+    {
+      "id": 124601,
+      "predicted_take": true,
+      "predicted_proba": 0.6637145406318607
+    },
+    {
+      "id": 124602,
+      "predicted_take": false,
+      "predicted_proba": 0.4014949927759785
+    },
+    {
+      "id": 124603,
+      "predicted_take": false,
+      "predicted_proba": 0.4462387776187061
+    },
+    {
+      "id": 124605,
+      "predicted_take": true,
+      "predicted_proba": 0.6288475697973448
+    },
+    {
+      "id": 124606,
+      "predicted_take": true,
+      "predicted_proba": 0.6146197804092528
+    },
+    {
+      "id": 124607,
+      "predicted_take": true,
+      "predicted_proba": 0.5358731367881022
+    },
+    {
+      "id": 124614,
+      "predicted_take": true,
+      "predicted_proba": 0.5865502683842695
+    },
+    {
+      "id": 124617,
+      "predicted_take": true,
+      "predicted_proba": 0.6057382885593523
+    },
+    {
+      "id": 124623,
+      "predicted_take": false,
+      "predicted_proba": 0.4591002540982286
+    },
+    {
+      "id": 124620,
+      "predicted_take": true,
+      "predicted_proba": 0.6446017592222704
+    },
+    {
+      "id": 124621,
+      "predicted_take": false,
+      "predicted_proba": 0.4974475703208084
+    },
+    {
+      "id": 124625,
+      "predicted_take": true,
+      "predicted_proba": 0.5198438799617325
+    },
+    {
+      "id": 124628,
+      "predicted_take": false,
+      "predicted_proba": 0.48386689774170377
+    },
+    {
+      "id": 124632,
+      "predicted_take": true,
+      "predicted_proba": 0.544849307636373
+    },
+    {
+      "id": 124633,
+      "predicted_take": false,
+      "predicted_proba": 0.42947118445057236
+    },
+    {
+      "id": 124644,
+      "predicted_take": true,
+      "predicted_proba": 0.5651639595661677
+    },
+    {
+      "id": 124652,
+      "predicted_take": true,
+      "predicted_proba": 0.5137435609323509
+    },
+    {
+      "id": 124678,
+      "predicted_take": false,
+      "predicted_proba": 0.4028007386041097
+    },
+    {
+      "id": 124718,
+      "predicted_take": true,
+      "predicted_proba": 0.5770203234205369
+    },
+    {
+      "id": 124733,
+      "predicted_take": false,
+      "predicted_proba": 0.45830719333821224
+    },
+    {
+      "id": 124737,
+      "predicted_take": false,
+      "predicted_proba": 0.448422953829338
+    },
+    {
+      "id": 124741,
+      "predicted_take": true,
+      "predicted_proba": 0.5509051546395869
+    },
+    {
+      "id": 124764,
+      "predicted_take": true,
+      "predicted_proba": 0.5938793398878134
+    },
+    {
+      "id": 124768,
+      "predicted_take": true,
+      "predicted_proba": 0.5892033191077187
+    },
+    {
+      "id": 124773,
+      "predicted_take": true,
+      "predicted_proba": 0.6318758959520013
+    },
+    {
+      "id": 124778,
+      "predicted_take": true,
+      "predicted_proba": 0.5060526425793281
+    },
+    {
+      "id": 124807,
+      "predicted_take": true,
+      "predicted_proba": 0.5346757781491012
+    },
+    {
+      "id": 124855,
+      "predicted_take": true,
+      "predicted_proba": 0.7262153924759485
+    },
+    {
+      "id": 124862,
+      "predicted_take": true,
+      "predicted_proba": 0.6296606616654722
+    },
+    {
+      "id": 124876,
+      "predicted_take": false,
+      "predicted_proba": 0.4991855855688315
+    },
+    {
+      "id": 124976,
+      "predicted_take": true,
+      "predicted_proba": 0.5029343759396421
+    },
+    {
+      "id": 124978,
+      "predicted_take": true,
+      "predicted_proba": 0.5817963539933426
+    },
+    {
+      "id": 124987,
+      "predicted_take": true,
+      "predicted_proba": 0.5952002978832102
+    },
+    {
+      "id": 125087,
+      "predicted_take": true,
+      "predicted_proba": 0.5234911612509833
+    },
+    {
+      "id": 125094,
+      "predicted_take": true,
+      "predicted_proba": 0.5829000648335168
+    },
+    {
+      "id": 125126,
+      "predicted_take": true,
+      "predicted_proba": 0.500931770738485
+    },
+    {
+      "id": 125195,
+      "predicted_take": false,
+      "predicted_proba": 0.338599878336313
+    },
+    {
+      "id": 125223,
+      "predicted_take": false,
+      "predicted_proba": 0.45750783410883306
+    },
+    {
+      "id": 125224,
+      "predicted_take": false,
+      "predicted_proba": 0.43227296296807055
+    },
+    {
+      "id": 125225,
+      "predicted_take": false,
+      "predicted_proba": 0.43758106039082995
+    },
+    {
+      "id": 125226,
+      "predicted_take": false,
+      "predicted_proba": 0.46050134224242034
+    },
+    {
+      "id": 125229,
+      "predicted_take": true,
+      "predicted_proba": 0.6404346774176302
+    },
+    {
+      "id": 125230,
+      "predicted_take": false,
+      "predicted_proba": 0.4888391699450716
+    },
+    {
+      "id": 125231,
+      "predicted_take": true,
+      "predicted_proba": 0.5070091663479107
+    },
+    {
+      "id": 125232,
+      "predicted_take": false,
+      "predicted_proba": 0.38407899859283334
+    },
+    {
+      "id": 125233,
+      "predicted_take": true,
+      "predicted_proba": 0.5443356444061092
+    },
+    {
+      "id": 125234,
+      "predicted_take": false,
+      "predicted_proba": 0.4645471034472383
+    },
+    {
+      "id": 125235,
+      "predicted_take": true,
+      "predicted_proba": 0.5339402645154393
+    },
+    {
+      "id": 125236,
+      "predicted_take": false,
+      "predicted_proba": 0.39014604812289766
+    },
+    {
+      "id": 125238,
+      "predicted_take": false,
+      "predicted_proba": 0.3150858654157306
+    },
+    {
+      "id": 125243,
+      "predicted_take": true,
+      "predicted_proba": 0.5293085856308273
+    },
+    {
+      "id": 125244,
+      "predicted_take": false,
+      "predicted_proba": 0.4919264603639901
+    },
+    {
+      "id": 125245,
+      "predicted_take": false,
+      "predicted_proba": 0.3844335937094526
+    },
+    {
+      "id": 125246,
+      "predicted_take": true,
+      "predicted_proba": 0.5284321072306152
+    },
+    {
+      "id": 125252,
+      "predicted_take": true,
+      "predicted_proba": 0.6252318716100344
+    },
+    {
+      "id": 125251,
+      "predicted_take": false,
+      "predicted_proba": 0.4988947926583684
+    },
+    {
+      "id": 125257,
+      "predicted_take": true,
+      "predicted_proba": 0.5350704237222361
+    },
+    {
+      "id": 125262,
+      "predicted_take": true,
+      "predicted_proba": 0.5346717417816798
+    },
+    {
+      "id": 125260,
+      "predicted_take": false,
+      "predicted_proba": 0.45463902060350253
+    },
+    {
+      "id": 125265,
+      "predicted_take": true,
+      "predicted_proba": 0.5053880893340839
+    },
+    {
+      "id": 125263,
+      "predicted_take": true,
+      "predicted_proba": 0.5185034357284786
+    },
+    {
+      "id": 125273,
+      "predicted_take": true,
+      "predicted_proba": 0.5087083504023395
+    },
+    {
+      "id": 125272,
+      "predicted_take": false,
+      "predicted_proba": 0.48674104930001855
+    },
+    {
+      "id": 125274,
+      "predicted_take": true,
+      "predicted_proba": 0.5462784517288944
+    },
+    {
+      "id": 125280,
+      "predicted_take": true,
+      "predicted_proba": 0.5785306401996818
+    },
+    {
+      "id": 125282,
+      "predicted_take": false,
+      "predicted_proba": 0.4538712691423366
+    },
+    {
+      "id": 125292,
+      "predicted_take": false,
+      "predicted_proba": 0.48620551940930323
+    },
+    {
+      "id": 125307,
+      "predicted_take": false,
+      "predicted_proba": 0.32263791494564276
+    },
+    {
+      "id": 125337,
+      "predicted_take": true,
+      "predicted_proba": 0.5916675703503443
+    },
+    {
+      "id": 125338,
+      "predicted_take": false,
+      "predicted_proba": 0.39042028246745125
+    },
+    {
+      "id": 125510,
+      "predicted_take": true,
+      "predicted_proba": 0.5911194003651359
+    },
+    {
+      "id": 125520,
+      "predicted_take": false,
+      "predicted_proba": 0.4592729390581635
+    },
+    {
+      "id": 125536,
+      "predicted_take": true,
+      "predicted_proba": 0.5265376738950368
+    },
+    {
+      "id": 125716,
+      "predicted_take": false,
+      "predicted_proba": 0.3846498572596565
+    },
+    {
+      "id": 125717,
+      "predicted_take": false,
+      "predicted_proba": 0.2999089128212039
+    },
+    {
+      "id": 125718,
+      "predicted_take": false,
+      "predicted_proba": 0.4942054848282023
+    },
+    {
+      "id": 125719,
+      "predicted_take": true,
+      "predicted_proba": 0.5235561462487548
+    },
+    {
+      "id": 125722,
+      "predicted_take": false,
+      "predicted_proba": 0.41128604975633665
+    },
+    {
+      "id": 125723,
+      "predicted_take": false,
+      "predicted_proba": 0.3822632395257857
+    },
+    {
+      "id": 125724,
+      "predicted_take": false,
+      "predicted_proba": 0.4492738119794099
+    },
+    {
+      "id": 125725,
+      "predicted_take": false,
+      "predicted_proba": 0.45483664304633015
+    },
+    {
+      "id": 125728,
+      "predicted_take": false,
+      "predicted_proba": 0.4655749494038475
+    },
+    {
+      "id": 125729,
+      "predicted_take": false,
+      "predicted_proba": 0.40861096807231817
+    }
+  ]
+}
