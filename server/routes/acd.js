@@ -65,7 +65,7 @@ import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
-import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked } from '../services/setupEligibility.js';
+import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked, ALL_LEVELS_LIVE, isLevelForcedLive } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
 // server/services/acdCandidateBuilder.js 2026-09-20 (Phase A of
@@ -5078,9 +5078,12 @@ export default function createACDRouter(io) {
                 const candRecentlyFired = recentlyFiredTypes.has(candType);
                 const candSuppressed = !!liveStats._suppressedSetups?.has(candType);
                 const candDowSuppressed = !!liveStats._dowSuppressToday?.has(candType);
-                if (!candRecentlyFired && !candSuppressed && !candDowSuppressed && !s2Double && !trendCounterFadeFlag) {
+                if (!winnerFound && !candRecentlyFired && !candSuppressed && !candDowSuppressed && !s2Double && !trendCounterFadeFlag) {
                   lv = cand; type = candType; sameTypeRecentlyFired = false; winnerFound = true;
-                  break;
+                  // ALL_LEVELS_LIVE (setupEligibility.js): keep walking so every other level in
+                  // the cluster gets its own row below instead of being grouped under the winner.
+                  if (!ALL_LEVELS_LIVE.enabled) break;
+                  continue;
                 }
                 // Skipped candidate — logged so the fallback doesn't recreate the exact
                 // "orphaned candidate with zero trace" problem this fix exists to solve.
@@ -5151,6 +5154,19 @@ export default function createACDRouter(io) {
                     // winner of this touch, so it must never count as a second independent
                     // sample of the same market event in a cross-setup_type pooled consumer
                     // (see POOLED_TRADE_FILTER in scripts/backtest_setup_status.mjs).
+                    // ALL_LEVELS_LIVE: a sibling of a touch whose winner fired trades live as its
+                    // own resting limit at sibLevel, subject to the same risk-discipline gates the
+                    // main path applies (opposite direction open, same-type refire, opening-drive
+                    // counter-trade). resolveSetupsByPrice()'s sibling fill gate only counts it once
+                    // sibLevel actually trades.
+                    let sibLive = false;
+                    if (winnerFound && isLevelForcedLive(candType)) {
+                      const sibDirStr = isLong ? 'LONG' : 'SHORT';
+                      sibLive = !(await isOppositeDirectionOpen(sibDirStr))
+                        && !(await isSameSetupRefireBlocked(todayET, candType, 'RTH'))
+                        && !(await isOpeningDriveCounterTrade(sibDirStr)).blocked;
+                    }
+                    const sibOrigin = sibLive ? 'ACTIVE' : 'SHADOW';
                     const sibIns = await query(`
                       INSERT INTO active_setups (
                         trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
@@ -5158,14 +5174,14 @@ export default function createACDRouter(io) {
                         entry_zone_low, entry_zone_high, stop_level, t1_level, expires_at, wider_target_mult, bet_class,
                         is_cluster_primary, cluster_touch_id, breakeven_stop_eligible
                       )
-                      VALUES ($1,$2,NOW(),$3,'SHADOW','SHADOW','CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12,$13)
+                      VALUES ($1,$2,NOW(),$3,$14,$14,'CLUSTER_SIBLING_TOUCH_CREDIT',$4,$5,$6,$6,$7,$8,$9,$10,$11,false,$12,$13)
                       ON CONFLICT DO NOTHING
                       RETURNING id
                     `, [
                       todayET, candType, currentPrice, nearLevels.length,
                       nearLevels.map(l => canonicalConfluenceLevelName(l.name)),
                       sibLevel, sibStopLevel, sibT1Level, sibExpiresAt, sibWiderTargetMult, getBetClass(candType),
-                      clusterTouchId, isBreakevenStopEligible(candType),
+                      clusterTouchId, isBreakevenStopEligible(candType), sibOrigin,
                     ]);
                     // Shadow-tag wiring (2026-09-16, found live: user asked why a real cluster-
                     // sibling touch-credit row -- SHADOW-origin, never a live alert either way --

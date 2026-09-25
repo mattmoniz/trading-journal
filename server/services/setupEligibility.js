@@ -191,7 +191,7 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
   const knownTypes = new Set();
   for (const r of setupStatusQ.rows) {
     knownTypes.add(r.signal_name);
-    if (r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') suppressedSetups.add(r.signal_name);
+    if ((r.recommendation === 'SUPPRESS' || r.recommendation === 'THIN_N') && !isLevelForcedLive(r.signal_name)) suppressedSetups.add(r.signal_name);
   }
   // Found 2026-08-19 (promotion_pipeline_remaining_stuck_types): an ACTIVE/PROMOTE
   // recommendation from a BACKTEST_DERIVED_SETUP_STATUS_TYPES member is NOT the same
@@ -207,7 +207,8 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
   }
   const dowSuppressToday = new Set();
   for (const r of dowStatusQ.rows) {
-    if (r.recommendation === 'SUPPRESS') dowSuppressToday.add(r.signal_name.replace(/_DOW_\d+$/, ''));
+    const t = r.signal_name.replace(/_DOW_\d+$/, '');
+    if (r.recommendation === 'SUPPRESS' && !isLevelForcedLive(t)) dowSuppressToday.add(t);
   }
   return { suppressedSetups, dowSuppressToday, knownTypes };
 }
@@ -245,15 +246,38 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
 //     geometry, day-blocked CI > 0 both, both chronological halves positive) --
 //     RESEARCH_CLAIM per_setup_improvement_variants_20260925, OPEN_DECISION
 //     setup_improvement_candidates_20260925.
+// ALL_LEVELS_LIVE (2026-09-25, explicit user directive: "I want all levels to fire" / "I want the
+// declustered level trades to trade, I don't want them grouped"). While enabled, every level-fade
+// setup_type (/_FADE_(LONG|SHORT)/) bypasses SETUP_STATUS-driven SHADOW gating (SUPPRESS, THIN_N,
+// DOW suppression, no-row fail-closed, LIVE_TIME_WINDOW_OVERRIDE) and every level in a confluence
+// cluster fires its own real row (acd.js, CLUSTER_SIBLING_TOUCH_CREDIT) instead of one grouped
+// winner. Deliberately a user decision that overrides the calibration evidence (at the time: 6 of
+// 190 level-fade types ACTIVE, 51 SUPPRESS) -- SETUP_STATUS keeps recalibrating underneath, so
+// setting enabled:false restores evidence-gated behavior with no other change. Risk-discipline
+// gates are NOT bypassed: CAPITAL_EXPOSURE_OVERRIDE (uncalibrated stop), opposite-direction
+// conflict, same-type refire, opening-drive counter-trade, 4-6PM dead zone.
+// Sibling rows enter at their OWN level (a resting limit); resolveSetupsByPrice() requires that
+// price to actually trade before the trade counts (sibling fill gate, same day) -- without it the
+// declustered view credits ~12% unfillable wins (RESEARCH_CLAIM
+// sibling_phantom_fill_inflates_shadow_ev_20260925).
+export const ALL_LEVELS_LIVE = { enabled: true, addedDate: '2026-09-25' };
+export function isLevelFadeType(setupType) {
+  return /_FADE_(LONG|SHORT)/.test(setupType || '');
+}
+export function isLevelForcedLive(setupType) {
+  return ALL_LEVELS_LIVE.enabled && isLevelFadeType(setupType) && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
+}
+
 export const LIVE_TIME_WINDOW_OVERRIDE = new Map([
   ['PD_VAL_FADE_LONG', { fromEtMin: 780, toEtMin: 960, reason: 'LIVE_TIME_WINDOW', addedDate: '2026-09-25' }],
 ]);
 export function isLiveTimeWindowBlocked(setupType, etMin) {
   const o = LIVE_TIME_WINDOW_OVERRIDE.get(setupType);
-  return !!o && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
+  return !!o && !isLevelForcedLive(setupType) && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
 }
 
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
+  if (isLevelForcedLive(setupType)) return true;
   return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType)
     && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
 }
@@ -281,6 +305,9 @@ export async function getCanonicalLiveStatus(signalName) {
     ORDER BY run_date DESC LIMIT 1
   `, [signalName]);
   const row = rows[0];
+  if (isLevelForcedLive(signalName)) {
+    return { status: 'ACTIVE', reason: 'ALL_LEVELS_LIVE', liveN: row?.sample_size ?? 0, liveEv: row?.ev ?? null, realN: null };
+  }
   // realN: the origin_status-filtered (ACTIVE/SHADOW, not BACKFILL) real count from the row's
   // own notes JSON -- added 2026-09-14 so callers displaying "count" to a user show the real
   // figure, not sample_size (blended, can be ~80% synthetic BACKFILL per CLAUDE.md's hard

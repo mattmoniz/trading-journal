@@ -72,7 +72,7 @@ export async function resolveSetupsByPrice(io) {
            stop_level::float as stop_level, t1_level::float as t1_level, status, touch_quality,
            runner_trail_width::float as runner_trail_width, extend_target_level::float as extend_target_level,
            wider_target_mult::float as wider_target_mult, origin_status, post_entry_exit_signals,
-           breakeven_stop_eligible
+           breakeven_stop_eligible, is_cluster_primary
     FROM active_setups WHERE status IN ('ACTIVE', 'SHADOW')
   `);
   // Naive ET wall-clock text, same convention as fired_at/expires_at above (see the
@@ -124,7 +124,7 @@ export async function resolveSetupsByPrice(io) {
       SELECT ts::text as ts, open::float, high::float, low::float, close::float,
              COALESCE(bid_volume,0)::int AS bid_volume, COALESCE(ask_volume,0)::int AS ask_volume,
              (EXTRACT(hour FROM ts)*60 + EXTRACT(minute FROM ts))::int AS mod
-      FROM price_bars_primary WHERE symbol='NQ' AND ts > $1 ORDER BY ts
+      FROM price_bars_primary WHERE symbol='NQ' AND ts >= date_trunc('minute', $1::timestamp) ORDER BY ts
     `, [earliestFiredAt]);
     sharedBarsRows = sharedBars.rows;
   }
@@ -440,7 +440,36 @@ export async function resolveSetupsByPrice(io) {
     if (long && t1 <= entry) continue;
     if (!long && t1 >= entry) continue;
 
-    const bars = { rows: sharedBarsRows.filter(b => b.ts > row.fired_at) };
+    // Fetch starts at the earliest fire MINUTE (not fired_at) so a sibling's fire-minute bar is
+    // available to its fill gate below; every other row still starts strictly after fired_at.
+    const isSibling = row.is_cluster_primary === false;
+    const fireMinute = `${row.fired_at.slice(0, 16)}:00`;
+    const bars = { rows: sharedBarsRows.filter(b => (isSibling ? b.ts >= fireMinute : b.ts > row.fired_at)) };
+
+    // Cluster-sibling fill gate (2026-09-25, RESEARCH_CLAIM
+    // sibling_phantom_fill_inflates_shadow_ev_20260925). A sibling enters at its OWN level, which
+    // sits further into the move than the touch price -- a resting limit, not a fill. The walk
+    // below used to start at fired_at regardless, crediting ~12% of siblings with outcomes
+    // (mostly TARGET_HIT) on an entry price that never traded. Now the walk starts at the first
+    // bar that trades through the entry, INCLUDING the fire-minute bar (DeepSeek design critique
+    // 2026-09-25: excluding it misclassifies ~1,000 real fire-minute fills as unfilled; the
+    // cost is a documented <60s sub-minute ambiguity, since 1-min bars can't separate pre- from
+    // post-fire prices inside that minute). No fill by expires_at -> NOT_FILLED,
+    // actual_pnl NULL (no position ever existed). Primaries enter at the touch price and are
+    // untouched by this.
+    if (isSibling) {
+      const fillIdx = bars.rows.findIndex(b => (long ? b.low <= entry : b.high >= entry));
+      if (fillIdx < 0) {
+        if (row.expires_at && nowEt >= row.expires_at) {
+          await query(`UPDATE active_setups SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='SIBLING_UNFILLED',
+                         actual_outcome='NOT_FILLED', actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()
+                       WHERE id=$1 AND status=$2`, [row.id, statusMatch]);
+          count++;
+        }
+        continue;
+      }
+      if (fillIdx > 0) bars.rows = bars.rows.slice(fillIdx);
+    }
 
     // Post-entry exit-signal tracking for open GLOBEX_FLUSH_* positions (part 1 of
     // OPEN_DECISION wire_flush_post_entry_exit_signals_globex, 2026-09-02): persists the

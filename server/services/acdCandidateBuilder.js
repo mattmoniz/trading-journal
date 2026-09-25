@@ -1441,7 +1441,7 @@ export async function computeLevelFadeFactors(ctx) {
           // only as resolved siblings accumulated over the session).
           query(
             `SELECT CASE WHEN setup_type LIKE '%_LONG' THEN 'LONG' WHEN setup_type LIKE '%_SHORT' THEN 'SHORT' END AS direction,
-                    COUNT(DISTINCT COALESCE(cluster_touch_id, id)) as cnt
+                    COUNT(DISTINCT COALESCE(cluster_touch_id::text, id::text)) as cnt
              FROM active_setups WHERE trade_date=$1 AND origin_status IN ('ACTIVE','SHADOW') AND status IN ('ACTIVE','RESOLVED')
              GROUP BY 1`,
             [todayET]

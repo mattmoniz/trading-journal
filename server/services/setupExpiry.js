@@ -49,16 +49,19 @@ export async function expireStaleSetups(io) {
   // resolveSetupsByPrice() branch (15s poll) records the designed TIMEOUT_EXIT first; this 60s
   // backstop only closes them if that branch still hasn't after the grace (e.g. no bars
   // arrived), in which case MARK_TO_MARKET is the correct "accidental close" label. The grace
-  // is plumbing (several multiples of the 15s poll), not a trading threshold.
+  // is plumbing (several multiples of the 15s poll), not a trading threshold. Cluster siblings
+  // (is_cluster_primary=false) get the same grace so resolveSetupsByPrice()'s sibling fill gate
+  // can write NOT_FILLED (null pnl) for a never-filled sibling before this backstop would
+  // mark-to-market a position that never existed (2026-09-25).
   // `_` is a LIKE single-char wildcard -- escape it so this is an exact prefix match, same as
   // resolveSetups.js's startsWith() checks (DeepSeek code review 2026-09-25).
   const timeoutPatterns = DESIGNED_TIMEOUT_EXIT_PREFIXES.map(p => `${p.replace(/_/g, '\\_')}%`);
   const candidates = await query(`
     SELECT id, setup_type, trade_date::text as trade_date, entry_zone_low, entry_zone_high,
-           stop_level, t1_level
+           stop_level, t1_level, is_cluster_primary
     FROM active_setups
     WHERE status IN ('ACTIVE', 'SHADOW') AND expires_at IS NOT NULL AND expires_at < NOW()
-      AND NOT (setup_type LIKE ANY($1::text[]) AND expires_at > NOW() - INTERVAL '5 minutes')
+      AND NOT ((setup_type LIKE ANY($1::text[]) OR is_cluster_primary = false) AND expires_at > NOW() - INTERVAL '5 minutes')
   `, [timeoutPatterns]);
   let lastKnownClose = null;
   if (candidates.rows.length) {
@@ -67,6 +70,20 @@ export async function expireStaleSetups(io) {
   }
   const expiredRows = [];
   for (const row of candidates.rows) {
+    // A cluster sibling reaching this backstop unresolved was never filled -- resolveSetupsByPrice()
+    // (which runs first each poll and resolves/MTMs any FILLED sibling itself) left it open because
+    // its own level never traded. No position existed, so no mark-to-market: NOT_FILLED, null pnl.
+    if (row.is_cluster_primary === false) {
+      const upd = await query(`
+        UPDATE active_setups
+        SET status='EXPIRED', resolution='NOT_FILLED', resolution_method='SIBLING_UNFILLED', actual_outcome='NOT_FILLED',
+            actual_pnl=NULL, resolved_at=NOW(), updated_at=NOW()
+        WHERE id=$1 AND status IN ('ACTIVE','SHADOW')
+        RETURNING *
+      `, [row.id]);
+      if (upd.rows[0]) expiredRows.push(upd.rows[0]);
+      continue;
+    }
     // Null direction (name/price disagreement, or missing price levels) leaves pnl null --
     // resolution_method below already falls to 'NO_PRICE_DATA' for a null pnl, the existing
     // convention for un-scoreable rows here. No separate logging needed at this call site:

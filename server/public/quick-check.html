@@ -1789,7 +1789,8 @@ function renderTimeline() {
       isTrail ? (isWin ? 'Trail ✓' : 'Trail ✗') :
       isWin ? 'T1 ✓' : isLoss ? 'Stop ✗' :
       (s.resolution === 'TIME_EXPIRED' || s.resolution === 'SESSION_CLOSED') ? 'expired' :
-      s.resolution === 'INVALIDATED' ? 'inv.' : '—';
+      s.resolution === 'INVALIDATED' ? 'inv.' :
+      s.resolution === 'NOT_FILLED' ? 'not filled' : '—';
     const dotColor = isLong ? 'var(--green-soft)' : 'var(--red-soft)';
     const time = s.fired_at_str ? s.fired_at_str.slice(11, 16) : '';
     const timeLabel = to12Hour(time);

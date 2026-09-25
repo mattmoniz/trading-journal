@@ -865,6 +865,7 @@ async function main() {
           AND trade_date >= CURRENT_DATE - 30
           AND NOT (resolution = 'INVALIDATED' AND invalidation_timing = 'PRE_ENTRY')
           AND resolution != 'SESSION_CLOSED'
+          AND resolution != 'NOT_FILLED' -- cluster sibling whose own level never traded (2026-09-25 fill gate): no position, null pnl by design
         GROUP BY 1, 2 ORDER BY 3 DESC
       `);
       if (resolvedDead.length === 0) {
