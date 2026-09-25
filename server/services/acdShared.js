@@ -320,6 +320,20 @@ export function isInNewEntryDeadZone(etMinuteOfDay) {
   return etMinuteOfDay >= 16 * 60 && etMinuteOfDay < 18 * 60;
 }
 
+// RTH-open no-new-entries dead zone (2026-09-25, user request after the 09-25 setup review's
+// §5 "opening burst" section: 9:30-9:35 ET fires ran -$20 to -$34/trade in every window tested).
+// Honest evidence caveat (kept from the review, not a firm per-setup finding like
+// openingDriveGate's P=0.70): this was a population-level observation with a CI that just
+// crosses zero on small N, explicitly left as "observation, not a gate" by the design review at
+// the time -- the user asked for a hard block anyway. Full skip (no row at all), matching the
+// 4-6PM dead zone's own precedent (isInNewEntryDeadZone above) and every one of its insert
+// sites, not a force-SHADOW accrual gate like openingDriveGate/LIVE_TIME_WINDOW_OVERRIDE --
+// there is no pre-registered recheck plan for this one, since it's a blanket user directive, not
+// a calibrated finding awaiting confirmation. 9:30:00-9:34:59 ET.
+export function isInRthOpenDeadZone(etMinuteOfDay) {
+  return etMinuteOfDay >= 570 && etMinuteOfDay < 575;
+}
+
 export function computeSessionEndCapStr(etNow) {
   const sessionEndET = new Date(etNow);
   sessionEndET.setHours(16, 0, 0, 0);

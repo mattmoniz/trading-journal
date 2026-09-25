@@ -22,7 +22,7 @@ import multer from 'multer';
 import { query } from '../db.js';
 import { computeVolumeBuildingMeasures, classifyVolumeBuilding, computeSizeMultiplier } from '../services/touchQuality.js';
 import { cacheGet, cacheSet } from '../lib/cache.js';
-import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible } from '../services/acdShared.js';
+import { getCached, setCached, getGlobalCalib, DAY_CACHE_TTL, getTouchQualityCalib, getTouchQualityBaseline, dropToTimeline, lookupRunnerTrailWidth, fmtETStr, computeSessionEndCapStr, getOptStopForType, tagClusterBatch, claimClusterRole, isFirstTradingDayAfterGap, isPdPriorDayType, isInNewEntryDeadZone, nextTradingDay, resolveRangeDates, getOpenStandalonePosition, isBreakevenStopEligible, isInRthOpenDeadZone } from '../services/acdShared.js';
 import { getLatestBars, getCurrentPrice } from '../services/priceRetrieval.js';
 import { isOpeningDriveCounterTrade, OPENING_DRIVE_GATE } from '../services/openingDriveGate.js';
 export { dropToTimeline } from '../services/acdShared.js';
@@ -3502,7 +3502,7 @@ export default function createACDRouter(io) {
         // close over that handler's own `inNewEntryDeadZone` -- computed fresh here from this
         // function's own `bar.tod`, same self-contained pattern as isGlobexNow just above,
         // same [960,1080) boundary as the RTH handler's own inNewEntryDeadZone.
-        const inStackVolDeadZone = isInNewEntryDeadZone(bar.tod);
+        const inStackVolDeadZone = isInNewEntryDeadZone(bar.tod) || isInRthOpenDeadZone(bar.tod);
         const svThresholds = isGlobexNow ? STACK_VOL_THRESHOLDS.GLOBEX : STACK_VOL_THRESHOLDS.RTH;
         const { volZCutoff, osrCutoff, minClusterSize } = svThresholds;
 
@@ -3831,6 +3831,7 @@ export default function createACDRouter(io) {
       // population for a genuinely quiet dead zone. See CONVENTIONS_DETAIL.md's entry for
       // the full account and which insert sites needed which flavor of this fix.
       const inNewEntryDeadZone = isInNewEntryDeadZone(etMin);
+      const inRthOpenDeadZone = isInRthOpenDeadZone(etMin);
 
       // Resolve/expire existing setups on every poll regardless of window
       await resolveSetupsByPrice(io).catch(() => {});
@@ -3915,7 +3916,7 @@ export default function createACDRouter(io) {
       // of this field) until 2026-07-31, when it became the real flag for the 4-6pm
       // no-new-entries dead zone above. Distinct from dll.js's own noNewEntries concept
       // (daily-loss-limit-driven) — this one is purely time-of-day.
-      const noNewEntries = inNewEntryDeadZone;
+      const noNewEntries = inNewEntryDeadZone || inRthOpenDeadZone;
 
       // RTH detection — same as before (8:30 AM–5 PM ET)
       const isRTH = true; // already gated above
@@ -5138,7 +5139,7 @@ export default function createACDRouter(io) {
                 // touched" actually means.
                 // 4-6PM no-new-entries dead zone (2026-09-16, user request) -- full skip, not a
                 // SHADOW row, matching the same fix on the suppressed-audit branch below.
-                if (willGetTouchCredit && !inNewEntryDeadZone) {
+                if (willGetTouchCredit && !inNewEntryDeadZone && !inRthOpenDeadZone) {
                   try {
                     const sibLevel = cand.level;
                     const sibOptStop = getOptStopForType(liveStats._opt, candType);
@@ -5615,7 +5616,7 @@ export default function createACDRouter(io) {
               // tracking this branch exists for during 4-6PM specifically, in exchange for a
               // genuinely quiet dead zone. Does NOT touch the cluster_attributed_setups UPDATE
               // below (that tags an ALREADY-EXISTING anchor row, not a new insert).
-              const auditIns = inNewEntryDeadZone ? { rows: [] } : await query(`
+              const auditIns = (inNewEntryDeadZone || inRthOpenDeadZone) ? { rows: [] } : await query(`
                 INSERT INTO active_setups (
                   trade_date, setup_type, fired_at, price_at_detection, status, origin_status,
                   suppression_reason, confluence_score_at_detection, confluence_levels_at_detection,
@@ -6452,7 +6453,7 @@ export default function createACDRouter(io) {
               // touch from earlier in the session (e.g. 10am) during a poll that's currently
               // running at 4:30pm, and that 10am touch is not a dead-zone entry just because the
               // server got to it late. Full skip, matching the other RTH insert sites' same fix.
-              if (isInNewEntryDeadZone(bt.etMin)) continue;
+              if (isInNewEntryDeadZone(bt.etMin) || isInRthOpenDeadZone(bt.etMin)) continue;
               const h = Math.floor(bt.etMin / 60), m = bt.etMin % 60;
               const firedAtBackfill = `${todayET} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
               const btRegimeStamp = computeRegimeStamp(bt.entry, btVaMap);
@@ -6927,7 +6928,8 @@ export default function createACDRouter(io) {
           || oppositeDirectionOpen
           || sameTypeRefireBlocked
           || openingDriveCounter
-          || liveTimeWindowBlocked;
+          || liveTimeWindowBlocked
+          || inRthOpenDeadZone;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
@@ -6938,6 +6940,7 @@ export default function createACDRouter(io) {
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
           : liveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
+          : inRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
         // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
@@ -6953,11 +6956,12 @@ export default function createACDRouter(io) {
         // 5min of a same-type resolution is skipped here, not SHADOW-inserted -- same accepted
         // tradeoff as isSameSetupRefireBlocked (bypassing reintroduces the 2026-08-20 flood).
         const skipRedundantShadowInsert = forceShadow
-          && (inNewEntryDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
+          && (inNewEntryDeadZone || inRthOpenDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
         if (skipRedundantShadowInsert) {
           logGatedCandidate({
             tradeDate: todayET, setupType: active.type, gateName: 'REDUNDANT_SHADOW_SUPPRESSED',
             gateReason: inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
+              : inRthOpenDeadZone ? 'RTH_OPEN_DEAD_ZONE'
               : `${forceShadowReason} + same-type resolved within ${REFIRE_COOLDOWN_MINUTES[active.type] ?? SHADOW_NOISE_SUPPRESSION_MINUTES}min`,
             entry: active.entry, stop: active.stop, target: safeT1Level,
           });
@@ -7199,8 +7203,8 @@ export default function createACDRouter(io) {
             // touch-detection loop (unlike the early-touch-backfill loop above, which gates on
             // the touch's OWN earlier etMin instead), so the outer/current inNewEntryDeadZone is
             // the correct flag here. Full skip, matching the other RTH insert sites' same fix.
-            if (inNewEntryDeadZone) {
-              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
+            if (inNewEntryDeadZone || inRthOpenDeadZone) {
+              logGatedCandidate({ tradeDate: todayET, setupType: shadow.type, gateName: 'POST_RTH_DEAD_ZONE_SHADOW', gateReason: inRthOpenDeadZone ? '9:30-9:35 ET no-new-entries window' : '4-6PM ET no-new-entries window', entry: shadow.entry, stop: shadow.stop, target: shadow.target });
               continue;
             }
             let sT1 = shadow.target;
