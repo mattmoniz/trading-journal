@@ -89,3 +89,9 @@ What the data says, honestly:
 3. Pooled, family-level calibration for the near-duplicate OR/pivot/weekly families.
 4. Follow the first-touch-vs-refire lead (§2.4) with a direct first-touch-of-day test.
 5. Overnight fades run on a 45/90 default geometry that looks poor: the corrected next-structural-level test found closer targets helped several `_OVERNIGHT` types, but only `PM_POC_FADE_SHORT_OVERNIGHT` (N=15) beat a direction placebo — a proper overnight geometry calibration is the better fix than per-level targets (only matters once Globex is unpaused).
+
+## 9. Also done tonight: top-50 level confluence scan (your 09-24 request; Gemini was out of quota)
+
+- 283 clean RTH days (2025-03 → 2026-09). Most-approached levels: DAILY_OPEN, OR5 mid/low/high, IB_MID, ONH, CAM_R1, IB_HIGH, PD_CLOSE, PD_VAH. VWAP levels excluded (their stored values include the rest of that day = lookahead); OR/IB only counted after they form.
+- Most frequent within-15pt pairs are mostly near-duplicates by construction (PD_IB_LOW+PD_LOW 53% of days, PD_HIGH+PD_IB_HIGH 43%, 3M_POC+PM_POC 39%, DAILY_OPEN+OR5_MID 37%).
+- **Confluence zones see less follow-through, not more**: 183pt vs 244pt max move over the next 4 hours vs isolated levels (0.87× after matching time of day). No pair beats the isolated-level baseline with confidence; 25 pairs are significantly below it. The "which pair goes furthest" ranking doesn't persist from the first half of history to the second (rank correlation 0.04). `RESEARCH_CLAIM level_confluence_top50_travel_20260925`.
