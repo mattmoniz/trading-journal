@@ -1,6 +1,11 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## 🔧 2026-09-25 (morning): SHADOW "declustered edge" was phantom fills; ALL_LEVELS_LIVE shipped by user directive
+- **Finding**: 226 of 1,882 real cluster-sibling rows (12%) since 07-16 never had their own entry level trade before resolving, yet were credited +$18,344 (mostly TARGET_HIT). That is most of the Declustered SHADOW view's outperformance. No currently-ACTIVE setup flips status once phantoms are removed; several THIN_N ones flip negative (CAM_R3/R2_FADE_SHORT, OR15_HIGH_FADE_LONG, WEEKLY_VWAP_FADE_SHORT_OVERNIGHT). `RESEARCH_CLAIM sibling_phantom_fill_inflates_shadow_ev_20260925`.
+- **Shipped (36ddedc)**: sibling fill gate in the resolver + expiry backstop (DeepSeek design-critiqued); `ALL_LEVELS_LIVE` (every level-fade fires live, every cluster level trades individually), at the user's explicit direction despite that evidence; PD_VAL_FADE_LONG after-1pm window (22ee189) is bypassed while ALL_LEVELS_LIVE is on. Also fixed a `COALESCE(uuid,int)` error that had silently zeroed `stackCount` since 09-07.
+- **Pending**: DeepSeek code review of 36ddedc (dispatched); historical sibling re-resolution (`OPEN_DECISION sibling_fill_gate_resolver_fix_20260925`); 10-day revisit (`OPEN_DECISION all_levels_live_revisit_20260925`); quick-check's "open" badge shows unrealized P&L for an ACTIVE sibling even before its level has filled (cosmetic, not yet fixed).
+
 ## 2026-09-25 (overnight, user asleep): month setup review + opening-burst/first-30 work + POC resolver-race fix
 
 User asked for: (1) a thorough review of every setup and all real results over the past month with critique/improvements, (2) testing how to improve the mass firing in the first 20 min of RTH, (3) fixing firing against the first-30-min trend, plus "fix bugs you find." Gemini quota was exhausted (resets ~2026-09-28), so analysis was done directly; DeepSeek did the design critique + two code reviews. Full write-up: **`docs/SETUP_REVIEW_20260925.md`**.
