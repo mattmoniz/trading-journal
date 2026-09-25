@@ -217,6 +217,10 @@
      Duration is shown directly in the tag text (not hidden behind a hover title) so a
      mobile/touchscreen viewer sees it without needing to tap anything. */
   .late-tag { color: #fde68a; background: rgba(202,138,4,0.16); }
+  /* T1-floor runner shadow tag (2026-09-25) -- distinct hue from every tag above so it stays
+     visually distinguishable. PROVISIONAL (RESEARCH_CLAIM
+     t1floor_runner_positive_slow_population_20260925) -- SHADOW-tracked, not yet promoted. */
+  .t1floor-tag { color: #a3e635; background: rgba(101,163,13,0.16); }
   .sig-tag { cursor: pointer; }
 
   /* Modal */
@@ -1852,6 +1856,11 @@ function renderTimeline() {
     // qualified=false rows still tap-open to show why it was skipped, useful monitoring
     // signal on its own.
     const pcTag = s.pitch_catch_shadow ? '<span class="vb-tag pitchcatch-tag sig-tag" onclick="event.stopPropagation(); openPitchCatchPopup(' + s.id + ')">PC</span>' : '';
+    // T1-floor runner shadow tag (2026-09-25, PROVISIONAL -- see t1FloorRunnerWalker.js's
+    // header for the full backtest + stress-test + DeepSeek-review-and-fix evidence trail).
+    // Same tap-to-see-hypothetical-vs-real convention as every tag above. Applies to the PLAIN
+    // (non-wider-target-armed) T1-hit population, distinct from stTag/pcTag above.
+    const t1fTag = s.t1_floor_runner_shadow ? '<span class="vb-tag t1floor-tag sig-tag" onclick="event.stopPropagation(); openT1FloorRunnerPopup(' + s.id + ')">T1F</span>' : '';
     // Direction-loss-alternation gate tag (user idea + user-provided live example, 2026-09-05
     // -- see acd.js's isDirectionLossBlocked() header). Only shown when this trade WOULD have
     // been blocked (the informative case) -- every real trade gets tagged internally, but
@@ -1893,7 +1902,7 @@ function renderTimeline() {
       '<span class="rdot" style="background:' + dotColor + '"></span>' +
       '<span class="time mono">' + timeLabel + '</span>' +
       '<span class="type">' + (s.setup_type || '').replace(/_/g, ' ') + '</span>' +
-      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + dgTag + mfTag + bsTag + efTag + lateTag +
+      clusterBadge + vbTag + wideTag + rsTag + vrTag + stTag + pcTag + t1fTag + dgTag + mfTag + bsTag + efTag + lateTag +
       '<span class="price mono">' + price + '</span>' +
       '<span class="badge ' + badgeClass + '">' + badgeText + '</span>' +
       '</div>';
@@ -2105,6 +2114,7 @@ function shadowTagRows(s) {
   }
   if (s.step_trail_shadow) out += altExitRow('StepTrail', s.step_trail_shadow.hypothetical_pnl, s.step_trail_shadow.armed_at);
   if (s.pitch_catch_shadow && s.pitch_catch_shadow.qualified === true) out += altExitRow('PitchCatch', s.pitch_catch_shadow.hypothetical_pnl, null);
+  if (s.t1_floor_runner_shadow) out += altExitRow('T1-Floor Runner', s.t1_floor_runner_shadow.hypothetical_pnl, null);
   if (s.post_entry_exit_signals?.range_slope) out += altExitRow('RangeSlope', s.post_entry_exit_signals.range_slope.hypothetical_pnl, s.post_entry_exit_signals.range_slope.fired_at);
   if (s.post_entry_exit_signals?.vol_rollover) out += altExitRow('VolRoll', s.post_entry_exit_signals.vol_rollover.hypothetical_pnl, s.post_entry_exit_signals.vol_rollover.fired_at);
   if (s.breakeven_stop_shadow && s.breakeven_stop_shadow.classification === 'REWARDED') out += altExitRow('BreakevenStop', s.breakeven_stop_shadow.hypothetical_pnl, s.breakeven_stop_shadow.armed_at);
@@ -2375,6 +2385,60 @@ function openPitchCatchPopup(id) {
   if (pitchCatchShadowSummary) {
     html += pcBucketRow('Pitch and Catch LONG', pitchCatchShadowSummary.long);
     html += pcBucketRow('Pitch and Catch SHORT', pitchCatchShadowSummary.short);
+  } else {
+    html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
+  }
+
+  $('modal').innerHTML = html;
+  $('modal-backdrop').classList.add('open');
+}
+
+// ---- T1-floor runner shadow popup (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
+// t1floor_runner_positive_slow_population_20260925). Tap target for the T1F row tag above. Same
+// #modal/#modal-backdrop + mRow/mSection convention as every other popup. Bank T1 as a
+// permanent floor (this trade's own real win is never at risk from this mechanism, even
+// hypothetically) then ride a runner toward 1.5x -- applies to the PLAIN (non-wider-target-armed)
+// T1-hit population, distinct from StepTrail/PitchCatch above.
+let t1FloorRunnerSummary = null;
+async function loadT1FloorRunnerSummary() {
+  try {
+    t1FloorRunnerSummary = await fetch('/api/setups/t1-floor-runner-shadow-summary', { cache: 'no-store' }).then(r => r.json());
+  } catch (e) { /* popup falls back to per-trade-only view below */ }
+}
+
+function t1fBucketRow(label, b) {
+  if (!b || b.n === 0) return '<div class="m-row"><span class="m-k" style="color:var(--dim)">' + label + ': no data yet</span></div>';
+  const deltaColor = b.avgDelta >= 0 ? 'var(--green)' : 'var(--red)';
+  return '<div class="m-row"><span class="m-k">' + label + '</span><span class="m-v mono" style="color:' + deltaColor + '">' +
+    'N=' + b.n + (b.thin ? ' (thin, N<' + (t1FloorRunnerSummary?.minRealN ?? 20) + ')' : '') +
+    ', avg delta ' + (b.avgDelta >= 0 ? '+' : '') + '$' + b.avgDelta.toFixed(2) + '</span></div>';
+}
+
+function openT1FloorRunnerPopup(id) {
+  const s = timelineRows.find(r => r.id === id);
+  const shadow = s?.t1_floor_runner_shadow;
+  if (!s || !shadow) return;
+
+  const hyp = Number(shadow.hypothetical_pnl);
+  const real = s.actual_pnl != null ? Number(s.actual_pnl) : null;
+  const delta = Number(shadow.delta);
+  const hypColor = hyp >= 0 ? 'var(--green)' : 'var(--red)';
+  let html = '<div class="m-head"><span class="m-title" style="color:#a3e635">T1-Floor Runner</span>' +
+    '<button class="m-close" onclick="closeTradeModal()">×</button></div>';
+  html += '<div class="m-sub">' + (s.setup_type || '').replace(/_/g, ' ') + ' · id ' + s.id + ' · PROVISIONAL, tracked for real data — backtest N=264 mean +$8.26/trade (survives stress test down to +$4.34/trade)</div>';
+
+  html += mSection('This trade');
+  html += mRow('Real outcome (what actually happened — banked T1)', real != null ? (real >= 0 ? '+' : '') + '$' + real.toFixed(2) : null,
+    real != null ? (real >= 0 ? 'var(--green)' : 'var(--red)') : null);
+  html += mRow('Hypothetical if floor-runner instead', (hyp >= 0 ? '+' : '') + '$' + hyp.toFixed(2), hypColor);
+  html += mRow('Delta (hypothetical − real)', (delta >= 0 ? '+' : '') + '$' + delta.toFixed(2), delta >= 0 ? 'var(--green)' : 'var(--red)');
+  html += mRow('Exit', shadow.hypothetical_resolution + ' / ' + shadow.hypothetical_method);
+  html += mRow('Target multiple', shadow.target_mult != null ? shadow.target_mult + 'x' : null);
+
+  html += mSection('Running total across all real + shadow fires');
+  if (t1FloorRunnerSummary) {
+    html += t1fBucketRow('Real (ACTIVE-origin)', t1FloorRunnerSummary.real);
+    html += t1fBucketRow('Shadow (SHADOW-origin)', t1FloorRunnerSummary.shadow);
   } else {
     html += '<div class="m-row"><span class="m-k" style="color:var(--dim)">Still loading / not enough data yet</span></div>';
   }
@@ -3181,6 +3245,7 @@ loadRange('today');
 loadFlushExitSignalsSummary(); // slow-changing (weekly cron writes it) -- fetch once, no poll
 loadStepTrailShadowSummary(); // slow-changing (weekly cron writes the frac calib) -- fetch once, no poll
 loadPitchCatchShadowSummary(); // slow-changing (weekly cron writes the filter calib) -- fetch once, no poll
+loadT1FloorRunnerSummary(); // slow-changing (live query over real trades, no calib row) -- fetch once, no poll
 loadDirectionGateSummary(); // slow-changing (this is a live query over real trades, not a calib row) -- fetch once, no poll
 loadMomentumFadeShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll
 loadBreakevenStopShadowSummary(); // slow-changing (live query over real trades) -- fetch once, no poll

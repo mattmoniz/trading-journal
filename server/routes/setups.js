@@ -1246,6 +1246,39 @@ router.get('/setups/pitch-catch-shadow-summary', async (req, res) => {
   }
 });
 
+// GET /api/setups/t1-floor-runner-shadow-summary — monitoring surface for the T1-floor runner
+// forward-tracking (2026-09-25, PROVISIONAL -- RESEARCH_CLAIM
+// t1floor_runner_positive_slow_population_20260925, see server/services/t1FloorRunnerWalker.js's
+// header for the full backtest + stress-test + DeepSeek-review-and-fix evidence trail). Same
+// live, read-only aggregate-over-the-field pattern as step-trail's summary (real ACTIVE-origin
+// vs background SHADOW-origin split), minus the per-cell calibration section step-trail has --
+// this mechanism has no per-setup_type-x-time-of-day calibration script (yet).
+router.get('/setups/t1-floor-runner-shadow-summary', async (req, res) => {
+  try {
+    const MIN_REAL_N_T1_FLOOR = 20; // this codebase's own standing N>=20-before-decisive floor
+    const rowsQ = await query(`
+      SELECT actual_pnl::float as actual_pnl, origin_status, t1_floor_runner_shadow
+      FROM active_setups
+      WHERE t1_floor_runner_shadow IS NOT NULL AND origin_status IN ('ACTIVE','SHADOW')
+    `);
+    function summarize(rows) {
+      const n = rows.length;
+      if (!n) return { n: 0, avgDelta: null, avgRealPnl: null, avgHypotheticalPnl: null, thin: true };
+      const deltas = rows.map(r => Number(r.t1_floor_runner_shadow.delta));
+      const avgDelta = deltas.reduce((s, d) => s + d, 0) / n;
+      const avgRealPnl = rows.reduce((s, r) => s + Number(r.actual_pnl), 0) / n;
+      const avgHypotheticalPnl = rows.reduce((s, r) => s + Number(r.t1_floor_runner_shadow.hypothetical_pnl), 0) / n;
+      return { n, avgDelta: +avgDelta.toFixed(2), avgRealPnl: +avgRealPnl.toFixed(2), avgHypotheticalPnl: +avgHypotheticalPnl.toFixed(2), thin: n < MIN_REAL_N_T1_FLOOR };
+    }
+    const real = rowsQ.rows.filter(r => r.origin_status === 'ACTIVE');
+    const shadow = rowsQ.rows.filter(r => r.origin_status === 'SHADOW');
+    res.json({ minRealN: MIN_REAL_N_T1_FLOOR, real: summarize(real), shadow: summarize(shadow), combined: summarize(rowsQ.rows) });
+  } catch (err) {
+    console.error('[setups/t1-floor-runner-shadow-summary]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/setups/direction-gate-shadow-summary — monitoring surface for the direction-loss-
 // alternation gate (user idea + user-directed live example, 2026-09-05, see acd.js's
 // isDirectionLossBlocked()/tagDirectionGateShadow() header for the full mechanism and honest
