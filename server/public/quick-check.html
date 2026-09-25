@@ -332,7 +332,7 @@
       <div id="perf-toggle" class="perf-toggle"></div>
     </div>
     <div class="perf-head-row" style="margin-top:4px;">
-      <div class="perf-subhead" style="font-size:10px;color:var(--dim);" title="Collapsed = one row per real market touch (a confluence cluster's siblings excluded). Declustered = every cluster-sibling trade counted individually too.">Cluster view</div>
+      <div class="perf-subhead" style="font-size:10px;color:var(--dim);" title="Clustered = one row per real market touch (a confluence cluster's siblings excluded). Declustered = every cluster-sibling trade counted individually too.">Cluster view</div>
       <div id="cluster-toggle" class="perf-toggle"></div>
     </div>
     <div id="range-stats" class="range-stats-row"></div>
@@ -2888,7 +2888,11 @@ function setPerformanceFilter(f) {
 }
 
 function renderClusterToggle() {
-  renderToggle('cluster-toggle', [['collapsed', 'Collapsed'], ['declustered', 'Declustered']], clusterView, setClusterView);
+  // Label renamed 2026-09-25 (user request: "Collapsed vs Declustered isn't a clean pair,
+  // Clustered vs Declustered reads better") -- display text only, the internal value ('collapsed')
+  // and localStorage key are unchanged since nothing compares against it directly (only
+  // `clusterView === 'declustered'` is ever checked), so old stored values still work correctly.
+  renderToggle('cluster-toggle', [['collapsed', 'Clustered'], ['declustered', 'Declustered']], clusterView, setClusterView);
 }
 
 function setClusterView(v) {
