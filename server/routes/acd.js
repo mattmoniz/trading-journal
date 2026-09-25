@@ -65,7 +65,7 @@ import { computeIbBullBear } from '../services/caseEngine.js';
 import { computeVWAP } from '../../scripts/backtest_confluence.js';
 import { stepWiderTarget, WIDER_TARGET_MULT, MAX_BARS_TO_T1_FOR_WIDER } from '../services/widerTargetWalker.js';
 import { isPastMechanismSessionEnd, firedAtToMod, isFiredInRTH } from '../services/sessionBoundary.js';
-import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE } from '../services/setupEligibility.js';
+import { computeSuppressionSets, isLiveEligible, getCanonicalLiveStatus, CAPITAL_EXPOSURE_OVERRIDE, isLiveTimeWindowBlocked } from '../services/setupEligibility.js';
 import { tagEntryOrderFlowShadow } from '../services/entryOrderFlowShadow.js';
 // buildAllCandidates/computeLevelFadeFactors/logGatedCandidate moved to
 // server/services/acdCandidateBuilder.js 2026-09-20 (Phase A of
@@ -6879,6 +6879,9 @@ export default function createACDRouter(io) {
         const openingDriveCounter = !crossDirectionCooldownMin && !postWinOppBlocked && !oppositeDirectionOpen && !sameTypeRefireBlocked && rthDir
           ? (await isOpeningDriveCounterTrade(rthDir)).blocked
           : false;
+        // Per-setup live time window (2026-09-25) -- see LIVE_TIME_WINDOW_OVERRIDE in
+        // setupEligibility.js (PD_VAL_FADE_LONG after 13:00 ET). Pure lookup, no query.
+        const liveTimeWindowBlocked = isLiveTimeWindowBlocked(active.type, etMin);
         // FIXED 2026-09-02 (base-eligibility divergence, docs/UNIFIED_LIVE_GATE_CHECKPOINT_SPEC.md
         // sequencing item 2): this used to read `_suppressedSetups?.has(active.type)` directly --
         // fail-OPEN on an unknown type (absent from the set == "not suppressed" == eligible),
@@ -6907,7 +6910,8 @@ export default function createACDRouter(io) {
           || postWinOppBlocked
           || oppositeDirectionOpen
           || sameTypeRefireBlocked
-          || openingDriveCounter;
+          || openingDriveCounter
+          || liveTimeWindowBlocked;
         const forceShadowReason = isTrailMechanism ? 'UNCALIBRATED_TRAIL_VARIANT'
           : inNewEntryDeadZone ? 'POST_RTH_DEAD_ZONE'
           : inRefireCooldown ? 'REFIRE_COOLDOWN'
@@ -6917,6 +6921,7 @@ export default function createACDRouter(io) {
           : oppositeDirectionOpen ? 'OPPOSITE_DIRECTION_OPEN'
           : sameTypeRefireBlocked ? 'SAME_TYPE_REFIRE'
           : openingDriveCounter ? OPENING_DRIVE_GATE.REASON
+          : liveTimeWindowBlocked ? 'LIVE_TIME_WINDOW'
           : forceShadow ? 'PERFORMANCE_BELOW_THRESHOLD' : null;
         // 4-6PM no-new-entries dead zone (2026-09-16, user request: "stop firing trades during
         // the deadzone") -- was force-SHADOW only (still wrote a real row, suppression_reason=
@@ -6928,6 +6933,9 @@ export default function createACDRouter(io) {
         // quiet dead zone -- matches the same fix already applied to every other RTH insert
         // site (cluster-sibling-touch-credit, suppressed-near-level-audit, STACK_VOL_BREAK_LIVE,
         // early-touch-backfill, shadowCandidates).
+        // Known limitation (DeepSeek review 2026-09-25): a LIVE_TIME_WINDOW-forced candidate within
+        // 5min of a same-type resolution is skipped here, not SHADOW-inserted -- same accepted
+        // tradeoff as isSameSetupRefireBlocked (bypassing reintroduces the 2026-08-20 flood).
         const skipRedundantShadowInsert = forceShadow
           && (inNewEntryDeadZone || inRefireCooldown || await recentlyShadowedSameType(todayET, active.type));
         if (skipRedundantShadowInsert) {
@@ -7238,7 +7246,8 @@ export default function createACDRouter(io) {
             // Only evaluated when this row would otherwise go ACTIVE (it can't change a SHADOW row).
             const shadowOpeningDriveCounter = shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked
               && shadow.direction && (await isOpeningDriveCounterTrade(shadow.direction)).blocked;
-            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter) ? 'ACTIVE' : 'SHADOW';
+            const shadowLiveTimeWindowBlocked = isLiveTimeWindowBlocked(shadow.type, etMin);
+            const st = (shadowIsLive && !shadowCrossDirectionCooldownMin && !shadowPostWinBlocked && !shadowOppositeDirectionOpen && !shadowSameTypeRefireBlocked && !shadowOpeningDriveCounter && !shadowLiveTimeWindowBlocked) ? 'ACTIVE' : 'SHADOW';
             const regimeStamp = computeRegimeStamp(shadow.entry, vaMap);
             const shadowVaOverlapStreak = await getVaOverlapStreak(todayET).catch(() => null);
             // Volume-building signal (2026-08-29, informational only -- see touchQuality.js's

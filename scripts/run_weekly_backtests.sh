@@ -443,4 +443,9 @@ echo "=== Weekly backtest run: $(date) ==="
 # gates/sizes a real trade.
 /usr/bin/node scripts/calibrate_globex_rotation_badge.mjs
 
+# Per-setup live time-window overrides (LIVE_TIME_WINDOW_OVERRIDE, setupEligibility.js; first
+# entry PD_VAL_FADE_LONG after 13:00 ET, 2026-09-25). Re-derives each override's value on realized
+# actual_pnl and runs its pre-registered prospective look -- remove the entry if it fails.
+/usr/bin/node scripts/recheck_live_time_window_overrides.mjs
+
 echo "=== Weekly backtest run complete: $(date) ==="

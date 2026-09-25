@@ -233,6 +233,26 @@ export async function computeSuppressionSets(todayDowInt, setupStatusRows = null
 // THIS canonical function (rather than patching the one known call site) means any future
 // caller gets it for free, per this function's own "every live insert path must call this
 // instead of reimplementing" contract.
+// Time-of-day companion to CAPITAL_EXPOSURE_OVERRIDE (2026-09-25, user-approved): a setup_type
+// that stays live-eligible except inside an RTH clock window where its own real trades were
+// tested to lose. Force-SHADOW only (rows still insert and resolve, so the recheck keeps
+// accumulating data). Same deliberate-review bar as the map above -- each entry cites its
+// evidence and is re-derived weekly by scripts/recheck_live_time_window_overrides.mjs (which
+// also reports the post-change prospective sample). Remove an entry if that recheck's
+// pre-registered look (>=20 distinct prospective days) fails to confirm it.
+//   - PD_VAL_FADE_LONG, 13:00-16:00 ET: skip-after-1pm was the only per-setup change robust in
+//     BOTH the 8wk and 11wk windows (+$5.02 / +$5.55 per trade vs its own re-simulated current
+//     geometry, day-blocked CI > 0 both, both chronological halves positive) --
+//     RESEARCH_CLAIM per_setup_improvement_variants_20260925, OPEN_DECISION
+//     setup_improvement_candidates_20260925.
+export const LIVE_TIME_WINDOW_OVERRIDE = new Map([
+  ['PD_VAL_FADE_LONG', { fromEtMin: 780, toEtMin: 960, reason: 'LIVE_TIME_WINDOW', addedDate: '2026-09-25' }],
+]);
+export function isLiveTimeWindowBlocked(setupType, etMin) {
+  const o = LIVE_TIME_WINDOW_OVERRIDE.get(setupType);
+  return !!o && Number.isFinite(etMin) && etMin >= o.fromEtMin && etMin < o.toEtMin;
+}
+
 export function isLiveEligible(setupType, { suppressedSetups, dowSuppressToday, knownTypes }) {
   return knownTypes.has(setupType) && !suppressedSetups.has(setupType) && !dowSuppressToday.has(setupType)
     && !CAPITAL_EXPOSURE_OVERRIDE.has(setupType);
