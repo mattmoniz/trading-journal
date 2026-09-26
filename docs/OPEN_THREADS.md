@@ -1,6 +1,14 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-26: dead-zone verification found a real 7th insert path (3 standalone detectors) never wired to either dead zone
+
+Verifying `dead_zone_full_skip_live_verification_pending_20260916` (does the 4-6pm full-skip actually produce zero rows live) found the acd.js side was clean, but surfaced a real, previously-unaudited gap: `STALL_DEFENDED_LEVEL_SHORT` (id 124469) fired 2026-09-18 16:30 ET — a standalone detector file with its own `INSERT`, never wired to `isInNewEntryDeadZone()`/`isInRthOpenDeadZone()` at all.
+
+Audited all 5 standalone detector files. Fixed 3: `stallDefendedLevelDetector.js` (both zones), `rthFlushDetector.js` (the 9:30-9:35 zone — its own `EVAL_END_ET_MIN=960` already excluded 4-6pm), `majorPivotDefendedBreakDetector.js` (both zones, RTH-classified breaks only). The last one needed care — its header explicitly warns against changing its RTH/Globex session-split boundary math, but that's about which stop/target *config* a break uses, not whether a new entry should be allowed at all; a "no new entries" gate layered on top doesn't touch that. User confirmed the intent directly mid-fix: "the 4-6 area is just a volumeless deadzone that fires random trades that hurt us." 2 files confirmed structurally exempt already (`minuteBarSignalDetector.js`/`ibLowPnrDetector.js`'s own eval windows don't overlap either dead zone).
+
+All SHADOW-only/thin real N at the time of the fix — zero live-capital impact from the gap itself, but a real structural miss that would have kept recurring. Verified: `test_invariants.mjs` unchanged (19/92), server restarted and confirmed postdating the edits. See commit `7a12e06`.
+
 ## ✅ 2026-09-26: DeepSeek week-review batch 1 found a real boundary bug in both sibling-repair scripts; fixed, plus a self-inflicted bug found while fixing it
 
 User asked for a DeepSeek QA pass over the whole week's work (~102 commits/21k+ lines — too much for one dispatch, so scoped to the highest-stakes cluster first: tonight's `SUPPRESS_ALL_DISABLED`, the `ALL_LEVELS_LIVE` correction, and the two sibling phantom-fill scripts). Full review dispatched via `scripts/invoke_deepseek.sh`, audited per the standing rule before acting on anything.
