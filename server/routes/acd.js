@@ -1627,7 +1627,17 @@ async function detectGlobexSetup(sessionDate, io) {
 
       await tagDirectionGateShadow(ins.rows[0].id, c.dir);
       await tagMomentumAgainstFadeShadow(ins.rows[0].id, c.dir);
-      await tagEntryOrderFlowShadow(ins.rows[0].id, { direction: c.dir, setupType: c.type, entryPrice: entry });
+      // FIXED 2026-09-26 (DeepSeek week-review batch 3, MEDIUM finding): tagEntryOrderFlowShadow()
+      // was awaited inline at all 6 real insert sites -- but getPriorClosedBarDelta() (the
+      // function it calls) has an internal 8-SECOND sleep on a stale-bar retry (~1/3 of RTH SHORT
+      // fires trigger this, per that file's own header), stalling the REST of this poll's work
+      // (sibling-credit inserts, event emission) even though the real row is already persisted
+      // by this point. tagEntryOrderFlowShadow() already catches its own errors internally
+      // (entryOrderFlowShadow.js's own try/catch, "never let a tagging failure surface anywhere"),
+      // so dropping await here is safe -- no unhandled-rejection risk, matches this file's own
+      // observation-only fire-and-forget convention used elsewhere (server/index.js's pollers).
+      // Same fix applied at all 6 call sites (grep tagEntryOrderFlowShadow to find the others).
+      tagEntryOrderFlowShadow(ins.rows[0].id, { direction: c.dir, setupType: c.type, entryPrice: entry }).catch(() => {});
       // Cluster touch credit tagging (2026-09-07) — post-insert UPDATE, not spliced into the
       // ~37-param INSERT above, mirroring RTH's own winner-tagging (~line 9327) and this
       // codebase's feedback_sql_param_dryrun_verification convention exactly. First
@@ -3786,7 +3796,7 @@ export default function createACDRouter(io) {
                   try { await dropToTimeline(ins.rows[0]); } catch (_) {}
                   await tagDirectionGateShadow(ins.rows[0].id, direction);
                   await tagMomentumAgainstFadeShadow(ins.rows[0].id, direction);
-                  await tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry });
+                  tagEntryOrderFlowShadow(ins.rows[0].id, { direction, setupType: svSetupType, entryPrice: svEntry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                   if (live.status === 'ACTIVE' && io) {
                     io.emit('setup-fired', { setupId: ins.rows[0].id, setupType: svSetupType, entry: svEntry, stop: svStop, target: svT1, direction });
                   }
@@ -4652,8 +4662,13 @@ export default function createACDRouter(io) {
                 // real_n/real_ev (ACTIVE/SHADOW-origin only, excludes BACKFILL synthetic data) —
                 // added 2026-09-20 (sortedcandidates_ev_score_weakly_calibrated_20260920) so the
                 // within-cluster ranking below (directionalEv) can rank on genuinely real-fired-trade
-                // EV instead of the blended wr/ev/n above (still real+synthetic mixed) — mirrors
-                // liveStats._dta's existing realN/realEv parsing from the same notes shape.
+                // EV instead of the blended wr/ev/n above (still real+synthetic mixed) — mirrors the
+                // same MECHANISM as liveStats._dta's realN/realEv parsing (parse notes JSON, read a
+                // real-N/EV field), corrected 2026-09-26 (DeepSeek week-review batch 3, LOW finding):
+                // the field NAMES differ, not "the same notes shape" as this comment used to claim —
+                // _dta reads notes.real_n/real_ev (DAY_TYPE_ALPHA's own convention), this reads
+                // notes.all_time_real_n/all_time_real_ev (SETUP_STATUS's own convention) — both
+                // correct for their own source, just different key names.
                 realN:  parsedSsNotes.all_time_real_n  ?? null,
                 realEv: parsedSsNotes.all_time_real_ev ?? null,
               };
@@ -5238,7 +5253,7 @@ export default function createACDRouter(io) {
                       const sibDir = isLong ? 'LONG' : 'SHORT';
                       await tagDirectionGateShadow(sibIns.rows[0].id, sibDir);
                       await tagMomentumAgainstFadeShadow(sibIns.rows[0].id, sibDir);
-                      await tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel });
+                      tagEntryOrderFlowShadow(sibIns.rows[0].id, { direction: sibDir, setupType: candType, entryPrice: sibLevel }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
                     }
                   } catch (e) {
                     // Non-critical, observation-only (gives a level real N credit, never trades
@@ -5491,20 +5506,20 @@ export default function createACDRouter(io) {
               // description-string-building glue (this IIFE and its solely-local sub-notes) is gone.
               history: { winRate: lv.wr, occurrences: lv.n, avgPnl: lv.ev, t1HitRate: lv.wr },
               // OPEN_DECISION sizemultiplier_needs_per_factor_instrumentation (2026-08-20,
-              // DeepSeek-reviewed design): raw INPUT state of every factor the sizeMultiplier
-              // IIFE below reads, captured once here so a future walk-forward-validated joint
-              // model is buildable without reimplementing this whole context-gathering
-              // pipeline. Deliberately raw categorical/boolean inputs, NOT per-factor dollar
-              // contribution -- the IIFE below is order-dependent with absolute sets (SUPPRESS
-              // -> mult=0.25, loss-streak ceilings), so a
-              // before/after delta per factor would be non-monotonic and misleading; a
-              // regression should learn the interaction/ordering effects itself from clean
-              // inputs. Read-only snapshot of already-computed variables -- does not touch the
-              // IIFE's logic or its returned mult at all. mult_iife/hasLossToday are merged in
-              // at the INSERT site below (hasLossToday isn't known yet at this point in
-              // construction, and DOMINATES real live_multiplier per the comment ~8 lines above
-              // the ceiling application -- omitting it here would make this column silently
-              // uninformative for the majority of real rows, see DeepSeek's review).
+              // DeepSeek-reviewed design): raw INPUT state of every factor the ORIGINAL
+              // sizeMultiplier IIFE read, captured once here so a future walk-forward-validated
+              // joint model is buildable without reimplementing this whole context-gathering
+              // pipeline. CORRECTED 2026-09-26 (DeepSeek week-review batch 3, LOW finding): the
+              // sizeMultiplier IIFE this comment describes was replaced 2026-09-20 (commit
+              // fc0e37b) by the single-factor computeSizeMultiplier({buyersAtLevel,
+              // sellersAtLevel}) call below -- these ~17 raw inputs now feed NOTHING except this
+              // monitoring blob (intentional, for a future model), not a live sizing stack. Kept
+              // for that future-model purpose; this snapshot never fed live sizing logic to begin
+              // with (it's a read-only capture of already-computed variables), so the correction
+              // is comment-only, not a behavior change. `multIife` at the INSERT site below is
+              // similarly a misnomer now -- it stores computeSizeMultiplier's result, not an IIFE
+              // value. hasLossToday is still merged in only at the INSERT site (unknown yet here,
+              // and DOMINATES real live_multiplier per the comment near its ceiling application).
               sizeFactorsAtDetection: {
                 tierDiscount: lv.ev < 30 && confluenceCount < 2,
                 lfConsecWins, lfConsecLosses, lfFirstOfDay,
@@ -5724,7 +5739,7 @@ export default function createACDRouter(io) {
               if (auditIns.rows[0]) {
                 await tagDirectionGateShadow(auditIns.rows[0].id, dir);
                 await tagMomentumAgainstFadeShadow(auditIns.rows[0].id, dir);
-                await tagEntryOrderFlowShadow(auditIns.rows[0].id, { direction: dir, setupType: type, entryPrice: currentPrice });
+                tagEntryOrderFlowShadow(auditIns.rows[0].id, { direction: dir, setupType: type, entryPrice: currentPrice }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               }
               // Tag the anchor trade with this attributed setup, so the trade detail modal can
               // show "this execution also represents: X, Y, Z" -- the whole point of tracking
@@ -7147,7 +7162,7 @@ export default function createACDRouter(io) {
         if (ins.rows[0]) {
           await tagDirectionGateShadow(ins.rows[0].id, rthDir);
           await tagMomentumAgainstFadeShadow(ins.rows[0].id, rthDir);
-          await tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry });
+          tagEntryOrderFlowShadow(ins.rows[0].id, { direction: rthDir, setupType: active.type, entryPrice: active.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
         }
         // Cluster touch credit Phase 1 fix #3 (docs/CLUSTER_TOUCH_CREDIT_SPEC.md): tag this
         // winner's own row with the same-cluster candidates the sortedCandidates loop skipped
@@ -7416,7 +7431,7 @@ export default function createACDRouter(io) {
             if (shadowIns.rows[0]) {
               await tagDirectionGateShadow(shadowIns.rows[0].id, shadow.direction);
               await tagMomentumAgainstFadeShadow(shadowIns.rows[0].id, shadow.direction);
-              await tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry });
+              tagEntryOrderFlowShadow(shadowIns.rows[0].id, { direction: shadow.direction, setupType: shadow.type, entryPrice: shadow.entry }).catch(() => {}); // fire-and-forget -- see the first call site comment (line 1630) for why
               // Cluster role claimed HERE, after the insert actually succeeded -- not before
               // gating -- so a candidate that got risk-checked/cooldown/eligibility-gated out
               // can never consume the primary slot for a group it was never actually written
