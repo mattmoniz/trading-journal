@@ -68,3 +68,11 @@ cd "$REPO"
 agy --add-dir "$REPO" --print "$(cat "$REQUEST")" --print-timeout "$TIMEOUT" > "$RESPONSE" 2>&1
 
 echo "[invoke_gemini] Done at $(date '+%H:%M:%S') — $(wc -l < "$RESPONSE") lines written"
+
+# Copy to a timestamped, thread-scoped filename immediately (same fix as invoke_deepseek.sh,
+# OPEN_DECISION invoke_deepseek_gemini_response_file_collision_20260921) -- protects against a
+# later dispatch overwriting this response before anyone reads it. The fixed-name file stays
+# as the "most recent" pointer every existing caller already reads; this is purely additive.
+DATED_COPY="$REPO/scratch/antigravity_response_$(date '+%Y%m%d_%H%M%S').md"
+cp "$RESPONSE" "$DATED_COPY"
+echo "[invoke_gemini] Also saved to $DATED_COPY"

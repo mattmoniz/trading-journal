@@ -90,3 +90,13 @@ cd "$REPO"
 cline --auto-approve true -c "$REPO" -t "$TIMEOUT_SECONDS" "$(cat "$REQUEST")" > "$RESPONSE" 2>&1
 
 echo "[invoke_deepseek] Done at $(date '+%H:%M:%S') — $(wc -l < "$RESPONSE") lines written"
+
+# Copy to a timestamped, thread-scoped filename immediately, before ANY later dispatch (this
+# session or a concurrent one) could overwrite the fixed $RESPONSE path (OPEN_DECISION
+# invoke_deepseek_gemini_response_file_collision_20260921 -- confirmed real 2026-09-21: a
+# review dispatched ~12:xx-12:47 was lost when a later, unrelated dispatch overwrote the
+# response file before anyone read it). The fixed-name file stays as the "most recent" pointer
+# every existing caller already reads; this is purely additive.
+DATED_COPY="$REPO/scratch/deepseek_response_$(date '+%Y%m%d_%H%M%S').md"
+cp "$RESPONSE" "$DATED_COPY"
+echo "[invoke_deepseek] Also saved to $DATED_COPY"
