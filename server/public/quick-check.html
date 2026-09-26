@@ -1614,6 +1614,11 @@ function renderTimeline() {
     // shared REAL_TRADE_FILTER; this client-side filter is this card's own equivalent so
     // Net P&L/Wins/Losses/Worst Trade don't keep re-displaying a known-corrupted trade.
     .filter(s => !s.stale_entry_price_basis)
+    // late_fill_past_expiry_basis (2026-09-26, DeepSeek review finding #4): same reasoning --
+    // a real backfilled historical-record resolution the live system's own real order life
+    // would never have produced. `/api/setups/today` uses `SELECT s.*` so this column is
+    // already present with no backend change needed here.
+    .filter(s => !s.late_fill_past_expiry_basis)
     // Still-open (status IN ('SHADOW','ACTIVE')) rows now INCLUDED inline (2026-09-22, user
     // request: "have open trades fire inline but have them orange while they're open") --
     // previously excluded entirely, so a trade like a 12-hour-hold MAJOR_PIVOT_DEFENDED_BREAK
@@ -1694,6 +1699,7 @@ function renderTimeline() {
   // rendering either way.
   const globexRows = scoped
     .filter(s => !s.stale_entry_price_basis)
+    .filter(s => !s.late_fill_past_expiry_basis)
     .filter(s => s.fired_at_str)
     .filter(s => !isRthAdjacent(s))
     .filter(s => tagFilter === 'all' || TAG_META[tagFilter]?.test(s))
@@ -2788,8 +2794,14 @@ function fmtAxisTime(firedAtStr, useTime) {
 // shows uncollapsed -- this just applies that same population to the account-level
 // Net/equity-curve/drawdown figures instead of only the setup breakdown.
 function getDecidedRows(rows, declustered = false) {
+  // late_fill_past_expiry_basis excluded here too (2026-09-26, DeepSeek review finding #4):
+  // these rows carry a real backfilled resolution/actual_pnl for historical-record purposes,
+  // but the live system would never have kept a resting sibling order open that long -- the
+  // backend already excludes them from REAL_TRADE_FILTER/calibration, and the Declustered
+  // view (this app's default, per the user's own explicit preference) must match that or it
+  // silently shows trades that could never have actually happened live as if they were real.
   return rows
-    .filter(s => s.actual_pnl != null && (declustered || s.is_cluster_primary !== false))
+    .filter(s => s.actual_pnl != null && s.late_fill_past_expiry_basis !== true && (declustered || s.is_cluster_primary !== false))
     .sort((a, b) => (a.fired_at_str || '').localeCompare(b.fired_at_str || ''));
 }
 

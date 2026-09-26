@@ -27,7 +27,9 @@ config();
 const WRITE = process.argv.includes('--write');
 const PNL_PER_POINT = LIVE_INSTRUMENT.dollarsPerPoint;
 const COMMISSION = LIVE_INSTRUMENT.commissionPerRoundTrip;
-const BACKUP_TABLE = 'active_setups_sibling_notfilled_prelatefill_backup_20260926';
+// Distinct name per run -- CREATE TABLE has no IF NOT EXISTS (same fix as the repair script,
+// DeepSeek review finding #2). Pass BACKUP_SUFFIX to control it.
+const BACKUP_TABLE = `active_setups_sibling_notfilled_prelatefill_backup_${process.env.BACKUP_SUFFIX || '20260926'}`;
 
 const pool = new pg.Pool({
   host: process.env.DB_HOST || 'localhost', port: process.env.DB_PORT || 5432,
@@ -36,19 +38,27 @@ const pool = new pg.Pool({
 });
 
 async function main() {
-  // These are the 327 rows the 2026-09-26 repair set to NOT_FILLED. Original entry/stop/target
-  // are unchanged on the live row itself (only resolution/actual_pnl/resolution_method were
-  // touched by that repair), so no need to re-read the backup table here.
+  // FIXED 2026-09-26 (DeepSeek code review, batch 1 week-QA pass, finding #2): the original
+  // query matched ANY current NOT_FILLED/SIBLING_UNFILLED row with no scope at all --
+  // SIBLING_UNFILLED is the SAME resolution_method the live system writes going forward for
+  // a genuinely-never-filled sibling, so a careless re-run of this script would silently
+  // late-fill rows the live system had just correctly closed. Pinned explicitly to the two
+  // known repair-backup tables' id lists instead -- exactly the population this script's own
+  // header claims to process, immune to any future live NOT_FILLED row leaking in.
   const { rows: candidates } = await pool.query(`
-    SELECT id, setup_type, fired_at::text as fired_at, expires_at::text as expires_at,
-           resolved_at::text as resolved_at, entry_zone_low, entry_zone_high,
-           stop_level, t1_level
-    FROM active_setups
-    WHERE is_cluster_primary = false AND origin_status IN ('ACTIVE','SHADOW')
-      AND resolution = 'NOT_FILLED' AND resolution_method = 'SIBLING_UNFILLED'
-    ORDER BY fired_at
+    SELECT a.id, a.setup_type, a.fired_at::text as fired_at, a.expires_at::text as expires_at,
+           a.resolved_at::text as resolved_at, a.entry_zone_low, a.entry_zone_high,
+           a.stop_level, a.t1_level
+    FROM active_setups a
+    WHERE a.id IN (
+      SELECT id FROM active_setups_sibling_unfilled_repair_backup_20260925
+      UNION SELECT id FROM active_setups_sibling_unfilled_repair_backup_round2_20260926
+      UNION SELECT id FROM active_setups_sibling_unfilled_repair_backup_round3_20260926
+    )
+    AND a.resolution = 'NOT_FILLED' AND a.resolution_method = 'SIBLING_UNFILLED'
+    ORDER BY a.fired_at
   `);
-  console.log(`NOT_FILLED sibling rows from the 2026-09-26 repair: ${candidates.length}`);
+  console.log(`NOT_FILLED sibling rows from the 2026-09-26 repair (both rounds): ${candidates.length}`);
 
   const toUpdate = []; // { id, resolution, actual_pnl, resolved_at, priceAtResolution }
   let neverTouched = 0, ambiguous = 0, unresolved = 0;
@@ -59,12 +69,26 @@ async function main() {
     const dir = resolveDirection(row);
     if (dir == null) continue;
     const long = dir === 'LONG';
-    const originalBound = row.resolved_at || row.expires_at;
+    // FIXED 2026-09-26 (DeepSeek review finding #1): was `row.resolved_at || row.expires_at`
+    // -- resolved_at is the phantom (pre-fix, bogus) resolution time, not the order's real
+    // life. Searching forward from there could either re-check bars still legitimately
+    // inside the order's real life (harmless overlap) or, if resolved_at > expires_at,
+    // start the "eventual touch" search too late and skip a genuine touch that happened
+    // between expires_at and resolved_at. The correct search start is the order's real
+    // expiry -- everything after that is genuinely "past expiry," matching this script's
+    // own header claim.
+    const originalBound = row.expires_at || row.resolved_at;
     const stop = row.stop_level, t1 = row.t1_level;
 
+    // FIXED 2026-09-26 (DeepSeek review finding #3): LIMIT 5000 caps the search at ~3.47
+    // real calendar days IF bars were gapless -- price_bars_primary has real gaps (weekend/
+    // holiday closures, the daily 5-6pm ET maintenance window), so this doesn't actually
+    // bound calendar time consistently, but it's also not the "no time limit" the header
+    // claims. No LIMIT -- this is a one-time historical backfill over a small (~380-row)
+    // known population, not a hot path, so an unbounded scan per row is fine.
     const { rows: bars } = await pool.query(`
       SELECT ts::text as ts, high, low FROM price_bars_primary
-      WHERE symbol='NQ' AND ts > $1 ORDER BY ts LIMIT 5000
+      WHERE symbol='NQ' AND ts > $1 ORDER BY ts
     `, [originalBound]);
 
     const touchIdx = bars.findIndex(b => (long ? b.low <= entry : b.high >= entry));
@@ -76,15 +100,24 @@ async function main() {
       const b = bars[i];
       const stopHit = long ? b.low <= stop : b.high >= stop;
       const targetHit = long ? b.high >= t1 : b.low <= t1;
-      if (stopHit && targetHit) { ambiguous++; done = true; break; }
+      // FIXED 2026-09-26 (DeepSeek review finding #6): the live resolver treats a same-bar
+      // stop+target as STOP_HIT/SAME_BAR_STOP_FIRST (conservative, worst case) --
+      // resolveSetups.js's own convention -- this used to instead leave the row NOT_FILLED
+      // (an "ambiguous" bucket), which doesn't match what the live system would have done.
+      if (stopHit && targetHit) {
+        ambiguous++;
+        const pnl = (long ? (stop - entry) : (entry - stop)) * PNL_PER_POINT - COMMISSION;
+        toUpdate.push({ id: row.id, resolution: 'STOP_HIT', method: 'SAME_BAR_STOP_FIRST', actual_pnl: Math.round(pnl * 100) / 100, resolved_at: b.ts, price_at_resolution: stop });
+        done = true; break;
+      }
       if (stopHit) {
         const pnl = (long ? (stop - entry) : (entry - stop)) * PNL_PER_POINT - COMMISSION;
-        toUpdate.push({ id: row.id, resolution: 'STOP_HIT', actual_pnl: Math.round(pnl * 100) / 100, resolved_at: b.ts, price_at_resolution: stop });
+        toUpdate.push({ id: row.id, resolution: 'STOP_HIT', method: 'SIBLING_LATE_FILL', actual_pnl: Math.round(pnl * 100) / 100, resolved_at: b.ts, price_at_resolution: stop });
         done = true; break;
       }
       if (targetHit) {
         const pnl = (long ? (t1 - entry) : (entry - t1)) * PNL_PER_POINT - COMMISSION;
-        toUpdate.push({ id: row.id, resolution: 'TARGET_HIT', actual_pnl: Math.round(pnl * 100) / 100, resolved_at: b.ts, price_at_resolution: t1 });
+        toUpdate.push({ id: row.id, resolution: 'TARGET_HIT', method: 'SIBLING_LATE_FILL', actual_pnl: Math.round(pnl * 100) / 100, resolved_at: b.ts, price_at_resolution: t1 });
         done = true; break;
       }
     }
@@ -94,7 +127,7 @@ async function main() {
   const wins = toUpdate.filter(u => u.resolution === 'TARGET_HIT');
   const losses = toUpdate.filter(u => u.resolution === 'STOP_HIT');
   console.log(`\nNever touched (stays NOT_FILLED, no change): ${neverTouched}`);
-  console.log(`Ambiguous same-bar stop+target (stays NOT_FILLED, can't determine cleanly): ${ambiguous}`);
+  console.log(`Same-bar stop+target (resolved STOP_HIT, worst-case convention, matches live SAME_BAR_STOP_FIRST): ${ambiguous}`);
   console.log(`Unresolved within the search window (stays NOT_FILLED): ${unresolved}`);
   console.log(`Resolving to a real backfilled outcome: ${toUpdate.length} (wins=${wins.length} sum=$${wins.reduce((s,u)=>s+u.actual_pnl,0).toFixed(2)}, losses=${losses.length} sum=$${losses.reduce((s,u)=>s+u.actual_pnl,0).toFixed(2)})`);
   console.log(`Net: $${toUpdate.reduce((s,u)=>s+u.actual_pnl,0).toFixed(2)}`);
@@ -118,11 +151,11 @@ async function main() {
   for (const u of toUpdate) {
     await pool.query(`
       UPDATE active_setups
-      SET resolution=$2, resolution_method='SIBLING_LATE_FILL', actual_outcome=$2,
+      SET status='RESOLVED', resolution=$2, resolution_method=$6, actual_outcome=$2,
           actual_pnl=$3, resolved_at=$4::timestamp, price_at_resolution=$5,
           late_fill_past_expiry_basis=true, updated_at=NOW()
       WHERE id=$1
-    `, [u.id, u.resolution, u.actual_pnl, u.resolved_at, u.price_at_resolution]);
+    `, [u.id, u.resolution, u.actual_pnl, u.resolved_at, u.price_at_resolution, u.method]);
   }
 
   const { rows: verify } = await pool.query(`

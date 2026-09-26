@@ -7716,7 +7716,7 @@ export default function createACDRouter(io) {
 
       const setupsRes = await query(`
         SELECT s.id, s.setup_type, s.trade_date, s.status, s.resolution, s.actual_pnl, s.is_rth, s.origin_status,
-          s.is_cluster_primary, s.mae_points, s.mfe_points,
+          s.is_cluster_primary, s.mae_points, s.mfe_points, s.late_fill_past_expiry_basis,
           TO_CHAR(s.fired_at, 'YYYY-MM-DD HH24:MI:SS') as fired_at_str
         FROM active_setups s
         WHERE ${whereClause}

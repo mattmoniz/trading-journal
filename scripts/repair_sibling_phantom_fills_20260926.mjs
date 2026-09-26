@@ -27,7 +27,10 @@ import { resolveDirection } from '../server/config/setupTypes.js';
 config();
 
 const WRITE = process.argv.includes('--write');
-const BACKUP_TABLE = 'active_setups_sibling_unfilled_repair_backup_20260925';
+// Distinct name per run -- CREATE TABLE has no IF NOT EXISTS, so a fixed name across re-runs
+// throws a confusing error rather than a clean "already applied" message (DeepSeek review
+// finding #2, 2026-09-26). Pass BACKUP_SUFFIX to control it; defaults to today's date.
+const BACKUP_TABLE = `active_setups_sibling_unfilled_repair_backup_${process.env.BACKUP_SUFFIX || '20260925'}`;
 
 const pool = new pg.Pool({
   host: process.env.DB_HOST || 'localhost', port: process.env.DB_PORT || 5432,
@@ -36,6 +39,28 @@ const pool = new pg.Pool({
 });
 
 async function main() {
+  // Defensive -- this repair's candidate query now reads late_fill_past_expiry_basis (see
+  // below), a column the sibling backfill script normally creates. Ensures this script works
+  // regardless of which of the two has run first.
+  await pool.query(`ALTER TABLE active_setups ADD COLUMN IF NOT EXISTS late_fill_past_expiry_basis boolean`);
+
+  // FIXED 2026-09-26 (self-caught while verifying the expires_at boundary fix above): a
+  // re-run of this repair after backfill_sibling_late_fill_outcomes_20260926.mjs has already
+  // run will find its own late-filled rows as "candidates" too -- those are DELIBERATELY
+  // resolved using bars past expires_at (that is the entire point of the late-fill backfill),
+  // so checking them against the narrower [fireMinute, expires_at] window here would always
+  // find "no fill" and wrongly re-flag an already-correct row as phantom. Confirmed this
+  // actually happened on this session's own round-2 run: all 55 "new phantom" rows found that
+  // time were round 1's own correctly-resolved late-fill rows, not genuine newly-found
+  // phantoms -- churned back through NOT_FILLED and re-backfilled to the SAME final value (no
+  // real corruption, verified directly), but a real latent bug if the underlying bars had ever
+  // disagreed on a second pass. A first fix excluded resolution_method='SIBLING_LATE_FILL'
+  // only, which missed the backfill script's OWN same-bar branch (resolution_method=
+  // 'SAME_BAR_STOP_FIRST', a value the LIVE resolver also produces normally for unrelated
+  // rows -- so it can't be blanket-excluded by that string alone) -- caught the same way,
+  // re-running this script and finding the identical row "phantom" a second time. The robust
+  // marker is the flag column itself, set ONLY by the late-fill backfill and never by the
+  // live resolver, regardless of which resolution_method string ends up on the row.
   const { rows: candidates } = await pool.query(`
     SELECT id, setup_type, fired_at::text as fired_at, expires_at::text as expires_at,
            resolved_at::text as resolved_at, entry_zone_low, entry_zone_high,
@@ -45,6 +70,7 @@ async function main() {
       AND origin_status IN ('ACTIVE','SHADOW')
       AND resolution IS NOT NULL AND resolution != 'NOT_FILLED'
       AND actual_pnl IS NOT NULL
+      AND late_fill_past_expiry_basis IS NOT TRUE
     ORDER BY fired_at
   `);
   console.log(`Candidate resolved real sibling rows to check: ${candidates.length}`);
@@ -59,7 +85,15 @@ async function main() {
     if (dir == null) continue; // same anomaly-skip convention as the live resolver
     const long = dir === 'LONG';
     const fireMinute = row.fired_at.slice(0, 16) + ':00';
-    const endBound = row.resolved_at || row.expires_at;
+    // FIXED 2026-09-26 (DeepSeek code review, batch 1 week-QA pass): this used to be
+    // `row.resolved_at || row.expires_at` -- resolved_at is always non-null for a resolved
+    // row, so expires_at was dead code, and the fill-check window was wrongly bounded by
+    // the PHANTOM resolution time (whenever the buggy pre-fix walk happened to declare a
+    // fake stop/target hit) instead of the order's real life. Confirmed real impact: 55
+    // additional rows with resolved_at > expires_at were left uncorrected (a fill the buggy
+    // window "saw" only existed because it kept checking bars past the order's real expiry).
+    // The real fill-check window is the order's actual life: [fireMinute, expires_at].
+    const endBound = row.expires_at || row.resolved_at;
     const { rows: bars } = await pool.query(`
       SELECT high, low FROM price_bars_primary
       WHERE symbol='NQ' AND ts >= $1 AND ts <= $2
