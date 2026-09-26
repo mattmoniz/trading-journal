@@ -1,6 +1,12 @@
 # Open Threads / Pending Work
 
 Older resolved/superseded threads are periodically moved to [OPEN_THREADS_ARCHIVE.md](OPEN_THREADS_ARCHIVE.md) (via `node scripts/archive_open_threads.mjs --apply`) to keep this file's per-session read cost down — nothing is deleted, just relocated. Still-pending items are backed by `OPEN_DECISION`/`RESEARCH_CLAIM` rows regardless, so archiving here never buries anything.
+## ✅ 2026-09-26: DeepSeek week-review batch 2 — 3 real findings, all fixed
+
+Scope: the 9:30-9:35 RTH dead-zone commit + its same-day `firedEtMin`/`isLiveTimeWindowBlocked` staleness fixes (3 commits — the opening-drive gate and POC resolver-race fix from the same week were excluded, since they'd already had a DeepSeek review before shipping).
+
+DeepSeek found 3 real findings, all confirmed against the live code and fixed (commit `e70d31e`): **#1 MEDIUM** — `skipRedundantShadowInsert` used the stale outer wall-clock dead-zone flags instead of the `firedEtMin`-based ones the same commit introduced for `forceShadow` just above it — a dead-zone candidate whose poll ran late correctly avoided `ACTIVE` but fell through to a `SHADOW` insert instead of the intended full skip (no capital risk, but re-polluted the dead zone with rows the 2026-09-16 fix existed to eliminate). **#2 LOW** — `firedEtMin`'s null-fallback used `etMin` (poll-start) instead of `etNow` (matching what `fired_at` itself falls back to in the same edge case). **#3 LOW** — a 3rd `isLiveTimeWindowBlocked` call site was undocumented but confirmed correctly exempt (its sibling INSERT stamps `fired_at` via `NOW()`, not a bar timestamp) — added a clarifying comment, not a bug fix.
+
 ## ✅ 2026-09-26: dead-zone verification found a real 7th insert path (3 standalone detectors) never wired to either dead zone
 
 Verifying `dead_zone_full_skip_live_verification_pending_20260916` (does the 4-6pm full-skip actually produce zero rows live) found the acd.js side was clean, but surfaced a real, previously-unaudited gap: `STALL_DEFENDED_LEVEL_SHORT` (id 124469) fired 2026-09-18 16:30 ET — a standalone detector file with its own `INSERT`, never wired to `isInNewEntryDeadZone()`/`isInRthOpenDeadZone()` at all.
