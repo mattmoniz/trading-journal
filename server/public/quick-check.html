@@ -1378,7 +1378,10 @@ function isLossRow(s) {
 
 let timelineRows = []; // full setup rows (already session+filter scoped), keyed for the modal lookup
 let allTimelineRows = []; // unfiltered fetch, so toggling live/all doesn't require a re-fetch
-let timelineFilter = localStorage.getItem('timelineFilter') || 'live'; // 'live' | 'all'
+// FORCED default, 2026-09-25 (same fix as performanceFilter/clusterView above -- a stale
+// localStorage 'live' value from before this page defaulted to 'all' kept winning on every
+// load, so this now ignores stored history entirely and always starts on 'all').
+let timelineFilter = 'all'; // 'live' | 'all'
 // Top-5-by-$-impact tag filter (2026-09-16, user request: replaced the Vol Building filter --
 // "add filters in the same spot, one for each of the top 5 tags that save us the most pnl").
 // Purely a client-side display filter on the already-fetched rows, same as the Vol Building
@@ -1551,7 +1554,8 @@ function renderSweepWatch() {
 
 function setTimelineFilter(f) {
   timelineFilter = f;
-  localStorage.setItem('timelineFilter', f);
+  // No longer persisted -- timelineFilter now always starts on the forced 'all' default above
+  // (a reload no longer re-reads any stored value, so writing one here would be dead code).
   renderTimeline();
 }
 
@@ -2901,11 +2905,21 @@ function renderEquityCurve(canvasId, rows, range, declustered = false) {
 // with live to show when i toggle live and i want the equity chart for all when i toggle
 // all" -- i.e. switch which one is shown, don't show both.
 let currentRange = 'today';
-let performanceFilter = localStorage.getItem('performanceFilter') || 'live'; // 'live' | 'all'
-// 'collapsed' (default) = one row per real market touch, matching account-level reality.
-// 'declustered' = every confluence-cluster sibling counted as its own trade too -- see
-// getDecidedRows()'s header comment for why this exists and what it's the same population as.
-let clusterView = localStorage.getItem('clusterView') || 'collapsed'; // 'collapsed' | 'declustered'
+// FORCED default, 2026-09-25 (explicit user request: "I want ungrouped or declustered to be
+// number 1" -- a prior fix that only changed the localStorage FALLBACK wasn't enough, since
+// this browser already had 'live'/'collapsed' stored from before this page defaulted to
+// 'all'/'declustered', so the old stored value kept winning on every load ("you just keep
+// reverting back to grouped"). This now ignores any stored value entirely on load -- ALWAYS
+// starts on 'all'/'declustered' regardless of localStorage history. Toggling within a session
+// still works normally (see setPerformanceFilter/setClusterView below); it just no longer
+// persists across a reload, since the whole point is that declustered/all IS the default, not
+// a rememberable preference that can drift back to the old one.
+let performanceFilter = 'all'; // 'live' | 'all'
+// 'collapsed' = one row per real market touch, matching account-level reality.
+// 'declustered' (forced default) = every confluence-cluster sibling counted as its own trade
+// too -- see getDecidedRows()'s header comment for why this exists and what it's the same
+// population as.
+let clusterView = 'declustered'; // 'collapsed' | 'declustered'
 let currentRangeRowsLive = [];
 let currentRangeRowsAll = [];
 let currentLiveData = null, currentAllData = null;
@@ -2947,7 +2961,7 @@ function renderPerfToggle() {
 
 function setPerformanceFilter(f) {
   performanceFilter = f;
-  localStorage.setItem('performanceFilter', f);
+  // No longer persisted -- see the forced-default comment on performanceFilter's declaration.
   renderPerformance();
 }
 
@@ -2961,7 +2975,7 @@ function renderClusterToggle() {
 
 function setClusterView(v) {
   clusterView = v;
-  localStorage.setItem('clusterView', v);
+  // No longer persisted -- see the forced-default comment on clusterView's declaration.
   renderPerformance();
 }
 
